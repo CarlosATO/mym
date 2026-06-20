@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 200" fill="none">
+  <!-- Fondo cálido crema suave -->
+  <defs>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F5C842"/>
+      <stop offset="50%" stop-color="#D4A017"/>
+      <stop offset="100%" stop-color="#A07810"/>
+    </linearGradient>
+    <linearGradient id="bannerGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#6B1A1A"/>
+      <stop offset="100%" stop-color="#3D0A0A"/>
+    </linearGradient>
+    <linearGradient id="shimmer" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFE080"/>
+      <stop offset="40%" stop-color="#D4A017"/>
+      <stop offset="100%" stop-color="#8B6010"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ===== GATO (izquierda, más pequeño) ===== -->
+  <!-- Cuerpo gato -->
+  <ellipse cx="80" cy="130" rx="28" ry="34" fill="url(#goldGrad)" stroke="#8B6010" stroke-width="1.2"/>
+  <!-- Cabeza gato -->
+  <ellipse cx="82" cy="88" rx="20" ry="18" fill="url(#goldGrad)" stroke="#8B6010" stroke-width="1.2"/>
+  <!-- Orejas gato -->
+  <polygon points="66,76 72,58 79,76" fill="url(#goldGrad)" stroke="#8B6010" stroke-width="1.2"/>
+  <polygon points="70,75 73,63 77,75" fill="#FFE080"/>
+  <polygon points="85,76 91,58 98,76" fill="url(#goldGrad)" stroke="#8B6010" stroke-width="1.2"/>
+  <polygon points="87,75 91,63 95,75" fill="#FFE080"/>
+  <!-- Ojos gato -->
+  <ellipse cx="76" cy="88" rx="3" ry="3.5" fill="#4A2800"/>
+  <ellipse cx="88" cy="88" rx="3" ry="3.5" fill="#4A2800"/>
+  <circle cx="77" cy="87" r="1" fill="white"/>
+  <circle cx="89" cy="87" r="1" fill="white"/>
+  <!-- Nariz gato -->
+  <polygon points="82,93 80,96 84,96" fill="#C97020"/>
+  <!-- Boca gato -->
+  <path d="M80,96 Q82,99 84,96" stroke="#8B6010" stroke-width="0.8" fill="none"/>
+  <!-- Bigotes gato -->
+  <line x1="63" y1="93" x2="78" y2="94" stroke="#8B6010" stroke-width="0.7"/>
+  <line x1="63" y1="96" x2="78" y2="96" stroke="#8B6010" stroke-width="0.7"/>
+  <line x1="86" y1="94" x2="101" y2="93" stroke="#8B6010" stroke-width="0.7"/>
+  <line x1="86" y1="96" x2="101" y2="96" stroke="#8B6010" stroke-width="0.7"/>
+  <!-- Cola gato (curva a la izquierda) -->
+  <path d="M52,140 Q38,115 50,100 Q55,92 58,105 Q48,118 60,138" fill="url(#goldGrad)" stroke="#8B6010" stroke-width="1.2"/>
+  <!-- Patas delanteras gato -->
+  <ellipse cx="68" cy="158" rx="9" ry="6" fill="url(#goldGrad)" stroke="#8B6010" stroke-width="1"/>
+  <ellipse cx="88" cy="158" rx="9" ry="6" fill="url(#goldGrad)" stroke="#8B6010" stroke-width="1"/>
+
+  <!-- ===== PERRO (derecha, más grande) ===== -->
+  <!-- Cuerpo perro -->
+  <ellipse cx="148" cy="122" rx="38" ry="44" fill="url(#shimmer)" stroke="#8B6010" stroke-width="1.5"/>
+  <!-- Cabeza perro -->
+  <ellipse cx="148" cy="70" rx="30" ry="26" fill="url(#shimmer)" stroke="#8B6010" stroke-width="1.5"/>
+  <!-- Orejas perro (caídas) -->
+  <ellipse cx="122" cy="76" rx="10" ry="20" fill="url(#goldGrad)" stroke="#8B6010" stroke-width="1.2" transform="rotate(-15,122,76)"/>
+  <ellipse cx="174" cy="76" rx="10" ry="20" fill="url(#goldGrad)" stroke="#8B6010" stroke-width="1.2" transform="rotate(15,174,76)"/>
+  <!-- Hocico perro -->
+  <ellipse cx="148" cy="82" rx="14" ry="10" fill="#E8B830" stroke="#8B6010" stroke-width="1"/>
+  <!-- Nariz perro -->
+  <ellipse cx="148" cy="76" rx="6" ry="4" fill="#3D2000"/>
+  <ellipse cx="146" cy="75" rx="2" ry="1.5" fill="#7A5020" opacity="0.5"/>
+  <!-- Ojos perro -->
+  <ellipse cx="136" cy="65" rx="5" ry="5.5" fill="#2A1500"/>
+  <ellipse cx="160" cy="65" rx="5" ry="5.5" fill="#2A1500"/>
+  <circle cx="137.5" cy="63.5" r="1.8" fill="white"/>
+  <circle cx="161.5" cy="63.5" r="1.8" fill="white"/>
+  <!-- Boca perro -->
+  <path d="M138,85 Q148,94 158,85" stroke="#8B6010" stroke-width="1.2" fill="none"/>
+  <!-- Línea central hocico -->
+  <line x1="148" y1="80" x2="148" y2="85" stroke="#8B6010" stroke-width="1"/>
+  <!-- Cola perro (curva a la derecha) -->
+  <path d="M185,115 Q205,90 195,72 Q190,62 183,78 Q190,92 178,110" fill="url(#shimmer)" stroke="#8B6010" stroke-width="1.5"/>
+  <!-- Patas delanteras perro -->
+  <ellipse cx="133" cy="160" rx="13" ry="8" fill="url(#shimmer)" stroke="#8B6010" stroke-width="1.2"/>
+  <ellipse cx="161" cy="160" rx="13" ry="8" fill="url(#shimmer)" stroke="#8B6010" stroke-width="1.2"/>
+
+  <!-- ===== BANNER PREMIUM ===== -->
+  <!-- Sombra del banner -->
+  <rect x="18" y="170" width="184" height="36" rx="4" fill="#1A0000" opacity="0.3"/>
+  <!-- Cuerpo del banner -->
+  <rect x="14" y="166" width="192" height="36" rx="4" fill="url(#bannerGrad)"/>
+  <!-- Borde dorado del banner -->
+  <rect x="14" y="166" width="192" height="36" rx="4" fill="none" stroke="#D4A017" stroke-width="1.5"/>
+  <!-- Línea dorada superior en banner -->
+  <line x1="20" y1="170" x2="200" y2="170" stroke="#F5C842" stroke-width="0.8" opacity="0.6"/>
+  <!-- Texto PREMIUM -->
+  <text x="110" y="191" text-anchor="middle" font-family="Georgia, serif" font-size="18" font-weight="bold" letter-spacing="4" fill="#F5C842">PREMIUM</text>
+  <!-- Destellos laterales banner -->
+  <polygon points="14,166 8,184 14,202" fill="url(#bannerGrad)" stroke="#D4A017" stroke-width="1"/>
+  <polygon points="206,166 212,184 206,202" fill="url(#bannerGrad)" stroke="#D4A017" stroke-width="1"/>
+
+  <!-- Detalles de brillo en los animales -->
+  <ellipse cx="90" cy="80" rx="5" ry="3" fill="white" opacity="0.15" transform="rotate(-30,90,80)"/>
+  <ellipse cx="155" cy="58" rx="7" ry="4" fill="white" opacity="0.15" transform="rotate(-30,155,58)"/>
+</svg>
