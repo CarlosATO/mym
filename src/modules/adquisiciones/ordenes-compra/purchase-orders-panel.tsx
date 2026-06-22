@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, Ban } from 'lucide-react'
+import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, Ban, PackageOpen, XCircle, CheckCircle2 } from 'lucide-react'
 import { AuthorizedPersonnelCombobox } from '@/components/ui/authorized-personnel-combobox'
 import {
   getPurchaseOrders, getPurchaseOrderDetail, createPurchaseOrder,
@@ -77,6 +77,10 @@ const textareaClass = "w-full rounded-lg border border-theme-border bg-theme-sur
 
 export function PurchaseOrdersPanel() {
   const [view, setView] = useState<'list' | 'form' | 'detail'>('list')
+  const [selectedPo, setSelectedPo] = useState<PurchaseOrder | null>(null)
+  const detailCacheRef = useRef<Record<string, PurchaseOrderDetail>>({})
+  const pendingRequestsRef = useRef<Record<string, Promise<PurchaseOrderDetail | null>>>({})
+
   const [editId, setEditId] = useState<string | null>(null)
   const [data, setData] = useState<PurchaseOrder[]>([])
   const [total, setTotal] = useState(0)
@@ -269,10 +273,37 @@ export function PurchaseOrdersPanel() {
   }
 
   function openDetail(po: PurchaseOrder) {
+    setSelectedPo(po)
+    setView('list')
     setDetail(null)
-    setView('detail')
-    getPurchaseOrderDetail(po.id).then(d => setDetail(d))
+    
+    if (detailCacheRef.current[po.id]) {
+      setDetail(detailCacheRef.current[po.id])
+      return
+    }
+    
+    if (!pendingRequestsRef.current[po.id]) {
+      pendingRequestsRef.current[po.id] = getPurchaseOrderDetail(po.id)
+    }
+    
+    pendingRequestsRef.current[po.id].then(d => {
+      if (d) {
+        detailCacheRef.current[po.id] = d
+        setDetail(prev => d)
+      }
+    })
   }
+
+  function prefetchDetail(poId: string) {
+    if (detailCacheRef.current[poId]) return
+    if (!pendingRequestsRef.current[poId]) {
+      pendingRequestsRef.current[poId] = getPurchaseOrderDetail(poId).then(d => {
+        if (d) detailCacheRef.current[poId] = d
+        return d
+      })
+    }
+  }
+
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -772,48 +803,56 @@ export function PurchaseOrdersPanel() {
                   </>
                 )}
               </div>
-              <div ref={warehouseRef} className="relative space-y-1">
+              <div className="relative space-y-1" ref={warehouseRef}>
                 <label className="text-xs text-theme-text-muted/70">Bodega destino</label>
-                <input
-                  type="text"
-                  value={
-                    !warehouseOpen && form.warehouse_id && !warehouseSearch
-                      ? (warehouses.find(w => w.id === form.warehouse_id)?.name ?? '')
-                      : warehouseSearch
-                  }
-                  onChange={e => { setWarehouseSearch(e.target.value); setWarehouseOpen(true); if (form.warehouse_id) setForm(p => ({ ...p, warehouse_id: '' })) }}
-                  onFocus={() => setWarehouseOpen(true)}
-                  placeholder="Buscar bodega..."
-                  className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30"
-                />
-                {warehouseOpen && (
+                {warehouses.length === 0 ? (
+                  <div className="w-full rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-500 font-semibold">
+                    No hay bodegas disponibles. Las bodegas deben ser creadas desde el módulo Logística.
+                  </div>
+                ) : (
                   <>
-                    <div className="fixed inset-0 z-40" onClick={() => setWarehouseOpen(false)} />
-                    <div className="absolute left-0 top-full mt-1 w-full max-h-48 overflow-y-auto bg-theme-surface border border-theme-border rounded-xl shadow-xl z-50 p-1 space-y-0.5">
-                      {(() => {
-                        const norm = warehouseSearch.toUpperCase().trim()
-                        const filtered = warehouses.filter(w =>
-                          w.is_active && (
-                            !norm ||
-                            w.name.toUpperCase().includes(norm) ||
-                            (w.code && w.code.toUpperCase().includes(norm))
-                          )
-                        ).slice(0, 20)
-                        return filtered.length === 0
-                          ? <p className="px-3 py-2 text-xs text-theme-text-muted/50">Sin resultados</p>
-                          : filtered.map(w => (
-                              <button
-                                key={w.id}
-                                type="button"
-                                onClick={() => { setForm(p => ({ ...p, warehouse_id: w.id })); setWarehouseSearch(''); setWarehouseOpen(false) }}
-                                className="w-full text-left px-3 py-2 text-xs rounded-lg transition-colors text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text"
-                              >
-                                <span className="font-medium">{w.name}</span>
-                                {w.code && <span className="text-theme-text-muted/50 ml-2">{w.code}</span>}
-                              </button>
-                            ))
-                      })()}
-                    </div>
+                    <input
+                      type="text"
+                      value={
+                        !warehouseOpen && form.warehouse_id && !warehouseSearch
+                          ? (warehouses.find(w => w.id === form.warehouse_id)?.name ?? '')
+                          : warehouseSearch
+                      }
+                      onChange={e => { setWarehouseSearch(e.target.value); setWarehouseOpen(true); if (form.warehouse_id) setForm(p => ({ ...p, warehouse_id: '' })) }}
+                      onFocus={() => setWarehouseOpen(true)}
+                      placeholder="Buscar bodega..."
+                      className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30"
+                    />
+                    {warehouseOpen && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setWarehouseOpen(false)} />
+                        <div className="absolute left-0 top-full mt-1 w-full max-h-48 overflow-y-auto bg-theme-surface border border-theme-border rounded-xl shadow-xl z-50 p-1 space-y-0.5">
+                          {(() => {
+                            const norm = warehouseSearch.toUpperCase().trim()
+                            const filtered = warehouses.filter(w =>
+                              w.is_active && (
+                                !norm ||
+                                w.name.toUpperCase().includes(norm) ||
+                                (w.code && w.code.toUpperCase().includes(norm))
+                              )
+                            ).slice(0, 20)
+                            return filtered.length === 0
+                              ? <p className="px-3 py-2 text-xs text-theme-text-muted/50">Sin resultados</p>
+                              : filtered.map(w => (
+                                  <button
+                                    key={w.id}
+                                    type="button"
+                                    onClick={() => { setForm(p => ({ ...p, warehouse_id: w.id })); setWarehouseSearch(''); setWarehouseOpen(false) }}
+                                    className="w-full text-left px-3 py-2 text-xs rounded-lg transition-colors text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text"
+                                  >
+                                    <span className="font-medium">{w.name}</span>
+                                    {w.code && <span className="text-theme-text-muted/50 ml-2">{w.code}</span>}
+                                  </button>
+                                ))
+                          })()}
+                        </div>
+                      </>
+                    )}
                   </>
                 )}
               </div>
@@ -1157,6 +1196,8 @@ export function PurchaseOrdersPanel() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-theme-surface">
+      <div className="flex flex-1 overflow-hidden">
+        <div className={`flex flex-col h-full overflow-hidden transition-all duration-300 ${selectedPo ? "w-full md:w-1/3 lg:w-1/4 border-r border-theme-border" : "w-full"}`}>
       {message && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
 
       <div className="shrink-0 flex flex-col gap-4 p-5 border-b border-theme-border/60 bg-theme-text/[0.01]">
@@ -1241,12 +1282,12 @@ export function PurchaseOrdersPanel() {
                 <th className="text-right py-3 px-4 font-medium">Total</th>
                 <th className="text-left py-3 px-4 font-medium">Recepción</th>
                 <th className="text-left py-3 px-4 font-medium">Factura</th>
-                <th className="text-right py-3 px-4 font-medium">Acciones</th>
+                <th className={`text-right py-3 px-4 font-medium ${selectedPo ? "hidden" : ""}`}>Acciones</th>
               </tr>
             </thead>
             <tbody>
               {data.map(po => (
-                <tr key={po.id} className="border-b border-theme-border hover:bg-theme-text/5 transition-colors cursor-pointer" onClick={() => openDetail(po)}>
+                <tr key={po.id} className={`border-b border-theme-border hover:bg-theme-text/5 transition-colors cursor-pointer ${selectedPo?.id === po.id ? "bg-theme-accent/5 border-l-2 border-l-theme-accent" : ""}`} onClick={() => openDetail(po)} onMouseEnter={() => prefetchDetail(po.id)}>
                   <td className="py-3 px-4 text-xs font-mono font-semibold text-theme-text-accent">{po.correlative}</td>
                   <td className="py-3 px-4 text-xs text-theme-text">{formatDate(po.issue_date)}</td>
                   <td className="py-3 px-4 text-xs text-theme-text">{po.supplier_name}</td>
@@ -1258,7 +1299,7 @@ export function PurchaseOrdersPanel() {
                   <td className="py-3 px-4 text-xs text-theme-text text-right font-medium">{formatCurrency(po.grand_total, po.currency)}</td>
                   <td className="py-3 px-4"><Badge value={po.receipt_status} map={RECEIPT_BADGES} /></td>
                   <td className="py-3 px-4"><Badge value={po.invoice_status} map={INVOICE_BADGES} /></td>
-                  <td className="py-3 px-4 text-right" onClick={e => e.stopPropagation()}>
+                  <td className={`py-3 px-4 text-right ${selectedPo ? "hidden" : ""}`} onClick={e => e.stopPropagation()}>
                     <button onClick={() => openDetail(po)} className="p-1.5 rounded-lg hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text transition-colors" title="Ver detalle">
                       <Eye className="w-4 h-4" />
                     </button>
@@ -1298,6 +1339,61 @@ export function PurchaseOrdersPanel() {
           </div>
         </div>
       )}
+        </div>
+        
+        {selectedPo && (
+          <div className="hidden md:flex flex-col flex-1 bg-theme-surface animate-in slide-in-from-right-4 duration-300 overflow-hidden">
+             <div className="flex items-center justify-between gap-4 px-5 py-3 bg-theme-text/[0.02] border-b border-theme-border/70 shrink-0">
+               <div className="flex items-center gap-3">
+                 <div className="w-7 h-7 rounded-lg bg-theme-accent/10 flex items-center justify-center shrink-0"><PackageOpen className="w-4 h-4 text-theme-accent" /></div>
+                 <div>
+                   <div className="flex items-center gap-2"><span className="font-mono text-sm font-bold text-theme-accent">{selectedPo.correlative}</span><Badge value={selectedPo.status} map={STATUS_BADGES} /></div>
+                   <p className="text-xs text-theme-text-muted truncate">{selectedPo.supplier_name}</p>
+                 </div>
+               </div>
+               <div className="flex items-center gap-2 shrink-0">
+                 <button onClick={() => setSelectedPo(null)} className="p-1.5 rounded-lg hover:bg-theme-text/10 text-theme-text-muted transition-colors"><X className="w-3.5 h-3.5" /></button>
+               </div>
+             </div>
+             <div className="flex-1 overflow-auto p-6 lg:p-8">
+               {detail ? (
+                 <div className="space-y-8">
+                   <div className="flex gap-2">
+                     <button onClick={handleDownloadPDF} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5"><Download className="w-3.5 h-3.5" /> PDF</button>
+                   </div>
+                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-5">
+                     <div><p className="text-xs text-theme-text-muted/70 mb-0.5">Fecha emisión</p><p className="text-sm text-theme-text">{formatDate(selectedPo.issue_date)}</p></div>
+                     <div><p className="text-xs text-theme-text-muted/70 mb-0.5">Total Neto</p><p className="text-sm text-theme-text">{formatCurrency(selectedPo.net_total, selectedPo.currency)}</p></div>
+                     <div><p className="text-xs text-theme-text-muted/70 mb-0.5">Total IVA</p><p className="text-sm text-theme-text">{formatCurrency(selectedPo.tax_total, selectedPo.currency)}</p></div>
+                     <div><p className="text-xs text-theme-text-muted/70 mb-0.5">Total Compra</p><p className="text-sm text-theme-text font-bold">{formatCurrency(selectedPo.grand_total, selectedPo.currency)}</p></div>
+                     <div><p className="text-xs text-theme-text-muted/70 mb-0.5">Bodega destino</p><p className="text-sm text-theme-text">{selectedPo.warehouse_name || "—"}</p></div>
+                   </div>
+                   <h3 className="text-sm font-bold text-theme-text mb-4 mt-8">Líneas de la orden</h3>
+                   <div className="overflow-x-auto rounded-xl border border-theme-border">
+                     <table className="w-full text-sm">
+                       <thead><tr className="border-b border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider"><th className="text-left py-3 px-4">Producto/Servicio</th><th className="text-right py-3 px-4">Cantidad</th><th className="text-right py-3 px-4">Total</th></tr></thead>
+                       <tbody>
+                         {detail.items.map(it => (
+                           <tr key={it.id} className="border-b border-theme-border hover:bg-theme-text/5 transition-colors">
+                             <td className="py-3 px-4 text-xs text-theme-text">{it.product_description}</td>
+                             <td className="py-3 px-4 text-xs text-theme-text text-right">{it.quantity}</td>
+                             <td className="py-3 px-4 text-xs text-theme-text font-semibold text-right">{formatCurrency(it.line_total, detail.po.currency)}</td>
+                           </tr>
+                         ))}
+                       </tbody>
+                     </table>
+                   </div>
+                 </div>
+               ) : (
+                 <div className="animate-pulse space-y-4">
+                   <div className="h-3 bg-theme-text/10 rounded w-1/3" />
+                   <div className="space-y-2"><div className="h-8 bg-theme-text/6 rounded" /><div className="h-8 bg-theme-text/6 rounded" /></div>
+                 </div>
+               )}
+             </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

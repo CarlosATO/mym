@@ -161,33 +161,19 @@ export async function getPurchaseOrderForReceipt(poId: string) {
     return null
   }
 
-  // 2. Fetch Supplier
-  const { data: supplier } = await db
-    .from('suppliers')
-    .select('*')
-    .eq('id', po.supplier_id)
-    .single()
+  // 2. Fetch dependencies in parallel
+  const [supplierRes, warehouseRes, requesterRes, itemsRes] = await Promise.all([
+    db.from('suppliers').select('*').eq('id', po.supplier_id).single(),
+    po.warehouse_id ? db.from('warehouses').select('name').eq('id', po.warehouse_id).single() : Promise.resolve({ data: null }),
+    po.requested_by ? supabase.from('users').select('nombre, apellido').eq('id', po.requested_by).single() : Promise.resolve({ data: null }),
+    db.from('purchase_order_items').select('*').eq('po_id', poId).order('line_number')
+  ]);
 
-  // 3. Fetch Warehouse details
-  let warehouseName = null
-  if (po.warehouse_id) {
-    const { data: wh } = await db.from('warehouses').select('name').eq('id', po.warehouse_id).single()
-    warehouseName = wh?.name || null
-  }
-
-  // 4. Fetch User profile (requester name)
-  const { data: requester } = await supabase
-    .from('users')
-    .select('nombre, apellido')
-    .eq('id', po.requested_by)
-    .single()
-
-  // 5. Fetch Items
-  const { data: items, error: itemsError } = await db
-    .from('purchase_order_items')
-    .select('*')
-    .eq('po_id', poId)
-    .order('line_number')
+  const supplier = supplierRes.data;
+  const warehouseName = warehouseRes.data?.name || null;
+  const requester = requesterRes.data;
+  const items = itemsRes.data;
+  const itemsError = itemsRes.error;
 
   if (itemsError) {
     console.error('getPurchaseOrderForReceipt Items error:', itemsError)
@@ -215,45 +201,54 @@ export async function getPurchaseOrderForReceipt(poId: string) {
 }
 
 export async function getPurchaseOrderReceiptDetails(poId: string) {
-  const baseData = await getPurchaseOrderForReceipt(poId)
-  if (!baseData) return null
+  if (process.env.NODE_ENV === 'development') console.time(`getPurchaseOrderReceiptDetails_${poId}`)
 
   const supabase = await createClient()
   const { data: { session } } = await supabase.auth.getSession()
-  
+
   const logDbClient = createSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
     db: { schema: 'logistica' },
     global: { headers: { Authorization: `Bearer ${session?.access_token}` } }
   })
 
-  // 1. Fetch Receipts
-  const { data: receipts } = await logDbClient
-    .from('purchase_receipts')
-    .select('*, receipt_documents(*)')
-    .eq('purchase_order_id', poId)
-    .order('received_at', { ascending: false })
+  const [baseData, receiptsResult] = await Promise.all([
+    getPurchaseOrderForReceipt(poId),
+    logDbClient
+      .from('purchase_receipts')
+      .select('*, receipt_documents(id, document_type, document_number, file_name), purchase_receipt_items(*, locations(name, code))')
+      .eq('purchase_order_id', poId)
+      .order('received_at', { ascending: false })
+  ]);
 
-  // 2. Fetch Receipt Items
-  const receiptIds = receipts?.map(r => r.id) || []
-  let receiptItems: any[] = []
-  if (receiptIds.length > 0) {
-    const { data: rItems } = await logDbClient
-      .from('purchase_receipt_items')
-      .select('*, locations(name, code)')
-      .in('receipt_id', receiptIds)
-    receiptItems = rItems || []
+  if (!baseData) {
+    if (process.env.NODE_ENV === 'development') console.timeEnd(`getPurchaseOrderReceiptDetails_${poId}`)
+    return null
   }
+
+  const receiptsData = receiptsResult.data || [];
+  
+  // Extract receipt items and format receipts
+  let receiptItems: any[] = [];
+  const receipts = receiptsData.map((r: any) => {
+    const { purchase_receipt_items, ...rest } = r;
+    if (purchase_receipt_items && Array.isArray(purchase_receipt_items)) {
+      receiptItems = receiptItems.concat(purchase_receipt_items);
+    }
+    return rest;
+  });
 
   // Calculate totals
   const totalOrdered = baseData.items.reduce((acc, i) => acc + Number(i.quantity || 0), 0)
   const totalReceived = baseData.items.reduce((acc, i) => acc + Number(i.quantity_received || 0), 0)
   const totalPending = Math.max(0, totalOrdered - totalReceived)
-  const amountReceived = receipts?.reduce((acc, r) => acc + Number(r.receipt_total_gross || 0), 0) || 0
+  const amountReceived = receipts?.reduce((acc: number, r: any) => acc + Number(r.receipt_total_gross || 0), 0) || 0
+
+  if (process.env.NODE_ENV === 'development') console.timeEnd(`getPurchaseOrderReceiptDetails_${poId}`)
 
   return {
     po: baseData.po,
     items: baseData.items,
-    receipts: receipts || [],
+    receipts: receipts,
     receiptItems: receiptItems,
     totals: {
       qtyOrdered: totalOrdered,

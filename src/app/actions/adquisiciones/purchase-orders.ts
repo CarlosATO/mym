@@ -185,7 +185,9 @@ export async function getPurchaseOrderDetail(poId: string) {
   if (!user) return null
 
   const db = adqAdmin()
+  if (process.env.NODE_ENV === 'development') console.time(`getPurchaseOrderDetail_${poId}`)
   const { data, error } = await db.rpc('get_purchase_order_detail', { p_po_id: poId })
+  if (process.env.NODE_ENV === 'development') console.timeEnd(`getPurchaseOrderDetail_${poId}`)
   if (error) {
     console.error('get_purchase_order_detail error:', error)
     return null

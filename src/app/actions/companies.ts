@@ -75,9 +75,13 @@ export async function getUserCompanies(): Promise<UserCompany[]> {
   }))
 }
 
-export async function getActiveCompanyId(): Promise<string | null> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+export async function getActiveCompanyId(cachedUser?: any): Promise<string | null> {
+  let user = cachedUser
+  if (!user) {
+    const supabase = await createClient()
+    const { data } = await supabase.auth.getUser()
+    user = data.user
+  }
   if (!user) return null
 
   const cookieStore = await cookies()

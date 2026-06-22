@@ -137,6 +137,7 @@ export function LocationsPanel() {
   })
 
   const load = useCallback(async () => {
+    if (!filters.warehouse_id) return
     setLoading(true)
     const r = await getLocations(filters)
     setData(r.data)
@@ -150,14 +151,17 @@ export function LocationsPanel() {
   }, [load])
 
   useEffect(() => {
+    let active = true
     getWarehouses({ pageSize: 10000, is_active: 'true' }).then(res => {
+      if (!active) return
       setWarehouses(res.data)
       if (res.data.length > 0) {
-        setFilters(prev => ({ ...prev, warehouse_id: res.data[0].id }))
-        setForm(prev => ({ ...prev, warehouse_id: res.data[0].id }))
-        setBulkForm(prev => ({ ...prev, warehouse_id: res.data[0].id }))
+        setFilters(prev => prev.warehouse_id === res.data[0].id ? prev : { ...prev, warehouse_id: res.data[0].id })
+        setForm(prev => prev.warehouse_id === res.data[0].id ? prev : { ...prev, warehouse_id: res.data[0].id })
+        setBulkForm(prev => prev.warehouse_id === res.data[0].id ? prev : { ...prev, warehouse_id: res.data[0].id })
       }
     })
+    return () => { active = false }
   }, [])
 
   function showMsg(text: string) {

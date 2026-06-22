@@ -7,11 +7,13 @@ import { RecepcionesPanel } from '@/modules/logistica/recepciones/recepciones-pa
 import { LocationsPanel } from '@/modules/logistica/ubicaciones/locations-panel'
 import { KardexPanel } from '@/modules/logistica/kardex/kardex-panel'
 import { StockPanel } from '@/modules/logistica/stock/stock-panel'
+import { WarehousesPanel } from '@/modules/logistica/bodegas/warehouses-panel'
+import { ProductsPanel } from '@/modules/logistica/productos/products-panel'
 import type { RibbonAction } from '@/components/layout/module-ribbon'
 
 const tabs = [
   { id: 'inicio', label: 'Inicio' },
-  { id: 'catalogos', label: 'Catálogos' },
+  { id: 'catalogos', label: 'Parámetros' },
   { id: 'movimientos', label: 'Movimientos' },
   { id: 'consultas', label: 'Consultas' },
   { id: 'reportes', label: 'Reportes' },
@@ -43,8 +45,8 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
   if (activeTab === 'catalogos') {
     ribbonActions.push(
       { id: 'ubicaciones', label: 'Ubicaciones', icon: 'MapPin', onClick: () => setActiveActionId('ubicaciones') },
-      { id: 'bodegas', label: 'Bodegas', icon: 'Home', upcoming: true },
-      { id: 'productos', label: 'Productos', icon: 'Box', upcoming: true }
+      { id: 'bodegas', label: 'Bodegas', icon: 'Home', onClick: () => setActiveActionId('bodegas') },
+      { id: 'productos', label: 'Productos', icon: 'Box', onClick: () => setActiveActionId('productos') }
     )
   } else if (activeTab === 'movimientos') {
     ribbonActions.push(
@@ -83,12 +85,16 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
   } else if (activeTab === 'catalogos') {
     if (activeActionId === 'ubicaciones') {
       content = <LocationsPanel />
+    } else if (activeActionId === 'bodegas') {
+      content = <WarehousesPanel />
+    } else if (activeActionId === 'productos') {
+      content = <ProductsPanel />
     } else {
       content = (
         <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px] flex flex-col justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-theme-text">Mantenedor de Almacén</h2>
-            <p className="text-sm text-theme-text-muted/60 mt-2">Gestión y mantenedores del módulo de Logística.</p>
+            <h2 className="text-lg font-semibold text-theme-text">Parámetros Operativos</h2>
+            <p className="text-sm text-theme-text-muted/60 mt-2">Gestión y configuración base del módulo de Logística.</p>
           </div>
           <div className="mt-6 inline-flex items-center gap-2 text-xs font-semibold text-theme-accent/70 uppercase tracking-wider border border-theme-accent/20 bg-theme-accent-hover/8 px-3 py-1.5 rounded-lg w-fit">
             <span>⏳</span> Próximamente
@@ -161,7 +167,7 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
 
   // Workspace mode for panels that need full-height, full-width layout.
   // Extend this list when new operational panels are added.
-  const workspaceActionIds = ['recepciones', 'stock', 'kardex']
+  const workspaceActionIds = ['recepciones', 'stock', 'kardex', 'bodegas', 'productos']
   const layoutMode = workspaceActionIds.includes(activeActionId) ? 'workspace' : 'contained'
 
   return (

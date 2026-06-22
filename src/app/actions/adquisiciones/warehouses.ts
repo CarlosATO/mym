@@ -26,13 +26,24 @@ export interface WarehouseFilters {
 }
 
 export async function getWarehouses(filters: WarehouseFilters = {}): Promise<{ data: Warehouse[]; total: number }> {
+  if (process.env.NODE_ENV === 'development') console.time('getWarehouses_total')
+  if (process.env.NODE_ENV === 'development') console.time('getWarehouses_auth_company')
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { data: [], total: 0 }
+  if (!user) {
+    if (process.env.NODE_ENV === 'development') { console.timeEnd('getWarehouses_auth_company'); console.timeEnd('getWarehouses_total') }
+    return { data: [], total: 0 }
+  }
 
-  const companyId = await getActiveCompanyId()
-  if (!companyId) return { data: [], total: 0 }
+  const companyId = await getActiveCompanyId(user)
+  if (process.env.NODE_ENV === 'development') console.timeEnd('getWarehouses_auth_company')
 
+  if (!companyId) {
+    if (process.env.NODE_ENV === 'development') console.timeEnd('getWarehouses_total')
+    return { data: [], total: 0 }
+  }
+
+  if (process.env.NODE_ENV === 'development') console.time('getWarehouses_db')
   const d = db()
   let q = d.from('warehouses')
     .select('*', { count: 'exact' })
@@ -45,6 +56,8 @@ export async function getWarehouses(filters: WarehouseFilters = {}): Promise<{ d
   else if (filters.is_active === 'false') q = q.eq('is_active', false)
   const p = filters.page ?? 1; const ps = filters.pageSize ?? 50
   const { data, error, count } = await q.order('code').range((p - 1) * ps, p * ps - 1)
+  if (process.env.NODE_ENV === 'development') console.timeEnd('getWarehouses_db')
+  if (process.env.NODE_ENV === 'development') console.timeEnd('getWarehouses_total')
   if (error) return { data: [], total: 0 }
   return { data: (data ?? []) as Warehouse[], total: count ?? 0 }
 }
