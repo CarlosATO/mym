@@ -142,8 +142,8 @@ export function WarehousesPanel() {
 
   if (showForm) {
     return (
-      <div className="animate-in fade-in zoom-in-95 duration-200">
-        <form onSubmit={handleSubmit} className="bg-theme-surface rounded-2xl border border-theme-border shadow-sm overflow-hidden">
+      <div className="flex flex-col h-full overflow-hidden bg-theme-surface animate-in fade-in zoom-in-95 duration-200">
+        <form onSubmit={handleSubmit} className="flex-1 overflow-auto">
           <div className="px-6 py-4 border-b border-theme-border bg-theme-text/5 flex items-center justify-between sticky top-0 z-10">
             <div className="flex items-center gap-4">
               <button type="button" onClick={() => { setShowForm(false); resetForm() }} className="p-2 rounded-lg hover:bg-theme-text/10 text-theme-text-muted transition-colors">
@@ -200,10 +200,11 @@ export function WarehousesPanel() {
   }
 
   return (
-    <div className="space-y-4">
-      {msg && <div className="bg-theme-surface border border-theme-border rounded-xl px-4 py-2.5 text-sm text-theme-text">{msg}</div>}
+    <div className="flex flex-col h-full overflow-hidden bg-theme-surface">
+      {msg && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-muted">{msg}</div>}
 
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="shrink-0 flex flex-col gap-4 p-5 border-b border-theme-border/60 bg-theme-text/[0.01]">
+        <div className="flex flex-wrap items-center gap-3">
         <input type="text" value={filters.search ?? ''} onChange={e => setFilter('search', e.target.value)}
           placeholder="Buscar por código, nombre, ciudad, comuna..."
           className="flex-1 min-w-[200px] h-10 rounded-xl border border-theme-border bg-theme-surface px-3 text-sm text-theme-text placeholder:text-gray-400 dark:placeholder:text-theme-text-muted/50 focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
@@ -229,16 +230,16 @@ export function WarehousesPanel() {
         </select>
         <button onClick={() => { setFilters({ page: 1, pageSize: 50 }); setSelected(new Set()) }} className="h-9 px-3 rounded-lg border border-theme-border text-theme-text-muted/70 hover:text-theme-text hover:bg-theme-text/5 text-xs transition-colors">✕ Limpiar filtros</button>
       </div>
-
       {selected.size > 0 && <div className="text-xs text-theme-text-muted/70 px-1">{selected.size} bodega(s) seleccionada(s)</div>}
+      </div>
 
       {preview && (<div className="rounded-2xl border border-theme-border bg-theme-surface p-5 space-y-4"><div className="flex items-center justify-between"><h3 className="text-sm font-semibold text-theme-text">Vista previa - {preview.rows.length} filas</h3><div className="flex gap-2"><button onClick={() => setPreview(null)} className="px-3 py-1.5 rounded-lg border border-theme-border text-xs text-theme-text-muted/70 hover:text-theme-text">Cancelar</button>{preview.errors.length === 0 && preview.rows.length > 0 && <button onClick={handleImportConfirm} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-xs text-white font-semibold hover:bg-emerald-500">Confirmar</button>}</div></div>{preview.errors.length > 0 && <div className="bg-red-100 dark:bg-red-500/10 border border-red-300 dark:border-red-500/20 rounded-lg p-3 space-y-1">{preview.errors.map((e, i) => <p key={i} className="text-xs text-red-500 dark:text-red-400">{e}</p>)}</div>}</div>)}
 
       {loading ? (<div className="rounded-2xl border border-theme-border bg-theme-surface p-10 text-center"><p className="text-theme-text-muted/50 text-sm">Cargando...</p></div>)
       : data.length === 0 ? (<div className="rounded-2xl border border-theme-border bg-theme-surface p-10 text-center"><p className="text-theme-text-muted/50 text-sm">No hay bodegas registradas.</p></div>)
-      : (<div className="overflow-x-auto rounded-2xl border border-theme-border bg-theme-surface">
-          <table className="w-full text-sm">
-            <thead><tr className="border-b border-theme-border text-xs text-theme-text-muted/60 uppercase tracking-wider">
+      : (<div className="flex-1 overflow-auto">
+          <table className="w-full text-sm border-collapse">
+            <thead className="sticky top-0 z-10 bg-theme-surface"><tr className="border-b border-theme-border text-xs text-theme-text-muted/60 uppercase tracking-wider">
               <th className="py-3 px-4 text-left w-10"><input type="checkbox" checked={data.length > 0 && data.every(d => selected.has(d.id))} onChange={toggleAll} className="accent-emerald-600" /></th>
               <th className="text-left py-3 px-4 font-medium">Código</th>
               <th className="text-left py-3 px-4 font-medium">Nombre</th>
@@ -275,7 +276,7 @@ export function WarehousesPanel() {
         </div>)}
 
       {tp > 1 && (
-        <div className="flex items-center justify-between text-xs">
+        <div className="shrink-0 flex items-center justify-between text-xs p-4 border-t border-theme-border/60 bg-theme-text/[0.01]">
           <div className="flex items-center gap-2">
             <span className="text-theme-text-muted/50">Mostrar</span>
             <select value={filters.pageSize} onChange={e => setFilter('pageSize', e.target.value)} className="h-8 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30">

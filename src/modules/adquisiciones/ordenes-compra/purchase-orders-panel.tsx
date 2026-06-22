@@ -691,9 +691,9 @@ export function PurchaseOrdersPanel() {
 
   if (view === 'form') {
     return (
-      <div className="space-y-4 animate-in fade-in zoom-in-95 duration-200">
-        {message && <div className="bg-theme-accent-hover/10 border border-theme-accent/20 rounded-xl px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
-        <form onSubmit={handleSubmit} className="bg-theme-surface rounded-2xl border border-theme-border shadow-sm overflow-hidden">
+      <div className="flex flex-col h-full overflow-hidden bg-theme-surface animate-in fade-in zoom-in-95 duration-200">
+        {message && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
+        <form onSubmit={handleSubmit} className="flex-1 overflow-auto">
           <div className="px-6 py-4 border-b border-theme-border bg-theme-text/5 flex items-center justify-between sticky top-0 z-10">
             <div className="flex items-center gap-4">
               <button type="button" onClick={() => { setView('list'); resetForm() }} className="p-2 rounded-lg hover:bg-theme-text/10 text-theme-text-muted transition-colors">
@@ -1016,9 +1016,9 @@ export function PurchaseOrdersPanel() {
 
   if (view === 'detail' && detail) {
     return (
-      <div className="space-y-4 animate-in fade-in zoom-in-95 duration-200">
-        {message && <div className="bg-theme-accent-hover/10 border border-theme-accent/20 rounded-xl px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
-        <div className="bg-theme-surface rounded-2xl border border-theme-border shadow-sm overflow-hidden">
+      <div className="flex flex-col h-full overflow-hidden bg-theme-surface animate-in fade-in zoom-in-95 duration-200">
+        {message && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
+        <div className="flex-1 overflow-auto">
           <div className="px-6 py-4 border-b border-theme-border bg-theme-text/5 flex items-center justify-between sticky top-0 z-10">
             <div className="flex items-center gap-4">
               <button type="button" onClick={() => { setView('list'); setDetail(null) }} className="p-2 rounded-lg hover:bg-theme-text/10 text-theme-text-muted transition-colors">
@@ -1156,10 +1156,10 @@ export function PurchaseOrdersPanel() {
   }
 
   return (
-    <div className="space-y-4">
-      {message && <div className="bg-theme-accent-hover/10 border border-theme-accent/20 rounded-xl px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
+    <div className="flex flex-col h-full overflow-hidden bg-theme-surface">
+      {message && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
 
-      <div className="flex flex-col gap-4 mb-6">
+      <div className="shrink-0 flex flex-col gap-4 p-5 border-b border-theme-border/60 bg-theme-text/[0.01]">
         <div className="flex flex-col md:flex-row items-center gap-3 w-full">
           <div className="relative flex-1 w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted/50" />
@@ -1226,9 +1226,9 @@ export function PurchaseOrdersPanel() {
           <p className="text-theme-text-muted/50 text-sm">No hay órdenes de compra.</p>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-2xl border border-theme-border bg-theme-text/5">
-          <table className="w-full text-sm">
-            <thead>
+        <div className="flex-1 overflow-auto">
+          <table className="w-full text-sm border-collapse">
+            <thead className="sticky top-0 z-10 bg-theme-surface">
               <tr className="border-b border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider">
                 <th className="text-left py-3 px-4 font-medium">N° OC</th>
                 <th className="text-left py-3 px-4 font-medium">Fecha</th>
@@ -1281,7 +1281,7 @@ export function PurchaseOrdersPanel() {
       )}
 
       {totalPages > 1 && (
-        <div className="flex items-center justify-between text-xs">
+        <div className="shrink-0 flex items-center justify-between text-xs p-4 border-t border-theme-border/60 bg-theme-text/[0.01]">
           <div className="flex items-center gap-2">
             <span className="text-theme-text-muted/50">Mostrar</span>
             <select value={filters.pageSize} onChange={e => setFilters(p => ({ ...p, pageSize: parseInt(e.target.value) as 25 | 50 | 100 }))} className="h-8 rounded-lg border border-theme-border bg-theme-text/5 px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40">

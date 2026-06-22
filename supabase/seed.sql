@@ -1,0 +1,1 @@
+-- Archivo de semilla vacío para desarrollo local y producción

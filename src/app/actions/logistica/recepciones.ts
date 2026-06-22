@@ -28,6 +28,13 @@ export interface PurchaseOrderPending {
   grand_total: number
   receipt_status: string
   status: string
+  qty_ordered: number
+  qty_received: number
+  qty_pending: number
+  amount_received: number
+  latest_receipt_number: string | null
+  latest_receipt_date: string | null
+  latest_receipt_doc: string | null
 }
 
 export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]> {
@@ -43,7 +50,7 @@ export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]>
     .from('purchase_orders')
     .select('id, correlative, issue_date, po_type, grand_total, status, receipt_status, supplier_id, warehouse_id')
     .eq('company_id', companyId)
-    .in('status', ['EMITIDA', 'RECEPCION_PARCIAL'])
+    .in('status', ['EMITIDA', 'RECEPCION_PARCIAL', 'RECEPCION_TOTAL'])
     .order('created_at', { ascending: false })
 
   if (error) {
@@ -65,17 +72,70 @@ export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]>
   const supplierMap = new Map(suppliersRes.data?.map(s => [s.id, s.business_name]) ?? [])
   const warehouseMap = new Map(warehousesRes.data?.map(w => [w.id, w.name]) ?? [])
 
-  return data.map(po => ({
-    id: po.id,
-    correlative: po.correlative,
-    issue_date: po.issue_date,
-    supplier_name: supplierMap.get(po.supplier_id) || 'Proveedor Desconocido',
-    warehouse_name: po.warehouse_id ? warehouseMap.get(po.warehouse_id) || null : null,
-    po_type: po.po_type,
-    grand_total: po.grand_total,
-    receipt_status: po.receipt_status || 'PENDIENTE',
-    status: po.status
-  }))
+  // Additional Fetch: Quantities
+  const poIds = data.map(d => d.id)
+  const { data: itemsData } = await db
+    .from('purchase_order_items')
+    .select('po_id, quantity, quantity_received')
+    .in('po_id', poIds)
+
+  // Additional Fetch: Receipts (from logistica schema)
+  const { data: { session } } = await supabase.auth.getSession()
+  const logDbClient = createSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
+    db: { schema: 'logistica' },
+    global: { headers: { Authorization: `Bearer ${session?.access_token}` } }
+  })
+  
+  const { data: receiptsData } = await logDbClient
+    .from('purchase_receipts')
+    .select('id, purchase_order_id, receipt_number, received_at, status, receipt_total_gross, receipt_documents(id, document_type, document_number, file_name)')
+    .in('purchase_order_id', poIds)
+    .order('received_at', { ascending: false })
+
+  return data.map(po => {
+    // Quantities
+    const poItems = itemsData?.filter(i => i.po_id === po.id) || []
+    const qtyOrdered = poItems.reduce((acc, i) => acc + Number(i.quantity || 0), 0)
+    const qtyReceived = poItems.reduce((acc, i) => acc + Number(i.quantity_received || 0), 0)
+    const qtyPending = Math.max(0, qtyOrdered - qtyReceived)
+
+    // Receipts
+    const poReceipts = receiptsData?.filter(r => r.purchase_order_id === po.id) || []
+    const amountReceived = poReceipts.reduce((acc, r) => acc + Number(r.receipt_total_gross || 0), 0)
+    
+    let latestReceiptNumber = null
+    let latestReceiptDate = null
+    let latestReceiptDoc = null
+    
+    if (poReceipts.length > 0) {
+      const latest = poReceipts[0]
+      latestReceiptNumber = latest.receipt_number
+      latestReceiptDate = latest.received_at
+      if (latest.receipt_documents && latest.receipt_documents.length > 0) {
+        const doc = latest.receipt_documents[0]
+        latestReceiptDoc = `${doc.document_type} ${doc.document_number || ''}`.trim() || doc.file_name
+      }
+    }
+
+    return {
+      id: po.id,
+      correlative: po.correlative,
+      issue_date: po.issue_date,
+      supplier_name: supplierMap.get(po.supplier_id) || 'Proveedor Desconocido',
+      warehouse_name: po.warehouse_id ? warehouseMap.get(po.warehouse_id) || null : null,
+      po_type: po.po_type,
+      grand_total: po.grand_total,
+      receipt_status: po.receipt_status || 'PENDIENTE',
+      status: po.status,
+      qty_ordered: qtyOrdered,
+      qty_received: qtyReceived,
+      qty_pending: qtyPending,
+      amount_received: amountReceived,
+      latest_receipt_number: latestReceiptNumber,
+      latest_receipt_date: latestReceiptDate,
+      latest_receipt_doc: latestReceiptDoc
+    }
+  })
 }
 
 export async function getPurchaseOrderForReceipt(poId: string) {
@@ -126,7 +186,7 @@ export async function getPurchaseOrderForReceipt(poId: string) {
   const { data: items, error: itemsError } = await db
     .from('purchase_order_items')
     .select('*')
-    .eq('purchase_order_id', poId)
+    .eq('po_id', poId)
     .order('line_number')
 
   if (itemsError) {
@@ -154,13 +214,69 @@ export async function getPurchaseOrderForReceipt(poId: string) {
   }
 }
 
+export async function getPurchaseOrderReceiptDetails(poId: string) {
+  const baseData = await getPurchaseOrderForReceipt(poId)
+  if (!baseData) return null
+
+  const supabase = await createClient()
+  const { data: { session } } = await supabase.auth.getSession()
+  
+  const logDbClient = createSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
+    db: { schema: 'logistica' },
+    global: { headers: { Authorization: `Bearer ${session?.access_token}` } }
+  })
+
+  // 1. Fetch Receipts
+  const { data: receipts } = await logDbClient
+    .from('purchase_receipts')
+    .select('*, receipt_documents(*)')
+    .eq('purchase_order_id', poId)
+    .order('received_at', { ascending: false })
+
+  // 2. Fetch Receipt Items
+  const receiptIds = receipts?.map(r => r.id) || []
+  let receiptItems: any[] = []
+  if (receiptIds.length > 0) {
+    const { data: rItems } = await logDbClient
+      .from('purchase_receipt_items')
+      .select('*, locations(name, code)')
+      .in('receipt_id', receiptIds)
+    receiptItems = rItems || []
+  }
+
+  // Calculate totals
+  const totalOrdered = baseData.items.reduce((acc, i) => acc + Number(i.quantity || 0), 0)
+  const totalReceived = baseData.items.reduce((acc, i) => acc + Number(i.quantity_received || 0), 0)
+  const totalPending = Math.max(0, totalOrdered - totalReceived)
+  const amountReceived = receipts?.reduce((acc, r) => acc + Number(r.receipt_total_gross || 0), 0) || 0
+
+  return {
+    po: baseData.po,
+    items: baseData.items,
+    receipts: receipts || [],
+    receiptItems: receiptItems,
+    totals: {
+      qtyOrdered: totalOrdered,
+      qtyReceived: totalReceived,
+      qtyPending: totalPending,
+      amountReceived: amountReceived
+    }
+  }
+}
+
+
 export interface ReceiptItemInput {
   purchase_order_item_id: string
   quantity_received: number
+  quantity_rejected?: number
+  quantity_missing?: number
   location_id?: string | null
   lot_number?: string | null
   expiration_date?: string | null
+  condition?: 'CONFORME' | 'DANADO' | 'RECHAZADO' | 'FALTANTE'
   notes?: string | null
+  rejection_reason?: string | null
+  difference_reason?: string | null
 }
 
 export async function createPurchaseReceipt(data: {
@@ -168,7 +284,19 @@ export async function createPurchaseReceipt(data: {
   receiving_type: 'WAREHOUSE' | 'OFFICE'
   warehouse_id?: string | null
   notes?: string | null
+  document_type?: string | null
+  document_number?: string | null
+  document_date?: string | null
   items: ReceiptItemInput[]
+  attachment?: {
+    file_url?: string | null
+    storage_bucket?: string | null
+    storage_path?: string | null
+    file_name: string
+    file_size: number
+    mime_type: string
+    notes?: string
+  } | null
 }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -177,20 +305,44 @@ export async function createPurchaseReceipt(data: {
   const companyId = await getActiveCompanyId()
   if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
 
-  const db = logDb()
+  const { data: { session } } = await supabase.auth.getSession()
+
+  const db = createSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
+    db: { schema: 'logistica' },
+    global: {
+      headers: {
+        Authorization: `Bearer ${session?.access_token}`
+      }
+    }
+  })
+
+  // Map FOTO or EVIDENCIA document types to 'OTRO' for the header constraint
+  let headerDocType = data.document_type
+  if (headerDocType === 'FOTO' || headerDocType === 'EVIDENCIA') {
+    headerDocType = 'OTRO'
+  }
+
   const { data: result, error } = await db.rpc('create_purchase_receipt_db', {
     p_company_id: companyId,
     p_purchase_order_id: data.purchase_order_id,
     p_receiving_type: data.receiving_type,
     p_warehouse_id: data.warehouse_id || null,
     p_notes: data.notes || null,
+    p_document_type: headerDocType || null,
+    p_document_number: data.document_number || null,
+    p_document_date: data.document_date || null,
     p_items: data.items.map(it => ({
       purchase_order_item_id: it.purchase_order_item_id,
-      quantity_received: Number(it.quantity_received),
+      quantity_received: Number(it.quantity_received || 0),
+      quantity_rejected: Number(it.quantity_rejected || 0),
+      quantity_missing: Number(it.quantity_missing || 0),
       location_id: it.location_id || null,
       lot_number: it.lot_number || null,
       expiration_date: it.expiration_date || null,
-      notes: it.notes || null
+      condition: it.condition || 'CONFORME',
+      notes: it.notes || null,
+      rejection_reason: it.rejection_reason || null,
+      difference_reason: it.difference_reason || null
     })),
     p_user_id: user.id
   })
@@ -202,6 +354,37 @@ export async function createPurchaseReceipt(data: {
 
   const r = result as { success: boolean; error?: string; receipt_id?: string; receipt_number?: string }
   if (!r.success) return { error: r.error || 'Error al guardar recepción' }
+
+  // If there's an attachment, insert into logistica.receipt_documents
+  if (data.attachment && r.receipt_id) {
+    let docType = data.document_type || 'OTRO'
+    if (docType === 'FOTO') {
+      docType = 'EVIDENCIA'
+    }
+
+    const { error: docError } = await db
+      .from('receipt_documents')
+      .insert({
+        company_id: companyId,
+        receipt_id: r.receipt_id,
+        document_type: docType as any,
+        document_number: data.document_number || null,
+        file_url: null, // Removed per request, use signed URLs from storage_path
+        storage_bucket: data.attachment.storage_bucket || 'recepciones',
+        storage_path: data.attachment.storage_path || null,
+        document_date: data.document_date || null,
+        file_name: data.attachment.file_name,
+        file_size: data.attachment.file_size,
+        mime_type: data.attachment.mime_type,
+        notes: data.attachment.notes || null,
+        created_by: user.id
+      })
+
+    if (docError) {
+      console.error('Error inserting receipt document metadata:', docError)
+      return { error: `Recepción creada, pero falló el registro del documento: ${docError.message}` }
+    }
+  }
 
   return { success: true, receipt_id: r.receipt_id, receipt_number: r.receipt_number }
 }

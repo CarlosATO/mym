@@ -233,8 +233,8 @@ export function CatalogPanel() {
 
   if (showForm) {
     return (
-      <div className="animate-in fade-in zoom-in-95 duration-200">
-        <form id="product-form" onSubmit={handleSubmit} className="bg-theme-surface rounded-2xl border border-theme-border shadow-sm overflow-hidden">
+      <div className="flex flex-col h-full overflow-hidden bg-theme-surface animate-in fade-in zoom-in-95 duration-200">
+        <form id="product-form" onSubmit={handleSubmit} className="flex-1 overflow-auto">
           <div className="px-6 py-4 border-b border-theme-border bg-theme-text/5 flex items-center justify-between sticky top-0 z-10">
             <div className="flex items-center gap-4">
               <button type="button" onClick={() => { setShowForm(false); resetForm() }} className="p-2 rounded-lg hover:bg-theme-text/10 text-theme-text-muted transition-colors">
@@ -289,10 +289,10 @@ export function CatalogPanel() {
   }
 
   return (
-    <div className="space-y-4">
-      {message && <div className="bg-theme-accent-hover/10 border border-theme-accent/20 rounded-xl px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
+    <div className="flex flex-col h-full overflow-hidden bg-theme-surface">
+      {message && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
 
-      <div className="flex flex-col gap-4 mb-6">
+      <div className="shrink-0 flex flex-col gap-4 p-5 border-b border-theme-border/60 bg-theme-text/[0.01]">
         {/* Barra superior de herramientas */}
         <div className="flex flex-col md:flex-row items-center gap-3 w-full">
           {/* Búsqueda */}
@@ -436,7 +436,7 @@ export function CatalogPanel() {
       ) : products.length === 0 && viewMode === 'table' ? (
         <div className="rounded-2xl border border-gray-200/80 dark:border-theme-border bg-black/5 dark:bg-theme-text/5 p-10 text-center"><p className="text-theme-text-muted/50 text-sm">No hay productos en el catálogo.</p></div>
       ) : viewMode === 'cards' ? (
-        <>
+        <div className="flex-1 overflow-auto p-4">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {(products.length > 0 ? products : filteredData).map(p => (
               <div key={p.id} onClick={() => toggleSelect(p.id)} className={`rounded-2xl border overflow-hidden hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200 group cursor-pointer ${selected.has(p.id) ? 'border-emerald-500/60 ring-1 ring-emerald-500/30' : 'border-gray-200/80 dark:border-theme-border'}`}>
@@ -461,11 +461,11 @@ export function CatalogPanel() {
             ))}
           </div>
           {products.length === 0 && <div className="text-center py-10 text-theme-text-muted/50 text-sm">No hay productos.</div>}
-        </>
+        </div>
       ) : (
-        <div className="overflow-x-auto rounded-2xl border border-gray-200/80 dark:border-theme-border bg-black/5 dark:bg-theme-text/5">
-          <table className="w-full text-sm">
-            <thead>
+        <div className="flex-1 overflow-auto">
+          <table className="w-full text-sm border-collapse">
+            <thead className="sticky top-0 z-10 bg-theme-surface">
               <tr className="border-b border-gray-200/80 dark:border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider">
                 <th className="py-3 px-4 text-left w-10"><input type="checkbox" checked={products.length > 0 && products.every(p => selected.has(p.id))} onChange={toggleSelectAll} className="accent-emerald-600" /></th>
                 <th className="text-left py-3 px-4 font-medium w-14">Imagen</th>
@@ -509,7 +509,7 @@ export function CatalogPanel() {
       )}
 
       {totalPages > 1 && viewMode === 'table' && (
-        <div className="flex items-center justify-between text-xs">
+        <div className="shrink-0 flex items-center justify-between text-xs p-4 border-t border-theme-border/60 bg-theme-text/[0.01]">
           <div className="flex items-center gap-2">
             <span className="text-theme-text-muted/50">Mostrar</span>
             <select value={filters.pageSize} onChange={e => setFilter('pageSize', e.target.value)} className="h-8 rounded-lg border border-gray-200 dark:border-theme-border bg-black/5 dark:bg-theme-text/5 px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40">

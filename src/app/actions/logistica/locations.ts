@@ -57,7 +57,7 @@ export async function getLocations(filters: LocationFilters = {}): Promise<{
   const d = logDb()
   const { data, error } = await d
     .from('locations')
-    .select('*, warehouse:adquisiciones.warehouses(name)')
+    .select('*')
     .eq('company_id', companyId)
     .order('code')
 
@@ -66,9 +66,22 @@ export async function getLocations(filters: LocationFilters = {}): Promise<{
     return { data: [], total: 0, stats: { total: 0, active: 0, inactive: 0 } }
   }
 
+  // Consultar bodegas por separado desde el schema adquisiciones
+  const { data: warehouses, error: whError } = await adqDb()
+    .from('warehouses')
+    .select('id, name')
+    .eq('company_id', companyId)
+
+  const whMap = new Map()
+  if (warehouses && !whError) {
+    warehouses.forEach(wh => {
+      whMap.set(wh.id, wh.name)
+    })
+  }
+
   let filteredData = (data ?? []).map((loc: any) => ({
     ...loc,
-    warehouse_name: loc.warehouse?.name || 'Bodega Desconocida'
+    warehouse_name: whMap.get(loc.warehouse_id) || 'Bodega Desconocida'
   })) as Location[]
 
   // Compute stats based on company and selected warehouse (before search query is applied)
