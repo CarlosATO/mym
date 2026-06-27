@@ -86,6 +86,11 @@ function formatCode(
     .replace(/{level}/gi, level)
     .replace(/{position}/gi, position)
   
+  if (!aisle) res = res.replace(/PAS-/gi, '')
+  if (!rack) res = res.replace(/-R(?=-|$)/gi, '').replace(/RACK-/gi, '')
+  if (!level) res = res.replace(/-N(?=-|$)/gi, '').replace(/NIV-/gi, '')
+  if (!position) res = res.replace(/-P(?=-|$)/gi, '').replace(/POS-/gi, '')
+
   res = res.replace(/[-_+/]{2,}/g, (match) => match[0])
   res = res.replace(/^[-_+/]+|[-_+/]+$/g, '')
   return res.toUpperCase()
@@ -657,7 +662,12 @@ export function LocationsPanel() {
 
             {/* Range configuration */}
             <div className="bg-theme-text/5 rounded-2xl p-5 border border-theme-border/60 space-y-4">
-              <h3 className="text-xs font-bold text-theme-text uppercase tracking-wider">Definición de Rangos</h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold text-theme-text uppercase tracking-wider">Definición de Rangos</h3>
+                <span className="text-[10px] text-theme-text-muted/80 bg-theme-text/5 px-2 py-1 rounded-md border border-theme-border/50">
+                  Para crear múltiples ubicaciones, debe llenar ambos campos (ej: de 1 a 10). Si deja un campo vacío, solo se creará 1 valor.
+                </span>
+              </div>
               
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 {/* Comma separated pasillos */}

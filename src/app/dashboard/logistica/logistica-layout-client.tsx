@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { usePathname } from 'next/navigation'
 import { ModuleLayout } from '@/components/modules/module-layout'
 import { RecepcionesPanel } from '@/modules/logistica/recepciones/recepciones-panel'
@@ -9,6 +9,8 @@ import { KardexPanel } from '@/modules/logistica/kardex/kardex-panel'
 import { StockPanel } from '@/modules/logistica/stock/stock-panel'
 import { WarehousesPanel } from '@/modules/logistica/bodegas/warehouses-panel'
 import { ProductsPanel } from '@/modules/logistica/productos/products-panel'
+import { TransfersPanel } from '@/modules/logistica/traspasos/transfers-panel'
+import { AdjustmentsPanel } from '@/modules/logistica/ajustes/adjustments-panel'
 import type { RibbonAction } from '@/components/layout/module-ribbon'
 
 const tabs = [
@@ -18,6 +20,61 @@ const tabs = [
   { id: 'consultas', label: 'Consultas' },
   { id: 'reportes', label: 'Reportes' },
 ]
+
+// pageHeaders are only used in 'contained' mode views (e.g. Inicio).
+// Workspace/operational panels do NOT render these headers — they manage their own title area.
+const pageHeaders: Record<string, { title: string; breadcrumb: string[]; description: string }> = {
+  resumen: {
+    title: 'Panel de Logística',
+    breadcrumb: ['Logística', 'Inicio'],
+    description: 'Resumen operativo del módulo de almacén e inventario.',
+  },
+  ubicaciones: {
+    title: 'Ubicaciones',
+    breadcrumb: ['Logística', 'Parámetros', 'Ubicaciones'],
+    description: 'Administración de posiciones físicas por bodega, pasillo, rack, nivel y posición.',
+  },
+  bodegas: {
+    title: 'Bodegas',
+    breadcrumb: ['Logística', 'Parámetros', 'Bodegas'],
+    description: 'Administración de bodegas operativas.',
+  },
+  productos: {
+    title: 'Productos',
+    breadcrumb: ['Logística', 'Parámetros', 'Productos'],
+    description: 'Catálogo logístico de productos y atributos operacionales.',
+  },
+  recepciones: {
+    title: 'Recepciones',
+    breadcrumb: ['Logística', 'Movimientos', 'Recepciones'],
+    description: 'Registro y consulta de recepciones contra órdenes de compra.',
+  },
+  traspasos: {
+    title: 'Traspasos internos',
+    breadcrumb: ['Logística', 'Movimientos', 'Traspasos'],
+    description: 'Movimiento de stock entre bodegas y ubicaciones con trazabilidad por lote.',
+  },
+  stock: {
+    title: 'Stock por ubicación',
+    breadcrumb: ['Logística', 'Consultas', 'Stock'],
+    description: 'Existencias agrupadas por producto, bodega, ubicación, lote y vencimiento.',
+  },
+  kardex: {
+    title: 'Kardex de movimientos',
+    breadcrumb: ['Logística', 'Consultas', 'Kardex'],
+    description: 'Consulta cronológica de entradas, salidas, ajustes y traspasos de inventario.',
+  },
+  trazabilidad: {
+    title: 'Trazabilidad',
+    breadcrumb: ['Logística', 'Consultas', 'Trazabilidad'],
+    description: 'Seguimiento histórico de movimientos y lotes.',
+  },
+  reportes_log: {
+    title: 'Reportes de Almacén',
+    breadcrumb: ['Logística', 'Reportes'],
+    description: 'Reportería operacional del módulo de logística.',
+  },
+}
 
 interface LogisticaLayoutClientProps {
   children: React.ReactNode
@@ -30,6 +87,16 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
 
   const [activeTab, setActiveTab] = useState('inicio')
   const [activeActionId, setActiveActionId] = useState('resumen')
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search)
+      const tab = params.get('tab')
+      const action = params.get('action')
+      if (tab) setActiveTab(tab)
+      if (action) setActiveActionId(action)
+    }
+  }, [])
 
   const handleTabChange = (tabId: string) => {
     setActiveTab(tabId)
@@ -51,8 +118,8 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
   } else if (activeTab === 'movimientos') {
     ribbonActions.push(
       { id: 'recepciones', label: 'Recepciones', icon: 'PackageOpen', onClick: () => setActiveActionId('recepciones') },
-      { id: 'traspasos', label: 'Traspasos', icon: 'ArrowLeftRight', upcoming: true },
-      { id: 'ajustes', label: 'Ajustes', icon: 'Sliders', upcoming: true },
+      { id: 'traspasos', label: 'Traspasos', icon: 'ArrowLeftRight', onClick: () => setActiveActionId('traspasos') },
+      { id: 'ajustes', label: 'Ajustes', icon: 'Sliders', onClick: () => setActiveActionId('ajustes') },
       { id: 'egresos', label: 'Egresos', icon: 'LogOut', upcoming: true },
       { id: 'devoluciones', label: 'Devoluciones', icon: 'RotateCcw', upcoming: true }
     )
@@ -105,6 +172,10 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
   } else if (activeTab === 'movimientos') {
     if (activeActionId === 'recepciones') {
       content = <RecepcionesPanel />
+    } else if (activeActionId === 'traspasos') {
+      content = <TransfersPanel />
+    } else if (activeActionId === 'ajustes') {
+      content = <AdjustmentsPanel />
     } else {
       content = (
         <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px] flex flex-col justify-between">
@@ -167,7 +238,7 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
 
   // Workspace mode for panels that need full-height, full-width layout.
   // Extend this list when new operational panels are added.
-  const workspaceActionIds = ['recepciones', 'stock', 'kardex', 'bodegas', 'productos']
+  const workspaceActionIds = ['recepciones', 'traspasos', 'stock', 'kardex', 'bodegas', 'productos']
   const layoutMode = workspaceActionIds.includes(activeActionId) ? 'workspace' : 'contained'
 
   return (
@@ -179,11 +250,12 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
       ribbonActions={ribbonActions}
       activeActionId={activeActionId}
       layoutMode={layoutMode}
+      // pageHeader is intentionally omitted in workspace mode (operational panels).
+      // Only pass it for contained mode views that benefit from breadcrumb/title.
+      pageHeader={layoutMode === 'workspace' ? undefined : (pageHeaders[activeActionId] ?? pageHeaders.resumen)}
       profile={profile}
     >
       {content}
     </ModuleLayout>
   )
 }
-
-

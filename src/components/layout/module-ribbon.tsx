@@ -46,14 +46,15 @@ export function ModuleRibbon({ actions, activeActionId }: ModuleRibbonProps) {
                 }}
                 disabled={isDisabled}
                 className={cn(
-                  "flex items-center gap-1.2 px-2.5 py-0.5 rounded-lg text-xs font-semibold transition-all shrink-0 border relative",
+                  "flex items-center gap-1.5 px-3 py-0.5 rounded-lg text-xs font-semibold transition-all shrink-0 border relative",
                   isSelected
-                    ? "bg-theme-accent/15 border-theme-accent/30 text-theme-text"
-                    : "bg-white/5 border-white/10 text-theme-text hover:border-white/20 hover:bg-white/10",
+                    ? "bg-theme-accent/18 border-theme-accent/60 text-theme-text shadow-sm ring-1 ring-theme-accent/25"
+                    : "bg-theme-text/5 border-theme-border/60 text-theme-text-muted hover:text-theme-text hover:border-theme-border-accent/50 hover:bg-theme-text/10",
                   isDisabled && "opacity-65 cursor-not-allowed hover:bg-white/5 hover:border-white/10 text-theme-text-muted"
                 )}
               >
-                <Icon className="h-3 w-3 text-theme-accent" />
+                {isSelected && <span className="absolute left-1 top-1 bottom-1 w-0.5 rounded-full bg-theme-accent" />}
+                <Icon className={cn("h-3 w-3", isSelected ? "text-theme-accent" : "text-theme-text-muted")} />
                 <span>{action.label}</span>
                 {action.upcoming && (
                   <span className="text-[7px] font-bold bg-theme-accent/20 text-theme-accent border border-theme-accent/25 px-1 rounded-sm uppercase tracking-wider scale-90 origin-right">

@@ -7,6 +7,7 @@ import { getLocations, type Location } from '@/app/actions/logistica/locations'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
 import * as LucideIcons from 'lucide-react'
+import { erpInputClass, erpSelectClass } from '@/lib/form-styles'
 import { cn } from '@/lib/utils'
 
 interface ReceiptWorksheetProps {
@@ -341,12 +342,15 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
         return
       }
 
-      toast.success(`Recepción ${res.receipt_number} guardada exitosamente de forma local.`)
+      toast.success(`Recepción ${res.receipt_number} guardada exitosamente.`)
       
-      router.push('/dashboard/logistica')
-      setTimeout(() => {
-        window.location.reload()
-      }, 100)
+      sessionStorage.setItem('mym_receipt_success', JSON.stringify({
+        poId: poDetail.po.id,
+        receiptNumber: res.receipt_number,
+        timestamp: Date.now()
+      }))
+
+      window.location.assign('/dashboard/logistica?tab=movimientos&action=recepciones')
     } catch (err) {
       console.error('Error confirming receipt:', err)
       toast.error('Error de red o comunicación al guardar la recepción.')
@@ -403,7 +407,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
             ) : (
               <LucideIcons.CheckCircle2 className="w-3.5 h-3.5" />
             )}
-            <span>Registrar Recepción</span>
+            <span>{saving ? 'Registrando recepción...' : 'Registrar Recepción'}</span>
           </button>
         </div>
       </div>
@@ -463,34 +467,24 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
             </div>
 
             <div className="grid grid-cols-2 gap-2 pt-2 border-t border-theme-border/40">
-              <div>
-                <span className="text-theme-text-muted uppercase tracking-wider text-[9px] font-semibold">Tipo Recepción</span>
-                <select 
-                  value={receivingType} 
-                  onChange={e => setReceivingType(e.target.value as any)}
-                  disabled={poDetail.po.po_type === 'SERVICIOS'}
-                  className="mt-1 h-8 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none w-full shadow-sm"
-                >
-                  <option value="WAREHOUSE">Física (Bodega)</option>
-                  <option value="OFFICE">Administrativa (Oficina)</option>
-                </select>
+              <div className="flex flex-col justify-end">
+                <div className="flex items-end justify-between mb-1 gap-1">
+                  <span className="text-theme-text-muted uppercase tracking-wider text-[9px] font-semibold leading-tight">Tipo Recepción</span>
+                  <span className="text-[8px] text-theme-text-muted/60 uppercase whitespace-nowrap hidden sm:inline-block">Definido en OC</span>
+                </div>
+                <div className="flex items-center h-8 rounded-lg border border-theme-border/50 bg-theme-text/[0.02] px-2.5 text-xs font-semibold text-theme-text shadow-sm cursor-default">
+                  {receivingType === 'WAREHOUSE' ? 'Física (Bodega)' : 'Administrativa (Oficina)'}
+                </div>
               </div>
               
-              <div>
-                <span className="text-theme-text-muted uppercase tracking-wider text-[9px] font-semibold">Bodega de Ingreso</span>
-                <select 
-                  value={mainWarehouseId} 
-                  onChange={e => setMainWarehouseId(e.target.value)}
-                  disabled={receivingType === 'OFFICE'}
-                  className="mt-1 h-8 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none w-full disabled:opacity-50 shadow-sm"
-                >
-                  <option value="">Seleccionar...</option>
-                  {poDetail.po.warehouse_id && (
-                    <option value={poDetail.po.warehouse_id}>
-                      {poDetail.po.warehouse_name} (Origen)
-                    </option>
-                  )}
-                </select>
+              <div className="flex flex-col justify-end">
+                <div className="flex items-end justify-between mb-1 gap-1">
+                  <span className="text-theme-text-muted uppercase tracking-wider text-[9px] font-semibold leading-tight">Bodega Ingreso</span>
+                  <span className="text-[8px] text-theme-text-muted/60 uppercase whitespace-nowrap hidden sm:inline-block">Dato de origen</span>
+                </div>
+                <div className="flex items-center h-8 rounded-lg border border-theme-border/50 bg-theme-text/[0.02] px-2.5 text-[11px] font-semibold text-theme-text shadow-sm cursor-default truncate">
+                  {receivingType === 'OFFICE' ? '—' : (poDetail.po.warehouse_name || 'No asignada')}
+                </div>
               </div>
             </div>
           </div>
@@ -509,7 +503,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
               <select
                 value={documentType}
                 onChange={e => setDocumentType(e.target.value)}
-                className="w-full h-8 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none shadow-sm"
+                className={cn(erpSelectClass, 'w-full h-8 px-3 text-xs')}
               >
                 <option value="GD">GD - Guía de Despacho</option>
                 <option value="FA">FA - Factura</option>
@@ -526,7 +520,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
                 value={documentNumber}
                 onChange={e => setDocumentNumber(e.target.value)}
                 placeholder="Ej: 12948"
-                className="w-full h-8 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none shadow-sm"
+                className={cn(erpInputClass, 'w-full h-8 px-3 text-xs')}
               />
             </div>
 
@@ -536,7 +530,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
                 type="date"
                 value={documentDate}
                 onChange={e => setDocumentDate(e.target.value)}
-                className="w-full h-8 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none shadow-sm"
+                className={cn(erpInputClass, 'w-full h-8 px-3 text-xs')}
               />
             </div>
           </div>
@@ -597,7 +591,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
                 }}
                 placeholder="Observación del archivo cargado..."
                 rows={2}
-                className="w-full rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-xs text-theme-text focus:outline-none resize-none shadow-sm"
+                className={cn(erpInputClass, 'w-full px-3 py-2 text-xs resize-none')}
               />
             </div>
           </div>
@@ -616,7 +610,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
           onChange={e => setGeneralNotes(e.target.value)}
           rows={2}
           placeholder="Ingrese comentarios adicionales sobre la carga, estado del transporte, etc..."
-          className="w-full rounded-xl border border-theme-border bg-theme-surface px-4 py-2.5 text-xs text-theme-text focus:outline-none resize-none shadow-sm"
+          className={cn(erpInputClass, 'w-full rounded-xl px-4 py-2.5 text-xs resize-none')}
         />
       </div>
 
@@ -722,7 +716,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
                                   const val = Math.max(0, parseFloat(e.target.value) || 0)
                                   updateSplitField(item.id, split.id, 'quantity', val)
                                 }}
-                                className="w-20 h-7 rounded border border-theme-border/80 bg-theme-surface px-2 text-right font-bold text-[11px] text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30"
+                                className={cn(erpInputClass, 'w-20 h-7 rounded px-2 text-right font-bold text-[11px]')}
                               />
                             </td>
 
@@ -735,7 +729,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
                                     <select
                                       value={split.location_id}
                                       onChange={e => updateSplitField(item.id, split.id, 'location_id', e.target.value)}
-                                      className="h-7 rounded border border-theme-border/80 bg-theme-surface px-1.5 text-[11px] text-theme-text font-bold focus:outline-none focus:ring-1 focus:ring-theme-accent/30"
+                                      className={cn(erpSelectClass, 'h-7 rounded px-1.5 text-[11px] font-bold')}
                                     >
                                       <option value="">Seleccionar...</option>
                                       {whLocs.map(l => (
@@ -754,7 +748,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
                                         value={split.lot_number}
                                         onChange={e => updateSplitField(item.id, split.id, 'lot_number', e.target.value)}
                                         placeholder="Código"
-                                        className="w-20 h-7 rounded border border-theme-border/80 bg-theme-surface px-1.5 text-[11px] text-theme-text font-bold placeholder-theme-text-muted/30 focus:outline-none focus:ring-1 focus:ring-theme-accent/30"
+                                        className={cn(erpInputClass, 'w-20 h-7 rounded px-1.5 text-[11px] font-bold')}
                                       />
                                     </div>
 
@@ -764,7 +758,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
                                         type="date"
                                         value={split.expiration_date}
                                         onChange={e => updateSplitField(item.id, split.id, 'expiration_date', e.target.value)}
-                                        className="h-7 rounded border border-theme-border/80 bg-theme-surface px-1.5 text-[11px] text-theme-text font-bold focus:outline-none focus:ring-1 focus:ring-theme-accent/30"
+                                        className={cn(erpInputClass, 'h-7 rounded px-1.5 text-[11px] font-bold')}
                                       />
                                     </div>
                                   </>
@@ -777,7 +771,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
                                     value={split.notes}
                                     onChange={e => updateSplitField(item.id, split.id, 'notes', e.target.value)}
                                     placeholder="Notas u observaciones (opcional)..."
-                                    className="w-full h-7 rounded border border-theme-border/80 bg-theme-surface px-2 text-[11px] text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30"
+                                    className={cn(erpInputClass, 'w-full h-7 rounded px-2 text-[11px]')}
                                   />
                                 </div>
 
@@ -862,7 +856,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
           ) : (
             <LucideIcons.CheckCircle2 className="w-4 h-4" />
           )}
-          <span>Confirmar y Registrar Recepción</span>
+          <span>{saving ? 'Registrando recepción...' : 'Confirmar y Registrar Recepción'}</span>
         </button>
       </div>
 

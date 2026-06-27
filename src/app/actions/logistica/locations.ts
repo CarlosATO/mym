@@ -278,6 +278,11 @@ function formatCode(
     .replace(/{level}/gi, level)
     .replace(/{position}/gi, position)
   
+  if (!aisle) res = res.replace(/PAS-/gi, '')
+  if (!rack) res = res.replace(/-R(?=-|$)/gi, '').replace(/RACK-/gi, '')
+  if (!level) res = res.replace(/-N(?=-|$)/gi, '').replace(/NIV-/gi, '')
+  if (!position) res = res.replace(/-P(?=-|$)/gi, '').replace(/POS-/gi, '')
+
   res = res.replace(/[-_+/]{2,}/g, (match) => match[0])
   res = res.replace(/^[-_+/]+|[-_+/]+$/g, '')
   return res.toUpperCase()
@@ -394,6 +399,23 @@ export async function createLocationsBulk(data: {
     }
   }
 
+  if (process.env.NODE_ENV === 'development') {
+    console.log('--- DEBUG BULK INSERT ---')
+    console.log('Parameters received:', {
+      warehouse_id: data.warehouse_id,
+      prefix,
+      aisles,
+      rackFrom: data.rackFrom, rackTo: data.rackTo,
+      levelFrom: data.levelFrom, levelTo: data.levelTo,
+      positionFrom: data.positionFrom, positionTo: data.positionTo,
+      codeFormat: data.codeFormat
+    })
+    console.log('Ranges generated:', { aisles, racks, levels, positions })
+    console.log('Total generated combinations (toInsert):', toInsert.length)
+    console.log('First 10 codes:', toInsert.slice(0, 10).map(x => x.code))
+    console.log('Skipped duplicates:', skippedDuplicates)
+  }
+
   if (toInsert.length === 0) {
     return {
       success: true,
@@ -417,6 +439,12 @@ export async function createLocationsBulk(data: {
     } else {
       createdCount += chunk.length
     }
+  }
+
+  if (process.env.NODE_ENV === 'development') {
+    console.log('Total inserted:', createdCount)
+    console.log('Errors:', errors)
+    console.log('-------------------------')
   }
 
   return {

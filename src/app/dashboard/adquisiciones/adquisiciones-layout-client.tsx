@@ -16,6 +16,59 @@ const tabs = [
   { id: 'reportes', label: 'Reportes' },
 ]
 
+const pageHeaders: Record<string, { title: string; breadcrumb: string[]; description: string }> = {
+  resumen: {
+    title: 'Panel de Adquisiciones',
+    breadcrumb: ['Adquisiciones', 'Inicio'],
+    description: 'Resumen general del módulo de compras y abastecimiento.',
+  },
+  proveedores: {
+    title: 'Proveedores',
+    breadcrumb: ['Adquisiciones', 'Catálogos', 'Proveedores'],
+    description: 'Administración de proveedores y condiciones comerciales.',
+  },
+  catalogo: {
+    title: 'Catálogo de Productos',
+    breadcrumb: ['Adquisiciones', 'Catálogos', 'Catálogo de Productos'],
+    description: 'Mantenimiento del catálogo base para compras.',
+  },
+  bodegas: {
+    title: 'Bodegas',
+    breadcrumb: ['Adquisiciones', 'Catálogos', 'Bodegas'],
+    description: 'Consulta de bodegas disponibles para órdenes de compra.',
+  },
+  autorizadores: {
+    title: 'Autorizadores de Compra',
+    breadcrumb: ['Adquisiciones', 'Catálogos', 'Autorizadores'],
+    description: 'Gestión y control de autorizaciones de montos y presupuestos.',
+  },
+  ordenes: {
+    title: 'Órdenes de Compra',
+    breadcrumb: ['Adquisiciones', 'Compras', 'Órdenes de Compra'],
+    description: 'Emisión, seguimiento y control de órdenes de compra.',
+  },
+  nueva_orden: {
+    title: 'Nueva Orden',
+    breadcrumb: ['Adquisiciones', 'Compras', 'Nueva Orden'],
+    description: 'Creación de nuevas solicitudes de compra.',
+  },
+  historial: {
+    title: 'Historial de Compras',
+    breadcrumb: ['Adquisiciones', 'Compras', 'Historial'],
+    description: 'Consulta histórica de compras realizadas.',
+  },
+  recepciones_p: {
+    title: 'Recepciones',
+    breadcrumb: ['Adquisiciones', 'Recepción', 'Recepciones'],
+    description: 'Seguimiento de recepciones asociadas a compras.',
+  },
+  reporte_gral: {
+    title: 'Reporte General',
+    breadcrumb: ['Adquisiciones', 'Reportes'],
+    description: 'Indicadores y reportes generales de compras.',
+  },
+}
+
 interface AdquisicionesLayoutClientProps {
   children: React.ReactNode
   profile: { nombre: string; apellido: string; email: string; roles: { name: string } }
@@ -139,6 +192,7 @@ export function AdquisicionesLayoutClient({ children, profile }: AdquisicionesLa
       ribbonActions={ribbonActions}
       activeActionId={activeActionId}
       layoutMode={layoutMode}
+      pageHeader={pageHeaders[activeActionId] ?? pageHeaders.resumen}
       profile={profile}
     >
       {content}

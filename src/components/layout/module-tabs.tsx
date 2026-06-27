@@ -28,12 +28,13 @@ export function ModuleTabs({ tabs, activeTab, onTabChange }: ModuleTabsProps) {
                 key={tab.id}
                 onClick={() => onTabChange(tab.id)}
                 className={cn(
-                  "h-full px-4 text-xs font-semibold border-b-2 transition-all shrink-0 flex items-center justify-center gap-1.5",
+                  "h-full px-4 text-xs font-semibold border-b-2 transition-all shrink-0 flex items-center justify-center gap-1.5 relative",
                   isActive
-                    ? "border-theme-accent text-theme-text"
-                    : "border-transparent text-theme-text-muted hover:text-theme-text hover:border-theme-border/40 font-medium"
+                    ? "border-theme-accent text-theme-text bg-theme-accent/12 shadow-[inset_0_-1px_0_rgba(255,255,255,0.08)]"
+                    : "border-transparent text-theme-text-muted hover:text-theme-text hover:border-theme-border/60 hover:bg-theme-text/5 font-medium"
                 )}
               >
+                {isActive && <span className="absolute left-2 right-2 top-0 h-px rounded-full bg-theme-accent/70" />}
                 {tab.label}
               </button>
             )

@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils'
 import { AppTopbar } from '@/components/layout/app-topbar'
 import { ModuleTabs } from '@/components/layout/module-tabs'
 import { ModuleRibbon, type RibbonAction } from '@/components/layout/module-ribbon'
+import { ModulePageHeader, type ModulePageHeaderProps } from '@/components/layout/module-page-header'
 
 interface Tab {
   id: string
@@ -22,6 +23,7 @@ interface ModuleLayoutProps {
   activeActionId?: string
   /** 'contained' = max-w-7xl centrado (default). 'workspace' = ancho completo, altura útil fija. */
   layoutMode?: 'contained' | 'workspace'
+  pageHeader?: ModulePageHeaderProps
   children: React.ReactNode
   profile: { nombre: string; apellido: string; email: string; roles: { name: string } }
 }
@@ -34,6 +36,7 @@ export function ModuleLayout({
   ribbonActions = [],
   activeActionId,
   layoutMode = 'contained',
+  pageHeader,
   children,
   profile
 }: ModuleLayoutProps) {
@@ -79,7 +82,7 @@ export function ModuleLayout({
     )
   }
 
-  // Generamos permisos ficticios vacíos ya que en el módulo no cargamos roles específicos cliente-side, 
+  // Generamos permisos ficticios vacíos ya que en el módulo no cargamos roles específicos cliente-side,
   // pero el UserMenu leerá el rol de SUPER_USUARIO del profile.
   const permissions: string[] = profile.roles?.name === 'SUPER_USUARIO' ? ['usuarios.view', 'roles.view', 'audit.view', 'security.view'] : []
 
@@ -112,19 +115,25 @@ export function ModuleLayout({
         // Topbar=48 + Tabs=36 + Ribbon=40 → 124px fixed headers.
         // With ribbon: main pt=132px + pb=8px = 140px consumed.
         // Without ribbon: main pt=92px + pb=8px = 100px consumed.
+        // NOTE: ModulePageHeader is intentionally suppressed in workspace mode.
+        // Operational panels (Recepciones, Traspasos, Stock, Kardex, Bodegas,
+        // Ubicaciones, Productos) manage their own compact headers internally.
         <main className={cn("flex-1 w-full", ribbonActions.length > 0 ? "pt-[132px]" : "pt-[92px]")}
               data-layout="workspace">
           <div
-            className="w-full pb-2"
+            className="w-full pb-2 flex flex-col min-h-0"
             style={{ height: ribbonActions.length > 0 ? 'calc(100vh - 140px)' : 'calc(100vh - 100px)' }}
           >
-            {children}
+            <div className="flex-1 min-h-0 overflow-hidden">
+              {children}
+            </div>
           </div>
         </main>
       ) : (
         // Contained mode: centered, max-width, default padding.
         <main className={cn("flex-1 w-full", ribbonActions.length > 0 ? "pt-[132px]" : "pt-[92px]")}>
           <div className="max-w-7xl mx-auto p-4 lg:p-6">
+            {pageHeader && <div className="mb-4 overflow-hidden rounded-2xl border border-theme-border/70"><ModulePageHeader {...pageHeader} /></div>}
             {children}
           </div>
         </main>
@@ -133,4 +142,3 @@ export function ModuleLayout({
 
   )
 }
-

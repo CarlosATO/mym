@@ -10,8 +10,9 @@ import {
 import {
   Search, CheckCircle2, Clock, AlertCircle, Package,
   MapPin, Calendar, FileText, Paperclip, Layers, X,
-  Eye, PackageOpen
+  Eye, PackageOpen, Loader2
 } from 'lucide-react'
+import { erpInputClass } from '@/lib/form-styles'
 import { cn } from '@/lib/utils'
 
 type FilterTab = 'ALL' | 'PENDING' | 'PARTIAL' | 'RECEIVED'
@@ -63,16 +64,35 @@ function DetailPanel({
   summary,
   cachedDetail,
   onClose,
-  onDetailLoaded
+  onDetailLoaded,
+  receivingId,
+  onReceive
 }: {
   summary: PurchaseOrderPending
   cachedDetail: any | null
   onClose: () => void
   onDetailLoaded: (poId: string, data: any) => void
+  receivingId: string | null
+  onReceive: (id: string) => void
 }) {
-  const router = useRouter()
   const [detail, setDetail] = useState<any>(cachedDetail)
   const [loadingDetail, setLoadingDetail] = useState(!cachedDetail)
+  const [successReceipt, setSuccessReceipt] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const flash = sessionStorage.getItem('mym_receipt_success')
+      if (flash) {
+        try {
+          const data = JSON.parse(flash)
+          if (data.poId === summary.id && data.receiptNumber) {
+            setSuccessReceipt(data.receiptNumber)
+            sessionStorage.removeItem('mym_receipt_success')
+          }
+        } catch (e) {}
+      }
+    }
+  }, [summary.id])
 
   useEffect(() => {
     if (cachedDetail) {
@@ -83,7 +103,10 @@ function DetailPanel({
     let active = true
     setDetail(null)
     setLoadingDetail(true)
+    const perfLabel = `openReceptionDetail:${summary.id}`
+    if (process.env.NODE_ENV === 'development') console.time(perfLabel)
     getPurchaseOrderReceiptDetails(summary.id).then(res => {
+      if (process.env.NODE_ENV === 'development') console.timeEnd(perfLabel)
       if (active) {
         setDetail(res)
         setLoadingDetail(false)
@@ -101,6 +124,19 @@ function DetailPanel({
 
       {/* ── Header (fixed height, no excessive padding) ── */}
       <div className="shrink-0 border-b border-theme-border/70">
+        {successReceipt && (
+          <div className="bg-emerald-500/10 border-b border-emerald-500/20 px-5 py-2.5 flex items-center justify-between animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+              <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                Recepción <span className="font-mono text-emerald-700 dark:text-emerald-300">{successReceipt}</span> registrada correctamente
+              </span>
+            </div>
+            <button onClick={() => setSuccessReceipt(null)} className="text-emerald-600 hover:bg-emerald-500/10 p-1 rounded transition-colors" title="Cerrar aviso">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
         {/* Title row */}
         <div className="flex items-center justify-between gap-4 px-5 py-3 bg-theme-text/[0.02]">
           <div className="flex items-center gap-3 min-w-0">
@@ -122,17 +158,21 @@ function DetailPanel({
               </span>
             ) : isPartial ? (
               <button
-                onClick={() => router.push(`/dashboard/logistica/recepciones/${summary.id}`)}
-                className="px-3 py-1.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-xs font-bold transition-all active:scale-95"
+                disabled={!!receivingId}
+                onClick={() => onReceive(summary.id)}
+                className="px-3 py-1.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-xs font-bold transition-all active:scale-95 flex items-center gap-1.5 disabled:opacity-50"
               >
-                Recibir saldo
+                {receivingId === summary.id && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {receivingId === summary.id ? 'Cargando...' : 'Recibir saldo'}
               </button>
             ) : (
               <button
-                onClick={() => router.push(`/dashboard/logistica/recepciones/${summary.id}`)}
-                className="px-3 py-1.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-xs font-bold transition-all active:scale-95"
+                disabled={!!receivingId}
+                onClick={() => onReceive(summary.id)}
+                className="px-3 py-1.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-xs font-bold transition-all active:scale-95 flex items-center gap-1.5 disabled:opacity-50"
               >
-                Recibir OC
+                {receivingId === summary.id && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {receivingId === summary.id ? 'Cargando...' : 'Recibir OC'}
               </button>
             )}
             <button
@@ -330,6 +370,8 @@ function TrayTable({
   filteredPOs,
   onOpenDetail,
   onPrefetch,
+  receivingId,
+  onReceive
 }: {
   pos: PurchaseOrderPending[]
   loading: boolean
@@ -341,8 +383,9 @@ function TrayTable({
   filteredPOs: PurchaseOrderPending[]
   onOpenDetail: (po: PurchaseOrderPending) => void
   onPrefetch: (poId: string) => void
+  receivingId: string | null
+  onReceive: (id: string) => void
 }) {
-  const router = useRouter()
 
   const tabBtn = (id: FilterTab, label: string, activeColor: string) => (
     <button
@@ -374,7 +417,7 @@ function TrayTable({
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Buscar OC, proveedor, documento..."
-            className="w-full h-9 pl-9 pr-3 rounded-lg border border-theme-border bg-theme-surface focus:ring-1 focus:ring-theme-accent/30 focus:border-theme-accent transition-all text-xs text-theme-text placeholder:text-theme-text-muted/50"
+            className={cn(erpInputClass, 'w-full h-9 pl-9 pr-3 text-xs')}
           />
         </div>
       </div>
@@ -416,7 +459,10 @@ function TrayTable({
                 return (
                   <tr
                     key={po.id}
-                    onDoubleClick={() => onOpenDetail(po)}
+                    onDoubleClick={() => {
+                      if (isTotal) onOpenDetail(po)
+                      else onReceive(po.id)
+                    }}
                     onMouseEnter={() => onPrefetch(po.id)}
                     className="border-b border-theme-border/40 hover:bg-theme-accent/[0.03] transition-colors cursor-pointer group"
                   >
@@ -459,17 +505,21 @@ function TrayTable({
                         </button>
                       ) : isPartial ? (
                         <button
-                          onClick={() => router.push(`/dashboard/logistica/recepciones/${po.id}`)}
-                          className="px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-400 border border-amber-500/25 text-[10px] font-bold transition-all"
+                          disabled={!!receivingId}
+                          onClick={(e) => { e.stopPropagation(); onReceive(po.id) }}
+                          className="px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-400 border border-amber-500/25 text-[10px] font-bold transition-all disabled:opacity-50 flex items-center gap-1"
                         >
-                          Recibir saldo
+                          {receivingId === po.id && <Loader2 className="w-3 h-3 animate-spin" />}
+                          {receivingId === po.id ? 'Cargando...' : 'Recibir saldo'}
                         </button>
                       ) : (
                         <button
-                          onClick={() => router.push(`/dashboard/logistica/recepciones/${po.id}`)}
-                          className="px-2.5 py-1 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-[10px] font-bold transition-all active:scale-95"
+                          disabled={!!receivingId}
+                          onClick={(e) => { e.stopPropagation(); onReceive(po.id) }}
+                          className="px-2.5 py-1 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-[10px] font-bold transition-all active:scale-95 disabled:opacity-50 flex items-center gap-1"
                         >
-                          Recibir
+                          {receivingId === po.id && <Loader2 className="w-3 h-3 animate-spin" />}
+                          {receivingId === po.id ? 'Cargando...' : 'Recibir'}
                         </button>
                       )}
                     </td>
@@ -537,10 +587,18 @@ function CompactList({
 // ─── Main Panel ───────────────────────────────────────────────────────────────
 
 export function RecepcionesPanel() {
+  const router = useRouter()
   const [pos, setPos] = useState<PurchaseOrderPending[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filterTab, setFilterTab] = useState<FilterTab>('ALL')
+
+  const [receivingId, setReceivingId] = useState<string | null>(null)
+  const handleReceive = (id: string) => {
+    if (receivingId) return
+    setReceivingId(id)
+    router.push(`/dashboard/logistica/recepciones/${id}`)
+  }
 
   // null = tray view (no detail). string = detail open for this poId.
   const [detailPoId, setDetailPoId] = useState<string | null>(null)
@@ -550,11 +608,39 @@ export function RecepcionesPanel() {
   // Track pending prefetch requests to avoid duplicates
   const pendingRequestsRef = useRef<Record<string, boolean>>({})
 
+  const [initialPoIdSet, setInitialPoIdSet] = useState(false)
+  
+  useEffect(() => {
+    if (pos.length > 0 && !initialPoIdSet && typeof window !== 'undefined') {
+      let activePoId = null
+      
+      const flash = sessionStorage.getItem('mym_receipt_success')
+      if (flash) {
+        try {
+          const data = JSON.parse(flash)
+          if (data.poId) activePoId = data.poId
+        } catch (e) {}
+      }
+      
+      if (!activePoId) {
+        const params = new URLSearchParams(window.location.search)
+        activePoId = params.get('poId')
+      }
+      
+      if (activePoId) {
+        setDetailPoId(activePoId)
+      }
+      setInitialPoIdSet(true)
+    }
+  }, [pos, initialPoIdSet])
+
   const loadPOs = useCallback(async () => {
+    if (process.env.NODE_ENV === 'development') console.time('loadRecepciones')
     setLoading(true)
     const list = await getPendingReceivablePOs()
     setPos(list)
     setLoading(false)
+    if (process.env.NODE_ENV === 'development') console.timeEnd('loadRecepciones')
     // NO auto-select
   }, [])
 
@@ -620,6 +706,8 @@ export function RecepcionesPanel() {
           filteredPOs={filteredPOs}
           onOpenDetail={openDetail}
           onPrefetch={prefetchDetail}
+          receivingId={receivingId}
+          onReceive={handleReceive}
         />
       </div>
     )
@@ -640,7 +728,7 @@ export function RecepcionesPanel() {
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="Buscar..."
-              className="w-full h-7 pl-7 pr-2 rounded-md border border-theme-border bg-theme-surface text-[11px] text-theme-text placeholder:text-theme-text-muted/50 focus:ring-1 focus:ring-theme-accent/30 focus:border-theme-accent"
+              className={cn(erpInputClass, 'w-full h-7 pl-7 pr-2 rounded-md text-[11px]')}
             />
           </div>
         </div>
@@ -660,6 +748,8 @@ export function RecepcionesPanel() {
           cachedDetail={detailCache.current[detailSummary.id] ?? null}
           onClose={closeDetail}
           onDetailLoaded={(poId, data) => { detailCache.current[poId] = data }}
+          receivingId={receivingId}
+          onReceive={handleReceive}
         />
       </div>
 

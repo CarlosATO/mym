@@ -38,46 +38,63 @@ export interface PurchaseOrderPending {
 }
 
 export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]> {
+  if (process.env.NODE_ENV === 'development') console.time('getPendingReceivablePOs')
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
+  if (!user) {
+    if (process.env.NODE_ENV === 'development') console.timeEnd('getPendingReceivablePOs')
+    return []
+  }
 
   const companyId = await getActiveCompanyId()
-  if (!companyId) return []
+  if (!companyId) {
+    if (process.env.NODE_ENV === 'development') console.timeEnd('getPendingReceivablePOs')
+    return []
+  }
 
   const db = adqDb()
+  if (process.env.NODE_ENV === 'development') console.time('getPendingReceivablePOs:base')
   const { data, error } = await db
     .from('purchase_orders')
     .select('id, correlative, issue_date, po_type, grand_total, status, receipt_status, supplier_id, warehouse_id')
     .eq('company_id', companyId)
     .in('status', ['EMITIDA', 'RECEPCION_PARCIAL', 'RECEPCION_TOTAL'])
     .order('created_at', { ascending: false })
+  if (process.env.NODE_ENV === 'development') console.timeEnd('getPendingReceivablePOs:base')
 
   if (error) {
     console.error('getPendingReceivablePOs error:', error)
+    if (process.env.NODE_ENV === 'development') console.timeEnd('getPendingReceivablePOs')
     return []
   }
 
-  if (!data || data.length === 0) return []
+  if (!data || data.length === 0) {
+    if (process.env.NODE_ENV === 'development') console.timeEnd('getPendingReceivablePOs')
+    return []
+  }
 
   // Fetch supplier names and warehouse names in parallel
   const supplierIds = Array.from(new Set(data.map(d => d.supplier_id)))
   const warehouseIds = Array.from(new Set(data.map(d => d.warehouse_id).filter(Boolean)))
 
+  if (process.env.NODE_ENV === 'development') console.time('getPendingReceivablePOs:lookups')
   const [suppliersRes, warehousesRes] = await Promise.all([
     db.from('suppliers').select('id, business_name').in('id', supplierIds),
     db.from('warehouses').select('id, name').in('id', warehouseIds)
   ])
+  if (process.env.NODE_ENV === 'development') console.timeEnd('getPendingReceivablePOs:lookups')
 
   const supplierMap = new Map(suppliersRes.data?.map(s => [s.id, s.business_name]) ?? [])
   const warehouseMap = new Map(warehousesRes.data?.map(w => [w.id, w.name]) ?? [])
 
   // Additional Fetch: Quantities
   const poIds = data.map(d => d.id)
+  if (process.env.NODE_ENV === 'development') console.time('getPendingReceivablePOs:items')
   const { data: itemsData } = await db
     .from('purchase_order_items')
     .select('po_id, quantity, quantity_received')
     .in('po_id', poIds)
+  if (process.env.NODE_ENV === 'development') console.timeEnd('getPendingReceivablePOs:items')
 
   // Additional Fetch: Receipts (from logistica schema)
   const { data: { session } } = await supabase.auth.getSession()
@@ -86,13 +103,15 @@ export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]>
     global: { headers: { Authorization: `Bearer ${session?.access_token}` } }
   })
   
+  if (process.env.NODE_ENV === 'development') console.time('getPendingReceivablePOs:receipts')
   const { data: receiptsData } = await logDbClient
     .from('purchase_receipts')
     .select('id, purchase_order_id, receipt_number, received_at, status, receipt_total_gross, receipt_documents(id, document_type, document_number, file_name)')
     .in('purchase_order_id', poIds)
     .order('received_at', { ascending: false })
+  if (process.env.NODE_ENV === 'development') console.timeEnd('getPendingReceivablePOs:receipts')
 
-  return data.map(po => {
+  const result = data.map(po => {
     // Quantities
     const poItems = itemsData?.filter(i => i.po_id === po.id) || []
     const qtyOrdered = poItems.reduce((acc, i) => acc + Number(i.quantity || 0), 0)
@@ -136,6 +155,8 @@ export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]>
       latest_receipt_doc: latestReceiptDoc
     }
   })
+  if (process.env.NODE_ENV === 'development') console.timeEnd('getPendingReceivablePOs')
+  return result
 }
 
 export async function getPurchaseOrderForReceipt(poId: string) {
@@ -405,7 +426,7 @@ export interface KardexMovement {
   notes: string | null
 }
 
-export async function getKardexMovements(): Promise<KardexMovement[]> {
+export async function getKardexMovements(productId?: string): Promise<KardexMovement[]> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return []
@@ -414,11 +435,17 @@ export async function getKardexMovements(): Promise<KardexMovement[]> {
   if (!companyId) return []
 
   const db = logDb()
-  const { data, error } = await db
+  let query = db
     .from('kardex_movements')
     .select('*')
     .eq('company_id', companyId)
-    .order('movement_date', { ascending: false })
+    .order('movement_date', { ascending: true })
+
+  if (productId) {
+    query = query.eq('product_id', productId)
+  }
+
+  const { data, error } = await query
 
   if (error) {
     console.error('getKardexMovements error:', error)
@@ -479,6 +506,7 @@ export interface StockItem {
   lot_number: string | null
   expiration_date: string | null
   quantity: number
+  unit_cost: number | null
 }
 
 export async function getStockSummary(): Promise<StockItem[]> {
@@ -492,8 +520,9 @@ export async function getStockSummary(): Promise<StockItem[]> {
   const db = logDb()
   const { data: movements, error } = await db
     .from('kardex_movements')
-    .select('product_id, warehouse_id, location_id, lot_number, expiration_date, quantity, movement_type')
+    .select('product_id, warehouse_id, location_id, lot_number, expiration_date, quantity, movement_type, unit_cost')
     .eq('company_id', companyId)
+    .order('movement_date', { ascending: true })
 
   if (error) {
     console.error('getStockSummary error:', error)
@@ -510,6 +539,7 @@ export async function getStockSummary(): Promise<StockItem[]> {
     lot_number: string | null
     expiration_date: string | null
     quantity: number
+    unit_cost: number | null
   }>()
 
   for (const m of movements) {
@@ -521,6 +551,9 @@ export async function getStockSummary(): Promise<StockItem[]> {
     const existing = stockMap.get(key)
     if (existing) {
       existing.quantity += delta
+      if (['IN', 'PURCHASE_RECEIPT', 'ADJUSTMENT'].includes(m.movement_type) && m.unit_cost !== null && m.unit_cost > 0) {
+        existing.unit_cost = Number(m.unit_cost)
+      }
     } else {
       stockMap.set(key, {
         product_id: m.product_id,
@@ -528,7 +561,8 @@ export async function getStockSummary(): Promise<StockItem[]> {
         location_id: m.location_id,
         lot_number: m.lot_number,
         expiration_date: m.expiration_date,
-        quantity: delta
+        quantity: delta,
+        unit_cost: m.unit_cost !== null ? Number(m.unit_cost) : null
       })
     }
   }
@@ -566,7 +600,68 @@ export async function getStockSummary(): Promise<StockItem[]> {
       location_code: item.location_id ? locationMap.get(item.location_id) || null : null,
       lot_number: item.lot_number,
       expiration_date: item.expiration_date,
-      quantity: item.quantity
+      quantity: item.quantity,
+      unit_cost: item.unit_cost
     }
   })
+}
+
+export async function getReceiptDocumentSignedUrl(document: any) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado' }
+
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
+
+  const logistica = logDb()
+  
+  if (!document.storage_path) return { error: 'Documento sin ruta de almacenamiento' }
+
+  const { data: receipt, error: receiptError } = await logistica
+    .from('purchase_receipts')
+    .select('id, company_id, purchase_order_id')
+    .eq('id', document.receipt_id)
+    .maybeSingle()
+
+  if (receiptError) {
+    console.error('getReceiptDocumentSignedUrl receipt error:', receiptError)
+    return { error: 'Error al validar la recepción' }
+  }
+
+  if (!receipt) return { error: 'Recepción no encontrada' }
+  if (receipt.company_id !== companyId) return { error: 'Acceso denegado a la recepción' }
+
+  const adquisiciones = adqDb()
+  const { data: purchaseOrder, error: poError } = await adquisiciones
+    .from('purchase_orders')
+    .select('id, company_id')
+    .eq('id', receipt.purchase_order_id)
+    .maybeSingle()
+
+  if (poError) {
+    console.error('getReceiptDocumentSignedUrl purchase order error:', poError)
+    return { error: 'Error al validar la orden de compra' }
+  }
+
+  if (!purchaseOrder || purchaseOrder.company_id !== companyId) {
+    return { error: 'Acceso denegado a la orden de compra' }
+  }
+
+  const expiresIn = 300
+  const { data: signedData, error: signedError } = await logistica.storage
+    .from(document.storage_bucket || 'recepciones')
+    .createSignedUrl(document.storage_path, expiresIn)
+
+  if (signedError || !signedData?.signedUrl) {
+    console.error('getReceiptDocumentSignedUrl storage error:', signedError)
+    return { error: 'No se pudo generar la previsualización del documento' }
+  }
+
+  return {
+    signedUrl: signedData.signedUrl,
+    fileName: document.file_name || 'Documento de recepción',
+    mimeType: document.mime_type || null,
+    expiresIn
+  }
 }
