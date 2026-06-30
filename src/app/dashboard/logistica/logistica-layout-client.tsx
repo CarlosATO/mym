@@ -26,53 +26,53 @@ const tabs = [
 // Workspace/operational panels do NOT render these headers — they manage their own title area.
 const pageHeaders: Record<string, { title: string; breadcrumb: string[]; description: string }> = {
   resumen: {
-    title: 'Panel de Logística',
-    breadcrumb: ['Logística', 'Inicio'],
-    description: 'Resumen operativo del módulo de almacén e inventario.',
+    title: 'WMS · Warehouse Management System',
+    breadcrumb: ['WMS', 'Inicio'],
+    description: 'Gestión de bodegas, rutas, despachos, movimientos e inventario.',
   },
   ubicaciones: {
     title: 'Ubicaciones',
-    breadcrumb: ['Logística', 'Parámetros', 'Ubicaciones'],
+    breadcrumb: ['WMS', 'Parámetros', 'Ubicaciones'],
     description: 'Administración de posiciones físicas por bodega, pasillo, rack, nivel y posición.',
   },
   bodegas: {
     title: 'Bodegas',
-    breadcrumb: ['Logística', 'Parámetros', 'Bodegas'],
+    breadcrumb: ['WMS', 'Parámetros', 'Bodegas'],
     description: 'Administración de bodegas operativas.',
   },
   productos: {
     title: 'Productos',
-    breadcrumb: ['Logística', 'Parámetros', 'Productos'],
+    breadcrumb: ['WMS', 'Parámetros', 'Productos'],
     description: 'Catálogo logístico de productos y atributos operacionales.',
   },
   recepciones: {
     title: 'Recepciones',
-    breadcrumb: ['Logística', 'Movimientos', 'Recepciones'],
+    breadcrumb: ['WMS', 'Movimientos', 'Recepciones'],
     description: 'Registro y consulta de recepciones contra órdenes de compra.',
   },
   traspasos: {
     title: 'Traspasos internos',
-    breadcrumb: ['Logística', 'Movimientos', 'Traspasos'],
+    breadcrumb: ['WMS', 'Movimientos', 'Traspasos'],
     description: 'Movimiento de stock entre bodegas y ubicaciones con trazabilidad por lote.',
   },
   stock: {
     title: 'Stock por ubicación',
-    breadcrumb: ['Logística', 'Consultas', 'Stock'],
+    breadcrumb: ['WMS', 'Consultas', 'Stock'],
     description: 'Existencias agrupadas por producto, bodega, ubicación, lote y vencimiento.',
   },
   kardex: {
     title: 'Kardex de movimientos',
-    breadcrumb: ['Logística', 'Consultas', 'Kardex'],
+    breadcrumb: ['WMS', 'Consultas', 'Kardex'],
     description: 'Consulta cronológica de entradas, salidas, ajustes y traspasos de inventario.',
   },
   trazabilidad: {
     title: 'Trazabilidad',
-    breadcrumb: ['Logística', 'Consultas', 'Trazabilidad'],
+    breadcrumb: ['WMS', 'Consultas', 'Trazabilidad'],
     description: 'Seguimiento histórico de movimientos y lotes.',
   },
   reportes_log: {
     title: 'Reportes de Almacén',
-    breadcrumb: ['Logística', 'Reportes'],
+    breadcrumb: ['WMS', 'Reportes'],
     description: 'Reportería operacional del módulo de logística.',
   },
 }
@@ -143,9 +143,9 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
     content = (
       <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px]">
         <div className="max-w-xl">
-          <h2 className="text-lg font-semibold text-theme-text">Panel de Logística</h2>
+          <h2 className="text-lg font-semibold text-theme-text">WMS · Warehouse Management System</h2>
           <p className="text-sm text-theme-text-muted/60 mt-2">
-            Bienvenido al módulo de control de almacén. Gestione recepciones de compras, ubicaciones físicas, movimientos de Kardex y niveles de stock.
+            Gestión de bodegas, rutas, despachos, movimientos e inventario.
           </p>
         </div>
         {children}
@@ -163,7 +163,7 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
         <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px] flex flex-col justify-between">
           <div>
             <h2 className="text-lg font-semibold text-theme-text">Parámetros Operativos</h2>
-            <p className="text-sm text-theme-text-muted/60 mt-2">Gestión y configuración base del módulo de Logística.</p>
+            <p className="text-sm text-theme-text-muted/60 mt-2">Gestión y configuración base del módulo WMS.</p>
           </div>
           <div className="mt-6 inline-flex items-center gap-2 text-xs font-semibold text-theme-accent/70 uppercase tracking-wider border border-theme-accent/20 bg-theme-accent-hover/8 px-3 py-1.5 rounded-lg w-fit">
             <span>⏳</span> Próximamente
@@ -215,7 +215,7 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
     content = (
       <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px] flex flex-col justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-theme-text">Módulo de Logística</h2>
+          <h2 className="text-lg font-semibold text-theme-text">Módulo WMS</h2>
           <p className="text-sm text-theme-text-muted/60 mt-2">Sección en desarrollo.</p>
         </div>
         <div className="mt-6 inline-flex items-center gap-2 text-xs font-semibold text-theme-accent/70 uppercase tracking-wider border border-theme-accent/20 bg-theme-accent-hover/8 px-3 py-1.5 rounded-lg w-fit">
@@ -228,7 +228,7 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
   if (isReceiptRoute) {
     return (
       <ModuleLayout
-        moduleName="Logística"
+        moduleName="WMS"
         tabs={[]}
         activeTab=""
         onTabChange={() => {}}
@@ -247,7 +247,7 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
 
   return (
     <ModuleLayout
-      moduleName="Logística"
+      moduleName="WMS"
       tabs={tabs}
       activeTab={activeTab}
       onTabChange={handleTabChange}

@@ -107,11 +107,11 @@ export function AdquisicionesLayoutClient({ children, profile }: AdquisicionesLa
   } else if (activeTab === 'transacciones') {
     ribbonActions.push(
       { id: 'ordenes', label: 'Órdenes de Compra', icon: 'FileCheck', onClick: () => {
-        if (process.env.NODE_ENV === 'development') console.log(`[RendicionRutas:UI] ribbon clicked: ordenes`)
+        if (process.env.NODE_ENV === 'development') console.log('[RendicionRutas:UI] ribbon click', 'ordenes')
         setActiveActionId('ordenes')
       }},
       { id: 'rendicion_rutas', label: 'Rendición de Rutas', icon: 'ClipboardCheck', onClick: () => {
-        if (process.env.NODE_ENV === 'development') console.log(`[RendicionRutas:UI] ribbon clicked: rendicion_rutas`)
+        if (process.env.NODE_ENV === 'development') console.log('[RendicionRutas:UI] ribbon click', 'rendicion_rutas')
         setActiveActionId('rendicion_rutas')
       }},
       { id: 'nueva_orden', label: 'Nueva Orden', icon: 'PlusCircle', upcoming: true },
@@ -214,5 +214,3 @@ export function AdquisicionesLayoutClient({ children, profile }: AdquisicionesLa
     </ModuleLayout>
   )
 }
-
-

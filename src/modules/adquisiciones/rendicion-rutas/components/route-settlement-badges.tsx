@@ -5,8 +5,9 @@ export function SettlementStatusBadge({ status }: { status: string }) {
   const getBadgeStyle = () => {
     switch (status) {
       case 'IN_REVIEW':
-      case 'CREATED_NOT_REVIEWED':
         return 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20'
+      case 'CREATED_NOT_REVIEWED':
+        return 'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border border-yellow-500/20'
       case 'SETTLED':
         return 'bg-green-500/10 text-green-600 dark:text-green-400 border border-green-500/20'
       case 'SETTLED_WITH_DIFFERENCE':
@@ -23,9 +24,9 @@ export function SettlementStatusBadge({ status }: { status: string }) {
     }
   }
 
-  const getLabel = () => {
-    if (status === 'PENDING' || status === 'PENDING_SETTLEMENT') return 'Pendiente de rendición'
-    if (status === 'CREATED_NOT_REVIEWED') return 'Pendiente de revisar'
+    const getLabel = () => {
+      if (status === 'PENDING' || status === 'PENDING_SETTLEMENT') return 'Pendiente de rendición'
+    if (status === 'CREATED_NOT_REVIEWED') return 'Pendiente de rendición'
     return formatSettlementStatus(status)
   }
 

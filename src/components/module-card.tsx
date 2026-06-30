@@ -15,8 +15,23 @@ function getIcon(iconName: string) {
   return Icon ?? LucideIcons.Box
 }
 
+function getDisplayModule(module: Modulo) {
+  if (module.route === '/dashboard/logistica' || module.code === 'logistica') {
+    return {
+      name: 'WMS · Warehouse Management System',
+      description: 'Gestion de bodegas, rutas, despachos, movimientos e inventario.'
+    }
+  }
+
+  return {
+    name: module.name,
+    description: module.description
+  }
+}
+
 export function ModuleCard({ module, disabled }: ModuleCardProps) {
   const Icon = getIcon(module.icon)
+  const displayModule = getDisplayModule(module)
 
   const content = (
     <div
@@ -49,14 +64,14 @@ export function ModuleCard({ module, disabled }: ModuleCardProps) {
             'text-lg font-semibold leading-tight',
             disabled ? 'text-theme-text/40' : 'text-theme-text'
           )}>
-            {module.name}
+            {displayModule.name}
           </h3>
-          {module.description && (
+          {displayModule.description && (
             <p className={cn(
               'text-sm leading-relaxed',
               disabled ? 'text-theme-text-muted/40' : 'text-theme-text-muted/70'
             )}>
-              {module.description}
+              {displayModule.description}
             </p>
           )}
         </div>

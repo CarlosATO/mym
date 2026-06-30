@@ -1,30 +1,11 @@
 import React, { useState, useMemo } from 'react'
+import type { RouteSettlementsDashboardRow } from '@/app/actions/adquisiciones/rendicion-rutas'
 import { formatCurrency, formatDate } from '../utils/route-settlement-formatters'
 import { SettlementStatusBadge } from './route-settlement-badges'
 import { ClipboardCheck, Eye, Search, Filter, X } from 'lucide-react'
 
-interface UnifiedRouteSettlementRow {
-  route_guide_id: string
-  guide_number: string
-  guide_date: string
-  route_name: string
-  driver_name: string
-  seller_name: string
-  total_route_amount: number
-  total_cash_expected: number
-  total_cash_received: number
-  total_cash_difference: number
-  total_transfer_pending: number
-  total_invoices: number
-  settlement_id: string | null
-  settlement_number: string | null
-  settlement_status: string | null
-  operational_status: string
-  action_type: 'CREATE' | 'VIEW'
-}
-
 interface UnifiedTableProps {
-  data: UnifiedRouteSettlementRow[]
+  data: RouteSettlementsDashboardRow[]
   isLoading: boolean
   onCreateSettlement: (guideId: string) => void
   isCreating: boolean
@@ -46,6 +27,8 @@ export function UnifiedRouteSettlementsTable({
 }: UnifiedTableProps) {
   
   const [searchTerm, setSearchTerm] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
 
   const filteredData = useMemo(() => {
     return data.filter(row => {
@@ -57,11 +40,16 @@ export function UnifiedRouteSettlementsTable({
         const matchesSettlement = row.settlement_number?.toLowerCase().includes(lowerSearch)
         const matchesRoute = row.route_name?.toLowerCase().includes(lowerSearch)
         const matchesDriver = row.driver_name?.toLowerCase().includes(lowerSearch)
-        return matchesGuide || matchesSettlement || matchesRoute || matchesDriver
+        const matchesSeller = row.seller_name?.toLowerCase().includes(lowerSearch)
+        if (!(matchesGuide || matchesSettlement || matchesRoute || matchesDriver || matchesSeller)) return false
       }
+
+      if (dateFrom && row.guide_date && row.guide_date < dateFrom) return false
+      if (dateTo && row.guide_date && row.guide_date > dateTo) return false
+
       return true
     })
-  }, [data, filterStatus, searchTerm])
+  }, [data, dateFrom, dateTo, filterStatus, searchTerm])
 
   if (isLoading) {
     return (
@@ -81,7 +69,7 @@ export function UnifiedRouteSettlementsTable({
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted" />
           <input 
             type="text" 
-            placeholder="Buscar por guía, rendición, ruta o conductor..."
+            placeholder="Buscar por guía, rendición, ruta, conductor o vendedor..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-9 pr-4 py-2 text-sm bg-theme-surface border border-theme-border rounded-xl focus:outline-none focus:border-theme-accent transition-colors text-theme-text placeholder-theme-text-muted"
@@ -90,6 +78,20 @@ export function UnifiedRouteSettlementsTable({
         
         <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto">
           <Filter className="w-4 h-4 text-theme-text-muted shrink-0" />
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            className="text-sm bg-theme-surface border border-theme-border rounded-xl px-3 py-2 text-theme-text focus:outline-none focus:border-theme-accent"
+            aria-label="Fecha desde"
+          />
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            className="text-sm bg-theme-surface border border-theme-border rounded-xl px-3 py-2 text-theme-text focus:outline-none focus:border-theme-accent"
+            aria-label="Fecha hasta"
+          />
           <select 
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
@@ -97,16 +99,15 @@ export function UnifiedRouteSettlementsTable({
           >
             <option value="ALL">Todos los estados</option>
             <option value="PENDING_SETTLEMENT">Pendiente de rendición</option>
-            <option value="CREATED_NOT_REVIEWED">Pendiente de revisar</option>
             <option value="IN_REVIEW">En revisión</option>
             <option value="SETTLED">Rendida</option>
             <option value="SETTLED_WITH_DIFFERENCE">Con diferencias</option>
             <option value="CLOSED">Cerrada</option>
             <option value="CANCELLED">Anulada</option>
           </select>
-          {(filterStatus !== 'ALL' || searchTerm !== '') && (
+          {(filterStatus !== 'ALL' || searchTerm !== '' || dateFrom !== '' || dateTo !== '') && (
             <button 
-              onClick={() => { setFilterStatus('ALL'); setSearchTerm(''); }}
+              onClick={() => { setFilterStatus('ALL'); setSearchTerm(''); setDateFrom(''); setDateTo(''); }}
               className="p-2 text-theme-text-muted hover:text-red-500 transition-colors shrink-0"
               title="Limpiar filtros"
             >
@@ -148,10 +149,10 @@ export function UnifiedRouteSettlementsTable({
                 <tr key={item.route_guide_id} className="hover:bg-theme-text/[0.02] transition-colors">
                   <td className="px-4 py-3 font-bold text-theme-text">{item.guide_number}</td>
                   <td className="px-4 py-3 text-theme-text font-mono text-[11px]">{item.settlement_number || '—'}</td>
-                  <td className="px-4 py-3 text-theme-text-muted">{formatDate(item.guide_date)}</td>
-                  <td className="px-4 py-3 text-theme-text">{item.route_name}</td>
-                  <td className="px-4 py-3 text-theme-text max-w-[120px] truncate" title={item.driver_name}>{item.driver_name}</td>
-                  <td className="px-4 py-3 text-theme-text max-w-[120px] truncate" title={item.seller_name}>{item.seller_name}</td>
+                  <td className="px-4 py-3 text-theme-text-muted">{formatDate(item.guide_date ?? '')}</td>
+                  <td className="px-4 py-3 text-theme-text">{item.route_name || '—'}</td>
+                  <td className="px-4 py-3 text-theme-text max-w-[120px] truncate" title={item.driver_name || undefined}>{item.driver_name || '—'}</td>
+                  <td className="px-4 py-3 text-theme-text max-w-[120px] truncate" title={item.seller_name || undefined}>{item.seller_name || '—'}</td>
                   <td className="px-4 py-3 text-theme-text text-right font-semibold">{formatCurrency(item.total_route_amount)}</td>
                   <td className="px-4 py-3 text-theme-text text-right font-semibold">{formatCurrency(item.total_cash_expected)}</td>
                   <td className="px-4 py-3 text-theme-text text-right font-semibold text-green-600 dark:text-green-400">
@@ -177,7 +178,7 @@ export function UnifiedRouteSettlementsTable({
                     {item.action_type === 'CREATE' ? (
                       <button
                         onClick={() => onCreateSettlement(item.route_guide_id)}
-                        disabled={isCreating}
+                        disabled={isCreating && creatingGuideId === item.route_guide_id}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white font-bold text-[11px] uppercase tracking-wider transition-all disabled:opacity-50 w-32 justify-center"
                       >
                         {isCreating && creatingGuideId === item.route_guide_id ? (

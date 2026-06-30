@@ -1,15 +1,75 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
-import { getRouteSettlementsDashboardData, createRouteSettlementFromGuide, getRouteSettlementById } from '@/app/actions/adquisiciones/rendicion-rutas'
+import React, { useState, useEffect, useRef } from 'react'
+import {
+  getRouteSettlementsDashboardData,
+  createRouteSettlementFromGuide,
+  getRouteSettlementById,
+  type RouteSettlementsDashboardKpis,
+  type RouteSettlementsDashboardRow,
+} from '@/app/actions/adquisiciones/rendicion-rutas'
 import { UnifiedRouteSettlementsTable } from './components/unified-route-settlements-table'
 import { RouteSettlementDetailPanel } from './components/route-settlement-detail-panel'
 import { RouteSettlement, RouteSettlementItem } from './types'
 import { AlertTriangle, ClipboardCheck, FileText, CheckCircle2 } from 'lucide-react'
 
+const EMPTY_KPIS: RouteSettlementsDashboardKpis = {
+  pending_count: 0,
+  in_review_count: 0,
+  settled_count: 0,
+  with_difference_count: 0,
+}
+
+let dashboardCache: { kpis: RouteSettlementsDashboardKpis; rows: RouteSettlementsDashboardRow[] } | null = null
+let dashboardRequest: Promise<Awaited<ReturnType<typeof getRouteSettlementsDashboardData>>> | null = null
+
+async function loadDashboardPayload(forceRefresh = false) {
+  if (forceRefresh) {
+    dashboardCache = null
+    dashboardRequest = null
+  }
+
+  if (dashboardCache) {
+    return { data: dashboardCache, error: null }
+  }
+
+  if (!dashboardRequest) {
+    dashboardRequest = getRouteSettlementsDashboardData().finally(() => {
+      dashboardRequest = null
+    })
+  }
+
+  const result = await dashboardRequest
+  if (result.data) {
+    dashboardCache = result.data
+  }
+
+  return result
+}
+
+function applyCreatedSettlementToRows(
+  currentRows: RouteSettlementsDashboardRow[],
+  guideId: string,
+  settlementId: string | null | undefined,
+  settlementNumber: string | null | undefined
+) {
+  return currentRows.map(row => {
+    if (row.route_guide_id !== guideId) return row
+    return {
+      ...row,
+      settlement_id: settlementId ?? row.settlement_id,
+      settlement_number: settlementNumber ?? row.settlement_number,
+      settlement_status: 'IN_REVIEW',
+      has_worked_items: false,
+      operational_status: 'PENDING_SETTLEMENT' as const,
+      action_type: 'VIEW' as const
+    }
+  })
+}
+
 export function RouteSettlementsPanel() {
-  const [rows, setRows] = useState<any[]>([])
-  const [kpis, setKpis] = useState({ pending_count: 0, in_review_count: 0, settled_count: 0, with_difference_count: 0 })
+  const [rows, setRows] = useState<RouteSettlementsDashboardRow[]>([])
+  const [kpis, setKpis] = useState<RouteSettlementsDashboardKpis>(EMPTY_KPIS)
   const [isLoading, setIsLoading] = useState(true)
   const [filterStatus, setFilterStatus] = useState('ALL')
   
@@ -22,52 +82,83 @@ export function RouteSettlementsPanel() {
   const [detailData, setDetailData] = useState<{ settlement: RouteSettlement, items: RouteSettlementItem[] } | null>(null)
   const [isLoadingDetail, setIsLoadingDetail] = useState(false)
 
-  let renderCount = React.useRef(0)
+  const renderCount = useRef(0)
+  const isMountedRef = useRef(false)
+  const loadStartedAtRef = useRef<number | null>(null)
+  const latestRequestIdRef = useRef(0)
+  const hasLoggedKpisRef = useRef(false)
+  const hasLoggedTableRef = useRef(false)
   
   useEffect(() => {
-    if (process.env.NODE_ENV === 'development') {
-      renderCount.current += 1
-      console.log(`[RendicionRutas:UI] render count: ${renderCount.current}`)
-    }
+    renderCount.current += 1
+    if (process.env.NODE_ENV === 'development') console.log('[RendicionRutas:UI] render count', renderCount.current)
   })
 
-  const loadDashboardData = async () => {
+  const loadDashboardData = async (forceRefresh = false) => {
+    const requestId = latestRequestIdRef.current + 1
+    latestRequestIdRef.current = requestId
+
     if (process.env.NODE_ENV === 'development') {
-      console.log(`[RendicionRutas:UI] fetch start`)
+      console.log('[RendicionRutas:UI] fetch start')
     }
-    const t0 = performance.now()
+
+    loadStartedAtRef.current = performance.now()
     setIsLoading(true)
-    
-    const { data, error } = await getRouteSettlementsDashboardData()
+
+    const { data, error } = await loadDashboardPayload(forceRefresh)
+    if (!isMountedRef.current || requestId !== latestRequestIdRef.current) {
+      return
+    }
+
     if (error) {
       setErrorMsg(error)
     } else if (data) {
+      setErrorMsg(null)
       setRows(data.rows || [])
-      if (data.kpis) setKpis(data.kpis)
+      setKpis(data.kpis || EMPTY_KPIS)
+      hasLoggedKpisRef.current = false
+      hasLoggedTableRef.current = false
     }
-    
+
     setIsLoading(false)
-    const t1 = performance.now()
     if (process.env.NODE_ENV === 'development') {
-      console.log(`[RendicionRutas:UI] fetch end`)
-      console.log(`[RendicionRutas:UI] total visual load ms: ${Math.round(t1 - t0)}ms`)
-      console.log(`[RendicionRutas:UI] table rendered`)
+      console.log('[RendicionRutas:UI] fetch end')
     }
   }
 
-  const hasFetched = React.useRef(false)
-
   useEffect(() => {
+    isMountedRef.current = true
     if (process.env.NODE_ENV === 'development') {
-      console.log(`[RendicionRutas:UI] mounted`)
+      console.log('[RendicionRutas:UI] mount')
     }
-    if (!hasFetched.current) {
-      hasFetched.current = true
-      loadDashboardData()
+
+    loadDashboardData()
+
+    return () => {
+      isMountedRef.current = false
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[RendicionRutas:UI] unmount')
+      }
     }
   }, [])
 
+  useEffect(() => {
+    if (process.env.NODE_ENV !== 'development' || isLoading || hasLoggedKpisRef.current) return
+    hasLoggedKpisRef.current = true
+    console.log('[RendicionRutas:UI] kpis visible')
+  }, [isLoading, kpis])
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== 'development' || isLoading || hasLoggedTableRef.current) return
+    hasLoggedTableRef.current = true
+    console.log('[RendicionRutas:UI] table visible')
+    if (loadStartedAtRef.current !== null) {
+      console.log('[RendicionRutas:UI] visual load total ms', Math.round(performance.now() - loadStartedAtRef.current))
+    }
+  }, [isLoading, rows])
+
   const handleCreateSettlement = async (guideId: string) => {
+    if (isCreating) return
     setIsCreating(true)
     setCreatingGuideId(guideId)
     setErrorMsg(null)
@@ -75,9 +166,12 @@ export function RouteSettlementsPanel() {
     if (error) {
       setErrorMsg(error)
     } else {
-      await loadDashboardData()
-      if (data?.id) {
-        handleViewDetail(data.id)
+      setRows(currentRows => applyCreatedSettlementToRows(currentRows, guideId, data?.id, data?.settlement_number))
+      if (dashboardCache) {
+        dashboardCache = {
+          ...dashboardCache,
+          rows: applyCreatedSettlementToRows(dashboardCache.rows, guideId, data?.id, data?.settlement_number)
+        }
       }
     }
     setIsCreating(false)
@@ -151,10 +245,10 @@ export function RouteSettlementsPanel() {
             </div>
             <p className="text-2xl font-bold text-theme-text">{kpis.pending_count}</p>
           </button>
-          <button onClick={() => setFilterStatus('CREATED_NOT_REVIEWED')} className="p-4 rounded-xl border border-theme-border bg-theme-surface/50 hover:bg-theme-surface transition-colors text-left focus:outline-none focus:ring-2 focus:ring-theme-accent">
+          <button onClick={() => setFilterStatus('IN_REVIEW')} className="p-4 rounded-xl border border-theme-border bg-theme-surface/50 hover:bg-theme-surface transition-colors text-left focus:outline-none focus:ring-2 focus:ring-theme-accent">
             <div className="flex items-center gap-2 mb-2 text-blue-500">
               <FileText className="w-4 h-4" />
-              <h3 className="text-[10px] font-bold uppercase tracking-wider">Pendientes de revisar</h3>
+              <h3 className="text-[10px] font-bold uppercase tracking-wider">En revisión</h3>
             </div>
             <p className="text-2xl font-bold text-theme-text">{kpis.in_review_count}</p>
           </button>
