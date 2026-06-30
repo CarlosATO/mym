@@ -635,12 +635,14 @@ export function RecepcionesPanel() {
   }, [pos, initialPoIdSet])
 
   const loadPOs = useCallback(async () => {
-    if (process.env.NODE_ENV === 'development') console.time('loadRecepciones')
+    const start = performance.now()
     setLoading(true)
     const list = await getPendingReceivablePOs()
     setPos(list)
     setLoading(false)
-    if (process.env.NODE_ENV === 'development') console.timeEnd('loadRecepciones')
+    if (process.env.NODE_ENV === 'development') {
+      console.log('loadRecepciones', Math.round(performance.now() - start), 'ms')
+    }
     // NO auto-select
   }, [])
 

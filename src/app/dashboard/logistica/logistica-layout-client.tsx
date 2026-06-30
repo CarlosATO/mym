@@ -11,6 +11,7 @@ import { WarehousesPanel } from '@/modules/logistica/bodegas/warehouses-panel'
 import { ProductsPanel } from '@/modules/logistica/productos/products-panel'
 import { TransfersPanel } from '@/modules/logistica/traspasos/transfers-panel'
 import { AdjustmentsPanel } from '@/modules/logistica/ajustes/adjustments-panel'
+import { RouteGuidesPanel } from '@/modules/logistica/guias-ruta/route-guides-panel'
 import type { RibbonAction } from '@/components/layout/module-ribbon'
 
 const tabs = [
@@ -120,6 +121,7 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
       { id: 'recepciones', label: 'Recepciones', icon: 'PackageOpen', onClick: () => setActiveActionId('recepciones') },
       { id: 'traspasos', label: 'Traspasos', icon: 'ArrowLeftRight', onClick: () => setActiveActionId('traspasos') },
       { id: 'ajustes', label: 'Ajustes', icon: 'Sliders', onClick: () => setActiveActionId('ajustes') },
+      { id: 'guias_ruta', label: 'Guías de Ruta', icon: 'Map', onClick: () => setActiveActionId('guias_ruta') },
       { id: 'egresos', label: 'Egresos', icon: 'LogOut', upcoming: true },
       { id: 'devoluciones', label: 'Devoluciones', icon: 'RotateCcw', upcoming: true }
     )
@@ -176,6 +178,8 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
       content = <TransfersPanel />
     } else if (activeActionId === 'ajustes') {
       content = <AdjustmentsPanel />
+    } else if (activeActionId === 'guias_ruta') {
+      content = <RouteGuidesPanel />
     } else {
       content = (
         <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px] flex flex-col justify-between">
@@ -238,7 +242,7 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
 
   // Workspace mode for panels that need full-height, full-width layout.
   // Extend this list when new operational panels are added.
-  const workspaceActionIds = ['recepciones', 'traspasos', 'stock', 'kardex', 'bodegas', 'productos']
+  const workspaceActionIds = ['recepciones', 'traspasos', 'stock', 'kardex', 'bodegas', 'productos', 'guias_ruta']
   const layoutMode = workspaceActionIds.includes(activeActionId) ? 'workspace' : 'contained'
 
   return (

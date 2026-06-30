@@ -6,12 +6,13 @@ import { SuppliersPanel } from '@/modules/adquisiciones/proveedores/suppliers-pa
 import { CatalogPanel } from '@/modules/adquisiciones/catalogo/catalog-panel'
 import { WarehousesPanel } from '@/modules/adquisiciones/bodegas/warehouses-panel'
 import { PurchaseOrdersPanel } from '@/modules/adquisiciones/ordenes-compra/purchase-orders-panel'
+import { RouteSettlementsPanel } from '@/modules/adquisiciones/rendicion-rutas/route-settlements-panel'
 import type { RibbonAction } from '@/components/layout/module-ribbon'
 
 const tabs = [
   { id: 'inicio', label: 'Inicio' },
   { id: 'catalogos', label: 'Catálogos' },
-  { id: 'compras', label: 'Compras' },
+  { id: 'transacciones', label: 'Transacciones' },
   { id: 'recepcion', label: 'Recepción' },
   { id: 'reportes', label: 'Reportes' },
 ]
@@ -54,8 +55,13 @@ const pageHeaders: Record<string, { title: string; breadcrumb: string[]; descrip
   },
   historial: {
     title: 'Historial de Compras',
-    breadcrumb: ['Adquisiciones', 'Compras', 'Historial'],
+    breadcrumb: ['Adquisiciones', 'Transacciones', 'Historial'],
     description: 'Consulta histórica de compras realizadas.',
+  },
+  rendicion_rutas: {
+    title: 'Rendición de Rutas',
+    breadcrumb: ['Adquisiciones', 'Transacciones', 'Rendición de Rutas'],
+    description: 'Control administrativo de efectivo, transferencias, cheques, créditos y pendientes asociados a guías despachadas.',
   },
   recepciones_p: {
     title: 'Recepciones',
@@ -83,7 +89,7 @@ export function AdquisicionesLayoutClient({ children, profile }: AdquisicionesLa
     setActiveTab(tabId)
     if (tabId === 'inicio') setActiveActionId('resumen')
     else if (tabId === 'catalogos') setActiveActionId('proveedores')
-    else if (tabId === 'compras') setActiveActionId('ordenes')
+    else if (tabId === 'transacciones') setActiveActionId('ordenes')
     else if (tabId === 'recepcion') setActiveActionId('recepciones_p')
     else if (tabId === 'reportes') setActiveActionId('reporte_gral')
   }
@@ -98,9 +104,16 @@ export function AdquisicionesLayoutClient({ children, profile }: AdquisicionesLa
       { id: 'bodegas', label: 'Bodegas', icon: 'Home', onClick: () => setActiveActionId('bodegas') },
       { id: 'autorizadores', label: 'Autorizadores', icon: 'CheckSquare', upcoming: true }
     )
-  } else if (activeTab === 'compras') {
+  } else if (activeTab === 'transacciones') {
     ribbonActions.push(
-      { id: 'ordenes', label: 'Órdenes de Compra', icon: 'FileCheck', onClick: () => setActiveActionId('ordenes') },
+      { id: 'ordenes', label: 'Órdenes de Compra', icon: 'FileCheck', onClick: () => {
+        if (process.env.NODE_ENV === 'development') console.log(`[RendicionRutas:UI] ribbon clicked: ordenes`)
+        setActiveActionId('ordenes')
+      }},
+      { id: 'rendicion_rutas', label: 'Rendición de Rutas', icon: 'ClipboardCheck', onClick: () => {
+        if (process.env.NODE_ENV === 'development') console.log(`[RendicionRutas:UI] ribbon clicked: rendicion_rutas`)
+        setActiveActionId('rendicion_rutas')
+      }},
       { id: 'nueva_orden', label: 'Nueva Orden', icon: 'PlusCircle', upcoming: true },
       { id: 'historial', label: 'Historial', icon: 'History', upcoming: true }
     )
@@ -149,14 +162,16 @@ export function AdquisicionesLayoutClient({ children, profile }: AdquisicionesLa
         </div>
       )
     }
-  } else if (activeTab === 'compras') {
+  } else if (activeTab === 'transacciones') {
     if (activeActionId === 'ordenes') {
       content = <PurchaseOrdersPanel />
+    } else if (activeActionId === 'rendicion_rutas') {
+      content = <RouteSettlementsPanel />
     } else {
       content = (
         <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px] flex flex-col justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-theme-text">Acción de Compras</h2>
+            <h2 className="text-lg font-semibold text-theme-text">Acción de Transacciones</h2>
             <p className="text-sm text-theme-text-muted/60 mt-2">Esta sección está actualmente planificada en nuestro flujo de trabajo.</p>
           </div>
           <div className="mt-6 inline-flex items-center gap-2 text-xs font-semibold text-theme-accent/70 uppercase tracking-wider border border-theme-accent/20 bg-theme-accent-hover/8 px-3 py-1.5 rounded-lg w-fit">
@@ -180,7 +195,7 @@ export function AdquisicionesLayoutClient({ children, profile }: AdquisicionesLa
     )
   }
 
-  const workspaceActionIds = ['ordenes', 'proveedores', 'catalogo', 'bodegas', 'recepciones_p']
+  const workspaceActionIds = ['ordenes', 'proveedores', 'catalogo', 'bodegas', 'recepciones_p', 'rendicion_rutas']
   const layoutMode = workspaceActionIds.includes(activeActionId) ? 'workspace' : 'contained'
 
   return (

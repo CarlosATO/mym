@@ -16,9 +16,10 @@ interface LocalComboboxProps {
   placeholder?: string
   disabled?: boolean
   className?: string
+  onCreateNew?: (name: string) => Promise<void>
 }
 
-export function LocalCombobox({ value, onChange, options, placeholder = "Seleccionar...", disabled, className }: LocalComboboxProps) {
+export function LocalCombobox({ value, onChange, options, placeholder = "Seleccionar...", disabled, className, onCreateNew }: LocalComboboxProps) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [dropdownRect, setDropdownRect] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null)
@@ -100,7 +101,23 @@ export function LocalCombobox({ value, onChange, options, placeholder = "Selecci
             }}
           >
             {filtered.length === 0 && (
-              <p className="px-3 py-2 text-[11px] font-medium text-slate-500 dark:text-slate-400">Sin resultados</p>
+              <div className="px-3 py-2 text-[11px] font-medium text-slate-500 dark:text-slate-400 flex justify-between items-center">
+                <span>Sin resultados</span>
+                {onCreateNew && search.trim() && (
+                  <button
+                    onClick={async (e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      await onCreateNew(search.trim())
+                      setSearch('')
+                      setOpen(false)
+                    }}
+                    className="text-theme-accent hover:underline ml-2"
+                  >
+                    Crear "{search.trim()}"
+                  </button>
+                )}
+              </div>
             )}
             {filtered.map(opt => (
               <button
