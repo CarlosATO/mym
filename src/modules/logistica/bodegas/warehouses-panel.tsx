@@ -2,20 +2,27 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { getWarehouses, createWarehouse, updateWarehouse, deactivateWarehouse, importWarehouses, type Warehouse } from '@/app/actions/adquisiciones/warehouses'
+import { getWarehouseLocationStats, type WarehouseStats } from '@/app/actions/logistica/location-layouts'
 import { getRegions, getCommunes } from '@/app/actions/geography'
 import * as XLSX from 'xlsx'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, LayoutGrid, List } from 'lucide-react'
+import { WarehouseVisualOverview } from '../components/warehouse-visual-overview'
+
 export function WarehousesPanel() {
   const [data, setData] = useState<Warehouse[]>([])
+  const [stats, setStats] = useState<WarehouseStats[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [msg, setMsg] = useState('')
   const [filters, setFilters] = useState<{ search?: string; warehouse_type?: string; status?: string; is_active?: string; page: number; pageSize: number }>({ page: 1, pageSize: 50 })
+  const [viewMode, setViewMode] = useState<'table' | 'visual'>('visual')
+  const [selectedWarehouseId, setSelectedWarehouseId] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [showForm, setShowForm] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [preview, setPreview] = useState<{ rows: Record<string, unknown>[]; errors: string[] } | null>(null)
   const [showExport, setShowExport] = useState(false)
+  const [showFilters, setShowFilters] = useState(false)
   const [regions, setRegions] = useState<{ id: string; code: string; name: string }[]>([])
   const [communes, setCommunes] = useState<{ id: string; code: string; name: string }[]>([])
   const [form, setForm] = useState<Record<string, string>>({
@@ -26,7 +33,12 @@ export function WarehousesPanel() {
   const fileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
-    setLoading(true); const r = await getWarehouses(filters); setData(r.data); setTotal(r.total); setLoading(false)
+    setLoading(true); 
+    const [r, s] = await Promise.all([
+      getWarehouses(filters),
+      getWarehouseLocationStats()
+    ]);
+    setData(r.data); setTotal(r.total); setStats(s); setLoading(false)
   }, [filters])
   useEffect(() => { load() }, [load])
   useEffect(() => { getRegions().then(setRegions) }, [])
@@ -200,46 +212,70 @@ export function WarehousesPanel() {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-theme-surface">
+    <div className="flex flex-col h-full overflow-hidden bg-transparent">
       {msg && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-muted">{msg}</div>}
 
-      <div className="shrink-0 flex flex-col gap-4 p-5 border-b border-theme-border/60 bg-theme-text/[0.01]">
-        <div className="flex flex-wrap items-center gap-3">
-        <input type="text" value={filters.search ?? ''} onChange={e => setFilter('search', e.target.value)}
-          placeholder="Buscar por código, nombre, ciudad, comuna..."
-          className="flex-1 min-w-[200px] h-10 rounded-xl border border-theme-border bg-theme-surface px-3 text-sm text-theme-text placeholder:text-gray-400 dark:placeholder:text-theme-text-muted/50 focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
-        <button onClick={() => { resetForm(); setShowForm(true) }} className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold transition-colors">+ Nueva</button>
-        <button onClick={downloadTemplate} className="h-10 px-4 rounded-xl border border-theme-border text-theme-text-muted/70 hover:text-theme-text hover:bg-theme-text/5 text-sm font-medium transition-colors">📄 Descargar plantilla</button>
-        <label className="h-10 px-4 rounded-xl border border-theme-border text-theme-text-muted/70 hover:text-theme-text hover:bg-theme-text/5 text-sm font-medium transition-colors cursor-pointer inline-flex items-center gap-2">📥 Importar Excel<input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={handleFile} className="hidden" /></label>
-        <div className="relative">
-          <button onClick={() => setShowExport(!showExport)} className="h-10 px-4 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-semibold transition-colors">📤 Exportar Excel</button>
-          {showExport && (<><div className="fixed inset-0 z-40" onClick={() => setShowExport(false)} /><div className="absolute right-0 top-full mt-2 w-64 bg-white dark:bg-theme-surface/95 backdrop-blur-md rounded-2xl border border-theme-border shadow-2xl z-50 py-2"><button onClick={handleExportAll} className="w-full text-left px-4 py-2.5 text-sm text-theme-text-muted hover:bg-theme-text/5">Exportar todas</button><button onClick={handleExportFiltered} className="w-full text-left px-4 py-2.5 text-sm text-theme-text-muted hover:bg-theme-text/5">Exportar filtradas</button><button onClick={handleExportSelected} disabled={selected.size === 0} className="w-full text-left px-4 py-2.5 text-sm text-theme-text-muted hover:bg-theme-text/5 disabled:text-gray-400 dark:disabled:text-theme-text-muted/50 disabled:cursor-not-allowed">Exportar seleccionadas {selected.size > 0 && `(${selected.size})`}</button></div></>)}
-        </div>
-      </div>
+      {!(viewMode === 'visual' && selectedWarehouseId) && (
+        <>
+          <div className="shrink-0 flex flex-col gap-3 p-4 border-b border-theme-border/60 bg-theme-surface shadow-sm z-10 relative">
+            <div className="flex flex-wrap items-center gap-3 justify-between">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                <input type="text" value={filters.search ?? ''} onChange={e => setFilter('search', e.target.value)}
+                  placeholder="Buscar por código, nombre..."
+                  className="w-full max-w-xs h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-sm text-theme-text placeholder:text-gray-400 dark:placeholder:text-theme-text-muted/50 focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                <button onClick={() => setShowFilters(!showFilters)} className={`h-9 px-3 rounded-lg border transition-colors text-sm font-medium ${showFilters ? 'bg-theme-text/10 border-theme-border text-theme-text' : 'border-theme-border text-theme-text-muted/70 hover:text-theme-text hover:bg-theme-text/5'}`}>
+                  Filtros {((filters.warehouse_type && filters.warehouse_type !== '') || (filters.status && filters.status !== '')) && ' (Activos)'}
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button onClick={() => { resetForm(); setShowForm(true) }} className="h-9 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold transition-colors">+ Nueva</button>
+                <button onClick={downloadTemplate} className="h-9 px-3 rounded-lg border border-theme-border text-theme-text-muted/70 hover:text-theme-text hover:bg-theme-text/5 text-sm font-medium transition-colors hidden md:block" title="Descargar plantilla">Plantilla</button>
+                <label className="h-9 px-3 rounded-lg border border-theme-border text-theme-text-muted/70 hover:text-theme-text hover:bg-theme-text/5 text-sm font-medium transition-colors cursor-pointer inline-flex items-center gap-2">Importar<input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={handleFile} className="hidden" /></label>
+                <div className="relative">
+                  <button onClick={() => setShowExport(!showExport)} className="h-9 px-3 rounded-lg border border-theme-border text-theme-text-muted/70 hover:text-theme-text hover:bg-theme-text/5 text-sm font-medium transition-colors">Exportar</button>
+                  {showExport && (<><div className="fixed inset-0 z-40" onClick={() => setShowExport(false)} /><div className="absolute right-0 top-full mt-2 w-56 bg-white dark:bg-theme-surface/95 backdrop-blur-md rounded-xl border border-theme-border shadow-lg z-50 py-2"><button onClick={handleExportAll} className="w-full text-left px-4 py-2 text-sm text-theme-text-muted hover:bg-theme-text/5">Exportar todas</button><button onClick={handleExportFiltered} className="w-full text-left px-4 py-2 text-sm text-theme-text-muted hover:bg-theme-text/5">Exportar filtradas</button><button onClick={handleExportSelected} disabled={selected.size === 0} className="w-full text-left px-4 py-2 text-sm text-theme-text-muted hover:bg-theme-text/5 disabled:text-gray-400 dark:disabled:text-theme-text-muted/50 disabled:cursor-not-allowed">Seleccionadas {selected.size > 0 && `(${selected.size})`}</button></div></>)}
+                </div>
+                <div className="w-px h-6 bg-theme-border mx-1" />
+                <div className="flex items-center bg-theme-text/5 border border-theme-border rounded-lg p-0.5">
+                  <button onClick={() => { setViewMode('table'); setSelectedWarehouseId(null); }} className={`p-1.5 rounded-md flex items-center justify-center transition-colors ${viewMode === 'table' ? 'bg-theme-surface shadow-sm text-theme-text' : 'text-theme-text-muted hover:text-theme-text'}`} title="Vista Tabla"><List className="w-4 h-4" /></button>
+                  <button onClick={() => setViewMode('visual')} className={`p-1.5 rounded-md flex items-center justify-center transition-colors ${viewMode === 'visual' ? 'bg-theme-surface shadow-sm text-theme-text' : 'text-theme-text-muted hover:text-theme-text'}`} title="Vista Operativa"><LayoutGrid className="w-4 h-4" /></button>
+                </div>
+              </div>
+            </div>
 
-      <div className="flex flex-wrap gap-3">
-        <select value={filters.warehouse_type ?? ''} onChange={e => setFilter('warehouse_type', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30">
-          <option value="" className="bg-white dark:bg-theme-surface">Todos los tipos</option>
-          {typeOpts.map(t => <option key={t} value={t} className="bg-white dark:bg-theme-surface">{t}</option>)}
-        </select>
-        <select value={filters.status ?? ''} onChange={e => setFilter('status', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30">
-          <option value="" className="bg-white dark:bg-theme-surface">Todos los estados</option>
-          <option value="ACTIVE" className="bg-white dark:bg-theme-surface">ACTIVA</option>
-          <option value="INACTIVE" className="bg-white dark:bg-theme-surface">INACTIVA</option>
-          <option value="BLOCKED" className="bg-white dark:bg-theme-surface">BLOQUEADA</option>
-        </select>
-        <button onClick={() => { setFilters({ page: 1, pageSize: 50 }); setSelected(new Set()) }} className="h-9 px-3 rounded-lg border border-theme-border text-theme-text-muted/70 hover:text-theme-text hover:bg-theme-text/5 text-xs transition-colors">✕ Limpiar filtros</button>
-      </div>
-      {selected.size > 0 && <div className="text-xs text-theme-text-muted/70 px-1">{selected.size} bodega(s) seleccionada(s)</div>}
-      </div>
+            {showFilters && (
+              <div className="flex flex-wrap gap-3 pt-3 border-t border-theme-border/40 animate-in fade-in slide-in-from-top-2 duration-200">
+                <select value={filters.warehouse_type ?? ''} onChange={e => setFilter('warehouse_type', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30">
+                  <option value="" className="bg-white dark:bg-theme-surface">Todos los tipos</option>
+                  {typeOpts.map(t => <option key={t} value={t} className="bg-white dark:bg-theme-surface">{t}</option>)}
+                </select>
+                <select value={filters.status ?? ''} onChange={e => setFilter('status', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30">
+                  <option value="" className="bg-white dark:bg-theme-surface">Todos los estados</option>
+                  <option value="ACTIVE" className="bg-white dark:bg-theme-surface">ACTIVA</option>
+                  <option value="INACTIVE" className="bg-white dark:bg-theme-surface">INACTIVA</option>
+                  <option value="BLOCKED" className="bg-white dark:bg-theme-surface">BLOQUEADA</option>
+                </select>
+                <button onClick={() => { setFilters({ page: 1, pageSize: 50 }); setSelected(new Set()) }} className="h-9 px-3 rounded-lg border border-theme-border text-theme-text-muted/70 hover:text-theme-text hover:bg-theme-text/5 text-xs transition-colors">✕ Limpiar filtros</button>
+              </div>
+            )}
+          </div>
+          {selected.size > 0 && viewMode === 'table' && <div className="text-xs text-theme-text-muted/70 px-4 py-2 border-b border-theme-border bg-theme-text/[0.02]">{selected.size} bodega(s) seleccionada(s)</div>}
+        </>
+      )}
 
       {preview && (<div className="rounded-2xl border border-theme-border bg-theme-surface p-5 space-y-4"><div className="flex items-center justify-between"><h3 className="text-sm font-semibold text-theme-text">Vista previa - {preview.rows.length} filas</h3><div className="flex gap-2"><button onClick={() => setPreview(null)} className="px-3 py-1.5 rounded-lg border border-theme-border text-xs text-theme-text-muted/70 hover:text-theme-text">Cancelar</button>{preview.errors.length === 0 && preview.rows.length > 0 && <button onClick={handleImportConfirm} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-xs text-white font-semibold hover:bg-emerald-500">Confirmar</button>}</div></div>{preview.errors.length > 0 && <div className="bg-red-100 dark:bg-red-500/10 border border-red-300 dark:border-red-500/20 rounded-lg p-3 space-y-1">{preview.errors.map((e, i) => <p key={i} className="text-xs text-red-500 dark:text-red-400">{e}</p>)}</div>}</div>)}
 
       {loading ? (<div className="rounded-2xl border border-theme-border bg-theme-surface p-10 text-center"><p className="text-theme-text-muted/50 text-sm">Cargando...</p></div>)
       : data.length === 0 ? (<div className="rounded-2xl border border-theme-border bg-theme-surface p-10 text-center"><p className="text-theme-text-muted/50 text-sm">No hay bodegas registradas.</p></div>)
-      : (<div className="flex-1 overflow-auto">
-          <table className="w-full text-sm border-collapse">
-            <thead className="sticky top-0 z-10 bg-theme-surface"><tr className="border-b border-theme-border text-xs text-theme-text-muted/60 uppercase tracking-wider">
+      : viewMode === 'visual' ? (
+          <div className={`flex-1 overflow-hidden flex ${selectedWarehouseId ? '' : 'p-6'}`}>
+            <WarehouseVisualOverview warehouses={data} stats={stats} onWarehouseSelect={setSelectedWarehouseId} />
+          </div>
+        )
+      : (<div className="flex-1 overflow-auto p-6">
+          <div className="bg-theme-surface border border-theme-border rounded-xl shadow-sm overflow-hidden">
+            <table className="w-full text-sm border-collapse">
+            <thead className="sticky top-0 z-10 bg-theme-text/5"><tr className="border-b border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider">
               <th className="py-3 px-4 text-left w-10"><input type="checkbox" checked={data.length > 0 && data.every(d => selected.has(d.id))} onChange={toggleAll} className="accent-emerald-600" /></th>
               <th className="text-left py-3 px-4 font-medium">Código</th>
               <th className="text-left py-3 px-4 font-medium">Nombre</th>
@@ -254,10 +290,10 @@ export function WarehousesPanel() {
             </tr></thead>
             <tbody>
               {data.map(w => (
-                <tr key={w.id} className={`border-b border-gray-200 dark:border-white/5 hover:bg-black/5 dark:hover:bg-white/3 transition-colors ${selected.has(w.id) ? 'bg-theme-accent/5 dark:bg-theme-accent/10' : ''}`}>
+                <tr key={w.id} className={`border-b border-theme-border hover:bg-theme-text/5 transition-colors ${selected.has(w.id) ? 'bg-theme-accent/5' : ''}`}>
                   <td className="py-3 px-4"><input type="checkbox" checked={selected.has(w.id)} onChange={() => toggleSelect(w.id)} className="accent-emerald-600" /></td>
                   <td className="py-3 px-4 text-theme-text text-xs font-mono font-medium">{w.code}</td>
-                  <td className="py-3 px-4 text-gray-900 dark:text-emerald-200/80 text-xs">{w.name}</td>
+                  <td className="py-3 px-4 text-theme-text text-xs font-semibold">{w.name}</td>
                   <td className="py-3 px-4 text-theme-text-muted text-xs">{w.warehouse_type}</td>
                   <td className="py-3 px-4 text-theme-text-muted text-xs">{w.manager_name || '—'}</td>
                   <td className="py-3 px-4 text-theme-text-muted text-xs">{w.city || '—'}</td>
@@ -266,13 +302,14 @@ export function WarehousesPanel() {
                   <td className="py-3 px-4 text-center">{w.is_default ? <span className="text-xs text-theme-accent font-semibold">★</span> : '—'}</td>
                   <td className="py-3 px-4">{w.is_active ? <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-theme-accent/10 dark:bg-theme-accent/10 text-theme-accent dark:text-theme-accent border-emerald-300 dark:border-emerald-500/20">Activa</span> : <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 border-red-300 dark:border-red-500/20">Inactiva</span>}</td>
                   <td className="py-3 px-4 text-right">
-                    <button onClick={() => openEdit(w)} className="text-xs text-theme-text-muted/70 hover:text-gray-900 dark:hover:text-emerald-300 mr-3">Editar</button>
-                    <button onClick={() => handleDeactivate(w)} className={`text-xs ${w.is_active ? 'text-red-500/80 dark:text-red-400 hover:text-red-600 dark:hover:text-red-400' : 'text-theme-text-muted/70 hover:text-gray-900 dark:hover:text-emerald-300'}`}>{w.is_active ? 'Desactivar' : 'Activar'}</button>
+                    <button onClick={() => openEdit(w)} className="text-xs text-theme-text-muted hover:text-theme-text font-medium mr-3 transition-colors">Editar</button>
+                    <button onClick={() => handleDeactivate(w)} className={`text-xs font-medium transition-colors ${w.is_active ? 'text-red-500 hover:text-red-600' : 'text-theme-text-muted hover:text-theme-text'}`}>{w.is_active ? 'Desactivar' : 'Activar'}</button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+          </div>
         </div>)}
 
       {tp > 1 && (

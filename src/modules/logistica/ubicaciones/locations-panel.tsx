@@ -403,9 +403,9 @@ export function LocationsPanel() {
   // ----------------------------------------------------
   if (view === 'new' || view === 'edit') {
     return (
-      <div className="animate-in fade-in zoom-in-95 duration-200">
-        <form onSubmit={handleSaveLocation} className="bg-theme-surface rounded-2xl border border-theme-border shadow-sm overflow-hidden">
-          <div className="px-6 py-4 border-b border-theme-border bg-theme-text/5 flex items-center justify-between sticky top-0 z-10">
+      <div className="flex flex-col h-full overflow-y-auto bg-transparent p-4 lg:p-6 animate-in fade-in zoom-in-95 duration-200">
+        <form onSubmit={handleSaveLocation} className="bg-theme-surface rounded-2xl border border-theme-border shadow-sm overflow-hidden flex-shrink-0">
+          <div className="px-6 py-4 border-b border-theme-border bg-theme-surface flex items-center justify-between sticky top-0 z-10">
             <div className="flex items-center gap-4">
               <button 
                 type="button" 
@@ -585,9 +585,9 @@ export function LocationsPanel() {
   // ----------------------------------------------------
   if (view === 'bulk') {
     return (
-      <div className="animate-in fade-in zoom-in-95 duration-200">
-        <form onSubmit={handleBulkSubmit} className="bg-theme-surface rounded-2xl border border-theme-border shadow-sm overflow-hidden">
-          <div className="px-6 py-4 border-b border-theme-border bg-theme-text/5 flex items-center justify-between sticky top-0 z-10">
+      <div className="flex flex-col h-full overflow-y-auto bg-transparent p-4 lg:p-6 animate-in fade-in zoom-in-95 duration-200">
+        <form onSubmit={handleBulkSubmit} className="bg-theme-surface rounded-2xl border border-theme-border shadow-sm overflow-hidden flex-shrink-0">
+          <div className="px-6 py-4 border-b border-theme-border bg-theme-surface flex items-center justify-between sticky top-0 z-10">
             <div className="flex items-center gap-4">
               <button 
                 type="button" 
@@ -817,7 +817,8 @@ export function LocationsPanel() {
   // RENDER SCREEN: LIST OF LOCATIONS (DEFAULT VIEW)
   // ----------------------------------------------------
   return (
-    <div className="space-y-6 animate-in fade-in duration-200">
+    <div className="flex flex-col h-full bg-transparent overflow-hidden">
+      <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-6 animate-in fade-in duration-200">
       {msg && (
         <div className="bg-theme-accent-hover/10 border border-theme-accent/20 rounded-xl px-4 py-3 text-sm text-theme-text-accent flex items-center gap-2 font-medium shadow-sm transition-all">
           <CheckCircle className="w-4 h-4 shrink-0 text-theme-accent" />
@@ -1007,6 +1008,7 @@ export function LocationsPanel() {
           </div>
         </div>
       )}
+      </div>
     </div>
   )
 }

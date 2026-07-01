@@ -278,10 +278,10 @@ function formatCode(
     .replace(/{level}/gi, level)
     .replace(/{position}/gi, position)
   
-  if (!aisle) res = res.replace(/PAS-/gi, '')
+  if (!aisle) res = res.replace(/P(?=-|$)/gi, '').replace(/PAS-/gi, '')
   if (!rack) res = res.replace(/-R(?=-|$)/gi, '').replace(/RACK-/gi, '')
   if (!level) res = res.replace(/-N(?=-|$)/gi, '').replace(/NIV-/gi, '')
-  if (!position) res = res.replace(/-P(?=-|$)/gi, '').replace(/POS-/gi, '')
+  if (!position) res = res.replace(/-U(?=-|$)/gi, '').replace(/UBI-/gi, '')
 
   res = res.replace(/[-_+/]{2,}/g, (match) => match[0])
   res = res.replace(/^[-_+/]+|[-_+/]+$/g, '')
@@ -291,13 +291,14 @@ function formatCode(
 export async function createLocationsBulk(data: {
   warehouse_id: string
   prefix?: string
-  aisles?: string
+  aisleFrom?: string
+  aisleTo?: string
   rackFrom?: string
   rackTo?: string
   levelFrom?: string
   levelTo?: string
-  positionFrom?: string
-  positionTo?: string
+  posFrom?: string
+  posTo?: string
   codeFormat: string
 }) {
   const supabase = await createClient()
@@ -311,16 +312,10 @@ export async function createLocationsBulk(data: {
 
   const prefix = (data.prefix ?? '').trim()
   
-  // Comma-separated aisles parsing
-  const rawAisles = (data.aisles ?? '')
-    .split(',')
-    .map(s => s.trim().toUpperCase())
-    .filter(Boolean)
-  const aisles = rawAisles.length > 0 ? rawAisles : ['']
-  
+  const aisles = generateRange((data.aisleFrom ?? '').trim(), (data.aisleTo ?? '').trim())
   const racks = generateRange((data.rackFrom ?? '').trim(), (data.rackTo ?? '').trim())
   const levels = generateRange((data.levelFrom ?? '').trim(), (data.levelTo ?? '').trim())
-  const positions = generateRange((data.positionFrom ?? '').trim(), (data.positionTo ?? '').trim())
+  const positions = generateRange((data.posFrom ?? '').trim(), (data.posTo ?? '').trim())
 
   const combinationsCount = aisles.length * racks.length * levels.length * positions.length
   if (combinationsCount > 2000) {
@@ -407,7 +402,7 @@ export async function createLocationsBulk(data: {
       aisles,
       rackFrom: data.rackFrom, rackTo: data.rackTo,
       levelFrom: data.levelFrom, levelTo: data.levelTo,
-      positionFrom: data.positionFrom, positionTo: data.positionTo,
+      posFrom: data.posFrom, posTo: data.posTo,
       codeFormat: data.codeFormat
     })
     console.log('Ranges generated:', { aisles, racks, levels, positions })

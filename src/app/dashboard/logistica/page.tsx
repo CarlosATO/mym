@@ -15,5 +15,5 @@ export default async function LogisticaPage() {
   const hasView = perms.includes('module.logistica.view') || perms.includes('system.admin')
   if (!hasView) return <AccessDenied />
 
-  return null
+  return <></>
 }

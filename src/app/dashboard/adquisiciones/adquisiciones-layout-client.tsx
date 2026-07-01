@@ -7,6 +7,7 @@ import { CatalogPanel } from '@/modules/adquisiciones/catalogo/catalog-panel'
 import { WarehousesPanel } from '@/modules/adquisiciones/bodegas/warehouses-panel'
 import { PurchaseOrdersPanel } from '@/modules/adquisiciones/ordenes-compra/purchase-orders-panel'
 import { RouteSettlementsPanel } from '@/modules/adquisiciones/rendicion-rutas/route-settlements-panel'
+import { SalesAnalysisWorkspace } from '@/modules/adquisiciones/analisis-ventas/sales-analysis-workspace'
 import type { RibbonAction } from '@/components/layout/module-ribbon'
 
 const tabs = [
@@ -73,6 +74,11 @@ const pageHeaders: Record<string, { title: string; breadcrumb: string[]; descrip
     breadcrumb: ['Adquisiciones', 'Reportes'],
     description: 'Indicadores y reportes generales de compras.',
   },
+  sugerencia_compras: {
+    title: 'Análisis y Sugerencia de Compras',
+    breadcrumb: ['Adquisiciones', 'Reportes', 'Sugerencia de Compras'],
+    description: 'Análisis de ventas e inventario para calcular sugerencias de compras automatizadas.',
+  },
 }
 
 interface AdquisicionesLayoutClientProps {
@@ -91,7 +97,7 @@ export function AdquisicionesLayoutClient({ children, profile }: AdquisicionesLa
     else if (tabId === 'catalogos') setActiveActionId('proveedores')
     else if (tabId === 'transacciones') setActiveActionId('ordenes')
     else if (tabId === 'recepcion') setActiveActionId('recepciones_p')
-    else if (tabId === 'reportes') setActiveActionId('reporte_gral')
+    else if (tabId === 'reportes') setActiveActionId('sugerencia_compras')
   }
 
   // Generación de acciones de Ribbon
@@ -123,6 +129,7 @@ export function AdquisicionesLayoutClient({ children, profile }: AdquisicionesLa
     )
   } else if (activeTab === 'reportes') {
     ribbonActions.push(
+      { id: 'sugerencia_compras', label: 'Sugerencia de Compras', icon: 'ShoppingCart', onClick: () => setActiveActionId('sugerencia_compras') },
       { id: 'reporte_gral', label: 'Reporte General', icon: 'BarChart3', upcoming: true }
     )
   }
@@ -180,8 +187,24 @@ export function AdquisicionesLayoutClient({ children, profile }: AdquisicionesLa
         </div>
       )
     }
+  } else if (activeTab === 'reportes') {
+    if (activeActionId === 'sugerencia_compras') {
+      content = <SalesAnalysisWorkspace />
+    } else {
+      content = (
+        <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px] flex flex-col justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-theme-text">Reporte General</h2>
+            <p className="text-sm text-theme-text-muted/60 mt-2">Indicadores y reportes generales de compras.</p>
+          </div>
+          <div className="mt-6 inline-flex items-center gap-2 text-xs font-semibold text-theme-accent/70 uppercase tracking-wider border border-theme-accent/20 bg-theme-accent-hover/8 px-3 py-1.5 rounded-lg w-fit">
+            <span>⏳</span> Próximamente
+          </div>
+        </div>
+      )
+    }
   } else {
-    // Para recepcion y reportes (todos placeholders por ahora)
+    // Para recepcion (todos placeholders por ahora)
     content = (
       <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px] flex flex-col justify-between">
         <div>
@@ -195,7 +218,7 @@ export function AdquisicionesLayoutClient({ children, profile }: AdquisicionesLa
     )
   }
 
-  const workspaceActionIds = ['ordenes', 'proveedores', 'catalogo', 'bodegas', 'recepciones_p', 'rendicion_rutas']
+  const workspaceActionIds = ['ordenes', 'proveedores', 'catalogo', 'bodegas', 'recepciones_p', 'rendicion_rutas', 'sugerencia_compras']
   const layoutMode = workspaceActionIds.includes(activeActionId) ? 'workspace' : 'contained'
 
   return (

@@ -3,7 +3,7 @@
 # Pruebas locales e inicio
 
 ** Servidor frontend 
-npn run dev
+npm run dev
 
 ** Servidor backend
 

@@ -518,59 +518,17 @@ export async function getStockSummary(): Promise<StockItem[]> {
   if (!companyId) return []
 
   const db = logDb()
-  const { data: movements, error } = await db
-    .from('kardex_movements')
-    .select('product_id, warehouse_id, location_id, lot_number, expiration_date, quantity, movement_type, unit_cost')
+  const { data: stockItems, error } = await db
+    .from('v_stock_by_location')
+    .select('product_id, warehouse_id, location_id, lot_number, expiration_date, quantity, max_unit_cost')
     .eq('company_id', companyId)
-    .order('movement_date', { ascending: true })
 
   if (error) {
     console.error('getStockSummary error:', error)
     return []
   }
 
-  if (!movements || movements.length === 0) return []
-
-  // Group and sum in memory
-  const stockMap = new Map<string, {
-    product_id: string
-    warehouse_id: string
-    location_id: string | null
-    lot_number: string | null
-    expiration_date: string | null
-    quantity: number
-    unit_cost: number | null
-  }>()
-
-  for (const m of movements) {
-    const key = `${m.product_id}_${m.warehouse_id}_${m.location_id || 'null'}_${m.lot_number || 'null'}_${m.expiration_date || 'null'}`
-    const qty = Number(m.quantity)
-    const sign = ['IN', 'TRANSFER_IN', 'ADJUSTMENT'].includes(m.movement_type) ? 1 : -1
-    const delta = qty * sign
-
-    const existing = stockMap.get(key)
-    if (existing) {
-      existing.quantity += delta
-      if (['IN', 'PURCHASE_RECEIPT', 'ADJUSTMENT'].includes(m.movement_type) && m.unit_cost !== null && m.unit_cost > 0) {
-        existing.unit_cost = Number(m.unit_cost)
-      }
-    } else {
-      stockMap.set(key, {
-        product_id: m.product_id,
-        warehouse_id: m.warehouse_id,
-        location_id: m.location_id,
-        lot_number: m.lot_number,
-        expiration_date: m.expiration_date,
-        quantity: delta,
-        unit_cost: m.unit_cost !== null ? Number(m.unit_cost) : null
-      })
-    }
-  }
-
-  // Filter out zero/negative stock items to show active inventory only
-  let stockItems = Array.from(stockMap.values()).filter(item => item.quantity > 0)
-
-  if (stockItems.length === 0) return []
+  if (!stockItems || stockItems.length === 0) return []
 
   // Join product and warehouse details
   const productIds = Array.from(new Set(stockItems.map(d => d.product_id)))
@@ -600,8 +558,8 @@ export async function getStockSummary(): Promise<StockItem[]> {
       location_code: item.location_id ? locationMap.get(item.location_id) || null : null,
       lot_number: item.lot_number,
       expiration_date: item.expiration_date,
-      quantity: item.quantity,
-      unit_cost: item.unit_cost
+      quantity: Number(item.quantity),
+      unit_cost: item.max_unit_cost ? Number(item.max_unit_cost) : null
     }
   })
 }

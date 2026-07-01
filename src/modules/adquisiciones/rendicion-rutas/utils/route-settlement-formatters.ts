@@ -32,7 +32,7 @@ export function formatSettlementItemStatus(status: string): string {
     case 'TRANSFER_CONFIRMED': return 'Transf. confirmada'
     case 'TRANSFER_PENDING': return 'Transf. pendiente'
     case 'CHECK_RECEIVED': return 'Cheque recibido'
-    case 'CREDIT_REGISTERED': return 'Crédito'
+    case 'CREDIT_REGISTERED': return 'Crédito pendiente'
     case 'PARTIAL_PAYMENT': return 'Pago parcial'
     case 'DIFFERENCE': return 'Diferencia'
     case 'NOT_DELIVERED': return 'No entregada'

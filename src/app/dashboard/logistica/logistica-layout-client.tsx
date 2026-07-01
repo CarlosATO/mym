@@ -102,7 +102,7 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
   const handleTabChange = (tabId: string) => {
     setActiveTab(tabId)
     if (tabId === 'inicio') setActiveActionId('resumen')
-    else if (tabId === 'catalogos') setActiveActionId('ubicaciones')
+    else if (tabId === 'catalogos') setActiveActionId('bodegas')
     else if (tabId === 'movimientos') setActiveActionId('recepciones')
     else if (tabId === 'consultas') setActiveActionId('stock')
     else if (tabId === 'reportes') setActiveActionId('reportes_log')
@@ -112,7 +112,6 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
 
   if (activeTab === 'catalogos') {
     ribbonActions.push(
-      { id: 'ubicaciones', label: 'Ubicaciones', icon: 'MapPin', onClick: () => setActiveActionId('ubicaciones') },
       { id: 'bodegas', label: 'Bodegas', icon: 'Home', onClick: () => setActiveActionId('bodegas') },
       { id: 'productos', label: 'Productos', icon: 'Box', onClick: () => setActiveActionId('productos') }
     )
@@ -242,7 +241,7 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
 
   // Workspace mode for panels that need full-height, full-width layout.
   // Extend this list when new operational panels are added.
-  const workspaceActionIds = ['recepciones', 'traspasos', 'stock', 'kardex', 'bodegas', 'productos', 'guias_ruta']
+  const workspaceActionIds = ['recepciones', 'traspasos', 'stock', 'kardex', 'bodegas', 'productos', 'guias_ruta', 'ubicaciones']
   const layoutMode = workspaceActionIds.includes(activeActionId) ? 'workspace' : 'contained'
 
   return (
