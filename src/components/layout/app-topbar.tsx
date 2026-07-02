@@ -28,7 +28,7 @@ export function AppTopbar({ profile, activeCompany, permissions, moduleName }: A
                 {activeCompany.trade_name || activeCompany.business_name}
               </p>
               <p className="text-[8.5px] font-semibold text-theme-accent uppercase tracking-wider truncate max-w-[140px]">
-                MYM Distribuidora
+                PetGrup
               </p>
             </div>
           </Link>

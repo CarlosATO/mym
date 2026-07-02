@@ -37,9 +37,9 @@ export default function LoginPage() {
 
           {/* Texto descriptivo */}
           <div className="space-y-3">
-            <h1 className="text-4xl font-bold tracking-tight text-theme-text">Distribuidora MYM</h1>
+            <h1 className="text-4xl font-bold tracking-tight text-theme-text">PetGrup</h1>
             <p className="text-base text-theme-text-accent/70 leading-relaxed">
-              Sistema interno de gestión empresarial.
+              Sistema Unificado de Gestión Corporativa
             </p>
           </div>
 
@@ -70,7 +70,7 @@ export default function LoginPage() {
           {/* Logo móvil (solo en pantallas pequeñas) */}
           <div className="lg:hidden flex flex-col items-center gap-4 mb-10">
             <CompanyLogo size={110} />
-            <span className="text-2xl font-bold text-theme-text/90">Distribuidora MYM</span>
+            <span className="text-2xl font-bold text-theme-text/90">PetGrup</span>
           </div>
 
           <LoginForm />

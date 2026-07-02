@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Distribuidora MYM | Portal Interno",
-  description: "Sistema de gestión empresarial Distribuidora MYM",
+  title: "PetGrup | Sistema Unificado",
+  description: "Plataforma de gestión corporativa PetGrup",
 };
 
 export default function RootLayout({
