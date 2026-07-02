@@ -231,6 +231,8 @@ export async function createFundClosure(selectedFunds: PendingRouteFund[]) {
     throw new Error("Error insertando ítems: " + itemsError.message);
   }
 
+  await recalculateClosureTotals(closureId, companyId, db);
+
   return closureId;
 }
 
@@ -259,9 +261,8 @@ export async function getFundClosures(filters?: {
   let query = db.from('route_fund_closures')
     .select(`
       *,
-      items:route_fund_closure_items(route_guide_id),
-      attachments:route_fund_closure_attachments(id),
-      custody_user:portal.users!route_fund_closures_custody_user_id_fkey(first_name, last_name)
+      items:route_fund_closure_items(route_guide_id, invoice_number, payment_method, amount),
+      attachments:route_fund_closure_attachments(id)
     `)
     .eq('company_id', companyId)
 
@@ -287,6 +288,33 @@ export async function getFundClosures(filters?: {
   const { data, error } = await query.order('created_at', { ascending: false });
 
   if (error) throw new Error(error.message);
+
+  if (data && data.length > 0) {
+    const userIds = [...new Set(data.map(d => d.custody_user_id).filter(Boolean))];
+    const guideIds = [...new Set(data.flatMap(d => (d.items || []).map((i: any) => i.route_guide_id)).filter(Boolean))];
+
+    const [usersRes, guidesRes] = await Promise.all([
+      userIds.length > 0 ? db.schema('portal').from('users').select('id, first_name, last_name').in('id', userIds) : Promise.resolve({ data: null }),
+      guideIds.length > 0 ? db.schema('logistica').from('route_guides').select('id, guide_number').in('id', guideIds) : Promise.resolve({ data: null })
+    ]);
+
+    const usersById = (usersRes.data || []).reduce((acc: any, u: any) => { acc[u.id] = u; return acc; }, {});
+    const guidesById = (guidesRes.data || []).reduce((acc: any, g: any) => { acc[g.id] = g.guide_number; return acc; }, {});
+
+    data.forEach(d => {
+      if (d.custody_user_id && usersById[d.custody_user_id]) {
+        d.custody_user = usersById[d.custody_user_id];
+      }
+      if (d.items) {
+        d.items.forEach((i: any) => {
+          if (i.route_guide_id && guidesById[i.route_guide_id]) {
+            i.guide_number = guidesById[i.route_guide_id];
+          }
+        });
+      }
+    });
+  }
+
   return data;
 }
 
@@ -305,7 +333,7 @@ export async function getFundClosureById(id: string) {
     p_permission_code: 'adquisiciones.route_fund_closures.cancel'
   });
 
-  let closureQuery = db.from('route_fund_closures').select('*, custody_user:portal.users!route_fund_closures_custody_user_id_fkey(first_name, last_name)').eq('id', id).eq('company_id', companyId);
+  let closureQuery = db.from('route_fund_closures').select('*').eq('id', id).eq('company_id', companyId);
   if (!isSuper) {
     closureQuery = closureQuery.eq('custody_user_id', userData.user.id);
   }
@@ -318,7 +346,28 @@ export async function getFundClosureById(id: string) {
     db.from('route_fund_closure_attachments').select('*').eq('fund_closure_id', id)
   ]);
 
-  if (closure.error) throw new Error(closure.error.message);
+  if (closure.data && closure.data.custody_user_id) {
+    const { data: cUserData } = await db.schema('portal').from('users').select('id, first_name, last_name').eq('id', closure.data.custody_user_id).single();
+    if (cUserData) {
+      closure.data.custody_user = cUserData;
+    }
+  }
+
+  const closureItems = items.data || [];
+  if (closureItems.length > 0) {
+    const guideIds = [...new Set(closureItems.map((i: any) => i.route_guide_id).filter(Boolean))];
+    if (guideIds.length > 0) {
+      const { data: guidesData } = await db.schema('logistica').from('route_guides').select('id, guide_number').in('id', guideIds);
+      if (guidesData) {
+        const guidesById = guidesData.reduce((acc: any, g: any) => { acc[g.id] = g.guide_number; return acc; }, {});
+        closureItems.forEach((i: any) => {
+          if (i.route_guide_id && guidesById[i.route_guide_id]) {
+            i.guide_number = guidesById[i.route_guide_id];
+          }
+        });
+      }
+    }
+  }
 
   return {
     closure: closure.data,
@@ -514,9 +563,18 @@ export async function executeCloseFundClosure(closureId: string) {
 }
 
 async function recalculateClosureTotals(closureId: string, companyId: string, db: any) {
-  // Fetch closure
-  const { data: closure } = await db.from('route_fund_closures').select('total_cash_received, total_check_received').eq('id', closureId).single();
+  // Fetch items
+  const { data: items } = await db.from('route_fund_closure_items').select('payment_method, amount').eq('fund_closure_id', closureId).is('released_at', null);
   
+  let totalCash = 0;
+  let totalCheck = 0;
+  if (items) {
+    items.forEach((item: any) => {
+      if (item.payment_method === 'CASH') totalCash += Number(item.amount || 0);
+      else if (item.payment_method === 'CHECK') totalCheck += Number(item.amount || 0);
+    });
+  }
+
   // Expenses
   const { data: expenses } = await db.from('route_fund_closure_expenses').select('amount').eq('fund_closure_id', closureId);
   const totalExpenses = (expenses || []).reduce((acc: number, curr: any) => acc + Number(curr.amount), 0);
@@ -525,9 +583,11 @@ async function recalculateClosureTotals(closureId: string, companyId: string, db
   const { data: deposits } = await db.from('route_fund_closure_deposits').select('amount').eq('fund_closure_id', closureId);
   const totalDeposits = (deposits || []).reduce((acc: number, curr: any) => acc + Number(curr.amount), 0);
 
-  const totalPending = Number(closure.total_cash_received) + Number(closure.total_check_received) - totalExpenses - totalDeposits;
+  const totalPending = totalCash + totalCheck - totalExpenses - totalDeposits;
 
   await db.from('route_fund_closures').update({
+    total_cash_received: totalCash,
+    total_check_received: totalCheck,
     total_expenses: totalExpenses,
     total_deposits: totalDeposits,
     total_pending: totalPending,

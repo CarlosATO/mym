@@ -224,8 +224,17 @@ export function FundClosuresWorkspace() {
                   {closures.length === 0 ? (
                     <tr><td colSpan={12} className="p-8 text-center text-theme-text-muted">No se encontraron cierres con los filtros aplicados.</td></tr>
                   ) : closures.map(closure => {
-                    const guideCount = Array.isArray(closure.items) ? new Set(closure.items.map((i:any) => i.route_guide_id)).size : 0;
-                    const invoiceCount = Array.isArray(closure.items) ? closure.items.length : 0;
+                    const uniqueGuides = [...new Set((closure.items || []).map((i:any) => i.guide_number).filter(Boolean))];
+                    const uniqueInvoices = [...new Set((closure.items || []).map((i:any) => i.invoice_number).filter(Boolean))];
+                    
+                    const guideText = uniqueGuides.length > 0 
+                      ? (uniqueGuides.length <= 2 ? uniqueGuides.join(', ') : `${uniqueGuides.length} guías`) 
+                      : '---';
+                      
+                    const invoiceText = uniqueInvoices.length > 0
+                      ? (uniqueInvoices.length <= 2 ? uniqueInvoices.join(', ') : `${uniqueInvoices.length} facturas`)
+                      : '---';
+                      
                     const attachCount = Array.isArray(closure.attachments) ? closure.attachments.length : 0;
                     return (
                     <tr key={closure.id} className="hover:bg-theme-text/5 transition-colors">
@@ -234,8 +243,8 @@ export function FundClosuresWorkspace() {
                       <td className="p-3 whitespace-nowrap">
                         <span className={`px-2 py-1 text-[11px] font-bold rounded ${closure.status === 'CLOSED' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : closure.status === 'WITH_DIFFERENCE' ? 'bg-orange-500/10 text-orange-600 dark:text-orange-400' : closure.status === 'CANCELLED' ? 'bg-red-500/10 text-red-600 dark:text-red-400' : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'}`}>{closure.status}</span>
                       </td>
-                      <td className="p-3 text-center font-mono text-theme-text-muted">{guideCount}</td>
-                      <td className="p-3 text-center font-mono text-theme-text-muted">{invoiceCount}</td>
+                      <td className="p-3 text-center font-mono text-xs text-theme-text" title={uniqueGuides.join(', ')}>{guideText}</td>
+                      <td className="p-3 text-center font-mono text-xs text-theme-text" title={uniqueInvoices.join(', ')}>{invoiceText}</td>
                       <td className="p-3 text-right font-mono text-theme-text">${Number(closure.total_cash_received).toLocaleString('es-CL')}</td>
                       <td className="p-3 text-right font-mono text-theme-text">${Number(closure.total_check_received).toLocaleString('es-CL')}</td>
                       <td className="p-3 text-right font-mono text-red-600 dark:text-red-400">${Number(closure.total_expenses).toLocaleString('es-CL')}</td>
@@ -559,6 +568,7 @@ function FundClosureDetail({ closureId, onBack }: { closureId: string; onBack: (
               <table className="w-full text-left text-sm text-theme-text">
                 <thead className="bg-theme-text/5 border-b border-theme-border">
                   <tr>
+                    <th className="p-3">Guía</th>
                     <th className="p-3">Factura</th>
                     <th className="p-3">Cliente</th>
                     <th className="p-3">Método</th>
@@ -568,9 +578,14 @@ function FundClosureDetail({ closureId, onBack }: { closureId: string; onBack: (
                 <tbody className="divide-y divide-theme-border">
                   {data.items.map((item: any) => (
                     <tr key={item.id}>
+                      <td className="p-3 font-mono text-theme-text-muted">{item.guide_number || '---'}</td>
                       <td className="p-3 font-mono">{item.invoice_number}</td>
                       <td className="p-3">{item.customer_name}</td>
-                      <td className="p-3">{item.payment_method}</td>
+                      <td className="p-3">
+                        <span className="px-2 py-0.5 rounded bg-theme-text/10 text-[11px] font-bold">
+                          {item.payment_method === 'CASH' ? 'Efectivo' : 'Cheque'}
+                        </span>
+                      </td>
                       <td className="p-3 text-right font-mono">${Number(item.amount).toLocaleString('es-CL')}</td>
                     </tr>
                   ))}

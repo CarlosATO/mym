@@ -116,7 +116,14 @@ export async function getActiveCompany(): Promise<Company | null> {
   const db = coreAdmin()
   const { data } = await db
     .from('companies')
-    .select('*')
+    .select(`
+      id, rut, business_name, trade_name, email, phone,
+      address, logo_url, is_active, giro, region, comuna,
+      city, purchase_email, finance_email, website,
+      admin_contact_name, observations, document_footer,
+      purchase_terms, legal_text, default_po_prefix,
+      default_currency, default_tax_rate, default_payment_days
+    `)
     .eq('id', companyId)
     .eq('is_active', true)
     .maybeSingle()
