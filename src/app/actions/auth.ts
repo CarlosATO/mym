@@ -1,7 +1,9 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 
 export async function login(formData: FormData) {
@@ -39,6 +41,37 @@ export async function login(formData: FormData) {
   if (profile?.must_change_password) {
     redirect('/change-password')
   }
+
+  // Check user's company access
+  const coreAdmin = createSupabaseClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { db: { schema: 'core' }, auth: { autoRefreshToken: false, persistSession: false } }
+  )
+
+  const { data: companies } = await coreAdmin
+    .from('user_company_access')
+    .select('company_id, is_default')
+    .eq('user_id', data.user.id)
+    .eq('is_active', true)
+
+  if (!companies || companies.length === 0) {
+    redirect('/sin-empresa')
+  }
+
+  if (companies.length === 1) {
+    // Auto-set active company cookie
+    const cookieStore = await cookies()
+    cookieStore.set('active_company_id', companies[0].company_id, {
+      path: '/',
+      maxAge: 60 * 60 * 24 * 30,
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+    })
+  }
+
+  // If 2+ companies, no cookie set yet — dashboard layout will show CompanySwitcher
 
   redirect('/dashboard')
 }

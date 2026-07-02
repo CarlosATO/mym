@@ -1,13 +1,20 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { createUser, updateUser } from '@/app/actions/users'
+import { createUser, updateUser, getUserCompanyIds, getAllActiveCompanies } from '@/app/actions/users'
 import type { Profile, Rol } from '@/lib/types'
+
+interface CompanyOption {
+  id: string
+  business_name: string
+  trade_name: string | null
+  rut: string | null
+}
 
 interface UserFormDialogProps {
   open: boolean
@@ -21,8 +28,42 @@ export function UserFormDialog({ open, onOpenChange, roles, userToEdit }: UserFo
   const [tempPassword, setTempPassword] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
+  const [companies, setCompanies] = useState<CompanyOption[]>([])
+  const [selectedCompanies, setSelectedCompanies] = useState<string[]>([])
+  const [loadingCompanies, setLoadingCompanies] = useState(true)
+
+  useEffect(() => {
+    if (open) {
+      setLoadingCompanies(true)
+      setSelectedCompanies([])
+      getAllActiveCompanies().then(list => {
+        setCompanies(list as unknown as CompanyOption[])
+        setLoadingCompanies(false)
+      })
+
+      if (userToEdit) {
+        getUserCompanyIds(userToEdit.id).then(ids => {
+          setSelectedCompanies(ids)
+        })
+      }
+    }
+  }, [open, userToEdit])
+
+  function toggleCompany(companyId: string) {
+    setSelectedCompanies(prev =>
+      prev.includes(companyId)
+        ? prev.filter(id => id !== companyId)
+        : [...prev, companyId]
+    )
+  }
 
   async function handleSubmit(formData: FormData) {
+    if (selectedCompanies.length === 0) {
+      setError('Debe seleccionar al menos una empresa.')
+      return
+    }
+
+    formData.append('companyIds', JSON.stringify(selectedCompanies))
     setPending(true)
     setError('')
     setTempPassword(null)
@@ -64,7 +105,7 @@ export function UserFormDialog({ open, onOpenChange, roles, userToEdit }: UserFo
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent>
+      <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>{userToEdit ? 'Editar Usuario' : 'Crear Usuario'}</DialogTitle>
           <DialogDescription>
@@ -128,10 +169,43 @@ export function UserFormDialog({ open, onOpenChange, roles, userToEdit }: UserFo
                 ))}
               </select>
             </div>
+            <div className="space-y-2">
+              <Label>Empresa(s) asignadas</Label>
+              {loadingCompanies ? (
+                <p className="text-sm text-muted-foreground">Cargando empresas...</p>
+              ) : companies.length === 0 ? (
+                <p className="text-sm text-red-500">No hay empresas activas disponibles.</p>
+              ) : (
+                <div className="max-h-48 overflow-y-auto border border-input rounded-md p-2 space-y-1">
+                  {companies.map((company) => (
+                    <label
+                      key={company.id}
+                      className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-accent/50 cursor-pointer transition-colors"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedCompanies.includes(company.id)}
+                        onChange={() => toggleCompany(company.id)}
+                        className="h-4 w-4 rounded border-gray-300"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{company.trade_name || company.business_name}</p>
+                        {company.rut && <p className="text-xs text-muted-foreground truncate">{company.rut}</p>}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {selectedCompanies.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  {selectedCompanies.length} empresa(s) seleccionada(s). La primera será la predeterminada.
+                </p>
+              )}
+            </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
             <div className="flex gap-2 justify-end">
               <Button type="button" variant="outline" onClick={handleClose}>Cancelar</Button>
-              <Button type="submit" disabled={pending}>
+              <Button type="submit" disabled={pending || loadingCompanies || companies.length === 0}>
                 {pending ? 'Guardando...' : userToEdit ? 'Guardar cambios' : 'Crear usuario'}
               </Button>
             </div>

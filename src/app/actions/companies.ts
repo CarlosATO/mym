@@ -98,15 +98,17 @@ export async function getActiveCompanyId(cachedUser?: any): Promise<string | nul
 
   if (!accesses || accesses.length === 0) return null
 
+  // If cookie is valid, respect it
   if (activeCompanyCookie) {
     const hasAccess = accesses.some(a => a.company_id === activeCompanyCookie)
     if (hasAccess) return activeCompanyCookie
   }
 
-  const defaultAccess = accesses.find(a => a.is_default)
-  if (defaultAccess) return defaultAccess.company_id
+  // If only one company, auto-select
+  if (accesses.length === 1) return accesses[0].company_id
 
-  return accesses[0].company_id
+  // Multiple companies and no cookie — let user choose via CompanySwitcher
+  return null
 }
 
 export async function getActiveCompany(): Promise<Company | null> {
