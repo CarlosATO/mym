@@ -1,3 +1,4 @@
+import Image from 'next/image'
 import { LoginForm } from '@/components/login-form'
 import { CompanyLogo } from '@/components/company-logo'
 
@@ -21,23 +22,36 @@ export default function LoginPage() {
       <div className="hidden lg:flex flex-1 items-center justify-center relative">
         <div className="text-center space-y-10 max-w-md px-12">
 
-          {/* Logo flotante sin contenedor */}
-          <div className="flex justify-center">
+          {/* Logos corporativos lado a lado */}
+          <div className="flex items-center justify-center gap-8">
             <div className="relative">
-              {/* Glow ambiental detrás del logo */}
               <div className="absolute inset-0 scale-[1.4] rounded-full bg-amber-400/10 blur-2xl" />
-              <CompanyLogo size={200} />
+              <CompanyLogo size={140} />
+            </div>
+            <div className="relative">
+              <div className="absolute inset-0 scale-[1.4] rounded-full bg-amber-400/10 blur-2xl" />
+              <Image
+                src="/logos/Logo_AmiMascota.jpeg"
+                alt="amiMascota"
+                width={140}
+                height={140}
+                priority
+                unoptimized
+                style={{ width: 140, height: 'auto' }}
+                className="select-none"
+              />
             </div>
           </div>
 
           {/* Divisor elegante */}
           <div className="flex items-center gap-4">
             <div className="flex-1 h-px bg-gradient-to-r from-transparent via-theme-accent/30 to-transparent" />
+            <span className="text-theme-accent/40 text-xs font-bold tracking-widest uppercase">PetGrup</span>
+            <div className="flex-1 h-px bg-gradient-to-l from-transparent via-theme-accent/30 to-transparent" />
           </div>
 
           {/* Texto descriptivo */}
           <div className="space-y-3">
-            <h1 className="text-4xl font-bold tracking-tight text-theme-text">PetGrup</h1>
             <p className="text-base text-theme-text-accent/70 leading-relaxed">
               Sistema Unificado de Gestión Corporativa
             </p>
@@ -67,10 +81,22 @@ export default function LoginPage() {
       {/* Panel derecho – formulario */}
       <div className="flex-1 flex items-center justify-center relative p-8 pb-24">
         <div className="w-full max-w-md">
-          {/* Logo móvil (solo en pantallas pequeñas) */}
+          {/* Logos móvil (solo en pantallas pequeñas) */}
           <div className="lg:hidden flex flex-col items-center gap-4 mb-10">
-            <CompanyLogo size={110} />
-            <span className="text-2xl font-bold text-theme-text/90">PetGrup</span>
+            <div className="flex items-center justify-center gap-4">
+              <CompanyLogo size={80} />
+              <Image
+                src="/logos/Logo_AmiMascota.jpeg"
+                alt="amiMascota"
+                width={80}
+                height={80}
+                priority
+                unoptimized
+                style={{ width: 80, height: 'auto' }}
+                className="select-none"
+              />
+            </div>
+            <span className="text-lg font-bold text-theme-text/80 tracking-widest uppercase">PetGrup</span>
           </div>
 
           <LoginForm />
