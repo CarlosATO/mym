@@ -2,12 +2,9 @@
 
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
-import { unstable_cache } from 'next/cache';
-import { revalidateTag } from 'next/cache';
+
 import { RouteGuide, CatalogOptions, RoutePersonnelType } from '@/modules/logistica/guias-ruta/types';
 import { getActiveCompanyId } from '@/app/actions/companies';
-
-const CACHE_TAG_CATALOGS = 'route-guide-catalogs';
 
 // ---- Types ---------------------------------------------------------------
 
@@ -158,16 +155,6 @@ export async function getRouteGuideCatalogOptions(): Promise<CatalogOptions> {
   };
 }
 
-export const getCachedRouteGuideCatalogOptions = unstable_cache(
-  async () => getRouteGuideCatalogOptions(),
-  ['route-guide-catalogs'],
-  { tags: [CACHE_TAG_CATALOGS], revalidate: 300 }
-);
-
-export async function revalidateRouteGuideCatalogs() {
-  revalidateTag(CACHE_TAG_CATALOGS, { expire: 0 });
-}
-
 // ---- Catalog Inline Creations ---------------------------------------------
 
 export async function createRouteVehicleInline(vehicleName: string) {
@@ -186,7 +173,6 @@ export async function createRouteVehicleInline(vehicleName: string) {
 
   if (error) throw error;
   if (!data?.success) throw new Error(data?.error || 'Error creando vehículo');
-  await await revalidateRouteGuideCatalogs();
   return data.id as string;
 }
 
@@ -206,7 +192,6 @@ export async function createDeliveryRouteInline(routeName: string) {
 
   if (error) throw error;
   if (!data?.success) throw new Error(data?.error || 'Error creando ruta');
-  await revalidateRouteGuideCatalogs();
   return data.id as string;
 }
 
@@ -227,7 +212,6 @@ export async function createRoutePersonInline(personName: string, personType: Ro
 
   if (error) throw error;
   if (!data?.success) throw new Error(data?.error || 'Error creando personal');
-  await revalidateRouteGuideCatalogs();
   return data.id as string;
 }
 

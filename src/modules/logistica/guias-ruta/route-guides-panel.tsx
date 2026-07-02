@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { getRouteGuides, getCachedRouteGuideCatalogOptions, saveRouteGuideDraft, dispatchRouteGuideAction, deleteRouteGuideDraftAction, RouteSaveDuplicateWarning, RouteDuplicateInvoice } from '@/app/actions/logistica/guias-ruta';
+import { getRouteGuides, getRouteGuideCatalogOptions, saveRouteGuideDraft, dispatchRouteGuideAction, deleteRouteGuideDraftAction, RouteSaveDuplicateWarning, RouteDuplicateInvoice } from '@/app/actions/logistica/guias-ruta';
 import { RouteGuidesTrayTable } from './components/route-guides-tray-table';
 import { RouteGuidesTraySkeleton } from './components/route-guide-skeletons';
 import { RouteGuideForm } from './components/route-guide-form';
@@ -46,7 +46,7 @@ export function RouteGuidesPanel() {
 
   const loadCatalogs = useCallback(async () => {
     try {
-      const data = await getCachedRouteGuideCatalogOptions();
+      const data = await getRouteGuideCatalogOptions();
       setCatalogs(data);
     } catch (e: any) {
       toast.error('Error cargando catálogos: ' + e.message);
