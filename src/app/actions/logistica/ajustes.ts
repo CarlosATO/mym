@@ -90,9 +90,14 @@ export async function getStockAdjustments(): Promise<StockAdjustment[]> {
   if (process.env.NODE_ENV === 'development') console.time('getStockAdjustments:base')
   const { data, error } = await db
     .from('stock_adjustments')
-    .select('*')
+    .select(`
+      id, company_id, adjustment_number, adjustment_type,
+      reason, adjustment_date, warehouse_id, notes,
+      status, created_by, created_at
+    `)
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })
+    .limit(100)
   if (process.env.NODE_ENV === 'development') console.timeEnd('getStockAdjustments:base')
 
   if (error) {
@@ -204,7 +209,11 @@ export async function getStockAdjustmentDetails(id: string): Promise<{ adjustmen
   if (process.env.NODE_ENV === 'development') console.time('getAdjustmentDetails:header')
   const { data: adj, error: err1 } = await db
     .from('stock_adjustments')
-    .select('*')
+    .select(`
+      id, company_id, adjustment_number, adjustment_type,
+      reason, adjustment_date, warehouse_id, notes,
+      status, created_by, created_at
+    `)
     .eq('id', id)
     .eq('company_id', companyId)
     .single()
@@ -219,7 +228,11 @@ export async function getStockAdjustmentDetails(id: string): Promise<{ adjustmen
   if (process.env.NODE_ENV === 'development') console.time('getAdjustmentDetails:items')
   const { data: items, error: err2 } = await db
     .from('stock_adjustment_items')
-    .select('*')
+    .select(`
+      id, adjustment_id, product_id, warehouse_id,
+      location_id, lot_number, expiration_date,
+      quantity, unit_cost, total_cost, notes
+    `)
     .eq('adjustment_id', id)
   if (process.env.NODE_ENV === 'development') console.timeEnd('getAdjustmentDetails:items')
 

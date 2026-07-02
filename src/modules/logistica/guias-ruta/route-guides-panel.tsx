@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { getRouteGuides, getRouteGuideCatalogOptions, saveRouteGuideDraft, dispatchRouteGuideAction, deleteRouteGuideDraftAction, RouteSaveDuplicateWarning, RouteDuplicateInvoice } from '@/app/actions/logistica/guias-ruta';
+import { getRouteGuides, getCachedRouteGuideCatalogOptions, saveRouteGuideDraft, dispatchRouteGuideAction, deleteRouteGuideDraftAction, RouteSaveDuplicateWarning, RouteDuplicateInvoice } from '@/app/actions/logistica/guias-ruta';
 import { RouteGuidesTrayTable } from './components/route-guides-tray-table';
 import { RouteGuidesTraySkeleton } from './components/route-guide-skeletons';
 import { RouteGuideForm } from './components/route-guide-form';
@@ -46,7 +46,7 @@ export function RouteGuidesPanel() {
 
   const loadCatalogs = useCallback(async () => {
     try {
-      const data = await getRouteGuideCatalogOptions();
+      const data = await getCachedRouteGuideCatalogOptions();
       setCatalogs(data);
     } catch (e: any) {
       toast.error('Error cargando catálogos: ' + e.message);
@@ -88,27 +88,42 @@ export function RouteGuidesPanel() {
     if (isSaving || isDispatching) throw new Error('Operación en progreso');
     setIsSaving(true);
     try {
-      // --- BLOCK 1: The actual save (must not swallow errors) ---
       const res = await saveRouteGuideDraft(selectedGuideId, guideData, itemsData);
 
-      // Promote new guide state immediately after successful save
       if (!selectedGuideId) {
         setSelectedGuideId(res.id);
         setActiveView('EDIT');
+        // Add new guide to local tray state to avoid full refetch
+        const newGuide = {
+          id: res.id,
+          guide_number: res.guide_number,
+          guide_date: guideData.guide_date,
+          route_name_snapshot: guideData.route_name_snapshot || '',
+          vehicle_name_snapshot: guideData.vehicle_name_snapshot || '',
+          driver_name_snapshot: guideData.driver_name_snapshot || '',
+          seller_name_snapshot: guideData.seller_name_snapshot || '',
+          dispatcher_name_snapshot: guideData.dispatcher_name_snapshot || '',
+          total_invoices: guideData.total_invoices || 0,
+          total_amount: guideData.total_amount || 0,
+          error_count: guideData.error_count || 0,
+          duplicate_count: guideData.duplicate_count || 0,
+          status: 'DRAFT',
+        };
+        setGuides(prev => [newGuide, ...prev]);
+      } else {
+        // Update existing guide in tray
+        setGuides(prev => prev.map(g => g.id === res.id ? {
+          ...g,
+          guide_number: res.guide_number || g.guide_number,
+          ...guideData,
+          guide_date: guideData.guide_date || g.guide_date,
+        } : g));
       }
 
       toast.success(selectedGuideId ? 'Borrador actualizado' : `Borrador creado (${res.guide_number})`);
 
-      // --- BLOCK 2: Refresh tray only (do not force detail load) ---
-      loadTray().catch(err => {
-        console.warn('Error en loadTray posterior a guardar:', err);
-        // It's non-critical, we don't disrupt the user's form
-      });
-
-      // Return full response so the form can render warnings and update its local headers
       return res;
     } catch (e: any) {
-      // Re-throw so the form can display the save error panel
       throw e;
     } finally {
       setIsSaving(false);
@@ -119,22 +134,14 @@ export function RouteGuidesPanel() {
     if (isSaving || isDispatching) return;
     setIsDispatching(true);
     try {
-      // --- BLOCK 1: The actual dispatch (must not swallow errors) ---
       await dispatchRouteGuideAction(guideId);
       toast.success('Guía despachada correctamente');
 
-      // --- BLOCK 2: Refresh data (non-critical) ---
-      try {
-        invalidateCache(guideId);
-        await loadTray();
-        handleCloseDetail(); // Return cleanly to the tray
-      } catch (err) {
-        // Even if refresh fails, dispatch was successful — just return to tray
-        console.warn('Error refrescando bandeja tras despachar:', err);
-        handleCloseDetail();
-      }
+      // Update guide status locally instead of full refetch
+      invalidateCache(guideId);
+      setGuides(prev => prev.map(g => g.id === guideId ? { ...g, status: 'DISPATCHED' } : g));
+      handleCloseDetail();
     } catch (e: any) {
-      // Re-throw so the form can display the dispatch error panel (with duplicates)
       throw e;
     } finally {
       setIsDispatching(false);
@@ -154,7 +161,8 @@ export function RouteGuidesPanel() {
         handleCloseDetail();
       }
       
-      await loadTray();
+      // Remove from local state instead of full refetch
+      setGuides(prev => prev.filter(g => g.id !== guideId));
     } catch (e: any) {
       toast.error('Error eliminando borrador: ' + e.message);
     }

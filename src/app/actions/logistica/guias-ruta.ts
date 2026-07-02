@@ -2,8 +2,12 @@
 
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
+import { unstable_cache } from 'next/cache';
+import { revalidateTag } from 'next/cache';
 import { RouteGuide, CatalogOptions, RoutePersonnelType } from '@/modules/logistica/guias-ruta/types';
 import { getActiveCompanyId } from '@/app/actions/companies';
+
+const CACHE_TAG_CATALOGS = 'route-guide-catalogs';
 
 // ---- Types ---------------------------------------------------------------
 
@@ -91,7 +95,19 @@ export async function getRouteGuideById(id: string): Promise<RouteGuide | null> 
   // But RLS on route_guides handles it. We'll explicitly check it returns data.
   const { data: guide, error: guideError } = await supabase
     .from('route_guides')
-    .select('*')
+    .select(`
+      id, company_id, guide_number, guide_date, status,
+      route_id, route_name_snapshot,
+      vehicle_id, vehicle_name_snapshot,
+      driver_id, driver_name_snapshot,
+      seller_id, seller_name_snapshot,
+      dispatcher_id, dispatcher_name_snapshot,
+      notes,
+      total_invoices, total_amount,
+      total_cash_expected, total_check_expected,
+      total_credit, total_transfer, total_unknown_payment,
+      error_count, duplicate_count
+    `)
     .eq('id', id)
     .maybeSingle();
 
@@ -105,7 +121,13 @@ export async function getRouteGuideById(id: string): Promise<RouteGuide | null> 
 
   const { data: items, error: itemsError } = await supabase
     .from('route_guide_items')
-    .select('*')
+    .select(`
+      id, route_guide_id, line_number, invoice_number,
+      customer_name, customer_address, commune,
+      amount, payment_method_original, payment_method_normalized,
+      requires_settlement, validation_status, validation_errors,
+      notes, settlement_status
+    `)
     .eq('route_guide_id', id)
     .order('line_number', { ascending: true });
 
@@ -120,9 +142,9 @@ export async function getRouteGuideCatalogOptions(): Promise<CatalogOptions> {
   const supabase = await createLogisticaClient();
 
   const [routesRes, vehiclesRes, personnelRes] = await Promise.all([
-    supabase.from('delivery_routes').select('*').eq('is_active', true).order('route_name'),
-    supabase.from('route_vehicles').select('*').eq('is_active', true).order('vehicle_name'),
-    supabase.from('route_personnel').select('*').eq('is_active', true).order('person_name'),
+    supabase.from('delivery_routes').select('id, company_id, route_name, description, is_active').eq('is_active', true).order('route_name'),
+    supabase.from('route_vehicles').select('id, company_id, vehicle_name, plate_number, description, is_active').eq('is_active', true).order('vehicle_name'),
+    supabase.from('route_personnel').select('id, company_id, person_name, person_type, phone, email, is_active').eq('is_active', true).order('person_name'),
   ]);
 
   if (routesRes.error) throw routesRes.error;
@@ -134,6 +156,16 @@ export async function getRouteGuideCatalogOptions(): Promise<CatalogOptions> {
     vehicles: vehiclesRes.data || [],
     personnel: personnelRes.data || [],
   };
+}
+
+export const getCachedRouteGuideCatalogOptions = unstable_cache(
+  async () => getRouteGuideCatalogOptions(),
+  ['route-guide-catalogs'],
+  { tags: [CACHE_TAG_CATALOGS], revalidate: 300 }
+);
+
+export async function revalidateRouteGuideCatalogs() {
+  revalidateTag(CACHE_TAG_CATALOGS, { expire: 0 });
 }
 
 // ---- Catalog Inline Creations ---------------------------------------------
@@ -154,6 +186,7 @@ export async function createRouteVehicleInline(vehicleName: string) {
 
   if (error) throw error;
   if (!data?.success) throw new Error(data?.error || 'Error creando vehículo');
+  await await revalidateRouteGuideCatalogs();
   return data.id as string;
 }
 
@@ -173,6 +206,7 @@ export async function createDeliveryRouteInline(routeName: string) {
 
   if (error) throw error;
   if (!data?.success) throw new Error(data?.error || 'Error creando ruta');
+  await revalidateRouteGuideCatalogs();
   return data.id as string;
 }
 
@@ -193,6 +227,7 @@ export async function createRoutePersonInline(personName: string, personType: Ro
 
   if (error) throw error;
   if (!data?.success) throw new Error(data?.error || 'Error creando personal');
+  await revalidateRouteGuideCatalogs();
   return data.id as string;
 }
 

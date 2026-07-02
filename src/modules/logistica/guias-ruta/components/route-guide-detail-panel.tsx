@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { RouteGuide, CatalogOptions } from '../types';
 import { RouteGuideStatusBadge } from './route-guide-badges';
 import { formatCurrency, formatDate, formatPaymentMethodLabel } from '../utils/route-guide-formatters';
@@ -43,29 +44,39 @@ export function RouteGuideDetailPanel({
     }
   };
 
+  const renderPreviewModal = () => {
+    if (!previewUrl || typeof document === 'undefined') return null;
+
+    return createPortal(
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[99999] flex items-center justify-center" onClick={() => { URL.revokeObjectURL(previewUrl); setPreviewUrl(null); }}>
+        <div className="relative w-[90vw] h-[90vh] bg-theme-surface rounded-2xl border border-theme-border shadow-2xl flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+          <div className="flex items-center justify-between px-6 py-3 border-b border-theme-border bg-theme-text/5 shrink-0">
+            <h2 className="text-sm font-bold text-theme-text">Vista previa — Guía de Ruta</h2>
+            <div className="flex items-center gap-2">
+              <button onClick={() => { const win = window.open(previewUrl, '_blank'); win?.print(); }} className="px-4 py-1.5 rounded-lg bg-theme-surface border border-theme-border text-theme-text hover:bg-theme-text/5 text-xs font-bold transition-colors shadow-sm flex items-center gap-1.5">
+                <Printer className="w-4 h-4" /> Imprimir PDF
+              </button>
+              <button onClick={() => { downloadRouteGuidePdf(guide, `Guia_${guide.guide_number}`); }} className="px-4 py-1.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-xs font-bold transition-colors shadow-lg shadow-theme-accent/20 flex items-center gap-1.5">
+                <Download className="w-4 h-4" /> Descargar PDF
+              </button>
+              <button onClick={() => { URL.revokeObjectURL(previewUrl); setPreviewUrl(null); }} className="px-4 py-1.5 rounded-lg border border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/10 text-xs font-semibold transition-colors">
+                Cerrar
+              </button>
+            </div>
+          </div>
+          <div className="flex-1 min-h-0">
+            <iframe src={previewUrl} className="w-full h-full bg-white" title="Vista previa Guía de Ruta" />
+          </div>
+        </div>
+      </div>,
+      document.body
+    );
+  };
+
   return (
     <div className="flex flex-col h-full bg-theme-surface text-theme-text relative">
       
-      {previewUrl && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center" onClick={() => { URL.revokeObjectURL(previewUrl); setPreviewUrl(null); }}>
-          <div className="relative w-[90vw] h-[90vh] bg-theme-surface rounded-2xl border border-theme-border shadow-2xl flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-6 py-3 border-b border-theme-border bg-theme-text/5 shrink-0">
-              <h2 className="text-sm font-bold text-theme-text">Vista previa — Guía de Ruta</h2>
-              <div className="flex items-center gap-2">
-                <button onClick={() => { downloadRouteGuidePdf(guide, `Guia_${guide.guide_number}`); }} className="px-4 py-1.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-xs font-bold transition-colors shadow-lg shadow-theme-accent/20 flex items-center gap-1.5">
-                  <Download className="w-4 h-4" /> Descargar PDF
-                </button>
-                <button onClick={() => { URL.revokeObjectURL(previewUrl); setPreviewUrl(null); }} className="px-4 py-1.5 rounded-lg border border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/10 text-xs font-semibold transition-colors">
-                  Cerrar
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 min-h-0">
-              <iframe src={previewUrl} className="w-full h-full" title="Vista previa Guía de Ruta" />
-            </div>
-          </div>
-        </div>
-      )}
+      {renderPreviewModal()}
 
       {/* Header Actions */}
       <div className="flex justify-between items-center px-6 py-4 border-b border-theme-border print:hidden">

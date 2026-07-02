@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { getWarehouses, type Warehouse } from '@/app/actions/adquisiciones/warehouses'
 
 export function WarehousesPanel() {
@@ -9,19 +9,32 @@ export function WarehousesPanel() {
   const [loading, setLoading] = useState(true)
   const [msg, setMsg] = useState('')
   const [filters, setFilters] = useState<{ search?: string; warehouse_type?: string; status?: string; is_active?: string; page: number; pageSize: number }>({ page: 1, pageSize: 50 })
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const load = useCallback(async () => {
+    const start = performance.now()
     setLoading(true)
     const r = await getWarehouses(filters)
     setData(r.data)
     setTotal(r.total)
     setLoading(false)
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[WarehousesPanel] load completa`, Math.round(performance.now() - start), 'ms')
+    }
   }, [filters])
 
   useEffect(() => { load() }, [load])
 
-  function m(t: string) { setMsg(t); setTimeout(() => setMsg(''), 3500) }
-  function setFilter(k: string, v: string) { setFilters(p => ({ ...p, [k]: v || undefined, page: 1 })) }
+  function setFilter(k: string, v: string) {
+    if (k === 'search') {
+      if (searchTimer.current) clearTimeout(searchTimer.current)
+      searchTimer.current = setTimeout(() => {
+        setFilters(p => ({ ...p, [k]: v || undefined, page: 1 }))
+      }, 300)
+    } else {
+      setFilters(p => ({ ...p, [k]: v || undefined, page: 1 }))
+    }
+  }
 
   const tp = Math.ceil(total / (filters.pageSize ?? 50))
   const typeOpts = ['CENTRAL','SUCURSAL','TRANSITO','DEVOLUCIONES','CONSIGNACION','OTRO']

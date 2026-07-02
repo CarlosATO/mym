@@ -46,7 +46,13 @@ export async function getWarehouses(filters: WarehouseFilters = {}): Promise<{ d
   if (process.env.NODE_ENV === 'development') console.time('getWarehouses_db')
   const d = db()
   let q = d.from('warehouses')
-    .select('*', { count: 'exact' })
+    .select(`
+      id, code, name, warehouse_type,
+      manager_name, manager_phone,
+      address, commune,
+      capacity_pallets,
+      is_default, status, is_active
+    `, { count: 'exact' })
     .eq('company_id', companyId)
 
   if (filters.search) { const s = filters.search; q = q.or(`code.ilike.%${s}%,name.ilike.%${s}%,city.ilike.%${s}%,commune.ilike.%${s}%`) }

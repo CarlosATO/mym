@@ -60,6 +60,7 @@ export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]>
     .eq('company_id', companyId)
     .in('status', ['EMITIDA', 'RECEPCION_PARCIAL', 'RECEPCION_TOTAL'])
     .order('created_at', { ascending: false })
+    .limit(200)
   if (process.env.NODE_ENV === 'development') console.timeEnd('getPendingReceivablePOs:base')
 
   if (error) {
@@ -437,7 +438,12 @@ export async function getKardexMovements(productId?: string): Promise<KardexMove
   const db = logDb()
   let query = db
     .from('kardex_movements')
-    .select('*')
+    .select(`
+      id, product_id, warehouse_id, location_id,
+      movement_type, source_type, source_id,
+      quantity, unit_cost, total_cost,
+      lot_number, expiration_date, movement_date, notes
+    `)
     .eq('company_id', companyId)
     .order('movement_date', { ascending: true })
 
@@ -445,7 +451,7 @@ export async function getKardexMovements(productId?: string): Promise<KardexMove
     query = query.eq('product_id', productId)
   }
 
-  const { data, error } = await query
+  const { data, error } = await query.limit(500)
 
   if (error) {
     console.error('getKardexMovements error:', error)
@@ -522,6 +528,7 @@ export async function getStockSummary(): Promise<StockItem[]> {
     .from('v_stock_by_location')
     .select('product_id, warehouse_id, location_id, lot_number, expiration_date, quantity, max_unit_cost')
     .eq('company_id', companyId)
+    .limit(1000)
 
   if (error) {
     console.error('getStockSummary error:', error)

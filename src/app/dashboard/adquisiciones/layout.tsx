@@ -9,22 +9,12 @@ export default async function Layout({ children }: { children: React.ReactNode }
 
   const { data: profile } = await supabase
     .from('users')
-    .select('nombre, apellido, email, role_id')
+    .select('nombre, apellido, email, role_id, roles:role_id(name)')
     .eq('id', user.id)
     .maybeSingle()
 
-  let roleName = ''
-  if (profile?.role_id) {
-    const { data: role } = await supabase
-      .from('roles')
-      .select('name')
-      .eq('id', profile.role_id)
-      .single()
-    roleName = role?.name ?? ''
-  }
-
   const profileWithRole = profile
-    ? { ...profile, roles: { name: roleName } }
+    ? { ...profile, roles: { name: (profile.roles as { name?: string } | null)?.name ?? '' } }
     : { nombre: '', apellido: '', email: '', roles: { name: '' } }
 
   return (

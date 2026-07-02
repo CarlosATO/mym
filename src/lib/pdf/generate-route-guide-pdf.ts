@@ -243,18 +243,20 @@ export async function generateRouteGuidePdfBlob(guide: RouteGuide, logoBase64?: 
   const tableBody = validItems.map(item => [
     item.line_number.toString(),
     item.invoice_number,
-    item.customer_name,
+    item.customer_address && item.customer_address.trim() !== '' ? `${item.customer_name}\nDir: ${item.customer_address.trim()}` : item.customer_name,
     item.commune,
     formatRouteGuideLineAmount(item.amount),
     formatPaymentMethodLabel(item.payment_method_normalized, item.payment_method_original),
     item.notes
   ])
 
-  autoTable(doc, {
+  const blockHeight = 55;
+  const blockStartY = 297 - margin - blockHeight; // 197 -> 227
+
+  const autoTableOptions = {
     head: [tableHeaders],
-    body: tableBody,
     startY: cursorY,
-    margin: { left: margin, right: margin },
+    margin: { left: margin, right: margin, bottom: 15 },
     styles: { font: 'helvetica', fontSize: 7, textColor: [30, 41, 59], lineColor: [226, 232, 240], lineWidth: 0.3 },
     headStyles: { fillColor: [30, 58, 95], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7, halign: 'center' },
     columnStyles: {
@@ -266,92 +268,146 @@ export async function generateRouteGuidePdfBlob(guide: RouteGuide, logoBase64?: 
       5: { halign: 'center', cellWidth: 20 },
       6: { cellWidth: 30 }
     },
-    alternateRowStyles: { fillColor: [248, 250, 252] },
-    didDrawPage: (data) => {
-      totalPages = doc.getNumberOfPages()
-      drawPageFooter(doc, data.pageNumber, totalPages)
+    alternateRowStyles: { fillColor: [248, 250, 252] }
+  } as any;
+
+  // PASS 1: Simular renderizado para calcular paginación
+  const doc1 = new jsPDF('p', 'mm', 'a4')
+  autoTable(doc1, { ...autoTableOptions, body: tableBody });
+  const pages1 = doc1.getNumberOfPages();
+  const finalY1 = (doc1 as any).lastAutoTable.finalY;
+
+  let splitIndex = -1;
+  // Si la tabla termina invadiendo el área reservada para el bloque final (blockStartY)
+  if (finalY1 > blockStartY) {
+    const allRows = (doc1 as any).lastAutoTable.body;
+    
+    // Calcular en qué página cayó cada fila analizando los saltos de su coordenada Y
+    let currentPage = 1;
+    let lastY = 0;
+    for (const r of allRows) {
+      if (r.y < lastY - 10) {
+        currentPage++; // La coordenada Y bajó abruptamente, hubo salto de página
+      }
+      r.pageNumber = currentPage;
+      lastY = r.y;
     }
-  })
+    
+    const finalPageRows = allRows.filter((r: any) => r.pageNumber === pages1);
+    
+    for (const r of finalPageRows) {
+      if (r.y + r.height > blockStartY) {
+        splitIndex = r.index;
+        break;
+      }
+    }
+    
+    // Si no encontramos un índice claro, dividimos antes de la última fila de esa página
+    if (splitIndex === -1 && finalPageRows.length > 0) {
+      splitIndex = finalPageRows[finalPageRows.length - 1].index;
+    }
+    
+    // Evitar cortes nulos
+    if (splitIndex <= 0 && tableBody.length > 1) {
+      splitIndex = 1;
+    }
+  }
 
-  const finalY = ((doc as any).lastAutoTable?.finalY) ?? cursorY + 10
+  // PASS 2: Renderizado real con división de tabla si es necesario
+  if (splitIndex > -1 && splitIndex < tableBody.length) {
+    const tableBody1 = tableBody.slice(0, splitIndex);
+    const tableBody2 = tableBody.slice(splitIndex);
 
-  // TOTALS
-  let totalsY = finalY + 8
-  if (totalsY > 230) { doc.addPage(); totalsY = 20 }
+    autoTable(doc, { ...autoTableOptions, body: tableBody1 });
+    doc.addPage();
+    autoTable(doc, { ...autoTableOptions, body: tableBody2, startY: margin });
+  } else {
+    autoTable(doc, { ...autoTableOptions, body: tableBody });
+  }
 
-  const totalsWidth = 70
-  const totalsX = pageWidth - margin - totalsWidth
-  doc.setFillColor(...LIGHT_GRAY)
+  // TOTALS (New layout)
+  doc.setPage(doc.getNumberOfPages()); // Nos aseguramos de estar en la última página
   
-  const totalUnknown = guide.items?.filter(i => i.payment_method_normalized === 'UNKNOWN').reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0) || 0
-
-  const hasUnknown = totalUnknown > 0
+  const summaryStartY = blockStartY;
   
-  // Resumen de guía
-  doc.roundedRect(totalsX - 3, totalsY - 3, totalsWidth + 6, hasUnknown ? 60 : 54, 3, 3, 'F')
-
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(9)
-  doc.setTextColor(...DARK_TEXT)
-  doc.text('Resumen de guía:', totalsX, totalsY + 3)
-
-  const summaryData: [string, string][] = [
-    ['Total facturas:', guide.total_invoices?.toString() || '0'],
-    ['Monto total ruta:', formatCurrency(guide.total_amount || 0)],
-    ['Efectivo esperado:', formatCurrency(guide.total_cash_expected || 0)],
-    ['Cheques esperados:', formatCurrency(guide.total_check_expected || 0)],
-    ['Crédito:', formatCurrency(guide.total_credit || 0)],
-    ['Transferencia:', formatCurrency(guide.total_transfer || 0)]
-  ]
+  // Title
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(...DARK_TEXT);
+  doc.text(`Resumen de guía: ${guide.total_invoices || 0} Facturas`, margin, summaryStartY);
   
+  const summaryTableBody = [
+    ['Efectivo esperado', formatCurrency(guide.total_cash_expected || 0), ''],
+    ['Cheques esperados', formatCurrency(guide.total_check_expected || 0), ''],
+    ['Crédito', formatCurrency(guide.total_credit || 0), ''],
+    ['Transferencia', formatCurrency(guide.total_transfer || 0), ''],
+  ];
+  
+  const totalUnknown = guide.items?.filter(i => i.payment_method_normalized === 'UNKNOWN').reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0) || 0;
+  const hasUnknown = totalUnknown > 0;
+
   if (hasUnknown) {
-    summaryData.push(['No reconocido:', formatCurrency(totalUnknown)])
+    summaryTableBody.push(['No reconocido', formatCurrency(totalUnknown), '']);
   }
-
-  let ty = totalsY + 9
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(8)
-  for (let i = 0; i < summaryData.length; i++) {
-    const [label, value] = summaryData[i]
-    doc.text(label, totalsX + 2, ty)
-    doc.text(value, totalsX + totalsWidth - 2, ty, { align: 'right' })
-    ty += 5
-  }
-
-  // Total a rendir
-  ty += 2
-  doc.setDrawColor(...EMERALD)
-  doc.setLineWidth(0.5)
-  doc.line(totalsX, ty - 2, totalsX + totalsWidth, ty - 2)
   
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(9)
-  doc.setTextColor(...EMERALD)
-  doc.text('Total a rendir:', totalsX, ty + 3)
+  summaryTableBody.push(['Gastos', '', '']);
   
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(10)
-  doc.text(formatCurrency((guide.total_cash_expected || 0) + (guide.total_check_expected || 0)), totalsX + totalsWidth - 2, ty + 3, { align: 'right' })
+  autoTable(doc, {
+    head: [['Concepto', 'Emitido', 'Recibido / Rendido']],
+    body: summaryTableBody,
+    startY: summaryStartY + 3,
+    margin: { left: margin },
+    tableWidth: 100,
+    styles: { font: 'helvetica', fontSize: 7, cellPadding: 1.5, textColor: [30, 41, 59], lineColor: [226, 232, 240], lineWidth: 0.3 },
+    headStyles: { fillColor: [30, 58, 95], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7, halign: 'center' },
+    columnStyles: {
+      0: { cellWidth: 35, fontStyle: 'bold' },
+      1: { cellWidth: 25, halign: 'right' },
+      2: { cellWidth: 40 }
+    },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+  });
 
-  ty += 6
+  const totalsX = margin + 100 + 10;
+  let ty = summaryStartY + 10;
+  
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(...DARK_TEXT);
+  doc.text('Monto total ruta:', totalsX, ty);
+  doc.text(formatCurrency(guide.total_amount || 0), pageWidth - margin, ty, { align: 'right' });
+  
+  ty += 8;
+  
+  doc.setDrawColor(...EMERALD);
+  doc.setLineWidth(0.5);
+  doc.line(totalsX, ty - 4, pageWidth - margin, ty - 4);
+  
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(...EMERALD);
+  doc.text('Total a rendir:', totalsX, ty + 1);
+  doc.setFontSize(10);
+  doc.text(formatCurrency((guide.total_cash_expected || 0) + (guide.total_check_expected || 0)), pageWidth - margin, ty + 1, { align: 'right' });
 
   // SIGNATURES
-  let sigY = ty + 20
-  if (sigY > 250) { doc.addPage(); sigY = 40 }
+  let sigY = blockStartY + 45; 
   
   doc.setFont('helvetica', 'normal')
   doc.setFontSize(8)
   doc.setTextColor(...DARK_TEXT)
+  doc.setDrawColor(...DARK_TEXT)
+  doc.setLineWidth(0.3)
   
   const third = usableWidth / 3
   doc.line(margin + 10, sigY, margin + third - 10, sigY)
-  doc.text('Firma Despachador', margin + third / 2, sigY + 5, { align: 'center' })
+  doc.text('Firma Despachador', margin + third / 2, sigY + 4, { align: 'center' })
 
   doc.line(margin + third + 10, sigY, margin + third * 2 - 10, sigY)
-  doc.text('Firma Conductor', margin + third + third / 2, sigY + 5, { align: 'center' })
+  doc.text('Firma Conductor', margin + third + third / 2, sigY + 4, { align: 'center' })
 
   doc.line(margin + third * 2 + 10, sigY, margin + usableWidth - 10, sigY)
-  doc.text('Firma Rendición / Caja', margin + third * 2 + third / 2, sigY + 5, { align: 'center' })
+  doc.text('Firma Rendición / Caja', margin + third * 2 + third / 2, sigY + 4, { align: 'center' })
 
   totalPages = doc.getNumberOfPages()
   for (let i = 1; i <= totalPages; i++) {
