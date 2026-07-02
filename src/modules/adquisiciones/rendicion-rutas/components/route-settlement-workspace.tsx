@@ -9,6 +9,8 @@ import {
   Info,
   Loader2,
   Paperclip,
+  Printer,
+  Download
 } from 'lucide-react'
 import {
   RouteGuideWorkspaceData,
@@ -17,6 +19,7 @@ import {
   SaveRouteSettlementResult,
   saveRouteSettlementChanges,
 } from '@/app/actions/adquisiciones/rendicion-rutas'
+import { generateRouteGuidePdfBlob, downloadRouteGuidePdf } from '@/lib/pdf/generate-route-guide-pdf'
 import { RouteSettlement, RouteSettlementItem } from '../types'
 import {
   formatCurrency,
@@ -627,6 +630,34 @@ export function RouteSettlementWorkspace({
     }
   }, [persistedSettlementId])
 
+  const handlePrintPdf = async () => {
+    try {
+      const guidePayload = {
+        ...guide,
+        items: guideData.items
+      } as any;
+      const blob = await generateRouteGuidePdfBlob(guidePayload);
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+    } catch (err) {
+      console.error('Error generating PDF', err);
+      toast.error('Error generando PDF');
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    try {
+      const guidePayload = {
+        ...guide,
+        items: guideData.items
+      } as any;
+      await downloadRouteGuidePdf(guidePayload, `Guia-Despachada-GR-${guide.guide_number}`);
+    } catch (err) {
+      console.error('Error downloading PDF', err);
+      toast.error('Error descargando PDF');
+    }
+  };
+
   // ─── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="h-full min-h-0 overflow-hidden p-3 lg:p-4 flex flex-col gap-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -658,6 +689,20 @@ export function RouteSettlementWorkspace({
         </div>
 
         <div className="flex items-center justify-end gap-2 shrink-0">
+          <button
+            onClick={handlePrintPdf}
+            className="p-1.5 rounded-lg border border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors"
+            title="Imprimir Guía en PDF"
+          >
+            <Printer className="w-4 h-4" />
+          </button>
+          <button
+            onClick={handleDownloadPdf}
+            className="p-1.5 rounded-lg border border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors"
+            title="Descargar Guía en PDF"
+          >
+            <Download className="w-4 h-4" />
+          </button>
           {hasDirtyChanges && (
             <span className="text-[11px] text-amber-600 dark:text-amber-400 font-semibold">
               {dirtyRows.length} factura{dirtyRows.length !== 1 ? 's' : ''} modificada{dirtyRows.length !== 1 ? 's' : ''}

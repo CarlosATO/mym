@@ -14,7 +14,8 @@ import { UnifiedRouteSettlementsTable } from './components/unified-route-settlem
 import { RouteSettlementDetailPanel } from './components/route-settlement-detail-panel'
 import { RouteSettlementWorkspace } from './components/route-settlement-workspace'
 import { RouteSettlement, RouteSettlementItem } from './types'
-import { AlertTriangle, RefreshCw } from 'lucide-react'
+import { AlertTriangle, RefreshCw, Wallet } from 'lucide-react'
+import { FundClosuresWorkspace } from './fund-closures-workspace'
 
 const EMPTY_KPIS: RouteSettlementsDashboardKpis = {
   pending_count: 0,
@@ -78,6 +79,7 @@ export function RouteSettlementsPanel() {
   const [paymentFilter, setPaymentFilter] = useState<'CASH_ONLY' | 'ALL' | 'CREDIT'>('CASH_ONLY')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [view, setView] = useState<PanelView>({ kind: 'list' })
+  const [mainTab, setMainTab] = useState<'TRAY' | 'FUND_CLOSURES'>('TRAY')
 
   const isMountedRef = useRef(false)
   const latestRequestIdRef = useRef(0)
@@ -312,8 +314,39 @@ export function RouteSettlementsPanel() {
   return (
     <div className="h-full min-h-0 flex flex-col p-3 lg:p-4 animate-in fade-in duration-300">
 
-      {/* Header operativo compacto */}
-      <div className="shrink-0 flex flex-col gap-2 border border-theme-border bg-theme-surface/70 px-3 py-2.5 rounded-xl">
+      {/* Main Tab Switcher */}
+      <div className="shrink-0 flex items-center gap-2 mb-3">
+        <button
+          onClick={() => setMainTab('TRAY')}
+          className={`px-4 py-2 text-sm font-bold rounded-lg border transition-colors ${
+            mainTab === 'TRAY'
+              ? 'bg-theme-accent text-white border-theme-accent'
+              : 'bg-theme-surface border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5'
+          }`}
+        >
+          Bandeja de Rendiciones
+        </button>
+        <button
+          onClick={() => setMainTab('FUND_CLOSURES')}
+          className={`flex items-center gap-2 px-4 py-2 text-sm font-bold rounded-lg border transition-colors ${
+            mainTab === 'FUND_CLOSURES'
+              ? 'bg-theme-accent text-white border-theme-accent'
+              : 'bg-theme-surface border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5'
+          }`}
+        >
+          <Wallet className="w-4 h-4" />
+          Cierre de Fondos
+        </button>
+      </div>
+
+      {mainTab === 'FUND_CLOSURES' ? (
+        <div className="flex-1 min-h-0 border border-theme-border rounded-xl overflow-hidden bg-theme-surface">
+          <FundClosuresWorkspace />
+        </div>
+      ) : (
+        <>
+          {/* Header operativo compacto */}
+          <div className="shrink-0 flex flex-col gap-2 border border-theme-border bg-theme-surface/70 px-3 py-2.5 rounded-xl">
         <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3 min-w-0">
             <div className="min-w-0">
@@ -376,6 +409,9 @@ export function RouteSettlementsPanel() {
           setPaymentFilter={setPaymentFilter}
         />
       </div>
+      
+      </>
+      )}
 
     </div>
   )
