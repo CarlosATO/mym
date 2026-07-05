@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, Ban, PackageOpen, XCircle, CheckCircle2 } from 'lucide-react'
+import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, Ban, PackageOpen, XCircle, CheckCircle2, BarChart3 } from 'lucide-react'
 import { AuthorizedPersonnelCombobox } from '@/components/ui/authorized-personnel-combobox'
 import {
   getPurchaseOrders, getPurchaseOrderDetail, createPurchaseOrder,
@@ -15,6 +15,7 @@ import { getProducts, type Product } from '@/app/actions/adquisiciones/products'
 import { getWarehouses, type Warehouse } from '@/app/actions/adquisiciones/warehouses'
 import { downloadPOBooklet, generatePdfBlob } from '@/lib/pdf/generate-po-pdf'
 import { getActiveCompany, type Company } from '@/app/actions/companies'
+import { ReplenishmentAnalysisPanel } from './replenishment-analysis-panel'
 
 const STATUS_BADGES: Record<string, { bg: string; text: string; border: string }> = {
   BORRADOR: { bg: 'bg-gray-500/10', text: 'text-gray-500', border: 'border-gray-500/20' },
@@ -76,7 +77,7 @@ const selectClass = "w-full h-9 rounded-lg border border-theme-border bg-theme-s
 const textareaClass = "w-full rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30 resize-none"
 
 export function PurchaseOrdersPanel() {
-  const [view, setView] = useState<'list' | 'form' | 'detail'>('list')
+  const [view, setView] = useState<'list' | 'form' | 'detail' | 'analysis'>('list')
   const [selectedPo, setSelectedPo] = useState<PurchaseOrder | null>(null)
   const detailCacheRef = useRef<Record<string, PurchaseOrderDetail>>({})
   const pendingRequestsRef = useRef<Record<string, Promise<PurchaseOrderDetail | null>>>({})
@@ -1194,6 +1195,14 @@ export function PurchaseOrdersPanel() {
     )
   }
 
+  if (view === 'analysis') {
+    return (
+      <div className="flex flex-col h-full overflow-hidden bg-theme-surface">
+        <ReplenishmentAnalysisPanel onBack={() => { setView('list'); load() }} />
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col h-full overflow-hidden bg-theme-surface">
       <div className="flex flex-1 overflow-hidden">
@@ -1215,6 +1224,10 @@ export function PurchaseOrdersPanel() {
               <span className="hidden md:inline">Filtros</span>
             </button>
 
+            <button onClick={() => setView('analysis')} className="h-11 px-4 rounded-xl border border-theme-accent/30 text-theme-accent hover:bg-theme-accent/10 text-sm font-semibold transition-all flex items-center justify-center gap-2 shadow-sm">
+              <BarChart3 className="w-4 h-4" />
+              <span className="hidden sm:inline">Realizar Análisis</span>
+            </button>
             <button onClick={() => { resetForm(); setView('form') }} className="h-11 px-4 md:px-5 rounded-xl bg-theme-accent hover:bg-theme-accent-hover text-white text-sm font-bold transition-all shadow-lg shadow-theme-accent/20 flex items-center justify-center gap-2 ml-auto md:ml-0">
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">Crear OC</span>
