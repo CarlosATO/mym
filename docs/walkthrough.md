@@ -1,34 +1,27 @@
-# UI Catálogo Bsale-aware: Cambios Implementados
+# Walkthrough: Clasificación de Pseudoproveedores Bsale
 
-Se han implementado con éxito todas las funcionalidades requeridas para exponer de forma segura y útil la metadata de Bsale en el panel del Catálogo, asegurando que todos los campos técnicos permanezcan de **solo lectura**.
+## Resumen de Tareas Realizadas
 
-## 1. Actualización de Acciones (Servidor)
-[products.ts](file:///c:/Users/mympr/OneDrive/Desktop/PetGrup/mym/src/app/actions/adquisiciones/products.ts)
-- Se añadieron los campos técnicos de Bsale (`source`, `bsale_product_id`, `bsale_status_conflict`, etc.) a la interfaz `Product`.
-- Se añadieron 5 nuevos campos opcionales a la interfaz `ProductFilters` para permitir la búsqueda avanzada.
-- La función `getProducts` ahora procesa correctamente los filtros (ej: si `bsale_inactive === 'true'`, se aplica `query.or('bsale_product_state.eq.1,bsale_variant_state.eq.1')`).
-- **Validado:** `updateProduct` solo envía los campos procesados desde el FormData, sin tocar ni sobreescribir la nueva metadata de Bsale.
+1. **Migración SQL Estructural:**
+   - Se aplicó y validó la migración `20260706120000_supplier_real_operational_hierarchy.sql` que agregó las columnas necesarias para la jerarquía de proveedores (`supplier_kind`, `parent_supplier_id`, `bsale_product_type_id`, `source`, etc.).
+   - Se aplicó la migración de corrección `20260706130000_supplier_bsale_type_uuid_fix.sql` para ajustar el tipo de dato de `bsale_product_type_id` a `uuid`.
 
-## 2. Mejoras en la Tabla Principal
-[catalog-panel.tsx](file:///c:/Users/mympr/OneDrive/Desktop/PetGrup/mym/src/modules/adquisiciones/catalogo/catalog-panel.tsx)
-- Se añadió la columna **"Tipo Bsale"** separada de Categoría, que muestra `bsale_product_type_name` (si existe) o `product_type`.
-- Se añadió la columna **"Integ. Bsale"** justo antes de la columna "Estado". Esta columna muestra badges limpios para:
-  - `BSALE` (fondo azul claro)
-  - `LOTE` (fondo violeta)
-  - `! CONFLICTO` (fondo ámbar con tooltip sobre el motivo)
+2. **Clasificación Masiva Segura:**
+   - Se actualizó el script `scripts/classify_bsale_pseudo_suppliers.ts` y se ejecutó en modo apply.
+   - El 100% de los proveedores actuales (269) fueron identificados y marcados como `supplier_kind = 'BSALE_OPERATIVE'` y se les asignó `source = 'BSALE'`.
+   - Se pobló el `bsale_product_type_id` de forma cruzada con la tabla de integraciones.
 
-## 3. Filtros Avanzados
-- Se insertaron los 5 `<select>` solicitados en la grilla del panel de "Filtros Avanzados":
-  1. Origen (Todos / Bsale / PetGrup)
-  2. Conflicto Bsale (Todos / Sí)
-  3. Estado Bsale (Todos / Inactivo en Bsale)
-  4. Código Barra (Todos / Sin Código de Barra)
-  5. Tipo Bsale (Todos / Sin Tipo Bsale)
+3. **Hallazgos Específicos (Excepciones):**
+   - 3 pseudoproveedores (`BEWICAT/ALIMENTO HUMEDO`, `BEWIDOG/ALIMENTO HUMEDO`, `BELCANDO/SUPLEMENTO`) quedaron sin `bsale_product_type_id` ni `name` porque no coinciden con ningún tipo vigente en Bsale.
+   - Estos 3 proveedores tienen **0 mappings y 0 productos asociados**. No causan ningún efecto secundario negativo en la BD.
 
-## 4. Formulario de Edición y Guardado Seguro
-- Al presionar **Editar**, se recopila la metadata de Bsale en un estado separado (`bsaleMeta`) para que no se mezcle con el `form` state.
-- Se ha incorporado el bloque de **"Información de Integración Bsale"**, que solo se muestra si `source === 'BSALE'`. Este bloque es puramente texto y no contiene `<input>`, garantizando que no haya envío de estos datos al servidor al guardar.
-- **Corrección Visual:** El sticky header superior ("Editar producto" / "Guardar") ahora utiliza `bg-theme-surface` y `z-20 shadow-sm`, evitando que los inputs pasen transparentemente detrás de él.
+4. **Preservación de Estado Operativo:**
+   - No se modificaron productos.
+   - No se modificaron stocks ni costos.
+   - No se modificaron los mappings de productos-proveedor (se mantuvieron los 3.585 mappings).
+   - No se crearon proveedores reales de forma artificial.
+   - No se alteró ningún dato en Bsale.
 
-## 5. Verificación
-- Se ejecutó de forma local `npx tsc --noEmit` sobre el código modificado y finalizó con **0 errores**, validando que los tipos y la interfaz están consistentes.
+## Próximos Pasos (Pendientes)
+
+La base de datos está preparada estructuralmente para que la aplicación (UI) pueda crear los Proveedores Reales y relacionarlos con los Pseudoproveedores (`BSALE_OPERATIVE`) mediante la clave foránea `parent_supplier_id`.
