@@ -33,6 +33,7 @@ export function CatalogPanel() {
     is_perishable: 'false', requires_lot: 'false', requires_expiration: 'false',
     notes: '', existing_image: '',
   })
+  const [bsaleMeta, setBsaleMeta] = useState<Partial<Product> | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -59,11 +60,13 @@ export function CatalogPanel() {
   function resetForm() {
     setForm({ sku: '', barcode: '', internal_code: '', description: '', short_description: '', brand: '', category: '', subcategory: '', product_type: '', species: '', presentation: '', unit_of_measure: '', net_weight: '', weight_unit: '', package_quantity: '', package_unit: '', purchase_unit: '', sales_unit: '', min_stock: '0', max_stock: '0', reorder_point: '0', tax_rate: '19', is_perishable: 'false', requires_lot: 'false', requires_expiration: 'false', notes: '', existing_image: '' })
     setEditId(null)
+    setBsaleMeta(null)
   }
 
   function openEdit(p: Product) {
     setForm({ sku: p.sku, barcode: p.barcode ?? '', internal_code: p.internal_code ?? '', description: p.description, short_description: p.short_description ?? '', brand: p.brand ?? '', category: p.category ?? '', subcategory: p.subcategory ?? '', product_type: p.product_type ?? '', species: p.species ?? '', presentation: p.presentation ?? '', unit_of_measure: p.unit_of_measure ?? '', net_weight: String(p.net_weight ?? ''), weight_unit: p.weight_unit ?? '', package_quantity: String(p.package_quantity ?? ''), package_unit: p.package_unit ?? '', purchase_unit: p.purchase_unit ?? '', sales_unit: p.sales_unit ?? '', min_stock: String(p.min_stock), max_stock: String(p.max_stock), reorder_point: String(p.reorder_point), tax_rate: String(p.tax_rate), is_perishable: p.is_perishable ? 'true' : 'false', requires_lot: p.requires_lot ? 'true' : 'false', requires_expiration: p.requires_expiration ? 'true' : 'false', notes: p.notes ?? '', existing_image: p.image_url ?? '' })
     setEditId(p.id); setShowForm(true)
+    setBsaleMeta({ source: p.source, bsale_product_id: p.bsale_product_id, bsale_variant_id: p.bsale_variant_id, bsale_product_type_name: p.bsale_product_type_name, bsale_product_state: p.bsale_product_state, bsale_variant_state: p.bsale_variant_state, last_bsale_sync_at: p.last_bsale_sync_at, bsale_status_conflict: p.bsale_status_conflict, bsale_status_conflict_reason: p.bsale_status_conflict_reason })
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -235,7 +238,7 @@ export function CatalogPanel() {
     return (
       <div className="flex flex-col h-full overflow-hidden bg-theme-surface animate-in fade-in zoom-in-95 duration-200">
         <form id="product-form" onSubmit={handleSubmit} className="flex-1 overflow-auto">
-          <div className="px-6 py-4 border-b border-theme-border bg-theme-text/5 flex items-center justify-between sticky top-0 z-10">
+          <div className="px-6 py-4 border-b border-theme-border bg-theme-surface flex items-center justify-between sticky top-0 z-20 shadow-sm">
             <div className="flex items-center gap-4">
               <button type="button" onClick={() => { setShowForm(false); resetForm() }} className="p-2 rounded-lg hover:bg-theme-text/10 text-theme-text-muted transition-colors">
                 <ArrowLeft className="w-5 h-5" />
@@ -251,7 +254,54 @@ export function CatalogPanel() {
               </button>
             </div>
           </div>
-          <div className="p-6 lg:p-8">
+          <div className="p-6 lg:p-8 space-y-6">
+            
+            {/* Bsale Integration Block (Read Only) */}
+            {bsaleMeta && bsaleMeta.source === 'BSALE' && (
+              <div className="bg-theme-text/5 border border-theme-border rounded-xl p-5 mb-6">
+                <h3 className="text-xs font-bold text-theme-text-muted/80 uppercase tracking-wider mb-4 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                  Información de Integración Bsale
+                </h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div>
+                    <p className="text-[10px] text-theme-text-muted/60 uppercase">Origen</p>
+                    <p className="text-xs font-semibold text-theme-text mt-1">{bsaleMeta.source || '—'}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-theme-text-muted/60 uppercase">ID Prod. Bsale</p>
+                    <p className="text-xs font-semibold text-theme-text mt-1">{bsaleMeta.bsale_product_id || '—'}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-theme-text-muted/60 uppercase">ID Var. Bsale</p>
+                    <p className="text-xs font-semibold text-theme-text mt-1">{bsaleMeta.bsale_variant_id || '—'}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-theme-text-muted/60 uppercase">Tipo Bsale</p>
+                    <p className="text-xs font-semibold text-theme-text mt-1">{bsaleMeta.bsale_product_type_name || '—'}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-theme-text-muted/60 uppercase">Estado Prod.</p>
+                    <p className="text-xs font-semibold text-theme-text mt-1">{bsaleMeta.bsale_product_state === 1 ? 'Inactivo' : (bsaleMeta.bsale_product_state === 0 ? 'Activo' : '—')}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-theme-text-muted/60 uppercase">Estado Var.</p>
+                    <p className="text-xs font-semibold text-theme-text mt-1">{bsaleMeta.bsale_variant_state === 1 ? 'Inactivo' : (bsaleMeta.bsale_variant_state === 0 ? 'Activo' : '—')}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-theme-text-muted/60 uppercase">Últ. Sincronización</p>
+                    <p className="text-xs font-semibold text-theme-text mt-1">{bsaleMeta.last_bsale_sync_at ? new Date(bsaleMeta.last_bsale_sync_at).toLocaleString() : '—'}</p>
+                  </div>
+                  {bsaleMeta.bsale_status_conflict && (
+                    <div className="bg-amber-500/10 border border-amber-500/20 p-2 rounded-lg">
+                      <p className="text-[10px] text-amber-600/80 uppercase font-bold">Conflicto Bsale</p>
+                      <p className="text-xs font-semibold text-amber-600 mt-0.5">{bsaleMeta.bsale_status_conflict_reason}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-5">
                 <div className="space-y-1"><label className="text-xs text-theme-text-muted/70">SKU *</label><input name="sku" defaultValue={editId ? undefined : ''} disabled={!!editId} className="w-full h-9 rounded-lg border border-gray-200 dark:border-theme-border bg-black/5 dark:bg-theme-text/5 px-3 text-xs text-theme-text disabled:text-theme-accent-hover/50 focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40" /></div>
                 <div className="space-y-1"><label className="text-xs text-theme-text-muted/70">Código de barra</label><input name="barcode" defaultValue={form.barcode} className="w-full h-9 rounded-lg border border-gray-200 dark:border-theme-border bg-black/5 dark:bg-theme-text/5 px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40" /></div>
@@ -363,7 +413,7 @@ export function CatalogPanel() {
                 <X className="w-3 h-3" /> Limpiar filtros
               </button>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-3">
               <select value={filters.brand ?? ''} onChange={e => setFilter('brand', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40 appearance-none">
                 <option value="">Todas las marcas</option>
                 {classifierOptions.BRAND?.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
@@ -399,6 +449,27 @@ export function CatalogPanel() {
                 <option value="">Venc. (Todos)</option>
                 <option value="true">Sí</option>
                 <option value="false">No</option>
+              </select>
+              <select value={filters.source ?? ''} onChange={e => setFilter('source', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40 appearance-none">
+                <option value="">Origen (Todos)</option>
+                <option value="BSALE">Bsale</option>
+                <option value="PETGRUP">PetGrup</option>
+              </select>
+              <select value={filters.bsale_status_conflict ?? ''} onChange={e => setFilter('bsale_status_conflict', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40 appearance-none">
+                <option value="">Conflicto Bsale (Todos)</option>
+                <option value="true">Sí (Con Conflicto)</option>
+              </select>
+              <select value={filters.bsale_inactive ?? ''} onChange={e => setFilter('bsale_inactive', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40 appearance-none">
+                <option value="">Estado Bsale (Todos)</option>
+                <option value="true">Inactivo en Bsale</option>
+              </select>
+              <select value={filters.no_barcode ?? ''} onChange={e => setFilter('no_barcode', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40 appearance-none">
+                <option value="">Cód. Barra (Todos)</option>
+                <option value="true">Sin Código de Barra</option>
+              </select>
+              <select value={filters.no_bsale_type ?? ''} onChange={e => setFilter('no_bsale_type', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40 appearance-none">
+                <option value="">Tipo Bsale (Todos)</option>
+                <option value="true">Sin Tipo Bsale</option>
               </select>
             </div>
           </div>
@@ -474,10 +545,12 @@ export function CatalogPanel() {
                 <th className="text-left py-3 px-4 font-medium">Descripción</th>
                 <th className="text-left py-3 px-4 font-medium">Marca</th>
                 <th className="text-left py-3 px-4 font-medium">Categoría</th>
+                <th className="text-left py-3 px-4 font-medium">Tipo Bsale</th>
                 <th className="text-left py-3 px-4 font-medium">Presentación</th>
                 <th className="text-left py-3 px-4 font-medium">U.Medida</th>
                 <th className="text-left py-3 px-4 font-medium">St.Min</th>
                 <th className="text-left py-3 px-4 font-medium">P.Repos</th>
+                <th className="text-left py-3 px-4 font-medium">Integ. Bsale</th>
                 <th className="text-left py-3 px-4 font-medium">Estado</th>
                 <th className="text-right py-3 px-4 font-medium">Acciones</th>
               </tr>
@@ -492,10 +565,16 @@ export function CatalogPanel() {
                   <td className="py-3 px-4 text-theme-text-muted/80 text-xs max-w-[200px] truncate" title={p.description}>{p.description}</td>
                   <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.brand || '—'}</td>
                   <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.category || '—'}</td>
+                  <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.bsale_product_type_name || p.product_type || '—'}</td>
                   <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.presentation || '—'}</td>
                   <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.unit_of_measure || '—'}</td>
                   <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.min_stock}</td>
                   <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.reorder_point}</td>
+                  <td className="py-3 px-4 flex flex-col gap-1 items-start">
+                    {p.source === 'BSALE' && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 border border-blue-500/20">BSALE</span>}
+                    {p.requires_lot && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-600 border border-purple-500/20">LOTE</span>}
+                    {p.bsale_status_conflict && <span title={p.bsale_status_conflict_reason || ''} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 border border-amber-500/20">! CONFLICTO</span>}
+                  </td>
                   <td className="py-3 px-4">{p.is_active ? <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-theme-accent-hover/10 text-theme-text-accent border-theme-accent/20">Activo</span> : <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-red-500/10 text-red-500 border-red-500/20">Inactivo</span>}</td>
                   <td className="py-3 px-4 text-right">
                     <button onClick={() => openEdit(p)} className="text-xs text-theme-text-muted/70 hover:text-theme-text-accent mr-3">Editar</button>

@@ -52,6 +52,12 @@ export interface Product {
   is_perishable: boolean; requires_lot: boolean; requires_expiration: boolean
   image_url: string | null; notes: string | null; status: string; is_active: boolean
   created_at: string; updated_at: string
+  source?: string | null; bsale_product_id?: number | null; bsale_variant_id?: number | null;
+  bsale_product_type_id?: number | null; bsale_product_type_name?: string | null;
+  bsale_product_state?: number | null; bsale_variant_state?: number | null;
+  last_bsale_sync_at?: string | null; bsale_sync_hash?: string | null;
+  bsale_status_conflict?: boolean | null; bsale_status_conflict_reason?: string | null;
+  bsale_status_conflict_detected_at?: string | null;
 }
 
 async function validateClassifier(type: string, name: string | null, companyId: string): Promise<string | null> {
@@ -96,6 +102,11 @@ export interface ProductFilters {
   is_perishable?: string
   requires_lot?: string
   requires_expiration?: string
+  source?: string
+  bsale_status_conflict?: string
+  bsale_inactive?: string
+  no_barcode?: string
+  no_bsale_type?: string
   page?: number
   pageSize?: number
 }
@@ -130,6 +141,12 @@ export async function getProducts(filters: ProductFilters = {}): Promise<{ data:
   else if (filters.requires_lot === 'false') query = query.eq('requires_lot', false)
   if (filters.requires_expiration === 'true') query = query.eq('requires_expiration', true)
   else if (filters.requires_expiration === 'false') query = query.eq('requires_expiration', false)
+
+  if (filters.source) query = query.eq('source', filters.source)
+  if (filters.bsale_status_conflict === 'true') query = query.eq('bsale_status_conflict', true)
+  if (filters.bsale_inactive === 'true') query = query.or('bsale_product_state.eq.1,bsale_variant_state.eq.1')
+  if (filters.no_barcode === 'true') query = query.or('barcode.is.null,barcode.eq.""')
+  if (filters.no_bsale_type === 'true') query = query.is('bsale_product_type_id', null)
 
   const page = filters.page ?? 1
   const pageSize = filters.pageSize ?? 50
