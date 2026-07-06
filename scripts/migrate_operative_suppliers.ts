@@ -41,14 +41,20 @@ async function run() {
   // --- OBTENER COMPANY ID SI NO EXISTE ---
   let targetCompanyId = companyId
   if (!targetCompanyId || targetCompanyId === 'c34a1a3f-1d37-47ab-a279-d57e0ed4f901') {
-      const { data: cData } = await cDb.from('companies').select('id').limit(1).single()
+      const { data: cData } = await cDb.from('companies').select('id').eq('business_name', 'DISTRIBUIDORA MYM').limit(1).single()
       if (cData) targetCompanyId = cData.id
   }
   
-  if (!targetCompanyId) {
-    console.error("No se pudo determinar el company_id. Verifica la base de datos.")
-    process.exit(1)
+  if (targetCompanyId !== 'd1000000-0000-0000-0000-000000000001') {
+      console.error(`ERROR: targetCompanyId no es d1000000-0000-0000-0000-000000000001 (detectado: ${targetCompanyId}). Abortando por seguridad.`)
+      process.exit(1)
   }
+  
+  const { data: companyData } = await cDb.from('companies').select('id, business_name, rut').eq('id', targetCompanyId).single()
+  console.log(`\n🏢 EMPRESA OBJETIVO:`)
+  console.log(`ID: ${companyData?.id}`)
+  console.log(`Razón Social: ${companyData?.business_name}`)
+  console.log(`RUT: ${companyData?.rut}\n`)
 
   // --- REPORTE DE PROVEEDORES ACTUALES ---
   console.log('--- 1. Proveedores Actuales ---')
@@ -292,7 +298,6 @@ async function run() {
           })
       }
   }
-  
   console.log(`SKUs únicos a importar: ${uniqueSkus.size}`)
   console.log(` - Variantes sin product_type o con tipo excluido: ${noProductTypeCount}`)
   
@@ -300,57 +305,89 @@ async function run() {
       console.log(` [Dry-Run] Se crearían ${uniqueSkus.size} productos PetGrup.`)
       console.log(` [Dry-Run] Se crearían ${uniqueSkus.size} product_supplier_mappings.`)
   } else {
-      // Inserción masiva de productos (idealmente en lotes)
-      const productsToInsert = Array.from(uniqueSkus.values()).map(u => ({
-          company_id: targetCompanyId,
-          sku: u.sku,
-          description: u.description,
-          status: 'ACTIVE'
-      }))
+      // Inserción masiva de productos (idempotente sin upsert por falta de unique constraint en postgREST)
+      const fetchAllAdq = async (table: string, columns: string, eqCol: string, eqVal: string) => {
+          let allData: any[] = []
+          let offset = 0
+          const limit = 1000
+          while (true) {
+              const { data } = await dbAdq.from(table).select(columns).eq(eqCol, eqVal).range(offset, offset + limit - 1)
+              if (!data || data.length === 0) break
+              allData.push(...data)
+              if (data.length < limit) break
+              offset += limit
+          }
+          return allData
+      }
       
-      const { data: insertedProds, error: prodErr } = await dbAdq
-          .from('products')
-          .upsert(productsToInsert, { onConflict: 'company_id, sku', ignoreDuplicates: false })
-          .select('id, sku')
-          
-      if (prodErr) {
-          console.error("Error insertando productos:", prodErr)
-      } else {
-          console.log(`Se insertaron/actualizaron ${insertedProds?.length || 0} productos PetGrup.`)
-          
-          // Construir Mappings
-          const prodIdMap = new Map((insertedProds || []).map(p => [p.sku, p.id]))
-          
-          const mappingsToInsert = Array.from(uniqueSkus.values()).map(u => {
-              // Ensure we have a valid supplier_id, if not, skip or use a default
-              // For now we map strictly if we have the supplier
-              const supplierId = suppliersMapByName.get(u.supplierName)
-              if (!supplierId) return null
-              
-              return {
-                  company_id: targetCompanyId,
-                  product_id: prodIdMap.get(u.sku),
-                  supplier_id: supplierId,
-                  bsale_variant_id: u.bsale_variant_id,
-                  sku: u.sku,
-                  product_name: u.description,
-                  unit_cost: u.unit_cost,
-                  is_preferred: true,
-                  is_active: true
+      const existingProds = await fetchAllAdq('products', 'id, sku', 'company_id', targetCompanyId)
+      const existingSkuMap = new Map((existingProds || []).map(p => [p.sku, p.id]))
+      
+      const productsToInsert = Array.from(uniqueSkus.values())
+          .filter(u => !existingSkuMap.has(u.sku))
+          .map(u => ({
+              company_id: targetCompanyId,
+              sku: u.sku,
+              description: u.description,
+              status: 'ACTIVE'
+          }))
+      
+      let insertedCount = 0
+      if (productsToInsert.length > 0) {
+          // Insert in batches of 1000
+          for (let i = 0; i < productsToInsert.length; i += 1000) {
+              const batch = productsToInsert.slice(i, i + 1000)
+              const { error: prodErr } = await dbAdq.from('products').insert(batch)
+              if (prodErr) {
+                  console.error("Error insertando productos:", prodErr)
+                  process.exit(1)
               }
-          }).filter((m): m is NonNullable<typeof m> => Boolean(m))
-          
-          const { data: insertedMappings, error: mapErr } = await dbAdq
-              .from('product_supplier_mappings')
-              .upsert(mappingsToInsert, { onConflict: 'company_id, supplier_id, sku', ignoreDuplicates: false })
-              .select('id')
-              
-          if (mapErr) {
-              console.error("Error insertando mappings:", mapErr)
-          } else {
-              console.log(`Se crearon/actualizaron ${insertedMappings?.length || 0} product_supplier_mappings.`)
+              insertedCount += batch.length
           }
       }
+      console.log(`Se insertaron ${insertedCount} productos PetGrup nuevos (omitidos ${existingSkuMap.size} existentes).`)
+      
+      // Re-fetch all to get IDs for mappings
+      const allProds = await fetchAllAdq('products', 'id, sku', 'company_id', targetCompanyId)
+      const prodIdMap = new Map((allProds || []).map(p => [p.sku, p.id]))
+      
+      const mappingsToInsert = Array.from(uniqueSkus.values()).map(u => {
+          if (u.supplierName === 'SIN PROVEEDOR') return null
+          const supplierId = suppliersMapByName.get(u.supplierName)
+          if (!supplierId) return null
+          
+          return {
+              company_id: targetCompanyId,
+              product_id: prodIdMap.get(u.sku),
+              supplier_id: supplierId,
+              bsale_variant_id: u.bsale_variant_id,
+              sku: u.sku,
+              product_name: u.description,
+              unit_cost: u.unit_cost,
+              is_preferred: true,
+              is_active: true
+          }
+      }).filter((m): m is NonNullable<typeof m> => Boolean(m))
+      
+      // Fetch existing mappings
+      const existingMappings = await fetchAllAdq('product_supplier_mappings', 'supplier_id, product_id', 'company_id', targetCompanyId)
+      const existingMapSet = new Set((existingMappings || []).map(m => `${m.supplier_id}_${m.product_id}`))
+      
+      const newMappings = mappingsToInsert.filter(m => !existingMapSet.has(`${m.supplier_id}_${m.product_id}`))
+      
+      let insertedMapCount = 0
+      if (newMappings.length > 0) {
+          for (let i = 0; i < newMappings.length; i += 1000) {
+              const batch = newMappings.slice(i, i + 1000)
+              const { error: mapErr } = await dbAdq.from('product_supplier_mappings').insert(batch)
+              if (mapErr) {
+                  console.error("Error insertando mappings:", mapErr)
+                  process.exit(1)
+              }
+              insertedMapCount += batch.length
+          }
+      }
+      console.log(`Se crearon ${insertedMapCount} product_supplier_mappings nuevos (omitidos ${mappingsToInsert.length - insertedMapCount} existentes).`)
   }
   
   console.log('\n--- 5. Resumen de Mappings ---')

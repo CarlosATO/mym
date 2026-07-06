@@ -26,31 +26,23 @@ Este documento resume el progreso realizado hoy para la lógica de proveedores o
    - Se mejoró el filtrado de tipos excluidos usando comprobaciones exactas e insensibles a mayúsculas (`SIN TIPO`, `TIPO DE PRODUCTO O SERVICIO`, `DEMO BSALE`, etc).
    - El script es capaz de iterar, validar dependencias y estructurar la inserción en el esquema `adquisiciones`. No efectúa cambios a menos que se usen de forma explícita los argumentos `--apply` y `--confirm-remote`.
 
-## Estado Actual Remoto
-- **`adquisiciones.products`**: Quedó en **0** productos (el usuario eliminó los 708 productos de prueba manualmente). Se confirma al correr `--dry-run`.
-- **`integraciones.*`**: Se encuentra plenamente poblado con el catálogo maestro de Bsale.
+## Estado Actual Remoto (Fase 4C Completada - 06 de Julio de 2026)
+- **`adquisiciones.products`**: 3.585 productos importados exitosamente.
+- **`adquisiciones.product_supplier_mappings`**: 3.583 mappings creados exitosamente.
+- **Proveedores**: 352 proveedores operativos activos. Los proveedores "basura" (SIN TIPO, DEMO BSALE, etc.) se excluyeron correctamente.
 
-## Ejecución (`--dry-run`)
-En la última simulación:
-- **0 dependencias**.
-- **3,585 SKUs únicos a importar**.
-- **65~ Proveedores operativos nuevos** a gestionar, sin errores en exclusiones.
-- **Costos válidos**: 0 (todo se insertará con costo 0 momentáneamente).
-- **Pendiente crítico (Resuelto parcialmente):** El descuadre inicial (3,500 vs 3,585) se debe a diferencias entre el reporte del sync y la forma de conteo local en BD. Los **costos** marcan 0 porque dependemos de que Bsale nos los exponga o deban cargarse más adelante mediante OC.
+### Resultados Fase 4C (Validación SQL Final)
+- **Empresa Objetivo:** DISTRIBUIDORA MYM (`d1000000-0000-0000-0000-000000000001`).
+- **Productos importados:** 3.585
+- **Mappings creados:** 3.583
+- **Mappings con costo > 0:** 1.780
+- **Mappings con costo = 0:** 1.803
+- **Productos sin proveedor/mapping:** 2 (SKU `74920` y `CNTG0`). Ambos se importaron correctamente al catálogo pero sin mapping asociado.
+- **SKUs Duplicados:** 0 (Se garantizó la idempotencia completa).
+- **Protección de Entorno:** El script fue actualizado para abortar inmediatamente si intenta ejecutarse en un entorno o company_id distinto a DISTRIBUIDORA MYM (`d1000000-0000-0000-0000-000000000001`), y la lógica es ahora 100% idempotente (manual, evadiendo fallos por falta de unique constraints en PostgREST).
+- **Nota sobre Data Antigua (`d200`):** Existe data cargada bajo la compañía original PetGrup (`d2000000-0000-0000-0000-000000000002`). Esta data duplicada queda pendiente de limpieza futura y no genera impacto operativo en el entorno activo.
 
-## Próximos pasos exactos para mañana
-
-1. **Variables de entorno:** Configurar en Railway o en el nuevo equipo el `.env.local` con:
-   - `BSALE_ACCESS_TOKEN`
-   - `BSALE_API_BASE_URL=https://api.bsale.io/v1`
-   - Credenciales de Supabase (URL y SERVICE_ROLE_KEY).
-   
-2. **Revisión de Costos:** Determinar por qué los costos promedio devuelven `0` y si esto bloquea la importación o si es el comportamiento deseado inicial.
-
-3. **Ejecución Definitiva:**
-   - Correr localmente `npx tsx scripts/migrate_operative_suppliers.ts` (esto correrá un `--dry-run` por defecto). Validar que los números sigan siendo consistentes (3585 mappings).
-   - Autorizar y correr:
-     ```bash
-     npx tsx scripts/migrate_operative_suppliers.ts --apply --confirm-remote
-     ```
-   - Esto populará los proveedores y generará los mappings Bsale -> PetGrup reales. 
+## Próximos pasos recomendados
+1. Habilitar la función "Generar OC" (Órdenes de Compra) en la UI y verificar que los productos operativos estén disponibles.
+2. Definir si la limpieza de la compañía `d200` (PetGrup) se ejecutará mediante script directo o durante el cierre final de pruebas.
+3. Avanzar con la visualización y análisis de costos/ventas en Órdenes de Compra usando los nuevos mappings.

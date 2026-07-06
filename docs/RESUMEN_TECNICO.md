@@ -422,7 +422,7 @@ railway logs --deployment
 | **4B** | Server Action `saveProductSupplierMapping` | 🔴 Alta |
 | **4B** | Modal de vinculación en UI de análisis | 🔴 Alta |
 | **4B** | Completar RUT/datos de contacto de proveedores | 🟡 Media |
-| **4C** | Vincular SKU → producto → proveedor (mappings) | 🔴 Alta |
+| **4C** | ~~Vincular SKU / producto / proveedor (mappings)~~ | ✅ Hecho |
 | **4C** | Habilitar "Generar OC" para SKU vinculados | 🟡 Media |
 | **5** | API route `/api/cron/bsale-sync` | 🟡 Media |
 | **5** | Sincronización incremental cada 30 min | 🟢 Baja |
