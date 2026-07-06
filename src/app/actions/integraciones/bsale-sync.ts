@@ -68,6 +68,35 @@ async function finishSyncRun(
 
 // ─── Sync functions ───────────────────────────────────────────────
 
+async function syncProductTypes(companyId: string, runId: string): Promise<number> {
+  const db = integrDb()
+  let count = 0
+
+  const items = await bsaleFetchAll<any>('/product_types.json', { limit: 50 }, {
+    onPage: async (page, batch) => {
+      const records = batch.map((p: any) => ({
+        company_id: companyId,
+        bsale_id: p.id,
+        name: p.name || '',
+        state: p.state ?? null,
+        raw_json: p,
+        bsale_sync_run_id: runId,
+        synced_at: new Date().toISOString(),
+      }))
+
+      const { error } = await db.from('bsale_product_types').upsert(records, {
+        onConflict: 'company_id, bsale_id',
+        ignoreDuplicates: false,
+      })
+      if (error) console.error(`[syncProductTypes] page ${page} error:`, error.message)
+      count += records.length
+    },
+  })
+
+  return count
+}
+
+
 async function syncProducts(companyId: string, runId: string): Promise<number> {
   const db = integrDb()
   let count = 0
@@ -654,7 +683,12 @@ export async function syncBsaleCatalog(companyId: string): Promise<{
     const runId = run.id
     const counts: Record<string, number> = {}
 
-    // 1. Sincronizar productos del catálogo
+    // 1. Sincronizar product types
+    console.log('[bsale-sync] Iniciando sync de product types...')
+    counts.product_types = await syncProductTypes(companyId, runId)
+    console.log(`[bsale-sync] Product types sincronizados: ${counts.product_types}`)
+
+    // 2. Sincronizar productos del catálogo
     console.log('[bsale-sync] Iniciando sync de productos...')
     counts.products = await syncProducts(companyId, runId)
     console.log(`[bsale-sync] Productos sincronizados: ${counts.products}`)
