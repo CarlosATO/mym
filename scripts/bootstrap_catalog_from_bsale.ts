@@ -41,6 +41,7 @@ async function main() {
   const isApply = process.argv.includes('--apply')
   const isConfirm = process.argv.includes('--confirm-remote')
   const isApplyState = process.argv.includes('--apply-state')
+  const isDryRunState = process.argv.includes('--dry-run-state')
 
   if (isApply && !isConfirm) {
     console.error('ERROR: Missing --confirm-remote with --apply')
@@ -49,6 +50,7 @@ async function main() {
 
   console.log(`[BOOTSTRAP CATALOG] Starting in ${isApply ? 'APPLY' : 'DRY-RUN'} mode.`)
   if (isApplyState) console.log(`[STATE SYNC] Operational state will be synced.`)
+  if (isDryRunState) console.log(`[STATE SYNC] Operational state sync DRY-RUN.`)
   console.log(`Target company: ${TARGET_COMPANY}`)
 
   console.log('Fetching PetGrup products...')
@@ -111,6 +113,14 @@ async function main() {
   const exceptions = []
   const updates = []
   
+  let countBsaleInactive = 0
+  let countConflicts = 0
+  let countSafeToInactivate = 0
+  let countSafeWithStock = 0
+  let countSafeWithSales = 0
+  let expectedActiveAfter = 0
+  let expectedInactiveAfter = 0
+  const safeCandidates = []
   for (const p of petProducts) {
     const v = bsaleVariants.find(bv => bv.code === p.sku)
     if (!v) continue
@@ -176,7 +186,30 @@ async function main() {
       updatePayload.requires_lot = true
     }
 
-    if (isApplyState) {
+    if (isInactiveBsale) {
+      countBsaleInactive++
+      if (conflict) {
+        countConflicts++
+        expectedActiveAfter++
+      } else {
+        countSafeToInactivate++
+        expectedInactiveAfter++
+        if (stock > 0) countSafeWithStock++
+        if (hasSales) countSafeWithSales++
+        if (safeCandidates.length < 100) {
+          safeCandidates.push({
+            sku: p.sku,
+            description: p.description,
+            stock: stock,
+            sales: sales
+          })
+        }
+      }
+    } else {
+      expectedActiveAfter++
+    }
+
+    if (isApplyState || isDryRunState) {
       if (isInactiveBsale && !conflict) {
         updatePayload.is_active = false
         updatePayload.status = 'INACTIVE'
@@ -216,6 +249,30 @@ async function main() {
   } else {
     console.log(`DRY-RUN completed. ${updates.length} products would be updated.`)
     console.log(`${exceptions.length} exceptions found.`)
+  }
+
+  if (isApplyState || isDryRunState) {
+    console.log('\n--- Inactivation Summary ---')
+    console.log(`Total productos: ${petProducts.length}`)
+    console.log(`Bsale inactivos: ${countBsaleInactive}`)
+    console.log(`Conflictos protegidos: ${countConflicts}`)
+    console.log(`Candidatos seguros a inactivar: ${countSafeToInactivate}`)
+    console.log(`Productos con stock positivo entre candidatos seguros: ${countSafeWithStock}`)
+    console.log(`Productos con ventas últimos 180 días entre candidatos seguros: ${countSafeWithSales}`)
+    console.log(`Productos que permanecerán activos por conflicto: ${countConflicts}`)
+    console.log(`Productos activos esperados después: ${expectedActiveAfter}`)
+    console.log(`Productos inactivos esperados después: ${expectedInactiveAfter}`)
+    console.log('----------------------------\n')
+
+    let safeMd = '# Muestra de Candidatos Seguros a Inactivar (Top 100)\n\n'
+    safeMd += '| SKU | Descripción | Stock | Ventas 180d |\n'
+    safeMd += '|---|---|---|---|\n'
+    for (const c of safeCandidates) {
+      safeMd += `| ${c.sku} | ${c.description?.replace(/\|/g, '') || ''} | ${c.stock} | ${c.sales} |\n`
+    }
+    const docsPath = path.resolve(process.cwd(), 'docs')
+    fs.writeFileSync(path.resolve(docsPath, 'catalog-safe-candidates-sample.md'), safeMd)
+    console.log('Generated safe candidates sample at docs/catalog-safe-candidates-sample.md')
   }
 }
 
