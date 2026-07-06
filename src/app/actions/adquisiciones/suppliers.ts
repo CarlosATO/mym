@@ -522,3 +522,18 @@ export async function importSuppliers(suppliers: Record<string, unknown>[]) {
 
   return { created, errors, total: suppliers.length }
 }
+
+export async function getRealSuppliers() {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return []
+
+  const db = adqAdmin()
+  const { data } = await db.from('suppliers')
+    .select('id, business_name')
+    .eq('company_id', companyId)
+    .eq('supplier_kind', 'REAL')
+    .eq('is_active', true)
+    .order('business_name')
+    
+  return data || []
+}

@@ -58,6 +58,15 @@ export interface Product {
   last_bsale_sync_at?: string | null; bsale_sync_hash?: string | null;
   bsale_status_conflict?: boolean | null; bsale_status_conflict_reason?: string | null;
   bsale_status_conflict_detected_at?: string | null;
+  supplier_mapping_id?: string;
+  supplier_id?: string;
+  supplier_kind?: string;
+  pseudo_supplier_id?: string;
+  pseudo_supplier_name?: string;
+  real_supplier_id?: string;
+  real_supplier_name?: string;
+  supplier_resolution_status?: 'DIRECTO' | 'ASOCIADO' | 'PENDIENTE_ASOCIACION' | 'SIN_PROVEEDOR';
+  supplier_origin_label?: string;
 }
 
 async function validateClassifier(type: string, name: string | null, companyId: string): Promise<string | null> {
@@ -156,7 +165,83 @@ export async function getProducts(filters: ProductFilters = {}): Promise<{ data:
   query = query.order('sku').range(from, to)
   const { data, error, count } = await query
   if (error) return { data: [], total: 0 }
-  return { data: (data ?? []) as Product[], total: count ?? 0 }
+  const products = (data ?? []) as Product[]
+
+  if (products.length > 0) {
+    const productIds = products.map(p => p.id)
+    const { data: mappings } = await db.from('product_supplier_mappings')
+      .select('id, product_id, supplier_id, is_active')
+      .in('product_id', productIds)
+
+    if (mappings && mappings.length > 0) {
+      // Preferred mapping (active first, or first encountered)
+      const mappingByProduct = new Map<string, any>()
+      for (const m of mappings) {
+        if (!mappingByProduct.has(m.product_id)) {
+          mappingByProduct.set(m.product_id, m)
+        } else if (m.is_active && !mappingByProduct.get(m.product_id).is_active) {
+          mappingByProduct.set(m.product_id, m)
+        }
+      }
+
+      const supplierIds = Array.from(new Set(Array.from(mappingByProduct.values()).map(m => m.supplier_id)))
+      const { data: suppliers } = await db.from('suppliers')
+        .select('id, supplier_kind, business_name, bsale_product_type_name, parent_supplier_id')
+        .in('id', supplierIds)
+
+      const parentIds = Array.from(new Set(suppliers?.filter(s => s.parent_supplier_id).map(s => s.parent_supplier_id) || []))
+      let parents: { id: string; business_name: string }[] = []
+      if (parentIds.length > 0) {
+        const { data: parentData } = await db.from('suppliers')
+          .select('id, business_name')
+          .in('id', parentIds)
+        parents = parentData || []
+      }
+
+      const supplierMap = new Map((suppliers || []).map(s => [s.id, s]))
+      const parentMap = new Map((parents || []).map(p => [p.id, p]))
+
+      for (const p of products) {
+        const m = mappingByProduct.get(p.id)
+        if (!m) {
+          p.supplier_resolution_status = 'SIN_PROVEEDOR'
+          continue
+        }
+        p.supplier_mapping_id = m.id
+        p.supplier_id = m.supplier_id
+        
+        const s = supplierMap.get(m.supplier_id)
+        if (!s) {
+          p.supplier_resolution_status = 'SIN_PROVEEDOR'
+          continue
+        }
+        
+        p.supplier_kind = s.supplier_kind
+        if (s.supplier_kind === 'REAL') {
+          p.supplier_resolution_status = 'DIRECTO'
+          p.real_supplier_id = s.id
+          p.real_supplier_name = s.business_name
+          p.supplier_origin_label = 'DIRECTO'
+        } else if (s.supplier_kind === 'BSALE_OPERATIVE') {
+          p.pseudo_supplier_id = s.id
+          p.pseudo_supplier_name = s.bsale_product_type_name ?? s.business_name
+          p.supplier_origin_label = p.pseudo_supplier_name
+          if (s.parent_supplier_id) {
+            const parent = parentMap.get(s.parent_supplier_id)
+            p.real_supplier_id = s.parent_supplier_id
+            p.real_supplier_name = parent?.business_name
+            p.supplier_resolution_status = 'ASOCIADO'
+          } else {
+            p.supplier_resolution_status = 'PENDIENTE_ASOCIACION'
+          }
+        }
+      }
+    } else {
+      products.forEach(p => p.supplier_resolution_status = 'SIN_PROVEEDOR')
+    }
+  }
+
+  return { data: products, total: count ?? 0 }
 }
 
 export async function createProduct(formData: FormData) {
@@ -229,6 +314,18 @@ export async function createProduct(formData: FormData) {
     const { error: uploadErr } = await sb.storage.from('product-images').upload(path, imageFile, { upsert: true })
     if (!uploadErr) { const { data: pubUrl } = sb.storage.from('product-images').getPublicUrl(path); await db.from('products').update({ image_url: pubUrl?.publicUrl }).eq('id', data[0].id) }
   }
+
+  const realSupplierId = formData.get('real_supplier_id') as string
+  if (realSupplierId) {
+    await db.from('product_supplier_mappings').insert({
+      product_id: data[0].id,
+      supplier_id: realSupplierId,
+      company_id: companyId,
+      unit_cost: 0,
+      is_active: true
+    })
+  }
+
   return { success: true }
 }
 
@@ -262,6 +359,39 @@ export async function updateProduct(productId: string, formData: FormData) {
   const { data, error } = await db.from('products').update({ description, short_description: v(formData.get('short_description') as string), barcode: v(formData.get('barcode') as string), internal_code: v(formData.get('internal_code') as string), brand: v(formData.get('brand') as string), category: v(formData.get('category') as string), subcategory: v(formData.get('subcategory') as string), product_type: v(formData.get('product_type') as string), species: v(formData.get('species') as string), presentation: v(formData.get('presentation') as string), unit_of_measure: v(formData.get('unit_of_measure') as string), net_weight: n('net_weight'), weight_unit: v(formData.get('weight_unit') as string), package_quantity: n('package_quantity'), package_unit: v(formData.get('package_unit') as string), purchase_unit: v(formData.get('purchase_unit') as string), sales_unit: v(formData.get('sales_unit') as string), min_stock: n('min_stock'), max_stock: n('max_stock'), reorder_point: n('reorder_point'), tax_rate: n('tax_rate'), is_perishable: b('is_perishable'), requires_lot: b('requires_lot'), requires_expiration: b('requires_expiration'), image_url, notes: v(formData.get('notes') as string), updated_by: userId }).eq('id', productId).select()
   if (error) return { error: error.message }
   if (!data || data.length === 0) return { error: 'No se actualizó el registro' }
+
+  // Update supplier mapping only if source is not BSALE
+  if (data[0].source !== 'BSALE') {
+    const realSupplierId = formData.get('real_supplier_id') as string
+    if (realSupplierId) {
+      const { data: existingMapping } = await db.from('product_supplier_mappings')
+        .select('id')
+        .eq('product_id', productId)
+        .eq('supplier_id', realSupplierId)
+        .maybeSingle()
+        
+      if (!existingMapping) {
+        // Find existing mappings to deactivate or delete? For simplicity, we just add the new one or update the existing.
+        // Actually it's better to update the existing REAL mapping if it exists.
+        const { data: realMappings } = await db.from('product_supplier_mappings')
+          .select('id')
+          .eq('product_id', productId)
+          
+        if (realMappings && realMappings.length > 0) {
+          await db.from('product_supplier_mappings').update({ supplier_id: realSupplierId }).eq('id', realMappings[0].id)
+        } else {
+          await db.from('product_supplier_mappings').insert({
+            product_id: productId,
+            supplier_id: realSupplierId,
+            company_id: companyId,
+            unit_cost: 0,
+            is_active: true
+          })
+        }
+      }
+    }
+  }
+
   return { success: true }
 }
 

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { getProducts, getClassifiers, createProduct, updateProduct, deactivateProduct, importProducts, type Product, type ProductFilters } from '@/app/actions/adquisiciones/products'
+import { getRealSuppliers } from '@/app/actions/adquisiciones/suppliers'
 import * as XLSX from 'xlsx'
 import { ClassifierCombobox } from '@/components/ui/classifier-combobox'
 import { Search, Plus, FileSpreadsheet, Upload, Download, List, Grid, MoreHorizontal, Filter, X, ArrowLeft } from 'lucide-react'
@@ -19,6 +20,7 @@ export function CatalogPanel() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [filters, setFilters] = useState<ProductFilters>({ page: 1, pageSize: 50 })
   const [classifierOptions, setClassifierOptions] = useState<Record<string, { id: string; name: string }[]>>({})
+  const [realSuppliers, setRealSuppliers] = useState<{ id: string; business_name: string }[]>([])
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [showFilters, setShowFilters] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -31,7 +33,7 @@ export function CatalogPanel() {
     package_quantity: '', package_unit: '', purchase_unit: '', sales_unit: '',
     min_stock: '0', max_stock: '0', reorder_point: '0', tax_rate: '19',
     is_perishable: 'false', requires_lot: 'false', requires_expiration: 'false',
-    notes: '', existing_image: '',
+    notes: '', existing_image: '', real_supplier_id: '',
   })
   const [bsaleMeta, setBsaleMeta] = useState<Partial<Product> | null>(null)
 
@@ -53,20 +55,22 @@ export function CatalogPanel() {
     ]).then(([b, c, s, t, w, pu, su, mu, pku]) => {
       setClassifierOptions({ BRAND: b, CATEGORY: c, SUBCATEGORY: s, PRODUCT_TYPE: t, WEIGHT_UNIT: w, PURCHASE_UNIT: pu, SALES_UNIT: su, MEASURE_UNIT: mu, PACKAGE_UNIT: pku })
     })
+    
+    getRealSuppliers().then(setRealSuppliers)
   }, [])
 
   function msg(text: string) { setMessage(text); setTimeout(() => setMessage(''), 3500) }
 
   function resetForm() {
-    setForm({ sku: '', barcode: '', internal_code: '', description: '', short_description: '', brand: '', category: '', subcategory: '', product_type: '', species: '', presentation: '', unit_of_measure: '', net_weight: '', weight_unit: '', package_quantity: '', package_unit: '', purchase_unit: '', sales_unit: '', min_stock: '0', max_stock: '0', reorder_point: '0', tax_rate: '19', is_perishable: 'false', requires_lot: 'false', requires_expiration: 'false', notes: '', existing_image: '' })
+    setForm({ sku: '', barcode: '', internal_code: '', description: '', short_description: '', brand: '', category: '', subcategory: '', product_type: '', species: '', presentation: '', unit_of_measure: '', net_weight: '', weight_unit: '', package_quantity: '', package_unit: '', purchase_unit: '', sales_unit: '', min_stock: '0', max_stock: '0', reorder_point: '0', tax_rate: '19', is_perishable: 'false', requires_lot: 'false', requires_expiration: 'false', notes: '', existing_image: '', real_supplier_id: '' })
     setEditId(null)
     setBsaleMeta(null)
   }
 
   function openEdit(p: Product) {
-    setForm({ sku: p.sku, barcode: p.barcode ?? '', internal_code: p.internal_code ?? '', description: p.description, short_description: p.short_description ?? '', brand: p.brand ?? '', category: p.category ?? '', subcategory: p.subcategory ?? '', product_type: p.product_type ?? '', species: p.species ?? '', presentation: p.presentation ?? '', unit_of_measure: p.unit_of_measure ?? '', net_weight: String(p.net_weight ?? ''), weight_unit: p.weight_unit ?? '', package_quantity: String(p.package_quantity ?? ''), package_unit: p.package_unit ?? '', purchase_unit: p.purchase_unit ?? '', sales_unit: p.sales_unit ?? '', min_stock: String(p.min_stock), max_stock: String(p.max_stock), reorder_point: String(p.reorder_point), tax_rate: String(p.tax_rate), is_perishable: p.is_perishable ? 'true' : 'false', requires_lot: p.requires_lot ? 'true' : 'false', requires_expiration: p.requires_expiration ? 'true' : 'false', notes: p.notes ?? '', existing_image: p.image_url ?? '' })
+    setForm({ sku: p.sku, barcode: p.barcode ?? '', internal_code: p.internal_code ?? '', description: p.description, short_description: p.short_description ?? '', brand: p.brand ?? '', category: p.category ?? '', subcategory: p.subcategory ?? '', product_type: p.product_type ?? '', species: p.species ?? '', presentation: p.presentation ?? '', unit_of_measure: p.unit_of_measure ?? '', net_weight: String(p.net_weight ?? ''), weight_unit: p.weight_unit ?? '', package_quantity: String(p.package_quantity ?? ''), package_unit: p.package_unit ?? '', purchase_unit: p.purchase_unit ?? '', sales_unit: p.sales_unit ?? '', min_stock: String(p.min_stock), max_stock: String(p.max_stock), reorder_point: String(p.reorder_point), tax_rate: String(p.tax_rate), is_perishable: p.is_perishable ? 'true' : 'false', requires_lot: p.requires_lot ? 'true' : 'false', requires_expiration: p.requires_expiration ? 'true' : 'false', notes: p.notes ?? '', existing_image: p.image_url ?? '', real_supplier_id: p.real_supplier_id ?? '' })
     setEditId(p.id); setShowForm(true)
-    setBsaleMeta({ source: p.source, bsale_product_id: p.bsale_product_id, bsale_variant_id: p.bsale_variant_id, bsale_product_type_name: p.bsale_product_type_name, bsale_product_state: p.bsale_product_state, bsale_variant_state: p.bsale_variant_state, last_bsale_sync_at: p.last_bsale_sync_at, bsale_status_conflict: p.bsale_status_conflict, bsale_status_conflict_reason: p.bsale_status_conflict_reason })
+    setBsaleMeta({ source: p.source, bsale_product_id: p.bsale_product_id, bsale_variant_id: p.bsale_variant_id, bsale_product_type_name: p.bsale_product_type_name, bsale_product_state: p.bsale_product_state, bsale_variant_state: p.bsale_variant_state, last_bsale_sync_at: p.last_bsale_sync_at, bsale_status_conflict: p.bsale_status_conflict, bsale_status_conflict_reason: p.bsale_status_conflict_reason, pseudo_supplier_name: p.pseudo_supplier_name, real_supplier_name: p.real_supplier_name, supplier_resolution_status: p.supplier_resolution_status })
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -263,7 +267,7 @@ export function CatalogPanel() {
                   <span className="w-2 h-2 rounded-full bg-blue-500"></span>
                   Información de Integración Bsale
                 </h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                   <div>
                     <p className="text-[10px] text-theme-text-muted/60 uppercase">Origen</p>
                     <p className="text-xs font-semibold text-theme-text mt-1">{bsaleMeta.source || '—'}</p>
@@ -299,6 +303,47 @@ export function CatalogPanel() {
                     </div>
                   )}
                 </div>
+                <div className="border-t border-theme-border pt-4">
+                  <h4 className="text-[10px] font-bold text-theme-text-muted/60 uppercase mb-3">Proveedor</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <p className="text-[10px] text-theme-text-muted/60 uppercase">Pseudoproveedor Bsale</p>
+                      <p className="text-xs font-semibold text-theme-text mt-1">{bsaleMeta.pseudo_supplier_name || '—'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-theme-text-muted/60 uppercase">Proveedor Real Resuelto</p>
+                      <p className="text-xs font-semibold text-theme-text mt-1">{bsaleMeta.real_supplier_name || '—'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-theme-text-muted/60 uppercase">Estado Asociación</p>
+                      <p className="text-xs font-semibold text-theme-text mt-1">
+                        {bsaleMeta.supplier_resolution_status === 'ASOCIADO' && <span className="text-emerald-600">ASOCIADO</span>}
+                        {bsaleMeta.supplier_resolution_status === 'PENDIENTE_ASOCIACION' && <span className="text-amber-600">PENDIENTE ASOCIACIÓN</span>}
+                        {bsaleMeta.supplier_resolution_status === 'SIN_PROVEEDOR' && <span className="text-red-500">SIN PROVEEDOR</span>}
+                        {bsaleMeta.supplier_resolution_status === 'DIRECTO' && <span className="text-emerald-600">DIRECTO</span>}
+                        {!bsaleMeta.supplier_resolution_status && '—'}
+                      </p>
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-theme-text-muted/50 mt-3 italic">La asociación proveedor real se gestiona desde el módulo Proveedores.</p>
+                </div>
+              </div>
+            )}
+            
+            {(!bsaleMeta || bsaleMeta.source !== 'BSALE') && (
+              <div className="bg-theme-text/5 border border-theme-border rounded-xl p-5 mb-6">
+                <h3 className="text-xs font-bold text-theme-text-muted/80 uppercase tracking-wider mb-4">Proveedor Principal</h3>
+                {realSuppliers.length > 0 ? (
+                  <div className="space-y-1 max-w-sm">
+                    <label className="text-xs text-theme-text-muted/70">Seleccionar proveedor real</label>
+                    <select name="real_supplier_id" defaultValue={form.real_supplier_id} className="w-full h-9 rounded-lg border border-gray-200 dark:border-theme-border bg-black/5 dark:bg-theme-text/5 px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40 appearance-none">
+                      <option value="">-- Sin proveedor --</option>
+                      {realSuppliers.map(s => <option key={s.id} value={s.id}>{s.business_name}</option>)}
+                    </select>
+                  </div>
+                ) : (
+                  <p className="text-xs text-amber-600 bg-amber-500/10 p-3 rounded-lg border border-amber-500/20">No existen proveedores reales. Crea primero un proveedor real en el módulo Proveedores.</p>
+                )}
               </div>
             )}
 
@@ -543,6 +588,8 @@ export function CatalogPanel() {
                 <th className="text-left py-3 px-4 font-medium">SKU</th>
                 <th className="text-left py-3 px-4 font-medium">Código barra</th>
                 <th className="text-left py-3 px-4 font-medium">Descripción</th>
+                <th className="text-left py-3 px-4 font-medium">Proveedor real</th>
+                <th className="text-left py-3 px-4 font-medium">Origen prov.</th>
                 <th className="text-left py-3 px-4 font-medium">Marca</th>
                 <th className="text-left py-3 px-4 font-medium">Categoría</th>
                 <th className="text-left py-3 px-4 font-medium">Tipo Bsale</th>
@@ -563,6 +610,19 @@ export function CatalogPanel() {
                   <td className="py-3 px-4 text-theme-text text-xs font-mono font-medium">{p.sku}</td>
                   <td className="py-3 px-4 text-theme-text-muted/60 text-xs font-mono">{p.barcode || '—'}</td>
                   <td className="py-3 px-4 text-theme-text-muted/80 text-xs max-w-[200px] truncate" title={p.description}>{p.description}</td>
+                  <td className="py-3 px-4">
+                    <span className={`text-xs font-semibold ${p.real_supplier_name ? 'text-emerald-600 dark:text-emerald-400' : 'text-theme-text-muted/40'}`}>
+                      {p.real_supplier_name || '—'}
+                    </span>
+                  </td>
+                  <td className="py-3 px-4">
+                    <div className="flex flex-col items-start gap-0.5">
+                      <span className="text-xs text-theme-text-muted/80" title={p.supplier_origin_label}>{p.supplier_origin_label || '—'}</span>
+                      <span className="text-[9px] uppercase tracking-wider font-bold text-theme-text-muted/50">
+                        {p.supplier_resolution_status === 'PENDIENTE_ASOCIACION' ? 'PENDIENTE ASOCIACIÓN' : (p.supplier_resolution_status === 'SIN_PROVEEDOR' ? 'SIN PROVEEDOR' : p.supplier_resolution_status?.replace('_', ' '))}
+                      </span>
+                    </div>
+                  </td>
                   <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.brand || '—'}</td>
                   <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.category || '—'}</td>
                   <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.bsale_product_type_name || p.product_type || '—'}</td>
