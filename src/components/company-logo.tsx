@@ -9,15 +9,16 @@ interface CompanyLogoProps {
 
 export function CompanyLogo({ size = 120, className = '', logoUrl }: CompanyLogoProps) {
   return (
-    <Image
-      src={logoUrl || "/logo-transparent.png"}
-      alt="Logo"
-      width={size}
-      height={size}
-      priority
-      unoptimized={!!logoUrl}
-      style={{ width: size, height: 'auto' }}
-      className={`select-none ${className}`}
-    />
+    <div style={{ width: size }} className={`relative shrink-0 flex items-center justify-center ${className}`}>
+      <Image
+        src={logoUrl || "/logo-transparent.png"}
+        alt="Logo"
+        width={size}
+        height={size}
+        priority
+        unoptimized={!!logoUrl}
+        className="object-contain w-full h-auto select-none"
+      />
+    </div>
   )
 }

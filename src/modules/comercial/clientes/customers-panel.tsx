@@ -6,10 +6,11 @@ import {
   deactivateCustomer, reactivateCustomer, getCustomerStats,
   type Customer
 } from '@/app/actions/comercial/customers'
+import { forceSyncBsaleClients, getSyncStatus } from '@/app/actions/integraciones/sync'
 import {
   Search, Plus, Building2, User2, Mail, Phone,
   MapPin, Info, AlertCircle, RefreshCw, MoreVertical,
-  Edit, ToggleLeft, ToggleRight
+  Edit, ToggleLeft, ToggleRight, CloudSync, Clock
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -96,7 +97,7 @@ function RowMenu({ customer, onEdit, onToggle }: {
 }
 
 /* ─────────────────────────────────────────────────────────────
-   CUSTOMER FORM — identical structure to CatalogPanel form
+   CUSTOMER FORM
 ───────────────────────────────────────────────────────────── */
 function CustomerForm({ editing, onClose, onSaved }: {
   editing: Customer | null; onClose: () => void; onSaved: () => void
@@ -317,13 +318,19 @@ function CustomerForm({ editing, onClose, onSaved }: {
 }
 
 /* ─────────────────────────────────────────────────────────────
-   MAIN LIST — pattern identical to CatalogPanel
+   MAIN LIST
 ───────────────────────────────────────────────────────────── */
 export function CustomersPanel() {
   const [customers, setCustomers] = useState<Customer[]>([])
   const [stats, setStats] = useState({ total: 0, active: 0, inactive: 0, bsale: 0, manual: 0 })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  
+  // Sync state
+  const [syncStatus, setSyncStatus] = useState<any>(null)
+  const [isSyncing, setIsSyncing] = useState(false)
+  const [syncError, setSyncError] = useState<string | null>(null)
+
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all')
@@ -336,6 +343,19 @@ export function CustomersPanel() {
     const h = setTimeout(() => setDebouncedSearch(search), 400)
     return () => clearTimeout(h)
   }, [search])
+
+  const loadSyncStatus = useCallback(async () => {
+    try {
+      const status = await getSyncStatus('BSALE', 'clients')
+      setSyncStatus(status)
+      if (status?.isLocked) {
+        // If it's locked, poll every 5s until it's unlocked
+        setTimeout(loadSyncStatus, 5000)
+      }
+    } catch (e: any) {
+      console.error('Failed to load sync status', e)
+    }
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true); setError(null)
@@ -351,6 +371,25 @@ export function CustomersPanel() {
   }, [debouncedSearch, statusFilter, sourceFilter])
 
   useEffect(() => { load() }, [load])
+  useEffect(() => { loadSyncStatus() }, [loadSyncStatus])
+
+  const handleForceSync = async () => {
+    if (isSyncing || syncStatus?.isLocked) return
+    setIsSyncing(true)
+    setSyncError(null)
+    try {
+      const res = await forceSyncBsaleClients()
+      if (res.status === 'SKIPPED') {
+        setSyncError(res.message || 'La sincronización está bloqueada o en curso.')
+      }
+      await load()
+      await loadSyncStatus()
+    } catch (err: any) {
+      setSyncError(err.message || 'Error al sincronizar')
+    } finally {
+      setIsSyncing(false)
+    }
+  }
 
   const handleToggleActive = async (c: Customer) => {
     try {
@@ -426,13 +465,52 @@ export function CustomersPanel() {
           </div>
         </div>
 
-        {/* Stats row */}
-        <div className="flex items-center gap-4 text-xs text-theme-text-muted">
-          <span><span className="font-semibold text-theme-text">{stats.total}</span> clientes</span>
-          <span className="text-emerald-500 font-semibold">{stats.active} activos</span>
-          {stats.inactive > 0 && <span className="text-red-400 font-semibold">{stats.inactive} inactivos</span>}
-          <span className="text-blue-400">{stats.bsale} Bsale</span>
-          {stats.manual > 0 && <span className="text-orange-400">{stats.manual} manual</span>}
+        {/* Stats and Sync row */}
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 text-xs text-theme-text-muted">
+          <div className="flex items-center flex-wrap gap-4">
+            <span><span className="font-semibold text-theme-text">{stats.total}</span> clientes</span>
+            <span className="text-emerald-500 font-semibold">{stats.active} activos</span>
+            {stats.inactive > 0 && <span className="text-red-400 font-semibold">{stats.inactive} inactivos</span>}
+            <span className="text-blue-400">{stats.bsale} Bsale</span>
+            {stats.manual > 0 && <span className="text-orange-400">{stats.manual} manual</span>}
+          </div>
+
+          <div className="flex items-center flex-wrap gap-3">
+            {syncStatus?.isLocked || isSyncing ? (
+              <span className="flex items-center gap-1 text-blue-500 font-medium">
+                <RefreshCw className="w-3 h-3 animate-spin" /> Sync: En proceso
+              </span>
+            ) : syncStatus?.lastSuccess ? (
+              <span className="flex items-center gap-1 text-emerald-500 font-medium">
+                <CloudSync className="w-3 h-3" /> Sync: OK
+              </span>
+            ) : syncStatus?.lastRun && syncStatus.lastRun.status !== 'SUCCESS' ? (
+              <span className="flex items-center gap-1 text-red-400 font-medium">
+                <AlertCircle className="w-3 h-3" /> Sync: Error
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 text-theme-text-muted font-medium">
+                <CloudSync className="w-3 h-3" /> Sync: Pendiente
+              </span>
+            )}
+            
+            <span className="text-theme-text-muted/30 hidden sm:inline">|</span>
+            <span>Última: {syncStatus?.lastSuccess ? new Date(syncStatus.lastSuccess.finished_at).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+            
+            <span className="text-theme-text-muted/30 hidden sm:inline">|</span>
+            <span>Frecuencia: {syncStatus?.config?.frequency_minutes || 30} min</span>
+            
+            <button 
+              onClick={handleForceSync}
+              disabled={isSyncing || syncStatus?.isLocked}
+              title="Forzar sincronización"
+              className="ml-2 h-7 px-2.5 flex items-center gap-1.5 rounded-md border border-theme-border/60 bg-theme-surface hover:bg-theme-text/5 text-theme-text hover:border-theme-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium shadow-sm"
+            >
+              <RefreshCw className={cn("w-3 h-3 text-theme-text-muted", (isSyncing || syncStatus?.isLocked) && "animate-spin")} />
+              Forzar sync
+            </button>
+            {syncError && <span className="text-red-400 font-medium ml-1" title={syncError}><AlertCircle className="w-3.5 h-3.5" /></span>}
+          </div>
         </div>
       </div>
 

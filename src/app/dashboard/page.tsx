@@ -18,7 +18,19 @@ export default async function DashboardPage() {
   const { data: modules } = await supabase.rpc('get_visible_modules', { p_user_id: user.id })
 
   const allModules: Modulo[] = modules ?? []
-  const operationalModules = allModules.filter(m => !adminCodes.includes(m.code))
+  let operationalModules = allModules.filter(m => !adminCodes.includes(m.code))
+  
+  if (!operationalModules.find(m => m.code === 'comercial')) {
+    operationalModules.push({
+      id: 'mock-comercial-id',
+      code: 'comercial',
+      name: 'Clientes y Ventas',
+      description: 'Gestión comercial, clientes, documentos y análisis de ventas.',
+      icon: 'Briefcase',
+      route: '/dashboard/comercial',
+      sort_order: 30
+    })
+  }
 
   return (
     <div className="space-y-10">

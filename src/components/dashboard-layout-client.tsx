@@ -28,6 +28,7 @@ export function DashboardLayoutClient({ children, profile, permissions, activeCo
   const MODULE_PREFIXES = [
     '/dashboard/adquisiciones',
     '/dashboard/logistica',
+    '/dashboard/comercial',
   ]
   const isModulePage = MODULE_PREFIXES.some(prefix => pathname.startsWith(prefix))
 

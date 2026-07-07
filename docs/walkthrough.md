@@ -38,3 +38,10 @@
 4. **Productos Manuales:** Tienen habilitada la edición con un `<select>` que apunta a `getRealSuppliers()`. Si se elige uno, el action genera un nuevo registro `product_supplier_mappings` asociando al nuevo producto con `unit_cost: 0` de manera que quede pendiente de actualización financiera, preservando la trazabilidad.
 
 La base de datos sigue protegida, no hay `supplier_id` físico en la tabla de productos, y toda la jerarquía de asociaciones se soporta desde la tabla transaccional `product_supplier_mappings`.
+
+## Fase Sync Core
+1. **Infraestructura Base de Sincronización**: Se creó el core robusto `Sync Core` bajo el schema `integraciones` que previene condiciones de carrera (`sync_locks`) y registra métricas detalladas (`sync_runs`, `sync_errors`).
+2. **Sincronización Refactorizada**: La sincronización de Clientes Bsale se centralizó en un módulo compartido `src/lib/integraciones/bsale-clients-sync.ts`. Este puede ser llamado desde el CLI, Server Actions (UI) o API Cron, sin duplicar lógica.
+3. **Monitoreo en el Panel de Clientes**: Ahora, el encabezado de "Comercial -> Clientes" despliega un estado en tiempo real. En caso de una sincronización exitosa, muestra la fecha y el estado; durante una ejecución activa, avisa y bloquea intentos paralelos gracias a los locks.
+4. **Protección de Datos Local**: Cualquier actualización extraída desde Bsale nunca borrará el campo de notas administrativas asignadas desde el panel local de PetGrup.
+5. **Sincronización Automatizada (Cron)**: El endpoint `POST /api/integraciones/bsale/clients/sync` se encuentra disponible y protegido por el secreto de la plataforma `CRON_SECRET`. (Requiere configuración externa de Cron).

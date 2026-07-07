@@ -41,9 +41,10 @@
 - Solo se permite editar el campo `notes` (Notas internas) como dato administrativo de PetGrup.
 - El sistema informa claramente al usuario que cualquier cambio origen se debe realizar en Bsale.
 
-## FASE 8 — (Próxima Fase) Sincronización Automática
-- Se deberá implementar un job en backend que se ejecute cada ~30 minutos.
-- **Limitaciones:** Ejecución única (evitar concurrencia vía lock), registrar logs, contar iteraciones, y controlar errores.
-- **Lectura Pura:** Utilizar estrictamente llamadas GET a la API Bsale sin alterar ningún documento.
-- **Protección de Datos Locales:** La sincronización de bajada no deberá sobrescribir los datos administrativos (ej. `notes`) creados localmente en PetGrup.
-- (La escritura o actualización desde PetGrup hacia Bsale queda aplazada y documentada como caso aparte en `docs/bsale-customer-writeback-plan.md`).
+## FASE 8 — Sincronización Automática (Sync Core Integrado)
+- Se desarrolló e integró la infraestructura general `Sync Core` en el schema `integraciones`.
+- Bsale Clients es el primer puente conectado a esta infraestructura.
+- **UI:** Se incluyó un banner con el estado dinámico en la lista de Clientes y un botón "Forzar sincronización".
+- **Backend:** Se creó el endpoint `POST /api/integraciones/bsale/clients/sync` preparado para un servicio Cron externo (cada 30 mins) validando la variable `CRON_SECRET`.
+- **Protección de Datos:** Se protegen las `notes` en PetGrup; `Sync Core` cuenta con manejo de bloqueos por entidad (`sync_locks`), contadores e historial en `sync_runs`.
+- (La escritura o actualización desde PetGrup hacia Bsale queda aplazada y documentada en `docs/bsale-customer-writeback-plan.md`).
