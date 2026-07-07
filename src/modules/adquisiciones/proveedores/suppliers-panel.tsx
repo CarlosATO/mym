@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { getSuppliers, createSupplier, updateSupplier, deactivateSupplier, importSuppliers, getBsalePseudoStats, type Supplier, type BsalePseudoStat } from '@/app/actions/adquisiciones/suppliers'
 import * as XLSX from 'xlsx'
 import { Search, Plus, FileSpreadsheet, Upload, Download, MoreHorizontal, Filter, X, ArrowLeft, Check, AlertCircle } from 'lucide-react'
+import { PseudoSupplierBsaleSyncStatus } from '@/components/integraciones/bsale-sync-status'
 
 export function SuppliersPanel() {
   const [activeTab, setActiveTab] = useState<'REAL' | 'BSALE'>('REAL')
@@ -517,6 +518,13 @@ export function SuppliersPanel() {
       </div>
 
       <div className="shrink-0 flex flex-col gap-4 p-5 border-b border-theme-border/60 bg-theme-text/[0.01]">
+        
+        {activeTab === 'BSALE' && (
+          <div className="flex w-full">
+            <PseudoSupplierBsaleSyncStatus />
+          </div>
+        )}
+
         <div className="flex flex-col md:flex-row items-center gap-3 w-full">
           <div className="relative flex-1 w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted/50" />

@@ -155,6 +155,7 @@ export async function releaseSyncLock(companyId: string, provider: string, entit
 
 export async function getSyncStatus(companyId: string, provider: string, entity: string) {
   const admin = getSyncAdminClient()
+  const now = new Date()
   
   // Limpiar locks expirados
   await admin.schema('integraciones').from('sync_locks')
@@ -165,7 +166,7 @@ export async function getSyncStatus(companyId: string, provider: string, entity:
     .lt('expires_at', new Date().toISOString())
 
   const { data: lock } = await admin.schema('integraciones').from('sync_locks')
-    .select('*').eq('company_id', companyId).eq('provider', provider).eq('entity', entity).maybeSingle()
+    .select('*').eq('company_id', companyId).eq('provider', provider).eq('entity', entity).gt('expires_at', now.toISOString()).maybeSingle()
     
   const { data: lastRun } = await admin.schema('integraciones').from('sync_runs')
     .select('*').eq('company_id', companyId).eq('provider', provider).eq('entity', entity).order('started_at', { ascending: false }).limit(1).maybeSingle()
@@ -176,8 +177,13 @@ export async function getSyncStatus(companyId: string, provider: string, entity:
   const { data: config } = await admin.schema('integraciones').from('sync_job_configs')
     .select('*').eq('company_id', companyId).eq('provider', provider).eq('entity', entity).maybeSingle()
 
+  const runningStartedAt = lastRun?.status === 'RUNNING' && lastRun?.started_at ? new Date(lastRun.started_at).getTime() : null
+  const isRecentRunning = runningStartedAt !== null && now.getTime() - runningStartedAt <= 15 * 60 * 1000
+
   return {
     isLocked: !!lock,
+    isRunning: !!lock || isRecentRunning,
+    runningReason: lock ? 'active_lock' : isRecentRunning ? 'recent_running_run' : null,
     lockDetails: lock || null,
     lastRun: lastRun || null,
     lastSuccess: lastSuccess || null,

@@ -3,6 +3,12 @@ import { createServerClient } from '@supabase/ssr'
 
 const publicRoutes = ['/login', '/change-password']
 
+const cronRoutes = [
+  '/api/integraciones/bsale/clients/sync',
+  '/api/integraciones/bsale/product-types/sync',
+  '/api/integraciones/bsale/products/sync'
+]
+
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
 
@@ -28,8 +34,11 @@ export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname
 
   if (!user) {
-    if (publicRoutes.includes(path) || path === '/') {
+    if (publicRoutes.includes(path) || path === '/' || cronRoutes.includes(path)) {
       return supabaseResponse
+    }
+    if (path.startsWith('/api/')) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
     return NextResponse.redirect(new URL('/login', request.url))
   }

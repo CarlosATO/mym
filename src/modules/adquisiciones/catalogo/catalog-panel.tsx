@@ -6,6 +6,7 @@ import { getRealSuppliers } from '@/app/actions/adquisiciones/suppliers'
 import * as XLSX from 'xlsx'
 import { ClassifierCombobox } from '@/components/ui/classifier-combobox'
 import { Search, Plus, FileSpreadsheet, Upload, Download, List, Grid, MoreHorizontal, Filter, X, ArrowLeft } from 'lucide-react'
+import { CatalogBsaleSyncStatus } from '@/components/integraciones/bsale-sync-status'
 
 export function CatalogPanel() {
   const [products, setProducts] = useState<Product[]>([])
@@ -46,6 +47,11 @@ export function CatalogPanel() {
   }, [filters])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    window.addEventListener('bsale-products-sync-finished', load)
+    return () => window.removeEventListener('bsale-products-sync-finished', load)
+  }, [load])
 
   useEffect(() => {
     Promise.all([
@@ -388,6 +394,12 @@ export function CatalogPanel() {
       {message && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
 
       <div className="shrink-0 flex flex-col gap-4 p-5 border-b border-theme-border/60 bg-theme-text/[0.01]">
+        
+        {/* Sync Status */}
+        <div className="flex w-full">
+          <CatalogBsaleSyncStatus />
+        </div>
+
         {/* Barra superior de herramientas */}
         <div className="flex flex-col md:flex-row items-center gap-3 w-full">
           {/* Búsqueda */}

@@ -2,6 +2,8 @@
 
 import { getActiveCompanyId } from '@/app/actions/companies'
 import { syncBsaleClients } from '@/lib/integraciones/bsale-clients-sync'
+import { syncBsaleProductTypes } from '@/lib/integraciones/bsale-product-types-sync'
+import { syncBsaleProducts } from '@/lib/integraciones/bsale-products-sync'
 import { getSyncStatus as getStatus } from '@/lib/integraciones/sync-core'
 import { createClient } from '@supabase/supabase-js'
 
@@ -9,11 +11,35 @@ export async function forceSyncBsaleClients() {
   const companyId = await getActiveCompanyId()
   if (!companyId) throw new Error('Empresa no activa')
 
-  // Ideally validate user roles here. Currently delegating to standard auth.
-  // We assume any authenticated user calling this has access since there's no granular permission defined yet.
-  
-  // No dry-run, record the run
   const result = await syncBsaleClients({
+    companyId,
+    triggerType: 'MANUAL',
+    isDryRun: false,
+    recordDryRun: true
+  })
+
+  return result
+}
+
+export async function forceSyncBsaleProductTypes() {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) throw new Error('Empresa no activa')
+
+  const result = await syncBsaleProductTypes({
+    companyId,
+    triggerType: 'MANUAL',
+    isDryRun: false,
+    recordDryRun: true
+  })
+
+  return result
+}
+
+export async function forceSyncBsaleProducts() {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) throw new Error('Empresa no activa')
+
+  const result = await syncBsaleProducts({
     companyId,
     triggerType: 'MANUAL',
     isDryRun: false,
