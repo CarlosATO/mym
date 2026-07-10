@@ -6,14 +6,16 @@ import { SuppliersPanel } from '@/modules/adquisiciones/proveedores/suppliers-pa
 import { CatalogPanel } from '@/modules/adquisiciones/catalogo/catalog-panel'
 import { WarehousesPanel } from '@/modules/adquisiciones/bodegas/warehouses-panel'
 import { PurchaseOrdersPanel } from '@/modules/adquisiciones/ordenes-compra/purchase-orders-panel'
+import { ReplenishmentAnalysisPanel } from '@/modules/adquisiciones/ordenes-compra/replenishment-analysis-panel'
 import { RouteSettlementsPanel } from '@/modules/adquisiciones/rendicion-rutas/route-settlements-panel'
-import { SalesAnalysisWorkspace } from '@/modules/adquisiciones/analisis-ventas/sales-analysis-workspace'
 import type { RibbonAction } from '@/components/layout/module-ribbon'
 
 const tabs = [
   { id: 'inicio', label: 'Inicio' },
   { id: 'catalogos', label: 'Catálogos' },
-  { id: 'transacciones', label: 'Transacciones' },
+  { id: 'analisis_reposicion', label: 'Análisis de reposición' },
+  { id: 'orden_compra', label: 'Orden de compra' },
+  { id: 'guias_rutas', label: 'Guías de rutas' },
   { id: 'recepcion', label: 'Recepción' },
   { id: 'reportes', label: 'Reportes' },
 ]
@@ -45,8 +47,8 @@ const pageHeaders: Record<string, { title: string; breadcrumb: string[]; descrip
     description: 'Gestión y control de autorizaciones de montos y presupuestos.',
   },
   ordenes: {
-    title: 'Órdenes de Compra',
-    breadcrumb: ['Adquisiciones', 'Compras', 'Órdenes de Compra'],
+    title: 'Orden de compra',
+    breadcrumb: ['Adquisiciones', 'Orden de compra'],
     description: 'Emisión, seguimiento y control de órdenes de compra.',
   },
   nueva_orden: {
@@ -56,12 +58,12 @@ const pageHeaders: Record<string, { title: string; breadcrumb: string[]; descrip
   },
   historial: {
     title: 'Historial de Compras',
-    breadcrumb: ['Adquisiciones', 'Transacciones', 'Historial'],
+    breadcrumb: ['Adquisiciones', 'Compras', 'Historial'],
     description: 'Consulta histórica de compras realizadas.',
   },
   rendicion_rutas: {
-    title: 'Rendición de Rutas',
-    breadcrumb: ['Adquisiciones', 'Transacciones', 'Rendición de Rutas'],
+    title: 'Guías de rutas',
+    breadcrumb: ['Adquisiciones', 'Guías de rutas'],
     description: 'Control administrativo de efectivo, transferencias, cheques, créditos y pendientes asociados a guías despachadas.',
   },
   recepciones_p: {
@@ -75,12 +77,11 @@ const pageHeaders: Record<string, { title: string; breadcrumb: string[]; descrip
     description: 'Indicadores y reportes generales de compras.',
   },
   sugerencia_compras: {
-    title: 'Análisis y Sugerencia de Compras',
-    breadcrumb: ['Adquisiciones', 'Reportes', 'Sugerencia de Compras'],
-    description: 'Análisis de ventas e inventario para calcular sugerencias de compras automatizadas.',
+    title: 'Análisis de reposición',
+    breadcrumb: ['Adquisiciones', 'Análisis de reposición'],
+    description: 'Revisión operativa de demanda, cobertura y cantidades sugeridas antes de generar compras.',
   },
 }
-
 interface AdquisicionesLayoutClientProps {
   children: React.ReactNode
   profile: { nombre: string; apellido: string; email: string; roles: { name: string } }
@@ -89,15 +90,18 @@ interface AdquisicionesLayoutClientProps {
 export function AdquisicionesLayoutClient({ children, profile }: AdquisicionesLayoutClientProps) {
   const [activeTab, setActiveTab] = useState('inicio')
   const [activeActionId, setActiveActionId] = useState('resumen')
+  const [targetPoId, setTargetPoId] = useState<string | null>(null)
 
   // Cuando cambia la pestaña principal, re-establecer la acción seleccionada por defecto
   const handleTabChange = (tabId: string) => {
     setActiveTab(tabId)
     if (tabId === 'inicio') setActiveActionId('resumen')
     else if (tabId === 'catalogos') setActiveActionId('proveedores')
-    else if (tabId === 'transacciones') setActiveActionId('ordenes')
+    else if (tabId === 'analisis_reposicion') setActiveActionId('sugerencia_compras')
+    else if (tabId === 'orden_compra') setActiveActionId('ordenes')
+    else if (tabId === 'guias_rutas') setActiveActionId('rendicion_rutas')
     else if (tabId === 'recepcion') setActiveActionId('recepciones_p')
-    else if (tabId === 'reportes') setActiveActionId('sugerencia_compras')
+    else if (tabId === 'reportes') setActiveActionId('reporte_gral')
   }
 
   // Generación de acciones de Ribbon
@@ -110,26 +114,12 @@ export function AdquisicionesLayoutClient({ children, profile }: AdquisicionesLa
       { id: 'bodegas', label: 'Bodegas', icon: 'Home', onClick: () => setActiveActionId('bodegas') },
       { id: 'autorizadores', label: 'Autorizadores', icon: 'CheckSquare', upcoming: true }
     )
-  } else if (activeTab === 'transacciones') {
-    ribbonActions.push(
-      { id: 'ordenes', label: 'Órdenes de Compra', icon: 'FileCheck', onClick: () => {
-        if (process.env.NODE_ENV === 'development') console.log('[RendicionRutas:UI] ribbon click', 'ordenes')
-        setActiveActionId('ordenes')
-      }},
-      { id: 'rendicion_rutas', label: 'Rendición de Rutas', icon: 'ClipboardCheck', onClick: () => {
-        if (process.env.NODE_ENV === 'development') console.log('[RendicionRutas:UI] ribbon click', 'rendicion_rutas')
-        setActiveActionId('rendicion_rutas')
-      }},
-      { id: 'nueva_orden', label: 'Nueva Orden', icon: 'PlusCircle', upcoming: true },
-      { id: 'historial', label: 'Historial', icon: 'History', upcoming: true }
-    )
   } else if (activeTab === 'recepcion') {
     ribbonActions.push(
       { id: 'recepciones_p', label: 'Recepciones', icon: 'PackageOpen', upcoming: true }
     )
   } else if (activeTab === 'reportes') {
     ribbonActions.push(
-      { id: 'sugerencia_compras', label: 'Sugerencia de Compras', icon: 'ShoppingCart', onClick: () => setActiveActionId('sugerencia_compras') },
       { id: 'reporte_gral', label: 'Reporte General', icon: 'BarChart3', upcoming: true }
     )
   }
@@ -169,40 +159,28 @@ export function AdquisicionesLayoutClient({ children, profile }: AdquisicionesLa
         </div>
       )
     }
-  } else if (activeTab === 'transacciones') {
-    if (activeActionId === 'ordenes') {
-      content = <PurchaseOrdersPanel />
-    } else if (activeActionId === 'rendicion_rutas') {
-      content = <RouteSettlementsPanel />
-    } else {
-      content = (
-        <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px] flex flex-col justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-theme-text">Acción de Transacciones</h2>
-            <p className="text-sm text-theme-text-muted/60 mt-2">Esta sección está actualmente planificada en nuestro flujo de trabajo.</p>
-          </div>
-          <div className="mt-6 inline-flex items-center gap-2 text-xs font-semibold text-theme-accent/70 uppercase tracking-wider border border-theme-accent/20 bg-theme-accent-hover/8 px-3 py-1.5 rounded-lg w-fit">
-            <span>⏳</span> Próximamente
-          </div>
-        </div>
-      )
-    }
+  } else if (activeTab === 'analisis_reposicion') {
+    content = <ReplenishmentAnalysisPanel onNavigateToPo={(poId) => {
+      setTargetPoId(poId || null)
+      setActiveTab('orden_compra')
+      setActiveActionId('ordenes')
+    }} />
+  } else if (activeTab === 'orden_compra') {
+    content = <PurchaseOrdersPanel initialOpenPoId={targetPoId} onInitialOpenConsumed={() => setTargetPoId(null)} />
+  } else if (activeTab === 'guias_rutas') {
+    content = <RouteSettlementsPanel />
   } else if (activeTab === 'reportes') {
-    if (activeActionId === 'sugerencia_compras') {
-      content = <SalesAnalysisWorkspace />
-    } else {
-      content = (
-        <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px] flex flex-col justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-theme-text">Reporte General</h2>
-            <p className="text-sm text-theme-text-muted/60 mt-2">Indicadores y reportes generales de compras.</p>
-          </div>
-          <div className="mt-6 inline-flex items-center gap-2 text-xs font-semibold text-theme-accent/70 uppercase tracking-wider border border-theme-accent/20 bg-theme-accent-hover/8 px-3 py-1.5 rounded-lg w-fit">
-            <span>⏳</span> Próximamente
-          </div>
+    content = (
+      <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px] flex flex-col justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-theme-text">Reporte General</h2>
+          <p className="text-sm text-theme-text-muted/60 mt-2">Indicadores y reportes generales de compras.</p>
         </div>
-      )
-    }
+        <div className="mt-6 inline-flex items-center gap-2 text-xs font-semibold text-theme-accent/70 uppercase tracking-wider border border-theme-accent/20 bg-theme-accent-hover/8 px-3 py-1.5 rounded-lg w-fit">
+          <span>⏳</span> Próximamente
+        </div>
+      </div>
+    )
   } else {
     // Para recepcion (todos placeholders por ahora)
     content = (

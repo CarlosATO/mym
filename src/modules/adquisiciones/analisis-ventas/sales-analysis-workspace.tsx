@@ -39,7 +39,7 @@ interface ReportState {
 // ─── Tabs del dashboard ────────────────────────────────────────────────────────
 
 const TABS = [
-  { id: 'reposicion', label: 'Reposición Inteligente', icon: ShoppingCart },
+  { id: 'reposicion', label: 'Análisis de reposición', icon: ShoppingCart },
   { id: 'hallazgos', label: 'Hallazgos', icon: AlertTriangle },
   { id: 'resumen', label: 'Resumen Ejecutivo', icon: BarChart3 },
   { id: 'pareto', label: 'Pareto 80/20', icon: Activity },

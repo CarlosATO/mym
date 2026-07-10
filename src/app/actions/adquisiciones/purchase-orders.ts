@@ -422,3 +422,205 @@ export async function getNextCorrelative() {
   if (error) return null
   return data as string
 }
+
+export interface ReplenishmentOrderItem {
+  sku: string
+  product_name: string
+  suggested_qty: number
+  confirmed_qty: number
+  unit_cost: number
+  stock_available: number
+  avg_per_7: number
+}
+
+export interface ReplenishmentOrderRequest {
+  period_days: number
+  coverage_weeks: number
+  items: ReplenishmentOrderItem[]
+}
+
+export async function generateReplenishmentPurchaseOrders(req: ReplenishmentOrderRequest) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado' }
+
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
+
+  const db = adqAdmin()
+
+  const validItems = req.items.filter(i => i.confirmed_qty > 0)
+  if (validItems.length === 0) return { error: 'No hay ítems con cantidad mayor a 0' }
+
+  const skus = validItems.map(i => i.sku)
+
+  const { data: mappings } = await db
+    .from('product_supplier_mappings')
+    .select('id, sku, product_id, supplier_id')
+    .eq('company_id', companyId)
+    .eq('is_preferred', true)
+    .eq('is_active', true)
+    .in('sku', skus)
+
+  const mappingMap = new Map((mappings || []).map(m => [m.sku, m]))
+  const rawSupplierIds = Array.from(new Set((mappings || []).map(m => m.supplier_id).filter(Boolean)))
+  
+  let suppliersMap = new Map()
+  if (rawSupplierIds.length > 0) {
+    const { data: sups } = await db
+      .from('suppliers')
+      .select('id, supplier_kind, parent_supplier_id')
+      .eq('company_id', companyId)
+      .in('id', rawSupplierIds)
+    suppliersMap = new Map((sups || []).map(s => [s.id, s]))
+  }
+
+  const grouped = new Map<string, any[]>()
+  const blockedNoSupplier: string[] = []
+  const blockedNoProduct: string[] = []
+
+  for (const item of validItems) {
+    const mapping = mappingMap.get(item.sku)
+    
+    if (!mapping?.product_id) {
+      blockedNoProduct.push(item.sku)
+      continue
+    }
+
+    if (!mapping?.supplier_id) {
+      blockedNoSupplier.push(item.sku)
+      continue
+    }
+
+    const sup = suppliersMap.get(mapping.supplier_id)
+    if (!sup) {
+      blockedNoSupplier.push(item.sku)
+      continue
+    }
+
+    let realSupplierId = null
+    if (sup.supplier_kind === 'REAL') {
+      realSupplierId = sup.id
+    } else if (sup.supplier_kind === 'BSALE_OPERATIVE' && sup.parent_supplier_id) {
+      const { data: parentSup } = await db.from('suppliers').select('id, supplier_kind').eq('id', sup.parent_supplier_id).single()
+      if (parentSup && parentSup.supplier_kind === 'REAL') {
+        realSupplierId = parentSup.id
+      }
+    }
+
+    if (!realSupplierId) {
+      blockedNoSupplier.push(item.sku)
+      continue
+    }
+
+    if (!grouped.has(realSupplierId)) {
+      grouped.set(realSupplierId, [])
+    }
+    grouped.get(realSupplierId)!.push({
+      ...item,
+      product_id: mapping.product_id,
+      mapping_id: mapping.id
+    })
+  }
+
+  if (grouped.size === 0) {
+    return { error: 'No se encontraron proveedores reales válidos para los productos seleccionados', blockedNoSupplier, blockedNoProduct }
+  }
+
+  const { data: analysis, error: anError } = await db.from('purchase_replenishment_analyses').insert({
+    company_id: companyId,
+    name: `Análisis ${new Date().toLocaleDateString('es-CL')}`,
+    status: 'BORRADOR',
+    period_days: req.period_days,
+    coverage_weeks: req.coverage_weeks,
+    created_by: user.id
+  }).select('id').single()
+
+  if (anError || !analysis) {
+    console.error('Error insertando analisis:', anError)
+    return { error: 'Error al registrar cabecera de análisis' }
+  }
+
+  const analysisId = analysis.id
+  const generatedPOs: { supplier_id: string, po_id: string, correlative: string }[] = []
+
+  for (const [supplierId, items] of grouped.entries()) {
+    const poItems = items.map(i => ({
+      item_type: 'PRODUCT' as const,
+      product_id: i.product_id,
+      product_description: i.product_name,
+      quantity: i.confirmed_qty,
+      unit_price: i.unit_cost,
+      discount_percent: 0,
+      tax_rate: 19
+    }))
+
+    const { data: rpcRes, error: rpcErr } = await db.rpc('create_purchase_order', {
+      p_data: { 
+        issue_date: new Date().toISOString().split('T')[0],
+        supplier_id: supplierId,
+        currency: 'CLP',
+        notes: 'Generado automáticamente desde Análisis de Reposición',
+        items: poItems,
+        status: 'BORRADOR'
+      },
+      p_user_id: user.id,
+      p_company_id: companyId
+    })
+
+    if (rpcErr) {
+      console.error('Error creating PO for supplier', supplierId, rpcErr)
+      continue
+    }
+    
+    const r = rpcRes as any
+    if (!r?.success) {
+      console.error('Error in RPC create_purchase_order', r)
+      continue
+    }
+
+    const poId = r.po_id
+    const correlative = r.correlative
+    generatedPOs.push({ supplier_id: supplierId, po_id: poId, correlative })
+
+    const dbItems = items.map(i => ({
+      analysis_id: analysisId,
+      company_id: companyId,
+      product_supplier_mapping_id: i.mapping_id,
+      product_id: i.product_id,
+      supplier_id: supplierId,
+      sku: i.sku,
+      product_name: i.product_name,
+      current_stock: i.stock_available,
+      weekly_avg_sales: i.avg_per_7,
+      suggested_quantity: i.suggested_qty,
+      unit_cost: i.unit_cost,
+      total_cost: i.confirmed_qty * i.unit_cost,
+      selected: true,
+      ordered_quantity: i.confirmed_qty,
+      purchase_order_id: poId,
+      ordered_at: new Date().toISOString()
+    }))
+
+    await db.from('purchase_replenishment_analysis_items').insert(dbItems)
+
+    await db.from('purchase_replenishment_analysis_orders').insert({
+      analysis_id: analysisId,
+      company_id: companyId,
+      supplier_id: supplierId,
+      purchase_order_id: poId,
+      item_count: items.length,
+      total_units: items.reduce((a, b) => a + b.confirmed_qty, 0),
+      total_cost: items.reduce((a, b) => a + (b.confirmed_qty * b.unit_cost), 0),
+      created_by: user.id
+    })
+  }
+
+  return {
+    success: true,
+    analysisId,
+    generatedPOs,
+    blockedNoSupplier,
+    blockedNoProduct
+  }
+}

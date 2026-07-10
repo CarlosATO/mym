@@ -76,12 +76,11 @@ const inputClass = "w-full h-9 rounded-lg border border-theme-border bg-theme-su
 const selectClass = "w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30 appearance-none"
 const textareaClass = "w-full rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30 resize-none"
 
-export function PurchaseOrdersPanel() {
+export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: { initialOpenPoId?: string | null, onInitialOpenConsumed?: () => void }) {
   const [view, setView] = useState<'list' | 'form' | 'detail' | 'analysis'>('list')
   const [selectedPo, setSelectedPo] = useState<PurchaseOrder | null>(null)
   const detailCacheRef = useRef<Record<string, PurchaseOrderDetail>>({})
   const pendingRequestsRef = useRef<Record<string, Promise<PurchaseOrderDetail | null>>>({})
-
   const [editId, setEditId] = useState<string | null>(null)
   const [data, setData] = useState<PurchaseOrder[]>([])
   const [total, setTotal] = useState(0)
@@ -173,6 +172,70 @@ export function PurchaseOrdersPanel() {
   }, [filters])
 
   useEffect(() => { load() }, [load])
+
+  const openPOById = useCallback(async (poId: string, mode: 'detail' | 'edit' = 'detail') => {
+    if (mode === 'detail' && selectedPo?.id === poId) return;
+    if (mode === 'edit' && editId === poId) return;
+    
+    // Mientras carga mostramos el listado o dejamos la vista actual, 
+    // pero si es edit mode podríamos mostrar form vacio. 
+    // Lo más seguro es mantener la vista y esperar a tener datos.
+    if (mode === 'detail') setDetail(null);
+    
+    const d = await getPurchaseOrderDetail(poId);
+    if (d) {
+      if (mode === 'detail') {
+        setSelectedPo(d.po as PurchaseOrder);
+        setDetail(d);
+        detailCacheRef.current[poId] = d;
+        setView('list');
+      } else {
+        setForm({
+          issue_date: d.po.issue_date?.slice(0, 10) || '',
+          required_date: d.po.required_date?.slice(0, 10) || '',
+          supplier_id: d.po.supplier_id || '',
+          warehouse_id: d.po.warehouse_id || '',
+          po_type: d.po.po_type || 'PRODUCTOS',
+          currency: d.po.currency || 'CLP',
+          payment_terms: d.po.payment_terms || '',
+          authorized_by: d.po.authorized_by || '',
+          notes: d.po.notes || '',
+        });
+        setEditId(d.po.id);
+        setItems(d.items.map(i => ({
+          tempId: i.id,
+          item_type: (i.item_type === 'SERVICE' ? 'SERVICE' : 'PRODUCT') as 'PRODUCT' | 'SERVICE',
+          product_id: i.product_id || '',
+          sku: '', // Podríamos recuperarlo si viniera, pero se deja vacio en base al modelo
+          description: i.product_description || '',
+          unit: i.unit || 'UNIDAD',
+          quantity: i.quantity || 0,
+          unit_price: i.unit_price || 0,
+          discount_percent: i.discount_percent || 0,
+          tax_rate: i.tax_rate || 19,
+          warehouse_id: i.warehouse_id || '',
+          notes: i.notes || '',
+        })));
+        setSelectedPo(null);
+        setView('form');
+      }
+      
+      if (data.length === 0) load();
+    } else {
+      msg('Error al cargar detalle de la orden.');
+    }
+  }, [selectedPo?.id, editId, data.length, load]);
+
+  const consumedOpenPoIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (initialOpenPoId && initialOpenPoId !== consumedOpenPoIdRef.current && initialOpenPoId !== editId) {
+      consumedOpenPoIdRef.current = initialOpenPoId;
+      openPOById(initialOpenPoId, 'edit').then(() => {
+        onInitialOpenConsumed?.();
+      });
+    }
+  }, [initialOpenPoId, editId, openPOById, onInitialOpenConsumed]);
 
   useEffect(() => {
     Promise.all([
@@ -1398,9 +1461,9 @@ export function PurchaseOrdersPanel() {
                    </div>
                  </div>
                ) : (
-                 <div className="animate-pulse space-y-4">
-                   <div className="h-3 bg-theme-text/10 rounded w-1/3" />
-                   <div className="space-y-2"><div className="h-8 bg-theme-text/6 rounded" /><div className="h-8 bg-theme-text/6 rounded" /></div>
+                 <div className="animate-pulse flex flex-col items-center justify-center h-40">
+                   <div className="w-8 h-8 border-4 border-theme-text/10 border-t-theme-accent rounded-full animate-spin mb-4" />
+                   <p className="text-sm font-medium text-theme-text-muted">Cargando detalle de orden de compra...</p>
                  </div>
                )}
              </div>

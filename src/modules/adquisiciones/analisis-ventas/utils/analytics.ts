@@ -31,6 +31,8 @@ export interface NormalizedSale {
   anio: number
   mes: string
   mes_num: number
+  real_supplier_name?: string
+  pseudo_supplier_name?: string
 }
 
 export interface NormalizedStock {
@@ -45,6 +47,8 @@ export interface NormalizedStock {
   marca: string
   tipo_producto: string
   linea_tema: string
+  real_supplier_name?: string
+  pseudo_supplier_name?: string
 }
 
 // ─── Interfaz principal por SKU ────────────────────────────────────────────────
@@ -56,6 +60,8 @@ export interface SkuSummary {
   tipo_producto: string
   marca: string
   linea_tema: string
+  real_supplier_name?: string
+  pseudo_supplier_name?: string
   // Ventas del período
   venta_6m: number
   unidades_6m: number
@@ -329,6 +335,7 @@ export function buildSkuSummary(
     meses: Set<string>
     venta_por_mes: Map<string, number>
     producto: string; variante: string; tipo_producto: string; marca: string; linea_tema: string
+    real_supplier_name?: string; pseudo_supplier_name?: string
   }>()
 
   for (const s of salesInPeriod) {
@@ -339,6 +346,7 @@ export function buildSkuSummary(
         meses: new Set(), venta_por_mes: new Map(),
         producto: s.producto, variante: s.variante,
         tipo_producto: s.tipo_producto, marca: s.marca, linea_tema: s.linea_tema,
+        real_supplier_name: s.real_supplier_name, pseudo_supplier_name: s.pseudo_supplier_name,
       })
     }
     const agg = skuPeriod.get(s.SKU)!
@@ -357,6 +365,8 @@ export function buildSkuSummary(
     // Nombre del producto (primer encontrado)
     if (!agg.producto && s.producto) agg.producto = s.producto
     if (!agg.variante && s.variante) agg.variante = s.variante
+    if (!agg.real_supplier_name && s.real_supplier_name) agg.real_supplier_name = s.real_supplier_name
+    if (!agg.pseudo_supplier_name && s.pseudo_supplier_name) agg.pseudo_supplier_name = s.pseudo_supplier_name
   }
 
   // ── Historial completo (para primera/última venta) ──
@@ -395,12 +405,14 @@ export function buildSkuSummary(
     const history = skuHistory.get(sku)
     const stockData = stockBySku.get(sku)
 
-    // Nombres: priorizar ventas > stock
-    const producto = period?.producto || stockData?.producto || history ? '' : sku
+    // Nombres: priorizar ventas > stock; si no hay nombre, mantener el SKU como fallback visible.
+    const producto = period?.producto || stockData?.producto || sku
     const variante = period?.variante || stockData?.variante || ''
     const marca = period?.marca || stockData?.marca || ''
     const tipo_producto = period?.tipo_producto || stockData?.tipo_producto || ''
     const linea_tema = period?.linea_tema || stockData?.linea_tema || ''
+    const real_supplier_name = period?.real_supplier_name || stockData?.real_supplier_name || 'Sin proveedor'
+    const pseudo_supplier_name = period?.pseudo_supplier_name || stockData?.pseudo_supplier_name || 'Sin pseudoproveedor'
 
     const venta_6m = period?.venta || 0
     const unidades_6m = period?.unidades || 0
@@ -465,6 +477,7 @@ export function buildSkuSummary(
 
     result.push({
       SKU: sku, producto, variante, tipo_producto, marca, linea_tema,
+      real_supplier_name, pseudo_supplier_name,
       venta_6m, unidades_6m, margen_6m, documentos,
       venta_historica_total, unidades_historicas_total, documentos_historicos,
       fecha_primera_venta, fecha_ultima_venta, dias_desde_ultima_venta,

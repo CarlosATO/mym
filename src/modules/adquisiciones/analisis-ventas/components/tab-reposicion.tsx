@@ -1,9 +1,10 @@
 'use client'
 // tab-reposicion.tsx — Reposición Inteligente / Compra Sugerida
-import React, { useState, useMemo } from 'react'
+import React, { useCallback, useEffect, useState, useMemo } from 'react'
 import type { NormalizedSale, NormalizedStock } from '../utils/analytics'
 import { buildSkuSummary, classifySkus } from '../utils/analytics'
-import { fmtMoney, fmtDate, DataTable } from './tab-shared'
+import { fmtMoney, fmtDate } from './tab-shared'
+import { getProductCatalogBySkus, type ProductCatalogLookup } from '@/app/actions/adquisiciones/products'
 
 interface Props {
   allSales: NormalizedSale[]
@@ -22,8 +23,8 @@ export function TabReposicion({ allSales, allStock, globalMaxDate, globalMinDate
   const [coverageIdx, setCoverageIdx] = useState(3) // 4 semanas default
   const [includeNoStock, setIncludeNoStock] = useState(false)
   const [searchProduct, setSearchProduct] = useState('')
-  const [searchSupplier, setSearchSupplier] = useState('')
   const [confirmed, setConfirmed] = useState<Record<string, number>>({})
+  const [catalogBySku, setCatalogBySku] = useState<Record<string, ProductCatalogLookup>>({})
 
   const days = PERIOD_DAYS[periodIdx]
   const targetWeeks = COVERAGE_WEEKS[coverageIdx]
@@ -35,18 +36,41 @@ export function TabReposicion({ allSales, allStock, globalMaxDate, globalMinDate
     const raw = buildSkuSummary(allSales, allStock, globalMaxDate, startDate, globalMaxDate, targetWeeks)
     const skus = classifySkus(raw)
     return { startDate, skus }
-  }, [periodIdx, targetWeeks, allSales, allStock, globalMaxDate, globalMinDate, days])
+  }, [targetWeeks, allSales, allStock, globalMaxDate, globalMinDate, days])
+
+  const skuList = useMemo(() => Array.from(new Set(skus.map(s => s.SKU).filter(Boolean))), [skus])
+
+  useEffect(() => {
+    let cancelled = false
+    getProductCatalogBySkus(skuList).then(rows => {
+      if (cancelled) return
+      const next: Record<string, ProductCatalogLookup> = {}
+      for (const row of rows) next[String(row.sku).trim().toUpperCase()] = row
+      setCatalogBySku(next)
+    })
+    return () => { cancelled = true }
+  }, [skuList])
+
+  const getCatalogProduct = useCallback((sku: string) => {
+    return catalogBySku[String(sku || '').trim().toUpperCase()]
+  }, [catalogBySku])
+
+  const getProductName = useCallback((s: { SKU: string; producto: string }) => {
+    const catalog = getCatalogProduct(s.SKU)
+    const name = catalog?.description || s.producto
+    return name && name.trim() ? name : 'Producto no encontrado en catálogo'
+  }, [getCatalogProduct])
 
   const filtered = useMemo(() => {
     return skus
       .filter(s => {
         if (!includeNoStock && s.cantidad_disponible <= 0 && s.venta_6m <= 0) return false
-        const matchProd = !searchProduct || s.SKU.toLowerCase().includes(searchProduct.toLowerCase()) || s.producto.toLowerCase().includes(searchProduct.toLowerCase())
-        const matchSup = !searchSupplier // supplier field not in stock data currently
-        return matchProd && matchSup
+        const productName = getProductName(s)
+        const matchProd = !searchProduct || s.SKU.toLowerCase().includes(searchProduct.toLowerCase()) || productName.toLowerCase().includes(searchProduct.toLowerCase())
+        return matchProd
       })
       .sort((a, b) => b.suggested_quantity - a.suggested_quantity)
-  }, [skus, includeNoStock, searchProduct, searchSupplier])
+  }, [skus, includeNoStock, searchProduct, getProductName])
 
   // KPIs del reporte
   const evaluados = filtered.length
@@ -138,39 +162,51 @@ export function TabReposicion({ allSales, allStock, globalMaxDate, globalMinDate
               </tr>
             </thead>
             <tbody className="divide-y divide-theme-border/40">
-              {filtered.slice(0, 300).map((s, i) => (
-                <tr key={s.SKU} className="hover:bg-theme-text/5 transition-colors">
-                  <td className="p-2.5 font-mono text-theme-text">{s.SKU}</td>
-                  <td className="p-2.5 text-theme-text font-medium max-w-[200px] truncate">{s.producto}</td>
-                  <td className="p-2.5 text-theme-text-muted">{s.variante || '-'}</td>
-                  <td className="p-2.5 text-right text-theme-text">{s.cantidad_disponible}</td>
-                  <td className="p-2.5 text-right text-theme-text">{fmtMoney(s.venta_6m)}</td>
-                  <td className="p-2.5 text-right text-theme-text">{(s.unidades_promedio_diaria * 7).toFixed(1)}</td>
-                  <td className={`p-2.5 text-right font-semibold ${s.dias_cobertura != null && s.dias_cobertura < 7 ? 'text-red-500' : s.dias_cobertura != null && s.dias_cobertura < 15 ? 'text-amber-500' : 'text-theme-text'}`}>
-                    {s.dias_cobertura != null ? s.dias_cobertura.toFixed(1) : '-'}
-                  </td>
-                  <td className="p-2.5 text-right text-theme-primary font-bold text-sm">{s.suggested_quantity}</td>
-                  <td className="p-2.5 text-right">
-                    <input
-                      type="number"
-                      min={0}
-                      value={confirmed[s.SKU] ?? s.suggested_quantity}
-                      onChange={e => setConfirmed(prev => ({ ...prev, [s.SKU]: Number(e.target.value) }))}
-                      className="w-16 h-7 rounded border border-theme-border bg-theme-surface px-1.5 text-xs text-right text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-primary"
-                    />
-                  </td>
-                  <td className="p-2.5">
-                    {s.alerta !== 'Normal' && (
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-                        s.alerta === 'Quiebre crítico' ? 'bg-red-500/20 text-red-500' :
-                        s.alerta === 'Producto muerto con stock' ? 'bg-red-400/20 text-red-400' :
-                        s.alerta === 'Riesgo de quiebre' ? 'bg-amber-500/20 text-amber-500' :
-                        'bg-theme-text/10 text-theme-text-muted'
-                      }`}>{s.alerta.split(' ').slice(0,2).join(' ')}</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {filtered.slice(0, 300).map((s) => {
+                const catalog = getCatalogProduct(s.SKU)
+                const productName = getProductName(s)
+                const unresolved = productName === 'Producto no encontrado en catálogo'
+                return (
+                  <tr key={s.SKU} className="hover:bg-theme-text/5 transition-colors">
+                    <td className="p-2.5 font-mono text-theme-text">{s.SKU}</td>
+                    <td className="p-2.5 max-w-[260px]" title={productName}>
+                      <div className={`font-medium truncate ${unresolved ? 'text-amber-500' : 'text-theme-text'}`}>{productName}</div>
+                      {(catalog?.barcode || catalog?.bsale_product_type_name) && (
+                        <div className="text-[10px] text-theme-text-muted/60 truncate mt-0.5">
+                          {[catalog.barcode, catalog.bsale_product_type_name].filter(Boolean).join(' · ')}
+                        </div>
+                      )}
+                    </td>
+                    <td className="p-2.5 text-theme-text-muted">{s.variante || '-'}</td>
+                    <td className="p-2.5 text-right text-theme-text">{s.cantidad_disponible}</td>
+                    <td className="p-2.5 text-right text-theme-text">{fmtMoney(s.venta_6m)}</td>
+                    <td className="p-2.5 text-right text-theme-text">{(s.unidades_promedio_diaria * 7).toFixed(1)}</td>
+                    <td className={`p-2.5 text-right font-semibold ${s.dias_cobertura != null && s.dias_cobertura < 7 ? 'text-red-500' : s.dias_cobertura != null && s.dias_cobertura < 15 ? 'text-amber-500' : 'text-theme-text'}`}>
+                      {s.dias_cobertura != null ? s.dias_cobertura.toFixed(1) : '-'}
+                    </td>
+                    <td className="p-2.5 text-right text-theme-primary font-bold text-sm">{s.suggested_quantity}</td>
+                    <td className="p-2.5 text-right">
+                      <input
+                        type="number"
+                        min={0}
+                        value={confirmed[s.SKU] ?? s.suggested_quantity}
+                        onChange={e => setConfirmed(prev => ({ ...prev, [s.SKU]: Number(e.target.value) }))}
+                        className="w-16 h-7 rounded border border-theme-border bg-theme-surface px-1.5 text-xs text-right text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-primary"
+                      />
+                    </td>
+                    <td className="p-2.5">
+                      {s.alerta !== 'Normal' && (
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                          s.alerta === 'Quiebre crítico' ? 'bg-red-500/20 text-red-500' :
+                          s.alerta === 'Producto muerto con stock' ? 'bg-red-400/20 text-red-400' :
+                          s.alerta === 'Riesgo de quiebre' ? 'bg-amber-500/20 text-amber-500' :
+                          'bg-theme-text/10 text-theme-text-muted'
+                        }`}>{s.alerta.split(' ').slice(0,2).join(' ')}</span>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
               {filtered.length === 0 && (
                 <tr><td colSpan={10} className="p-6 text-center text-theme-text-muted">No hay productos que coincidan con los filtros.</td></tr>
               )}

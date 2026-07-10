@@ -120,6 +120,49 @@ export interface ProductFilters {
   pageSize?: number
 }
 
+export interface ProductCatalogLookup {
+  sku: string
+  description: string | null
+  barcode: string | null
+  product_type: string | null
+  bsale_variant_id: number | null
+  bsale_product_type_name: string | null
+}
+
+export async function getProductCatalogBySkus(skus: string[]): Promise<ProductCatalogLookup[]> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return []
+
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return []
+
+  const normalizedSkus = Array.from(new Set(
+    skus
+      .map(sku => String(sku || '').trim().toUpperCase())
+      .filter(Boolean)
+  ))
+
+  if (normalizedSkus.length === 0) return []
+
+  const db = adqAdmin()
+  const rows: ProductCatalogLookup[] = []
+  const chunkSize = 400
+
+  for (let i = 0; i < normalizedSkus.length; i += chunkSize) {
+    const chunk = normalizedSkus.slice(i, i + chunkSize)
+    const { data, error } = await db.from('products')
+      .select('sku, description, barcode, product_type, bsale_variant_id, bsale_product_type_name')
+      .eq('company_id', companyId)
+      .in('sku', chunk)
+
+    if (error) continue
+    rows.push(...((data ?? []) as ProductCatalogLookup[]))
+  }
+
+  return rows
+}
+
 export async function getProducts(filters: ProductFilters = {}): Promise<{ data: Product[]; total: number }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()

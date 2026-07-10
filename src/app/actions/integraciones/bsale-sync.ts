@@ -66,6 +66,41 @@ async function finishSyncRun(
   await db.from('bsale_sync_runs').update(update).eq('id', runId)
 }
 
+// ─── Extract XML References ───────────────────────────────────────
+export function extractBsaleDocumentReferencesFromXml(xml: string) {
+  const references: Array<{
+    NroLinRef: string | null
+    TpoDocRef: string | null
+    FolioRef: string | null
+    FchRef: string | null
+    CodRef: string | null
+    RazonRef: string | null
+  }> = []
+  if (!xml) return references
+
+  const refMatches = xml.match(/<Referencia>[\s\S]*?<\/Referencia>/g)
+  if (!refMatches) return references
+
+  for (const refBlock of refMatches) {
+    const getValue = (tag: string) => {
+      const match = refBlock.match(new RegExp(`<${tag}>(.*?)<\/${tag}>`))
+      return match ? match[1].trim() : null
+    }
+
+    references.push({
+      NroLinRef: getValue('NroLinRef'),
+      TpoDocRef: getValue('TpoDocRef'),
+      FolioRef: getValue('FolioRef'),
+      FchRef: getValue('FchRef'),
+      CodRef: getValue('CodRef'),
+      RazonRef: getValue('RazonRef'),
+    })
+  }
+
+  return references
+}
+
+
 // ─── Sync functions ───────────────────────────────────────────────
 
 async function syncProductTypes(companyId: string, runId: string): Promise<number> {
@@ -198,7 +233,7 @@ async function syncStock(companyId: string, runId: string): Promise<number> {
       }
 
       const { error } = await db.from('bsale_stock_current').upsert(records, {
-        onConflict: 'company_id, bsale_id',
+        onConflict: 'company_id, variant_id, office_id',
         ignoreDuplicates: false,
       })
       if (error) console.error(`[syncStock] page ${page} error:`, error.message)
@@ -436,15 +471,27 @@ async function fetchAllDocuments(
   return { documents: allDocs, pages }
 }
 
-async function syncDocuments(companyId: string, runId: string, days: number): Promise<{
+async function syncDocuments(
+  companyId: string, 
+  runId: string, 
+  options: { days?: number, dateFrom?: string, dateTo?: string }
+): Promise<{
   docsCount: number
   detailsCount: number
   detailErrors: number
   pages: number
 }> {
   const db = integrDb()
-  const dateTo = new Date()
-  const dateFrom = new Date(dateTo.getTime() - days * 86400000)
+  
+  let dateTo = new Date()
+  let dateFrom = new Date(dateTo.getTime() - (options.days || 180) * 86400000)
+
+  if (options.dateTo) {
+    dateTo = new Date(options.dateTo + 'T23:59:59')
+  }
+  if (options.dateFrom) {
+    dateFrom = new Date(options.dateFrom + 'T00:00:00')
+  }
 
   console.log(`[syncSales] Fetching documents from ${dateFrom.toISOString().slice(0, 10)} to ${dateTo.toISOString().slice(0, 10)}`)
 
@@ -577,6 +624,59 @@ async function syncDocuments(companyId: string, runId: string, days: number): Pr
           }
 
           detailsCount += detailRecords.length
+
+          // Fetch XML for references if it is a Credit Note (Type 2 or 61 in SII, bsale internal type 2) and has urlXml
+          if (doc.documentTypeId == 2 || doc.document_type?.id == 2) {
+             console.log(`[syncSales] NC Detected. Folio: ${doc.number}, urlXml: ${doc.urlXml ? 'YES' : 'NO'}`);
+          }
+
+          if ((doc.documentTypeId == 2 || doc.document_type?.id == 2) && doc.urlXml) {
+            try {
+              console.log(`[syncSales] Fetching XML for NC ${doc.number}...`)
+              const xmlRes = await fetch(doc.urlXml, { signal: AbortSignal.timeout(15000) })
+              if (xmlRes.ok) {
+                const xmlText = await xmlRes.text()
+                const refs = extractBsaleDocumentReferencesFromXml(xmlText)
+                if (refs.length > 0) {
+                  const refRecords = refs.map((r, i) => {
+                    const lineStr = r.NroLinRef || String(i + 1)
+                    const folioStr = r.FolioRef || ''
+                    const codeStr = r.CodRef || ''
+                    const sourceKey = `${doc.id}_${lineStr}_${folioStr}_${codeStr}`
+                    return {
+                      company_id: companyId,
+                      source_key: sourceKey,
+                      bsale_document_id: doc.id,
+                      line_number: Number(r.NroLinRef) || (i + 1),
+                      referenced_document_type: r.TpoDocRef,
+                      referenced_document_number: r.FolioRef,
+                      reference_code: r.CodRef,
+                      reference_reason: r.RazonRef,
+                      reference_date: r.FchRef || null,
+                      raw_json: r,
+                      bsale_sync_run_id: runId,
+                      synced_at: new Date().toISOString()
+                    }
+                  })
+                  const { error: dbErr } = await db.from('bsale_document_references').upsert(refRecords, {
+                    onConflict: 'company_id, source_key',
+                    ignoreDuplicates: false
+                  })
+                  if (dbErr) {
+                    console.error(`[syncSales] DB Error upserting refs for ${doc.id}:`, dbErr.message);
+                  } else {
+                    console.log(`[syncSales] Successfully upserted ${refRecords.length} references for ${doc.id}`);
+                  }
+                }
+              } else {
+                 console.error(`[syncSales] HTTP Error fetching XML for doc ${doc.id}: ${xmlRes.status}`);
+              }
+            } catch (xmlErr: any) {
+              console.error(`[syncSales] Error fetching XML for doc ${doc.id}: ${xmlErr.message}`)
+              // Don't fail the entire detail sync if XML fails
+            }
+          }
+
           return { docId: doc.id, status: 'OK', detailCount: detailRecords.length }
         } catch (err: any) {
           lastError = err?.message || 'unknown error'
@@ -614,7 +714,7 @@ async function syncDocuments(companyId: string, runId: string, days: number): Pr
 
 export async function syncBsaleSales(
   companyId: string,
-  options?: { days?: number }
+  options?: { days?: number, dateFrom?: string, dateTo?: string }
 ): Promise<{
   success: boolean
   runId?: string
@@ -632,8 +732,8 @@ export async function syncBsaleSales(
     run = await createSyncRun(companyId)
     const runId = run.id
 
-    console.log(`[bsale-sync] Iniciando sync de ventas (${days} días)...`)
-    const result = await syncDocuments(companyId, runId, days)
+    console.log(`[bsale-sync] Iniciando sync de ventas...`)
+    const result = await syncDocuments(companyId, runId, options || { days })
 
     const counts: Record<string, number> = {
       documents: result.docsCount,
