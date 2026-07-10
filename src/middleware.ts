@@ -6,7 +6,8 @@ const publicRoutes = ['/login', '/change-password']
 const cronRoutes = [
   '/api/integraciones/bsale/clients/sync',
   '/api/integraciones/bsale/product-types/sync',
-  '/api/integraciones/bsale/products/sync'
+  '/api/integraciones/bsale/products/sync',
+  '/api/cron/sync-replenishment'
 ]
 
 export async function middleware(request: NextRequest) {

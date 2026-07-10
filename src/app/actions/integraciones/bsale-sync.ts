@@ -67,7 +67,7 @@ async function finishSyncRun(
 }
 
 // ─── Extract XML References ───────────────────────────────────────
-export function extractBsaleDocumentReferencesFromXml(xml: string) {
+export async function extractBsaleDocumentReferencesFromXml(xml: string) {
   const references: Array<{
     NroLinRef: string | null
     TpoDocRef: string | null
@@ -636,7 +636,7 @@ async function syncDocuments(
               const xmlRes = await fetch(doc.urlXml, { signal: AbortSignal.timeout(15000) })
               if (xmlRes.ok) {
                 const xmlText = await xmlRes.text()
-                const refs = extractBsaleDocumentReferencesFromXml(xmlText)
+                const refs = await extractBsaleDocumentReferencesFromXml(xmlText)
                 if (refs.length > 0) {
                   const refRecords = refs.map((r, i) => {
                     const lineStr = r.NroLinRef || String(i + 1)
