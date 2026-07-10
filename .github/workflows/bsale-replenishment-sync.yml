@@ -1,0 +1,51 @@
+name: Bsale Replenishment Sync
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bsale-replenishment-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Trigger protected sync endpoint
+        env:
+          SYNC_URL: ${{ secrets.PRODUCTION_SYNC_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$SYNC_URL" ]; then
+            echo "Missing PRODUCTION_SYNC_URL"
+            exit 1
+          fi
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "Missing CRON_SECRET"
+            exit 1
+          fi
+
+          response_file="$(mktemp)"
+          http_code="$(curl -sS -X POST "$SYNC_URL" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            --max-time 600 \
+            -o "$response_file" \
+            -w "%{http_code}")"
+
+          echo "HTTP status: $http_code"
+          cat "$response_file"
+
+          if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+            echo "Sync endpoint failed"
+            exit 1
+          fi
