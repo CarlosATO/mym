@@ -819,3 +819,128 @@ export async function syncBsaleCatalog(companyId: string): Promise<{
     return { success: false, error: errMsg }
   }
 }
+
+
+// ─── Locking & Auto-Sync Orchestration (Fase 4B) ────────────────
+
+export async function acquireSyncLock(companyId: string, lockName: string, runId: string, ttlMinutes: number = 60): Promise<boolean> {
+  const db = integrDb();
+  
+  // Try to clean up expired lock first (due to Supabase REST limitations on ON CONFLICT WHERE)
+  // 1. Delete if expired
+  await db.from('bsale_sync_locks')
+    .delete()
+    .eq('company_id', companyId)
+    .eq('lock_name', lockName)
+    .lt('expires_at', new Date().toISOString());
+
+  // 2. Try to insert
+  const expiresAt = new Date(Date.now() + ttlMinutes * 60000).toISOString();
+  const { data, error } = await db.from('bsale_sync_locks')
+    .insert({
+      company_id: companyId,
+      lock_name: lockName,
+      run_id: runId,
+      acquired_at: new Date().toISOString(),
+      expires_at: expiresAt
+    })
+    .select('run_id')
+    .single();
+
+  if (error) {
+    // If it violates unique constraint, it means the lock is actively held
+    return false;
+  }
+  return true;
+}
+
+export async function releaseSyncLock(companyId: string, lockName: string, runId: string): Promise<void> {
+  const db = integrDb();
+  await db.from('bsale_sync_locks')
+    .delete()
+    .eq('company_id', companyId)
+    .eq('lock_name', lockName)
+    .eq('run_id', runId);
+}
+
+export async function runReplenishmentBsaleSync(companyId: string): Promise<{
+  success: boolean;
+  status: string;
+  runId?: string;
+  counts?: any;
+  error?: string;
+  duration?: number;
+}> {
+  const startTime = Date.now();
+  let run = null;
+  const lockName = 'bsale_replenishment_sync';
+  
+  try {
+    run = await createSyncRun(companyId);
+    const runId = run.id;
+
+    // Acquire lock
+    const acquired = await acquireSyncLock(companyId, lockName, runId, 60);
+    if (!acquired) {
+      console.log(`[runReplenishmentBsaleSync] Lock ocupado para ${companyId}`);
+      await finishSyncRun(runId, 'FAILED', {}, 'SKIPPED_LOCKED: Sync already running');
+      return { success: false, status: 'SKIPPED_LOCKED', error: 'Sync already running', duration: Date.now() - startTime };
+    }
+
+    let finalStatus: 'COMPLETED' | 'PARTIAL' | 'FAILED' = 'COMPLETED';
+    let errorMessage = '';
+    
+    // 1. Sync Sales (14 days)
+    console.log('[runReplenishmentBsaleSync] Iniciando syncBsaleSales (14 days)...');
+    const salesRes = await syncBsaleSales(companyId, { days: 14 });
+    
+    if (!salesRes.success) {
+      finalStatus = 'FAILED';
+      errorMessage = salesRes.error || 'Error en ventas';
+    } else if (salesRes.counts?.detail_errors && salesRes.counts.detail_errors > 0) {
+      finalStatus = 'PARTIAL';
+    }
+
+    // 2. Sync Stock
+    let stockCount = 0;
+    if (finalStatus !== 'FAILED') {
+      console.log('[runReplenishmentBsaleSync] Iniciando syncStock...');
+      try {
+         stockCount = await syncStock(companyId, runId);
+      } catch (stockErr: any) {
+         console.error('[runReplenishmentBsaleSync] Error en stock:', stockErr);
+         finalStatus = 'PARTIAL';
+         errorMessage += (errorMessage ? ' | ' : '') + 'Error en stock: ' + stockErr.message;
+      }
+    }
+
+    const counts = {
+      sales: salesRes.counts,
+      stocks: stockCount
+    };
+
+    await finishSyncRun(runId, finalStatus, {
+       documents: salesRes.counts?.documents || 0,
+       document_details_count: salesRes.counts?.details || 0,
+       detail_errors: salesRes.counts?.detail_errors || 0,
+       stocks: stockCount
+    }, errorMessage || undefined);
+
+    await releaseSyncLock(companyId, lockName, runId);
+
+    return {
+      success: finalStatus !== 'FAILED',
+      status: finalStatus,
+      runId,
+      counts,
+      duration: Date.now() - startTime
+    };
+
+  } catch (err: any) {
+    if (run?.id) {
+       await finishSyncRun(run.id, 'FAILED', {}, err.message || 'Error inesperado');
+       await releaseSyncLock(companyId, lockName, run.id);
+    }
+    return { success: false, status: 'FAILED', error: err.message, duration: Date.now() - startTime };
+  }
+}
