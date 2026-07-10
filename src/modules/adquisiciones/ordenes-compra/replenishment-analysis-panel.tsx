@@ -101,8 +101,12 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
       }
 
       const { sales, stock, dateFrom, dateTo, diagnostics: diag } = dataset.data
-      const periodStart = new Date(dateFrom + 'T00:00:00')
-      const periodEnd = new Date(dateTo + 'T00:00:00')
+      // FIX: Use 'Z' suffix so dates from server (UTC) parse as UTC midnight on the client.
+      // Without 'Z', new Date('2026-07-04T00:00:00') in a Chile browser = 2026-07-04T04:00:00Z,
+      // which is 4h later than server-generated sale dates (2026-07-04T00:00:00Z),
+      // causing all sales on the first day of each bucket to be excluded.
+      const periodStart = new Date(dateFrom + 'T00:00:00Z')
+      const periodEnd = new Date(dateTo + 'T00:00:00Z')
       const dayAfterEnd = new Date(periodEnd.getTime() + 86400000)
       const startDate = new Date(Math.max(dayAfterEnd.getTime() - periodDays * 86400000, periodStart.getTime()))
 
