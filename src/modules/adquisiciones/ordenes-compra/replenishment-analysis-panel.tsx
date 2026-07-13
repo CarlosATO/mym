@@ -1,11 +1,60 @@
 'use client'
 
 import { useState, useMemo, useCallback, useEffect } from 'react'
-import { ArrowLeft, Search, Loader2, AlertTriangle, X, Check, Eye } from 'lucide-react'
+import { ArrowLeft, Search, Loader2, AlertTriangle, X, Check, Eye, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
 import { getReplenishmentDatasetFromBsale } from '@/app/actions/integraciones/bsale-dataset'
 import { generateReplenishmentPurchaseOrders } from '@/app/actions/adquisiciones/purchase-orders'
 import { buildSkuSummary, classifySkus } from '@/modules/adquisiciones/analisis-ventas/utils/analytics'
 import type { NormalizedSale, SkuSummary } from '@/modules/adquisiciones/analisis-ventas/utils/analytics'
+
+type SortKey = 'sku' | 'producto' | 'variante' | 'proveedor_real' | 'pseudoproveedor' | 'disponible' | 'sugerido' | 'cantidad' | 'monto' | 'total_vendido' | 'promedio' | 'costo' | 'estado'
+
+interface SortConfig {
+  key: SortKey
+  direction: 'asc' | 'desc'
+}
+
+function SortHeader({ label, sortKey, currentSort, onSort }: { label: string, sortKey: SortKey, currentSort: SortConfig | null, onSort: (k: SortKey) => void }) {
+  return (
+    <div 
+      className="flex items-center justify-between cursor-pointer group/sort w-full h-full select-none"
+      onClick={() => onSort(sortKey)}
+    >
+      <span className="truncate pr-1">{label}</span>
+      <span className="text-theme-text-muted/30 group-hover/sort:text-theme-text-muted transition-colors shrink-0 pr-1">
+        {currentSort?.key === sortKey ? (
+          currentSort.direction === 'asc' ? <ChevronUp className="w-3.5 h-3.5 text-theme-accent" /> : <ChevronDown className="w-3.5 h-3.5 text-theme-accent" />
+        ) : (
+          <ChevronsUpDown className="w-3.5 h-3.5" />
+        )}
+      </span>
+    </div>
+  )
+}
+
+function ColumnResizer({ currentWidth, onResizeCommit }: { currentWidth: number, onResizeCommit: (w: number) => void }) {
+  return (
+    <div
+      className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-theme-accent/50 active:bg-theme-accent transition-colors z-[100]"
+      onMouseDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const startX = e.pageX;
+        const startWidth = currentWidth;
+        const handleMouseMove = (moveEvent: MouseEvent) => {
+          const deltaX = moveEvent.pageX - startX;
+          onResizeCommit(Math.max(40, startWidth + deltaX));
+        };
+        const handleMouseUp = () => {
+          document.removeEventListener('mousemove', handleMouseMove);
+          document.removeEventListener('mouseup', handleMouseUp);
+        };
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+      }}
+    />
+  )
+}
 
 const PERIOD_OPTIONS = [
   { label: '7 días (1 bloque)', value: 7 },
@@ -64,6 +113,50 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   const [confirmedSet, setConfirmedSet] = useState<Set<string>>(new Set())
   const [activeSku, setActiveSku] = useState<string | null>(null)
   const [detailSku, setDetailSku] = useState<string | null>(null)
+  const [hoveredRowSku, setHoveredRowSku] = useState<string | null>(null)
+  const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
+
+  const handleSort = useCallback((key: SortKey) => {
+    setSortConfig(prev => {
+      if (prev?.key === key) {
+        if (prev.direction === 'asc') return { key, direction: 'desc' }
+        return null
+      }
+      return { key, direction: 'asc' }
+    })
+  }, [])
+  const [colWidths, setColWidths] = useState({
+    sku: 80,
+    product: 304,
+    variant: 130,
+    realSupplier: 180,
+    pseudoSupplier: 170,
+    disponible: 72,
+    sugerido: 78,
+    cantidad: 90,
+    monto: 108,
+    confirmar: 72,
+    totalVendido: 82,
+    promedio: 88,
+    costo: 96,
+    estado: 90
+  })
+
+  useEffect(() => {
+    const saved = localStorage.getItem('replenishment_col_widths')
+    if (saved) {
+      try { setColWidths(prev => ({...prev, ...JSON.parse(saved)})) } catch(e){}
+    }
+  }, [])
+
+  const updateColWidth = useCallback((key: keyof typeof colWidths, newWidth: number) => {
+    setColWidths(prev => {
+      const next = { ...prev, [key]: newWidth }
+      localStorage.setItem('replenishment_col_widths', JSON.stringify(next))
+      return next
+    })
+  }, [])
+
   const [error, setError] = useState('')
   
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -185,7 +278,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   useEffect(() => { loadData() }, [loadData])
 
   // ─── Filters ─────────────────────────────────────────────────────
-  const filtered = useMemo(() => {
+  const filteredBase = useMemo(() => {
     let result = rows
     if (search) {
       const q = search.toLowerCase()
@@ -208,6 +301,44 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
     }
     return result
   }, [rows, search, realSupplierSearch, pseudoSupplierSearch, filterStatus])
+
+  const filtered = useMemo(() => {
+    const data = [...filteredBase]
+    if (!sortConfig) return data
+
+    return data.sort((a, b) => {
+      let valA: any
+      let valB: any
+
+      switch (sortConfig.key) {
+        case 'sku': valA = a.sku.SKU.toLowerCase(); valB = b.sku.SKU.toLowerCase(); break;
+        case 'producto': valA = getProductName(a.sku).toLowerCase(); valB = getProductName(b.sku).toLowerCase(); break;
+        case 'variante': valA = (a.sku.variante || a.sku.tipo_producto || '').toLowerCase(); valB = (b.sku.variante || b.sku.tipo_producto || '').toLowerCase(); break;
+        case 'proveedor_real': valA = getRealSupplierName(a.sku).toLowerCase(); valB = getRealSupplierName(b.sku).toLowerCase(); break;
+        case 'pseudoproveedor': valA = getPseudoSupplierName(a.sku).toLowerCase(); valB = getPseudoSupplierName(b.sku).toLowerCase(); break;
+        case 'disponible': valA = a.sku.cantidad_disponible || 0; valB = b.sku.cantidad_disponible || 0; break;
+        case 'sugerido': valA = a.suggestedQty || 0; valB = b.suggestedQty || 0; break;
+        case 'cantidad': valA = a.confirmedQty || 0; valB = b.confirmedQty || 0; break;
+        case 'monto': valA = a.confirmedCost || 0; valB = b.confirmedCost || 0; break;
+        case 'total_vendido': valA = a.totalUnits || 0; valB = b.totalUnits || 0; break;
+        case 'promedio': valA = a.avgPer7 || 0; valB = b.avgPer7 || 0; break;
+        case 'costo': valA = a.sku.costo_unitario || 0; valB = b.sku.costo_unitario || 0; break;
+        case 'estado': 
+          const rank = (al: string) => {
+            if (al === 'Quiebre crítico' || al === 'Demanda histórica sin stock') return 1
+            if (al === 'Riesgo de quiebre') return 2
+            if (al === 'Producto muerto con stock') return 4
+            return 3
+          }
+          valA = rank(a.sku.alerta || ''); valB = rank(b.sku.alerta || ''); break;
+        default: valA = 0; valB = 0;
+      }
+
+      if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1
+      if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1
+      return 0
+    })
+  }, [filteredBase, sortConfig])
 
   // ─── Totals ──────────────────────────────────────────────────────
   const repoUnits = rows.reduce((a, r) => a + r.confirmedQty, 0)
@@ -330,14 +461,22 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   }
 
   const totalBucketsCols = bucketLabels.length
+  
+  // Calculate dynamic sticky positions
+  const skuLeft = 36;
+  const productLeft = 36 + colWidths.sku;
+  
   const inputClass = 'h-7 rounded-md border border-theme-border bg-theme-bg/40 px-2 text-xs text-theme-text outline-none transition placeholder:text-theme-text-muted/45 focus:border-theme-accent focus:ring-2 focus:ring-theme-accent/15'
   const labelClass = 'text-[9px] font-semibold uppercase tracking-wide text-theme-text-muted whitespace-nowrap'
   const kpiClass = 'inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-theme-border bg-theme-bg/45 px-2 text-[10px] font-medium text-theme-text-muted whitespace-nowrap'
-  const thGroupClass = 'border-b border-r border-theme-border bg-theme-text/[0.1] px-2 py-[2px] text-center text-[8px] font-semibold uppercase tracking-[0.06em] text-theme-text leading-tight'
-  const thClass = 'border-b border-r border-theme-border bg-theme-bg/50 px-2 py-[3px] text-left text-[9px] font-semibold uppercase tracking-wide text-theme-text-muted leading-tight'
-  const stickyHeaderClass = 'sticky z-[80] border-b border-r-2 border-r-theme-border bg-theme-surface px-2 py-[3px] text-left text-[9px] font-semibold uppercase tracking-wide text-theme-text leading-tight'
-  const stickyCellBase = 'sticky z-[40] bg-theme-surface'
-  const stickyLastClass = 'sticky z-[40] bg-theme-surface border-r-2 border-r-theme-border shadow-[2px_0_4px_-4px_rgba(0,0,0,0.2)]'
+  
+  // Compacted table classes
+  const thGroupClass = 'border-b border-r border-theme-border bg-theme-text/[0.08] px-1.5 py-[2px] text-center text-[9px] font-semibold uppercase tracking-[0.05em] text-theme-text leading-tight'
+  const thClass = 'border-b border-r border-theme-border bg-theme-bg/50 px-1.5 py-[3px] text-left text-[9px] font-semibold uppercase tracking-wide text-theme-text-muted leading-tight relative group/th'
+  const stickyHeaderClass = 'sticky z-[80] border-b border-r border-theme-border bg-theme-surface px-1.5 py-[3px] text-left text-[9px] font-semibold uppercase tracking-wide text-theme-text leading-tight'
+  const stickyCellBase = 'sticky z-[40] border-b border-r border-theme-border px-1.5 py-1 text-[10px]'
+  const stickyLastClass = 'sticky z-[40] border-b border-r border-theme-border shadow-[2px_0_4px_-4px_rgba(0,0,0,0.2)] px-1.5 py-1 text-[10px]'
+  const tdClass = 'border-b border-r border-theme-border px-1.5 py-1 text-[10px] tabular-nums'
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-theme-bg text-theme-text animate-in fade-in duration-200">
@@ -477,7 +616,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
       {!loading && !error && (
         <div className="flex-1 overflow-hidden px-2 pb-2 pt-1.5">
           <div className="h-full overflow-auto rounded-lg border border-theme-border bg-theme-surface shadow-sm">
-          <table className="min-w-[1948px] w-full border-separate border-spacing-0 text-[11px]">
+          <table className="w-max border-separate border-spacing-0 text-[10px]">
             <thead className="z-20 bg-theme-surface">
               <tr className="sticky top-0 z-[70] bg-theme-surface shadow-[0_2px_4px_-4px_rgba(0,0,0,0.15)]">
                 <th colSpan={6} className={`${thGroupClass} text-left`}>Producto</th>
@@ -486,25 +625,69 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
                 <th colSpan={4} className={thGroupClass}>Confirmación de compra</th>
                 <th colSpan={4} className={`${thGroupClass} border-r-0`}>Cálculo sugerido</th>
               </tr>
-              <tr className="sticky top-[24px] z-[60] bg-theme-surface shadow-[0_2px_2px_-3px_rgba(0,0,0,0.12)]">
-                <th className={`${stickyHeaderClass} left-0 w-[36px] min-w-[36px] max-w-[36px]`}>#</th>
-                <th className={`${stickyHeaderClass} left-[36px] w-[80px] min-w-[80px] max-w-[80px]`}>SKU</th>
-                <th className={`${stickyLastClass} left-[116px] w-[304px] min-w-[304px] max-w-[304px]`}>Producto / descripción</th>
-                <th className={`${thClass} min-w-[130px]`}>Variante / tipo</th>
-                <th className={`${thClass} min-w-[180px]`}>Proveedor real</th>
-                <th className={`${thClass} min-w-[170px]`}>Pseudoproveedor</th>
-                <th className={`${thClass} w-[72px] text-center`} title="Stock disponible">Disponible</th>
+              <tr className="sticky top-[22px] z-[60] bg-theme-surface shadow-[0_2px_2px_-3px_rgba(0,0,0,0.12)]">
+                <th className={`${stickyHeaderClass} left-0`} style={{ width: 36, minWidth: 36, maxWidth: 36 }}>#</th>
+                <th className={`${stickyHeaderClass} relative group/th`} style={{ left: skuLeft, width: colWidths.sku, minWidth: colWidths.sku, maxWidth: colWidths.sku }}>
+                  <SortHeader label="SKU" sortKey="sku" currentSort={sortConfig} onSort={handleSort} />
+                  <ColumnResizer currentWidth={colWidths.sku} onResizeCommit={w => updateColWidth('sku', w)} />
+                </th>
+                <th className={`${stickyHeaderClass} border-r-2 shadow-[2px_0_4px_-4px_rgba(0,0,0,0.2)] relative group/th`} style={{ left: productLeft, width: colWidths.product, minWidth: colWidths.product, maxWidth: colWidths.product }}>
+                  <SortHeader label="Producto / desc." sortKey="producto" currentSort={sortConfig} onSort={handleSort} />
+                  <ColumnResizer currentWidth={colWidths.product} onResizeCommit={w => updateColWidth('product', w)} />
+                </th>
+                <th className={thClass} style={{ width: colWidths.variant, minWidth: colWidths.variant, maxWidth: colWidths.variant }}>
+                  <SortHeader label="Variante/tipo" sortKey="variante" currentSort={sortConfig} onSort={handleSort} />
+                  <ColumnResizer currentWidth={colWidths.variant} onResizeCommit={w => updateColWidth('variant', w)} />
+                </th>
+                <th className={thClass} style={{ width: colWidths.realSupplier, minWidth: colWidths.realSupplier, maxWidth: colWidths.realSupplier }}>
+                  <SortHeader label="Prov. real" sortKey="proveedor_real" currentSort={sortConfig} onSort={handleSort} />
+                  <ColumnResizer currentWidth={colWidths.realSupplier} onResizeCommit={w => updateColWidth('realSupplier', w)} />
+                </th>
+                <th className={thClass} style={{ width: colWidths.pseudoSupplier, minWidth: colWidths.pseudoSupplier, maxWidth: colWidths.pseudoSupplier }}>
+                  <SortHeader label="Pseudoprov." sortKey="pseudoproveedor" currentSort={sortConfig} onSort={handleSort} />
+                  <ColumnResizer currentWidth={colWidths.pseudoSupplier} onResizeCommit={w => updateColWidth('pseudoSupplier', w)} />
+                </th>
+                <th className={`${thClass} text-center`} title="Stock disponible" style={{ width: colWidths.disponible, minWidth: colWidths.disponible, maxWidth: colWidths.disponible }}>
+                  <SortHeader label="Disponible" sortKey="disponible" currentSort={sortConfig} onSort={handleSort} />
+                  <ColumnResizer currentWidth={colWidths.disponible} onResizeCommit={w => updateColWidth('disponible', w)} />
+                </th>
                 {bucketLabels.map((label, bi) => (
-                  <th key={bi} className={`${thClass} w-[68px] text-right font-mono text-[10px]`} title={label}>{label}</th>
+                  <th key={bi} className={`${thClass} text-right font-mono relative`} style={{ width: 68, minWidth: 68, maxWidth: 68 }} title={label}>
+                    <div className="w-full text-right pr-1 truncate">{label}</div>
+                  </th>
                 ))}
-                <th className={`${thClass} w-[78px] text-right`} title="stock_objetivo = prom_7d * cobertura - stock_actual">Sugerido</th>
-                <th className={`${thClass} w-[90px] text-center`}>Cantidad</th>
-                <th className={`${thClass} w-[108px] text-right`}>Monto confirmado</th>
-                <th className={`${thClass} w-[72px] text-center`}>Confirmar</th>
-                <th className={`${thClass} w-[82px] text-right`}>Total vendido</th>
-                <th className={`${thClass} w-[88px] text-right`} title="Promedio unidades por bloque de 7 días">Prom. semanal</th>
-                <th className={`${thClass} w-[96px] text-right`}>Costo unitario</th>
-                <th className={`${thClass} w-[90px] border-r-0 text-center`}>Estado</th>
+                <th className={`${thClass} text-right`} title="stock_objetivo = prom_7d * cobertura - stock_actual" style={{ width: colWidths.sugerido, minWidth: colWidths.sugerido, maxWidth: colWidths.sugerido }}>
+                  <SortHeader label="Sugerido" sortKey="sugerido" currentSort={sortConfig} onSort={handleSort} />
+                  <ColumnResizer currentWidth={colWidths.sugerido} onResizeCommit={w => updateColWidth('sugerido', w)} />
+                </th>
+                <th className={`${thClass} text-center`} style={{ width: colWidths.cantidad, minWidth: colWidths.cantidad, maxWidth: colWidths.cantidad }}>
+                  <SortHeader label="Cantidad" sortKey="cantidad" currentSort={sortConfig} onSort={handleSort} />
+                  <ColumnResizer currentWidth={colWidths.cantidad} onResizeCommit={w => updateColWidth('cantidad', w)} />
+                </th>
+                <th className={`${thClass} text-right`} style={{ width: colWidths.monto, minWidth: colWidths.monto, maxWidth: colWidths.monto }}>
+                  <SortHeader label="Monto conf." sortKey="monto" currentSort={sortConfig} onSort={handleSort} />
+                  <ColumnResizer currentWidth={colWidths.monto} onResizeCommit={w => updateColWidth('monto', w)} />
+                </th>
+                <th className={`${thClass} text-center`} style={{ width: colWidths.confirmar, minWidth: colWidths.confirmar, maxWidth: colWidths.confirmar }}>
+                  <div className="flex items-center justify-center w-full h-full pr-1">Conf.</div>
+                  <ColumnResizer currentWidth={colWidths.confirmar} onResizeCommit={w => updateColWidth('confirmar', w)} />
+                </th>
+                <th className={`${thClass} text-right`} style={{ width: colWidths.totalVendido, minWidth: colWidths.totalVendido, maxWidth: colWidths.totalVendido }}>
+                  <SortHeader label="Total ven." sortKey="total_vendido" currentSort={sortConfig} onSort={handleSort} />
+                  <ColumnResizer currentWidth={colWidths.totalVendido} onResizeCommit={w => updateColWidth('totalVendido', w)} />
+                </th>
+                <th className={`${thClass} text-right`} title="Promedio unidades por bloque de 7 días" style={{ width: colWidths.promedio, minWidth: colWidths.promedio, maxWidth: colWidths.promedio }}>
+                  <SortHeader label="Prom. sem." sortKey="promedio" currentSort={sortConfig} onSort={handleSort} />
+                  <ColumnResizer currentWidth={colWidths.promedio} onResizeCommit={w => updateColWidth('promedio', w)} />
+                </th>
+                <th className={`${thClass} text-right`} style={{ width: colWidths.costo, minWidth: colWidths.costo, maxWidth: colWidths.costo }}>
+                  <SortHeader label="Costo unit." sortKey="costo" currentSort={sortConfig} onSort={handleSort} />
+                  <ColumnResizer currentWidth={colWidths.costo} onResizeCommit={w => updateColWidth('costo', w)} />
+                </th>
+                <th className={`${thClass} border-r-0 text-center`} style={{ width: colWidths.estado, minWidth: colWidths.estado, maxWidth: colWidths.estado }}>
+                  <SortHeader label="Estado" sortKey="estado" currentSort={sortConfig} onSort={handleSort} />
+                  <ColumnResizer currentWidth={colWidths.estado} onResizeCommit={w => updateColWidth('estado', w)} />
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -516,13 +699,21 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
                 const unresolved = productName === 'Producto no encontrado en catálogo'
                 const costBadge = s.costo_unitario === 0 && row.suggestedQty > 0
                 const isActive = activeSku === s.SKU
+                const isHovered = hoveredRowSku === s.SKU
                 const isConfirmed = confirmedSet.has(s.SKU)
                 const activeCls = isActive
-                  ? 'border-l-2 border-l-theme-accent bg-theme-accent/10'
+                  ? 'border-l-2 border-l-theme-accent'
                   : isConfirmed
                   ? 'border-l-2 border-l-emerald-500/40'
                   : ''
-                const rowBg = idx % 2 === 0 ? 'bg-theme-surface' : 'bg-theme-bg'
+                
+                // Hover priority: active -> hovered -> confirmed -> default
+                const rowBg = isActive 
+                  ? 'bg-theme-accent/15'
+                  : isHovered
+                  ? 'bg-theme-text/5'
+                  : idx % 2 === 0 ? 'bg-theme-surface' : 'bg-theme-bg'
+                  
                 const statusCls = costBadge
                   ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/25'
                   : s.alerta === 'Quiebre crítico' || s.alerta === 'Demanda histórica sin stock'
@@ -537,43 +728,57 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
                 const statusLabel = costBadge ? 'Sin costo' : s.alerta
 
                 return (
-                  <tr key={s.SKU + idx} onClick={() => setActiveSku(s.SKU)} onDoubleClick={() => setDetailSku(s.SKU)} className={`group cursor-pointer ${activeCls}`}>
-                    <td className={`${stickyCellBase} ${rowBg} left-0 w-[36px] min-w-[36px] max-w-[36px] px-2 py-1.5 text-[10px] font-mono text-theme-text-muted group-hover:bg-theme-bg`}>{idx + 1}</td>
-                    <td className={`${stickyCellBase} ${rowBg} left-[36px] w-[80px] min-w-[80px] max-w-[80px] px-2 py-1.5 font-mono font-medium text-theme-accent group-hover:bg-theme-bg`}>{s.SKU}</td>
-                    <td className={`${stickyLastClass} ${rowBg} left-[116px] w-[304px] min-w-[304px] max-w-[304px] px-2 py-1.5 group-hover:bg-theme-bg ${unresolved ? 'text-amber-600 dark:text-amber-300' : 'text-theme-text'}`} title={productName}>
+                  <tr 
+                    key={s.SKU + idx} 
+                    onClick={() => setActiveSku(s.SKU)} 
+                    onDoubleClick={() => setDetailSku(s.SKU)}
+                    onMouseEnter={() => setHoveredRowSku(s.SKU)}
+                    onMouseLeave={() => setHoveredRowSku(null)}
+                    className={`cursor-pointer ${activeCls}`}>
+                    <td className={`${stickyCellBase} ${rowBg} left-0 text-theme-text-muted text-center font-mono`} style={{ width: 36, minWidth: 36, maxWidth: 36 }}>{idx + 1}</td>
+                    <td className={`${stickyCellBase} ${rowBg} font-mono font-medium text-theme-accent`} style={{ left: skuLeft, width: colWidths.sku, minWidth: colWidths.sku, maxWidth: colWidths.sku }}>
+                      <div className="truncate">{s.SKU}</div>
+                    </td>
+                    <td className={`${stickyLastClass} ${rowBg} ${unresolved ? 'text-amber-600 dark:text-amber-300' : 'text-theme-text'}`} style={{ left: productLeft, width: colWidths.product, minWidth: colWidths.product, maxWidth: colWidths.product }} title={productName}>
                       <div className="truncate">{productName}</div>
                     </td>
-                    <td className={`${rowBg} border-b border-r border-theme-border px-2 py-1.5 text-theme-text-muted max-w-[140px] truncate`} title={s.variante || s.tipo_producto || ''}>{s.variante || s.tipo_producto || '-'}</td>
-                    <td className={`${rowBg} border-b border-r border-theme-border px-2 py-1.5 text-theme-text max-w-[180px] truncate`} title={realSupplierName}>{realSupplierName}</td>
-                    <td className={`${rowBg} border-b border-r border-theme-border px-2 py-1.5 text-theme-text-muted max-w-[170px] truncate`} title={pseudoSupplierName}>{pseudoSupplierName}</td>
-                    <td className={`${rowBg} border-b border-r border-theme-border px-2 py-1.5 text-center font-semibold text-theme-text`}>{s.cantidad_disponible || '—'}</td>
+                    <td className={`${tdClass} ${rowBg} text-theme-text-muted`} style={{ width: colWidths.variant, minWidth: colWidths.variant, maxWidth: colWidths.variant }} title={s.variante || s.tipo_producto || ''}>
+                      <div className="truncate">{s.variante || s.tipo_producto || '-'}</div>
+                    </td>
+                    <td className={`${tdClass} ${rowBg} text-theme-text`} style={{ width: colWidths.realSupplier, minWidth: colWidths.realSupplier, maxWidth: colWidths.realSupplier }} title={realSupplierName}>
+                      <div className="truncate">{realSupplierName}</div>
+                    </td>
+                    <td className={`${tdClass} ${rowBg} text-theme-text-muted`} style={{ width: colWidths.pseudoSupplier, minWidth: colWidths.pseudoSupplier, maxWidth: colWidths.pseudoSupplier }} title={pseudoSupplierName}>
+                      <div className="truncate">{pseudoSupplierName}</div>
+                    </td>
+                    <td className={`${tdClass} ${rowBg} text-center font-semibold text-theme-text`} style={{ width: colWidths.disponible, minWidth: colWidths.disponible, maxWidth: colWidths.disponible }}>{s.cantidad_disponible || '—'}</td>
                     {row.buckets.map((val, bi) => (
-                      <td key={bi} className="border-b border-r border-theme-border px-2 py-1.5 text-right font-mono text-theme-text">{val > 0 ? val : '—'}</td>
+                      <td key={bi} className={`${tdClass} ${rowBg} text-right font-mono text-theme-text`} style={{ width: 68, minWidth: 68, maxWidth: 68 }}>{val > 0 ? val : '—'}</td>
                     ))}
-                    <td className="border-b border-r border-theme-border px-2 py-1.5 text-right font-semibold text-theme-text">{row.suggestedQty > 0 ? row.suggestedQty : '—'}</td>
-                    <td className="border-b border-r border-theme-border px-2 py-1 text-center">
+                    <td className={`${tdClass} ${rowBg} text-right font-semibold text-theme-text`} style={{ width: colWidths.sugerido, minWidth: colWidths.sugerido, maxWidth: colWidths.sugerido }}>{row.suggestedQty > 0 ? row.suggestedQty : '—'}</td>
+                    <td className={`${tdClass} ${rowBg} text-center`} style={{ width: colWidths.cantidad, minWidth: colWidths.cantidad, maxWidth: colWidths.cantidad }}>
                       <input
                         type="number"
                         min="0"
                         value={row.confirmedQty}
                         onChange={e => updateConfirmedQty(s.SKU, Number(e.target.value))}
-                        className="h-6 w-14 rounded-md border border-theme-border bg-theme-bg/50 px-1 text-right text-[11px] font-medium text-theme-text outline-none focus:border-theme-accent focus:ring-2 focus:ring-theme-accent/15"
+                        className="h-5 w-full rounded border border-theme-border bg-theme-bg/50 px-1 text-right text-[10px] font-medium text-theme-text outline-none focus:border-theme-accent focus:ring-1 focus:ring-theme-accent/15"
                       />
                     </td>
-                    <td className="border-b border-r border-theme-border px-2 py-1.5 text-right font-medium text-theme-text">{row.confirmedCost > 0 ? fmtN(row.confirmedCost) : '—'}</td>
-                    <td className="border-b border-r border-theme-border px-2 py-1.5 text-center">
-                      <input type="checkbox" checked={confirmedSet.has(s.SKU)} onChange={() => toggleConfirmed(s.SKU)} className="h-3.5 w-3.5 rounded border-theme-border text-theme-accent" />
+                    <td className={`${tdClass} ${rowBg} text-right font-medium text-theme-text`} style={{ width: colWidths.monto, minWidth: colWidths.monto, maxWidth: colWidths.monto }}>{row.confirmedCost > 0 ? fmtN(row.confirmedCost) : '—'}</td>
+                    <td className={`${tdClass} ${rowBg} text-center`} style={{ width: colWidths.confirmar, minWidth: colWidths.confirmar, maxWidth: colWidths.confirmar }}>
+                      <input type="checkbox" checked={confirmedSet.has(s.SKU)} onChange={() => toggleConfirmed(s.SKU)} className="h-3 w-3 rounded border-theme-border text-theme-accent" />
                     </td>
-                    <td className="border-b border-r border-theme-border px-2 py-1.5 text-right font-medium text-theme-text">{row.totalUnits || '—'}</td>
-                    <td className="border-b border-r border-theme-border px-2 py-1.5 text-right text-theme-text">{row.avgPer7 > 0 ? row.avgPer7.toFixed(1) : '—'}</td>
-                    <td className={`${rowBg} border-b border-r border-theme-border px-2 py-1.5 text-right text-theme-text-muted`}>
+                    <td className={`${tdClass} ${rowBg} text-right font-medium text-theme-text`} style={{ width: colWidths.totalVendido, minWidth: colWidths.totalVendido, maxWidth: colWidths.totalVendido }}>{row.totalUnits || '—'}</td>
+                    <td className={`${tdClass} ${rowBg} text-right text-theme-text`} style={{ width: colWidths.promedio, minWidth: colWidths.promedio, maxWidth: colWidths.promedio }}>{row.avgPer7 > 0 ? row.avgPer7.toFixed(1) : '—'}</td>
+                    <td className={`${tdClass} ${rowBg} text-right text-theme-text-muted`} style={{ width: colWidths.costo, minWidth: colWidths.costo, maxWidth: colWidths.costo }}>
                       {costBadge
                         ? <span className="font-medium text-amber-600 dark:text-amber-300">s/costo</span>
                         : fmtN(s.costo_unitario)
                       }
                     </td>
-                    <td className={`${rowBg} border-b border-theme-border px-2 py-1.5 text-center`}>
-                      <span className={`inline-flex rounded px-1.5 py-0.5 text-[9px] font-medium whitespace-nowrap border ${statusCls}`}>
+                    <td className={`${rowBg} border-b border-theme-border px-1.5 py-1 text-[10px] text-center`} style={{ width: colWidths.estado, minWidth: colWidths.estado, maxWidth: colWidths.estado }}>
+                      <span className={`inline-flex rounded px-1.5 py-[1px] text-[9px] font-medium whitespace-nowrap border ${statusCls}`}>
                         {statusLabel.length > 18 ? statusLabel.slice(0, 16) + '..' : statusLabel}
                       </span>
                     </td>
