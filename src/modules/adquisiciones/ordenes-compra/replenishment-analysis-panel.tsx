@@ -286,8 +286,8 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
       const bEnd = new Date(ref - b * bucketSize)
       const bStart = new Date(bEnd.getTime() - bucketSize)
       const labelEnd = new Date(bEnd.getTime() - 86400000)
-      const s = `${bStart.getDate()}/${bStart.getMonth() + 1}`
-      const e = `${labelEnd.getDate()}/${labelEnd.getMonth() + 1}`
+      const s = `${bStart.getUTCDate()}/${bStart.getUTCMonth() + 1}`
+      const e = `${labelEnd.getUTCDate()}/${labelEnd.getUTCMonth() + 1}`
       labels.push(`${s} al ${e}`)
     }
     return labels
@@ -360,7 +360,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
               )}
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-theme-text-muted">
-              <span>Bloques de 7 días · {numBuckets} bloques en {periodDays} días · datos hasta {new Date(effectiveEndDate.getTime() - 86400000).toLocaleDateString('es-CL')}</span>
+              <span>Bloques de 7 días · {numBuckets} bloques en {periodDays} días · datos hasta {(() => { const d = new Date(effectiveEndDate.getTime() - 86400000); return `${String(d.getUTCDate()).padStart(2, '0')}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${d.getUTCFullYear()}`; })()}</span>
               <span className="text-theme-text/30">|</span>
               <span>Mostrando <strong className="font-semibold text-theme-text">{filtered.length}</strong>/<strong className="font-semibold text-theme-text">{rows.length}</strong> SKU</span>
               <span className="text-red-600 dark:text-red-300">Críticos <strong className="font-semibold">{criticos}</strong></span>

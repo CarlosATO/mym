@@ -38,6 +38,7 @@ export interface ReplenishmentDataset {
 export interface ReplenishmentOptions {
   periodDays?: number
   documentTypeIds?: number[]
+  dateToStr?: string // YYYY-MM-DD format
 }
 
 interface CatalogProductRow {
@@ -161,16 +162,43 @@ export async function getReplenishmentSalesFromBsaleMirror(
 }
 
 
+function getChileDateParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Santiago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+
+  const get = (type: string) => parts.find((p) => p.type === type)?.value
+
+  return {
+    year: Number(get('year')),
+    month: Number(get('month')),
+    day: Number(get('day')),
+  }
+}
+
 export async function getReplenishmentDatasetFromBsale(
   companyId: string,
   options: ReplenishmentOptions = {}
 ): Promise<{ success: boolean; data?: ReplenishmentDataset; error?: string }> {
   if (!companyId) return { success: false, error: 'companyId requerido' }
 
+  const { year, month, day } = getChileDateParts()
+  let defaultDateTo = new Date(Date.UTC(year, month - 1, day))
+  defaultDateTo.setUTCDate(defaultDateTo.getUTCDate() - 1)
+  
+  if (options.dateToStr) {
+    defaultDateTo = new Date(options.dateToStr + 'T00:00:00Z')
+  }
+
   const periodDays = options.periodDays ?? 180
   const docTypeIds = options.documentTypeIds ?? SALE_DOCUMENT_TYPE_IDS
-  const dateFrom = new Date(Date.now() - periodDays * 86400000)
-  const dateTo = new Date()
+  const dateTo = defaultDateTo
+  
+  const dateFrom = new Date(dateTo)
+  dateFrom.setUTCDate(dateFrom.getUTCDate() - (periodDays - 1))
   const diag: Record<string, any> = {}
 
   try {
@@ -432,8 +460,8 @@ export async function getReplenishmentDatasetFromBsale(
       const productName = catalogProduct?.description || code
 
       // FIX 2: Create date in local timezone to avoid offset issues with buckets
-      // If emission_date is "2026-06-15", adding "T00:00:00" parses as local time.
-      const fecha = det.emission_date ? new Date(det.emission_date + 'T00:00:00') : dateTo
+      // If emission_date is "2026-06-15", adding "T00:00:00Z" parses as UTC time consistently.
+      const fecha = det.emission_date ? new Date(det.emission_date + 'T00:00:00Z') : dateTo
       const cantidad = Number(det.quantity) || 0
 
       const sale: NormalizedSale = {
