@@ -250,7 +250,7 @@ async function syncSellers(companyId: string, runId: string): Promise<number> {
   const db = integrDb()
   let count = 0
 
-  await bsaleFetchAll<any>('/sellers.json', { limit: 50 }, {
+  await bsaleFetchAll<any>('/users.json', { limit: 50 }, {
     onPage: async (page, batch) => {
       const records = batch.map((s: any) => ({
         company_id: companyId,
@@ -259,7 +259,6 @@ async function syncSellers(companyId: string, runId: string): Promise<number> {
         email: s.email || null,
         active: s.state === 0,
         raw_json: s,
-        bsale_sync_run_id: runId,
         synced_at: new Date().toISOString(),
       }))
 
