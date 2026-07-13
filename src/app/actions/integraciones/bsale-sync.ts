@@ -246,6 +246,35 @@ async function syncStock(companyId: string, runId: string): Promise<number> {
 
 // ─── Sync Costs ────────────────────────────────────────────────────
 
+async function syncSellers(companyId: string, runId: string): Promise<number> {
+  const db = integrDb()
+  let count = 0
+
+  await bsaleFetchAll<any>('/sellers.json', { limit: 50 }, {
+    onPage: async (page, batch) => {
+      const records = batch.map((s: any) => ({
+        company_id: companyId,
+        bsale_id: s.id,
+        name: s.firstName ? `${s.firstName} ${s.lastName || ''}`.trim() : s.name || '',
+        email: s.email || null,
+        active: s.state === 0,
+        raw_json: s,
+        bsale_sync_run_id: runId,
+        synced_at: new Date().toISOString(),
+      }))
+
+      const { error } = await db.from('bsale_sellers').upsert(records, {
+        onConflict: 'company_id, bsale_id',
+        ignoreDuplicates: false,
+      })
+      if (error) console.error(`[syncSellers] page ${page} error:`, error.message)
+      count += records.length
+    },
+  })
+
+  return count
+}
+
 async function getVariantCost(bsaleVariantId: number): Promise<{
   averageCost: number
   totalCost: number
@@ -673,7 +702,49 @@ async function syncDocuments(
               }
             } catch (xmlErr: any) {
               console.error(`[syncSales] Error fetching XML for doc ${doc.id}: ${xmlErr.message}`)
-              // Don't fail the entire detail sync if XML fails
+            }
+            // Don't fail the entire detail sync if XML fails
+          }
+
+          if (doc.document_type?.id === 5) {
+            console.log(`[syncSales] Fetching references for Factura ${doc.number}...`)
+            try {
+              const headers = getBsaleHeaders()
+              const refsRes = await fetch(`${BSALE_API_BASE}/documents/${doc.id}/references.json`, { headers })
+              if (refsRes.ok) {
+                const refsData = await refsRes.json()
+                if (refsData && refsData.items && refsData.items.length > 0) {
+                  const refRecords = refsData.items.map((r: any) => ({
+                    company_id: companyId,
+                    bsale_id: r.id,
+                    bsale_document_id: doc.id,
+                    source_document_type_id: doc.document_type?.id || null,
+                    source_document_number: doc.number || null,
+                    referenced_document_id: r.referenceDocumentId || null,
+                    referenced_document_number: r.number || null,
+                    referenced_document_type_id: r.referenceDocumentTypeId || null,
+                    reference_code: r.referenceCode || null,
+                    reference_reason: r.reason || null,
+                    reference_date: r.date ? new Date(r.date * 1000).toISOString() : null,
+                    raw_json: r,
+                    bsale_sync_run_id: runId,
+                    synced_at: new Date().toISOString()
+                  }))
+
+                  const { error: dbErr } = await integrDb().from('bsale_document_references').upsert(refRecords, {
+                    onConflict: 'company_id, bsale_id'
+                  })
+                  if (dbErr) {
+                    console.error(`[syncSales] DB Error upserting refs for Factura ${doc.id}:`, dbErr.message);
+                  } else {
+                    console.log(`[syncSales] Successfully upserted ${refRecords.length} references for Factura ${doc.id}`);
+                  }
+                }
+              } else {
+                 console.error(`[syncSales] HTTP Error fetching references for Factura ${doc.id}: ${refsRes.status}`);
+              }
+            } catch (refsErr: any) {
+              console.error(`[syncSales] Error fetching references for Factura ${doc.id}:`, refsErr.message)
             }
           }
 
@@ -798,10 +869,17 @@ export async function syncBsaleCatalog(companyId: string): Promise<{
     counts.variants = await syncVariants(companyId, runId)
     console.log(`[bsale-sync] Variantes sincronizadas: ${counts.variants}`)
 
+
     // 3. Sincronizar stock actual
     console.log('[bsale-sync] Iniciando sync de stock...')
     counts.stocks = await syncStock(companyId, runId)
     console.log(`[bsale-sync] Stock sincronizado: ${counts.stocks}`)
+
+    // 4. Sincronizar vendedores
+    console.log('[bsale-sync] Iniciando sync de vendedores...')
+    counts.sellers = await syncSellers(companyId, runId)
+    console.log(`[bsale-sync] Vendedores sincronizados: ${counts.sellers}`)
+
 
     await finishSyncRun(runId, 'COMPLETED', counts)
 
