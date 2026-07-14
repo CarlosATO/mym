@@ -210,8 +210,8 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
   }
 
   return (
-    <div className="flex flex-col h-full bg-transparent gap-6">
-      <div className="shrink-0 flex justify-between items-center p-6 border border-theme-border bg-theme-surface rounded-2xl shadow-sm">
+    <div className="flex flex-col min-h-0 overflow-y-auto h-full bg-transparent gap-4 pb-4">
+      <div className="shrink-0 flex justify-between items-center px-5 py-3 border border-theme-border bg-theme-surface rounded-xl shadow-sm">
         <div>
           <h2 className="text-xl font-bold text-theme-text">Calendario de Despacho</h2>
           <p className="text-sm text-theme-text-muted/70 mt-1">
@@ -288,7 +288,7 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
       {view === 'EDIT' && (
         <div className="flex-1 flex flex-col gap-6 animate-in fade-in">
           {/* Action Bar */}
-          <div className="flex flex-wrap gap-4 justify-between items-center bg-theme-surface border border-theme-border p-4 rounded-2xl shadow-sm sticky top-0 z-10">
+          <div className="flex flex-wrap gap-3 justify-between items-center bg-theme-surface border border-theme-border p-3 rounded-xl shadow-sm">
             <div className="flex items-center gap-4">
               <Button variant="ghost" size="icon" onClick={() => setView('LIST')} disabled={loading}>
                 <ArrowLeft className="h-5 w-5" />
@@ -324,20 +324,20 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
             {WEEKDAYS.map(day => {
               const dayCities = draftCities.filter(c => c.weekday === day.id)
               
               return (
-                <div key={day.id} className="rounded-2xl bg-theme-surface shadow-sm border border-theme-border overflow-hidden flex flex-col">
-                  <div className="py-3 px-5 border-b border-theme-border bg-theme-text/5 shrink-0 flex justify-between items-center">
+                <div key={day.id} className="rounded-xl bg-theme-surface shadow-sm border border-theme-border overflow-hidden flex flex-col">
+                  <div className="py-2 px-4 border-b border-theme-border bg-theme-text/5 shrink-0 flex justify-between items-center">
                     <h3 className="font-semibold text-theme-text">{day.label}</h3>
                     <span className="text-xs font-medium bg-theme-border px-2 py-0.5 rounded-full text-theme-text-muted">
                       {dayCities.length}
                     </span>
                   </div>
                   
-                  <div className="p-5 flex-1 flex flex-col gap-4">
+                  <div className="p-3 flex-1 flex flex-col gap-3">
                     {dayCities.length === 0 ? (
                       <div className="flex-1 flex items-center justify-center border-2 border-dashed border-theme-border/50 rounded-xl bg-theme-surface/50 p-6">
                          <p className="text-sm text-theme-text-muted/60 text-center">No hay comunas asignadas a este día.</p>

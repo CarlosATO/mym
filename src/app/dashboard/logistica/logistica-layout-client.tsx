@@ -250,7 +250,7 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
 
   // Workspace mode for panels that need full-height, full-width layout.
   // Extend this list when new operational panels are added.
-  const workspaceActionIds = ['recepciones', 'traspasos', 'stock', 'kardex', 'bodegas', 'productos', 'guias_ruta', 'ubicaciones']
+  const workspaceActionIds = ['recepciones', 'traspasos', 'stock', 'kardex', 'bodegas', 'productos', 'guias_ruta', 'ubicaciones', 'preparacion_pedidos', 'calendario_despacho', 'ajustes']
   const layoutMode = workspaceActionIds.includes(activeActionId) ? 'workspace' : 'contained'
 
   return (

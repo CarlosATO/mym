@@ -29,15 +29,15 @@ export type SalesOrderPreparationCardInfo = {
 }
 
 export type SalesOrderPreparationItem = {
-  id: string
+  detail_id: number
   company_id: string
-  bsale_document_id: number
+  nv_bsale_id: number
+  nv_folio: number
   variant_id: number | null
   sku: string | null
   product_name: string
   quantity: number
-  net_amount: number | null
-  tax_amount: number | null
+  unit_value: number | null
   total_amount: number | null
 }
 
@@ -74,7 +74,7 @@ export async function getSalesOrderPreparationItems(companyId: string, bsaleNvId
     .from('vw_bsale_sales_order_items_for_preparation')
     .select('*')
     .eq('company_id', companyId)
-    .eq('bsale_document_id', bsaleNvId)
+    .eq('nv_bsale_id', bsaleNvId)
     .order('product_name', { ascending: true })
 
   if (error) {
