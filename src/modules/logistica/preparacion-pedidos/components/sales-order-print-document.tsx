@@ -160,7 +160,11 @@ export function SalesOrderPrintDocument({
           <div className="border border-black p-4 h-fit">
             <div className="grid grid-cols-2 gap-2 text-right">
                <span className="font-bold">NETO ($)</span>
-               <span className="font-bold text-[11px]">{card.net_amount != null ? formatMoney(card.net_amount) : '—'}</span>
+               <span className="font-bold text-[11px]">{card.net_amount != null ? formatMoney(card.net_amount) : 'Sin dato'}</span>
+               <span className="font-bold">IVA 19% ($)</span>
+               <span className="font-bold text-[11px]">{card.tax_amount != null ? formatMoney(card.tax_amount) : 'Sin dato'}</span>
+               <span className="font-bold mt-2 pt-2 border-t border-black">TOTAL ($)</span>
+               <span className="font-bold text-[11px] mt-2 pt-2 border-t border-black">{card.gross_amount != null ? formatMoney(card.gross_amount) : (card.total_amount != null ? formatMoney(card.total_amount) : 'Sin dato')}</span>
             </div>
             <div className="mt-8 text-[8px] text-gray-500 text-right">
               <p>Impreso el: {formatDate(printDate)} a las {formatTime(printDate)}</p>
