@@ -150,13 +150,21 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose }: Sales
               ) : (
                 <div className="divide-y divide-theme-border max-h-[300px] overflow-y-auto">
                   {items.map((item) => (
-                    <div key={item.id} className="p-3 hover:bg-theme-border/10 flex items-start gap-3">
+                    <div key={item.detail_id} className="p-3 hover:bg-theme-border/10 flex items-start gap-3">
                       <div className="bg-theme-border/30 w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-xs font-bold text-theme-text">
                         x{item.quantity}
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-theme-text truncate">{item.product_name}</p>
                         {item.sku && <p className="text-xs text-theme-text-muted mt-0.5">SKU: {item.sku}</p>}
+                      </div>
+                      <div className="text-right shrink-0">
+                        {item.total_amount != null && (
+                          <p className="text-xs font-semibold text-theme-text">${item.total_amount.toLocaleString('es-CL')}</p>
+                        )}
+                        {item.unit_value != null && (
+                          <p className="text-[10px] text-theme-text-muted">c/u ${item.unit_value.toLocaleString('es-CL')}</p>
+                        )}
                       </div>
                     </div>
                   ))}

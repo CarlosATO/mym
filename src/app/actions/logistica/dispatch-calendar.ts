@@ -10,7 +10,8 @@ async function requireSuperUsuario() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'No autorizado' }
-  const { data: profile } = await supabase.from('users').select('role_id, roles:role_id(name)').eq('id', user.id).single()
+  const admin = logisticaAdmin()
+  const { data: profile } = await admin.from('users').select('role_id, roles:role_id(name)').eq('id', user.id).single()
   const roleName = (profile?.roles as any)?.name
   if (roleName !== 'SUPER_USUARIO') return { error: 'Se requiere rol SUPER_USUARIO' }
   return { user }

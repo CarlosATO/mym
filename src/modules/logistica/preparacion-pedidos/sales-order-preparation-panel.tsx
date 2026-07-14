@@ -1,31 +1,62 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { Search, MapPin, Calendar, Users, SlidersHorizontal, Info, KanbanSquare, Loader2 } from 'lucide-react'
+import { useEffect, useState, useMemo } from 'react'
+import { Search, SlidersHorizontal, KanbanSquare, Loader2, RotateCcw, Lock } from 'lucide-react'
 import { 
   getSalesOrderPreparationBoard, 
   getSalesOrderPreparationItems,
-  previewSalesOrderPreparationCandidates,
   SalesOrderPreparationCardInfo,
   SalesOrderPreparationItem,
-  PreviewCandidatesResult
 } from '@/app/actions/logistica/sales-order-preparation'
 import { SalesOrderCard } from './sales-order-card'
 import { SalesOrderDrawer } from './sales-order-drawer'
 
-
 type KanbanColumn = {
   id: string
   title: string
-  color: string
+  colorHeader: string
+  colorBody: string
+  badge: string
+  locked?: boolean
 }
 
 const COLUMNS: KanbanColumn[] = [
-  { id: 'PENDING_ROUTE_PREP', title: 'Pendiente / Próxima Ruta', color: 'border-orange-500/30 bg-orange-500/5' },
-  { id: 'IN_PREPARATION', title: 'En Preparación', color: 'border-blue-500/30 bg-blue-500/5' },
-  { id: 'IN_AUDIT', title: 'En Auditoría', color: 'border-purple-500/30 bg-purple-500/5' },
-  { id: 'INVOICED_READY_FOR_ROUTE', title: 'Facturada / Lista', color: 'border-green-500/30 bg-green-500/5 opacity-80' },
-  { id: 'CANCELLED', title: 'Canceladas', color: 'border-red-500/30 bg-red-500/5' }
+  {
+    id: 'PENDING_ROUTE_PREP',
+    title: 'Pendiente / Próxima Ruta',
+    colorHeader: 'border-orange-500/40 bg-orange-500/8',
+    colorBody: 'bg-orange-500/3',
+    badge: 'bg-orange-500/15 text-orange-400',
+  },
+  {
+    id: 'IN_PREPARATION',
+    title: 'En Preparación',
+    colorHeader: 'border-blue-500/40 bg-blue-500/8',
+    colorBody: 'bg-blue-500/3',
+    badge: 'bg-blue-500/15 text-blue-400',
+  },
+  {
+    id: 'IN_AUDIT',
+    title: 'En Auditoría',
+    colorHeader: 'border-purple-500/40 bg-purple-500/8',
+    colorBody: 'bg-purple-500/3',
+    badge: 'bg-purple-500/15 text-purple-400',
+  },
+  {
+    id: 'INVOICED_READY_FOR_ROUTE',
+    title: 'Facturada / Lista',
+    colorHeader: 'border-green-500/40 bg-green-500/8',
+    colorBody: 'bg-green-500/3',
+    badge: 'bg-green-500/15 text-green-400',
+    locked: true,
+  },
+  {
+    id: 'CANCELLED',
+    title: 'Canceladas',
+    colorHeader: 'border-red-500/30 bg-red-500/5',
+    colorBody: 'bg-red-500/3',
+    badge: 'bg-red-500/15 text-red-400',
+  },
 ]
 
 export function SalesOrderPreparationPanel() {
@@ -34,34 +65,17 @@ export function SalesOrderPreparationPanel() {
   const [cards, setCards] = useState<SalesOrderPreparationCardInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  
+
   // Drawer state
   const [selectedCard, setSelectedCard] = useState<SalesOrderPreparationCardInfo | null>(null)
   const [selectedItems, setSelectedItems] = useState<SalesOrderPreparationItem[]>([])
   const [loadingItems, setLoadingItems] = useState(false)
 
-  // Filters state (front-end only for now)
+  // Filters
   const [searchTerm, setSearchTerm] = useState('')
-
-  // Preview state
-  const [previewFrom, setPreviewFrom] = useState('')
-  const [previewTo, setPreviewTo] = useState('')
-  const [previewLoading, setPreviewLoading] = useState(false)
-  const [previewResult, setPreviewResult] = useState<PreviewCandidatesResult | null>(null)
-  const [previewError, setPreviewError] = useState<string | null>(null)
-
-  const handlePreview = async () => {
-    if (!previewFrom || !previewTo) return
-    setPreviewLoading(true)
-    setPreviewError(null)
-    const res = await previewSalesOrderPreparationCandidates(companyId, previewFrom, previewTo)
-    if (res.error) {
-      setPreviewError(res.error)
-    } else {
-      setPreviewResult(res.data)
-    }
-    setPreviewLoading(false)
-  }
+  const [filterCity, setFilterCity] = useState('')
+  const [filterSeller, setFilterSeller] = useState('')
+  const [showAdvanced, setShowAdvanced] = useState(false)
 
   useEffect(() => {
     async function loadBoard() {
@@ -89,176 +103,140 @@ export function SalesOrderPreparationPanel() {
     setLoadingItems(false)
   }
 
-  const filteredCards = cards.filter(card => {
-    if (!searchTerm) return true
-    const term = searchTerm.toLowerCase()
-    return (
-      card.nv_folio.toLowerCase().includes(term) ||
-      card.client_name.toLowerCase().includes(term) ||
-      (card.normalized_city && card.normalized_city.toLowerCase().includes(term))
-    )
-  })
+  // Unique options for selects
+  const cities = useMemo(() => [...new Set(cards.map(c => c.normalized_city || c.city_raw || '').filter(Boolean))].sort(), [cards])
+  const sellers = useMemo(() => [...new Set(cards.map(c => c.seller_name || '').filter(Boolean))].sort(), [cards])
+
+  const filteredCards = useMemo(() => cards.filter(card => {
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase()
+      const hit = (
+        String(card.nv_folio).toLowerCase().includes(term) ||
+        card.client_name.toLowerCase().includes(term) ||
+        (card.normalized_city ?? '').toLowerCase().includes(term) ||
+        (card.city_raw ?? '').toLowerCase().includes(term)
+      )
+      if (!hit) return false
+    }
+    if (filterCity && (card.normalized_city || card.city_raw) !== filterCity) return false
+    if (filterSeller && card.seller_name !== filterSeller) return false
+    return true
+  }), [cards, searchTerm, filterCity, filterSeller])
+
+  const hasFilters = searchTerm || filterCity || filterSeller
+  const clearFilters = () => { setSearchTerm(''); setFilterCity(''); setFilterSeller('') }
 
   return (
-    <div className="h-[calc(100vh-160px)] flex flex-col bg-theme-base rounded-2xl border border-theme-border shadow-sm overflow-hidden relative">
-      {/* Header & Toolbars */}
-      <div className="flex-none p-6 border-b border-theme-border bg-theme-panel">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
-          <div>
-            <h1 className="text-xl font-bold text-theme-text flex items-center gap-2">
-              <KanbanSquare className="w-6 h-6 text-theme-accent" />
-              Preparación de Pedidos
-            </h1>
-            <p className="text-sm text-theme-text-muted mt-1">
-              Notas de Venta de Bsale organizadas para preparación en bodega.
-            </p>
+    <div className="flex flex-col h-[calc(100vh-110px)] w-full overflow-hidden">
+      {/* ── Header / Toolbar ── */}
+      <div className="flex-none px-4 pt-4 pb-3 border-b border-theme-border bg-theme-panel">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <KanbanSquare className="w-5 h-5 text-theme-accent" />
+            <h1 className="text-base font-bold text-theme-text">Preparación de Pedidos</h1>
+            <span className="px-2 py-0.5 rounded-full bg-theme-accent/10 text-theme-accent text-xs font-bold">
+              {cards.length}
+            </span>
           </div>
-          
-          <div className="flex items-center gap-4 text-sm font-medium">
-            <div className="flex items-center gap-1.5 px-3 py-1.5 bg-theme-border/20 rounded-lg text-theme-text">
-              <span className="text-theme-accent">{cards.length}</span> Totales
-            </div>
-          </div>
+          <button
+            onClick={() => setShowAdvanced(v => !v)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${showAdvanced ? 'bg-theme-accent/15 text-theme-accent' : 'bg-theme-border/30 text-theme-text-muted hover:bg-theme-border/50'}`}
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5" />
+            Filtros{showAdvanced ? ' ▲' : ' ▼'}
+          </button>
         </div>
 
-        {/* Filters */}
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative flex-1 min-w-[250px] max-w-md">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted" />
-            <input 
-              type="text" 
-              placeholder="Buscar por folio, cliente o ciudad..."
+        {/* Search row */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative flex-1 min-w-[200px] max-w-sm">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-text-muted" />
+            <input
+              type="text"
+              placeholder="Folio, cliente o ciudad…"
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 bg-theme-base border border-theme-border rounded-xl text-sm text-theme-text focus:outline-none focus:border-theme-accent transition-colors"
+              className="w-full pl-8 pr-3 py-1.5 bg-theme-base border border-theme-border rounded-lg text-xs text-theme-text focus:outline-none focus:border-theme-accent transition-colors"
             />
           </div>
-          <button className="flex items-center gap-2 px-4 py-2 bg-theme-border/20 hover:bg-theme-border/40 text-theme-text text-sm font-medium rounded-xl transition-colors">
-            <SlidersHorizontal className="w-4 h-4" /> Filtros
-          </button>
+
+          {showAdvanced && (
+            <>
+              <select
+                value={filterCity}
+                onChange={e => setFilterCity(e.target.value)}
+                className="py-1.5 px-3 bg-theme-base border border-theme-border rounded-lg text-xs text-theme-text focus:outline-none focus:border-theme-accent"
+              >
+                <option value="">Todas las comunas</option>
+                {cities.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <select
+                value={filterSeller}
+                onChange={e => setFilterSeller(e.target.value)}
+                className="py-1.5 px-3 bg-theme-base border border-theme-border rounded-lg text-xs text-theme-text focus:outline-none focus:border-theme-accent"
+              >
+                <option value="">Todos los vendedores</option>
+                {sellers.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </>
+          )}
+
+          {hasFilters && (
+            <button
+              onClick={clearFilters}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors"
+            >
+              <RotateCcw className="w-3 h-3" /> Limpiar
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Kanban Board Area */}
-      <div className="flex-1 overflow-x-auto overflow-y-hidden bg-theme-base/50 p-6">
+      {/* ── Kanban Board ── */}
+      <div className="flex-1 overflow-hidden p-3">
         {loading ? (
-          <div className="h-full flex flex-col items-center justify-center text-theme-text-muted space-y-4">
-            <Loader2 className="w-8 h-8 animate-spin text-theme-accent" />
-            <p className="font-medium">Cargando tablero...</p>
+          <div className="h-full flex flex-col items-center justify-center text-theme-text-muted space-y-3">
+            <Loader2 className="w-7 h-7 animate-spin text-theme-accent" />
+            <p className="text-sm font-medium">Cargando tablero…</p>
           </div>
         ) : error ? (
-          <div className="h-full flex items-center justify-center text-red-500 font-medium">
-            Error al cargar: {error}
-          </div>
-        ) : cards.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto">
-            <div className="w-16 h-16 bg-theme-accent/10 text-theme-accent rounded-full flex items-center justify-center mb-6">
-              <KanbanSquare className="w-8 h-8" />
-            </div>
-            <h3 className="text-lg font-semibold text-theme-text mb-2">No hay tarjetas de preparación creadas todavía.</h3>
-            <p className="text-sm text-theme-text-muted mb-6">
-              Las Notas de Venta ya están disponibles desde Bsale. La creación de tarjetas se realizará de forma controlada por rango de fechas en sincronizaciones futuras.
-            </p>
-            <div className="px-4 py-3 bg-blue-500/10 border border-blue-500/20 rounded-xl text-blue-500 text-sm flex items-start gap-3 text-left mb-6">
-              <Info className="w-5 h-5 shrink-0 mt-0.5" />
-              <p>Módulo en fase de despliegue inicial (Solo Lectura). Próximamente se habilitará la importación de tarjetas.</p>
-            </div>
-
-            {/* Preview Box */}
-            <div className="w-full max-w-md bg-theme-panel border border-theme-border rounded-xl p-5 shadow-sm text-left">
-              <h4 className="font-semibold text-theme-text flex items-center gap-2 mb-4">
-                <Search className="w-4 h-4 text-theme-text-muted" />
-                Previsualizar Notas de Venta disponibles
-              </h4>
-              
-              <div className="flex gap-3 mb-4">
-                <div className="flex-1">
-                  <label className="block text-xs font-medium text-theme-text-muted mb-1">Desde</label>
-                  <input 
-                    type="date" 
-                    value={previewFrom}
-                    onChange={(e) => setPreviewFrom(e.target.value)}
-                    className="w-full bg-theme-base border border-theme-border rounded-lg px-3 py-2 text-sm text-theme-text focus:border-theme-accent focus:ring-1 focus:ring-theme-accent outline-none transition-all"
-                  />
-                </div>
-                <div className="flex-1">
-                  <label className="block text-xs font-medium text-theme-text-muted mb-1">Hasta</label>
-                  <input 
-                    type="date" 
-                    value={previewTo}
-                    onChange={(e) => setPreviewTo(e.target.value)}
-                    className="w-full bg-theme-base border border-theme-border rounded-lg px-3 py-2 text-sm text-theme-text focus:border-theme-accent focus:ring-1 focus:ring-theme-accent outline-none transition-all"
-                  />
-                </div>
-              </div>
-
-              <button
-                onClick={handlePreview}
-                disabled={!previewFrom || !previewTo || previewLoading}
-                className="w-full py-2 bg-theme-accent hover:bg-theme-accent-hover text-white rounded-lg font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {previewLoading && <Loader2 className="w-4 h-4 animate-spin" />}
-                Previsualizar
-              </button>
-
-              {previewError && (
-                <div className="mt-4 p-3 bg-red-500/10 border border-red-500/20 text-red-500 text-sm rounded-lg">
-                  {previewError}
-                </div>
-              )}
-
-              {previewResult && !previewLoading && (
-                <div className="mt-4 space-y-2 border-t border-theme-border pt-4">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-theme-text-muted">Total candidatas:</span>
-                    <span className="font-semibold text-theme-text">{previewResult.total_candidates}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-theme-text-muted">Ya creadas:</span>
-                    <span className="font-semibold text-theme-text">{previewResult.already_materialized}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-theme-text-muted">Pendientes de crear:</span>
-                    <span className="font-semibold text-theme-accent">{previewResult.pending_to_create}</span>
-                  </div>
-                  <p className="text-[11px] text-orange-500 mt-3 flex items-start gap-1.5 bg-orange-500/10 p-2 rounded-lg border border-orange-500/20">
-                    <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                    Esta acción solo consulta datos. No crea tarjetas.
-                  </p>
-                </div>
-              )}
-            </div>
-          </div>
+          <div className="h-full flex items-center justify-center text-red-500 text-sm font-medium">{error}</div>
         ) : (
-          <div className="flex gap-6 h-full min-w-max pb-4">
+          /* Grid de 5 columnas, todas en pantalla, sin scroll horizontal */
+          <div className="grid grid-cols-5 gap-3 h-full">
             {COLUMNS.map(col => {
               const colCards = filteredCards.filter(c => c.status === col.id)
-              
               return (
-                <div key={col.id} className={`flex flex-col w-[320px] rounded-xl border ${col.color} overflow-hidden`}>
-                  {/* Column Header */}
-                  <div className="px-4 py-3 border-b border-theme-border/50 flex items-center justify-between bg-theme-panel/50 backdrop-blur-sm">
-                    <h3 className="font-semibold text-sm text-theme-text">{col.title}</h3>
-                    <span className="px-2 py-0.5 bg-theme-base rounded-full text-xs font-bold text-theme-text-muted">
+                <div key={col.id} className={`flex flex-col rounded-xl border ${col.colorHeader} overflow-hidden min-w-0`}>
+                  {/* Column header */}
+                  <div className="flex-none flex items-center justify-between px-3 py-2 border-b border-theme-border/30">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      {col.locked && <Lock className="w-3 h-3 text-theme-text-muted/60 shrink-0" />}
+                      <h3 className="text-xs font-semibold text-theme-text leading-tight truncate">{col.title}</h3>
+                    </div>
+                    <span className={`ml-1.5 shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${col.badge}`}>
                       {colCards.length}
                     </span>
                   </div>
 
-                  {/* Column Body */}
-                  <div className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar">
-                    {col.id === 'INVOICED_READY_FOR_ROUTE' && colCards.length === 0 && (
-                      <div className="p-4 border border-dashed border-theme-border rounded-xl text-center">
-                        <Info className="w-5 h-5 text-theme-text-muted mx-auto mb-2" />
-                        <p className="text-xs text-theme-text-muted leading-relaxed">
-                          Movimiento automático pendiente de integración factura Bsale.
+                  {/* Column body */}
+                  <div className={`flex-1 overflow-y-auto p-2 space-y-2 ${col.colorBody}`}>
+                    {col.locked && colCards.length === 0 && (
+                      <div className="pt-4 px-2 text-center">
+                        <Lock className="w-4 h-4 text-theme-text-muted/40 mx-auto mb-1.5" />
+                        <p className="text-[10px] text-theme-text-muted/60 leading-snug">
+                          Movimiento automático al detectar factura en Bsale.
                         </p>
                       </div>
                     )}
+                    {colCards.length === 0 && !col.locked && (
+                      <p className="pt-6 text-center text-[10px] text-theme-text-muted/40">Sin tarjetas</p>
+                    )}
                     {colCards.map(card => (
-                      <SalesOrderCard 
-                        key={card.card_id} 
-                        card={card} 
-                        onClick={() => openCardDetails(card)} 
+                      <SalesOrderCard
+                        key={card.card_id}
+                        card={card}
+                        onClick={() => openCardDetails(card)}
                       />
                     ))}
                   </div>
@@ -270,7 +248,7 @@ export function SalesOrderPreparationPanel() {
       </div>
 
       {/* Drawer */}
-      <SalesOrderDrawer 
+      <SalesOrderDrawer
         card={selectedCard}
         items={selectedItems}
         isLoadingItems={loadingItems}
