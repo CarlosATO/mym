@@ -46,7 +46,7 @@ export default function LoginPage() {
           {/* Divisor elegante */}
           <div className="flex items-center gap-4">
             <div className="flex-1 h-px bg-gradient-to-r from-transparent via-theme-accent/30 to-transparent" />
-            <span className="text-theme-accent/40 text-xs font-bold tracking-widest uppercase">PetGrup</span>
+            <span className="text-theme-accent/40 text-xs font-bold tracking-widest uppercase">PetGroup</span>
             <div className="flex-1 h-px bg-gradient-to-l from-transparent via-theme-accent/30 to-transparent" />
           </div>
 
@@ -96,7 +96,7 @@ export default function LoginPage() {
                 className="select-none"
               />
             </div>
-            <span className="text-lg font-bold text-theme-text/80 tracking-widest uppercase">PetGrup</span>
+            <span className="text-lg font-bold text-theme-text/80 tracking-widest uppercase">PetGroup</span>
           </div>
 
           <LoginForm />
