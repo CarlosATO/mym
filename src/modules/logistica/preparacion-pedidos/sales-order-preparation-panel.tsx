@@ -131,12 +131,33 @@ export function SalesOrderPreparationPanel() {
       {/* ── Header / Toolbar ── */}
       <div className="flex-none px-4 pt-4 pb-3 border-b border-theme-border bg-theme-panel">
         <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <KanbanSquare className="w-5 h-5 text-theme-accent" />
-            <h1 className="text-base font-bold text-theme-text">Preparación de Pedidos</h1>
-            <span className="px-2 py-0.5 rounded-full bg-theme-accent/10 text-theme-accent text-xs font-bold">
-              {cards.length}
-            </span>
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <KanbanSquare className="w-5 h-5 text-theme-accent" />
+              <h1 className="text-base font-bold text-theme-text">Ruta o rutas a preparar</h1>
+              <span className="px-2 py-0.5 rounded-full bg-theme-accent/10 text-theme-accent text-xs font-bold">
+                {filteredCards.length} {filteredCards.length === 1 ? 'pedido' : 'pedidos'}
+              </span>
+            </div>
+            {filteredCards.length > 0 && (() => {
+              const uniqueDates = [...new Set(filteredCards.map(c => c.route_date).filter(Boolean))].sort()
+              const dateStrs = uniqueDates.map(d => new Date(d!).toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric' }))
+              const dateText = dateStrs.length === 1 ? `Salida de ruta: ${dateStrs[0]}` : dateStrs.length > 1 ? `Salidas de ruta: ${dateStrs.join(', ')}` : 'Salida de ruta: Sin fecha asignada'
+              const uniqueCities = [...new Set(filteredCards.map(c => c.normalized_city || c.city_raw).filter(Boolean))]
+              return (
+                <div className="text-xs text-theme-text-muted flex gap-3">
+                  <span>{dateText}</span>
+                  <span>·</span>
+                  <span>{uniqueCities.length} {uniqueCities.length === 1 ? 'comuna' : 'comunas'}</span>
+                  {uniqueCities.length > 0 && (
+                    <>
+                      <span>·</span>
+                      <span className="truncate max-w-[300px]">{uniqueCities.join(', ')}</span>
+                    </>
+                  )}
+                </div>
+              )
+            })()}
           </div>
           <button
             onClick={() => setShowAdvanced(v => !v)}

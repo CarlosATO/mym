@@ -2,6 +2,12 @@
 
 import { createClient } from '@/lib/supabase/server'
 
+export type SalesOrderClientData = {
+  rut: string | null
+  phone: string | null
+  email: string | null
+}
+
 export type SalesOrderPreparationCardInfo = {
   card_id: string
   company_id: string
@@ -22,6 +28,9 @@ export type SalesOrderPreparationCardInfo = {
   seller_name: string | null
   total_quantity: number
   total_amount: number | null
+  net_amount: number | null
+  tax_amount: number | null
+  gross_amount: number | null
   invoice_folio: string | null
   is_invoiced: boolean
   created_at: string
@@ -39,6 +48,10 @@ export type SalesOrderPreparationItem = {
   quantity: number
   unit_value: number | null
   total_amount: number | null
+  unit_net_value: number | null
+  line_net_amount: number | null
+  line_tax_amount: number | null
+  line_gross_amount: number | null
 }
 
 export type PreviewCandidatesResult = {
@@ -107,4 +120,43 @@ export async function previewSalesOrderPreparationCandidates(companyId: string, 
   }
 
   return { data: result, error: null }
+}
+
+export async function getSalesOrderClientData(companyId: string, bsaleNvId: number): Promise<{ data: SalesOrderClientData | null, error: string | null }> {
+  const supabase = await createClient()
+
+  // First get the client_id from the NV document
+  const { data: doc, error: docError } = await supabase
+    .schema('integraciones')
+    .from('bsale_documents')
+    .select('client_id')
+    .eq('company_id', companyId)
+    .eq('bsale_id', bsaleNvId)
+    .single()
+
+  if (docError || !doc || !doc.client_id) {
+    return { data: null, error: docError?.message || 'Document or client not found' }
+  }
+
+  // Then fetch the client data
+  const { data: client, error: clientError } = await supabase
+    .schema('integraciones')
+    .from('bsale_clients')
+    .select('code, phone, email')
+    .eq('company_id', companyId)
+    .eq('bsale_client_id', doc.client_id)
+    .single()
+
+  if (clientError || !client) {
+    return { data: null, error: clientError?.message || 'Client details not found' }
+  }
+
+  return { 
+    data: { 
+      rut: client.code, 
+      phone: client.phone, 
+      email: client.email 
+    }, 
+    error: null 
+  }
 }

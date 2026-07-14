@@ -24,7 +24,7 @@ export function SalesOrderCard({ card, onClick }: SalesOrderCardProps) {
         <span className="inline-block px-1.5 py-0.5 bg-theme-accent/10 text-theme-accent text-[10px] font-bold rounded">
           NV #{card.nv_folio}
         </span>
-        <span className="text-[10px] text-theme-text-muted">{emitDate}</span>
+        <span className="text-[10px] text-theme-text-muted">Emitida: {emitDate}</span>
       </div>
 
       {/* Client */}
@@ -48,6 +48,10 @@ export function SalesOrderCard({ card, onClick }: SalesOrderCardProps) {
             <span>Ruta: {routeDate}</span>
           </div>
         )}
+        <div className="flex items-center text-[10px] text-theme-text-muted gap-1">
+          <Package className="w-3 h-3 shrink-0 opacity-70" />
+          <span>Preparación: Sin iniciar</span>
+        </div>
       </div>
 
       {/* Footer */}
@@ -56,9 +60,9 @@ export function SalesOrderCard({ card, onClick }: SalesOrderCardProps) {
           <Package className="w-3 h-3 shrink-0 text-theme-accent opacity-80" />
           {card.total_quantity} {card.total_quantity === 1 ? 'ítem' : 'ítems'}
         </div>
-        {card.total_amount != null && (
+        {card.net_amount != null && (
           <span className="font-semibold text-theme-text">
-            ${card.total_amount.toLocaleString('es-CL')}
+            ${card.net_amount.toLocaleString('es-CL')}
           </span>
         )}
       </div>

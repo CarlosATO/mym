@@ -1,7 +1,9 @@
 'use client'
 
-import { X, MapPin, Package, User, FileText, FileCheck, CheckCircle2 } from 'lucide-react'
-import { SalesOrderPreparationCardInfo, SalesOrderPreparationItem } from '@/app/actions/logistica/sales-order-preparation'
+import { X, MapPin, Package, User, FileText, FileCheck, CheckCircle2, Printer } from 'lucide-react'
+import { SalesOrderPreparationCardInfo, SalesOrderPreparationItem, getSalesOrderClientData, SalesOrderClientData } from '@/app/actions/logistica/sales-order-preparation'
+import { SalesOrderPrintDocument } from './components/sales-order-print-document'
+import { useState, useEffect } from 'react'
 
 interface SalesOrderDrawerProps {
   card: SalesOrderPreparationCardInfo | null
@@ -11,6 +13,16 @@ interface SalesOrderDrawerProps {
 }
 
 export function SalesOrderDrawer({ card, items, isLoadingItems, onClose }: SalesOrderDrawerProps) {
+  const [clientData, setClientData] = useState<SalesOrderClientData | null>(null)
+
+  useEffect(() => {
+    if (card?.company_id && card?.nv_bsale_id) {
+      getSalesOrderClientData(card.company_id, card.nv_bsale_id).then((res) => {
+        if (res.data) setClientData(res.data)
+      })
+    }
+  }, [card?.company_id, card?.nv_bsale_id])
+
   if (!card) return null
 
   const dateStr = new Date(card.nv_emission_date).toLocaleDateString('es-CL', { day: 'numeric', month: 'long', year: 'numeric' })
@@ -18,12 +30,28 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose }: Sales
 
   return (
     <>
+      <div className="hidden print:block print:absolute print:inset-0 print:bg-white print:z-[9999]">
+        <style>{`
+          @media print {
+            body * { visibility: hidden !important; }
+            .sales-order-print-container, .sales-order-print-container * { visibility: visible !important; }
+            .sales-order-print-container { 
+              position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; margin: 0; padding: 0;
+            }
+            .drawer-no-print { display: none !important; }
+          }
+        `}</style>
+        <div className="sales-order-print-container">
+          <SalesOrderPrintDocument card={card} items={items} clientData={clientData} />
+        </div>
+      </div>
+
       <div 
-        className="fixed inset-0 bg-theme-base/80 backdrop-blur-sm z-50 transition-opacity" 
+        className="fixed inset-0 bg-theme-base/80 backdrop-blur-sm z-50 transition-opacity drawer-no-print" 
         onClick={onClose} 
       />
       
-      <div className="fixed inset-y-0 right-0 z-50 w-full max-w-md bg-theme-panel border-l border-theme-border shadow-2xl flex flex-col transition-transform transform">
+      <div className="fixed inset-y-0 right-0 z-50 w-full max-w-md bg-theme-panel border-l border-theme-border shadow-2xl flex flex-col transition-transform transform drawer-no-print">
         {/* Header */}
         <div className="flex-none px-6 py-4 border-b border-theme-border bg-theme-panel-hover/50 flex items-center justify-between">
           <div>
@@ -134,7 +162,7 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose }: Sales
                 <Package className="w-4 h-4" /> Productos ({card.total_quantity})
               </h3>
               <span className="text-sm font-medium text-theme-text">
-                Total: ${card.total_amount?.toLocaleString('es-CL')}
+                Neto: ${card.net_amount?.toLocaleString('es-CL')}
               </span>
             </div>
             
@@ -159,11 +187,13 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose }: Sales
                         {item.sku && <p className="text-xs text-theme-text-muted mt-0.5">SKU: {item.sku}</p>}
                       </div>
                       <div className="text-right shrink-0">
-                        {item.total_amount != null && (
-                          <p className="text-xs font-semibold text-theme-text">${item.total_amount.toLocaleString('es-CL')}</p>
+                        {item.line_net_amount != null ? (
+                          <p className="text-xs font-semibold text-theme-text">${item.line_net_amount.toLocaleString('es-CL')}</p>
+                        ) : (
+                          <p className="text-xs font-semibold text-red-500">Sin dato neto</p>
                         )}
-                        {item.unit_value != null && (
-                          <p className="text-[10px] text-theme-text-muted">c/u ${item.unit_value.toLocaleString('es-CL')}</p>
+                        {item.unit_net_value != null && (
+                          <p className="text-[10px] text-theme-text-muted">c/u ${item.unit_net_value.toLocaleString('es-CL')}</p>
                         )}
                       </div>
                     </div>
@@ -176,10 +206,16 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose }: Sales
         </div>
         
         {/* Footer */}
-        <div className="flex-none p-4 border-t border-theme-border bg-theme-panel">
+        <div className="flex-none p-4 border-t border-theme-border bg-theme-panel flex gap-3">
+          <button 
+            onClick={() => window.print()}
+            className="flex-1 py-2.5 px-4 bg-theme-accent hover:bg-theme-accent-hover text-white font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
+          >
+            <Printer className="w-4 h-4" /> Imprimir
+          </button>
           <button 
             onClick={onClose}
-            className="w-full py-2.5 px-4 bg-theme-border/50 hover:bg-theme-border/80 text-theme-text font-medium rounded-xl transition-colors"
+            className="flex-1 py-2.5 px-4 bg-theme-border/50 hover:bg-theme-border/80 text-theme-text font-medium rounded-xl transition-colors"
           >
             Cerrar detalle
           </button>
