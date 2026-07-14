@@ -31,13 +31,16 @@ export function normalizePaymentMethodAdvanced(rawMethod: string | null | undefi
     };
   }
 
-  // CASH
+  // CASH: efectivo, contado, al dia, pago contra entrega, prepago, cash, 48 horas
   if (
     normalized === 'al dia' || 
     normalized === 'aldia' || 
     normalized === 'efectivo' || 
     normalized === 'contado' || 
-    normalized === 'cash'
+    normalized === 'cash' ||
+    normalized === 'pago contra entrega' ||
+    normalized === 'prepago' ||
+    normalized === '48 horas'
   ) {
     return { normalized: 'CASH', label: 'Efectivo', requiresSettlement: true, confidence: 'HIGH' };
   }
@@ -52,31 +55,27 @@ export function normalizePaymentMethodAdvanced(rawMethod: string | null | undefi
     return { normalized: 'CHECK', label: 'Cheque', requiresSettlement: true, confidence: 'HIGH' };
   }
 
-  // TRANSFER
+  // TRANSFER: match any text containing transferencia/tranferencia/transf/deposito
   if (
-    normalized === 'transferencia' ||
-    normalized === 'transferencia bancaria' ||
+    normalized.includes('transferencia') ||
+    normalized.includes('tranferencia') || // Bsale typo: "TRAN" vs "TRANS"
     normalized === 'transfer' ||
-    normalized === 'trans bancaria' ||
-    normalized === 'trans banc' ||
-    normalized === 'transf' ||
-    normalized === 'transf bancaria' ||
-    normalized === 'transfer banc' ||
+    normalized.includes('trans banc') ||
+    normalized.includes('transf') ||
     normalized === 'deposito' ||
     normalized === 'dep bancario'
   ) {
-    return { normalized: 'TRANSFER', label: 'Transferencia', requiresSettlement: false, confidence: 'HIGH' };
+    return { normalized: 'TRANSFER', label: 'Transferencia', requiresSettlement: false, confidence: 'MEDIUM' };
   }
 
-  // CREDIT
+  // CREDIT: match any text containing credito
   if (
-    normalized === 'credito' ||
-    normalized === 'credito 12 dias' ||
-    normalized === 'cred 12' ||
+    normalized.includes('credito') ||
     normalized === 'a credito' ||
+    normalized === 'cta cte' ||
     normalized === 'cta cte'
   ) {
-    return { normalized: 'CREDIT', label: 'Crédito', requiresSettlement: false, confidence: 'HIGH' };
+    return { normalized: 'CREDIT', label: 'Crédito', requiresSettlement: false, confidence: 'MEDIUM' };
   }
 
   // Desconocido
@@ -113,4 +112,8 @@ export function getPaymentMethodHelp(): string[] {
     'Transferencia: "Transferencia bancaria", "Transferencia", "Trans bancaria", "Transf"',
     'Crédito: "Crédito", "Crédito 12 días"'
   ];
+}
+
+export function normalizeBsaleSaleCondition(bsaleName: string): PaymentNormalizationResult {
+  return normalizePaymentMethodAdvanced(bsaleName);
 }

@@ -4,6 +4,14 @@ import { formatCurrency } from '../utils/route-guide-formatters';
 import { Plus, Trash2, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
+export interface SaleConditionOption {
+  id: string;
+  bsale_id: number;
+  name: string;
+  normalized: 'CASH' | 'CHECK' | 'TRANSFER' | 'CREDIT' | 'UNKNOWN';
+  label: string;
+}
+
 interface RouteGuideGridProps {
   items: RouteGuideItem[];
   totals: any;
@@ -12,6 +20,7 @@ interface RouteGuideGridProps {
   onRemoveRow: (index: number) => void;
   onClearGrid: () => void;
   readOnly?: boolean;
+  saleConditions?: SaleConditionOption[];
 }
 
 export function RouteGuideGrid({
@@ -21,7 +30,8 @@ export function RouteGuideGrid({
   onPaste,
   onRemoveRow,
   onClearGrid,
-  readOnly = false
+  readOnly = false,
+  saleConditions = []
 }: RouteGuideGridProps) {
   const tableRef = useRef<HTMLTableElement>(null);
 
@@ -230,26 +240,47 @@ export function RouteGuideGrid({
                   </td>
 
                   <td className="px-1 py-1 relative group">
-                    <input
-                      type="text"
-                      className={cn(
-                        "w-full h-8 px-2 rounded-lg border border-transparent focus:border-theme-accent/50 focus:ring-1 focus:ring-theme-accent/30 bg-transparent text-xs text-theme-text placeholder:text-theme-text-muted/50",
-                        isInvalid && !item.payment_method_original && hasData ? "border-red-500/50 bg-red-500/5" : "",
-                        item.payment_method_normalized === 'UNKNOWN' && item.payment_method_original?.trim() ? "border-orange-500/50 bg-orange-500/5 pr-6" : ""
-                      )}
-                      value={item.payment_method_original}
-                      onChange={(e) => onCellChange(idx, 'payment_method_original', e.target.value)}
-                      onPaste={(e) => onPaste(e, idx, 'payment_method_original')}
-                      onKeyDown={(e) => handleKeyDown(e, idx, 5)}
-                      disabled={readOnly}
-                      placeholder="Efectivo/Cheque..."
-                    />
-                    {item.payment_method_normalized === 'UNKNOWN' && item.payment_method_original?.trim() && (
-                      <div 
-                        className="absolute right-2 top-1/2 -translate-y-1/2 text-orange-500 cursor-help"
-                        title="Forma de pago no reconocida. Será guardada como advertencia, pero debe corregirse para despachar."
+                    {saleConditions.length > 0 && !readOnly ? (
+                      <select
+                        className={cn(
+                          "w-full h-8 px-2 rounded-lg border border-transparent focus:border-theme-accent/50 focus:ring-1 focus:ring-theme-accent/30 bg-transparent text-xs text-theme-text appearance-none cursor-pointer",
+                          !item.payment_method_original ? "text-theme-text-muted/50" : "",
+                          isInvalid && !item.payment_method_original && hasData ? "border-red-500/50 bg-red-500/5" : "",
+                          item.payment_method_normalized === 'UNKNOWN' && item.payment_method_original?.trim() ? "border-orange-500/50 bg-orange-500/5" : ""
+                        )}
+                        value={item.payment_method_original}
+                        onChange={(e) => onCellChange(idx, 'payment_method_original', e.target.value)}
+                        disabled={readOnly}
                       >
-                        <AlertTriangle className="w-3.5 h-3.5" />
+                        <option value="">Seleccionar...</option>
+                        {saleConditions.map((sc) => (
+                          <option key={sc.id} value={sc.name}>{sc.label}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <div className="relative">
+                        <input
+                          type="text"
+                          className={cn(
+                            "w-full h-8 px-2 rounded-lg border border-transparent focus:border-theme-accent/50 focus:ring-1 focus:ring-theme-accent/30 bg-transparent text-xs text-theme-text placeholder:text-theme-text-muted/50",
+                            isInvalid && !item.payment_method_original && hasData ? "border-red-500/50 bg-red-500/5" : "",
+                            item.payment_method_normalized === 'UNKNOWN' && item.payment_method_original?.trim() ? "border-orange-500/50 bg-orange-500/5 pr-6" : ""
+                          )}
+                          value={item.payment_method_original}
+                          onChange={(e) => onCellChange(idx, 'payment_method_original', e.target.value)}
+                          onPaste={(e) => onPaste(e, idx, 'payment_method_original')}
+                          onKeyDown={(e) => handleKeyDown(e, idx, 5)}
+                          disabled={readOnly || saleConditions.length > 0}
+                          placeholder="Efectivo/Cheque..."
+                        />
+                        {item.payment_method_normalized === 'UNKNOWN' && item.payment_method_original?.trim() && (
+                          <div 
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-orange-500 cursor-help"
+                            title="Forma de pago no reconocida. Será guardada como advertencia, pero debe corregirse para despachar."
+                          >
+                            <AlertTriangle className="w-3.5 h-3.5" />
+                          </div>
+                        )}
                       </div>
                     )}
                   </td>

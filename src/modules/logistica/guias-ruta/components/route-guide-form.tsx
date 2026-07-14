@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { CatalogOptions, RouteGuide } from '../types';
-import { RouteGuideGrid } from './route-guide-grid';
+import { RouteGuideGrid, type SaleConditionOption } from './route-guide-grid';
 import { useRouteGuideGrid } from '../hooks/use-route-guide-grid';
 import { RouteGuideCombobox } from './route-guide-combobox';
 import { Save, Send, AlertTriangle, XCircle } from 'lucide-react';
@@ -8,6 +8,7 @@ import { createDeliveryRouteInline, createRouteVehicleInline, createRoutePersonI
 import type { RouteSaveDuplicateWarning, RouteDuplicateInvoice, SaveRouteGuideDraftResult } from '@/app/actions/logistica/guias-ruta';
 import { generateRouteGuidePdfBlob, downloadRouteGuidePdf } from '@/lib/pdf/generate-route-guide-pdf';
 import { parseChileanMoney, isEmptyRouteGuideRow } from '../utils/route-guide-validation';
+import { getSaleConditions } from '@/app/actions/integraciones/sale-conditions';
 
 function formatStatus(status: string) {
   if (status === 'DRAFT') return 'Borrador';
@@ -56,6 +57,11 @@ export function RouteGuideForm({
 
   const grid = useRouteGuideGrid(initialData?.items || []);
   const readOnly = status === 'DISPATCHED' || status === 'CANCELLED';
+
+  const [saleConditions, setSaleConditions] = useState<SaleConditionOption[]>([]);
+  useEffect(() => {
+    getSaleConditions().then(setSaleConditions).catch(() => {});
+  }, []);
 
   // Deduplicate options by normalized name (case-insensitive visual dedup)
   const dedupOptions = (items: any[], type?: string) => {
@@ -480,6 +486,7 @@ export function RouteGuideForm({
           onRemoveRow={grid.removeRow}
           onClearGrid={grid.clearGrid}
           readOnly={readOnly}
+          saleConditions={saleConditions}
         />
 
       </div>

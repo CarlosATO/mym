@@ -11,12 +11,15 @@ import { WarehousesPanel } from '@/modules/logistica/bodegas/warehouses-panel'
 import { ProductsPanel } from '@/modules/logistica/productos/products-panel'
 import { TransfersPanel } from '@/modules/logistica/traspasos/transfers-panel'
 import { AdjustmentsPanel } from '@/modules/logistica/ajustes/adjustments-panel'
+import { SalesOrderPreparationPanel } from '@/modules/logistica/preparacion-pedidos/sales-order-preparation-panel'
 import { RouteGuidesPanel } from '@/modules/logistica/guias-ruta/route-guides-panel'
+import { DispatchCalendarSettings } from '@/modules/logistica/parametros/dispatch-calendar-settings'
 import type { RibbonAction } from '@/components/layout/module-ribbon'
 
 const tabs = [
   { id: 'inicio', label: 'Inicio' },
   { id: 'catalogos', label: 'Parámetros' },
+  { id: 'preparacion_pedidos', label: 'Preparación de Pedidos' },
   { id: 'movimientos', label: 'Movimientos' },
   { id: 'consultas', label: 'Consultas' },
   { id: 'reportes', label: 'Reportes' },
@@ -103,6 +106,7 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
     setActiveTab(tabId)
     if (tabId === 'inicio') setActiveActionId('resumen')
     else if (tabId === 'catalogos') setActiveActionId('bodegas')
+    else if (tabId === 'preparacion_pedidos') setActiveActionId('preparacion_pedidos')
     else if (tabId === 'movimientos') setActiveActionId('recepciones')
     else if (tabId === 'consultas') setActiveActionId('stock')
     else if (tabId === 'reportes') setActiveActionId('reportes_log')
@@ -113,7 +117,8 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
   if (activeTab === 'catalogos') {
     ribbonActions.push(
       { id: 'bodegas', label: 'Bodegas', icon: 'Home', onClick: () => setActiveActionId('bodegas') },
-      { id: 'productos', label: 'Productos', icon: 'Box', onClick: () => setActiveActionId('productos') }
+      { id: 'productos', label: 'Productos', icon: 'Box', onClick: () => setActiveActionId('productos') },
+      { id: 'calendario_despacho', label: 'Calendario de Despacho', icon: 'Calendar', onClick: () => setActiveActionId('calendario_despacho') }
     )
   } else if (activeTab === 'movimientos') {
     ribbonActions.push(
@@ -157,6 +162,8 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
       content = <WarehousesPanel />
     } else if (activeActionId === 'productos') {
       content = <ProductsPanel />
+    } else if (activeActionId === 'calendario_despacho') {
+      content = <DispatchCalendarSettings isSuperUser={profile.roles?.name === 'SUPER_USUARIO'} />
     } else {
       content = (
         <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px] flex flex-col justify-between">
@@ -192,6 +199,8 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
         </div>
       )
     }
+  } else if (activeTab === 'preparacion_pedidos') {
+    content = <SalesOrderPreparationPanel />
   } else if (activeTab === 'consultas') {
     if (activeActionId === 'stock') {
       content = <StockPanel />

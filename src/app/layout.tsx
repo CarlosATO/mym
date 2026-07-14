@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PetGrup | Sistema Unificado",
-  description: "Plataforma de gestión corporativa PetGrup",
+  title: "PetGroup | Sistema Unificado",
+  description: "Plataforma de gestión corporativa PetGroup",
 };
 
 export default function RootLayout({
