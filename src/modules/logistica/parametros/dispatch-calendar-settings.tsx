@@ -57,6 +57,7 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
   // New Calendar Modal/Inline State
   const [showCreate, setShowCreate] = useState(false)
   const [newCalendarName, setNewCalendarName] = useState('')
+  const [originalDraftState, setOriginalDraftState] = useState<{name: string, active: boolean, cities: any[]} | null>(null)
 
   useEffect(() => {
     loadInitialData()
@@ -126,18 +127,40 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
     
     // Initialize draft cities
     const loaded = res.data || []
-    setDraftCities(loaded.map(c => ({
+    const draftC = loaded.map(c => ({
       id: c.id,
       weekday: c.weekday,
       city_id: c.city_id,
       normalized_city: c.normalized_city,
       route_label: c.route_label,
       priority: c.priority
-    })))
+    }))
+    setDraftCities(draftC)
+    
+    setOriginalDraftState({
+      name: calendar.name,
+      active: calendar.active,
+      cities: draftC
+    })
     
     setNewCityId({})
     setView('EDIT')
     setLoading(false)
+  }
+
+  function handleBackClick() {
+    if (view === 'EDIT' && originalDraftState) {
+      const isChanged = draftName !== originalDraftState.name || 
+                        draftActive !== originalDraftState.active ||
+                        JSON.stringify(draftCities) !== JSON.stringify(originalDraftState.cities)
+      if (isChanged) {
+        if (!window.confirm('Hay cambios sin guardar. ¿Deseas salir sin guardar?')) {
+          return
+        }
+      }
+    }
+    setView('LIST')
+    setEditingCalendarId(null)
   }
 
   function handleDraftAddCity(weekday: number) {
@@ -235,8 +258,13 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
           </div>
 
           {showCreate && (
-            <div className="bg-theme-surface border border-theme-border p-6 rounded-2xl shadow-sm animate-in fade-in slide-in-from-top-4">
-              <h4 className="font-medium mb-4">Crear nuevo calendario</h4>
+            <div className="bg-theme-surface border border-theme-border p-6 rounded-2xl shadow-sm animate-in fade-in slide-in-from-top-4 relative">
+              <div className="flex justify-between items-center mb-4">
+                <h4 className="font-medium text-theme-text">Crear nuevo calendario</h4>
+                <Button variant="ghost" size="sm" className="h-8 text-theme-text-muted hover:text-theme-text gap-1" onClick={() => {setShowCreate(false); setNewCalendarName('')}}>
+                  <X className="h-4 w-4" /> Cerrar
+                </Button>
+              </div>
               <form onSubmit={handleCreateSubmit} className="flex gap-4">
                 <input 
                   autoFocus
@@ -247,7 +275,6 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
                   className="flex-1 rounded-xl border border-theme-border bg-transparent px-4 py-2 text-sm text-theme-text outline-none focus:ring-2 focus:ring-blue-500/50"
                 />
                 <Button type="submit" disabled={!newCalendarName.trim() || loading}>Crear calendario</Button>
-                <Button type="button" variant="ghost" onClick={() => {setShowCreate(false); setNewCalendarName('')}}>Cancelar</Button>
               </form>
             </div>
           )}
@@ -289,9 +316,9 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
         <div className="flex-1 flex flex-col gap-6 animate-in fade-in">
           {/* Action Bar */}
           <div className="flex flex-wrap gap-3 justify-between items-center bg-theme-surface border border-theme-border p-3 rounded-xl shadow-sm">
-            <div className="flex items-center gap-4">
-              <Button variant="ghost" size="icon" onClick={() => setView('LIST')} disabled={loading}>
-                <ArrowLeft className="h-5 w-5" />
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={handleBackClick} disabled={loading} className="gap-2 text-theme-text-muted hover:text-theme-text">
+                <ArrowLeft className="h-4 w-4" /> <span className="hidden sm:inline">Volver a lista</span>
               </Button>
               {isSuperUser ? (
                 <input 
