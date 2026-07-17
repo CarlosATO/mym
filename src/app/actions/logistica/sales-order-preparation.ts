@@ -60,6 +60,55 @@ export type PreviewCandidatesResult = {
   pending_to_create: number
 }
 
+export type PreviewNextRouteCandidate = {
+  bsale_nv_id: number
+  nv_folio: string
+  client_name: string
+  route_location_normalized: string
+  route_city_id?: string
+  seller_name: string
+  nv_emission_date: string
+  nv_generation_date: string
+  nv_generation_date_chile: string
+  net_amount: number
+  gross_amount: number
+  route_date: string
+  cutoff_at: string
+  cutoff_at_chile: string
+  inclusion_status: string
+  reason?: string
+  observation?: string
+  authorized_by_name?: string
+  authorized_at?: string
+  card_id?: string
+  card_status?: string
+  card_route_date?: string
+  original_route_date?: string
+}
+
+export type PreviewNextRouteResult = {
+  has_route: boolean
+  route_date?: string
+  route_weekday?: number
+  cutoff_at?: string
+  cutoff_at_chile?: string
+  calendar_id?: string
+  calendar_name?: string
+  cities?: string[]
+  counts?: {
+    in_cutoff: number
+    out_cutoff: number
+    exceptions: number
+    existing_cards: number
+    previous_pending: number
+  }
+  candidates?: PreviewNextRouteCandidate[]
+  out_of_cutoff?: PreviewNextRouteCandidate[]
+  authorized_exceptions?: PreviewNextRouteCandidate[]
+  existing_cards?: PreviewNextRouteCandidate[]
+  previous_pending?: PreviewNextRouteCandidate[]
+}
+
 export async function getSalesOrderPreparationBoard(companyId: string) {
   const supabase = await createClient()
 
@@ -120,6 +169,22 @@ export async function previewSalesOrderPreparationCandidates(companyId: string, 
   }
 
   return { data: result, error: null }
+}
+
+export async function previewNextRouteCandidates(companyId: string) {
+  const supabase = await createClient()
+
+  const { data, error } = await supabase
+    .rpc('preview_next_route_candidates', {
+      p_company_id: companyId
+    })
+
+  if (error) {
+    console.error('previewNextRouteCandidates error:', error)
+    return { data: null, error: error.message }
+  }
+
+  return { data: data as PreviewNextRouteResult, error: null }
 }
 
 export async function getSalesOrderClientData(companyId: string, bsaleNvId: number): Promise<{ data: SalesOrderClientData | null, error: string | null }> {
