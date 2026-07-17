@@ -51,7 +51,7 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose }: Sales
         onClick={onClose} 
       />
       
-      <div className="fixed inset-y-0 right-0 z-50 w-full max-w-md bg-theme-panel border-l border-theme-border shadow-2xl flex flex-col transition-transform transform drawer-no-print">
+      <div className="fixed inset-y-0 right-0 z-50 w-full max-w-xl bg-theme-panel border-l border-theme-border shadow-2xl flex flex-col transition-transform transform drawer-no-print">
         {/* Header */}
         <div className="flex-none px-6 py-4 border-b border-theme-border bg-theme-panel-hover/50 flex items-center justify-between">
           <div>
