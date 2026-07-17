@@ -83,34 +83,37 @@ export function SalesOrderPreparationPanel() {
   const [filterSeller, setFilterSeller] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
 
-  useEffect(() => {
-    async function loadBoard() {
-      setLoading(true)
-      const res = await getSalesOrderPreparationBoard(companyId)
-      if (res.error) {
-        setError(res.error)
-      } else {
-        setCards(res.data || [])
-      }
-      setLoading(false)
-      
-      setLoadingPreview(true)
-      setPreviewError(null)
-      try {
-        const prevRes = await previewNextRouteCandidates()
-        if (prevRes.error) {
-          setPreviewError(prevRes.error)
-        } else if (prevRes.data) {
-          setPreviewInfo(prevRes.data)
-        } else {
-          setPreviewError('Respuesta nula del servidor')
-        }
-      } catch (err: any) {
-        setPreviewError(err.message || 'Error desconocido')
-      } finally {
-        setLoadingPreview(false)
-      }
+  const loadBoard = async () => {
+    setLoading(true)
+    const res = await getSalesOrderPreparationBoard(companyId)
+    if (res.error) {
+      setError(res.error)
+    } else {
+      setCards(res.data || [])
+      // If a card is selected, update its reference to the new one so the drawer updates
+      setSelectedCard(prev => prev ? (res.data?.find(c => c.card_id === prev.card_id) || prev) : prev)
     }
+    setLoading(false)
+    
+    setLoadingPreview(true)
+    setPreviewError(null)
+    try {
+      const prevRes = await previewNextRouteCandidates()
+      if (prevRes.error) {
+        setPreviewError(prevRes.error)
+      } else if (prevRes.data) {
+        setPreviewInfo(prevRes.data)
+      } else {
+        setPreviewError('Respuesta nula del servidor')
+      }
+    } catch (err: any) {
+      setPreviewError(err.message || 'Error desconocido')
+    } finally {
+      setLoadingPreview(false)
+    }
+  }
+
+  useEffect(() => {
     loadBoard()
   }, [companyId])
 
@@ -319,6 +322,9 @@ export function SalesOrderPreparationPanel() {
         items={selectedItems}
         isLoadingItems={loadingItems}
         onClose={() => setSelectedCard(null)}
+        onCardMoved={() => {
+          loadBoard()
+        }}
       />
     </div>
   )

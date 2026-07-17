@@ -1,6 +1,7 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { getActiveCompanyId } from '@/app/actions/companies'
 
 export type SalesOrderClientData = {
@@ -307,5 +308,155 @@ export async function getSalesOrderClientData(companyId: string, bsaleNvId: numb
       email: client.email 
     }, 
     error: null 
+  }
+}
+
+export type SalesOrderPreparationMovement = {
+  id: string
+  company_id: string
+  card_id: string
+  from_status: string | null
+  to_status: string
+  moved_by: string | null
+  movement_source: string
+  pin_validated: boolean
+  observation: string | null
+  metadata: {
+    moved_by_name?: string
+  }
+  created_at: string
+}
+
+export async function moveSalesOrderPreparationCard(params: {
+  cardId: string
+  toStatus: string
+  observation?: string
+}): Promise<{ ok: boolean; data?: unknown; error?: string }> {
+  try {
+    // -----------------------------------------------------------------------
+    // 1. Validar usuario autenticado (JWT vía cliente normal)
+    // -----------------------------------------------------------------------
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return { ok: false, error: 'No autorizado' }
+    }
+
+    // -----------------------------------------------------------------------
+    // 2. Validar rol usando el cliente admin (service_role) para leer portal
+    //    El cliente admin tiene schema portal por defecto (ver admin.ts)
+    //    Tablas reales: portal.users (nombre, apellido, role_id)
+    //                   portal.roles (id, name)
+    // -----------------------------------------------------------------------
+    const admin = createAdminClient()
+
+    const { data: profile, error: profileError } = await admin
+      .from('users')
+      .select('nombre, apellido, email, role_id, roles:role_id(name)')
+      .eq('id', user.id)
+      .single()
+
+    if (profileError || !profile) {
+      return { ok: false, error: 'No se pudo verificar el perfil del usuario' }
+    }
+
+    const roleName = (profile.roles as any)?.name as string | undefined
+    const ALLOWED_ROLES = ['SUPER_USUARIO', 'GERENCIA', 'BODEGA']
+
+    if (!roleName || !ALLOWED_ROLES.includes(roleName)) {
+      return {
+        ok: false,
+        error: `Rol '${roleName ?? 'sin rol'}' no tiene permiso para mover tarjetas. Requiere: ${ALLOWED_ROLES.join(', ')}.`
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // 3. Obtener nombre real: nombre + apellido, con email como fallback
+    //    Columnas reales en portal.users: nombre, apellido, email
+    // -----------------------------------------------------------------------
+    const nombre   = (profile.nombre   as string | null) ?? ''
+    const apellido = (profile.apellido as string | null) ?? ''
+    const userName = `${nombre} ${apellido}`.trim() || (profile.email as string | null) || user.id
+
+    // -----------------------------------------------------------------------
+    // 4. Obtener companyId en el servidor (nunca desde el frontend)
+    // -----------------------------------------------------------------------
+    const companyId = await getActiveCompanyId()
+
+    // -----------------------------------------------------------------------
+    // 5. Invocar la RPC con service_role
+    //    La RPC solo acepta GRANT EXECUTE TO service_role (post-000006)
+    //    Se usa schema('logistica') explícito
+    // -----------------------------------------------------------------------
+    const { data, error } = await admin
+      .schema('logistica')
+      .rpc('move_sales_order_preparation_card', {
+        p_company_id:  companyId,
+        p_card_id:     params.cardId,
+        p_to_status:   params.toStatus,
+        p_observation: params.observation?.trim() || null,
+        p_user_id:     user.id,
+        p_user_name:   userName,
+      })
+
+    if (error) {
+      console.error('[moveSalesOrderPreparationCard] RPC error', {
+        cardId: params.cardId,
+        toStatus: params.toStatus,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      })
+      return { ok: false, error: error.message }
+    }
+
+    return { ok: true, data }
+  } catch (err: any) {
+    console.error('[moveSalesOrderPreparationCard] Exception:', err)
+    return { ok: false, error: err?.message || 'Error desconocido' }
+  }
+}
+
+export async function getSalesOrderPreparationMovements(
+  cardId: string
+): Promise<{ data: SalesOrderPreparationMovement[]; error: string | null }> {
+  try {
+    // -----------------------------------------------------------------------
+    // 1. Validar usuario autenticado (JWT)
+    // -----------------------------------------------------------------------
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return { data: [], error: 'No autorizado' }
+    }
+
+    // -----------------------------------------------------------------------
+    // 2. Obtener companyId en el servidor
+    // -----------------------------------------------------------------------
+    const companyId = await getActiveCompanyId()
+
+    // -----------------------------------------------------------------------
+    // 3. Leer movimientos con service_role + filtro estricto por company_id
+    //    Garantiza aislamiento multi-tenant aunque la tabla no tenga RLS activo
+    // -----------------------------------------------------------------------
+    const admin = createAdminClient()
+
+    const { data, error } = await admin
+      .schema('logistica')
+      .from('sales_order_preparation_movements')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('card_id', cardId)
+      .order('created_at', { ascending: true })
+
+    if (error) {
+      console.error('[getSalesOrderPreparationMovements] Error:', error)
+      return { data: [], error: error.message }
+    }
+
+    return { data: (data ?? []) as SalesOrderPreparationMovement[], error: null }
+  } catch (err: any) {
+    console.error('[getSalesOrderPreparationMovements] Exception:', err)
+    return { data: [], error: err?.message || 'Error desconocido' }
   }
 }
