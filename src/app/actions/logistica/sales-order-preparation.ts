@@ -1,6 +1,7 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { getActiveCompanyId } from '@/app/actions/companies'
 
 export type SalesOrderClientData = {
   rut: string | null
@@ -109,6 +110,20 @@ export type PreviewNextRouteResult = {
   previous_pending?: PreviewNextRouteCandidate[]
 }
 
+export type SyncNextRouteResult = {
+  dry_run: boolean
+  has_route: boolean
+  route_date?: string
+  cities?: string[]
+  would_insert_cards?: number
+  would_reprogram_cards?: number
+  would_materialize_exceptions?: number
+  insert_candidates?: any[]
+  reprogram_candidates?: any[]
+  exception_candidates?: any[]
+  message?: string
+}
+
 export async function getSalesOrderPreparationBoard(companyId: string) {
   const supabase = await createClient()
 
@@ -174,17 +189,46 @@ export async function previewSalesOrderPreparationCandidates(companyId: string, 
 export async function previewNextRouteCandidates(companyId: string) {
   const supabase = await createClient()
 
-  const { data, error } = await supabase
-    .rpc('preview_next_route_candidates', {
-      p_company_id: companyId
-    })
+  const { data, error } = await supabase.rpc('preview_next_route_candidates', {
+    p_company_id: companyId,
+  })
 
   if (error) {
-    console.error('previewNextRouteCandidates error:', error)
+    console.error('Error in preview_next_route_candidates:', error)
     return { data: null, error: error.message }
   }
 
   return { data: data as PreviewNextRouteResult, error: null }
+}
+
+export async function syncNextRoutePreparationCards(options?: { dryRun?: boolean }): Promise<SyncNextRouteResult | null> {
+  const isDryRun = options?.dryRun ?? true
+
+  if (!isDryRun) {
+    throw new Error('Real materialization is not authorized yet.')
+  }
+
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+
+  if (!user) {
+    throw new Error('No user found')
+  }
+
+  const companyId = await getActiveCompanyId()
+
+  const { data, error } = await supabase.rpc('sync_next_route_preparation_cards', {
+    p_company_id: companyId,
+    p_user_id: user.id,
+    p_dry_run: isDryRun
+  })
+
+  if (error) {
+    console.error('Error in sync_next_route_preparation_cards:', error)
+    return null
+  }
+
+  return data as SyncNextRouteResult
 }
 
 export async function getSalesOrderClientData(companyId: string, bsaleNvId: number): Promise<{ data: SalesOrderClientData | null, error: string | null }> {
