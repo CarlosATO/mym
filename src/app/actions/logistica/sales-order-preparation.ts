@@ -201,11 +201,12 @@ export async function previewNextRouteCandidates(companyId: string) {
   return { data: data as PreviewNextRouteResult, error: null }
 }
 
-export async function syncNextRoutePreparationCards(options?: { dryRun?: boolean }): Promise<SyncNextRouteResult | null> {
+export async function syncNextRoutePreparationCards(options?: { dryRun?: boolean; confirmation?: string }): Promise<SyncNextRouteResult | null> {
   const isDryRun = options?.dryRun ?? true
+  const confirmation = options?.confirmation ?? null
 
   if (!isDryRun) {
-    throw new Error('Real materialization is not authorized yet.')
+    throw new Error('Real materialization is not authorized from UI yet.')
   }
 
   const supabase = await createClient()
@@ -220,11 +221,15 @@ export async function syncNextRoutePreparationCards(options?: { dryRun?: boolean
   const { data, error } = await supabase.rpc('sync_next_route_preparation_cards', {
     p_company_id: companyId,
     p_user_id: user.id,
-    p_dry_run: isDryRun
+    p_dry_run: isDryRun,
+    p_confirmation: confirmation
   })
 
   if (error) {
     console.error('Error in sync_next_route_preparation_cards:', error)
+    if (!isDryRun) {
+      throw new Error(error.message)
+    }
     return null
   }
 
