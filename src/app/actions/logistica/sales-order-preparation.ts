@@ -186,19 +186,54 @@ export async function previewSalesOrderPreparationCandidates(companyId: string, 
   return { data: result, error: null }
 }
 
-export async function previewNextRouteCandidates(companyId: string) {
-  const supabase = await createClient()
+export async function previewNextRouteCandidates() {
+  try {
+    const supabase = await createClient()
+    
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+      throw new Error('Unauthorized user')
+    }
 
-  const { data, error } = await supabase.rpc('preview_next_route_candidates', {
-    p_company_id: companyId,
-  })
+    const companyId = await getActiveCompanyId()
 
-  if (error) {
-    console.error('Error in preview_next_route_candidates:', error)
-    return { data: null, error: error.message }
+    console.log('[previewNextRouteCandidates] Starting preview', { userId: user.id, companyId })
+
+    const { data, error } = await (supabase as any)
+      .schema('logistica')
+      .rpc('preview_next_route_candidates', {
+        p_company_id: companyId,
+      })
+
+    if (error) {
+      console.error('[previewNextRouteCandidates] RPC error', {
+        companyId,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code,
+      })
+      return { 
+        data: null, 
+        error: error.message,
+        details: error.details ?? null,
+        hint: error.hint ?? null,
+        code: error.code ?? null
+      }
+    }
+
+    console.log(`[previewNextRouteCandidates] Success. has_route:`, data?.has_route)
+    return { data: data as PreviewNextRouteResult, error: null }
+  } catch (err: any) {
+    console.error('[previewNextRouteCandidates] Exception:', err)
+    return { 
+      data: null, 
+      error: err?.message || 'Unknown error in previewNextRouteCandidates',
+      details: null,
+      hint: null,
+      code: null
+    }
   }
-
-  return { data: data as PreviewNextRouteResult, error: null }
 }
 
 export async function syncNextRoutePreparationCards(options?: { dryRun?: boolean; confirmation?: string }): Promise<SyncNextRouteResult | null> {

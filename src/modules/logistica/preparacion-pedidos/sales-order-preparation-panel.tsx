@@ -69,6 +69,8 @@ export function SalesOrderPreparationPanel() {
   const [error, setError] = useState<string | null>(null)
   
   const [previewInfo, setPreviewInfo] = useState<PreviewNextRouteResult | null>(null)
+  const [loadingPreview, setLoadingPreview] = useState(true)
+  const [previewError, setPreviewError] = useState<string | null>(null)
 
   // Drawer state
   const [selectedCard, setSelectedCard] = useState<SalesOrderPreparationCardInfo | null>(null)
@@ -90,12 +92,24 @@ export function SalesOrderPreparationPanel() {
       } else {
         setCards(res.data || [])
       }
-      
-      const prevRes = await previewNextRouteCandidates(companyId)
-      if (!prevRes.error && prevRes.data) {
-        setPreviewInfo(prevRes.data)
-      }
       setLoading(false)
+      
+      setLoadingPreview(true)
+      setPreviewError(null)
+      try {
+        const prevRes = await previewNextRouteCandidates()
+        if (prevRes.error) {
+          setPreviewError(prevRes.error)
+        } else if (prevRes.data) {
+          setPreviewInfo(prevRes.data)
+        } else {
+          setPreviewError('Respuesta nula del servidor')
+        }
+      } catch (err: any) {
+        setPreviewError(err.message || 'Error desconocido')
+      } finally {
+        setLoadingPreview(false)
+      }
     }
     loadBoard()
   }, [companyId])
@@ -149,7 +163,17 @@ export function SalesOrderPreparationPanel() {
                   {filteredCards.length} {filteredCards.length === 1 ? 'pedido en tablero' : 'pedidos en tablero'}
                 </span>
               </div>
-              {previewInfo && previewInfo.has_route ? (
+              {loadingPreview ? (
+                <div className="text-xs text-theme-text-muted flex gap-2 items-center border-l border-theme-border pl-3">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Buscando próxima ruta...
+                </div>
+              ) : previewError ? (
+                <div className="text-xs text-red-500 border-l border-theme-border pl-3 flex gap-1 items-center">
+                  <span>Error: No se pudo cargar la próxima ruta.</span>
+                  <span className="hidden group-hover:inline-block">({previewError})</span>
+                </div>
+              ) : previewInfo && previewInfo.has_route ? (
                 <div className="text-xs text-theme-text-muted flex gap-2 items-center border-l border-theme-border pl-3">
                   <span className="font-semibold text-theme-text">Salida: {previewInfo.route_date ? (() => { const [y,m,d] = previewInfo.route_date.split('-'); return `${d}-${m}-${y}`; })() : ''}</span>
                   <span>·</span>
@@ -159,14 +183,23 @@ export function SalesOrderPreparationPanel() {
                   <span>·</span>
                   <span>Corte automático: {previewInfo.cutoff_at_chile ? previewInfo.cutoff_at_chile : previewInfo.cutoff_at ? new Date(previewInfo.cutoff_at).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}</span>
                   <div className="flex gap-2 ml-2 pl-2 border-l border-theme-border">
-                    <span className="text-green-600 font-medium">Incluidos: {previewInfo.counts?.in_cutoff ?? 0}</span>
+                    {previewInfo.counts?.in_cutoff === 0 && (previewInfo.counts?.existing_cards ?? 0) > 0 ? (
+                      <span className="text-blue-500 font-medium">Ya materializados: {previewInfo.counts?.existing_cards}</span>
+                    ) : (
+                      <>
+                        <span className="text-green-600 font-medium">Nuevos Incluidos: {previewInfo.counts?.in_cutoff ?? 0}</span>
+                        {(previewInfo.counts?.existing_cards ?? 0) > 0 && (
+                          <span className="text-blue-500 font-medium">Existentes: {previewInfo.counts?.existing_cards}</span>
+                        )}
+                      </>
+                    )}
                     <span className="text-red-500 font-medium cursor-pointer hover:underline" onClick={() => {/* TODO */}}>Fuera de corte: {previewInfo.counts?.out_cutoff ?? 0}</span>
                     {(previewInfo.counts?.exceptions ?? 0) > 0 && <span className="text-orange-500 font-medium">Excepciones: {previewInfo.counts?.exceptions}</span>}
                   </div>
                 </div>
               ) : (
                 <div className="text-xs text-theme-text-muted border-l border-theme-border pl-3">
-                  Buscando próxima ruta...
+                  No hay próxima ruta configurada o sin pedidos pendientes.
                 </div>
               )}
             </div>
