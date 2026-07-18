@@ -127,12 +127,42 @@ export type SyncNextRouteResult = {
 
 export async function getSalesOrderPreparationBoard(companyId: string) {
   const supabase = await createClient()
+  const admin = await createAdminClient()
 
-  const { data, error } = await supabase
+  // 1. Obtener contexto de la próxima ruta
+  const { data: routeCtxData, error: routeErr } = await (admin as any)
+    .schema('logistica')
+    .rpc('get_next_dispatch_route_context', {
+      p_company_id: companyId
+    })
+
+  if (routeErr) {
+    console.error('getSalesOrderPreparationBoard route error:', routeErr)
+    return { data: [], error: routeErr.message }
+  }
+
+  const routeCtx = routeCtxData?.[0]
+  if (!routeCtx || !routeCtx.route_date) {
+    // Si no hay próxima ruta, devolvemos tablero vacío
+    return { data: [], error: null }
+  }
+
+  const activeRouteDate = routeCtx.route_date
+  const activeCities = routeCtx.normalized_cities || []
+
+  // 2. Filtrar tarjetas por la ruta activa
+  let query = supabase
     .schema('logistica')
     .from('vw_sales_order_preparation_board')
     .select('*')
     .eq('company_id', companyId)
+    .eq('route_date', activeRouteDate)
+
+  if (activeCities.length > 0) {
+    query = query.in('normalized_city', activeCities)
+  }
+
+  const { data, error } = await query
     .order('priority', { ascending: false })
     .order('nv_emission_date', { ascending: true })
 
@@ -460,4 +490,69 @@ export async function getSalesOrderPreparationMovements(
     console.error('[getSalesOrderPreparationMovements] Exception:', err)
     return { data: [], error: err?.message || 'Error desconocido' }
   }
+}
+
+export async function authorizeSalesOrderRouteException(params: {
+  bsaleNvId: string | number
+  routeDate: string
+  reason: string
+  observation: string
+}) {
+  if (!params.reason?.trim()) return { ok: false, error: 'El motivo es obligatorio' }
+  if (!params.observation?.trim()) return { ok: false, error: 'La observación es obligatoria' }
+  if (!params.routeDate) return { ok: false, error: 'La fecha de ruta es obligatoria' }
+  if (!params.bsaleNvId || isNaN(Number(params.bsaleNvId))) return { ok: false, error: 'NV ID inválido' }
+
+  const supabase = await createClient()
+  const { data: { user }, error: authError } = await supabase.auth.getUser()
+
+  if (authError || !user) {
+    return { ok: false, error: 'No autorizado o sesión expirada' }
+  }
+
+  const companyId = await getActiveCompanyId()
+  const adminClient = createAdminClient()
+  
+  const { data: profile, error: profileError } = await adminClient
+    .schema('portal')
+    .from('users')
+    .select('nombre, apellido, email, role_id, roles:role_id(name)')
+    .eq('id', user.id)
+    .single()
+
+  if (profileError || !profile) {
+    return { ok: false, error: 'No se pudo validar el perfil del usuario' }
+  }
+
+  const roleName = (profile?.roles as any)?.name
+  const allowedRoles = ['SUPER_USUARIO', 'GERENCIA', 'BODEGA']
+  
+  if (!allowedRoles.includes(roleName)) {
+    return { ok: false, error: 'No tienes permisos para autorizar excepciones' }
+  }
+
+  const authorizedByName =
+    `${profile.nombre ?? ''} ${profile.apellido ?? ''}`.trim()
+    || profile.email
+    || user.email
+    || user.id
+
+  const { data, error } = await adminClient
+    .schema('logistica')
+    .rpc('authorize_sales_order_route_exception', {
+      p_company_id: companyId,
+      p_bsale_nv_id: Number(params.bsaleNvId),
+      p_route_date: params.routeDate,
+      p_reason: params.reason.trim(),
+      p_observation: params.observation.trim(),
+      p_authorized_by: user.id,
+      p_authorized_by_name: authorizedByName,
+    })
+
+  if (error) {
+    console.error('authorize_sales_order_route_exception error:', error)
+    return { ok: false, error: error.message }
+  }
+
+  return data as any
 }

@@ -15,6 +15,7 @@ import { SalesOrderDrawer } from './sales-order-drawer'
 import { DndContext, DragEndEvent, DragStartEvent, DragOverlay, useDroppable, useSensor, useSensors, PointerSensor } from '@dnd-kit/core'
 import { getMovementRule } from './movement-rules'
 import { MovementObservationDialog } from './movement-observation-dialog'
+import { RouteExceptionDialog } from './route-exception-dialog'
 import { moveSalesOrderPreparationCard } from '@/app/actions/logistica/sales-order-preparation'
 import { toast } from 'sonner'
 
@@ -143,6 +144,7 @@ export function SalesOrderPreparationPanel() {
   const [activeCard, setActiveCard] = useState<SalesOrderPreparationCardInfo | null>(null)
   const [pendingMovement, setPendingMovement] = useState<{ card: SalesOrderPreparationCardInfo, fromStatus: string, toStatus: string, label: string } | null>(null)
   const [isMoving, setIsMoving] = useState(false)
+  const [isExceptionDialogOpen, setIsExceptionDialogOpen] = useState(false)
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -340,9 +342,17 @@ export function SalesOrderPreparationPanel() {
                       )}
                     </>
                   )}
-                  <span className="flex items-center gap-1.5 text-theme-text font-bold text-[11px] cursor-pointer hover:underline">
+                  <span className="flex items-center gap-1.5 text-theme-text font-bold text-[11px]">
                     <span className="w-2 h-2 rounded-full bg-red-500"></span>Fuera de corte: {previewInfo.counts?.out_cutoff ?? 0}
                   </span>
+                  {(previewInfo.counts?.out_cutoff ?? 0) > 0 && (
+                    <button
+                      onClick={() => setIsExceptionDialogOpen(true)}
+                      className="ml-1 text-[10px] bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20 px-2 py-0.5 rounded transition-colors font-semibold"
+                    >
+                      Incluir fuera de corte
+                    </button>
+                  )}
                   {(previewInfo.counts?.exceptions ?? 0) > 0 && (
                     <span className="flex items-center gap-1.5 text-theme-text font-bold text-[11px]">
                       <span className="w-2 h-2 rounded-full bg-orange-500"></span>Excepciones: {previewInfo.counts?.exceptions}
@@ -462,6 +472,16 @@ export function SalesOrderPreparationPanel() {
         }}
         label={pendingMovement?.label ?? ''}
         isMoving={isMoving}
+      />
+
+      <RouteExceptionDialog
+        open={isExceptionDialogOpen}
+        onOpenChange={setIsExceptionDialogOpen}
+        outOfCutoffCandidates={previewInfo?.out_of_cutoff || []}
+        routeDate={previewInfo?.route_date || null}
+        onSuccess={() => {
+          loadBoard()
+        }}
       />
     </div>
   )
