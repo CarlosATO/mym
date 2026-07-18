@@ -12,6 +12,11 @@ import {
 } from '@/app/actions/logistica/sales-order-preparation'
 import { SalesOrderCard } from './sales-order-card'
 import { SalesOrderDrawer } from './sales-order-drawer'
+import { DndContext, DragEndEvent, DragStartEvent, DragOverlay, useDroppable, useSensor, useSensors, PointerSensor } from '@dnd-kit/core'
+import { getMovementRule } from './movement-rules'
+import { MovementObservationDialog } from './movement-observation-dialog'
+import { moveSalesOrderPreparationCard } from '@/app/actions/logistica/sales-order-preparation'
+import { toast } from 'sonner'
 
 type KanbanColumn = {
   id: string
@@ -61,6 +66,50 @@ const COLUMNS: KanbanColumn[] = [
   },
 ]
 
+function DroppableColumn({ col, colCards, onOpenCardDetails }: { col: KanbanColumn, colCards: SalesOrderPreparationCardInfo[], onOpenCardDetails: (c: SalesOrderPreparationCardInfo) => void }) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: col.id,
+    disabled: col.locked
+  })
+
+  return (
+    <div ref={setNodeRef} className={`flex flex-col rounded-xl border ${col.colorHeader} overflow-hidden min-w-0 ${isOver ? 'ring-2 ring-theme-accent ring-inset' : ''}`}>
+      {/* Column header */}
+      <div className="flex-none flex items-center justify-between px-3 py-2 border-b border-theme-border/30">
+        <div className="flex items-center gap-1.5 min-w-0">
+          {col.locked && <Lock className="w-3 h-3 text-theme-text-muted/60 shrink-0" />}
+          <h3 className="text-xs font-semibold text-theme-text leading-tight truncate">{col.title}</h3>
+        </div>
+        <span className={`ml-1.5 shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${col.badge}`}>
+          {colCards.length}
+        </span>
+      </div>
+
+      {/* Column body */}
+      <div className={`flex-1 overflow-y-auto p-2 space-y-2 ${col.colorBody}`}>
+        {col.locked && colCards.length === 0 && (
+          <div className="pt-4 px-2 text-center">
+            <Lock className="w-4 h-4 text-theme-text-muted/40 mx-auto mb-1.5" />
+            <p className="text-[10px] text-theme-text-muted/60 leading-snug">
+              Movimiento automático al detectar factura en Bsale.
+            </p>
+          </div>
+        )}
+        {colCards.length === 0 && !col.locked && (
+          <p className="pt-6 text-center text-[10px] text-theme-text-muted/40">Sin tarjetas</p>
+        )}
+        {colCards.map(card => (
+          <SalesOrderCard
+            key={card.card_id}
+            card={card}
+            onClick={() => onOpenCardDetails(card)}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function SalesOrderPreparationPanel() {
   const companyId = 'd1000000-0000-0000-0000-000000000001'
 
@@ -82,6 +131,19 @@ export function SalesOrderPreparationPanel() {
   const [filterCity, setFilterCity] = useState('')
   const [filterSeller, setFilterSeller] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
+
+  // Drag & Drop
+  const [activeCard, setActiveCard] = useState<SalesOrderPreparationCardInfo | null>(null)
+  const [pendingMovement, setPendingMovement] = useState<{ card: SalesOrderPreparationCardInfo, fromStatus: string, toStatus: string, label: string } | null>(null)
+  const [isMoving, setIsMoving] = useState(false)
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    })
+  )
 
   const loadBoard = async () => {
     setLoading(true)
@@ -127,6 +189,60 @@ export function SalesOrderPreparationPanel() {
       setSelectedItems([])
     }
     setLoadingItems(false)
+  }
+
+  const executeMove = async (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string) => {
+    setIsMoving(true)
+    const res = await moveSalesOrderPreparationCard({
+      cardId: card.card_id,
+      toStatus,
+      observation
+    })
+    setIsMoving(false)
+
+    if (!res.ok) {
+      toast.error(`Error al mover: ${res.error ?? 'Desconocido'}`)
+    } else {
+      toast.success(`NV #${card.nv_folio} movida exitosamente`)
+      setPendingMovement(null)
+      loadBoard()
+    }
+  }
+
+  const handleDragStart = (event: DragStartEvent) => {
+    const card = event.active.data.current?.card as SalesOrderPreparationCardInfo
+    if (card) {
+      setActiveCard(card)
+    }
+  }
+
+  const handleDragCancel = () => {
+    setActiveCard(null)
+  }
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    setActiveCard(null)
+    const { active, over } = event
+    if (!over) return
+
+    const card = active.data.current?.card as SalesOrderPreparationCardInfo
+    if (!card) return
+    const fromStatus = card.status
+    const toStatus = over.id as string
+
+    if (fromStatus === toStatus) return
+
+    const { rule, error } = getMovementRule(fromStatus, toStatus)
+    if (error) {
+      toast.error(error)
+      return
+    }
+
+    if (rule?.backward) {
+      setPendingMovement({ card, fromStatus, toStatus, label: rule.label })
+    } else {
+      await executeMove(card, toStatus)
+    }
   }
 
   // Unique options for selects
@@ -273,50 +389,26 @@ export function SalesOrderPreparationPanel() {
         ) : (
           /* Grid de 5 columnas, todas en pantalla, sin scroll horizontal */
           <div className="grid grid-cols-5 gap-3 h-full">
-            {COLUMNS.map(col => {
-              const colCards = filteredCards.filter(c => c.status === col.id)
-              return (
-                <div key={col.id} className={`flex flex-col rounded-xl border ${col.colorHeader} overflow-hidden min-w-0`}>
-                  {/* Column header */}
-                  <div className="flex-none flex items-center justify-between px-3 py-2 border-b border-theme-border/30">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      {col.locked && <Lock className="w-3 h-3 text-theme-text-muted/60 shrink-0" />}
-                      <h3 className="text-xs font-semibold text-theme-text leading-tight truncate">{col.title}</h3>
-                    </div>
-                    <span className={`ml-1.5 shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${col.badge}`}>
-                      {colCards.length}
-                    </span>
-                  </div>
-
-                  {/* Column body */}
-                  <div className={`flex-1 overflow-y-auto p-2 space-y-2 ${col.colorBody}`}>
-                    {col.locked && colCards.length === 0 && (
-                      <div className="pt-4 px-2 text-center">
-                        <Lock className="w-4 h-4 text-theme-text-muted/40 mx-auto mb-1.5" />
-                        <p className="text-[10px] text-theme-text-muted/60 leading-snug">
-                          Movimiento automático al detectar factura en Bsale.
-                        </p>
-                      </div>
-                    )}
-                    {colCards.length === 0 && !col.locked && (
-                      <p className="pt-6 text-center text-[10px] text-theme-text-muted/40">Sin tarjetas</p>
-                    )}
-                    {colCards.map(card => (
-                      <SalesOrderCard
-                        key={card.card_id}
-                        card={card}
-                        onClick={() => openCardDetails(card)}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )
-            })}
+            <DndContext 
+              sensors={sensors}
+              onDragStart={handleDragStart} 
+              onDragEnd={handleDragEnd}
+              onDragCancel={handleDragCancel}
+            >
+              {COLUMNS.map(col => {
+                const colCards = filteredCards.filter(c => c.status === col.id)
+                return <DroppableColumn key={col.id} col={col} colCards={colCards} onOpenCardDetails={openCardDetails} />
+              })}
+              <DragOverlay zIndex={9999}>
+                {activeCard ? (
+                  <SalesOrderCard card={activeCard} isOverlay />
+                ) : null}
+              </DragOverlay>
+            </DndContext>
           </div>
         )}
       </div>
 
-      {/* Drawer */}
       <SalesOrderDrawer
         card={selectedCard}
         items={selectedItems}
@@ -325,6 +417,18 @@ export function SalesOrderPreparationPanel() {
         onCardMoved={() => {
           loadBoard()
         }}
+      />
+      
+      <MovementObservationDialog
+        isOpen={!!pendingMovement}
+        onClose={() => setPendingMovement(null)}
+        onConfirm={(obs) => {
+          if (pendingMovement) {
+            executeMove(pendingMovement.card, pendingMovement.toStatus, obs)
+          }
+        }}
+        label={pendingMovement?.label ?? ''}
+        isMoving={isMoving}
       />
     </div>
   )

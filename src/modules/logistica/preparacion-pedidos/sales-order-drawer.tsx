@@ -5,6 +5,7 @@ import { SalesOrderPreparationCardInfo, SalesOrderPreparationItem, getSalesOrder
 import { SalesOrderPrintDocument } from './components/sales-order-print-document'
 import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
+import { MOVEMENT_RULES } from './movement-rules'
 
 interface SalesOrderDrawerProps {
   card: SalesOrderPreparationCardInfo | null
@@ -327,36 +328,35 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onCardM
           </div>
         )}
 
-        {/* Footer */}
         <div className="flex-none p-4 border-t border-theme-border bg-theme-panel">
           {moveError && !pendingMoveAction && <p className="text-xs text-red-500 mb-3 text-center">{moveError}</p>}
           
           {!pendingMoveAction && card.status === 'PENDING_ROUTE_PREP' && (
             <div className="flex gap-2 mb-3">
-              <button onClick={() => handleMove('IN_PREPARATION', false, 'Iniciar preparación')} disabled={isMoving} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
-                Iniciar preparación
+              <button onClick={() => handleMove('IN_PREPARATION', MOVEMENT_RULES.PENDING_ROUTE_PREP.IN_PREPARATION.backward, MOVEMENT_RULES.PENDING_ROUTE_PREP.IN_PREPARATION.label)} disabled={isMoving} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
+                {MOVEMENT_RULES.PENDING_ROUTE_PREP.IN_PREPARATION.label}
               </button>
             </div>
           )}
 
           {!pendingMoveAction && card.status === 'IN_PREPARATION' && (
             <div className="flex gap-2 mb-3">
-              <button onClick={() => handleMove('IN_AUDIT', false, 'Enviar a auditoría')} disabled={isMoving} className="flex-1 py-2 bg-purple-600 hover:bg-purple-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
-                Enviar a auditoría
+              <button onClick={() => handleMove('IN_AUDIT', MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.backward, MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.label)} disabled={isMoving} className="flex-1 py-2 bg-purple-600 hover:bg-purple-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
+                {MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.label}
               </button>
-              <button onClick={() => handleMove('PENDING_ROUTE_PREP', true, 'Volver a pendiente')} disabled={isMoving} className="flex-1 py-2 bg-orange-600 hover:bg-orange-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
-                Volver a pendiente
+              <button onClick={() => handleMove('PENDING_ROUTE_PREP', MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.backward, MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.label)} disabled={isMoving} className="flex-1 py-2 bg-orange-600 hover:bg-orange-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
+                {MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.label}
               </button>
             </div>
           )}
 
           {!pendingMoveAction && card.status === 'IN_AUDIT' && (
             <div className="flex gap-2 mb-3">
-              <button onClick={() => handleMove('IN_PREPARATION', true, 'Devolver a preparación')} disabled={isMoving} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
-                Devolver a preparación
+              <button onClick={() => handleMove('IN_PREPARATION', MOVEMENT_RULES.IN_AUDIT.IN_PREPARATION.backward, MOVEMENT_RULES.IN_AUDIT.IN_PREPARATION.label)} disabled={isMoving} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
+                {MOVEMENT_RULES.IN_AUDIT.IN_PREPARATION.label}
               </button>
-              <button onClick={() => handleMove('PENDING_ROUTE_PREP', true, 'Rechazar / volver a pendiente')} disabled={isMoving} className="flex-1 py-2 bg-orange-600 hover:bg-orange-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
-                Rechazar (Pendiente)
+              <button onClick={() => handleMove('PENDING_ROUTE_PREP', MOVEMENT_RULES.IN_AUDIT.PENDING_ROUTE_PREP.backward, MOVEMENT_RULES.IN_AUDIT.PENDING_ROUTE_PREP.label)} disabled={isMoving} className="flex-1 py-2 bg-orange-600 hover:bg-orange-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
+                {MOVEMENT_RULES.IN_AUDIT.PENDING_ROUTE_PREP.label}
               </button>
             </div>
           )}

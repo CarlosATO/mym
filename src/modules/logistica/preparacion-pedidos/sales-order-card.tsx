@@ -2,22 +2,47 @@
 
 import { MapPin, Package, User, Calendar } from 'lucide-react'
 import { SalesOrderPreparationCardInfo } from '@/app/actions/logistica/sales-order-preparation'
+import { useDraggable } from '@dnd-kit/core'
 
 interface SalesOrderCardProps {
   card: SalesOrderPreparationCardInfo
-  onClick: () => void
+  onClick?: () => void
+  isOverlay?: boolean
 }
 
-export function SalesOrderCard({ card, onClick }: SalesOrderCardProps) {
+export function SalesOrderCard({ card, onClick, isOverlay }: SalesOrderCardProps) {
   const emitDate = new Date(card.nv_emission_date).toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })
   const routeDate = card.route_date
     ? new Date(card.route_date).toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })
     : null
 
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: card.card_id,
+    data: { card },
+    disabled: isOverlay
+  })
+
+  const style = transform && !isOverlay ? {
+    transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
+  } : undefined
+
+  let wrapperClasses = "bg-theme-panel border border-theme-border rounded-lg p-2.5 transition-all group relative "
+  if (isOverlay) {
+    wrapperClasses += "z-[9999] shadow-2xl ring-2 ring-theme-accent pointer-events-none cursor-grabbing scale-[1.02] opacity-100"
+  } else if (isDragging) {
+    wrapperClasses += "opacity-40 cursor-grabbing"
+  } else {
+    wrapperClasses += "shadow-sm hover:border-theme-accent/40 hover:shadow-md cursor-grab"
+  }
+
   return (
     <div
-      onClick={onClick}
-      className="bg-theme-panel border border-theme-border rounded-lg p-2.5 shadow-sm hover:border-theme-accent/40 hover:shadow-md transition-all cursor-pointer group"
+      ref={!isOverlay ? setNodeRef : undefined}
+      style={style}
+      {...(!isOverlay ? listeners : {})}
+      {...(!isOverlay ? attributes : {})}
+      onClick={!isOverlay ? onClick : undefined}
+      className={wrapperClasses}
     >
       {/* Header row */}
       <div className="flex items-center justify-between mb-1.5">
