@@ -288,19 +288,25 @@ export function SalesOrderPreparationPanel() {
                   Buscando próxima ruta...
                 </div>
               ) : previewError ? (
-                <div className="text-xs text-red-500 border-l border-theme-border pl-3 flex gap-1 items-center">
+                <div className="text-xs text-red-500 border-l border-theme-border pl-3 flex gap-1 items-center group">
                   <span>Error: No se pudo cargar la próxima ruta.</span>
                   <span className="hidden group-hover:inline-block">({previewError})</span>
                 </div>
               ) : previewInfo && previewInfo.has_route ? (
                 <div className="text-xs text-theme-text-muted flex gap-2 items-center border-l border-theme-border pl-3">
-                  <span className="font-semibold text-theme-text">Salida: {previewInfo.route_date ? (() => { const [y,m,d] = previewInfo.route_date.split('-'); return `${d}-${m}-${y}`; })() : ''}</span>
-                  <span>·</span>
-                  <span className="truncate max-w-[200px]" title={previewInfo.cities?.join(', ')}>
-                    {previewInfo.cities?.length} {previewInfo.cities?.length === 1 ? 'comuna' : 'comunas'}
+                  <span className="font-semibold text-theme-text">
+                    Próxima ruta: {previewInfo.route_date ? (() => { const [y,m,d] = previewInfo.route_date.split('-'); return `${d}-${m}-${y}`; })() : ''}
                   </span>
                   <span>·</span>
-                  <span>Corte automático: {previewInfo.cutoff_at_chile ? previewInfo.cutoff_at_chile : previewInfo.cutoff_at ? new Date(previewInfo.cutoff_at).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                  <span className="truncate max-w-[200px]" title={previewInfo.cities?.join(', ')}>
+                    {previewInfo.cities?.join(', ') || ''}
+                  </span>
+                  <span>·</span>
+                  <span>Corte: {previewInfo.cutoff_at_chile ? (() => {
+                    const [datePart, timePart] = previewInfo.cutoff_at_chile.split(' ')
+                    const [y,m,d] = datePart.split('-')
+                    return `${d}-${m}-${y} ${timePart.substring(0,5)}`
+                  })() : previewInfo.cutoff_at ? new Date(previewInfo.cutoff_at).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}</span>
                   <div className="flex gap-2 ml-2 pl-2 border-l border-theme-border">
                     {previewInfo.counts?.in_cutoff === 0 && (previewInfo.counts?.existing_cards ?? 0) > 0 ? (
                       <span className="text-blue-500 font-medium">Ya materializados: {previewInfo.counts?.existing_cards}</span>
@@ -316,11 +322,11 @@ export function SalesOrderPreparationPanel() {
                     {(previewInfo.counts?.exceptions ?? 0) > 0 && <span className="text-orange-500 font-medium">Excepciones: {previewInfo.counts?.exceptions}</span>}
                   </div>
                 </div>
-              ) : (
-                <div className="text-xs text-theme-text-muted border-l border-theme-border pl-3">
-                  No hay próxima ruta configurada o sin pedidos pendientes.
+              ) : previewInfo && !previewInfo.has_route ? (
+                <div className="text-xs text-theme-text-muted border-l border-theme-border pl-3 flex items-center">
+                  <span>No hay rutas futuras configuradas.</span>
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
           <button

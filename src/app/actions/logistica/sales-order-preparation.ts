@@ -190,6 +190,7 @@ export async function previewSalesOrderPreparationCandidates(companyId: string, 
 export async function previewNextRouteCandidates() {
   try {
     const supabase = await createClient()
+    const admin = await createAdminClient()
     
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) {
@@ -200,7 +201,7 @@ export async function previewNextRouteCandidates() {
 
     console.log('[previewNextRouteCandidates] Starting preview', { userId: user.id, companyId })
 
-    const { data, error } = await (supabase as any)
+    const { data, error } = await (admin as any)
       .schema('logistica')
       .rpc('preview_next_route_candidates', {
         p_company_id: companyId,
