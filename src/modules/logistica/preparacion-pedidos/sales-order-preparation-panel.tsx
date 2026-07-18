@@ -24,6 +24,7 @@ type KanbanColumn = {
   colorHeader: string
   colorBody: string
   badge: string
+  dot: string
   locked?: boolean
 }
 
@@ -31,38 +32,43 @@ const COLUMNS: KanbanColumn[] = [
   {
     id: 'PENDING_ROUTE_PREP',
     title: 'Pendiente / Próxima Ruta',
-    colorHeader: 'border-orange-500/40 bg-orange-500/8',
-    colorBody: 'bg-orange-500/3',
-    badge: 'bg-orange-500/15 text-orange-400',
+    colorHeader: 'bg-theme-base border-slate-300 dark:border-theme-border/80',
+    colorBody: 'bg-theme-base/30',
+    badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
+    dot: 'bg-orange-500',
   },
   {
     id: 'IN_PREPARATION',
     title: 'En Preparación',
-    colorHeader: 'border-blue-500/40 bg-blue-500/8',
-    colorBody: 'bg-blue-500/3',
-    badge: 'bg-blue-500/15 text-blue-400',
+    colorHeader: 'bg-theme-base border-slate-300 dark:border-theme-border/80',
+    colorBody: 'bg-theme-base/30',
+    badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
+    dot: 'bg-blue-500',
   },
   {
     id: 'IN_AUDIT',
     title: 'En Auditoría',
-    colorHeader: 'border-purple-500/40 bg-purple-500/8',
-    colorBody: 'bg-purple-500/3',
-    badge: 'bg-purple-500/15 text-purple-400',
+    colorHeader: 'bg-theme-base border-slate-300 dark:border-theme-border/80',
+    colorBody: 'bg-theme-base/30',
+    badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
+    dot: 'bg-purple-500',
   },
   {
     id: 'INVOICED_READY_FOR_ROUTE',
     title: 'Facturada / Lista',
-    colorHeader: 'border-green-500/40 bg-green-500/8',
-    colorBody: 'bg-green-500/3',
-    badge: 'bg-green-500/15 text-green-400',
+    colorHeader: 'bg-theme-base border-slate-300 dark:border-theme-border/80',
+    colorBody: 'bg-theme-base/30',
+    badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
+    dot: 'bg-green-500',
     locked: true,
   },
   {
     id: 'CANCELLED',
     title: 'Canceladas',
-    colorHeader: 'border-red-500/30 bg-red-500/5',
-    colorBody: 'bg-red-500/3',
-    badge: 'bg-red-500/15 text-red-400',
+    colorHeader: 'bg-theme-base border-slate-300 dark:border-theme-border/80',
+    colorBody: 'bg-theme-base/30',
+    badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
+    dot: 'bg-red-500',
   },
 ]
 
@@ -73,14 +79,15 @@ function DroppableColumn({ col, colCards, onOpenCardDetails }: { col: KanbanColu
   })
 
   return (
-    <div ref={setNodeRef} className={`flex flex-col rounded-xl border ${col.colorHeader} overflow-hidden min-w-0 ${isOver ? 'ring-2 ring-theme-accent ring-inset' : ''}`}>
+    <div ref={setNodeRef} className={`flex flex-col rounded-lg border border-slate-300 dark:border-theme-border/80 bg-theme-panel shadow-sm overflow-hidden min-w-0 transition-all ${isOver ? 'ring-2 ring-theme-accent ring-inset' : ''}`}>
       {/* Column header */}
-      <div className="flex-none flex items-center justify-between px-3 py-2 border-b border-theme-border/30">
-        <div className="flex items-center gap-1.5 min-w-0">
+      <div className={`flex-none flex items-center justify-between px-3 py-2.5 border-b ${col.colorHeader}`}>
+        <div className="flex items-center gap-2 min-w-0">
+          <div className={`w-2 h-2 rounded-full ${col.dot} shrink-0`} />
           {col.locked && <Lock className="w-3 h-3 text-theme-text-muted/60 shrink-0" />}
-          <h3 className="text-xs font-semibold text-theme-text leading-tight truncate">{col.title}</h3>
+          <h3 className="text-xs font-bold text-theme-text leading-tight truncate">{col.title}</h3>
         </div>
-        <span className={`ml-1.5 shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${col.badge}`}>
+        <span className={`ml-2 shrink-0 px-2 py-0.5 rounded text-[10px] font-bold border ${col.badge}`}>
           {colCards.length}
         </span>
       </div>
@@ -96,7 +103,7 @@ function DroppableColumn({ col, colCards, onOpenCardDetails }: { col: KanbanColu
           </div>
         )}
         {colCards.length === 0 && !col.locked && (
-          <p className="pt-6 text-center text-[10px] text-theme-text-muted/40">Sin tarjetas</p>
+          <p className="pt-6 text-center text-[10px] font-medium text-theme-text-muted/60">Sin tarjetas</p>
         )}
         {colCards.map(card => (
           <SalesOrderCard
@@ -271,120 +278,140 @@ export function SalesOrderPreparationPanel() {
   return (
     <div className="flex flex-col h-[calc(100vh-110px)] w-full overflow-hidden">
       {/* ── Header / Toolbar ── */}
-      <div className="flex-none px-4 pt-4 pb-3 border-b border-theme-border bg-theme-panel">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2">
-                <KanbanSquare className="w-5 h-5 text-theme-accent" />
-                <h1 className="text-base font-bold text-theme-text">Próxima ruta a preparar</h1>
-                <span className="px-2 py-0.5 rounded-full bg-theme-accent/10 text-theme-accent text-xs font-bold">
-                  {filteredCards.length} {filteredCards.length === 1 ? 'pedido en tablero' : 'pedidos en tablero'}
-                </span>
+      <div className="flex-none px-4 py-3 border-b border-theme-border bg-theme-panel shadow-sm z-10">
+        <div className="flex items-center justify-between gap-4">
+          
+          <div className="flex items-center gap-3 flex-1 min-w-0">
+            <div className="flex items-center gap-2 pr-3 border-r border-theme-border/50">
+              <KanbanSquare className="w-4 h-4 text-theme-accent shrink-0" />
+              <h1 className="text-sm font-bold text-theme-text truncate">Próxima ruta a preparar</h1>
+              <span className="px-1.5 py-0.5 rounded bg-theme-base text-theme-text-muted text-[10px] font-bold border border-theme-border/50 shrink-0">
+                {filteredCards.length}
+              </span>
+            </div>
+
+            {loadingPreview ? (
+              <div className="text-[11px] text-theme-text-muted flex gap-1.5 items-center font-medium">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Buscando...
               </div>
-              {loadingPreview ? (
-                <div className="text-xs text-theme-text-muted flex gap-2 items-center border-l border-theme-border pl-3">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  Buscando próxima ruta...
-                </div>
-              ) : previewError ? (
-                <div className="text-xs text-red-500 border-l border-theme-border pl-3 flex gap-1 items-center group">
-                  <span>Error: No se pudo cargar la próxima ruta.</span>
-                  <span className="hidden group-hover:inline-block">({previewError})</span>
-                </div>
-              ) : previewInfo && previewInfo.has_route ? (
-                <div className="text-xs text-theme-text-muted flex gap-2 items-center border-l border-theme-border pl-3">
-                  <span className="font-semibold text-theme-text">
-                    Próxima ruta: {previewInfo.route_date ? (() => { const [y,m,d] = previewInfo.route_date.split('-'); return `${d}-${m}-${y}`; })() : ''}
+            ) : previewError ? (
+              <div className="text-[11px] text-red-500 flex gap-1 items-center font-medium">
+                <span>Error de ruta</span>
+                <span className="opacity-80 truncate max-w-[150px]">({previewError})</span>
+              </div>
+            ) : previewInfo && previewInfo.has_route ? (
+              <div className="flex items-center gap-3 text-[11px] text-theme-text overflow-x-auto no-scrollbar">
+                <div className="flex items-center gap-1.5 bg-theme-base px-2 py-1 rounded border border-theme-border/50 whitespace-nowrap">
+                  <span className="font-bold">
+                    {previewInfo.route_date ? (() => { const [y,m,d] = previewInfo.route_date.split('-'); return `${d}-${m}-${y}`; })() : ''}
                   </span>
-                  <span>·</span>
-                  <span className="truncate max-w-[200px]" title={previewInfo.cities?.join(', ')}>
+                  <span className="text-theme-text-muted">·</span>
+                  <span className="truncate max-w-[150px] font-medium" title={previewInfo.cities?.join(', ')}>
                     {previewInfo.cities?.join(', ') || ''}
                   </span>
-                  <span>·</span>
-                  <span>Corte: {previewInfo.cutoff_at_chile ? (() => {
-                    const [datePart, timePart] = previewInfo.cutoff_at_chile.split(' ')
-                    const [y,m,d] = datePart.split('-')
-                    return `${d}-${m}-${y} ${timePart.substring(0,5)}`
-                  })() : previewInfo.cutoff_at ? new Date(previewInfo.cutoff_at).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}</span>
-                  <div className="flex gap-2 ml-2 pl-2 border-l border-theme-border">
-                    {previewInfo.counts?.in_cutoff === 0 && (previewInfo.counts?.existing_cards ?? 0) > 0 ? (
-                      <span className="text-blue-500 font-medium">Ya materializados: {previewInfo.counts?.existing_cards}</span>
-                    ) : (
-                      <>
-                        <span className="text-green-600 font-medium">Nuevos Incluidos: {previewInfo.counts?.in_cutoff ?? 0}</span>
-                        {(previewInfo.counts?.existing_cards ?? 0) > 0 && (
-                          <span className="text-blue-500 font-medium">Existentes: {previewInfo.counts?.existing_cards}</span>
-                        )}
-                      </>
-                    )}
-                    <span className="text-red-500 font-medium cursor-pointer hover:underline" onClick={() => {/* TODO */}}>Fuera de corte: {previewInfo.counts?.out_cutoff ?? 0}</span>
-                    {(previewInfo.counts?.exceptions ?? 0) > 0 && <span className="text-orange-500 font-medium">Excepciones: {previewInfo.counts?.exceptions}</span>}
-                  </div>
                 </div>
-              ) : previewInfo && !previewInfo.has_route ? (
-                <div className="text-xs text-theme-text-muted border-l border-theme-border pl-3 flex items-center">
-                  <span>No hay rutas futuras configuradas.</span>
+
+                <div className="flex items-center gap-1.5 whitespace-nowrap">
+                  <span className="text-theme-text-muted font-medium">Corte:</span>
+                  <span className="font-bold">
+                    {previewInfo.cutoff_at_chile ? (() => {
+                      const [datePart, timePart] = previewInfo.cutoff_at_chile.split(' ')
+                      const [y,m,d] = datePart.split('-')
+                      return `${d}-${m}-${y} ${timePart.substring(0,5)}`
+                    })() : previewInfo.cutoff_at ? new Date(previewInfo.cutoff_at).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
+                  </span>
                 </div>
-              ) : null}
+
+                <div className="flex items-center gap-4 pl-4 border-l border-theme-border/50 whitespace-nowrap">
+                  {previewInfo.counts?.in_cutoff === 0 && (previewInfo.counts?.existing_cards ?? 0) > 0 ? (
+                    <span className="flex items-center gap-1.5 text-theme-text-muted font-medium text-[11px]">
+                      <span className="w-2 h-2 rounded-full bg-blue-500"></span>Materializados: {previewInfo.counts?.existing_cards}
+                    </span>
+                  ) : (
+                    <>
+                      <span className="flex items-center gap-1.5 text-theme-text font-bold text-[11px]">
+                        <span className="w-2 h-2 rounded-full bg-green-500"></span>Nuevos: {previewInfo.counts?.in_cutoff ?? 0}
+                      </span>
+                      {(previewInfo.counts?.existing_cards ?? 0) > 0 && (
+                        <span className="flex items-center gap-1.5 text-theme-text-muted font-medium text-[11px]">
+                          <span className="w-2 h-2 rounded-full bg-blue-500"></span>Existentes: {previewInfo.counts?.existing_cards}
+                        </span>
+                      )}
+                    </>
+                  )}
+                  <span className="flex items-center gap-1.5 text-theme-text font-bold text-[11px] cursor-pointer hover:underline">
+                    <span className="w-2 h-2 rounded-full bg-red-500"></span>Fuera de corte: {previewInfo.counts?.out_cutoff ?? 0}
+                  </span>
+                  {(previewInfo.counts?.exceptions ?? 0) > 0 && (
+                    <span className="flex items-center gap-1.5 text-theme-text font-bold text-[11px]">
+                      <span className="w-2 h-2 rounded-full bg-orange-500"></span>Excepciones: {previewInfo.counts?.exceptions}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ) : previewInfo && !previewInfo.has_route ? (
+              <div className="text-[11px] text-theme-text-muted font-medium">
+                No hay rutas futuras configuradas.
+              </div>
+            ) : null}
+          </div>
+          
+          {/* Controls */}
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="relative w-48">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-text-muted" />
+              <input
+                type="text"
+                placeholder="Buscar folio, cliente..."
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+                className="w-full pl-8 pr-2 py-1.5 bg-theme-base border border-theme-border rounded text-[11px] text-theme-text font-medium focus:outline-none focus:border-theme-accent transition-colors placeholder:text-theme-text-muted/70"
+              />
             </div>
-          </div>
-          <button
-            onClick={() => setShowAdvanced(v => !v)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${showAdvanced ? 'bg-theme-accent/15 text-theme-accent' : 'bg-theme-border/30 text-theme-text-muted hover:bg-theme-border/50'}`}
-          >
-            <SlidersHorizontal className="w-3.5 h-3.5" />
-            Filtros{showAdvanced ? ' ▲' : ' ▼'}
-          </button>
-        </div>
-
-        {/* Search row */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="relative flex-1 min-w-[200px] max-w-sm">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-text-muted" />
-            <input
-              type="text"
-              placeholder="Folio, cliente o ciudad…"
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-              className="w-full pl-8 pr-3 py-1.5 bg-theme-base border border-theme-border rounded-lg text-xs text-theme-text focus:outline-none focus:border-theme-accent transition-colors"
-            />
-          </div>
-
-          {showAdvanced && (
-            <>
-              <select
-                value={filterCity}
-                onChange={e => setFilterCity(e.target.value)}
-                className="py-1.5 px-3 bg-theme-base border border-theme-border rounded-lg text-xs text-theme-text focus:outline-none focus:border-theme-accent"
-              >
-                <option value="">Todas las comunas</option>
-                {cities.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-              <select
-                value={filterSeller}
-                onChange={e => setFilterSeller(e.target.value)}
-                className="py-1.5 px-3 bg-theme-base border border-theme-border rounded-lg text-xs text-theme-text focus:outline-none focus:border-theme-accent"
-              >
-                <option value="">Todos los vendedores</option>
-                {sellers.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </>
-          )}
-
-          {hasFilters && (
             <button
-              onClick={clearFilters}
-              className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors"
+              onClick={() => setShowAdvanced(v => !v)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded border text-[11px] font-bold transition-colors ${showAdvanced ? 'bg-theme-accent/10 border-theme-accent/30 text-theme-accent' : 'bg-theme-base border-theme-border text-theme-text-muted hover:bg-theme-border/40'}`}
             >
-              <RotateCcw className="w-3 h-3" /> Limpiar
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              Filtros
             </button>
-          )}
+          </div>
         </div>
+
+        {/* Filters Expansion */}
+        {showAdvanced && (
+          <div className="flex items-center gap-2 mt-3 pt-3 border-t border-theme-border/50">
+            <select
+              value={filterCity}
+              onChange={e => setFilterCity(e.target.value)}
+              className="py-1.5 px-2 bg-theme-base border border-theme-border rounded text-[11px] font-medium text-theme-text focus:outline-none focus:border-theme-accent"
+            >
+              <option value="">Todas las comunas</option>
+              {cities.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select
+              value={filterSeller}
+              onChange={e => setFilterSeller(e.target.value)}
+              className="py-1.5 px-2 bg-theme-base border border-theme-border rounded text-[11px] font-medium text-theme-text focus:outline-none focus:border-theme-accent"
+            >
+              <option value="">Todos los vendedores</option>
+              {sellers.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            {hasFilters && (
+              <button
+                onClick={clearFilters}
+                className="flex items-center gap-1 px-2 py-1.5 text-[10px] font-bold text-theme-text-muted hover:text-theme-text transition-colors ml-auto bg-theme-base rounded border border-transparent hover:border-theme-border"
+              >
+                <RotateCcw className="w-3.5 h-3.5" /> Limpiar filtros
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Kanban Board ── */}
-      <div className="flex-1 overflow-hidden p-3">
+      <div className="flex-1 overflow-x-auto overflow-y-hidden bg-slate-100/80 dark:bg-theme-base/40">
         {loading ? (
           <div className="h-full flex flex-col items-center justify-center text-theme-text-muted space-y-3">
             <Loader2 className="w-7 h-7 animate-spin text-theme-accent" />
@@ -394,7 +421,7 @@ export function SalesOrderPreparationPanel() {
           <div className="h-full flex items-center justify-center text-red-500 text-sm font-medium">{error}</div>
         ) : (
           /* Grid de 5 columnas, todas en pantalla, sin scroll horizontal */
-          <div className="grid grid-cols-5 gap-3 h-full">
+          <div className="grid grid-cols-5 gap-4 h-full p-4">
             <DndContext 
               sensors={sensors}
               onDragStart={handleDragStart} 
