@@ -8,6 +8,7 @@ import {
   getDispatchCalendarCities,
   createDispatchCalendar,
   saveDispatchCalendarConfig,
+  updateDispatchCalendarCutoffTime,
   DispatchCalendar,
   DispatchCalendarCity,
   DispatchCity
@@ -43,6 +44,7 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
   const [editingCalendarId, setEditingCalendarId] = useState<string | null>(null)
   const [draftName, setDraftName] = useState('')
   const [draftActive, setDraftActive] = useState(false)
+  const [draftCutoffTime, setDraftCutoffTime] = useState('12:00')
   const [draftCities, setDraftCities] = useState<Array<{
     id?: string
     weekday: number
@@ -57,7 +59,7 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
   // New Calendar Modal/Inline State
   const [showCreate, setShowCreate] = useState(false)
   const [newCalendarName, setNewCalendarName] = useState('')
-  const [originalDraftState, setOriginalDraftState] = useState<{name: string, active: boolean, cities: any[]} | null>(null)
+  const [originalDraftState, setOriginalDraftState] = useState<{name: string, active: boolean, cutoffTime: string, cities: any[]} | null>(null)
 
   useEffect(() => {
     loadInitialData()
@@ -124,6 +126,7 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
     setEditingCalendarId(calendar.id)
     setDraftName(calendar.name)
     setDraftActive(calendar.active)
+    setDraftCutoffTime(calendar.default_cutoff_time?.substring(0, 5) || '12:00')
     
     // Initialize draft cities
     const loaded = res.data || []
@@ -140,6 +143,7 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
     setOriginalDraftState({
       name: calendar.name,
       active: calendar.active,
+      cutoffTime: calendar.default_cutoff_time?.substring(0, 5) || '12:00',
       cities: draftC
     })
     
@@ -152,6 +156,7 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
     if (view === 'EDIT' && originalDraftState) {
       const isChanged = draftName !== originalDraftState.name || 
                         draftActive !== originalDraftState.active ||
+                        draftCutoffTime !== originalDraftState.cutoffTime ||
                         JSON.stringify(draftCities) !== JSON.stringify(originalDraftState.cities)
       if (isChanged) {
         if (!window.confirm('Hay cambios sin guardar. ¿Deseas salir sin guardar?')) {
@@ -220,6 +225,26 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
       if (!resCal.error) setCalendars(resCal.data || [])
       setView('LIST')
       setEditingCalendarId(null)
+      setLoading(false)
+    }
+  }
+
+  async function handleSaveCutoffTime() {
+    if (!isSuperUser || !editingCalendarId) return
+    setLoading(true)
+    const res = await updateDispatchCalendarCutoffTime({
+      calendarId: editingCalendarId,
+      defaultCutoffTime: draftCutoffTime
+    })
+    
+    if (res.error) {
+      toast.error(res.error)
+      setLoading(false)
+    } else {
+      toast.success('Hora de corte actualizada correctamente.')
+      const resCal = await getDispatchCalendars()
+      if (!resCal.error) setCalendars(resCal.data || [])
+      if (originalDraftState) setOriginalDraftState({...originalDraftState, cutoffTime: draftCutoffTime})
       setLoading(false)
     }
   }
@@ -347,6 +372,36 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                   Guardar cambios
                 </Button>
+              )}
+            </div>
+          </div>
+
+          {/* General Config Block */}
+          <div className="bg-theme-surface border border-theme-border p-5 rounded-xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+              <h3 className="font-semibold text-theme-text text-lg">Hora de corte por defecto</h3>
+              <p className="text-sm text-theme-text-muted mt-1">
+                Las notas de venta generadas después de esta hora, el día anterior a la ruta, quedarán fuera de corte y requerirán autorización.
+              </p>
+              <p className="text-xs font-medium text-blue-600 dark:text-blue-400 mt-2">
+                Corte actual guardado: {originalDraftState?.cutoffTime}
+              </p>
+            </div>
+            
+            <div className="flex items-center gap-3 shrink-0">
+              <input 
+                type="time" 
+                value={draftCutoffTime}
+                onChange={e => setDraftCutoffTime(e.target.value)}
+                disabled={!isSuperUser || loading}
+                className="rounded-lg border border-theme-border bg-transparent px-3 py-1.5 text-theme-text outline-none focus:ring-2 focus:ring-blue-500/50 disabled:opacity-50"
+              />
+              {isSuperUser ? (
+                <Button onClick={handleSaveCutoffTime} disabled={loading || draftCutoffTime === originalDraftState?.cutoffTime} size="sm" variant="outline">
+                  Actualizar hora
+                </Button>
+              ) : (
+                <p className="text-xs text-amber-600 bg-amber-500/10 px-2 py-1 rounded">Solo Super Usuario</p>
               )}
             </div>
           </div>

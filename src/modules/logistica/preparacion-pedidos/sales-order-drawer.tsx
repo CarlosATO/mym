@@ -1,19 +1,30 @@
 'use client'
 
 import { X, MapPin, Package, User, FileText, FileCheck, CheckCircle2, Printer } from 'lucide-react'
-import { SalesOrderPreparationCardInfo, SalesOrderPreparationItem, getSalesOrderClientData, SalesOrderClientData } from '@/app/actions/logistica/sales-order-preparation'
+import { SalesOrderPreparationCardInfo, SalesOrderPreparationItem, getSalesOrderClientData, SalesOrderClientData, moveSalesOrderPreparationCard, getSalesOrderPreparationMovements, SalesOrderPreparationMovement } from '@/app/actions/logistica/sales-order-preparation'
 import { SalesOrderPrintDocument } from './components/sales-order-print-document'
 import { useState, useEffect } from 'react'
+import { toast } from 'sonner'
+import { MOVEMENT_RULES } from './movement-rules'
 
 interface SalesOrderDrawerProps {
   card: SalesOrderPreparationCardInfo | null
   items: SalesOrderPreparationItem[]
   isLoadingItems: boolean
   onClose: () => void
+  onCardMoved?: () => void
 }
 
-export function SalesOrderDrawer({ card, items, isLoadingItems, onClose }: SalesOrderDrawerProps) {
+export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onCardMoved }: SalesOrderDrawerProps) {
   const [clientData, setClientData] = useState<SalesOrderClientData | null>(null)
+  
+  const [movements, setMovements] = useState<SalesOrderPreparationMovement[]>([])
+  const [loadingMovements, setLoadingMovements] = useState(false)
+  
+  const [pendingMoveAction, setPendingMoveAction] = useState<{ toStatus: string; requireObs: boolean; label: string } | null>(null)
+  const [observation, setObservation] = useState('')
+  const [isMoving, setIsMoving] = useState(false)
+  const [moveError, setMoveError] = useState<string | null>(null)
 
   useEffect(() => {
     if (card?.company_id && card?.nv_bsale_id) {
@@ -23,9 +34,59 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose }: Sales
     }
   }, [card?.company_id, card?.nv_bsale_id])
 
+  const loadMovements = async () => {
+    if (!card?.card_id) return
+    setLoadingMovements(true)
+    const res = await getSalesOrderPreparationMovements(card.card_id)
+    setMovements(res.data || [])
+    setLoadingMovements(false)
+  }
+
+  useEffect(() => {
+    if (card?.card_id) {
+      loadMovements()
+    } else {
+      setMovements([])
+    }
+    setPendingMoveAction(null)
+    setObservation('')
+    setMoveError(null)
+  }, [card?.card_id])
+
   if (!card) return null
 
+  const handleMove = async (toStatus: string, requireObs: boolean, label: string) => {
+    if (requireObs) {
+      setPendingMoveAction({ toStatus, requireObs, label })
+      setObservation('')
+      setMoveError(null)
+      return
+    }
+    executeMove(toStatus)
+  }
+
+  const executeMove = async (toStatus: string, obs?: string) => {
+    setIsMoving(true)
+    setMoveError(null)
+    const res = await moveSalesOrderPreparationCard({
+      cardId: card.card_id,
+      toStatus,
+      observation: obs
+    })
+    setIsMoving(false)
+    if (!res.ok) {
+      setMoveError(res.error ?? 'Error desconocido')
+      toast.error(`Error al mover: ${res.error ?? 'Desconocido'}`)
+      return
+    }
+    toast.success(`NV #${card.nv_folio} movida exitosamente`)
+    setPendingMoveAction(null)
+    await loadMovements()
+    if (onCardMoved) onCardMoved()
+  }
+
   const dateStr = new Date(card.nv_emission_date).toLocaleDateString('es-CL', { day: 'numeric', month: 'long', year: 'numeric' })
+  const firstPrepMovement = movements.find(m => m.to_status === 'IN_PREPARATION')
 
 
   return (
@@ -114,6 +175,9 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose }: Sales
                 {card.route_date && (
                   <p className="text-xs text-theme-text-muted mt-1">Ruta: {new Date(card.route_date).toLocaleDateString('es-CL')}</p>
                 )}
+                <p className="text-xs font-medium text-theme-accent mt-1">
+                  Preparación: {firstPrepMovement ? new Date(firstPrepMovement.created_at).toLocaleString('es-CL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Sin iniciar'}
+                </p>
               </div>
               <div className={`px-3 py-1 rounded-full text-xs font-semibold
                 ${card.status === 'PENDING_ROUTE_PREP' ? 'bg-orange-500/10 text-orange-500' : ''}
@@ -203,22 +267,120 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose }: Sales
             </div>
           </div>
 
+          {/* Historial de Movimientos */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-theme-text uppercase tracking-wider flex items-center gap-2">
+              Historial de Movimientos ({movements.length})
+            </h3>
+            <div className="bg-theme-border/10 rounded-xl p-4 max-h-[200px] overflow-y-auto text-xs text-theme-text space-y-2">
+              {loadingMovements ? (
+                <div className="text-center text-theme-text-muted">Cargando historial...</div>
+              ) : movements.length === 0 ? (
+                <div className="text-center text-theme-text-muted">Sin movimientos registrados.</div>
+              ) : (
+                movements.map(m => (
+                  <div key={m.id} className="pb-2 border-b border-theme-border/50 last:border-0 last:pb-0">
+                    <p className="font-medium">{m.metadata?.moved_by_name || 'Sistema'}</p>
+                    <p className="text-theme-text-muted">
+                      {new Date(m.created_at).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                    <p className="mt-1">
+                      <span className="text-theme-text-muted/60">{m.from_status ? m.from_status.replace(/_/g, ' ') : 'N/A'}</span>
+                      <span className="mx-1">→</span>
+                      <span className="font-semibold text-theme-accent">{m.to_status.replace(/_/g, ' ')}</span>
+                    </p>
+                    {m.observation && <p className="mt-1 italic opacity-80 text-orange-400">Obs: {m.observation}</p>}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
         </div>
         
-        {/* Footer */}
-        <div className="flex-none p-4 border-t border-theme-border bg-theme-panel flex gap-3">
-          <button 
-            onClick={() => window.print()}
-            className="flex-1 py-2.5 px-4 bg-theme-accent hover:bg-theme-accent-hover text-white font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
-          >
-            <Printer className="w-4 h-4" /> Imprimir
-          </button>
-          <button 
-            onClick={onClose}
-            className="flex-1 py-2.5 px-4 bg-theme-border/50 hover:bg-theme-border/80 text-theme-text font-medium rounded-xl transition-colors"
-          >
-            Cerrar detalle
-          </button>
+        {/* Movimientos UI */}
+        {pendingMoveAction && (
+          <div className="p-4 bg-theme-panel-hover border-t border-theme-border">
+            <p className="text-sm font-medium mb-2 text-theme-text">Observación requerida para: <span className="font-bold">{pendingMoveAction.label}</span></p>
+            <textarea
+              className="w-full bg-theme-base border border-theme-border rounded-lg p-2 text-sm text-theme-text mb-2 focus:border-theme-accent outline-none"
+              placeholder="Indica el motivo de este cambio..."
+              rows={3}
+              value={observation}
+              onChange={e => setObservation(e.target.value)}
+            />
+            {moveError && <p className="text-xs text-red-500 mb-2">{moveError}</p>}
+            <div className="flex gap-2">
+              <button 
+                disabled={isMoving || observation.trim() === ''}
+                onClick={() => executeMove(pendingMoveAction.toStatus, observation)}
+                className="flex-1 py-2 bg-theme-accent text-white rounded-lg text-sm font-medium disabled:opacity-50"
+              >
+                {isMoving ? 'Guardando...' : 'Confirmar'}
+              </button>
+              <button 
+                onClick={() => setPendingMoveAction(null)}
+                className="flex-1 py-2 bg-theme-border/50 text-theme-text rounded-lg text-sm font-medium"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="flex-none p-4 border-t border-theme-border bg-theme-panel">
+          {moveError && !pendingMoveAction && <p className="text-xs text-red-500 mb-3 text-center">{moveError}</p>}
+          
+          {!pendingMoveAction && card.status === 'PENDING_ROUTE_PREP' && (
+            <div className="flex gap-2 mb-3">
+              <button onClick={() => handleMove('IN_PREPARATION', MOVEMENT_RULES.PENDING_ROUTE_PREP.IN_PREPARATION.backward, MOVEMENT_RULES.PENDING_ROUTE_PREP.IN_PREPARATION.label)} disabled={isMoving} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
+                {MOVEMENT_RULES.PENDING_ROUTE_PREP.IN_PREPARATION.label}
+              </button>
+            </div>
+          )}
+
+          {!pendingMoveAction && card.status === 'IN_PREPARATION' && (
+            <div className="flex gap-2 mb-3">
+              <button onClick={() => handleMove('IN_AUDIT', MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.backward, MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.label)} disabled={isMoving} className="flex-1 py-2 bg-purple-600 hover:bg-purple-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
+                {MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.label}
+              </button>
+              <button onClick={() => handleMove('PENDING_ROUTE_PREP', MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.backward, MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.label)} disabled={isMoving} className="flex-1 py-2 bg-orange-600 hover:bg-orange-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
+                {MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.label}
+              </button>
+            </div>
+          )}
+
+          {!pendingMoveAction && card.status === 'IN_AUDIT' && (
+            <div className="flex gap-2 mb-3">
+              <button onClick={() => handleMove('IN_PREPARATION', MOVEMENT_RULES.IN_AUDIT.IN_PREPARATION.backward, MOVEMENT_RULES.IN_AUDIT.IN_PREPARATION.label)} disabled={isMoving} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
+                {MOVEMENT_RULES.IN_AUDIT.IN_PREPARATION.label}
+              </button>
+              <button onClick={() => handleMove('PENDING_ROUTE_PREP', MOVEMENT_RULES.IN_AUDIT.PENDING_ROUTE_PREP.backward, MOVEMENT_RULES.IN_AUDIT.PENDING_ROUTE_PREP.label)} disabled={isMoving} className="flex-1 py-2 bg-orange-600 hover:bg-orange-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
+                {MOVEMENT_RULES.IN_AUDIT.PENDING_ROUTE_PREP.label}
+              </button>
+            </div>
+          )}
+
+          {!pendingMoveAction && card.status === 'INVOICED_READY_FOR_ROUTE' && (
+            <div className="mb-3 text-center text-xs text-theme-text-muted bg-theme-border/20 p-2 rounded-lg">
+              Movimiento automático al detectar factura en Bsale. Sin acciones manuales.
+            </div>
+          )}
+
+          <div className="flex gap-3">
+            <button 
+              onClick={() => window.print()}
+              className="flex-1 py-2.5 px-4 bg-theme-border/20 hover:bg-theme-border/40 text-theme-text font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
+            >
+              <Printer className="w-4 h-4" /> Imprimir
+            </button>
+            <button 
+              onClick={onClose}
+              className="flex-1 py-2.5 px-4 bg-theme-border/50 hover:bg-theme-border/80 text-theme-text font-medium rounded-xl transition-colors"
+            >
+              Cerrar detalle
+            </button>
+          </div>
         </div>
       </div>
     </>
