@@ -18,7 +18,7 @@ async function requireSuperUsuario() {
 }
 
 export type DispatchCity = { id: string, name: string, active: boolean }
-export type DispatchCalendar = { id: string, name: string, active: boolean, created_at: string, updated_at: string }
+export type DispatchCalendar = { id: string, name: string, default_cutoff_time: string, active: boolean, created_at: string, updated_at: string }
 export type DispatchCalendarCity = { id: string, calendar_id: string, city_id: string, weekday: number, normalized_city: string, route_label: string | null, priority: number, active: boolean }
 
 export async function getDispatchCities(): Promise<{ data: DispatchCity[] | null, error: string | null }> {
@@ -105,4 +105,42 @@ export async function saveDispatchCalendarConfig(calendarId: string, payload: Di
     if (insError) return { success: false, error: insError.code === '23505' ? 'Comuna duplicada' : insError.message }
   }
   return { success: true, error: null }
+}
+
+export async function updateDispatchCalendarCutoffTime(params: {
+  calendarId: string
+  defaultCutoffTime: string
+}): Promise<{ ok: boolean; error: string | null }> {
+  const auth = await requireSuperUsuario()
+  if (auth.error) return { ok: false, error: auth.error }
+  
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { ok: false, error: 'No company active' }
+
+  if (!params.defaultCutoffTime || !/^([01]\d|2[0-3]):([0-5]\d)(:([0-5]\d))?$/.test(params.defaultCutoffTime)) {
+    return { ok: false, error: 'Hora de corte inválida. Formato esperado: HH:mm o HH:mm:ss' }
+  }
+
+  let timeString = params.defaultCutoffTime
+  if (timeString.length === 5) {
+    timeString = `${timeString}:00`
+  }
+
+  const admin = logisticaAdmin()
+  const { error } = await admin
+    .schema('logistica')
+    .from('dispatch_calendars')
+    .update({ 
+      default_cutoff_time: timeString,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', params.calendarId)
+    .eq('company_id', companyId)
+
+  if (error) {
+    console.error('updateDispatchCalendarCutoffTime error:', error)
+    return { ok: false, error: error.message }
+  }
+
+  return { ok: true, error: null }
 }
