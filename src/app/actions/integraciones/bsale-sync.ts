@@ -2,6 +2,8 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { bsaleFetchAll, normalizeSku, getBsaleHeaders } from '@/lib/bsale/client'
+import { syncBsaleClients } from '@/lib/integraciones/bsale-clients-sync'
+import crypto from 'crypto'
 
 const BSALE_API_BASE = process.env.BSALE_API_BASE_URL || 'https://api.bsale.cl/v1'
 
@@ -28,14 +30,14 @@ interface SyncRun {
   started_at?: string
 }
 
-async function createSyncRun(companyId: string): Promise<SyncRun> {
+async function createSyncRun(companyId: string, trigger: string = 'MANUAL'): Promise<SyncRun> {
   const db = integrDb()
   const { data, error } = await db
     .from('bsale_sync_runs')
     .insert({
       company_id: companyId,
       status: 'STARTED',
-      trigger: 'MANUAL',
+      trigger,
     })
     .select('id, company_id, started_at')
     .single()
@@ -273,6 +275,129 @@ async function syncSellers(companyId: string, runId: string): Promise<number> {
 
   return count
 }
+
+function cleanCodeForSync(code: any): string | null {
+  if (!code || typeof code !== 'string') return null
+  const cleaned = code.replace(/[^0-9kK]/g, '').toUpperCase()
+  return cleaned === '' ? null : cleaned
+}
+
+function resolveBusinessNameForSync(client: any): string {
+  if (client.company && client.company.trim() !== '') return client.company.trim()
+  const first = client.firstName ? client.firstName.trim() : ''
+  const last = client.lastName ? client.lastName.trim() : ''
+  const full = `${first} ${last}`.trim()
+  if (full !== '') return full
+  return `Cliente Bsale ${client.id}`
+}
+
+async function hydrateOrphanClients(companyId: string, runId: string): Promise<{ hydrated: number; errors: number; orphanIds: number[] }> {
+  const db = integrDb()
+  let hydrated = 0
+  let errors = 0
+
+  const { data: docClients } = await db
+    .from('bsale_documents')
+    .select('client_id')
+    .not('client_id', 'is', null)
+    .eq('company_id', companyId)
+
+  const { data: existingClients } = await db
+    .from('bsale_clients')
+    .select('bsale_client_id')
+    .eq('company_id', companyId)
+
+  const existingSet = new Set((existingClients || []).map((c: any) => c.bsale_client_id))
+  const orphanIds = [...new Set((docClients || []).map((d: any) => d.client_id).filter((id: number) => !existingSet.has(id)))]
+
+  if (orphanIds.length === 0) return { hydrated: 0, errors: 0, orphanIds: [] }
+
+  console.log(`[hydrateOrphanClients] Found ${orphanIds.length} orphan client_ids: ${orphanIds.join(', ')}`)
+
+  for (const clientId of orphanIds) {
+    try {
+      const url = `${process.env.BSALE_API_BASE_URL || 'https://api.bsale.cl/v1'}/clients/${clientId}.json`
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: getBsaleHeaders(),
+        signal: AbortSignal.timeout(15000),
+      })
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          console.log(`[hydrateOrphanClients] Client ${clientId} not found in Bsale (404), skipping`)
+          errors++
+          continue
+        }
+        console.error(`[hydrateOrphanClients] HTTP ${response.status} for client ${clientId}`)
+        errors++
+        continue
+      }
+
+      const client = await response.json()
+      const rut = client.code
+      const cleanedRut = cleanCodeForSync(rut)
+      const businessName = resolveBusinessNameForSync(client)
+      const email = (client.email && client.email.trim() !== '') ? client.email.trim().toLowerCase() : null
+      const phone = client.phone ? client.phone.trim() : null
+      const address = client.address ? client.address.trim() : null
+      const city = client.city ? client.city.trim() : null
+      const commune = client.municipality ? client.municipality.trim() : null
+      const creditLimit = client.maxCredit ? parseFloat(client.maxCredit) : null
+      const hash = crypto.createHash('md5').update(JSON.stringify(client)).digest('hex')
+
+      const record = {
+        company_id: companyId,
+        bsale_client_id: clientId,
+        code: rut,
+        code_clean: cleanedRut,
+        business_name: businessName,
+        first_name: client.firstName || null,
+        last_name: client.lastName || null,
+        email,
+        phone,
+        mobile: null,
+        address,
+        city,
+        commune,
+        region: null,
+        district: null,
+        activity: client.activity || null,
+        company: client.company || null,
+        client_type: null,
+        price_list_id: client.price_list?.id || null,
+        payment_type_id: client.payment_type?.id || null,
+        credit_limit: creditLimit,
+        credit_days: null,
+        is_active_bsale: client.state === 0,
+        raw_payload: client,
+        payload_hash: hash,
+        last_seen_at: new Date().toISOString(),
+        last_sync_at: new Date().toISOString(),
+      }
+
+      const { error: upsertErr } = await db
+        .from('bsale_clients')
+        .upsert(record, { onConflict: 'company_id, bsale_client_id', ignoreDuplicates: false })
+
+      if (upsertErr) {
+        console.error(`[hydrateOrphanClients] Error upserting client ${clientId}: ${upsertErr.message}`)
+        errors++
+        continue
+      }
+
+      hydrated++
+      console.log(`[hydrateOrphanClients] Hydrated client ${clientId}: ${businessName}`)
+    } catch (err: any) {
+      console.error(`[hydrateOrphanClients] Error processing client ${clientId}: ${err.message}`)
+      errors++
+    }
+  }
+
+  console.log(`[hydrateOrphanClients] Done: ${hydrated} hydrated, ${errors} errors`)
+  return { hydrated, errors, orphanIds }
+}
+
 
 async function getVariantCost(bsaleVariantId: number): Promise<{
   averageCost: number
@@ -940,7 +1065,7 @@ export async function releaseSyncLock(companyId: string, lockName: string, runId
     .eq('run_id', runId);
 }
 
-export async function runReplenishmentBsaleSync(companyId: string): Promise<{
+export async function runReplenishmentBsaleSync(companyId: string, trigger: string = 'SCHEDULED'): Promise<{
   success: boolean;
   status: string;
   runId?: string;
@@ -953,7 +1078,7 @@ export async function runReplenishmentBsaleSync(companyId: string): Promise<{
   const lockName = 'bsale_replenishment_sync';
   
   try {
-    run = await createSyncRun(companyId);
+    run = await createSyncRun(companyId, trigger);
     const runId = run.id;
 
     // Acquire lock
@@ -966,8 +1091,36 @@ export async function runReplenishmentBsaleSync(companyId: string): Promise<{
 
     let finalStatus: 'COMPLETED' | 'PARTIAL' | 'FAILED' = 'COMPLETED';
     let errorMessage = '';
-    
-    // 1. Sync Sales (14 days)
+
+    // 1. Sync Clients (before documents to reduce orphans)
+    console.log('[runReplenishmentBsaleSync] Iniciando syncBsaleClients...');
+    let clientStats = { bsaleTotal: 0, bsaleFetched: 0, insertedCount: 0, updatedCount: 0, skippedCount: 0, errorCount: 0 };
+    try {
+      const mappedTrigger = trigger === 'SCHEDULED' ? 'SCHEDULED' : (trigger === 'MANUAL' ? 'MANUAL' : 'SCHEDULED')
+      const clientsRes = await syncBsaleClients({
+        companyId,
+        triggerType: mappedTrigger,
+        isDryRun: false,
+        recordDryRun: true,
+      });
+      if (clientsRes.stats) {
+        clientStats = clientsRes.stats;
+      }
+      if (clientsRes.status === 'FAILED') {
+        console.error('[runReplenishmentBsaleSync] syncBsaleClients failed:', clientsRes.message);
+        finalStatus = 'PARTIAL';
+        errorMessage += (errorMessage ? ' | ' : '') + 'Clients: ' + clientsRes.message;
+      } else if (clientsRes.status === 'SKIPPED') {
+        console.log('[runReplenishmentBsaleSync] syncBsaleClients skipped (lock):', clientsRes.message);
+      }
+      console.log(`[runReplenishmentBsaleSync] Clients: fetched=${clientStats.bsaleFetched} ins=${clientStats.insertedCount} upd=${clientStats.updatedCount}`);
+    } catch (clientsErr: any) {
+      console.error('[runReplenishmentBsaleSync] Error en clients:', clientsErr);
+      finalStatus = 'PARTIAL';
+      errorMessage += (errorMessage ? ' | ' : '') + 'Error en clients: ' + clientsErr.message;
+    }
+
+    // 2. Sync Sales (14 days)
     console.log('[runReplenishmentBsaleSync] Iniciando syncBsaleSales (14 days)...');
     const salesRes = await syncBsaleSales(companyId, { days: 14 });
     
@@ -978,7 +1131,21 @@ export async function runReplenishmentBsaleSync(companyId: string): Promise<{
       finalStatus = 'PARTIAL';
     }
 
-    // 2. Sync Stock
+    // 3. Hydrate orphan clients detected after document sync
+    let orphanResult = { hydrated: 0, errors: 0, orphanIds: [] as number[] };
+    if (finalStatus !== 'FAILED') {
+      console.log('[runReplenishmentBsaleSync] Hydrating orphan clients...');
+      try {
+        orphanResult = await hydrateOrphanClients(companyId, runId);
+        if (orphanResult.hydrated > 0) {
+          console.log(`[runReplenishmentBsaleSync] Hydrated ${orphanResult.hydrated} orphan clients`);
+        }
+      } catch (orphanErr: any) {
+        console.error('[runReplenishmentBsaleSync] Error hydrating orphans:', orphanErr);
+      }
+    }
+
+    // 4. Sync Stock
     let stockCount = 0;
     if (finalStatus !== 'FAILED') {
       console.log('[runReplenishmentBsaleSync] Iniciando syncStock...');
@@ -992,14 +1159,20 @@ export async function runReplenishmentBsaleSync(companyId: string): Promise<{
     }
 
     const counts = {
+      clients: clientStats,
       sales: salesRes.counts,
+      orphans: orphanResult,
       stocks: stockCount
     };
 
     await finishSyncRun(runId, finalStatus, {
+       clients_fetched: clientStats.bsaleFetched,
+       clients_inserted: clientStats.insertedCount,
+       clients_updated: clientStats.updatedCount,
        documents: salesRes.counts?.documents || 0,
        document_details_count: salesRes.counts?.details || 0,
        detail_errors: salesRes.counts?.detail_errors || 0,
+       orphans_hydrated: orphanResult.hydrated,
        stocks: stockCount
     }, errorMessage || undefined);
 
