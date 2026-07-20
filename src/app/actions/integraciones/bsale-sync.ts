@@ -17,6 +17,13 @@ function integrDb() {
   })
 }
 
+function comercialDb() {
+  return createClient(supabaseUrl, serviceKey, {
+    db: { schema: 'comercial' },
+    auth: { autoRefreshToken: false, persistSession: false },
+  })
+}
+
 function adqDb() {
   return createClient(supabaseUrl, serviceKey, {
     db: { schema: 'adquisiciones' },
@@ -291,6 +298,59 @@ function resolveBusinessNameForSync(client: any): string {
   return `Cliente Bsale ${client.id}`
 }
 
+async function syncCommercialCustomerFromHydratedClient(companyId: string, client: any) {
+  const db = comercialDb()
+  const bsaleClientId = client.id
+  const rut = client.code || null
+  const record = {
+    company_id: companyId,
+    bsale_client_id: bsaleClientId,
+    source: 'BSALE',
+    rut,
+    rut_clean: cleanCodeForSync(rut),
+    business_name: resolveBusinessNameForSync(client),
+    fantasy_name: null,
+    email: (client.email && client.email.trim() !== '') ? client.email.trim().toLowerCase() : null,
+    phone: client.phone ? client.phone.trim() : null,
+    mobile: null,
+    address: client.address ? client.address.trim() : null,
+    city: client.city ? client.city.trim() : null,
+    commune: client.municipality ? client.municipality.trim() : null,
+    region: client.city || null,
+    business_activity: client.activity || null,
+    credit_limit: client.maxCredit ? parseFloat(client.maxCredit) : null,
+    is_active: client.state === 0,
+    last_bsale_sync_at: new Date().toISOString(),
+  }
+
+  const { data: existing, error: fetchErr } = await db
+    .from('customers')
+    .select('id, notes, fantasy_name')
+    .eq('company_id', companyId)
+    .eq('source', 'BSALE')
+    .eq('bsale_client_id', bsaleClientId)
+    .maybeSingle()
+
+  if (fetchErr) throw fetchErr
+
+  if (existing) {
+    const { error: updateErr } = await db
+      .from('customers')
+      .update({
+        ...record,
+        notes: existing.notes,
+        fantasy_name: existing.fantasy_name || record.fantasy_name,
+      })
+      .eq('id', existing.id)
+
+    if (updateErr) throw updateErr
+    return
+  }
+
+  const { error: insertErr } = await db.from('customers').insert(record)
+  if (insertErr) throw insertErr
+}
+
 async function hydrateOrphanClients(companyId: string, runId: string): Promise<{ hydrated: number; errors: number; orphanIds: number[] }> {
   const db = integrDb()
   let hydrated = 0
@@ -382,6 +442,14 @@ async function hydrateOrphanClients(companyId: string, runId: string): Promise<{
 
       if (upsertErr) {
         console.error(`[hydrateOrphanClients] Error upserting client ${clientId}: ${upsertErr.message}`)
+        errors++
+        continue
+      }
+
+      try {
+        await syncCommercialCustomerFromHydratedClient(companyId, client)
+      } catch (commercialErr: any) {
+        console.error(`[hydrateOrphanClients] Error syncing commercial customer ${clientId}: ${commercialErr.message}`)
         errors++
         continue
       }
