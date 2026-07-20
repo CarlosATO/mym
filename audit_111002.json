@@ -1,0 +1,415 @@
+{
+  "rawData": [
+    {
+      "id": "7fdd5663-dd98-465c-922a-2000f343e1eb",
+      "bsale_id": 87821,
+      "number": 3075,
+      "document_type_id": 23,
+      "emission_date": "2026-06-15",
+      "generation_date": "2026-06-15T19:09:51+00:00",
+      "quantity": 50
+    },
+    {
+      "id": "6a021a73-b41e-48bd-8a4c-ea82443b7654",
+      "bsale_id": 87827,
+      "number": 22771,
+      "document_type_id": 5,
+      "emission_date": "2026-06-15",
+      "generation_date": "2026-06-15T21:08:33+00:00",
+      "quantity": 50
+    },
+    {
+      "id": "92b5cc4e-ecd0-4114-9999-ad775f9dcab5",
+      "bsale_id": 87948,
+      "number": 3111,
+      "document_type_id": 23,
+      "emission_date": "2026-06-17",
+      "generation_date": "2026-06-17T23:38:05+00:00",
+      "quantity": 6
+    },
+    {
+      "id": "73a12e58-856d-4d84-88df-441779ebf359",
+      "bsale_id": 88404,
+      "number": 3143,
+      "document_type_id": 23,
+      "emission_date": "2026-06-18",
+      "generation_date": "2026-07-02T12:31:37+00:00",
+      "quantity": 5
+    },
+    {
+      "id": "2e3a56a7-685b-4e81-8e08-07c448e5ccc4",
+      "bsale_id": 88048,
+      "number": 3156,
+      "document_type_id": 23,
+      "emission_date": "2026-06-19",
+      "generation_date": "2026-06-19T17:03:07+00:00",
+      "quantity": 25
+    },
+    {
+      "id": "ccac0756-71ee-4abd-b4cd-a2715c8896f3",
+      "bsale_id": 88021,
+      "number": 22851,
+      "document_type_id": 5,
+      "emission_date": "2026-06-19",
+      "generation_date": "2026-06-19T13:04:18+00:00",
+      "quantity": 6
+    },
+    {
+      "id": "6ea028db-10ca-4575-a848-2914541b4054",
+      "bsale_id": 88080,
+      "number": 22878,
+      "document_type_id": 5,
+      "emission_date": "2026-06-22",
+      "generation_date": "2026-06-22T20:48:51+00:00",
+      "quantity": 25
+    },
+    {
+      "id": "73351499-1615-4d91-95ac-36e7a4f30b9d",
+      "bsale_id": 88195,
+      "number": 3225,
+      "document_type_id": 23,
+      "emission_date": "2026-06-24",
+      "generation_date": "2026-06-25T01:37:26+00:00",
+      "quantity": 10
+    },
+    {
+      "id": "c3e08ff2-cfbb-46fb-8f2b-3a82cadd703c",
+      "bsale_id": 88198,
+      "number": 3228,
+      "document_type_id": 23,
+      "emission_date": "2026-06-24",
+      "generation_date": "2026-06-25T01:39:10+00:00",
+      "quantity": 8
+    },
+    {
+      "id": "7a916e3e-8099-4d35-9aba-95c96fe7784f",
+      "bsale_id": 88171,
+      "number": 3205,
+      "document_type_id": 23,
+      "emission_date": "2026-06-24",
+      "generation_date": "2026-06-24T20:51:56+00:00",
+      "quantity": 5
+    },
+    {
+      "id": "af2710cf-7f50-4e98-84a6-9bf2687d34fc",
+      "bsale_id": 88210,
+      "number": 3237,
+      "document_type_id": 23,
+      "emission_date": "2026-06-25",
+      "generation_date": "2026-06-25T15:50:03+00:00",
+      "quantity": 8
+    },
+    {
+      "id": "d2f70fbe-33a0-40e9-b86f-5b55bae86196",
+      "bsale_id": 88213,
+      "number": 3240,
+      "document_type_id": 23,
+      "emission_date": "2026-06-25",
+      "generation_date": "2026-06-25T16:14:34+00:00",
+      "quantity": 6
+    },
+    {
+      "id": "db729928-2c7d-4608-9fe2-4237d6e68c18",
+      "bsale_id": 88208,
+      "number": 3235,
+      "document_type_id": 23,
+      "emission_date": "2026-06-25",
+      "generation_date": "2026-06-25T15:49:13+00:00",
+      "quantity": 4
+    },
+    {
+      "id": "201d7b47-79c6-4a86-a035-3ef0eec8dd14",
+      "bsale_id": 88249,
+      "number": 22948,
+      "document_type_id": 5,
+      "emission_date": "2026-06-26",
+      "generation_date": "2026-06-26T13:22:21+00:00",
+      "quantity": 4
+    },
+    {
+      "id": "0781ecea-b905-4efb-9120-90a6eb7f885d",
+      "bsale_id": 88255,
+      "number": 22953,
+      "document_type_id": 5,
+      "emission_date": "2026-06-26",
+      "generation_date": "2026-06-26T13:32:51+00:00",
+      "quantity": 8
+    },
+    {
+      "id": "5787007a-89dd-45dc-b502-cccf2fb30f06",
+      "bsale_id": 88259,
+      "number": 22957,
+      "document_type_id": 5,
+      "emission_date": "2026-06-26",
+      "generation_date": "2026-06-26T13:41:07+00:00",
+      "quantity": 6
+    },
+    {
+      "id": "c74878c2-eb46-4d41-899d-cd0fa587b3ff",
+      "bsale_id": 88282,
+      "number": 22965,
+      "document_type_id": 5,
+      "emission_date": "2026-06-26",
+      "generation_date": "2026-06-26T20:24:20+00:00",
+      "quantity": 10
+    },
+    {
+      "id": "03a902a1-1630-47a6-8425-faf69df27b10",
+      "bsale_id": 88286,
+      "number": 22969,
+      "document_type_id": 5,
+      "emission_date": "2026-06-26",
+      "generation_date": "2026-06-26T20:31:36+00:00",
+      "quantity": 8
+    },
+    {
+      "id": "6b196277-15be-4203-8383-f242834864b4",
+      "bsale_id": 88230,
+      "number": 22930,
+      "document_type_id": 5,
+      "emission_date": "2026-06-26",
+      "generation_date": "2026-06-26T12:20:50+00:00",
+      "quantity": 5
+    },
+    {
+      "id": "eec33f9c-616f-40dc-bfc1-2f678ce23cae",
+      "bsale_id": 88313,
+      "number": 3269,
+      "document_type_id": 23,
+      "emission_date": "2026-06-27",
+      "generation_date": "2026-06-27T14:32:26+00:00",
+      "quantity": 20
+    },
+    {
+      "id": "7d9f12d0-a793-42d4-a1b3-5700c9c6f11f",
+      "bsale_id": 88329,
+      "number": 22992,
+      "document_type_id": 5,
+      "emission_date": "2026-06-30",
+      "generation_date": "2026-06-30T12:20:07+00:00",
+      "quantity": 20
+    },
+    {
+      "id": "c0ab1201-f1a8-4ebd-9ada-02e796e9dad9",
+      "bsale_id": 88383,
+      "number": 3307,
+      "document_type_id": 23,
+      "emission_date": "2026-07-01",
+      "generation_date": "2026-07-01T20:41:05+00:00",
+      "quantity": 6
+    },
+    {
+      "id": "405ed111-f259-402b-9041-5b4284215588",
+      "bsale_id": 88481,
+      "number": 3307,
+      "document_type_id": 23,
+      "emission_date": "2026-07-01",
+      "generation_date": "2026-07-04T14:03:47+00:00",
+      "quantity": 6
+    },
+    {
+      "id": "ec6e9138-4bb8-40ea-91bb-f1ef06192240",
+      "bsale_id": 88435,
+      "number": 3341,
+      "document_type_id": 23,
+      "emission_date": "2026-07-02",
+      "generation_date": "2026-07-02T21:26:07+00:00",
+      "quantity": 8
+    },
+    {
+      "id": "648e2a2a-fa1d-4d12-8156-75225bde8220",
+      "bsale_id": 88405,
+      "number": 23025,
+      "document_type_id": 5,
+      "emission_date": "2026-07-02",
+      "generation_date": "2026-07-02T12:46:33+00:00",
+      "quantity": 5
+    },
+    {
+      "id": "edb031e8-a7c3-45df-a290-c96e54ab6cfa",
+      "bsale_id": 88429,
+      "number": 3335,
+      "document_type_id": 23,
+      "emission_date": "2026-07-02",
+      "generation_date": "2026-07-02T21:24:36+00:00",
+      "quantity": 4
+    },
+    {
+      "id": "fd931658-b9f4-4d7c-86a7-55ff8cf15c63",
+      "bsale_id": 88482,
+      "number": 23052,
+      "document_type_id": 5,
+      "emission_date": "2026-07-04",
+      "generation_date": "2026-07-04T14:04:30+00:00",
+      "quantity": 6
+    },
+    {
+      "id": "1a2e40a5-6dbc-4c6b-936a-0ca78b6feb0e",
+      "bsale_id": 88499,
+      "number": 23068,
+      "document_type_id": 5,
+      "emission_date": "2026-07-04",
+      "generation_date": "2026-07-04T16:27:50+00:00",
+      "quantity": 8
+    },
+    {
+      "id": "922cf751-529b-4f85-8fb8-1053e7f51ed0",
+      "bsale_id": 88511,
+      "number": 23078,
+      "document_type_id": 5,
+      "emission_date": "2026-07-06",
+      "generation_date": "2026-07-06T12:34:29+00:00",
+      "quantity": 4
+    },
+    {
+      "id": "6e35ba07-9d22-483b-826f-6ae1b9e162a5",
+      "bsale_id": 88542,
+      "number": 3378,
+      "document_type_id": 23,
+      "emission_date": "2026-07-06",
+      "generation_date": "2026-07-07T03:24:27+00:00",
+      "quantity": 10
+    },
+    {
+      "id": "99d049d9-72ca-4e1b-b315-e409ac5751d4",
+      "bsale_id": 88557,
+      "number": 3393,
+      "document_type_id": 23,
+      "emission_date": "2026-07-07",
+      "generation_date": "2026-07-07T15:40:04+00:00",
+      "quantity": 4
+    },
+    {
+      "id": "464b2133-8571-4ea4-9e24-807a8f7721ea",
+      "bsale_id": 88583,
+      "number": 23110,
+      "document_type_id": 5,
+      "emission_date": "2026-07-08",
+      "generation_date": "2026-07-08T13:01:33+00:00",
+      "quantity": 10
+    },
+    {
+      "id": "24fe5782-59b0-4447-9557-5811aa91d625",
+      "bsale_id": 88587,
+      "number": 23114,
+      "document_type_id": 5,
+      "emission_date": "2026-07-08",
+      "generation_date": "2026-07-08T13:05:13+00:00",
+      "quantity": 4
+    },
+    {
+      "id": "d29f2fc6-2c9e-4ecf-919b-4d5c6eeae3d5",
+      "bsale_id": 88629,
+      "number": 3417,
+      "document_type_id": 23,
+      "emission_date": "2026-07-09",
+      "generation_date": "2026-07-09T05:19:50+00:00",
+      "quantity": 6
+    },
+    {
+      "id": "f56094ff-a940-4f1c-b1df-b57d36d1f10b",
+      "bsale_id": 88675,
+      "number": 3456,
+      "document_type_id": 23,
+      "emission_date": "2026-07-09",
+      "generation_date": "2026-07-09T19:04:31+00:00",
+      "quantity": 50
+    },
+    {
+      "id": "d568dcba-19d5-495f-a254-161dbc0fcfaa",
+      "bsale_id": 88724,
+      "number": 23167,
+      "document_type_id": 5,
+      "emission_date": "2026-07-10",
+      "generation_date": "2026-07-10T17:09:41+00:00",
+      "quantity": 6
+    }
+  ],
+  "vw": [
+    {
+      "emission_date": "2026-06-15",
+      "document_type_id": 5,
+      "logistic_net_quantity": 50
+    },
+    {
+      "emission_date": "2026-06-19",
+      "document_type_id": 5,
+      "logistic_net_quantity": 6
+    },
+    {
+      "emission_date": "2026-06-22",
+      "document_type_id": 5,
+      "logistic_net_quantity": 25
+    },
+    {
+      "emission_date": "2026-06-26",
+      "document_type_id": 5,
+      "logistic_net_quantity": 10
+    },
+    {
+      "emission_date": "2026-06-26",
+      "document_type_id": 5,
+      "logistic_net_quantity": 8
+    },
+    {
+      "emission_date": "2026-06-26",
+      "document_type_id": 5,
+      "logistic_net_quantity": 4
+    },
+    {
+      "emission_date": "2026-06-26",
+      "document_type_id": 5,
+      "logistic_net_quantity": 8
+    },
+    {
+      "emission_date": "2026-06-26",
+      "document_type_id": 5,
+      "logistic_net_quantity": 6
+    },
+    {
+      "emission_date": "2026-06-26",
+      "document_type_id": 5,
+      "logistic_net_quantity": 5
+    },
+    {
+      "emission_date": "2026-06-30",
+      "document_type_id": 5,
+      "logistic_net_quantity": 20
+    },
+    {
+      "emission_date": "2026-07-02",
+      "document_type_id": 5,
+      "logistic_net_quantity": 5
+    },
+    {
+      "emission_date": "2026-07-04",
+      "document_type_id": 5,
+      "logistic_net_quantity": 8
+    },
+    {
+      "emission_date": "2026-07-04",
+      "document_type_id": 5,
+      "logistic_net_quantity": 6
+    },
+    {
+      "emission_date": "2026-07-06",
+      "document_type_id": 5,
+      "logistic_net_quantity": 4
+    },
+    {
+      "emission_date": "2026-07-08",
+      "document_type_id": 5,
+      "logistic_net_quantity": 4
+    },
+    {
+      "emission_date": "2026-07-08",
+      "document_type_id": 5,
+      "logistic_net_quantity": 10
+    },
+    {
+      "emission_date": "2026-07-10",
+      "document_type_id": 5,
+      "logistic_net_quantity": 6
+    }
+  ]
+}
