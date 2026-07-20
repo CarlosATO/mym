@@ -39,7 +39,7 @@ export function getBsaleHeaders(): Record<string, string> {
   }
 }
 
-async function bsaleFetch<T>(options: BsaleFetchOptions): Promise<BsaleResponse<T>> {
+export async function bsaleFetch<T>(options: BsaleFetchOptions): Promise<BsaleResponse<T>> {
   const { path, params, signal } = options
   const url = new URL(`${BSALE_API_BASE}${path}`)
 
