@@ -63,8 +63,11 @@ export interface CommercialCustomerExplorer {
   business_activity: string | null
   email: string | null
   phone: string | null
+  mobile: string | null
+  address: string | null
   city: string | null
   commune: string | null
+  region: string | null
   is_active: boolean
   status: string | null
   official_sales_total: number
@@ -74,13 +77,22 @@ export interface CommercialCustomerExplorer {
   official_sales_current_month_net: number
   official_sales_90d: number
   official_sales_180d: number
+  avg_ticket_gross_total: number
+  avg_ticket_gross_90d: number
   official_invoice_docs_total: number
   last_invoice_date: string | null
   days_since_last_invoice: number | null
+  sales_order_count_total: number
+  sales_order_amount_total: number
   sales_order_count_90d: number
+  sales_order_amount_90d: number
   credit_note_count_total: number
   credit_note_amount_total: number
+  credit_note_count_90d: number
+  credit_note_amount_90d: number
+  last_seller_name: string | null
   main_seller_name: string | null
+  snapshot_calculated_at: string | null
   quality_score: number
   has_anomalous_receipt: boolean
   has_possible_sibling: boolean
@@ -119,20 +131,32 @@ type CommercialCustomerExplorerRow = {
   business_activity: string | null
   email: string | null
   phone: string | null
+  mobile: string | null
+  address: string | null
   city: string | null
   commune: string | null
+  region: string | null
   is_active: boolean | null
   status: string | null
   official_sales_total: number | string | null
   official_sales_90d: number | string | null
   official_sales_180d: number | string | null
+  avg_ticket_gross_total: number | string | null
+  avg_ticket_gross_90d: number | string | null
   invoice_docs_total: number | string | null
   last_invoice_date: string | null
   days_since_last_invoice: number | null
+  sales_order_count_total: number | string | null
+  sales_order_amount_total: number | string | null
   sales_order_count_90d: number | string | null
+  sales_order_amount_90d: number | string | null
   credit_note_count_total: number | string | null
   credit_note_amount_total: number | string | null
+  credit_note_count_90d: number | string | null
+  credit_note_amount_90d: number | string | null
+  last_seller_name: string | null
   main_seller_name: string | null
+  snapshot_calculated_at: string | null
   snapshot_quality_score: number | string | null
   has_anomalous_receipt: boolean | null
   has_possible_sibling: boolean | null
@@ -225,8 +249,11 @@ function mapExplorerRow(row: CommercialCustomerExplorerRow, currentMonthSales: C
     business_activity: row.business_activity,
     email: row.email,
     phone: row.phone,
+    mobile: row.mobile,
+    address: row.address,
     city: row.city,
     commune: row.commune,
+    region: row.region,
     is_active: Boolean(row.is_active),
     status: row.status,
     official_sales_total: asNumber(row.official_sales_total),
@@ -236,13 +263,22 @@ function mapExplorerRow(row: CommercialCustomerExplorerRow, currentMonthSales: C
     official_sales_current_month_net: currentMonthSales.net,
     official_sales_90d: asNumber(row.official_sales_90d),
     official_sales_180d: asNumber(row.official_sales_180d),
+    avg_ticket_gross_total: asNumber(row.avg_ticket_gross_total),
+    avg_ticket_gross_90d: asNumber(row.avg_ticket_gross_90d),
     official_invoice_docs_total: asNumber(row.invoice_docs_total),
     last_invoice_date: row.last_invoice_date,
     days_since_last_invoice: row.days_since_last_invoice,
+    sales_order_count_total: asNumber(row.sales_order_count_total),
+    sales_order_amount_total: asNumber(row.sales_order_amount_total),
     sales_order_count_90d: asNumber(row.sales_order_count_90d),
+    sales_order_amount_90d: asNumber(row.sales_order_amount_90d),
     credit_note_count_total: asNumber(row.credit_note_count_total),
     credit_note_amount_total: asNumber(row.credit_note_amount_total),
+    credit_note_count_90d: asNumber(row.credit_note_count_90d),
+    credit_note_amount_90d: asNumber(row.credit_note_amount_90d),
+    last_seller_name: row.last_seller_name,
     main_seller_name: row.main_seller_name,
+    snapshot_calculated_at: row.snapshot_calculated_at,
     quality_score: asNumber(row.snapshot_quality_score),
     has_anomalous_receipt: Boolean(row.has_anomalous_receipt),
     has_possible_sibling: Boolean(row.has_possible_sibling),
