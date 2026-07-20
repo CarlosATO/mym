@@ -1,22 +1,20 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  getCustomers, createCustomer, updateCustomer,
-  deactivateCustomer, reactivateCustomer, getCustomerStats,
-  type Customer
+  createCustomer,
+  getCommercialCustomersExplorer,
+  type CommercialCustomerExplorer,
+  type CommercialCustomerStats,
+  type Customer,
 } from '@/app/actions/comercial/customers'
 import { forceSyncBsaleClients, getSyncStatus } from '@/app/actions/integraciones/sync'
 import {
-  Search, Plus, Building2, User2, Mail, Phone,
-  MapPin, Info, AlertCircle, RefreshCw, MoreVertical,
-  Edit, ToggleLeft, ToggleRight, CloudSync, Clock
+  AlertCircle, Building2, CloudSync, Mail, MapPin, Phone,
+  Plus, RefreshCw, Search, ShieldAlert, TrendingUp, UserRoundCheck,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-/* ─────────────────────────────────────────────────────────────
-   TYPES
-───────────────────────────────────────────────────────────── */
 type FormData = {
   business_name: string
   rut: string
@@ -34,344 +32,273 @@ type FormData = {
   credit_limit: string
 }
 
+type SaleFilter = 'all' | 'with_sales' | 'without_sales'
+
+type SyncStatus = {
+  isLocked?: boolean
+  lastSuccess?: { finished_at: string }
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : 'Error inesperado'
+}
+
 const emptyForm = (): FormData => ({
   business_name: '', rut: '', fantasy_name: '', business_activity: '',
   email: '', phone: '', mobile: '',
   address: '', city: '', commune: '', region: '',
-  notes: '', credit_days: '', credit_limit: ''
+  notes: '', credit_days: '', credit_limit: '',
 })
 
-/* ─────────────────────────────────────────────────────────────
-   HELPERS
-───────────────────────────────────────────────────────────── */
-function Lbl({ children }: { children: React.ReactNode }) {
-  return <label className="block text-[11px] font-semibold text-theme-text-muted uppercase tracking-wider mb-1">{children}</label>
-}
 const inp = "w-full h-10 px-3 bg-theme-bg border border-theme-border rounded-lg text-sm text-theme-text placeholder:text-theme-text-muted/40 focus:outline-none focus:border-theme-accent focus:ring-1 focus:ring-theme-accent/30 transition-all"
-const roInp = "w-full h-10 px-3 bg-theme-bg/40 border border-theme-border/50 rounded-lg text-sm text-theme-text-muted select-none cursor-default"
 
-function fmtCredit(v: number | null): string {
-  if (!v) return '—'
-  return '$' + v.toLocaleString('es-CL')
+function fmtMoney(value: number | null | undefined) {
+  const n = Number(value || 0)
+  if (n === 0) return '$0'
+  return '$' + n.toLocaleString('es-CL', { maximumFractionDigits: 0 })
 }
 
-/* ─────────────────────────────────────────────────────────────
-   ROW MENU
-───────────────────────────────────────────────────────────── */
-function RowMenu({ customer, onEdit, onToggle }: {
-  customer: Customer; onEdit: () => void; onToggle: () => void
-}) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const h = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', h)
-    return () => document.removeEventListener('mousedown', h)
-  }, [open])
+function fmtDate(value: string | null) {
+  if (!value) return '—'
+  return new Date(value + 'T00:00:00').toLocaleDateString('es-CL')
+}
+
+function statusLabel(status: string | null) {
+  if (!status) return 'SIN ESTADO'
+  return status.replaceAll('_', ' ')
+}
+
+function statusClass(status: string | null) {
+  switch (status) {
+    case 'ACTIVO': return 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
+    case 'NUEVO': return 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+    case 'OBSERVACION': return 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+    case 'RIESGO': return 'bg-orange-500/10 text-orange-400 border-orange-500/20'
+    case 'PERDIDO': return 'bg-red-500/10 text-red-400 border-red-500/20'
+    case 'INACTIVO': return 'bg-slate-500/10 text-slate-400 border-slate-500/20'
+    case 'SIN_VENTA_HISTORICA': return 'bg-theme-text/5 text-theme-text-muted border-theme-border'
+    default: return 'bg-theme-text/5 text-theme-text-muted border-theme-border'
+  }
+}
+
+function KpiCard({ label, value, tone, hint, secondary }: { label: string; value: string; tone: string; hint?: string; secondary?: string }) {
   return (
-    <div ref={ref} className="relative">
-      <button onClick={(e) => { e.stopPropagation(); setOpen(o => !o) }}
-        className="p-1.5 rounded-md text-theme-text-muted hover:text-theme-text hover:bg-theme-text/10 transition-colors">
-        <MoreVertical className="w-4 h-4" />
-      </button>
-      {open && (
-        <div className="absolute right-0 top-full mt-1 w-44 bg-theme-surface border border-theme-border rounded-xl shadow-xl shadow-black/20 z-50 overflow-hidden">
-          <button onClick={() => { setOpen(false); onEdit() }}
-            className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-theme-text hover:bg-theme-text/5 transition-colors text-left">
-            <Edit className="w-3.5 h-3.5 text-theme-accent" />Editar cliente
-          </button>
-          <button onClick={() => { setOpen(false); onToggle() }}
-            className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-theme-text hover:bg-theme-text/5 transition-colors text-left">
-            {customer.is_active
-              ? <ToggleLeft className="w-3.5 h-3.5 text-red-400" />
-              : <ToggleRight className="w-3.5 h-3.5 text-emerald-500" />}
-            {customer.is_active ? 'Desactivar' : 'Activar'}
-          </button>
-        </div>
-      )}
+    <div className="rounded-2xl border border-theme-border bg-theme-bg/50 px-4 py-3 min-w-[150px]">
+      <div className="text-[11px] uppercase tracking-wider text-theme-text-muted/70 font-semibold">{label}</div>
+      <div className={cn("mt-1 text-xl font-black", tone)}>{value}</div>
+      {hint && <div className="text-[11px] text-theme-text-muted/50 mt-1 truncate">{hint}</div>}
+      {secondary && <div className="text-[10px] text-theme-text-muted/40 mt-0.5 truncate" title={secondary}>{secondary}</div>}
     </div>
   )
 }
 
-/* ─────────────────────────────────────────────────────────────
-   CUSTOMER FORM
-───────────────────────────────────────────────────────────── */
-function CustomerForm({ editing, onClose, onSaved }: {
-  editing: Customer | null; onClose: () => void; onSaved: () => void
-}) {
-  const isBsale = editing?.source === 'BSALE'
-  const [form, setForm] = useState<FormData>(() =>
-    editing ? {
-      business_name: editing.business_name || '',
-      rut: editing.rut || '',
-      fantasy_name: editing.fantasy_name || '',
-      business_activity: editing.business_activity || '',
-      email: editing.email || '',
-      phone: editing.phone || '',
-      mobile: editing.mobile || '',
-      address: editing.address || '',
-      city: editing.city || '',
-      commune: editing.commune || '',
-      region: editing.region || '',
-      notes: editing.notes || '',
-      credit_days: editing.credit_days != null ? String(editing.credit_days) : '',
-      credit_limit: editing.credit_limit != null ? String(editing.credit_limit) : '',
-    } : emptyForm()
-  )
+function buildCommercialCustomerStats(rows: CommercialCustomerExplorer[]): CommercialCustomerStats {
+  return {
+    total: rows.length,
+    active: rows.filter(row => row.status === 'ACTIVO' || row.status === 'NUEVO').length,
+    observacion: rows.filter(row => row.status === 'OBSERVACION').length,
+    riesgo: rows.filter(row => row.status === 'RIESGO').length,
+    inactive: rows.filter(row => row.status === 'INACTIVO').length,
+    perdido: rows.filter(row => row.status === 'PERDIDO').length,
+    sinVentaHistorica: rows.filter(row => row.status === 'SIN_VENTA_HISTORICA').length,
+    withOfficialSales: rows.filter(row => row.official_sales_total > 0).length,
+    officialSalesTotal: rows.reduce((sum, row) => sum + row.official_sales_total, 0),
+    officialSalesCurrentMonth: rows.reduce((sum, row) => sum + row.official_sales_current_month_net, 0),
+    official_sales_current_month_gross_total: rows.reduce((sum, row) => sum + row.official_sales_current_month_gross, 0),
+    credit_notes_current_month_total: rows.reduce((sum, row) => sum + row.credit_notes_current_month, 0),
+    official_sales_current_month_net_total: rows.reduce((sum, row) => sum + row.official_sales_current_month_net, 0),
+    officialSales90d: rows.reduce((sum, row) => sum + row.official_sales_90d, 0),
+    withCreditNotes: rows.filter(row => row.credit_note_count_total > 0).length,
+    withAnomalousReceipt: rows.filter(row => row.has_anomalous_receipt).length,
+    lowQuality: rows.filter(row => row.quality_score < 60).length,
+  }
+}
+
+function Lbl({ children }: { children: React.ReactNode }) {
+  return <label className="block text-[11px] font-semibold text-theme-text-muted uppercase tracking-wider mb-1">{children}</label>
+}
+
+function ManualCustomerForm({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [form, setForm] = useState<FormData>(emptyForm)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
-  const set = (f: keyof FormData) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-    setForm(prev => ({ ...prev, [f]: e.target.value }))
+  const set = (field: keyof FormData) => (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    setForm(prev => ({ ...prev, [field]: event.target.value }))
+  }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!isBsale && !form.business_name.trim()) { setErr('La razón social es obligatoria'); return }
-    
-    // Check if anything actually changed for BSALE
-    if (editing && isBsale) {
-      const notesChanged = form.notes.trim() !== (editing.notes || '').trim()
-      if (!notesChanged) {
-        setErr('No hay cambios administrativos para guardar.')
-        return
-      }
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!form.business_name.trim()) {
+      setErr('La razón social es obligatoria')
+      return
     }
 
-    setLoading(true); setErr('')
+    setLoading(true)
+    setErr('')
     try {
-      let p: Partial<Customer>
-      if (isBsale) {
-        p = { notes: form.notes.trim() || undefined }
-      } else {
-        p = {
-          business_name: form.business_name.trim() || undefined,
-          rut: form.rut.trim() || undefined,
-          fantasy_name: form.fantasy_name.trim() || undefined,
-          business_activity: form.business_activity.trim() || undefined,
-          email: form.email.trim() || undefined,
-          phone: form.phone.trim() || undefined,
-          mobile: form.mobile.trim() || undefined,
-          address: form.address.trim() || undefined,
-          city: form.city.trim() || undefined,
-          commune: form.commune.trim() || undefined,
-          region: form.region.trim() || undefined,
-          notes: form.notes.trim() || undefined,
-          credit_days: form.credit_days ? Number(form.credit_days) : undefined,
-          credit_limit: form.credit_limit ? Number(form.credit_limit) : undefined,
-        }
+      const payload: Partial<Customer> = {
+        business_name: form.business_name.trim(),
+        rut: form.rut.trim() || undefined,
+        fantasy_name: form.fantasy_name.trim() || undefined,
+        business_activity: form.business_activity.trim() || undefined,
+        email: form.email.trim() || undefined,
+        phone: form.phone.trim() || undefined,
+        mobile: form.mobile.trim() || undefined,
+        address: form.address.trim() || undefined,
+        city: form.city.trim() || undefined,
+        commune: form.commune.trim() || undefined,
+        region: form.region.trim() || undefined,
+        notes: form.notes.trim() || undefined,
+        credit_days: form.credit_days ? Number(form.credit_days) : undefined,
+        credit_limit: form.credit_limit ? Number(form.credit_limit) : undefined,
       }
-      editing ? await updateCustomer(editing.id, p) : await createCustomer(p)
+      await createCustomer(payload)
       onSaved()
-    } catch (e: any) {
-      setErr(e.message || 'Error al guardar')
-    } finally { setLoading(false) }
+    } catch (error: unknown) {
+      setErr(getErrorMessage(error) || 'Error al guardar')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-theme-surface animate-in fade-in duration-150">
-      {/* Header */}
       <div className="shrink-0 px-5 py-4 border-b border-theme-border bg-theme-surface flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-theme-accent/10 flex items-center justify-center">
-            <Building2 className="w-4 h-4 text-theme-accent" />
-          </div>
-          <div>
-            <h2 className="text-base font-bold text-theme-text leading-tight">
-              {editing ? 'Editar cliente' : 'Nuevo cliente'}
-            </h2>
-            {editing && <p className="text-xs text-theme-text-muted">{editing.business_name}</p>}
-          </div>
+        <div>
+          <h2 className="text-base font-bold text-theme-text leading-tight">Nuevo cliente manual</h2>
+          <p className="text-xs text-theme-text-muted mt-1">Los clientes Bsale se mantienen desde la integración.</p>
         </div>
         <button onClick={onClose} className="px-4 py-2 rounded-lg border border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 text-sm font-medium transition-colors">
           Cancelar
         </button>
       </div>
 
-      {/* Scrollable form body */}
-      <div className="flex-1 overflow-auto p-5">
-        <div className="max-w-3xl space-y-8">
-          {err && (
-            <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />{err}
-            </div>
-          )}
+      <form onSubmit={handleSubmit} className="flex-1 overflow-auto p-5">
+        <div className="max-w-3xl space-y-7">
+          {err && <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm flex items-center gap-2"><AlertCircle className="w-4 h-4" />{err}</div>}
 
-          {/* Bsale block */}
-          {isBsale && (
-            <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
-              <div className="flex items-start gap-3">
-                <Info className="w-5 h-5 text-blue-400 mt-0.5 shrink-0" />
-                <div className="flex-1">
-                  <p className="text-sm font-semibold text-blue-400 mb-1">Integración Bsale — solo lectura</p>
-                  <p className="text-xs text-blue-400/80 leading-relaxed">
-                    Este cliente proviene de Bsale. Los datos tributarios, comerciales y de contacto se mantienen desde Bsale. 
-                    En PetGrup solo se guardan datos administrativos internos. Esta pantalla no sincroniza cambios hacia Bsale.
-                  </p>
-                  <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-4">
-                    {[
-                      ['Origen', editing!.source],
-                      ['ID Bsale', String(editing!.bsale_client_id ?? '—')],
-                      ['RUT origen', editing!.rut ?? '—'],
-                      ['Último sync', editing!.last_bsale_sync_at ? new Date(editing!.last_bsale_sync_at).toLocaleDateString('es-CL') : '—'],
-                    ].map(([label, val]) => (
-                      <div key={label}>
-                        <div className="text-[10px] text-blue-400/60 uppercase font-semibold">{label}</div>
-                        <div className="text-xs text-blue-400 font-bold mt-0.5">{val}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Identificación */}
           <section>
             <h3 className="text-sm font-bold text-theme-text mb-4 pb-2 border-b border-theme-border">Identificación</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              <div><Lbl>RUT</Lbl>
-                {isBsale ? <input value={form.rut} readOnly className={roInp} /> : <input value={form.rut} onChange={set('rut')} className={inp} placeholder="12.345.678-9" />}
-              </div>
-              <div><Lbl>Razón Social *</Lbl>
-                {isBsale ? <input value={form.business_name} readOnly className={roInp} /> : <input value={form.business_name} onChange={set('business_name')} className={inp} required />}
-              </div>
-              <div><Lbl>Nombre Fantasía</Lbl>
-                {isBsale ? <input value={form.fantasy_name} readOnly className={roInp} /> : <input value={form.fantasy_name} onChange={set('fantasy_name')} className={inp} placeholder="Nombre comercial" />}
-              </div>
-              <div className="sm:col-span-2 lg:col-span-3"><Lbl>Giro / Actividad</Lbl>
-                {isBsale ? <input value={form.business_activity} readOnly className={roInp} /> : <input value={form.business_activity} onChange={set('business_activity')} className={inp} placeholder="Ej. Distribución de alimentos para mascotas" />}
-              </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div><Lbl>Razón social *</Lbl><input value={form.business_name} onChange={set('business_name')} className={inp} required /></div>
+              <div><Lbl>RUT</Lbl><input value={form.rut} onChange={set('rut')} className={inp} placeholder="12.345.678-9" /></div>
+              <div><Lbl>Nombre fantasía</Lbl><input value={form.fantasy_name} onChange={set('fantasy_name')} className={inp} /></div>
+              <div><Lbl>Giro / Actividad</Lbl><input value={form.business_activity} onChange={set('business_activity')} className={inp} /></div>
             </div>
           </section>
 
-          {/* Contacto */}
           <section>
-            <h3 className="text-sm font-bold text-theme-text mb-4 pb-2 border-b border-theme-border">Contacto</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div><Lbl>Email</Lbl>
-                {isBsale ? <input value={form.email} readOnly className={roInp} /> : <input value={form.email} onChange={set('email')} type="email" className={inp} placeholder="contacto@empresa.cl" />}
-              </div>
-              <div><Lbl>Teléfono</Lbl>
-                {isBsale ? <input value={form.phone} readOnly className={roInp} /> : <input value={form.phone} onChange={set('phone')} className={inp} placeholder="+56 2 2xxx xxxx" />}
-              </div>
-              <div><Lbl>Móvil</Lbl>
-                {isBsale ? <input value={form.mobile} readOnly className={roInp} /> : <input value={form.mobile} onChange={set('mobile')} className={inp} placeholder="+56 9 xxxx xxxx" />}
-              </div>
+            <h3 className="text-sm font-bold text-theme-text mb-4 pb-2 border-b border-theme-border">Contacto y ubicación</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div><Lbl>Email</Lbl><input value={form.email} onChange={set('email')} type="email" className={inp} /></div>
+              <div><Lbl>Teléfono</Lbl><input value={form.phone} onChange={set('phone')} className={inp} /></div>
+              <div className="sm:col-span-2"><Lbl>Dirección</Lbl><input value={form.address} onChange={set('address')} className={inp} /></div>
+              <div><Lbl>Ciudad</Lbl><input value={form.city} onChange={set('city')} className={inp} /></div>
+              <div><Lbl>Comuna</Lbl><input value={form.commune} onChange={set('commune')} className={inp} /></div>
             </div>
           </section>
 
-          {/* Ubicación */}
           <section>
-            <h3 className="text-sm font-bold text-theme-text mb-4 pb-2 border-b border-theme-border">Ubicación</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="sm:col-span-2"><Lbl>Dirección</Lbl>
-                {isBsale ? <input value={form.address} readOnly className={roInp} /> : <input value={form.address} onChange={set('address')} className={inp} placeholder="Av. ejemplo 1234" />}
-              </div>
-              <div><Lbl>Ciudad</Lbl>
-                {isBsale ? <input value={form.city} readOnly className={roInp} /> : <input value={form.city} onChange={set('city')} className={inp} placeholder="Santiago" />}
-              </div>
-              <div><Lbl>Comuna</Lbl>
-                {isBsale ? <input value={form.commune} readOnly className={roInp} /> : <input value={form.commune} onChange={set('commune')} className={inp} placeholder="Las Condes" />}
-              </div>
-              <div className="sm:col-span-2"><Lbl>Región</Lbl>
-                {isBsale ? <input value={form.region} readOnly className={roInp} /> : <input value={form.region} onChange={set('region')} className={inp} placeholder="Metropolitana" />}
-              </div>
+            <h3 className="text-sm font-bold text-theme-text mb-4 pb-2 border-b border-theme-border">Condiciones y notas</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div><Lbl>Días de crédito</Lbl><input value={form.credit_days} onChange={set('credit_days')} type="number" min="0" className={inp} /></div>
+              <div><Lbl>Límite de crédito</Lbl><input value={form.credit_limit} onChange={set('credit_limit')} type="number" min="0" className={inp} /></div>
+              <div className="sm:col-span-2"><Lbl>Notas internas</Lbl><textarea value={form.notes} onChange={set('notes')} rows={3} className="w-full px-3 py-2 bg-theme-bg border border-theme-border rounded-lg text-sm text-theme-text resize-none" /></div>
             </div>
-          </section>
-
-          {/* Condiciones */}
-          <section>
-            <h3 className="text-sm font-bold text-theme-text mb-4 pb-2 border-b border-theme-border">Condiciones comerciales</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div><Lbl>Días de crédito</Lbl>
-                {isBsale ? <input value={form.credit_days} readOnly className={roInp} /> : <input value={form.credit_days} onChange={set('credit_days')} type="number" min="0" className={inp} placeholder="30" />}
-              </div>
-              <div><Lbl>Límite de crédito (CLP)</Lbl>
-                {isBsale ? <input value={form.credit_limit} readOnly className={roInp} /> : <input value={form.credit_limit} onChange={set('credit_limit')} type="number" min="0" className={inp} placeholder="0" />}
-              </div>
-            </div>
-          </section>
-
-          {/* Notas */}
-          <section>
-            <h3 className="text-sm font-bold text-theme-text mb-4 pb-2 border-b border-theme-border">Notas internas</h3>
-            <textarea value={form.notes} onChange={set('notes')} rows={3}
-              className="w-full px-3 py-2 bg-theme-bg border border-theme-border rounded-lg text-sm text-theme-text placeholder:text-theme-text-muted/40 focus:outline-none focus:border-theme-accent focus:ring-1 focus:ring-theme-accent/30 transition-all resize-none"
-              placeholder="Notas de uso administrativo…" />
           </section>
 
           <div className="flex items-center gap-3 pb-8">
-            <button disabled={loading} type="submit" onClick={handleSubmit}
-              className="px-6 py-2.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-sm font-bold shadow-md shadow-theme-accent/20 disabled:opacity-50 transition-all">
-              {loading ? 'Guardando...' : (editing ? 'Guardar cambios' : 'Crear cliente')}
+            <button disabled={loading} type="submit" className="px-6 py-2.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-sm font-bold shadow-md shadow-theme-accent/20 disabled:opacity-50 transition-all">
+              {loading ? 'Guardando...' : 'Crear cliente manual'}
             </button>
-            <button type="button" onClick={onClose} className="px-4 py-2.5 rounded-lg text-sm font-medium text-theme-text-muted hover:text-theme-text transition-colors">
-              Cancelar
-            </button>
+            <button type="button" onClick={onClose} className="px-4 py-2.5 rounded-lg text-sm font-medium text-theme-text-muted hover:text-theme-text transition-colors">Cancelar</button>
           </div>
         </div>
-      </div>
+      </form>
     </div>
   )
 }
 
-/* ─────────────────────────────────────────────────────────────
-   MAIN LIST
-───────────────────────────────────────────────────────────── */
 export function CustomersPanel() {
-  const [customers, setCustomers] = useState<Customer[]>([])
-  const [stats, setStats] = useState({ total: 0, active: 0, inactive: 0, bsale: 0, manual: 0 })
+  const [customers, setCustomers] = useState<CommercialCustomerExplorer[]>([])
+  const [stats, setStats] = useState<CommercialCustomerStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  
-  // Sync state
-  const [syncStatus, setSyncStatus] = useState<any>(null)
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
   const [isSyncing, setIsSyncing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
-
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all')
-  const [sourceFilter, setSourceFilter] = useState<'all' | 'BSALE' | 'MANUAL'>('all')
-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
-  const [isDetailOpen, setIsDetailOpen] = useState(false)
-  const [isNewForm, setIsNewForm] = useState(false)
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [sellerFilter, setSellerFilter] = useState('all')
+  const [communeFilter, setCommuneFilter] = useState('all')
+  const [saleFilter, setSaleFilter] = useState<SaleFilter>('all')
+  const [withCreditNotes, setWithCreditNotes] = useState(false)
+  const [lowQuality, setLowQuality] = useState(false)
+  const [anomalousReceipt, setAnomalousReceipt] = useState(false)
+  const [isNewFormOpen, setIsNewFormOpen] = useState(false)
 
   useEffect(() => {
-    const h = setTimeout(() => setDebouncedSearch(search), 400)
-    return () => clearTimeout(h)
+    const handle = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(handle)
   }, [search])
 
   const loadSyncStatus = useCallback(async () => {
     try {
       const status = await getSyncStatus('BSALE', 'clients')
       setSyncStatus(status)
-      if (status?.isLocked) {
-        // If it's locked, poll every 5s until it's unlocked
-        setTimeout(loadSyncStatus, 5000)
-      }
-    } catch (e: any) {
-      console.error('Failed to load sync status', e)
+    } catch (err) {
+      console.error('Failed to load sync status', err)
     }
   }, [])
 
   const load = useCallback(async () => {
-    setLoading(true); setError(null)
+    setLoading(true)
+    setError(null)
     try {
-      const [data, st] = await Promise.all([
-        getCustomers({ search: debouncedSearch, status: statusFilter, source: sourceFilter }),
-        getCustomerStats()
-      ])
-      setCustomers(data); setStats(st)
-    } catch (e: any) {
-      setError(e.message === 'MIGRATION_PENDING' ? 'El módulo Comercial requiere aplicar la migración' : e.message || 'Error')
-    } finally { setLoading(false) }
-  }, [debouncedSearch, statusFilter, sourceFilter])
+      const rows = await getCommercialCustomersExplorer()
+      setCustomers(rows)
+      setStats(buildCommercialCustomerStats(rows))
+    } catch (err: unknown) {
+      const message = getErrorMessage(err)
+      setError(message === 'MIGRATION_PENDING' ? 'El Explorador Comercial requiere aplicar la migración' : message)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
-  useEffect(() => { load() }, [load])
-  useEffect(() => { loadSyncStatus() }, [loadSyncStatus])
+  useEffect(() => {
+    const handle = setTimeout(() => { void load() }, 0)
+    return () => clearTimeout(handle)
+  }, [load])
+  useEffect(() => {
+    const handle = setTimeout(() => { void loadSyncStatus() }, 0)
+    return () => clearTimeout(handle)
+  }, [loadSyncStatus])
+
+  const sellers = useMemo(() => Array.from(new Set(customers.map(c => c.main_seller_name).filter(Boolean) as string[])).sort(), [customers])
+  const communes = useMemo(() => Array.from(new Set(customers.map(c => c.commune || c.city).filter(Boolean) as string[])).sort(), [customers])
+
+  const filteredCustomers = useMemo(() => {
+    const query = debouncedSearch.trim().toLowerCase()
+    return customers.filter(customer => {
+      const searchable = [customer.business_name, customer.fantasy_name, customer.rut, customer.rut_clean, customer.email, customer.commune, customer.city, customer.main_seller_name]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+
+      if (query && !searchable.includes(query)) return false
+      if (statusFilter !== 'all' && customer.status !== statusFilter) return false
+      if (sellerFilter !== 'all' && customer.main_seller_name !== sellerFilter) return false
+      if (communeFilter !== 'all' && (customer.commune || customer.city) !== communeFilter) return false
+      if (saleFilter === 'with_sales' && customer.official_sales_total <= 0) return false
+      if (saleFilter === 'without_sales' && customer.official_sales_total > 0) return false
+      if (withCreditNotes && customer.credit_note_count_total <= 0) return false
+      if (lowQuality && customer.quality_score >= 60) return false
+      if (anomalousReceipt && !customer.has_anomalous_receipt) return false
+      return true
+    })
+  }, [customers, debouncedSearch, statusFilter, sellerFilter, communeFilter, saleFilter, withCreditNotes, lowQuality, anomalousReceipt])
 
   const handleForceSync = async () => {
     if (isSyncing || syncStatus?.isLocked) return
@@ -379,144 +306,106 @@ export function CustomersPanel() {
     setSyncError(null)
     try {
       const res = await forceSyncBsaleClients()
-      if (res.status === 'SKIPPED') {
-        setSyncError(res.message || 'La sincronización está bloqueada o en curso.')
-      }
+      if (res.status === 'SKIPPED') setSyncError(res.message || 'La sincronización está bloqueada o en curso.')
       await load()
       await loadSyncStatus()
-    } catch (err: any) {
-      setSyncError(err.message || 'Error al sincronizar')
+    } catch (err: unknown) {
+      setSyncError(getErrorMessage(err) || 'Error al sincronizar')
     } finally {
       setIsSyncing(false)
     }
   }
 
-  const handleToggleActive = async (c: Customer) => {
-    try {
-      c.is_active ? await deactivateCustomer(c.id) : await reactivateCustomer(c.id)
-      await load()
-    } catch (e: any) { alert(e.message) }
-  }
-
-  const openNew = () => { setSelectedCustomer(null); setIsNewForm(true); setIsDetailOpen(true) }
-  const openEdit = (c: Customer) => { setSelectedCustomer(c); setIsNewForm(false); setIsDetailOpen(true) }
-  const closeForm = () => { setIsDetailOpen(false); setSelectedCustomer(null) }
-  const onSaved = async () => { closeForm(); await load() }
-
   return (
     <div className="flex flex-col h-full overflow-hidden bg-theme-surface">
-
-      {/* ── Toolbar (shrink-0, identical to CatalogPanel) ── */}
-      <div className="shrink-0 flex flex-col gap-3 p-5 border-b border-theme-border/60 bg-theme-text/[0.01]">
+      <div className="shrink-0 flex flex-col gap-4 p-5 border-b border-theme-border/60 bg-theme-text/[0.01]">
         <div className="flex flex-col md:flex-row items-center gap-3 w-full">
-
-          {/* Sub-tabs (inline, left) */}
           <div className="flex items-center gap-1 shrink-0">
             {[
               { label: 'Clientes', active: true },
               { label: 'Vendedores', active: false },
               { label: 'Rutas / Zonas', active: false },
-            ].map(t => (
-              <span key={t.label} className={cn(
+            ].map(tab => (
+              <span key={tab.label} className={cn(
                 "px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors",
-                t.active
-                  ? "bg-theme-accent/10 text-theme-accent"
-                  : "text-theme-text-muted/40 cursor-not-allowed"
-              )}>
-                {t.label}
-              </span>
+                tab.active ? "bg-theme-accent/10 text-theme-accent" : "text-theme-text-muted/40 cursor-not-allowed"
+              )}>{tab.label}</span>
             ))}
           </div>
 
-          {/* Search */}
           <div className="relative flex-1 w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted/50" />
             <input
               type="text"
               value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Buscar por nombre, RUT, email, ciudad, giro…"
+              onChange={event => setSearch(event.target.value)}
+              placeholder="Buscar cliente, RUT, email, comuna o vendedor…"
               className="w-full h-11 pl-10 pr-4 rounded-xl border border-theme-border bg-theme-surface hover:bg-theme-text/5 focus:bg-theme-surface focus:ring-2 focus:ring-theme-accent/20 focus:border-theme-accent transition-all text-sm text-theme-text placeholder:text-theme-text-muted/40"
             />
           </div>
 
-          {/* Filters + actions */}
-          <div className="flex items-center gap-2 w-full md:w-auto">
-            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as any)}
-              className="h-11 px-3 rounded-xl border border-theme-border bg-theme-surface text-sm text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/40">
-              <option value="all">Estado: Todos</option>
-              <option value="active">Activos</option>
-              <option value="inactive">Inactivos</option>
-            </select>
-            <select value={sourceFilter} onChange={e => setSourceFilter(e.target.value as any)}
-              className="h-11 px-3 rounded-xl border border-theme-border bg-theme-surface text-sm text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/40">
-              <option value="all">Origen: Todos</option>
-              <option value="BSALE">Bsale</option>
-              <option value="MANUAL">Manual</option>
-            </select>
-            <button onClick={load} title="Refrescar"
-              className="h-11 w-11 flex items-center justify-center rounded-xl border border-theme-border bg-theme-surface hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text transition-colors">
-              <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
-            </button>
-            <button onClick={openNew}
-              className="h-11 px-4 flex items-center gap-1.5 rounded-xl bg-theme-accent hover:bg-theme-accent-hover text-white text-sm font-bold shadow-lg shadow-theme-accent/20 transition-all ml-auto md:ml-0 shrink-0">
-              <Plus className="w-4 h-4" />Nuevo cliente
-            </button>
-          </div>
+          <button onClick={load} title="Recargar esta vista, sin sincronizar Bsale" className="h-11 w-11 flex items-center justify-center rounded-xl border border-theme-border bg-theme-surface hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text transition-colors">
+            <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+          </button>
+          <button onClick={() => setIsNewFormOpen(true)} className="h-11 px-4 flex items-center gap-1.5 rounded-xl bg-theme-accent hover:bg-theme-accent-hover text-white text-sm font-bold shadow-lg shadow-theme-accent/20 transition-all shrink-0">
+            <Plus className="w-4 h-4" />Nuevo cliente manual
+          </button>
         </div>
 
-        {/* Stats and Sync row */}
-        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 text-xs text-theme-text-muted">
-          <div className="flex items-center flex-wrap gap-4">
-            <span><span className="font-semibold text-theme-text">{stats.total}</span> clientes</span>
-            <span className="text-emerald-500 font-semibold">{stats.active} activos</span>
-            {stats.inactive > 0 && <span className="text-red-400 font-semibold">{stats.inactive} inactivos</span>}
-            <span className="text-blue-400">{stats.bsale} Bsale</span>
-            {stats.manual > 0 && <span className="text-orange-400">{stats.manual} manual</span>}
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+          <KpiCard label="Total clientes" value={String(stats?.total ?? 0)} tone="text-theme-text" hint="Base Bsale 360" />
+          <KpiCard label="Activos" value={String(stats?.active ?? 0)} tone="text-emerald-500" hint="ACTIVO + NUEVO" />
+          <KpiCard label="Riesgo / Perdidos" value={String((stats?.riesgo ?? 0) + (stats?.perdido ?? 0))} tone="text-orange-400" hint="requieren seguimiento" />
+          <KpiCard label="Sin venta histórica" value={String(stats?.sinVentaHistorica ?? 0)} tone="text-theme-text-muted" hint="sin factura oficial" />
+          <KpiCard
+            label="Venta mes actual"
+            value={fmtMoney(stats?.official_sales_current_month_net_total)}
+            tone="text-blue-400"
+            hint="facturas - notas de crédito"
+            secondary={`Bruto: ${fmtMoney(stats?.official_sales_current_month_gross_total)} · NC: ${fmtMoney(stats?.credit_notes_current_month_total)}`}
+          />
+          <KpiCard label="Con NC" value={String(stats?.withCreditNotes ?? 0)} tone="text-red-400" hint="clientes con notas de crédito" />
+        </div>
+
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+          <div className="flex items-center flex-wrap gap-2">
+            <select value={statusFilter} onChange={event => setStatusFilter(event.target.value)} className="h-10 px-3 rounded-xl border border-theme-border bg-theme-surface text-sm text-theme-text">
+              <option value="all">Estado comercial: Todos</option>
+              {['NUEVO', 'ACTIVO', 'OBSERVACION', 'RIESGO', 'INACTIVO', 'PERDIDO', 'SIN_VENTA_HISTORICA'].map(status => <option key={status} value={status}>{statusLabel(status)}</option>)}
+            </select>
+            <select value={sellerFilter} onChange={event => setSellerFilter(event.target.value)} className="h-10 px-3 rounded-xl border border-theme-border bg-theme-surface text-sm text-theme-text max-w-[220px]">
+              <option value="all">Vendedor: Todos</option>
+              {sellers.map(seller => <option key={seller} value={seller}>{seller}</option>)}
+            </select>
+            <select value={communeFilter} onChange={event => setCommuneFilter(event.target.value)} className="h-10 px-3 rounded-xl border border-theme-border bg-theme-surface text-sm text-theme-text max-w-[200px]">
+              <option value="all">Comuna: Todas</option>
+              {communes.map(commune => <option key={commune} value={commune}>{commune}</option>)}
+            </select>
+            <select value={saleFilter} onChange={event => setSaleFilter(event.target.value as SaleFilter)} className="h-10 px-3 rounded-xl border border-theme-border bg-theme-surface text-sm text-theme-text">
+              <option value="all">Venta: Todas</option>
+              <option value="with_sales">Con venta oficial</option>
+              <option value="without_sales">Sin venta oficial</option>
+            </select>
+            <button onClick={() => setWithCreditNotes(v => !v)} className={cn("h-10 px-3 rounded-xl border text-sm font-semibold", withCreditNotes ? "border-red-400/30 bg-red-500/10 text-red-400" : "border-theme-border text-theme-text-muted")}>Con NC</button>
+            <button onClick={() => setLowQuality(v => !v)} className={cn("h-10 px-3 rounded-xl border text-sm font-semibold", lowQuality ? "border-amber-400/30 bg-amber-500/10 text-amber-400" : "border-theme-border text-theme-text-muted")}>Calidad baja</button>
+            <button onClick={() => setAnomalousReceipt(v => !v)} className={cn("h-10 px-3 rounded-xl border text-sm font-semibold", anomalousReceipt ? "border-orange-400/30 bg-orange-500/10 text-orange-400" : "border-theme-border text-theme-text-muted")}>Boleta anómala</button>
           </div>
 
-          <div className="flex items-center flex-wrap gap-3">
-            {syncStatus?.isLocked || isSyncing ? (
-              <span className="flex items-center gap-1 text-blue-500 font-medium">
-                <RefreshCw className="w-3 h-3 animate-spin" /> Sync: En proceso
-              </span>
-            ) : syncStatus?.lastSuccess ? (
-              <span className="flex items-center gap-1 text-emerald-500 font-medium">
-                <CloudSync className="w-3 h-3" /> Sync: OK
-              </span>
-            ) : syncStatus?.lastRun && syncStatus.lastRun.status !== 'SUCCESS' ? (
-              <span className="flex items-center gap-1 text-red-400 font-medium">
-                <AlertCircle className="w-3 h-3" /> Sync: Error
-              </span>
-            ) : (
-              <span className="flex items-center gap-1 text-theme-text-muted font-medium">
-                <CloudSync className="w-3 h-3" /> Sync: Pendiente
-              </span>
-            )}
-            
-            <span className="text-theme-text-muted/30 hidden sm:inline">|</span>
-            <span>Última: {syncStatus?.lastSuccess ? new Date(syncStatus.lastSuccess.finished_at).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
-            
-            <span className="text-theme-text-muted/30 hidden sm:inline">|</span>
-            <span>Frecuencia: {syncStatus?.config?.frequency_minutes || 30} min</span>
-            
-            <button 
-              onClick={handleForceSync}
-              disabled={isSyncing || syncStatus?.isLocked}
-              title="Forzar sincronización"
-              className="ml-2 h-7 px-2.5 flex items-center gap-1.5 rounded-md border border-theme-border/60 bg-theme-surface hover:bg-theme-text/5 text-theme-text hover:border-theme-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium shadow-sm"
-            >
+          <div className="flex items-center flex-wrap gap-3 text-xs text-theme-text-muted">
+            {syncStatus?.isLocked || isSyncing ? <span className="flex items-center gap-1 text-blue-500 font-medium"><RefreshCw className="w-3 h-3 animate-spin" /> Sync: En proceso</span>
+              : syncStatus?.lastSuccess ? <span className="flex items-center gap-1 text-emerald-500 font-medium"><CloudSync className="w-3 h-3" /> Sync: OK</span>
+              : <span className="flex items-center gap-1 text-theme-text-muted font-medium"><CloudSync className="w-3 h-3" /> Sync: Pendiente</span>}
+            <span title="Las ventas, estados y alertas se calculan desde la capa comercial.">Datos comerciales calculados</span>
+            <button onClick={handleForceSync} disabled={isSyncing || syncStatus?.isLocked} title="Sincroniza clientes desde Bsale. Las métricas comerciales se actualizan con el proceso analítico." className="h-8 px-2.5 flex items-center gap-1.5 rounded-md border border-theme-border/60 bg-theme-surface hover:bg-theme-text/5 text-theme-text hover:border-theme-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium shadow-sm">
               <RefreshCw className={cn("w-3 h-3 text-theme-text-muted", (isSyncing || syncStatus?.isLocked) && "animate-spin")} />
-              Forzar sync
+              Forzar sync Bsale
             </button>
-            {syncError && <span className="text-red-400 font-medium ml-1" title={syncError}><AlertCircle className="w-3.5 h-3.5" /></span>}
+            {syncError && <span className="text-red-400 font-medium" title={syncError}><AlertCircle className="w-3.5 h-3.5" /></span>}
           </div>
         </div>
       </div>
 
-      {/* ── Table Area ── */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
-        {/* Left Panel: Table (now takes full width since drawer is overlay) */}
         <div className="flex-1 flex flex-col min-w-0">
           {error ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center p-8">
@@ -525,149 +414,90 @@ export function CustomersPanel() {
               <button onClick={load} className="px-4 py-2 border border-theme-border rounded-lg text-sm hover:bg-theme-text/5 transition-colors">Reintentar</button>
             </div>
           ) : loading && customers.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center">
-              <RefreshCw className="w-5 h-5 animate-spin text-theme-accent" />
-            </div>
-          ) : customers.length === 0 ? (
+            <div className="flex-1 flex items-center justify-center"><RefreshCw className="w-5 h-5 animate-spin text-theme-accent" /></div>
+          ) : filteredCustomers.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-2 text-theme-text-muted">
               <Building2 className="w-10 h-10 opacity-20" />
-              <p className="text-sm">No hay clientes que coincidan con tu búsqueda.</p>
+              <p className="text-sm">No hay clientes que coincidan con los filtros.</p>
             </div>
           ) : (
             <div className="flex-1 overflow-auto">
-              <table className="w-full text-sm border-collapse">
+              <table className="w-full text-sm border-collapse min-w-[1280px]">
                 <thead className="sticky top-0 z-10 bg-theme-surface">
                   <tr className="border-b border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider">
-                    <th className="text-left py-3 px-4 w-10">Tipo</th>
-                    <th className="text-left py-3 px-4">Nombre / Giro</th>
-                    <th className="text-left py-3 px-4 whitespace-nowrap">Doc. identidad</th>
-                    <th className="text-left py-3 px-4">Correo electrónico</th>
-                    <th className="text-left py-3 px-4">Ubicación</th>
-                    <th className="text-right py-3 px-4 whitespace-nowrap">Crédito</th>
-                    <th className="text-left py-3 px-4">Origen</th>
-                    <th className="text-left py-3 px-4">Estado</th>
-                    <th className="text-right py-3 px-4 w-10"></th>
+                    <th className="text-left py-3 px-4">Cliente / Giro</th>
+                    <th className="text-left py-3 px-4 whitespace-nowrap">RUT</th>
+                    <th className="text-left py-3 px-4">Comuna / Ciudad</th>
+                    <th className="text-left py-3 px-4">Estado comercial</th>
+                    <th className="text-right py-3 px-4">Venta oficial total</th>
+                    <th className="text-right py-3 px-4">Venta mes actual</th>
+                    <th className="text-right py-3 px-4">Venta 90d</th>
+                    <th className="text-left py-3 px-4">Última factura</th>
+                    <th className="text-right py-3 px-4">Días</th>
+                    <th className="text-left py-3 px-4">Vendedor principal</th>
+                    <th className="text-center py-3 px-4">NC total</th>
+                    <th className="text-center py-3 px-4">Calidad</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {customers.map(c => (
-                    <tr 
-                      key={c.id} 
-                      onClick={() => setSelectedCustomer(c)}
-                      onDoubleClick={() => openEdit(c)}
-                      className={cn(
-                        "border-b border-theme-border hover:bg-theme-text/5 transition-colors group cursor-pointer",
-                        selectedCustomer?.id === c.id ? "bg-theme-accent/10" : ""
-                      )}
-                    >
-                      {/* Tipo */}
-                      <td className="py-3 px-4">
-                        <div className={cn(
-                          "w-8 h-8 rounded-lg flex items-center justify-center shrink-0",
-                          c.customer_type === 'PERSONA' ? "bg-purple-500/10" : "bg-theme-accent/10"
-                        )}>
-                          {c.customer_type === 'PERSONA'
-                            ? <User2 className="w-4 h-4 text-purple-400" />
-                            : <Building2 className="w-4 h-4 text-theme-accent" />}
-                        </div>
-                      </td>
-
-                      {/* Nombre */}
-                      <td className="py-3 px-4">
-                        <div className="font-semibold text-sm text-theme-text max-w-[220px] truncate">{c.business_name}</div>
-                        {c.fantasy_name && <div className="text-xs text-theme-text-muted truncate max-w-[220px]">{c.fantasy_name}</div>}
-                        {c.business_activity && <div className="text-[10px] text-theme-text-muted/60 truncate max-w-[220px]">{c.business_activity}</div>}
-                      </td>
-
-                      {/* RUT */}
-                      <td className="py-3 px-4 text-sm font-mono text-theme-text whitespace-nowrap">
-                        {c.rut || <span className="text-theme-text-muted/30">—</span>}
-                      </td>
-
-                      {/* Email */}
-                      <td className="py-3 px-4">
-                        {c.email
-                          ? <span className="text-sm text-theme-text block max-w-[180px] truncate">{c.email}</span>
-                          : <span className="text-theme-text-muted/30 text-sm">—</span>}
-                      </td>
-
-                      {/* Ubicación */}
-                      <td className="py-3 px-4">
-                        {(c.commune || c.city)
-                          ? <div className="flex items-center gap-1 text-xs text-theme-text-muted max-w-[140px]">
-                              <MapPin className="w-3 h-3 shrink-0 opacity-50" />
-                              <span className="truncate">{[c.commune, c.city].filter(Boolean).join(', ')}</span>
-                            </div>
-                          : <span className="text-theme-text-muted/30 text-xs">—</span>}
-                      </td>
-
-                      {/* Crédito */}
-                      <td className="py-3 px-4 text-right whitespace-nowrap">
-                        {c.credit_limit
-                          ? <div className="text-sm font-medium text-theme-text">{fmtCredit(c.credit_limit)}</div>
-                          : null}
-                        {c.credit_days
-                          ? <div className="text-[10px] text-theme-text-muted">{c.credit_days} días</div>
-                          : (!c.credit_limit && <span className="text-theme-text-muted/30 text-sm">—</span>)}
-                      </td>
-
-                      {/* Origen */}
-                      <td className="py-3 px-4">
-                        <span className={cn(
-                          "text-[10px] font-bold px-2 py-0.5 rounded border",
-                          c.source === 'BSALE'
-                            ? "bg-blue-500/10 text-blue-400 border-blue-500/20"
-                            : "bg-orange-500/10 text-orange-400 border-orange-500/20"
-                        )}>{c.source}</span>
-                      </td>
-
-                      {/* Estado */}
-                      <td className="py-3 px-4">
-                        <span className={cn(
-                          "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border",
-                          c.is_active
-                            ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
-                            : "bg-red-400/10 text-red-400 border-red-400/20"
-                        )}>
-                          <span className={cn("w-1.5 h-1.5 rounded-full", c.is_active ? "bg-emerald-500" : "bg-red-400")} />
-                          {c.is_active ? 'Activo' : 'Inactivo'}
-                        </span>
-                      </td>
-
-                      {/* Menu */}
-                      <td className="py-3 px-4 text-right">
-                        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                          <RowMenu customer={c} onEdit={() => openEdit(c)} onToggle={() => handleToggleActive(c)} />
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {filteredCustomers.map(customer => {
+                    const incomplete = customer.quality_score < 60
+                    const noHistory = customer.status === 'SIN_VENTA_HISTORICA'
+                    return (
+                      <tr key={`${customer.company_id}-${customer.bsale_client_id}`} className="border-b border-theme-border hover:bg-theme-text/5 transition-colors group">
+                        <td className="py-3 px-4">
+                          <div className="font-semibold text-sm text-theme-text max-w-[260px] truncate">{customer.business_name}</div>
+                          <div className="flex items-center gap-2 mt-1 min-h-4">
+                            {customer.business_activity && <span className="text-[10px] text-theme-text-muted/60 truncate max-w-[200px]">{customer.business_activity}</span>}
+                            {customer.has_anomalous_receipt && <span title="Boleta anómala"><ShieldAlert className="w-3.5 h-3.5 text-orange-400" /></span>}
+                            {customer.credit_note_count_total > 0 && <span className="text-[10px] text-red-400 font-bold">NC</span>}
+                            {incomplete && <span className="text-[10px] text-amber-400 font-bold">datos incompletos</span>}
+                            {noHistory && <span className="text-[10px] text-theme-text-muted font-bold">sin venta</span>}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 text-sm font-mono text-theme-text whitespace-nowrap">{customer.rut || '—'}</td>
+                        <td className="py-3 px-4">
+                          <div className="flex items-center gap-1 text-xs text-theme-text-muted max-w-[160px]"><MapPin className="w-3 h-3 shrink-0 opacity-50" /><span className="truncate">{[customer.commune, customer.city].filter(Boolean).join(', ') || '—'}</span></div>
+                          <div className="mt-1 flex items-center gap-2 text-[10px] text-theme-text-muted/50">
+                            {customer.has_email && <Mail className="w-3 h-3" />}
+                            {customer.has_phone && <Phone className="w-3 h-3" />}
+                            {customer.has_address && <MapPin className="w-3 h-3" />}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4"><span className={cn("inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold border", statusClass(customer.status))}>{statusLabel(customer.status)}</span></td>
+                        <td className="py-3 px-4 text-right font-semibold text-theme-text whitespace-nowrap">{fmtMoney(customer.official_sales_total)}</td>
+                        <td className="py-3 px-4 text-right whitespace-nowrap" title={`Bruto ${fmtMoney(customer.official_sales_current_month_gross)} / NC ${fmtMoney(customer.credit_notes_current_month)}`}>
+                          <div className="text-sky-400 font-semibold">{fmtMoney(customer.official_sales_current_month_net)}</div>
+                          {customer.credit_notes_current_month > 0 && <div className="text-[10px] text-theme-text-muted/50">Bruto {fmtMoney(customer.official_sales_current_month_gross)} / NC {fmtMoney(customer.credit_notes_current_month)}</div>}
+                        </td>
+                        <td className="py-3 px-4 text-right text-blue-400 font-semibold whitespace-nowrap">{fmtMoney(customer.official_sales_90d)}</td>
+                        <td className="py-3 px-4 text-theme-text-muted whitespace-nowrap">{fmtDate(customer.last_invoice_date)}</td>
+                        <td className="py-3 px-4 text-right text-theme-text-muted">{customer.days_since_last_invoice ?? '—'}</td>
+                        <td className="py-3 px-4 text-theme-text max-w-[180px] truncate">{customer.main_seller_name || '—'}</td>
+                        <td className="py-3 px-4 text-center"><span className={cn("text-xs font-bold", customer.credit_note_count_total > 0 ? "text-red-400" : "text-theme-text-muted/30")}>{customer.credit_note_count_total}</span></td>
+                        <td className="py-3 px-4 text-center"><span className={cn("inline-flex items-center gap-1 text-xs font-bold", incomplete ? "text-amber-400" : "text-emerald-500")}><UserRoundCheck className="w-3 h-3" />{customer.quality_score}%</span></td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
           )}
 
-          {/* Footer */}
-          {!loading && !error && customers.length > 0 && (
+          {!loading && !error && filteredCustomers.length > 0 && (
             <div className="shrink-0 flex items-center justify-between text-xs p-4 border-t border-theme-border/60 bg-theme-text/[0.01] text-theme-text-muted/50">
-              <span>{customers.length} cliente{customers.length !== 1 ? 's' : ''} mostrado{customers.length !== 1 ? 's' : ''}</span>
+              <span>{filteredCustomers.length} de {customers.length} clientes comerciales</span>
+              <span className="flex items-center gap-1"><TrendingUp className="w-3 h-3" />Datasource: comercial.vw_client_360</span>
             </div>
           )}
         </div>
       </div>
 
-      {/* ── Fixed Drawer Overlay for Detail/Edit ── */}
-      {isDetailOpen && (
+      {isNewFormOpen && (
         <div className="fixed inset-0 z-[100] flex justify-end">
-          {/* Backdrop */}
-          <div 
-            className="absolute inset-0 bg-black/20 animate-in fade-in duration-200"
-            onClick={closeForm}
-          />
-          
-          {/* Drawer Panel */}
+          <div className="absolute inset-0 bg-black/20 animate-in fade-in duration-200" onClick={() => setIsNewFormOpen(false)} />
           <div className="relative w-full sm:w-[45vw] min-w-[480px] max-w-[800px] h-full bg-theme-surface shadow-2xl border-l border-theme-border/50 animate-in slide-in-from-right-full duration-300">
-            <CustomerForm editing={isNewForm ? null : selectedCustomer} onClose={closeForm} onSaved={onSaved} />
+            <ManualCustomerForm onClose={() => setIsNewFormOpen(false)} onSaved={async () => { setIsNewFormOpen(false); await load() }} />
           </div>
         </div>
       )}
