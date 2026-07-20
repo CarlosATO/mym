@@ -1,7 +1,7 @@
 'use server'
 
 import { createClient } from '@supabase/supabase-js'
-import { SALE_DOCUMENT_TYPE_IDS } from '@/lib/bsale/config'
+import { REPLENISHMENT_DOCUMENT_TYPE_IDS, OFFICIAL_SALE_DOCUMENT_TYPE_IDS, BSALE_DOCUMENT_TYPE_IDS } from '@/lib/bsale/config'
 import type { NormalizedSale, NormalizedStock } from '@/modules/adquisiciones/analisis-ventas/utils/analytics'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
@@ -194,7 +194,7 @@ export async function getReplenishmentDatasetFromBsale(
   }
 
   const periodDays = options.periodDays ?? 180
-  const docTypeIds = options.documentTypeIds ?? SALE_DOCUMENT_TYPE_IDS
+  const docTypeIds = options.documentTypeIds ?? REPLENISHMENT_DOCUMENT_TYPE_IDS
   const dateTo = defaultDateTo
   
   const dateFrom = new Date(dateTo)
@@ -740,8 +740,8 @@ export async function getReplenishmentDatasetFromBsale(
         diag.sku1020_supabase_by_office = Object.fromEntries(officeTotals)
 
         // Totales por document_type con nombre y signo
-        const docTypeNames: Record<number, string> = { 1: 'FACTURA ELECTRÓNICA', 2: 'NOTA DE CRÉDITO ELECTRÓNICA', 5: 'BOLETA ELECTRÓNICA T', 23: 'OTRO' }
-        const positiveTypes: number[] = [1, 5]
+        const docTypeNames: Record<number, string> = { 1: 'BOLETA ELECTRÓNICA T', 2: 'NOTA DE CRÉDITO ELECTRÓNICA', 5: 'FACTURA ELECTRÓNICA', 23: 'NOTA VENTA' }
+        const positiveTypes: number[] = [BSALE_DOCUMENT_TYPE_IDS.INVOICE]
         const negativeTypes: number[] = [2]
         const diagDocTypes = new Map<number, { docs: number; units: number; unitsSku1020: number; unitsNetSku1020: number }>()
         for (const doc of docsInPeriod || []) {
