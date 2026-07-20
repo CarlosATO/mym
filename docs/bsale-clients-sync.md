@@ -4,7 +4,7 @@ El puente de Bsale Clients es el primer conector integrado a la infraestructura 
 
 ## Reglas y Protecciones Estrictas
 - **Solo Lectura (GET)**: Esta sincronización NUNCA escribe datos tributarios, comerciales, ni de contacto hacia Bsale. Solo absorbe los cambios y clientes nuevos.
-- **Notas Administrativas Protegidas**: El campo `notes` en PetGrup es local y administrativo. La sincronización hace un `upsert` parcial inteligente que NUNCA pisará las notas creadas desde la plataforma de PetGrup.
+- **Notas Administrativas Protegidas**: El campo `notes` en PetGroup es local y administrativo. La sincronización hace un `upsert` parcial inteligente que NUNCA pisará las notas creadas desde la plataforma de PetGroup.
 - **Sin Exposición PII**: Los endpoints y actions devuelven únicamente metadatos genéricos (cuentas, estados). Los datos PII no se imprimen ni se filtran en los logs de sync.
 
 ## Modos de Gatillo

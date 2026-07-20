@@ -76,7 +76,7 @@ async function main() {
 
   console.log("\n--- BUCKETS ---");
   buckets.forEach(b => {
-    console.log(`${b.label} | Bsale esperado: ${b.expected} | PetGrup actual: ${b.petgrup} | Supabase bruto: ${b.bruto} | Supabase NC: ${b.nc} | Supabase neto: ${b.neto} | Diff neto vs Bsale: ${b.neto - b.expected} | Details: ${b.details}`);
+    console.log(`${b.label} | Bsale esperado: ${b.expected} | PetGroup actual: ${b.petgrup} | Supabase bruto: ${b.bruto} | Supabase NC: ${b.nc} | Supabase neto: ${b.neto} | Diff neto vs Bsale: ${b.neto - b.expected} | Details: ${b.details}`);
   });
 
   console.log("\n--- TYPE STATS ---");

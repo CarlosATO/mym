@@ -1,6 +1,6 @@
 # RESUMEN TÉCNICO — Integración Bsale + Reposición Inteligente
 
-> Proyecto: PetGrup / MYM Distribuidora  
+> Proyecto: PetGroup / MYM Distribuidora  
 > Fecha: Julio 2026  
 > Propósito: Documentar toda la implementación técnica para no perder el contexto
 

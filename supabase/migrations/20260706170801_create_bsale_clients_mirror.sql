@@ -1,5 +1,5 @@
 -- Migración: Crear tabla espejo de clientes Bsale
--- Fase 2: Sincronización Bsale -> PetGrup
+-- Fase 2: Sincronización Bsale -> PetGroup
 
 CREATE SCHEMA IF NOT EXISTS integraciones;
 

@@ -47,7 +47,7 @@ Los clientes retornan un payload rico en información comercial:
 ```
 
 ## Calidad de Datos Observada
-- El campo `code` almacena el RUT, pero puede requerir normalización (`rut_clean`) en PetGrup.
+- El campo `code` almacena el RUT, pero puede requerir normalización (`rut_clean`) en PetGroup.
 - Las empresas usan `company`, y puede que `firstName`/`lastName` apliquen al contacto o representante.
 - La información de crédito y condiciones de pago está disponible, lo cual es excelente para B2B.
 

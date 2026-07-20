@@ -1,5 +1,5 @@
 -- ============================================================================
--- CLEANUP TEST DATA — MYM Distribuidora / PetGrup
+-- CLEANUP TEST DATA — MYM Distribuidora / PetGroup
 -- ============================================================================
 -- Este script elimina datos transaccionales de prueba para empezar pruebas reales.
 -- Conserva: catálogos, usuarios, empresas, roles, productos, bodegas, ubicaciones.

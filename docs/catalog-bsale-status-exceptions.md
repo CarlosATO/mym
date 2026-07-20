@@ -1,6 +1,6 @@
-# Reporte de Excepciones de Estado Bsale vs PetGrup
+# Reporte de Excepciones de Estado Bsale vs PetGroup
 
-Detectadas 47 excepciones donde Bsale marca el producto como inactivo pero PetGrup registra movimiento o stock local.
+Detectadas 47 excepciones donde Bsale marca el producto como inactivo pero PetGroup registra movimiento o stock local.
 
 | SKU | Descripción | Tipo | Estado Prod | Estado Var | Stock | Ventas 180d | Costo | Motivo |
 |---|---|---|---|---|---|---|---|---|

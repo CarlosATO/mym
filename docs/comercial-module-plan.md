@@ -30,7 +30,7 @@
 - Bsale provee 471 clientes activos listos para su futura ingesta controlada.
 
 ## FASE 6 — Importación Inicial (Sincronización manual)
-- Se ejecutó el script `scripts/sync_bsale_clients.ts` volcando 482 clientes Bsale hacia PetGrup.
+- Se ejecutó el script `scripts/sync_bsale_clients.ts` volcando 482 clientes Bsale hacia PetGroup.
 - La tabla de operaciones de UI es `comercial.customers`.
 - La tabla espejo técnico de retención (raw data) es `integraciones.bsale_clients`.
 - **Nota estricta:** Bsale no fue modificado (sólo operaciones GET).
@@ -38,7 +38,7 @@
 ## FASE 7 — UX y Reglas de Edición (Master-Detail y Bloqueo BSALE)
 - Se implementó un panel lateral fijo (Global Drawer) para el detalle de cliente.
 - **Regla estricta:** Para los clientes con `source = BSALE`, los campos nativos (rut, razón social, contactos, etc.) son **SÓLO LECTURA** tanto visualmente como a nivel de backend.
-- Solo se permite editar el campo `notes` (Notas internas) como dato administrativo de PetGrup.
+- Solo se permite editar el campo `notes` (Notas internas) como dato administrativo de PetGroup.
 - El sistema informa claramente al usuario que cualquier cambio origen se debe realizar en Bsale.
 
 ## FASE 8 — Sincronización Automática (Sync Core Integrado)
@@ -46,5 +46,5 @@
 - Bsale Clients es el primer puente conectado a esta infraestructura.
 - **UI:** Se incluyó un banner con el estado dinámico en la lista de Clientes y un botón "Forzar sincronización".
 - **Backend:** Se creó el endpoint `POST /api/integraciones/bsale/clients/sync` preparado para un servicio Cron externo (cada 30 mins) validando la variable `CRON_SECRET`.
-- **Protección de Datos:** Se protegen las `notes` en PetGrup; `Sync Core` cuenta con manejo de bloqueos por entidad (`sync_locks`), contadores e historial en `sync_runs`.
-- (La escritura o actualización desde PetGrup hacia Bsale queda aplazada y documentada en `docs/bsale-customer-writeback-plan.md`).
+- **Protección de Datos:** Se protegen las `notes` en PetGroup; `Sync Core` cuenta con manejo de bloqueos por entidad (`sync_locks`), contadores e historial en `sync_runs`.
+- (La escritura o actualización desde PetGroup hacia Bsale queda aplazada y documentada en `docs/bsale-customer-writeback-plan.md`).

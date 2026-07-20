@@ -1,6 +1,6 @@
 # Plan de Sincronización Hacia Bsale (Writeback) — FASE FUTURA
 
-> **Estado actual:** Bsale es solo lectura. PetGrup replica clientes desde Bsale para análisis y administración interna.  
+> **Estado actual:** Bsale es solo lectura. PetGroup replica clientes desde Bsale para análisis y administración interna.  
 > **Este documento describe una fase futura, no implementada todavía.**
 
 ---
@@ -13,7 +13,7 @@ Hoy el flujo es unidireccional:
 Bsale ──(GET)──► integraciones.bsale_clients ──► comercial.customers
 ```
 
-Los cambios administrativos realizados en PetGrup (notas, giro, condiciones comerciales) son datos locales en `comercial.customers` y **no se sincronizan con Bsale**.
+Los cambios administrativos realizados en PetGroup (notas, giro, condiciones comerciales) son datos locales en `comercial.customers` y **no se sincronizan con Bsale**.
 
 No existe escritura hacia Bsale en ningún punto de la aplicación.
 
@@ -24,7 +24,7 @@ No existe escritura hacia Bsale en ningún punto de la aplicación.
 1. Requiere auditar el endpoint de actualización de clientes Bsale (`PUT /v1/clients/:id`).
 2. Requiere confirmar los permisos del token actual (lectura solamente vs. escritura).
 3. Requiere identificar los campos permitidos y obligatorios en cada endpoint.
-4. Requiere definir una política de resolución de conflictos (¿qué gana? ¿Bsale o PetGrup?).
+4. Requiere definir una política de resolución de conflictos (¿qué gana? ¿Bsale o PetGroup?).
 5. Requiere crear una arquitectura de outbox para no escribir de forma síncrona.
 6. Requiere un mecanismo de aprobación/revisión antes de enviar cambios.
 7. Requiere pruebas con un cliente autorizado en Bsale antes de activar en producción.
@@ -41,9 +41,9 @@ No existe escritura hacia Bsale en ningún punto de la aplicación.
 
 ### Fase 2 — Política de Conflictos
 Definir qué sucede cuando:
-- Bsale actualiza un cliente que PetGrup también modificó.
-- PetGrup envía un campo que Bsale rechaza.
-- PetGrup envía y Bsale devuelve error 4xx/5xx.
+- Bsale actualiza un cliente que PetGroup también modificó.
+- PetGroup envía un campo que Bsale rechaza.
+- PetGroup envía y Bsale devuelve error 4xx/5xx.
 
 ### Fase 3 — Tabla Outbox
 Crear tabla de cola de cambios pendientes:
@@ -70,7 +70,7 @@ CREATE TABLE integraciones.bsale_client_outbox (
 ### Fase 4 — UI de Revisión de Cambios
 - Pantalla de revisión de cambios pendientes antes de enviar a Bsale.
 - Permite cancelar o aprobar cambio por cambio.
-- Muestra diff entre estado PetGrup y estado Bsale.
+- Muestra diff entre estado PetGroup y estado Bsale.
 
 ### Fase 5 — Dry Run
 - Simular el envío sin escribir en Bsale.
@@ -94,7 +94,7 @@ CREATE TABLE integraciones.bsale_client_outbox (
 
 ## Campos Candidatos a Writeback
 
-| Campo PetGrup      | Campo Bsale (tentativo)   | Riesgo |
+| Campo PetGroup      | Campo Bsale (tentativo)   | Riesgo |
 |--------------------|--------------------------|--------|
 | `business_name`    | `company`                | Alto — afecta documentos |
 | `email`            | `email`                  | Medio |
@@ -116,7 +116,7 @@ CREATE TABLE integraciones.bsale_client_outbox (
 
 Cuando se active la fase de writeback, el formulario deberá mostrar claramente:
 - Qué campos se sincronizarán con Bsale.
-- Qué campos son solo administrativos en PetGrup.
+- Qué campos son solo administrativos en PetGroup.
 - Una confirmación explícita antes de escribir en Bsale.
 
 ---

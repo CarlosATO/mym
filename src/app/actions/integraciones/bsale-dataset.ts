@@ -883,7 +883,7 @@ export async function getReplenishmentDatasetFromBsale(
         if (!docExists) motivo = 'falta document header en Supabase'
         else if (!detailExists) motivo = 'falta detail SKU 1020 en Supabase'
         else if (doc.document_type_id !== (ef.tipo === 'FE' ? 1 : 2)) motivo = `document_type_id distinto: ${doc.document_type_id}`
-        else if (petgrupQty !== ef.cantidad) motivo = `cantidad distinta: PetGrup ${petgrupQty} vs Excel ${ef.cantidad}`
+        else if (petgrupQty !== ef.cantidad) motivo = `cantidad distinta: PetGroup ${petgrupQty} vs Excel ${ef.cantidad}`
         else motivo = 'OK, coincide'
 
         return {

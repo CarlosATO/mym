@@ -119,7 +119,7 @@ async function main() {
   });
 
   console.log("\n--- RESULTADO PETGRUP RECALCULADO ---");
-  console.log(`Ventas 6m (Total PetGrup para el bloque evaluado): ${buckets.reduce((a, b) => a + b.units, 0)}`);
+  console.log(`Ventas 6m (Total PetGroup para el bloque evaluado): ${buckets.reduce((a, b) => a + b.units, 0)}`);
 
   console.log("\n--- TOTAL POR BLOQUE ---");
   buckets.forEach(b => console.log(`${b.label}: ${b.units}`));

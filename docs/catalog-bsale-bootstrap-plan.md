@@ -1,4 +1,4 @@
-# Plan de Bootstrap y Enriquecimiento de Catálogo Bsale -> PetGrup
+# Plan de Bootstrap y Enriquecimiento de Catálogo Bsale -> PetGroup
 
 Este documento detalla el plan de arquitectura actualizado, las reglas de sincronización, las modificaciones estructurales y los resultados de la auditoría y simulación (Dry-Run) reforzada. Todo ha sido preparado en estricta validación sin modificar datos aún.
 
@@ -28,11 +28,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_products_company_bsale_variant ON adquisici
 
 Clasificación de campos:
 1. `BSALE_SYNC`: Viene de Bsale y debe sincronizarse regularmente (metadata técnica o llave).
-2. `BSALE_INITIAL_THEN_EDITABLE`: Viene de Bsale como semilla inicial; luego PetGrup toma el control.
-3. `PETGRUP_ONLY`: Exclusivo y manejado en PetGrup.
+2. `BSALE_INITIAL_THEN_EDITABLE`: Viene de Bsale como semilla inicial; luego PetGroup toma el control.
+3. `PETGRUP_ONLY`: Exclusivo y manejado en PetGroup.
 4. `DYNAMIC_NOT_PRODUCT`: No debe guardarse en `products` en absoluto.
 
-| Campo PetGrup | Origen Bsale (Script Update) | Transformación / Regla | Clase | Próximo a Bsale |
+| Campo PetGroup | Origen Bsale (Script Update) | Transformación / Regla | Clase | Próximo a Bsale |
 |---|---|---|---|---|
 | **SKU** | `bsale_variants.code` | Match exacto (ya cargado). | `BSALE_SYNC` | No (Es la llave) |
 | **Nombre** | `bsale_products.name + variant` | - | `BSALE_INITIAL_THEN_EDITABLE` | Sí |
@@ -50,8 +50,8 @@ Se ejecutó una validación profunda sobre los datos para determinar el riesgo d
 ### Barcodes
 - 3.585 SKUs serán actualizados con su código de barra real Bsale (ej. "7852052749207").
 - Códigos vacíos, nulls o "0" fueron limpiados e ignorados.
-- **Códigos duplicados en Bsale detectados:** 24. No es bloqueante ya que la llave única en PetGrup es compuesta.
-- Conflicto PetGrup vs Bsale: 0 (la base en PetGrup estaba virgen).
+- **Códigos duplicados en Bsale detectados:** 24. No es bloqueante ya que la llave única en PetGroup es compuesta.
+- Conflicto PetGroup vs Bsale: 0 (la base en PetGroup estaba virgen).
 
 ### Tipos de Producto
 - 3.585 SKUs recibirán el `product_type` directo y completo de Bsale (ej: "AMIGO/ALIMENTO").
@@ -73,6 +73,6 @@ Basado en la evidencia obtenida:
 
 1. **Migración:** Recomiendo **Aprobar** la aplicación de la migración `20260706100000_catalog_bsale_references.sql`. No afecta RLS ni datos existentes, y su definición es segura (`IF NOT EXISTS`).
 2. **Metadata Bootstrap:** Recomiendo **Aprobar** la aplicación del Script (`--apply --confirm-remote`). No toca precios ni stocks, e inyecta barcodes reales muy necesarios para la operación, junto con los tipos de producto.
-3. **Estado Activo/Inactivo:** Recomiendo **Aprobar** la sincronización del estado (`--apply-state`). Con cero stock y cero ventas en los inactivos de Bsale, su presencia en PetGrup genera ruido innecesario.
+3. **Estado Activo/Inactivo:** Recomiendo **Aprobar** la sincronización del estado (`--apply-state`). Con cero stock y cero ventas en los inactivos de Bsale, su presencia en PetGroup genera ruido innecesario.
 
 **Todo ha sido validado contra Typechecking (`tsc --noEmit`). Todo corre sin errores.**

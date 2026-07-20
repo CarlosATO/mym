@@ -510,7 +510,7 @@ export function CatalogPanel() {
               <select value={filters.source ?? ''} onChange={e => setFilter('source', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40 appearance-none">
                 <option value="">Origen (Todos)</option>
                 <option value="BSALE">Bsale</option>
-                <option value="PETGRUP">PetGrup</option>
+                <option value="PETGRUP">PetGroup</option>
               </select>
               <select value={filters.bsale_status_conflict ?? ''} onChange={e => setFilter('bsale_status_conflict', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40 appearance-none">
                 <option value="">Conflicto Bsale (Todos)</option>

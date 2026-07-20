@@ -45,7 +45,7 @@ async function main() {
     });
   });
 
-  console.log("PetGrup Mock Calculation (Types 1, 5, 23):");
+  console.log("PetGroup Mock Calculation (Types 1, 5, 23):");
   buckets.forEach(b => console.log(`${b.label}: ${b.petgrup}`));
   console.log("Total:", buckets.reduce((a, b) => a + b.petgrup, 0));
 }

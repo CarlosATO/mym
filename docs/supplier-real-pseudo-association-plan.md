@@ -1,6 +1,6 @@
 # Plan de Asociación: Proveedores Reales y Pseudoproveedores Bsale
 
-Este plan documenta la estrategia para migrar el manejo de proveedores operativos de Bsale hacia un modelo estructurado en PetGrup con Proveedores Reales/Legales como entidad principal y Pseudoproveedores Bsale como entidades secundarias hijas.
+Este plan documenta la estrategia para migrar el manejo de proveedores operativos de Bsale hacia un modelo estructurado en PetGroup con Proveedores Reales/Legales como entidad principal y Pseudoproveedores Bsale como entidades secundarias hijas.
 
 ## 1. Diagnóstico y Reporte de Dry-Run
 

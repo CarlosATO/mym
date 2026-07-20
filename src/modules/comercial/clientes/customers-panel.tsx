@@ -207,7 +207,7 @@ function CustomerForm({ editing, onClose, onSaved }: {
                   <p className="text-sm font-semibold text-blue-400 mb-1">Integración Bsale — solo lectura</p>
                   <p className="text-xs text-blue-400/80 leading-relaxed">
                     Este cliente proviene de Bsale. Los datos tributarios, comerciales y de contacto se mantienen desde Bsale. 
-                    En PetGrup solo se guardan datos administrativos internos. Esta pantalla no sincroniza cambios hacia Bsale.
+                    En PetGroup solo se guardan datos administrativos internos. Esta pantalla no sincroniza cambios hacia Bsale.
                   </p>
                   <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-4">
                     {[

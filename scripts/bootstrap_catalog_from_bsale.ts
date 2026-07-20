@@ -53,7 +53,7 @@ async function main() {
   if (isDryRunState) console.log(`[STATE SYNC] Operational state sync DRY-RUN.`)
   console.log(`Target company: ${TARGET_COMPANY}`)
 
-  console.log('Fetching PetGrup products...')
+  console.log('Fetching PetGroup products...')
   const petProducts = await fetchAll('products', 'adquisiciones')
   
   console.log('Fetching Bsale variants...')
@@ -221,8 +221,8 @@ async function main() {
 
   // Write markdown exceptions report
   if (exceptions.length > 0) {
-    let md = '# Reporte de Excepciones de Estado Bsale vs PetGrup\n\n'
-    md += `Detectadas ${exceptions.length} excepciones donde Bsale marca el producto como inactivo pero PetGrup registra movimiento o stock local.\n\n`
+    let md = '# Reporte de Excepciones de Estado Bsale vs PetGroup\n\n'
+    md += `Detectadas ${exceptions.length} excepciones donde Bsale marca el producto como inactivo pero PetGroup registra movimiento o stock local.\n\n`
     md += '| SKU | Descripción | Tipo | Estado Prod | Estado Var | Stock | Ventas 180d | Costo | Motivo |\n'
     md += '|---|---|---|---|---|---|---|---|---|\n'
     for (const e of exceptions) {

@@ -302,7 +302,7 @@ async function run() {
   console.log(` - Variantes sin product_type o con tipo excluido: ${noProductTypeCount}`)
   
   if (isDryRun) {
-      console.log(` [Dry-Run] Se crearían ${uniqueSkus.size} productos PetGrup.`)
+      console.log(` [Dry-Run] Se crearían ${uniqueSkus.size} productos PetGroup.`)
       console.log(` [Dry-Run] Se crearían ${uniqueSkus.size} product_supplier_mappings.`)
   } else {
       // Inserción masiva de productos (idempotente sin upsert por falta de unique constraint en postgREST)
@@ -345,7 +345,7 @@ async function run() {
               insertedCount += batch.length
           }
       }
-      console.log(`Se insertaron ${insertedCount} productos PetGrup nuevos (omitidos ${existingSkuMap.size} existentes).`)
+      console.log(`Se insertaron ${insertedCount} productos PetGroup nuevos (omitidos ${existingSkuMap.size} existentes).`)
       
       // Re-fetch all to get IDs for mappings
       const allProds = await fetchAllAdq('products', 'id, sku', 'company_id', targetCompanyId)

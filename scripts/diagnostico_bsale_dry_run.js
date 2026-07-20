@@ -39,10 +39,10 @@ async function main() {
     console.log("variantes Bsale con SKU válido:", variantsValidSku);
 
     const { count: productsTotal } = await adqDb.from('products').select('*', { count: 'exact', head: true });
-    console.log("total productos PetGrup activos:", productsTotal);
+    console.log("total productos PetGroup activos:", productsTotal);
 
     const { count: productsValidSku } = await adqDb.from('products').select('*', { count: 'exact', head: true }).neq('sku', '').not('sku', 'is', null);
-    console.log("productos PetGrup con SKU válido:", productsValidSku);
+    console.log("productos PetGroup con SKU válido:", productsValidSku);
 
     // Fetch all suppliers
     const { data: suppliersData } = await adqDb.from('suppliers').select('id, business_name, company_id, is_active');
@@ -77,7 +77,7 @@ async function fetchAll(db, table, selectFields) {
 
     console.log("Variantes fetched:", variants.length);
     console.log("Productos Bsale fetched:", productsBsale.length);
-    console.log("Productos PetGrup fetched:", petgrupProducts.length);
+    console.log("Productos PetGroup fetched:", petgrupProducts.length);
     
     // Check what raw_json looks like
     if (productsBsale.length > 0) {
@@ -199,8 +199,8 @@ async function fetchAll(db, table, selectFields) {
     });
 
     console.log("\n--- B. Matching SKU ---");
-    console.log("Matchean producto PetGrup:", matchingSku);
-    console.log("No matchean producto PetGrup:", notMatchingSku);
+    console.log("Matchean producto PetGroup:", matchingSku);
+    console.log("No matchean producto PetGroup:", notMatchingSku);
     console.log("Top 30 no match:", JSON.stringify(top30NoMatch, null, 2));
 
     console.log("\n--- C. Matching Proveedor ---");
@@ -217,7 +217,7 @@ async function fetchAll(db, table, selectFields) {
     console.log("SKUs duplicados en Bsale:", dupBsaleSkus.length);
 
     const dupPetgrupSkus = [...petgrupProductsMap.keys()].filter(k => petgrupProductsMap.get(k).length > 1);
-    console.log("SKUs duplicados en productos PetGrup:", dupPetgrupSkus.length);
+    console.log("SKUs duplicados en productos PetGroup:", dupPetgrupSkus.length);
 
     const dupSuppliers = [...supplierMap.keys()].filter(k => supplierMap.get(k).length > 1);
     console.log("Proveedores duplicados por nombre normalizado:", dupSuppliers.length);

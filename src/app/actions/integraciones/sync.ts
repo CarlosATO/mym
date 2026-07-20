@@ -4,6 +4,7 @@ import { getActiveCompanyId } from '@/app/actions/companies'
 import { syncBsaleClients } from '@/lib/integraciones/bsale-clients-sync'
 import { syncBsaleProductTypes } from '@/lib/integraciones/bsale-product-types-sync'
 import { syncBsaleProducts } from '@/lib/integraciones/bsale-products-sync'
+import { syncBsaleSaleConditions } from '@/lib/integraciones/bsale-sale-conditions-sync'
 import { getSyncStatus as getStatus } from '@/lib/integraciones/sync-core'
 import { createClient } from '@supabase/supabase-js'
 
@@ -53,6 +54,20 @@ export async function getSyncStatus(provider: string, entity: string) {
   const companyId = await getActiveCompanyId()
   if (!companyId) return null
   return getStatus(companyId, provider, entity)
+}
+
+export async function forceSyncBsaleSaleConditions() {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) throw new Error('Empresa no activa')
+
+  const result = await syncBsaleSaleConditions({
+    companyId,
+    triggerType: 'MANUAL',
+    isDryRun: false,
+    recordDryRun: true
+  })
+
+  return result
 }
 
 export async function getRecentSyncRuns(provider: string, entity: string, limit: number = 5) {

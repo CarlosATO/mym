@@ -1,10 +1,10 @@
-# Plan de Inactivación Segura de Catálogo (Bsale → PetGrup)
+# Plan de Inactivación Segura de Catálogo (Bsale → PetGroup)
 
-Este documento detalla la regla de negocio, los resultados del análisis y la muestra de productos afectados para llevar a cabo la inactivación segura en el sistema PetGrup, asegurando que no haya impacto negativo en la operación y manteniendo la sincronización parcial con Bsale.
+Este documento detalla la regla de negocio, los resultados del análisis y la muestra de productos afectados para llevar a cabo la inactivación segura en el sistema PetGroup, asegurando que no haya impacto negativo en la operación y manteniendo la sincronización parcial con Bsale.
 
 ## Regla de Negocio
 
-**1. Candidato seguro a inactivar en PetGrup:**
+**1. Candidato seguro a inactivar en PetGroup:**
 - `bsale_product_state = 1` (Inactivo) o `bsale_variant_state = 1` (Inactivo).
 - **Stock actual = 0**.
 - **Ventas en los últimos 180 días = 0**.
@@ -68,11 +68,11 @@ A continuación, una muestra de los 2.130 productos que serán inactivados:
 
 ## Resumen de los 47 Conflictos Protegidos
 
-Estos productos **NO** serán inactivados. Se detectó actividad reciente o existencia de stock en PetGrup a pesar de que Bsale los considera inactivos. Se etiquetarán con el motivo del conflicto para resolución manual posterior.
+Estos productos **NO** serán inactivados. Se detectó actividad reciente o existencia de stock en PetGroup a pesar de que Bsale los considera inactivos. Se etiquetarán con el motivo del conflicto para resolución manual posterior.
 
 *Ejemplos destacados:*
 - `TY00001STD`: Protegido por motivo `STOCK_POSITIVO`
 - `CO66821`: Protegido por motivo `VENTA_RECIENTE`
 - `CO64334`: Protegido por motivo `VENTA_RECIENTE`
 
-*(La lista completa de los 47 conflictos se encuentra generada en [catalog-bsale-status-exceptions.md](file:///c:/Users/mympr/OneDrive/Desktop/PetGrup/mym/docs/catalog-bsale-status-exceptions.md)).*
+*(La lista completa de los 47 conflictos se encuentra generada en [catalog-bsale-status-exceptions.md](file:///c:/Users/mympr/OneDrive/Desktop/PetGroup/mym/docs/catalog-bsale-status-exceptions.md)).*
