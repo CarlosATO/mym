@@ -83,11 +83,11 @@ function statusClass(status: string | null) {
 
 function KpiCard({ label, value, tone, hint, secondary }: { label: string; value: string; tone: string; hint?: string; secondary?: string }) {
   return (
-    <div className="rounded-2xl border border-theme-border bg-theme-bg/50 px-4 py-3 min-w-[150px]">
-      <div className="text-[11px] uppercase tracking-wider text-theme-text-muted/70 font-semibold">{label}</div>
-      <div className={cn("mt-1 text-xl font-black", tone)}>{value}</div>
-      {hint && <div className="text-[11px] text-theme-text-muted/50 mt-1 truncate">{hint}</div>}
-      {secondary && <div className="text-[10px] text-theme-text-muted/40 mt-0.5 truncate" title={secondary}>{secondary}</div>}
+    <div className="rounded-xl border border-theme-border/70 bg-theme-bg/40 px-3 py-2 min-w-[132px]">
+      <div className="text-[10px] uppercase tracking-wide text-theme-text-muted/65 font-semibold leading-none">{label}</div>
+      <div className={cn("mt-1 text-base font-black leading-tight", tone)}>{value}</div>
+      {hint && <div className="text-[10px] text-theme-text-muted/50 mt-0.5 truncate leading-tight">{hint}</div>}
+      {secondary && <div className="text-[10px] text-theme-text-muted/40 truncate leading-tight" title={secondary}>{secondary}</div>}
     </div>
   )
 }
@@ -318,8 +318,8 @@ export function CustomersPanel() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-theme-surface">
-      <div className="shrink-0 flex flex-col gap-4 p-5 border-b border-theme-border/60 bg-theme-text/[0.01]">
-        <div className="flex flex-col md:flex-row items-center gap-3 w-full">
+      <div className="shrink-0 flex flex-col gap-2.5 px-4 py-3 border-b border-theme-border/60 bg-theme-text/[0.01]">
+        <div className="flex flex-col md:flex-row items-center gap-2 w-full">
           <div className="flex items-center gap-1 shrink-0">
             {[
               { label: 'Clientes', active: true },
@@ -327,32 +327,32 @@ export function CustomersPanel() {
               { label: 'Rutas / Zonas', active: false },
             ].map(tab => (
               <span key={tab.label} className={cn(
-                "px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors",
+                "px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors",
                 tab.active ? "bg-theme-accent/10 text-theme-accent" : "text-theme-text-muted/40 cursor-not-allowed"
               )}>{tab.label}</span>
             ))}
           </div>
 
           <div className="relative flex-1 w-full">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted/50" />
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-text-muted/50" />
             <input
               type="text"
               value={search}
               onChange={event => setSearch(event.target.value)}
               placeholder="Buscar cliente, RUT, email, comuna o vendedor…"
-              className="w-full h-11 pl-10 pr-4 rounded-xl border border-theme-border bg-theme-surface hover:bg-theme-text/5 focus:bg-theme-surface focus:ring-2 focus:ring-theme-accent/20 focus:border-theme-accent transition-all text-sm text-theme-text placeholder:text-theme-text-muted/40"
+              className="w-full h-9 pl-8 pr-3 rounded-lg border border-theme-border bg-theme-surface hover:bg-theme-text/5 focus:bg-theme-surface focus:ring-2 focus:ring-theme-accent/20 focus:border-theme-accent transition-all text-sm text-theme-text placeholder:text-theme-text-muted/40"
             />
           </div>
 
-          <button onClick={load} title="Recargar esta vista, sin sincronizar Bsale" className="h-11 w-11 flex items-center justify-center rounded-xl border border-theme-border bg-theme-surface hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text transition-colors">
-            <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+          <button onClick={load} title="Recargar esta vista, sin sincronizar Bsale" className="h-9 w-9 flex items-center justify-center rounded-lg border border-theme-border bg-theme-surface hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text transition-colors">
+            <RefreshCw className={cn("w-3.5 h-3.5", loading && "animate-spin")} />
           </button>
-          <button onClick={() => setIsNewFormOpen(true)} className="h-11 px-4 flex items-center gap-1.5 rounded-xl bg-theme-accent hover:bg-theme-accent-hover text-white text-sm font-bold shadow-lg shadow-theme-accent/20 transition-all shrink-0">
-            <Plus className="w-4 h-4" />Nuevo cliente manual
+          <button onClick={() => setIsNewFormOpen(true)} className="h-9 px-3 flex items-center gap-1.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-xs font-bold shadow-sm shadow-theme-accent/15 transition-all shrink-0">
+            <Plus className="w-3.5 h-3.5" />Nuevo cliente manual
           </button>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           <KpiCard label="Total clientes" value={String(stats?.total ?? 0)} tone="text-theme-text" hint="Base Bsale 360" />
           <KpiCard label="Activos" value={String(stats?.active ?? 0)} tone="text-emerald-500" hint="ACTIVO + NUEVO" />
           <KpiCard label="Riesgo / Perdidos" value={String((stats?.riesgo ?? 0) + (stats?.perdido ?? 0))} tone="text-orange-400" hint="requieren seguimiento" />
@@ -367,36 +367,36 @@ export function CustomersPanel() {
           <KpiCard label="Con NC" value={String(stats?.withCreditNotes ?? 0)} tone="text-red-400" hint="clientes con notas de crédito" />
         </div>
 
-        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
-          <div className="flex items-center flex-wrap gap-2">
-            <select value={statusFilter} onChange={event => setStatusFilter(event.target.value)} className="h-10 px-3 rounded-xl border border-theme-border bg-theme-surface text-sm text-theme-text">
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-2">
+          <div className="flex items-center flex-wrap gap-1.5">
+            <select value={statusFilter} onChange={event => setStatusFilter(event.target.value)} className="h-8 px-2.5 rounded-lg border border-theme-border bg-theme-surface text-xs text-theme-text">
               <option value="all">Estado comercial: Todos</option>
               {['NUEVO', 'ACTIVO', 'OBSERVACION', 'RIESGO', 'INACTIVO', 'PERDIDO', 'SIN_VENTA_HISTORICA'].map(status => <option key={status} value={status}>{statusLabel(status)}</option>)}
             </select>
-            <select value={sellerFilter} onChange={event => setSellerFilter(event.target.value)} className="h-10 px-3 rounded-xl border border-theme-border bg-theme-surface text-sm text-theme-text max-w-[220px]">
+            <select value={sellerFilter} onChange={event => setSellerFilter(event.target.value)} className="h-8 px-2.5 rounded-lg border border-theme-border bg-theme-surface text-xs text-theme-text max-w-[200px]">
               <option value="all">Vendedor: Todos</option>
               {sellers.map(seller => <option key={seller} value={seller}>{seller}</option>)}
             </select>
-            <select value={communeFilter} onChange={event => setCommuneFilter(event.target.value)} className="h-10 px-3 rounded-xl border border-theme-border bg-theme-surface text-sm text-theme-text max-w-[200px]">
+            <select value={communeFilter} onChange={event => setCommuneFilter(event.target.value)} className="h-8 px-2.5 rounded-lg border border-theme-border bg-theme-surface text-xs text-theme-text max-w-[180px]">
               <option value="all">Comuna: Todas</option>
               {communes.map(commune => <option key={commune} value={commune}>{commune}</option>)}
             </select>
-            <select value={saleFilter} onChange={event => setSaleFilter(event.target.value as SaleFilter)} className="h-10 px-3 rounded-xl border border-theme-border bg-theme-surface text-sm text-theme-text">
+            <select value={saleFilter} onChange={event => setSaleFilter(event.target.value as SaleFilter)} className="h-8 px-2.5 rounded-lg border border-theme-border bg-theme-surface text-xs text-theme-text">
               <option value="all">Venta: Todas</option>
               <option value="with_sales">Con venta oficial</option>
               <option value="without_sales">Sin venta oficial</option>
             </select>
-            <button onClick={() => setWithCreditNotes(v => !v)} className={cn("h-10 px-3 rounded-xl border text-sm font-semibold", withCreditNotes ? "border-red-400/30 bg-red-500/10 text-red-400" : "border-theme-border text-theme-text-muted")}>Con NC</button>
-            <button onClick={() => setLowQuality(v => !v)} className={cn("h-10 px-3 rounded-xl border text-sm font-semibold", lowQuality ? "border-amber-400/30 bg-amber-500/10 text-amber-400" : "border-theme-border text-theme-text-muted")}>Calidad baja</button>
-            <button onClick={() => setAnomalousReceipt(v => !v)} className={cn("h-10 px-3 rounded-xl border text-sm font-semibold", anomalousReceipt ? "border-orange-400/30 bg-orange-500/10 text-orange-400" : "border-theme-border text-theme-text-muted")}>Boleta anómala</button>
+            <button onClick={() => setWithCreditNotes(v => !v)} className={cn("h-8 px-2.5 rounded-lg border text-xs font-semibold", withCreditNotes ? "border-red-400/30 bg-red-500/10 text-red-400" : "border-theme-border text-theme-text-muted")}>Con NC</button>
+            <button onClick={() => setLowQuality(v => !v)} className={cn("h-8 px-2.5 rounded-lg border text-xs font-semibold", lowQuality ? "border-amber-400/30 bg-amber-500/10 text-amber-400" : "border-theme-border text-theme-text-muted")}>Calidad baja</button>
+            <button onClick={() => setAnomalousReceipt(v => !v)} className={cn("h-8 px-2.5 rounded-lg border text-xs font-semibold", anomalousReceipt ? "border-orange-400/30 bg-orange-500/10 text-orange-400" : "border-theme-border text-theme-text-muted")}>Boleta anómala</button>
           </div>
 
-          <div className="flex items-center flex-wrap gap-3 text-xs text-theme-text-muted">
+          <div className="flex items-center flex-wrap gap-2 text-[11px] text-theme-text-muted">
             {syncStatus?.isLocked || isSyncing ? <span className="flex items-center gap-1 text-blue-500 font-medium"><RefreshCw className="w-3 h-3 animate-spin" /> Sync: En proceso</span>
               : syncStatus?.lastSuccess ? <span className="flex items-center gap-1 text-emerald-500 font-medium"><CloudSync className="w-3 h-3" /> Sync: OK</span>
               : <span className="flex items-center gap-1 text-theme-text-muted font-medium"><CloudSync className="w-3 h-3" /> Sync: Pendiente</span>}
             <span title="Las ventas, estados y alertas se calculan desde la capa comercial.">Datos comerciales calculados</span>
-            <button onClick={handleForceSync} disabled={isSyncing || syncStatus?.isLocked} title="Sincroniza clientes desde Bsale. Las métricas comerciales se actualizan con el proceso analítico." className="h-8 px-2.5 flex items-center gap-1.5 rounded-md border border-theme-border/60 bg-theme-surface hover:bg-theme-text/5 text-theme-text hover:border-theme-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium shadow-sm">
+            <button onClick={handleForceSync} disabled={isSyncing || syncStatus?.isLocked} title="Sincroniza clientes desde Bsale. Las métricas comerciales se actualizan con el proceso analítico." className="h-7 px-2 flex items-center gap-1.5 rounded-md border border-theme-border/60 bg-theme-surface hover:bg-theme-text/5 text-theme-text hover:border-theme-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium">
               <RefreshCw className={cn("w-3 h-3 text-theme-text-muted", (isSyncing || syncStatus?.isLocked) && "animate-spin")} />
               Forzar sync Bsale
             </button>
@@ -422,21 +422,21 @@ export function CustomersPanel() {
             </div>
           ) : (
             <div className="flex-1 overflow-auto">
-              <table className="w-full text-sm border-collapse min-w-[1280px]">
+              <table className="w-full text-xs border-collapse min-w-[1240px]">
                 <thead className="sticky top-0 z-10 bg-theme-surface">
-                  <tr className="border-b border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider">
-                    <th className="text-left py-3 px-4">Cliente / Giro</th>
-                    <th className="text-left py-3 px-4 whitespace-nowrap">RUT</th>
-                    <th className="text-left py-3 px-4">Comuna / Ciudad</th>
-                    <th className="text-left py-3 px-4">Estado comercial</th>
-                    <th className="text-right py-3 px-4">Venta oficial total</th>
-                    <th className="text-right py-3 px-4">Venta mes actual</th>
-                    <th className="text-right py-3 px-4">Venta 90d</th>
-                    <th className="text-left py-3 px-4">Última factura</th>
-                    <th className="text-right py-3 px-4">Días</th>
-                    <th className="text-left py-3 px-4">Vendedor principal</th>
-                    <th className="text-center py-3 px-4">NC total</th>
-                    <th className="text-center py-3 px-4">Calidad</th>
+                  <tr className="border-b border-theme-border text-[10px] text-theme-text-muted/70 uppercase tracking-wide">
+                    <th className="text-left py-2 px-3">Cliente / Giro</th>
+                    <th className="text-left py-2 px-3 whitespace-nowrap">RUT</th>
+                    <th className="text-left py-2 px-3">Comuna / Ciudad</th>
+                    <th className="text-left py-2 px-3">Estado comercial</th>
+                    <th className="text-right py-2 px-3">Venta oficial total</th>
+                    <th className="text-right py-2 px-3">Venta mes actual</th>
+                    <th className="text-right py-2 px-3">Venta 90d</th>
+                    <th className="text-left py-2 px-3">Última factura</th>
+                    <th className="text-right py-2 px-3">Días</th>
+                    <th className="text-left py-2 px-3">Vendedor principal</th>
+                    <th className="text-center py-2 px-3">NC total</th>
+                    <th className="text-center py-2 px-3">Calidad</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -445,37 +445,37 @@ export function CustomersPanel() {
                     const noHistory = customer.status === 'SIN_VENTA_HISTORICA'
                     return (
                       <tr key={`${customer.company_id}-${customer.bsale_client_id}`} className="border-b border-theme-border hover:bg-theme-text/5 transition-colors group">
-                        <td className="py-3 px-4">
-                          <div className="font-semibold text-sm text-theme-text max-w-[260px] truncate">{customer.business_name}</div>
-                          <div className="flex items-center gap-2 mt-1 min-h-4">
-                            {customer.business_activity && <span className="text-[10px] text-theme-text-muted/60 truncate max-w-[200px]">{customer.business_activity}</span>}
-                            {customer.has_anomalous_receipt && <span title="Boleta anómala"><ShieldAlert className="w-3.5 h-3.5 text-orange-400" /></span>}
+                        <td className="py-2 px-3">
+                          <div className="font-semibold text-[13px] text-theme-text max-w-[250px] truncate leading-tight">{customer.business_name}</div>
+                          <div className="flex items-center gap-1.5 mt-0.5 min-h-3.5">
+                            {customer.business_activity && <span className="text-[10px] text-theme-text-muted/55 truncate max-w-[190px] leading-tight">{customer.business_activity}</span>}
+                            {customer.has_anomalous_receipt && <span title="Boleta anómala"><ShieldAlert className="w-3 h-3 text-orange-400" /></span>}
                             {customer.credit_note_count_total > 0 && <span className="text-[10px] text-red-400 font-bold">NC</span>}
                             {incomplete && <span className="text-[10px] text-amber-400 font-bold">datos incompletos</span>}
                             {noHistory && <span className="text-[10px] text-theme-text-muted font-bold">sin venta</span>}
                           </div>
                         </td>
-                        <td className="py-3 px-4 text-sm font-mono text-theme-text whitespace-nowrap">{customer.rut || '—'}</td>
-                        <td className="py-3 px-4">
-                          <div className="flex items-center gap-1 text-xs text-theme-text-muted max-w-[160px]"><MapPin className="w-3 h-3 shrink-0 opacity-50" /><span className="truncate">{[customer.commune, customer.city].filter(Boolean).join(', ') || '—'}</span></div>
-                          <div className="mt-1 flex items-center gap-2 text-[10px] text-theme-text-muted/50">
-                            {customer.has_email && <Mail className="w-3 h-3" />}
-                            {customer.has_phone && <Phone className="w-3 h-3" />}
-                            {customer.has_address && <MapPin className="w-3 h-3" />}
+                        <td className="py-2 px-3 font-mono text-theme-text whitespace-nowrap">{customer.rut || '—'}</td>
+                        <td className="py-2 px-3">
+                          <div className="flex items-center gap-1 text-[11px] text-theme-text-muted max-w-[150px]"><MapPin className="w-3 h-3 shrink-0 opacity-40" /><span className="truncate">{[customer.commune, customer.city].filter(Boolean).join(', ') || '—'}</span></div>
+                          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-theme-text-muted/40">
+                            {customer.has_email && <Mail className="w-2.5 h-2.5" />}
+                            {customer.has_phone && <Phone className="w-2.5 h-2.5" />}
+                            {customer.has_address && <MapPin className="w-2.5 h-2.5" />}
                           </div>
                         </td>
-                        <td className="py-3 px-4"><span className={cn("inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold border", statusClass(customer.status))}>{statusLabel(customer.status)}</span></td>
-                        <td className="py-3 px-4 text-right font-semibold text-theme-text whitespace-nowrap">{fmtMoney(customer.official_sales_total)}</td>
-                        <td className="py-3 px-4 text-right whitespace-nowrap" title={`Bruto ${fmtMoney(customer.official_sales_current_month_gross)} / NC ${fmtMoney(customer.credit_notes_current_month)}`}>
+                        <td className="py-2 px-3"><span className={cn("inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold border", statusClass(customer.status))}>{statusLabel(customer.status)}</span></td>
+                        <td className="py-2 px-3 text-right font-semibold text-theme-text whitespace-nowrap">{fmtMoney(customer.official_sales_total)}</td>
+                        <td className="py-2 px-3 text-right whitespace-nowrap" title={`Bruto ${fmtMoney(customer.official_sales_current_month_gross)} / NC ${fmtMoney(customer.credit_notes_current_month)}`}>
                           <div className="text-sky-400 font-semibold">{fmtMoney(customer.official_sales_current_month_net)}</div>
-                          {customer.credit_notes_current_month > 0 && <div className="text-[10px] text-theme-text-muted/50">Bruto {fmtMoney(customer.official_sales_current_month_gross)} / NC {fmtMoney(customer.credit_notes_current_month)}</div>}
+                          {customer.credit_notes_current_month > 0 && <div className="text-[10px] text-theme-text-muted/45 leading-tight">Bruto {fmtMoney(customer.official_sales_current_month_gross)} / NC {fmtMoney(customer.credit_notes_current_month)}</div>}
                         </td>
-                        <td className="py-3 px-4 text-right text-blue-400 font-semibold whitespace-nowrap">{fmtMoney(customer.official_sales_90d)}</td>
-                        <td className="py-3 px-4 text-theme-text-muted whitespace-nowrap">{fmtDate(customer.last_invoice_date)}</td>
-                        <td className="py-3 px-4 text-right text-theme-text-muted">{customer.days_since_last_invoice ?? '—'}</td>
-                        <td className="py-3 px-4 text-theme-text max-w-[180px] truncate">{customer.main_seller_name || '—'}</td>
-                        <td className="py-3 px-4 text-center"><span className={cn("text-xs font-bold", customer.credit_note_count_total > 0 ? "text-red-400" : "text-theme-text-muted/30")}>{customer.credit_note_count_total}</span></td>
-                        <td className="py-3 px-4 text-center"><span className={cn("inline-flex items-center gap-1 text-xs font-bold", incomplete ? "text-amber-400" : "text-emerald-500")}><UserRoundCheck className="w-3 h-3" />{customer.quality_score}%</span></td>
+                        <td className="py-2 px-3 text-right text-blue-400 font-semibold whitespace-nowrap">{fmtMoney(customer.official_sales_90d)}</td>
+                        <td className="py-2 px-3 text-theme-text-muted whitespace-nowrap">{fmtDate(customer.last_invoice_date)}</td>
+                        <td className="py-2 px-3 text-right text-theme-text-muted">{customer.days_since_last_invoice ?? '—'}</td>
+                        <td className="py-2 px-3 text-theme-text max-w-[170px] truncate">{customer.main_seller_name || '—'}</td>
+                        <td className="py-2 px-3 text-center"><span className={cn("text-[11px] font-bold", customer.credit_note_count_total > 0 ? "text-red-400" : "text-theme-text-muted/30")}>{customer.credit_note_count_total}</span></td>
+                        <td className="py-2 px-3 text-center"><span className={cn("inline-flex items-center gap-1 text-[11px] font-bold", incomplete ? "text-amber-400" : "text-emerald-500")}><UserRoundCheck className="w-2.5 h-2.5" />{customer.quality_score}%</span></td>
                       </tr>
                     )
                   })}
@@ -485,9 +485,9 @@ export function CustomersPanel() {
           )}
 
           {!loading && !error && filteredCustomers.length > 0 && (
-            <div className="shrink-0 flex items-center justify-between text-xs p-4 border-t border-theme-border/60 bg-theme-text/[0.01] text-theme-text-muted/50">
+            <div className="shrink-0 flex items-center justify-between text-[11px] px-3 py-2 border-t border-theme-border/60 bg-theme-text/[0.01] text-theme-text-muted/50">
               <span>{filteredCustomers.length} de {customers.length} clientes comerciales</span>
-              <span className="flex items-center gap-1"><TrendingUp className="w-3 h-3" />Datasource: comercial.vw_client_360</span>
+              <span className="flex items-center gap-1"><TrendingUp className="w-2.5 h-2.5" />Datasource: comercial.vw_client_360</span>
             </div>
           )}
         </div>
