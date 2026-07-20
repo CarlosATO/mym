@@ -461,7 +461,7 @@ SELECT
     ls.seller_name AS last_seller_name,
     ms.seller_id AS main_seller_id,
     ms.seller_name AS main_seller_name,
-    ms.main_seller_sales_180d
+    ms.seller_sales_180d AS main_seller_sales_180d
 FROM last_seller ls
 FULL JOIN main_seller ms ON ms.company_id = ls.company_id AND ms.bsale_client_id = ls.bsale_client_id;
 
