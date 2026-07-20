@@ -9,6 +9,7 @@ import {
   type Customer,
 } from '@/app/actions/comercial/customers'
 import { forceSyncBsaleClients, getSyncStatus } from '@/app/actions/integraciones/sync'
+import { Client360Drawer } from './client-360-drawer'
 import {
   AlertCircle, Building2, CloudSync, Mail, MapPin, Phone,
   Plus, RefreshCw, Search, ShieldAlert, TrendingUp, UserRoundCheck,
@@ -237,6 +238,8 @@ export function CustomersPanel() {
   const [lowQuality, setLowQuality] = useState(false)
   const [anomalousReceipt, setAnomalousReceipt] = useState(false)
   const [isNewFormOpen, setIsNewFormOpen] = useState(false)
+  const [selectedCustomer, setSelectedCustomer] = useState<CommercialCustomerExplorer | null>(null)
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false)
 
   useEffect(() => {
     const handle = setTimeout(() => setDebouncedSearch(search), 300)
@@ -314,6 +317,16 @@ export function CustomersPanel() {
     } finally {
       setIsSyncing(false)
     }
+  }
+
+  const openClient360 = (customer: CommercialCustomerExplorer) => {
+    setSelectedCustomer(customer)
+    setIsDrawerOpen(true)
+  }
+
+  const closeClient360 = () => {
+    setIsDrawerOpen(false)
+    setSelectedCustomer(null)
   }
 
   return (
@@ -444,9 +457,24 @@ export function CustomersPanel() {
                     const incomplete = customer.quality_score < 60
                     const noHistory = customer.status === 'SIN_VENTA_HISTORICA'
                     return (
-                      <tr key={`${customer.company_id}-${customer.bsale_client_id}`} className="border-b border-theme-border hover:bg-theme-text/5 transition-colors group">
+                      <tr
+                        key={`${customer.company_id}-${customer.bsale_client_id}`}
+                        onDoubleClick={() => openClient360(customer)}
+                        title="Doble click para abrir Cliente 360"
+                        className="border-b border-theme-border hover:bg-theme-text/5 transition-colors group cursor-pointer"
+                      >
                         <td className="py-2 px-3">
-                          <div className="font-semibold text-[13px] text-theme-text max-w-[250px] truncate leading-tight">{customer.business_name}</div>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="font-semibold text-[13px] text-theme-text max-w-[250px] truncate leading-tight">{customer.business_name}</div>
+                            <button
+                              type="button"
+                              onClick={event => { event.stopPropagation(); openClient360(customer) }}
+                              className="opacity-0 group-hover:opacity-100 shrink-0 rounded-md border border-theme-border/70 px-1.5 py-0.5 text-[10px] font-semibold text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-all"
+                              title="Ver Cliente 360"
+                            >
+                              Ver 360
+                            </button>
+                          </div>
                           <div className="flex items-center gap-1.5 mt-0.5 min-h-3.5">
                             {customer.business_activity && <span className="text-[10px] text-theme-text-muted/55 truncate max-w-[190px] leading-tight">{customer.business_activity}</span>}
                             {customer.has_anomalous_receipt && <span title="Boleta anómala"><ShieldAlert className="w-3 h-3 text-orange-400" /></span>}
@@ -501,6 +529,8 @@ export function CustomersPanel() {
           </div>
         </div>
       )}
+
+      {isDrawerOpen && <Client360Drawer customer={selectedCustomer} onClose={closeClient360} />}
     </div>
   )
 }
