@@ -8,7 +8,7 @@ import {
   type CommercialCustomerStats,
   type Customer,
 } from '@/app/actions/comercial/customers'
-import { forceSyncBsaleClients, getSyncStatus } from '@/app/actions/integraciones/sync'
+import { forceSyncBsaleClients, getBsaleSalesSyncHealth, getSyncStatus, type BsaleSalesSyncHealth } from '@/app/actions/integraciones/sync'
 import { Client360Drawer } from './client-360-drawer'
 import {
   AlertCircle, Building2, CloudSync, Mail, MapPin, Phone,
@@ -62,6 +62,11 @@ function fmtMoney(value: number | null | undefined) {
 function fmtDate(value: string | null) {
   if (!value) return '—'
   return new Date(value + 'T00:00:00').toLocaleDateString('es-CL')
+}
+
+function fmtDateTime(value: string | null | undefined) {
+  if (!value) return '—'
+  return new Date(value).toLocaleString('es-CL', { dateStyle: 'short', timeStyle: 'short' })
 }
 
 function statusLabel(status: string | null) {
@@ -226,6 +231,7 @@ export function CustomersPanel() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
+  const [salesSyncHealth, setSalesSyncHealth] = useState<BsaleSalesSyncHealth | null>(null)
   const [isSyncing, setIsSyncing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -248,8 +254,12 @@ export function CustomersPanel() {
 
   const loadSyncStatus = useCallback(async () => {
     try {
-      const status = await getSyncStatus('BSALE', 'clients')
+      const [status, salesHealth] = await Promise.all([
+        getSyncStatus('BSALE', 'clients'),
+        getBsaleSalesSyncHealth(),
+      ])
       setSyncStatus(status)
+      setSalesSyncHealth(salesHealth)
     } catch (err) {
       console.error('Failed to load sync status', err)
     }
@@ -408,6 +418,21 @@ export function CustomersPanel() {
             {syncStatus?.isLocked || isSyncing ? <span className="flex items-center gap-1 text-blue-500 font-medium"><RefreshCw className="w-3 h-3 animate-spin" /> Sync: En proceso</span>
               : syncStatus?.lastSuccess ? <span className="flex items-center gap-1 text-emerald-500 font-medium"><CloudSync className="w-3 h-3" /> Sync: OK</span>
               : <span className="flex items-center gap-1 text-theme-text-muted font-medium"><CloudSync className="w-3 h-3" /> Sync: Pendiente</span>}
+            <span
+              className={cn(
+                "flex items-center gap-1 font-medium",
+                salesSyncHealth?.hasScheduledEvidence ? "text-emerald-500" : "text-amber-400"
+              )}
+              title={salesSyncHealth?.latestSuccessfulRun
+                ? `Último sync ventas/documentos: ${fmtDateTime(salesSyncHealth.latestSuccessfulRun.completed_at || salesSyncHealth.latestSuccessfulRun.started_at)} · Trigger: ${salesSyncHealth.latestSuccessfulRun.trigger} · Docs: ${salesSyncHealth.latestSuccessfulRun.documents_count ?? 0} · Detalles: ${salesSyncHealth.latestSuccessfulRun.document_details_count ?? 0} · SCHEDULED registrados: ${salesSyncHealth.scheduledRunsCount}`
+                : 'Sin evidencia de sync ventas/documentos en integraciones.bsale_sync_runs'}
+            >
+              <CloudSync className="w-3 h-3" />
+              Ventas: {salesSyncHealth?.latestSuccessfulRun
+                ? `${salesSyncHealth.latestSuccessfulRun.trigger} ${fmtDateTime(salesSyncHealth.latestSuccessfulRun.completed_at || salesSyncHealth.latestSuccessfulRun.started_at)}`
+                : 'sin evidencia'}
+              {salesSyncHealth && !salesSyncHealth.hasScheduledEvidence ? ' · sin SCHEDULED' : ''}
+            </span>
             <span title="Las ventas, estados y alertas se calculan desde la capa comercial.">Datos comerciales calculados</span>
             <button onClick={handleForceSync} disabled={isSyncing || syncStatus?.isLocked} title="Sincroniza clientes desde Bsale. Las métricas comerciales se actualizan con el proceso analítico." className="h-7 px-2 flex items-center gap-1.5 rounded-md border border-theme-border/60 bg-theme-surface hover:bg-theme-text/5 text-theme-text hover:border-theme-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium">
               <RefreshCw className={cn("w-3 h-3 text-theme-text-muted", (isSyncing || syncStatus?.isLocked) && "animate-spin")} />
