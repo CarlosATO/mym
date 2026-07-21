@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { ModuleLayout } from '@/components/modules/module-layout'
 import { CustomersPanel } from '@/modules/comercial/clientes/customers-panel'
+import { ReceivablesPanel } from '@/modules/comercial/cobranza/receivables-panel'
 import type { RibbonAction } from '@/components/layout/module-ribbon'
 
 const tabs = [
@@ -18,7 +19,7 @@ interface ComercialLayoutClientProps {
   profile: { nombre: string; apellido: string; email: string; roles: { name: string } }
 }
 
-export function ComercialLayoutClient({ children, profile }: ComercialLayoutClientProps) {
+export function ComercialLayoutClient({ profile }: ComercialLayoutClientProps) {
   const [activeTab, setActiveTab] = useState('inicio')
   const [activeActionId, setActiveActionId] = useState('resumen')
 
@@ -32,7 +33,8 @@ export function ComercialLayoutClient({ children, profile }: ComercialLayoutClie
 
   if (activeTab === 'maestros') {
     ribbonActions.push(
-      { id: 'clientes', label: 'Clientes', icon: 'Users', onClick: () => setActiveActionId('clientes') }
+      { id: 'clientes', label: 'Clientes', icon: 'Users', onClick: () => setActiveActionId('clientes') },
+      { id: 'analisis-clientes', label: 'Análisis de clientes', icon: 'LineChart', onClick: () => setActiveActionId('analisis-clientes') }
     )
   }
 
@@ -52,6 +54,8 @@ export function ComercialLayoutClient({ children, profile }: ComercialLayoutClie
   } else if (activeTab === 'maestros') {
     if (activeActionId === 'clientes') {
       content = <CustomersPanel />
+    } else if (activeActionId === 'analisis-clientes') {
+      content = <ReceivablesPanel />
     }
   } else {
     content = (

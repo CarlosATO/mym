@@ -342,6 +342,93 @@ export type CommercialCustomerPurchaseMix = {
   }
 }
 
+export type CommercialCustomerReceivablesSummary = {
+  company_id: string
+  bsale_client_id: number
+  customer_id: string | null
+  client_name: string
+  total_invoiced: number
+  total_paid: number
+  total_pending: number
+  overdue_amount: number
+  pending_invoices_count: number
+  overdue_invoices_count: number
+  paid_invoices_count: number
+  partial_payment_invoices_count: number
+  last_invoice_date: string | null
+  last_payment_date: string | null
+  avg_days_to_pay: number | null
+  max_days_overdue: number
+  risk_status: string
+  payment_behavior_label: string
+  customer_classification: string | null
+  commercial_group_id: string | null
+  commercial_group_name: string | null
+  commercial_group_code: string | null
+  commercial_relationship_type: string | null
+  account_type: string
+  relationship_type: string
+  reporting_channel: string | null
+  reporting_seller_name: string | null
+  is_internal_account: boolean
+  is_commissionable: boolean
+  exclude_from_external_reports: boolean
+}
+
+export type CommercialCustomerReceivablesMonthly = {
+  month: string
+  monthLabel: string
+  invoiced_amount: number
+  paid_amount: number
+  net_cash_gap: number
+}
+
+export type CommercialCustomerReceivablesInvoice = {
+  bsale_document_id: number
+  document_number: number | null
+  emission_date: string | null
+  expiration_date: string | null
+  total_amount: number
+  paid_amount: number
+  pending_amount: number
+  days_overdue: number
+  receivable_status: string
+  last_payment_date: string | null
+  payments_count: number
+}
+
+export type CommercialCustomerReceivables = {
+  summary: CommercialCustomerReceivablesSummary | null
+  monthlyBehavior: CommercialCustomerReceivablesMonthly[]
+  invoices: CommercialCustomerReceivablesInvoice[]
+}
+
+export type CommercialReceivablesDashboardRow = CommercialCustomerReceivablesSummary & {
+  city: string | null
+  commune: string | null
+  seller_name: string | null
+}
+
+export type CommercialReceivablesAgingBucket = {
+  label: string
+  amount: number
+  invoices: number
+}
+
+export type CommercialReceivablesDashboard = {
+  rows: CommercialReceivablesDashboardRow[]
+  monthly: {
+    all: CommercialCustomerReceivablesMonthly[]
+    external: CommercialCustomerReceivablesMonthly[]
+    internal: CommercialCustomerReceivablesMonthly[]
+  }
+  aging: {
+    all: CommercialReceivablesAgingBucket[]
+    external: CommercialReceivablesAgingBucket[]
+    internal: CommercialReceivablesAgingBucket[]
+  }
+}
+
 type BehaviorDocumentRow = {
   bsale_id: number | string
   number: number | string | null
@@ -389,6 +476,63 @@ type PurchaseMixInvoiceRow = {
   bsale_id: number | string
   number: number | string | null
   emission_date: string | null
+}
+
+type CustomerReceivablesSummaryRow = Omit<CommercialCustomerReceivablesSummary,
+  'bsale_client_id' | 'total_invoiced' | 'total_paid' | 'total_pending' | 'overdue_amount' |
+  'pending_invoices_count' | 'overdue_invoices_count' | 'paid_invoices_count' |
+  'partial_payment_invoices_count' | 'avg_days_to_pay' | 'max_days_overdue' |
+  'is_internal_account' | 'is_commissionable' | 'exclude_from_external_reports'
+> & {
+  bsale_client_id: number | string
+  total_invoiced: number | string | null
+  total_paid: number | string | null
+  total_pending: number | string | null
+  overdue_amount: number | string | null
+  pending_invoices_count: number | string | null
+  overdue_invoices_count: number | string | null
+  paid_invoices_count: number | string | null
+  partial_payment_invoices_count: number | string | null
+  avg_days_to_pay: number | string | null
+  max_days_overdue: number | string | null
+  is_internal_account: boolean | null
+  is_commissionable: boolean | null
+  exclude_from_external_reports: boolean | null
+}
+
+type CustomerReceivablesMonthlyRow = {
+  month: string
+  invoiced_amount: number | string | null
+  paid_amount: number | string | null
+  net_cash_gap: number | string | null
+}
+
+type CustomerReceivablesInvoiceRow = {
+  bsale_document_id: number | string
+  document_number: number | string | null
+  emission_date: string | null
+  expiration_date: string | null
+  total_amount: number | string | null
+  paid_amount: number | string | null
+  pending_amount: number | string | null
+  days_overdue: number | string | null
+  receivable_status: string | null
+  last_payment_date: string | null
+  payments_count: number | string | null
+}
+
+type DashboardAgingInvoiceRow = {
+  pending_amount: number | string | null
+  days_overdue: number | string | null
+  is_internal_account: boolean | null
+  exclude_from_external_reports: boolean | null
+}
+
+type ReceivablesCustomerContextRow = {
+  bsale_client_id: number | string
+  city: string | null
+  commune: string | null
+  main_seller_name: string | null
 }
 
 type BsaleVariantRow = {
@@ -474,6 +618,76 @@ function buildTrendLabel(months: CommercialCustomerMonthlyEvolution[]): Commerci
   if (change > 0.1) return 'En crecimiento'
   if (change < -0.1) return 'En baja'
   return 'Estable'
+}
+
+function receivableMonthLabel(month: string) {
+  const date = new Date(month.slice(0, 10) + 'T00:00:00')
+  if (Number.isNaN(date.getTime())) return month
+  return date.toLocaleDateString('es-CL', { month: 'short', year: '2-digit' }).replace('.', '')
+}
+
+function mapReceivablesSummary(row: CustomerReceivablesSummaryRow): CommercialCustomerReceivablesSummary {
+  return {
+    company_id: row.company_id,
+    bsale_client_id: Number(row.bsale_client_id),
+    customer_id: row.customer_id,
+    client_name: row.client_name,
+    total_invoiced: asNumber(row.total_invoiced),
+    total_paid: asNumber(row.total_paid),
+    total_pending: asNumber(row.total_pending),
+    overdue_amount: asNumber(row.overdue_amount),
+    pending_invoices_count: asNumber(row.pending_invoices_count),
+    overdue_invoices_count: asNumber(row.overdue_invoices_count),
+    paid_invoices_count: asNumber(row.paid_invoices_count),
+    partial_payment_invoices_count: asNumber(row.partial_payment_invoices_count),
+    last_invoice_date: row.last_invoice_date,
+    last_payment_date: row.last_payment_date,
+    avg_days_to_pay: row.avg_days_to_pay == null ? null : asNumber(row.avg_days_to_pay),
+    max_days_overdue: asNumber(row.max_days_overdue),
+    risk_status: row.risk_status,
+    payment_behavior_label: row.payment_behavior_label,
+    customer_classification: row.customer_classification,
+    commercial_group_id: row.commercial_group_id,
+    commercial_group_name: row.commercial_group_name,
+    commercial_group_code: row.commercial_group_code,
+    commercial_relationship_type: row.commercial_relationship_type,
+    account_type: row.account_type,
+    relationship_type: row.relationship_type,
+    reporting_channel: row.reporting_channel,
+    reporting_seller_name: row.reporting_seller_name,
+    is_internal_account: Boolean(row.is_internal_account),
+    is_commissionable: row.is_commissionable !== false,
+    exclude_from_external_reports: Boolean(row.exclude_from_external_reports),
+  }
+}
+
+function receivableStatusRank(status: string) {
+  switch (status) {
+    case 'VENCIDA': return 0
+    case 'PAGO_PARCIAL': return 1
+    case 'PENDIENTE': return 2
+    case 'SIN_VENCIMIENTO': return 3
+    case 'PAGADA': return 4
+    default: return 5
+  }
+}
+
+function emptyAgingBuckets(): CommercialReceivablesAgingBucket[] {
+  return [
+    { label: 'Por vencer', amount: 0, invoices: 0 },
+    { label: 'Vencido 1-30', amount: 0, invoices: 0 },
+    { label: 'Vencido 31-60', amount: 0, invoices: 0 },
+    { label: 'Vencido 61-90', amount: 0, invoices: 0 },
+    { label: 'Vencido +90', amount: 0, invoices: 0 },
+  ]
+}
+
+function agingBucketIndex(daysOverdue: number) {
+  if (daysOverdue <= 0) return 0
+  if (daysOverdue <= 30) return 1
+  if (daysOverdue <= 60) return 2
+  if (daysOverdue <= 90) return 3
+  return 4
 }
 
 function sellerMapFromRows(rows: DocumentSellerRow[]) {
@@ -886,6 +1100,181 @@ export async function getCommercialCustomerBehavior(params: {
       worstMonth,
       trendLabel: buildTrendLabel(monthlyEvolution),
     },
+  }
+}
+
+export async function getCommercialCustomerReceivables(params: {
+  bsaleClientId: number
+  monthsBack?: number
+  limit?: number
+}): Promise<CommercialCustomerReceivables | { error: string }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { error: 'No autorizado' }
+
+  const bsaleClientId = Number(params.bsaleClientId)
+  if (!Number.isFinite(bsaleClientId)) return { error: 'Cliente inválido' }
+
+  const monthsBack = Math.min(Math.max(Number(params.monthsBack || 12), 3), 24)
+  const limit = Math.min(Math.max(Number(params.limit || 200), 50), 300)
+
+  try {
+    const customer = await validateCommercialClient(companyId, bsaleClientId)
+    if (!customer) return { error: 'Cliente no pertenece a la empresa activa' }
+
+    const now = new Date()
+    const firstMonth = addMonths(startOfMonth(now), -(monthsBack - 1))
+    const fromDate = monthKey(firstMonth) + '-01'
+
+    const [summaryResult, monthlyResult, invoiceResult] = await Promise.all([
+      comAdmin()
+        .from('vw_customer_receivables')
+        .select('company_id,bsale_client_id,customer_id,client_name,total_invoiced,total_paid,total_pending,overdue_amount,pending_invoices_count,overdue_invoices_count,paid_invoices_count,partial_payment_invoices_count,last_invoice_date,last_payment_date,avg_days_to_pay,max_days_overdue,risk_status,payment_behavior_label,customer_classification,commercial_group_id,commercial_group_name,commercial_group_code,commercial_relationship_type,account_type,relationship_type,reporting_channel,reporting_seller_name,is_internal_account,is_commissionable,exclude_from_external_reports')
+        .eq('company_id', companyId)
+        .eq('bsale_client_id', bsaleClientId)
+        .maybeSingle(),
+      comAdmin()
+        .from('vw_customer_payment_monthly_behavior')
+        .select('month,invoiced_amount,paid_amount,net_cash_gap')
+        .eq('company_id', companyId)
+        .eq('bsale_client_id', bsaleClientId)
+        .gte('month', fromDate)
+        .order('month', { ascending: true }),
+      comAdmin()
+        .from('vw_customer_invoice_receivables')
+        .select('bsale_document_id,document_number,emission_date,expiration_date,total_amount,paid_amount,pending_amount,days_overdue,receivable_status,last_payment_date,payments_count')
+        .eq('company_id', companyId)
+        .eq('bsale_client_id', bsaleClientId)
+        .limit(Math.max(limit * 2, 200)),
+    ])
+
+    if (summaryResult.error) throw summaryResult.error
+    if (monthlyResult.error) throw monthlyResult.error
+    if (invoiceResult.error) throw invoiceResult.error
+
+    const summary = summaryResult.data ? mapReceivablesSummary(summaryResult.data as CustomerReceivablesSummaryRow) : null
+    const monthlyBehavior = ((monthlyResult.data || []) as CustomerReceivablesMonthlyRow[]).map(row => ({
+      month: row.month,
+      monthLabel: receivableMonthLabel(row.month),
+      invoiced_amount: asNumber(row.invoiced_amount),
+      paid_amount: asNumber(row.paid_amount),
+      net_cash_gap: asNumber(row.net_cash_gap),
+    }))
+    const invoices = ((invoiceResult.data || []) as CustomerReceivablesInvoiceRow[])
+      .map(row => ({
+        bsale_document_id: Number(row.bsale_document_id),
+        document_number: row.document_number == null ? null : Number(row.document_number),
+        emission_date: row.emission_date,
+        expiration_date: row.expiration_date,
+        total_amount: asNumber(row.total_amount),
+        paid_amount: asNumber(row.paid_amount),
+        pending_amount: asNumber(row.pending_amount),
+        days_overdue: asNumber(row.days_overdue),
+        receivable_status: row.receivable_status || 'SIN_VENCIMIENTO',
+        last_payment_date: row.last_payment_date,
+        payments_count: asNumber(row.payments_count),
+      }))
+      .sort((a, b) => receivableStatusRank(a.receivable_status) - receivableStatusRank(b.receivable_status)
+        || b.days_overdue - a.days_overdue
+        || String(b.emission_date || '').localeCompare(String(a.emission_date || ''))
+        || b.bsale_document_id - a.bsale_document_id)
+      .slice(0, limit)
+
+    return { summary, monthlyBehavior, invoices }
+  } catch (error) {
+    console.error('getCommercialCustomerReceivables error:', error)
+    return { error: 'No se pudo cargar la cobranza del cliente' }
+  }
+}
+
+export async function getCommercialReceivablesDashboard(): Promise<CommercialReceivablesDashboard | { error: string }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { error: 'No autorizado' }
+
+  try {
+    const [receivablesResult, monthlyResult, agingResult, contextResult] = await Promise.all([
+      comAdmin()
+        .from('vw_customer_receivables')
+        .select('company_id,bsale_client_id,customer_id,client_name,total_invoiced,total_paid,total_pending,overdue_amount,pending_invoices_count,overdue_invoices_count,paid_invoices_count,partial_payment_invoices_count,last_invoice_date,last_payment_date,avg_days_to_pay,max_days_overdue,risk_status,payment_behavior_label,customer_classification,commercial_group_id,commercial_group_name,commercial_group_code,commercial_relationship_type,account_type,relationship_type,reporting_channel,reporting_seller_name,is_internal_account,is_commissionable,exclude_from_external_reports')
+        .eq('company_id', companyId),
+      comAdmin()
+        .from('vw_customer_payment_monthly_behavior')
+        .select('month,invoiced_amount,paid_amount,net_cash_gap,exclude_from_external_reports,is_internal_account')
+        .eq('company_id', companyId)
+        .order('month', { ascending: true }),
+      comAdmin()
+        .from('vw_customer_invoice_receivables')
+        .select('pending_amount,days_overdue,is_internal_account,exclude_from_external_reports')
+        .eq('company_id', companyId)
+        .gt('pending_amount', 0),
+      comAdmin()
+        .from('vw_client_360')
+        .select('bsale_client_id,city,commune,main_seller_name')
+        .eq('company_id', companyId),
+    ])
+
+    if (receivablesResult.error) throw receivablesResult.error
+    if (monthlyResult.error) throw monthlyResult.error
+    if (agingResult.error) throw agingResult.error
+    if (contextResult.error) throw contextResult.error
+
+    const context = new Map<number, ReceivablesCustomerContextRow>()
+    for (const row of (contextResult.data || []) as ReceivablesCustomerContextRow[]) context.set(Number(row.bsale_client_id), row)
+
+    const rows = ((receivablesResult.data || []) as CustomerReceivablesSummaryRow[]).map(row => {
+      const summary = mapReceivablesSummary(row)
+      const extra = context.get(summary.bsale_client_id)
+      return {
+        ...summary,
+        city: extra?.city || null,
+        commune: extra?.commune || null,
+        seller_name: summary.reporting_seller_name || extra?.main_seller_name || null,
+      }
+    })
+
+    const createMonthlyMap = () => new Map<string, CommercialCustomerReceivablesMonthly>()
+    const monthlyAll = createMonthlyMap()
+    const monthlyExternal = createMonthlyMap()
+    const monthlyInternal = createMonthlyMap()
+    const addMonthly = (map: Map<string, CommercialCustomerReceivablesMonthly>, row: CustomerReceivablesMonthlyRow) => {
+      const current = map.get(row.month) || { month: row.month, monthLabel: receivableMonthLabel(row.month), invoiced_amount: 0, paid_amount: 0, net_cash_gap: 0 }
+      current.invoiced_amount += asNumber(row.invoiced_amount)
+      current.paid_amount += asNumber(row.paid_amount)
+      current.net_cash_gap += asNumber(row.net_cash_gap)
+      map.set(row.month, current)
+    }
+
+    for (const row of (monthlyResult.data || []) as Array<CustomerReceivablesMonthlyRow & { exclude_from_external_reports: boolean | null; is_internal_account: boolean | null }>) {
+      addMonthly(monthlyAll, row)
+      if (row.exclude_from_external_reports === true || row.is_internal_account === true) addMonthly(monthlyInternal, row)
+      else addMonthly(monthlyExternal, row)
+    }
+
+    const agingAll = emptyAgingBuckets()
+    const agingExternal = emptyAgingBuckets()
+    const agingInternal = emptyAgingBuckets()
+    const addAging = (buckets: CommercialReceivablesAgingBucket[], row: DashboardAgingInvoiceRow) => {
+      const amount = asNumber(row.pending_amount)
+      if (amount <= 0) return
+      const bucket = buckets[agingBucketIndex(asNumber(row.days_overdue))]
+      bucket.amount += amount
+      bucket.invoices++
+    }
+
+    for (const row of (agingResult.data || []) as DashboardAgingInvoiceRow[]) {
+      addAging(agingAll, row)
+      if (row.exclude_from_external_reports === true || row.is_internal_account === true) addAging(agingInternal, row)
+      else addAging(agingExternal, row)
+    }
+
+    const sorted = (map: Map<string, CommercialCustomerReceivablesMonthly>) => Array.from(map.values()).sort((a, b) => a.month.localeCompare(b.month))
+    return {
+      rows,
+      monthly: { all: sorted(monthlyAll), external: sorted(monthlyExternal), internal: sorted(monthlyInternal) },
+      aging: { all: agingAll, external: agingExternal, internal: agingInternal },
+    }
+  } catch (error) {
+    console.error('getCommercialReceivablesDashboard error:', error)
+    return { error: 'No se pudo cargar la cobranza de clientes' }
   }
 }
 

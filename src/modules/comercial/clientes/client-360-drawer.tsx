@@ -2,12 +2,13 @@
 
 import { useEffect, useState, useTransition } from 'react'
 import { AlertTriangle, CalendarDays, Mail, MapPin, Phone, TrendingUp, UserRoundCheck, X } from 'lucide-react'
-import { getCommercialCustomerBehavior, getCommercialCustomerMetricDocuments, getCommercialCustomerPurchaseMix, getCommercialDocumentDetail, type CommercialCustomerBehavior, type CommercialCustomerBehaviorDocument, type CommercialCustomerMetricDocuments, type CommercialCustomerMetricKey, type CommercialCustomerPurchaseMix, type CommercialCustomerPurchaseMixProduct, type CommercialDocumentDetail } from '@/app/actions/comercial/customers'
+import { getCommercialCustomerBehavior, getCommercialCustomerMetricDocuments, getCommercialCustomerPurchaseMix, getCommercialCustomerReceivables, getCommercialDocumentDetail, type CommercialCustomerBehavior, type CommercialCustomerBehaviorDocument, type CommercialCustomerMetricDocuments, type CommercialCustomerMetricKey, type CommercialCustomerPurchaseMix, type CommercialCustomerPurchaseMixProduct, type CommercialCustomerReceivables, type CommercialCustomerReceivablesInvoice, type CommercialDocumentDetail } from '@/app/actions/comercial/customers'
 import type { CommercialCustomerExplorer } from '@/app/actions/comercial/customers'
 import { cn } from '@/lib/utils'
 
-type Client360Tab = 'summary' | 'purchases' | 'documents' | 'products'
+export type Client360Tab = 'summary' | 'purchases' | 'documents' | 'products' | 'receivables'
 type DocumentFilter = 'all' | 'invoice' | 'sales_order' | 'credit_note'
+type ReceivableFilter = 'all' | 'pending' | 'overdue' | 'paid'
 type MetricOpenHandler = (metricKey: CommercialCustomerMetricKey) => void
 type DocumentOpenHandler = (bsaleDocumentId: number) => void
 
@@ -22,6 +23,12 @@ function fmtCompactMoney(value: number | null | undefined) {
   if (n === 0) return '$0'
   if (Math.abs(n) >= 1000000) return '$' + (n / 1000000).toLocaleString('es-CL', { maximumFractionDigits: 1 }) + 'MM'
   if (Math.abs(n) >= 1000) return '$' + Math.round(n / 1000).toLocaleString('es-CL') + 'K'
+  return fmtMoney(n)
+}
+
+function fmtSignedMoney(value: number | null | undefined) {
+  const n = Number(value || 0)
+  if (n < 0) return '-$' + Math.abs(n).toLocaleString('es-CL', { maximumFractionDigits: 0 })
   return fmtMoney(n)
 }
 
@@ -59,6 +66,39 @@ function documentTone(type: CommercialCustomerBehaviorDocument['type']) {
     case 'sales_order': return 'border-violet-500/20 bg-violet-500/10 text-violet-400'
     case 'credit_note': return 'border-red-500/20 bg-red-500/10 text-red-400'
   }
+}
+
+function receivableStatusTone(status: string | null) {
+  switch (status) {
+    case 'PAGADA': return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+    case 'PAGO_PARCIAL': return 'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+    case 'PENDIENTE': return 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+    case 'VENCIDA': return 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300'
+    default: return 'border-theme-border bg-theme-text/5 text-theme-text-muted'
+  }
+}
+
+function riskTone(status: string | null) {
+  switch (status) {
+    case 'SIN_DEUDA': return 'text-emerald-500'
+    case 'BAJO': return 'text-sky-500'
+    case 'MEDIO': return 'text-amber-500'
+    case 'ALTO': return 'text-orange-500'
+    case 'CRITICO': return 'text-red-500'
+    default: return 'text-theme-text'
+  }
+}
+
+function behaviorText(receivables: CommercialCustomerReceivables) {
+  const summary = receivables.summary
+  if (!summary) return 'Sin datos suficientes de cobranza para este cliente.'
+  if (summary.total_pending <= 0) return 'Cliente sin deuda vigente.'
+  if (summary.risk_status === 'CRITICO' || summary.payment_behavior_label === 'DEUDA_CRITICA') return 'Cliente con deuda vencida crítica. Revisar antes de nuevas condiciones comerciales.'
+  if (summary.payment_behavior_label === 'ATRASO_RECURRENTE') return 'Cliente con atraso recurrente en facturas pendientes.'
+  if (summary.payment_behavior_label === 'ATRASO_LEVE') return 'Cliente con atraso leve; monitorear próximos pagos.'
+  if (summary.total_paid > 0 && summary.total_pending > 0) return 'Cliente con pagos recientes, pero mantiene saldo pendiente.'
+  if (summary.payment_behavior_label === 'SIN_DATOS_PAGO') return 'Sin datos suficientes de pago para concluir comportamiento.'
+  return 'Pago regular según la cobranza registrada.'
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -656,13 +696,221 @@ function PurchaseMixTab({ mix, loading, error }: { mix: CommercialCustomerPurcha
     </div>
   )
 }
-function Client360DrawerContent({ customer, onClose }: { customer: CommercialCustomerExplorer; onClose: () => void }) {
-  const [activeTab, setActiveTab] = useState<Client360Tab>('summary')
+
+function ReceivablesChart({ receivables }: { receivables: CommercialCustomerReceivables }) {
+  const months = receivables.monthlyBehavior
+  const [hoveredMonth, setHoveredMonth] = useState<string | null>(null)
+  const [pinnedMonth, setPinnedMonth] = useState<string | null>(null)
+  const maxValue = Math.max(...months.flatMap(month => [month.invoiced_amount, month.paid_amount]), 0)
+  const activeMonth = months.find(month => month.month === (pinnedMonth || hoveredMonth)) || months[months.length - 1]
+  const activeIndex = activeMonth ? months.findIndex(month => month.month === activeMonth.month) : -1
+  const activeX = activeIndex >= 0 ? (months.length === 1 ? 50 : (activeIndex / (months.length - 1)) * 100) : 50
+
+  if (months.length === 0) return <EmptyState>Sin comportamiento mensual de cobranza para mostrar.</EmptyState>
+
+  const buildPoints = (key: 'invoiced_amount' | 'paid_amount') => months.map((month, index) => {
+    const x = months.length === 1 ? 50 : (index / (months.length - 1)) * 100
+    const y = maxValue > 0 ? 38 - (month[key] / maxValue) * 32 : 38
+    return `${x.toFixed(2)},${y.toFixed(2)}`
+  }).join(' ')
+
+  return (
+    <Section title="Facturado vs Pagado">
+      <div className="rounded-xl border border-theme-border/70 bg-gradient-to-br from-theme-bg/50 to-theme-surface p-3 shadow-sm">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-[10px] text-theme-text-muted/55">
+          <span>Facturado por fecha de emisión; pagado por fecha real de pago.</span>
+          <div className="flex items-center gap-3">
+            <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-sky-500" />Facturado</span>
+            <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" />Pagado</span>
+          </div>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-[1fr_190px]">
+        <div className="relative">
+        <svg viewBox="0 0 100 42" className="h-44 w-full overflow-visible" onMouseLeave={() => setHoveredMonth(null)}>
+          {[6, 14, 22, 30, 38].map(y => <line key={y} x1="0" y1={y} x2="100" y2={y} className="stroke-theme-border/60" strokeWidth="0.22" />)}
+          <line x1="0" y1="38" x2="100" y2="38" className="stroke-theme-border" strokeWidth="0.5" />
+          <polyline points={buildPoints('invoiced_amount')} fill="none" stroke="rgb(2 132 199)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+          <polyline points={buildPoints('paid_amount')} fill="none" stroke="rgb(5 150 105)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+          {months.map((month, index) => {
+            const x = months.length === 1 ? 50 : (index / (months.length - 1)) * 100
+            const invoiceY = maxValue > 0 ? 38 - (month.invoiced_amount / maxValue) * 32 : 38
+            const paidY = maxValue > 0 ? 38 - (month.paid_amount / maxValue) * 32 : 38
+            const active = activeMonth?.month === month.month
+            return (
+              <g key={month.month} onMouseEnter={() => setHoveredMonth(month.month)} onClick={() => setPinnedMonth(pinnedMonth === month.month ? null : month.month)} className="cursor-pointer">
+                {active && <line x1={x} y1="5" x2={x} y2="38" stroke="currentColor" className="text-theme-text-muted/30" strokeWidth="0.35" strokeDasharray="1 1" />}
+                <circle cx={x} cy={invoiceY} r={active ? '1.9' : '1.35'} fill="rgb(2 132 199)" stroke="var(--theme-surface)" strokeWidth="0.45" />
+                <circle cx={x} cy={paidY} r={active ? '1.9' : '1.35'} fill="rgb(5 150 105)" stroke="var(--theme-surface)" strokeWidth="0.45" />
+              </g>
+            )
+          })}
+        </svg>
+        {hoveredMonth && activeMonth && (
+          <div
+            className="pointer-events-none absolute top-3 z-10 min-w-[180px] rounded-xl border border-theme-border bg-theme-surface px-3 py-2 text-xs text-theme-text shadow-xl"
+            style={{ left: `${activeX}%`, transform: activeX > 72 ? 'translateX(-100%)' : activeX < 18 ? 'translateX(0)' : 'translateX(-50%)' }}
+          >
+            <div className="font-black capitalize">{activeMonth.monthLabel}</div>
+            <div className="mt-1.5 space-y-1">
+              <div className="flex justify-between gap-3"><span className="text-theme-text-muted">Facturado</span><b className="text-sky-600 dark:text-sky-300">{fmtMoney(activeMonth.invoiced_amount)}</b></div>
+              <div className="flex justify-between gap-3"><span className="text-theme-text-muted">Pagado</span><b className="text-emerald-600 dark:text-emerald-300">{fmtMoney(activeMonth.paid_amount)}</b></div>
+              <div className="flex justify-between gap-3 border-t border-theme-border/60 pt-1"><span className="text-theme-text-muted">Diferencia</span><b>{fmtSignedMoney(activeMonth.net_cash_gap)}</b></div>
+            </div>
+          </div>
+        )}
+        </div>
+        {activeMonth && (
+          <div className="rounded-xl border border-theme-border/70 bg-theme-bg/45 p-3 text-xs shadow-sm">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-theme-text-muted">{pinnedMonth ? 'Mes fijado' : 'Mes destacado'}</div>
+            <div className="mt-1 text-sm font-black capitalize text-theme-text">{activeMonth.monthLabel}</div>
+            <div className="mt-2 space-y-1.5">
+              <div className="flex justify-between gap-3"><span className="text-theme-text-muted">Facturado</span><b className="text-sky-600 dark:text-sky-300">{fmtMoney(activeMonth.invoiced_amount)}</b></div>
+              <div className="flex justify-between gap-3"><span className="text-theme-text-muted">Pagado</span><b className="text-emerald-600 dark:text-emerald-300">{fmtMoney(activeMonth.paid_amount)}</b></div>
+              <div className="flex justify-between gap-3 border-t border-theme-border/60 pt-1.5"><span className="text-theme-text-muted">Diferencia</span><b className={activeMonth.net_cash_gap > 0 ? 'text-amber-600 dark:text-amber-300' : 'text-emerald-600 dark:text-emerald-300'}>{fmtSignedMoney(activeMonth.net_cash_gap)}</b></div>
+            </div>
+            <div className="mt-2 text-[10px] text-theme-text-muted/50">Click en un punto para fijar/liberar.</div>
+          </div>
+        )}
+        </div>
+        <div className="mt-2 grid grid-cols-6 gap-1 text-center text-[9px] text-theme-text-muted/65 sm:grid-cols-12">
+          {months.map(month => (
+            <div key={month.month} className="min-w-0">
+              <div className="truncate capitalize">{month.monthLabel.split(' ')[0]}</div>
+              <div className="truncate font-semibold text-sky-500">{fmtCompactMoney(month.invoiced_amount)}</div>
+              <div className="truncate text-emerald-500">{fmtCompactMoney(month.paid_amount)}</div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-2 rounded-lg border border-theme-border-accent bg-theme-accent-muted px-2.5 py-1.5 text-[10px] text-theme-text">Pagos disponibles desde backfill/sync actual. El histórico puede estar incompleto.</div>
+      </div>
+    </Section>
+  )
+}
+
+function ReceivableInvoicesTable({ invoices }: { invoices: CommercialCustomerReceivablesInvoice[] }) {
+  const [filter, setFilter] = useState<ReceivableFilter>('all')
+  const filters: { key: ReceivableFilter; label: string }[] = [
+    { key: 'all', label: 'Todas' },
+    { key: 'pending', label: 'Pendientes' },
+    { key: 'overdue', label: 'Vencidas' },
+    { key: 'paid', label: 'Pagadas' },
+  ]
+  const filtered = invoices.filter(invoice => {
+    if (filter === 'all') return true
+    if (filter === 'pending') return invoice.pending_amount > 0
+    if (filter === 'overdue') return invoice.receivable_status === 'VENCIDA'
+    return invoice.receivable_status === 'PAGADA'
+  })
+
+  return (
+    <Section title="Detalle facturas">
+      <div className="mb-2 flex flex-wrap gap-1.5">
+        {filters.map(item => (
+          <button key={item.key} onClick={() => setFilter(item.key)} className={cn("rounded-md border px-2 py-0.5 text-[10px] font-semibold transition-colors", filter === item.key ? "border-theme-text/20 bg-theme-text/10 text-theme-text" : "border-theme-border bg-theme-bg/20 text-theme-text-muted hover:text-theme-text")}>{item.label}</button>
+        ))}
+      </div>
+      {filtered.length === 0 ? <EmptyState>No hay facturas para este filtro.</EmptyState> : (
+        <div className="overflow-x-auto rounded-xl border border-theme-border/70 bg-theme-bg/20">
+          <table className="w-full min-w-[840px] text-xs">
+            <thead className="bg-theme-text/[0.025] text-[10px] uppercase tracking-wide text-theme-text-muted/60">
+              <tr>
+                <th className="px-2.5 py-1.5 text-left font-bold">Factura</th>
+                <th className="px-2.5 py-1.5 text-left font-bold">Emisión</th>
+                <th className="px-2.5 py-1.5 text-left font-bold">Vencimiento</th>
+                <th className="px-2.5 py-1.5 text-right font-bold">Total</th>
+                <th className="px-2.5 py-1.5 text-right font-bold">Pagado</th>
+                <th className="px-2.5 py-1.5 text-right font-bold">Pendiente</th>
+                <th className="px-2.5 py-1.5 text-right font-bold">Días vencido</th>
+                <th className="px-2.5 py-1.5 text-left font-bold">Estado</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-theme-border/60">
+              {filtered.map(invoice => (
+                <tr key={invoice.bsale_document_id} className="text-theme-text">
+                  <td className="px-2.5 py-1.5 font-mono">{invoice.document_number || invoice.bsale_document_id}</td>
+                  <td className="px-2.5 py-1.5 text-theme-text-muted whitespace-nowrap">{fmtDate(invoice.emission_date)}</td>
+                  <td className="px-2.5 py-1.5 text-theme-text-muted whitespace-nowrap">{fmtDate(invoice.expiration_date)}</td>
+                  <td className="px-2.5 py-1.5 text-right font-semibold">{fmtMoney(invoice.total_amount)}</td>
+                  <td className="px-2.5 py-1.5 text-right text-emerald-700 dark:text-emerald-300">{fmtMoney(invoice.paid_amount)}</td>
+                  <td className={cn("px-2.5 py-1.5 text-right font-semibold", invoice.pending_amount > 0 ? 'text-amber-700 dark:text-amber-300' : 'text-emerald-700 dark:text-emerald-300')}>{fmtMoney(invoice.pending_amount)}</td>
+                  <td className="px-2.5 py-1.5 text-right text-theme-text-muted">{invoice.days_overdue > 0 ? invoice.days_overdue : '—'}</td>
+                  <td className="px-2.5 py-1.5"><span className={cn("rounded-md border px-1.5 py-0.5 text-[10px] font-bold", receivableStatusTone(invoice.receivable_status))}>{statusLabel(invoice.receivable_status)}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Section>
+  )
+}
+
+function ReceivablesTab({ receivables, loading, error }: { receivables: CommercialCustomerReceivables | null; loading: boolean; error: string | null }) {
+  if (loading) return <LoadingState />
+  if (error) return <EmptyState>{error}</EmptyState>
+  if (!receivables) return <EmptyState>Selecciona esta pestaña para cargar pagos y cobranza.</EmptyState>
+  if (!receivables.summary) return <EmptyState>Sin datos de cobranza para este cliente.</EmptyState>
+
+  const summary = receivables.summary
+  const internal = summary.is_internal_account || summary.exclude_from_external_reports
+  const avgDays = summary.avg_days_to_pay == null ? 'Sin dato' : `${Math.round(summary.avg_days_to_pay)} días`
+  const hasRecentPayments = receivables.monthlyBehavior.some(month => month.paid_amount > 0)
+
+  return (
+    <div className="space-y-4">
+      {internal && (
+        <div className="rounded-xl border border-theme-border-accent bg-theme-accent-muted px-3 py-2.5 text-xs text-theme-text shadow-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="font-black uppercase tracking-wide">Cuenta interna / Tienda propia</div>
+            {!summary.is_commissionable && <span className="rounded-md border border-theme-border bg-theme-surface px-1.5 py-0.5 text-[10px] font-bold text-theme-text">No comisionable</span>}
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+            <span className="text-theme-text-muted">Canal: <b className="text-theme-text">{summary.reporting_channel || 'Sin canal'}</b></span>
+            <span className="text-theme-text-muted">Reporte: <b className="text-theme-text">{summary.reporting_seller_name || 'Sin responsable'}</b></span>
+          </div>
+        </div>
+      )}
+
+      <Section title="KPIs cobranza">
+        <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
+          <Metric label="Facturado" value={fmtMoney(summary.total_invoiced)} tone="text-sky-600 dark:text-sky-300" />
+          <Metric label="Pagado" value={fmtMoney(summary.total_paid)} tone="text-emerald-700 dark:text-emerald-300" />
+          <Metric label="Pendiente" value={fmtMoney(summary.total_pending)} tone={summary.total_pending > 0 ? 'text-amber-700 dark:text-amber-300' : 'text-emerald-700 dark:text-emerald-300'} featured={summary.total_pending > 0} />
+          <Metric label="Vencido" value={fmtMoney(summary.overdue_amount)} tone={summary.overdue_amount > 0 ? 'text-red-700 dark:text-red-300' : 'text-emerald-700 dark:text-emerald-300'} />
+          <Metric label="Facturas pendientes" value={String(summary.pending_invoices_count)} />
+          <Metric label="Facturas vencidas" value={String(summary.overdue_invoices_count)} tone={summary.overdue_invoices_count > 0 ? 'text-red-700 dark:text-red-300' : 'text-theme-text'} />
+          <Metric label="Promedio días pago" value={avgDays} />
+          <Metric label="Último pago" value={fmtDateTime(summary.last_payment_date)} />
+        </div>
+      </Section>
+
+      <Section title="Análisis automático">
+        <div className="rounded-xl border border-theme-border/70 bg-theme-bg/25 p-3 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={cn("rounded-md border px-2 py-0.5 text-[10px] font-black", receivableStatusTone(summary.total_pending <= 0 ? 'PAGADA' : summary.overdue_amount > 0 ? 'VENCIDA' : 'PENDIENTE'))}>{statusLabel(summary.payment_behavior_label)}</span>
+            <span className={cn("font-black", riskTone(summary.risk_status))}>Riesgo {statusLabel(summary.risk_status)}</span>
+          </div>
+          <div className="mt-2 text-theme-text-muted">{behaviorText(receivables)}</div>
+          {!hasRecentPayments && <div className="mt-2 text-[10px] text-amber-600 dark:text-amber-300">Histórico de pagos incompleto: considerar backfill antes de conclusiones definitivas.</div>}
+        </div>
+      </Section>
+
+      <ReceivablesChart receivables={receivables} />
+      <ReceivableInvoicesTable invoices={receivables.invoices} />
+    </div>
+  )
+}
+
+function Client360DrawerContent({ customer, onClose, initialTab = 'summary' }: { customer: CommercialCustomerExplorer; onClose: () => void; initialTab?: Client360Tab }) {
+  const [activeTab, setActiveTab] = useState<Client360Tab>(initialTab)
   const [behavior, setBehavior] = useState<CommercialCustomerBehavior | null>(null)
   const [behaviorError, setBehaviorError] = useState<string | null>(null)
   const [purchaseMix, setPurchaseMix] = useState<CommercialCustomerPurchaseMix | null>(null)
   const [purchaseMixError, setPurchaseMixError] = useState<string | null>(null)
   const [purchaseMixLoading, setPurchaseMixLoading] = useState(false)
+  const [receivables, setReceivables] = useState<CommercialCustomerReceivables | null>(null)
+  const [receivablesError, setReceivablesError] = useState<string | null>(null)
+  const [receivablesLoading, setReceivablesLoading] = useState(false)
   const [metricDocuments, setMetricDocuments] = useState<CommercialCustomerMetricDocuments | null>(null)
   const [metricError, setMetricError] = useState<string | null>(null)
   const [metricLoading, setMetricLoading] = useState(false)
@@ -674,13 +922,27 @@ function Client360DrawerContent({ customer, onClose }: { customer: CommercialCus
   const [isPending, startTransition] = useTransition()
 
   useEffect(() => {
-    if (behavior || behaviorError || activeTab === 'summary' || activeTab === 'products') return
+    if (behavior || behaviorError || activeTab === 'summary' || activeTab === 'products' || activeTab === 'receivables') return
     startTransition(async () => {
       const result = await getCommercialCustomerBehavior({ bsaleClientId: customer.bsale_client_id, monthsBack: 12, limit: 20 })
       if ('error' in result) setBehaviorError(result.error)
       else setBehavior(result)
     })
   }, [activeTab, behavior, behaviorError, customer])
+
+  useEffect(() => {
+    if (activeTab !== 'receivables' || receivables || receivablesError || receivablesLoading) return
+    const handle = setTimeout(() => {
+      setReceivablesLoading(true)
+      startTransition(async () => {
+        const result = await getCommercialCustomerReceivables({ bsaleClientId: customer.bsale_client_id, monthsBack: 12, limit: 200 })
+        if ('error' in result) setReceivablesError(result.error)
+        else setReceivables(result)
+        setReceivablesLoading(false)
+      })
+    }, 0)
+    return () => clearTimeout(handle)
+  }, [activeTab, customer.bsale_client_id, receivables, receivablesError, receivablesLoading])
 
   async function openMetricDocuments(metricKey: CommercialCustomerMetricKey) {
     setShowMetricModal(true)
@@ -706,14 +968,24 @@ function Client360DrawerContent({ customer, onClose }: { customer: CommercialCus
 
   function selectTab(tab: Client360Tab) {
     setActiveTab(tab)
-    if (tab !== 'products' || purchaseMix || purchaseMixError || purchaseMixLoading) return
-    setPurchaseMixLoading(true)
-    startTransition(async () => {
-      const result = await getCommercialCustomerPurchaseMix({ bsaleClientId: customer.bsale_client_id, monthsBack: 12, topLimit: 15 })
-      if ('error' in result) setPurchaseMixError(result.error)
-      else setPurchaseMix(result)
-      setPurchaseMixLoading(false)
-    })
+    if (tab === 'products' && !purchaseMix && !purchaseMixError && !purchaseMixLoading) {
+      setPurchaseMixLoading(true)
+      startTransition(async () => {
+        const result = await getCommercialCustomerPurchaseMix({ bsaleClientId: customer.bsale_client_id, monthsBack: 12, topLimit: 15 })
+        if ('error' in result) setPurchaseMixError(result.error)
+        else setPurchaseMix(result)
+        setPurchaseMixLoading(false)
+      })
+    }
+    if (tab === 'receivables' && !receivables && !receivablesError && !receivablesLoading) {
+      setReceivablesLoading(true)
+      startTransition(async () => {
+        const result = await getCommercialCustomerReceivables({ bsaleClientId: customer.bsale_client_id, monthsBack: 12, limit: 200 })
+        if ('error' in result) setReceivablesError(result.error)
+        else setReceivables(result)
+        setReceivablesLoading(false)
+      })
+    }
   }
 
   const lowQuality = customer.quality_score < 60
@@ -735,6 +1007,7 @@ function Client360DrawerContent({ customer, onClose }: { customer: CommercialCus
     { key: 'purchases', label: 'Compras' },
     { key: 'documents', label: 'Documentos' },
     { key: 'products', label: 'Mix de compra' },
+    { key: 'receivables', label: 'Pagos / Cobranza' },
   ]
 
   return (
@@ -782,6 +1055,7 @@ function Client360DrawerContent({ customer, onClose }: { customer: CommercialCus
           {activeTab === 'purchases' && <PurchasesTab behavior={behavior} loading={isPending} error={behaviorError} />}
           {activeTab === 'documents' && (isPending ? <LoadingState /> : behaviorError ? <EmptyState>{behaviorError}</EmptyState> : behavior ? <DocumentsTable documents={behavior.recentDocuments} onOpenDocument={openDocumentDetail} /> : <EmptyState>Selecciona esta pestaña para cargar documentos.</EmptyState>)}
           {activeTab === 'products' && <PurchaseMixTab mix={purchaseMix} loading={purchaseMixLoading} error={purchaseMixError} />}
+          {activeTab === 'receivables' && <ReceivablesTab receivables={receivables} loading={receivablesLoading} error={receivablesError} />}
         </div>
 
         {showMetricModal && <MetricDocumentsModal data={metricDocuments} loading={metricLoading} error={metricError} onClose={() => setShowMetricModal(false)} onOpenDocument={openDocumentDetail} />}
@@ -791,7 +1065,7 @@ function Client360DrawerContent({ customer, onClose }: { customer: CommercialCus
   )
 }
 
-export function Client360Drawer({ customer, onClose }: { customer: CommercialCustomerExplorer | null; onClose: () => void }) {
+export function Client360Drawer({ customer, onClose, initialTab = 'summary' }: { customer: CommercialCustomerExplorer | null; onClose: () => void; initialTab?: Client360Tab }) {
   if (!customer) return null
-  return <Client360DrawerContent key={customer.bsale_client_id} customer={customer} onClose={onClose} />
+  return <Client360DrawerContent key={`${customer.bsale_client_id}-${initialTab}`} customer={customer} onClose={onClose} initialTab={initialTab} />
 }
