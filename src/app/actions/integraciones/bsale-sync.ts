@@ -37,6 +37,51 @@ interface SyncRun {
   started_at?: string
 }
 
+type BsaleDocumentForSellerSync = {
+  id: number
+  number?: number | null
+  documentTypeId?: number | null
+  document_type?: { id?: number | string | null } | null
+}
+
+type BsaleDocumentSeller = {
+  id?: number | string | null
+  name?: string | null
+  firstName?: string | null
+  lastName?: string | null
+  email?: string | null
+  office?: { id?: number | string | null } | null
+  percent?: number | null
+  percentage?: number | null
+  amount?: number | null
+  commissionAmount?: number | null
+}
+
+type BsaleDocumentSellersResponse = {
+  items?: BsaleDocumentSeller[]
+}
+
+type BsaleDocumentSellerRecord = {
+  company_id: string
+  bsale_document_id: number
+  document_type_id: number | null
+  document_number: number | null
+  seller_bsale_id: number
+  seller_name: string | null
+  seller_first_name: string | null
+  seller_last_name: string | null
+  seller_email: string | null
+  seller_office: string | null
+  seller_percent: number | null
+  seller_amount: number | null
+  is_primary: boolean
+  source: string
+  raw_payload: { document_sellers: BsaleDocumentSellersResponse | null; seller: BsaleDocumentSeller }
+  payload_hash: string
+  last_sync_at: string
+  updated_at: string
+}
+
 async function createSyncRun(companyId: string, trigger: string = 'MANUAL'): Promise<SyncRun> {
   const db = integrDb()
   const { data, error } = await db
@@ -281,6 +326,95 @@ async function syncSellers(companyId: string, runId: string): Promise<number> {
   })
 
   return count
+}
+
+function resolveDocumentTypeId(doc: BsaleDocumentForSellerSync) {
+  return doc.documentTypeId ?? (doc.document_type?.id != null ? Number(doc.document_type.id) : null)
+}
+
+function normalizeDocumentSellerName(seller: BsaleDocumentSeller) {
+  return [seller?.firstName, seller?.lastName].filter(Boolean).join(' ').trim() || seller?.name || null
+}
+
+async function fetchDocumentSellers(docId: number) {
+  const response = await fetch(`${BSALE_API_BASE}/documents/${docId}/sellers.json`, {
+    method: 'GET',
+    headers: getBsaleHeaders(),
+    signal: AbortSignal.timeout(20000),
+  })
+
+  if (response.status === 404 || response.status === 400) return { items: [], raw: null }
+  if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    throw new Error(`HTTP ${response.status}: ${body.substring(0, 120)}`)
+  }
+
+  const raw = await response.json() as BsaleDocumentSellersResponse
+  return { items: raw?.items || [], raw }
+}
+
+export async function syncDocumentSellersForDocuments(companyId: string, documents: BsaleDocumentForSellerSync[]) {
+  const db = integrDb()
+  const relevantDocuments = documents.filter(doc => [2, 5, 23].includes(Number(resolveDocumentTypeId(doc))))
+  let upserted = 0
+  let errors = 0
+  let empty = 0
+  const records: BsaleDocumentSellerRecord[] = []
+
+  for (const doc of relevantDocuments) {
+    try {
+      const { items, raw } = await fetchDocumentSellers(doc.id)
+      if (!items.length) {
+        empty++
+        continue
+      }
+
+      items.forEach((seller, index) => {
+        const sellerId = Number(seller?.id)
+        if (!Number.isFinite(sellerId)) return
+        const rawPayload = { document_sellers: raw, seller }
+        records.push({
+          company_id: companyId,
+          bsale_document_id: doc.id,
+          document_type_id: resolveDocumentTypeId(doc),
+          document_number: doc.number ?? null,
+          seller_bsale_id: sellerId,
+          seller_name: normalizeDocumentSellerName(seller),
+          seller_first_name: seller?.firstName || null,
+          seller_last_name: seller?.lastName || null,
+          seller_email: seller?.email || null,
+          seller_office: seller?.office?.id != null ? String(seller.office.id) : null,
+          seller_percent: seller?.percent ?? seller?.percentage ?? null,
+          seller_amount: seller?.amount ?? seller?.commissionAmount ?? null,
+          is_primary: index === 0,
+          source: 'documents_sellers_endpoint',
+          raw_payload: rawPayload,
+          payload_hash: crypto.createHash('sha256').update(JSON.stringify(rawPayload)).digest('hex'),
+          last_sync_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+      })
+    } catch (error: unknown) {
+      errors++
+      console.error(`[syncDocumentSellers] doc ${doc.id} error:`, error instanceof Error ? error.message : error)
+    }
+  }
+
+  for (let i = 0; i < records.length; i += 100) {
+    const batch = records.slice(i, i + 100)
+    const { error } = await db.from('bsale_document_sellers').upsert(batch, {
+      onConflict: 'company_id,bsale_document_id,seller_bsale_id',
+      ignoreDuplicates: false,
+    })
+    if (error) {
+      errors += batch.length
+      console.error('[syncDocumentSellers] upsert error:', error.message)
+    } else {
+      upserted += batch.length
+    }
+  }
+
+  return { scanned: relevantDocuments.length, upserted, empty, errors }
 }
 
 function cleanCodeForSync(code: any): string | null {
@@ -700,6 +834,7 @@ async function syncDocuments(
   docsCount: number
   detailsCount: number
   detailErrors: number
+  sellerSync: { scanned: number; upserted: number; empty: number; errors: number }
   pages: number
 }> {
   const db = integrDb()
@@ -754,6 +889,9 @@ async function syncDocuments(
     if (error) console.error(`[syncSales] Document batch error:`, error.message)
     else docsCount += records.length
   }
+
+  const sellerSync = await syncDocumentSellersForDocuments(companyId, documents)
+  console.log(`[syncSales] Document sellers: scanned=${sellerSync.scanned} upserted=${sellerSync.upserted} empty=${sellerSync.empty} errors=${sellerSync.errors}`)
 
   // Fetch details with retry + backoff + classification
   console.log(`[syncSales] Fetching details for ${documents.length} documents...`)
@@ -972,7 +1110,7 @@ async function syncDocuments(
 
   console.log(`[syncSales] FINAL: docs=${documents.length} OK=${finalOk} (${coverage}%) NoDet=${finalNoDet} Err=${finalErr} details=${detailsCount}`)
 
-  return { docsCount, detailsCount, detailErrors: finalErr, pages }
+  return { docsCount, detailsCount, detailErrors: finalErr, sellerSync, pages }
 }
 
 export async function syncBsaleSales(
@@ -1002,6 +1140,8 @@ export async function syncBsaleSales(
       documents: result.docsCount,
       details: result.detailsCount,
       detail_errors: result.detailErrors,
+      document_sellers: result.sellerSync.upserted,
+      document_seller_errors: result.sellerSync.errors,
       pages: result.pages,
     }
 
