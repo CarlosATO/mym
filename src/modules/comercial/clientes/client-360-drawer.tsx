@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from 'react'
 import { AlertTriangle, CalendarDays, Mail, MapPin, Phone, TrendingUp, UserRoundCheck, X } from 'lucide-react'
-import { getCommercialCustomerBehavior, getCommercialCustomerMetricDocuments, getCommercialDocumentDetail, type CommercialCustomerBehavior, type CommercialCustomerBehaviorDocument, type CommercialCustomerMetricDocuments, type CommercialCustomerMetricKey, type CommercialDocumentDetail } from '@/app/actions/comercial/customers'
+import { getCommercialCustomerBehavior, getCommercialCustomerMetricDocuments, getCommercialCustomerPurchaseMix, getCommercialDocumentDetail, type CommercialCustomerBehavior, type CommercialCustomerBehaviorDocument, type CommercialCustomerMetricDocuments, type CommercialCustomerMetricKey, type CommercialCustomerPurchaseMix, type CommercialCustomerPurchaseMixProduct, type CommercialDocumentDetail } from '@/app/actions/comercial/customers'
 import type { CommercialCustomerExplorer } from '@/app/actions/comercial/customers'
 import { cn } from '@/lib/utils'
 
@@ -15,6 +15,14 @@ function fmtMoney(value: number | null | undefined) {
   const n = Number(value || 0)
   if (n === 0) return '$0'
   return '$' + n.toLocaleString('es-CL', { maximumFractionDigits: 0 })
+}
+
+function fmtCompactMoney(value: number | null | undefined) {
+  const n = Number(value || 0)
+  if (n === 0) return '$0'
+  if (Math.abs(n) >= 1000000) return '$' + (n / 1000000).toLocaleString('es-CL', { maximumFractionDigits: 1 }) + 'MM'
+  if (Math.abs(n) >= 1000) return '$' + Math.round(n / 1000).toLocaleString('es-CL') + 'K'
+  return fmtMoney(n)
 }
 
 function fmtDate(value: string | null) {
@@ -457,29 +465,204 @@ function PurchasesTab({ behavior, loading, error }: { behavior: CommercialCustom
   )
 }
 
-function ProductsPlaceholder() {
-  const blocks = ['Productos más comprados', 'Proveedores principales', 'Productos sin recompra']
+function QuantityChart({ mix }: { mix: CommercialCustomerPurchaseMix }) {
+  const maxMonthlyAmount = Math.max(...mix.monthlyQuantityEvolution.map(month => month.netSalesAmount || 0), 0)
+
+  if (maxMonthlyAmount === 0) {
+    return (
+      <Section title="Comportamiento mensual de compra">
+        <EmptyState>Sin compras facturadas en el período.</EmptyState>
+      </Section>
+    )
+  }
 
   return (
-    <div className="rounded-xl border border-dashed border-theme-border/70 bg-theme-bg/20 px-4 py-6 text-center">
-      <div className="text-sm font-bold text-theme-text">Mix de compra</div>
-      <div className="mx-auto mt-2 max-w-md text-xs leading-5 text-theme-text-muted">Próxima etapa: análisis por productos, proveedores, categorías, frecuencia y recompra.</div>
-      <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-2 text-left">
-        {blocks.map(block => (
-          <div key={block} className="rounded-lg border border-theme-border/60 bg-theme-bg/20 px-3 py-2 opacity-70">
-            <div className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted/60">Preparado</div>
-            <div className="mt-1 text-xs font-semibold text-theme-text">{block}</div>
-          </div>
-        ))}
+    <Section title="Comportamiento mensual de compra">
+      <div className="rounded-xl border border-theme-border/70 bg-theme-bg/20 p-3">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-[10px] text-theme-text-muted/55">
+          <span>Monto facturado mensual según facturas oficiales Bsale. Escala ajustada al cliente.</span>
+          <span className="font-semibold text-theme-text-muted">Máximo mensual: {fmtMoney(maxMonthlyAmount)}</span>
+        </div>
+        <div className="flex h-40 items-end gap-1.5 border-b border-theme-border/60 pb-2">
+          {mix.monthlyQuantityEvolution.map(month => {
+            const hasAmount = month.netSalesAmount > 0
+            const height = hasAmount ? Math.max(8, Math.round((month.netSalesAmount / maxMonthlyAmount) * 100)) : 0
+            return (
+              <div key={month.month} className="group flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1">
+                <div className="text-[9px] font-semibold text-theme-text opacity-0 transition-opacity group-hover:opacity-100">{fmtCompactMoney(month.netSalesAmount)}</div>
+                <div
+                  className={cn("w-full max-w-8 rounded-t-md border transition-colors", hasAmount ? "border-sky-600/30 bg-sky-600/35 dark:border-sky-400/25 dark:bg-sky-400/25 group-hover:bg-sky-600/50 dark:group-hover:bg-sky-400/40" : "h-1 border-theme-border/60 bg-theme-text/5")}
+                  style={hasAmount ? { height: `${height}%` } : undefined}
+                  title={`${month.monthLabel}: ${fmtMoney(month.netSalesAmount)} · ${month.totalUnits.toLocaleString('es-CL')} un. · ${month.invoiceCount} facturas`}
+                />
+              </div>
+            )
+          })}
+        </div>
+        <div className="mt-2 grid grid-cols-12 gap-1 text-center text-[9px] text-theme-text-muted/65">
+          {mix.monthlyQuantityEvolution.map(month => (
+            <div key={month.month} className="min-w-0">
+              <div className="truncate capitalize">{month.monthLabel.split(' ')[0]}</div>
+              <div className="truncate font-semibold text-theme-text-muted/75">{fmtCompactMoney(month.netSalesAmount)}</div>
+              <div className="truncate text-theme-text-muted/45">{month.totalUnits.toLocaleString('es-CL')} un.</div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-2 text-[10px] text-theme-text-muted/50">Unidades facturadas por mes como dato secundario. Meses sin compra se muestran en cero.</div>
       </div>
-    </div>
+    </Section>
   )
 }
 
+function ProductRankingTable({ title, products }: { title: string; products: CommercialCustomerPurchaseMixProduct[] }) {
+  return (
+    <Section title={title}>
+      {products.length === 0 ? <EmptyState>Sin productos para mostrar.</EmptyState> : (
+        <div className="overflow-x-auto rounded-xl border border-theme-border/70 bg-theme-bg/20">
+          <table className="w-full min-w-[760px] text-xs">
+            <thead className="bg-theme-text/[0.025] text-[10px] uppercase tracking-wide text-theme-text-muted/60">
+              <tr>
+                <th className="px-2.5 py-1.5 text-left font-bold">Producto</th>
+                <th className="px-2.5 py-1.5 text-left font-bold">Formatos</th>
+                <th className="px-2.5 py-1.5 text-right font-bold">Unidades</th>
+                <th className="px-2.5 py-1.5 text-right font-bold">Monto</th>
+                <th className="px-2.5 py-1.5 text-right font-bold">Facturas</th>
+                <th className="px-2.5 py-1.5 text-left font-bold">Última compra</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-theme-border/60">
+              {products.map(product => (
+                <tr key={`${product.sku}-${product.productName}`} className="text-theme-text">
+                  <td className="px-2.5 py-1.5 min-w-[240px]">
+                    <div className="font-semibold">{product.productName}</div>
+                    <div className="font-mono text-[10px] text-theme-text-muted/60">{product.sku || 'Sin SKU'}</div>
+                  </td>
+                  <td className="px-2.5 py-1.5 text-theme-text-muted max-w-[160px] truncate" title={product.formats.join(', ')}>{product.formats.join(', ') || '—'}</td>
+                  <td className="px-2.5 py-1.5 text-right font-semibold">{product.totalUnits.toLocaleString('es-CL')}</td>
+                  <td className="px-2.5 py-1.5 text-right font-semibold">{fmtMoney(product.totalAmount)}</td>
+                  <td className="px-2.5 py-1.5 text-right text-theme-text-muted">{product.invoiceCount}</td>
+                  <td className="px-2.5 py-1.5 text-theme-text-muted whitespace-nowrap">{fmtDate(product.lastPurchaseDate)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Section>
+  )
+}
+
+function StaleProductsTable({ products }: { products: CommercialCustomerPurchaseMixProduct[] }) {
+  return (
+    <Section title="Productos sin recompra">
+      <div className="mb-2 text-[10px] text-theme-text-muted/55">Productos comprados antes, sin recompra en más de 90 días.</div>
+      {products.length === 0 ? <EmptyState>No hay productos sin recompra para este rango.</EmptyState> : (
+        <div className="overflow-x-auto rounded-xl border border-theme-border/70 bg-theme-bg/20">
+          <table className="w-full min-w-[680px] text-xs">
+            <thead className="bg-theme-text/[0.025] text-[10px] uppercase tracking-wide text-theme-text-muted/60">
+              <tr>
+                <th className="px-2.5 py-1.5 text-left font-bold">Producto</th>
+                <th className="px-2.5 py-1.5 text-left font-bold">Última compra</th>
+                <th className="px-2.5 py-1.5 text-right font-bold">Días</th>
+                <th className="px-2.5 py-1.5 text-right font-bold">Unidades</th>
+                <th className="px-2.5 py-1.5 text-right font-bold">Monto</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-theme-border/60">
+              {products.map(product => (
+                <tr key={`stale-${product.sku}-${product.productName}`} className="text-theme-text">
+                  <td className="px-2.5 py-1.5 font-semibold">{product.productName}</td>
+                  <td className="px-2.5 py-1.5 text-theme-text-muted">{fmtDate(product.lastPurchaseDate)}</td>
+                  <td className="px-2.5 py-1.5 text-right text-theme-text-muted">{product.daysSinceLastPurchase ?? '—'}</td>
+                  <td className="px-2.5 py-1.5 text-right">{product.totalUnits.toLocaleString('es-CL')}</td>
+                  <td className="px-2.5 py-1.5 text-right font-semibold">{fmtMoney(product.totalAmount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Section>
+  )
+}
+
+function RecentProductActivity({ mix }: { mix: CommercialCustomerPurchaseMix }) {
+  return (
+    <Section title="Actividad reciente">
+      {mix.recentProductActivity.length === 0 ? <EmptyState>Sin actividad reciente de productos.</EmptyState> : (
+        <div className="overflow-x-auto rounded-xl border border-theme-border/70 bg-theme-bg/20">
+          <table className="w-full min-w-[760px] text-xs">
+            <thead className="bg-theme-text/[0.025] text-[10px] uppercase tracking-wide text-theme-text-muted/60">
+              <tr>
+                <th className="px-2.5 py-1.5 text-left font-bold">Fecha</th>
+                <th className="px-2.5 py-1.5 text-left font-bold">Factura</th>
+                <th className="px-2.5 py-1.5 text-left font-bold">Producto</th>
+                <th className="px-2.5 py-1.5 text-left font-bold">Formato</th>
+                <th className="px-2.5 py-1.5 text-right font-bold">Cant.</th>
+                <th className="px-2.5 py-1.5 text-right font-bold">Monto</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-theme-border/60">
+              {mix.recentProductActivity.slice(0, 10).map((item, index) => (
+                <tr key={`${item.date}-${item.invoiceNumber}-${item.sku}-${index}`} className="text-theme-text">
+                  <td className="px-2.5 py-1.5 text-theme-text-muted whitespace-nowrap">{fmtDate(item.date)}</td>
+                  <td className="px-2.5 py-1.5 font-mono">{item.invoiceNumber || '—'}</td>
+                  <td className="px-2.5 py-1.5 min-w-[240px]"><div className="font-semibold">{item.productName}</div><div className="font-mono text-[10px] text-theme-text-muted/60">{item.sku}</div></td>
+                  <td className="px-2.5 py-1.5 text-theme-text-muted">{item.format || '—'}</td>
+                  <td className="px-2.5 py-1.5 text-right">{item.quantity.toLocaleString('es-CL')}</td>
+                  <td className="px-2.5 py-1.5 text-right font-semibold">{fmtMoney(item.totalAmount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Section>
+  )
+}
+
+function PurchaseMixTab({ mix, loading, error }: { mix: CommercialCustomerPurchaseMix | null; loading: boolean; error: string | null }) {
+  const [rankingMode, setRankingMode] = useState<'amount' | 'units'>('amount')
+
+  if (loading) return <LoadingState />
+  if (error) return <EmptyState>{error}</EmptyState>
+  if (!mix) return <EmptyState>Selecciona esta pestaña para cargar el mix de compra.</EmptyState>
+  if (mix.mixSummary.totalProducts === 0) return <EmptyState>Sin facturas con productos para este cliente.</EmptyState>
+
+  const ranking = rankingMode === 'amount' ? mix.topProductsByAmount : mix.topProductsByUnits
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border border-theme-border/60 bg-theme-bg/20 px-2.5 py-1.5 text-[10px] text-theme-text-muted">Basado en facturas oficiales Bsale. No incluye notas de venta ni descuenta notas de crédito por producto en esta versión.</div>
+      <Section title="Resumen mix de compra">
+        <div className="grid grid-cols-2 xl:grid-cols-5 gap-2">
+          <Metric label="Productos distintos" value={String(mix.mixSummary.totalProducts)} />
+          <Metric label="Unidades 12m" value={mix.mixSummary.totalUnits12m.toLocaleString('es-CL')} />
+          <Metric label="Monto facturado 12m" value={fmtMoney(mix.mixSummary.totalAmount12m)} tone="text-sky-600 dark:text-sky-300" />
+          <Metric label="Meses con compra" value={String(mix.mixSummary.monthsWithPurchases)} />
+          <Metric label="Producto principal" value={mix.mixSummary.topProductSharePercent + '%'} hint={mix.mixSummary.topProductName || 'Sin dato'} />
+        </div>
+      </Section>
+      <QuantityChart mix={mix} />
+      <Section title="Ranking productos">
+        <div className="mb-2 flex gap-1.5">
+          <button onClick={() => setRankingMode('amount')} className={cn("rounded-md border px-2 py-0.5 text-[10px] font-semibold", rankingMode === 'amount' ? "border-theme-text/20 bg-theme-text/10 text-theme-text" : "border-theme-border bg-theme-bg/20 text-theme-text-muted hover:text-theme-text")}>Top por monto</button>
+          <button onClick={() => setRankingMode('units')} className={cn("rounded-md border px-2 py-0.5 text-[10px] font-semibold", rankingMode === 'units' ? "border-theme-text/20 bg-theme-text/10 text-theme-text" : "border-theme-border bg-theme-bg/20 text-theme-text-muted hover:text-theme-text")}>Top por unidades</button>
+        </div>
+        <ProductRankingTable title={rankingMode === 'amount' ? 'Top productos por monto' : 'Top productos por unidades'} products={ranking} />
+      </Section>
+      <StaleProductsTable products={mix.staleProducts} />
+      <RecentProductActivity mix={mix} />
+    </div>
+  )
+}
 function Client360DrawerContent({ customer, onClose }: { customer: CommercialCustomerExplorer; onClose: () => void }) {
   const [activeTab, setActiveTab] = useState<Client360Tab>('summary')
   const [behavior, setBehavior] = useState<CommercialCustomerBehavior | null>(null)
   const [behaviorError, setBehaviorError] = useState<string | null>(null)
+  const [purchaseMix, setPurchaseMix] = useState<CommercialCustomerPurchaseMix | null>(null)
+  const [purchaseMixError, setPurchaseMixError] = useState<string | null>(null)
+  const [purchaseMixLoading, setPurchaseMixLoading] = useState(false)
   const [metricDocuments, setMetricDocuments] = useState<CommercialCustomerMetricDocuments | null>(null)
   const [metricError, setMetricError] = useState<string | null>(null)
   const [metricLoading, setMetricLoading] = useState(false)
@@ -519,6 +702,18 @@ function Client360DrawerContent({ customer, onClose }: { customer: CommercialCus
     if ('error' in result) setDocumentDetailError(result.error)
     else setDocumentDetail(result)
     setDocumentDetailLoading(false)
+  }
+
+  function selectTab(tab: Client360Tab) {
+    setActiveTab(tab)
+    if (tab !== 'products' || purchaseMix || purchaseMixError || purchaseMixLoading) return
+    setPurchaseMixLoading(true)
+    startTransition(async () => {
+      const result = await getCommercialCustomerPurchaseMix({ bsaleClientId: customer.bsale_client_id, monthsBack: 12, topLimit: 15 })
+      if ('error' in result) setPurchaseMixError(result.error)
+      else setPurchaseMix(result)
+      setPurchaseMixLoading(false)
+    })
   }
 
   const lowQuality = customer.quality_score < 60
@@ -575,7 +770,7 @@ function Client360DrawerContent({ customer, onClose }: { customer: CommercialCus
 
           <div className="mt-3 flex gap-0.5 overflow-x-auto border-t border-theme-border/60 pt-2">
             {tabs.map(tab => (
-              <button key={tab.key} onClick={() => setActiveTab(tab.key)} className={cn("whitespace-nowrap rounded-md px-2.5 py-1 text-[11px] font-bold transition-colors", activeTab === tab.key ? "bg-theme-text/10 text-theme-text" : "text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text")}>
+              <button key={tab.key} onClick={() => selectTab(tab.key)} className={cn("whitespace-nowrap rounded-md px-2.5 py-1 text-[11px] font-bold transition-colors", activeTab === tab.key ? "bg-theme-text/10 text-theme-text" : "text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text")}>
                 {tab.label}
               </button>
             ))}
@@ -586,7 +781,7 @@ function Client360DrawerContent({ customer, onClose }: { customer: CommercialCus
           {activeTab === 'summary' && <SummaryTab customer={customer} alerts={alerts} noSeller={noSeller} onOpenMetric={openMetricDocuments} />}
           {activeTab === 'purchases' && <PurchasesTab behavior={behavior} loading={isPending} error={behaviorError} />}
           {activeTab === 'documents' && (isPending ? <LoadingState /> : behaviorError ? <EmptyState>{behaviorError}</EmptyState> : behavior ? <DocumentsTable documents={behavior.recentDocuments} onOpenDocument={openDocumentDetail} /> : <EmptyState>Selecciona esta pestaña para cargar documentos.</EmptyState>)}
-          {activeTab === 'products' && <ProductsPlaceholder />}
+          {activeTab === 'products' && <PurchaseMixTab mix={purchaseMix} loading={purchaseMixLoading} error={purchaseMixError} />}
         </div>
 
         {showMetricModal && <MetricDocumentsModal data={metricDocuments} loading={metricLoading} error={metricError} onClose={() => setShowMetricModal(false)} onOpenDocument={openDocumentDetail} />}
