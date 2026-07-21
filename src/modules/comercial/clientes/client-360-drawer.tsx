@@ -184,13 +184,13 @@ export function Client360Drawer({ customer, onClose }: { customer: CommercialCus
 
           <Section title="Vendedor comercial">
             <div className="space-y-2">
-              <div className="rounded-xl border border-amber-400/20 bg-amber-500/5 px-3 py-2">
-                <div className="text-xs font-semibold text-amber-400">Pendiente de certificar</div>
-                <div className="mt-0.5 text-[11px] text-theme-text-muted/60">El vendedor comercial real está pendiente de certificación.</div>
+              <div className={cn("rounded-xl border px-3 py-2", noSeller ? "border-slate-400/20 bg-slate-500/5" : "border-emerald-400/20 bg-emerald-500/5")}>
+                <div className={cn("text-xs font-semibold", noSeller ? "text-slate-400" : "text-emerald-400")}>{noSeller ? 'Sin vendedor identificado' : 'Certificado desde Bsale'}</div>
+                <div className="mt-0.5 text-[11px] text-theme-text-muted/60">Fuente: endpoint de vendedores por documento Bsale.</div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <InfoRow label="Usuario principal en documentos" value={customer.main_seller_name || 'No identificado'} />
-                <InfoRow label="Último usuario documento" value={customer.last_seller_name || 'No identificado'} />
+                <InfoRow label="Vendedor principal" value={customer.main_seller_name || 'No identificado'} />
+                <InfoRow label="Último vendedor" value={customer.last_seller_name || 'No identificado'} />
               </div>
             </div>
           </Section>
