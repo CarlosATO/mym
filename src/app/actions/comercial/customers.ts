@@ -296,6 +296,52 @@ export type CommercialDocumentDetail = {
   }
 }
 
+export type CommercialCustomerPurchaseMixProduct = {
+  sku: string
+  productName: string
+  totalAmount: number
+  totalUnits: number
+  invoiceCount: number
+  lastPurchaseDate: string | null
+  daysSinceLastPurchase: number | null
+  formats: string[]
+  avgUnitPrice: number
+}
+
+export type CommercialCustomerPurchaseMix = {
+  monthlyQuantityEvolution: Array<{
+    month: string
+    monthLabel: string
+    totalUnits: number
+    invoiceCount: number
+    netSalesAmount: number
+    distinctProducts: number
+    avgUnitsPerInvoice: number
+  }>
+  topProductsByAmount: CommercialCustomerPurchaseMixProduct[]
+  topProductsByUnits: CommercialCustomerPurchaseMixProduct[]
+  recentProductActivity: Array<{
+    date: string | null
+    invoiceNumber: number | null
+    sku: string
+    productName: string
+    format: string | null
+    quantity: number
+    totalAmount: number
+  }>
+  staleProducts: CommercialCustomerPurchaseMixProduct[]
+  mixSummary: {
+    totalProducts: number
+    totalUnits12m: number
+    totalAmount12m: number
+    topProductName: string | null
+    topProductSharePercent: number
+    lastProductPurchaseDate: string | null
+    monthsWithPurchases: number
+    avgMonthlyUnits: number
+  }
+}
+
 type BehaviorDocumentRow = {
   bsale_id: number | string
   number: number | string | null
@@ -328,6 +374,21 @@ type DetailLineRow = {
   variant_id: number | string | null
   variant_code: string | null
   variant_description: string | null
+}
+
+type PurchaseMixLineRow = DetailLineRow & {
+  bsale_document_id: number | string
+  documents: {
+    bsale_id: number | string
+    number: number | string | null
+    emission_date: string | null
+  } | null
+}
+
+type PurchaseMixInvoiceRow = {
+  bsale_id: number | string
+  number: number | string | null
+  emission_date: string | null
 }
 
 type BsaleVariantRow = {
@@ -1021,6 +1082,246 @@ export async function getCommercialDocumentDetail(params: {
   } catch (error) {
     console.error('getCommercialDocumentDetail error:', error)
     return { error: 'No se pudo cargar el detalle del documento' }
+  }
+}
+
+export async function getCommercialCustomerPurchaseMix(params: {
+  bsaleClientId: number
+  monthsBack?: number
+  topLimit?: number
+}): Promise<CommercialCustomerPurchaseMix | { error: string }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { error: 'No autorizado' }
+
+  const bsaleClientId = Number(params.bsaleClientId)
+  if (!Number.isFinite(bsaleClientId)) return { error: 'Cliente inválido' }
+
+  const monthsBack = Math.min(Math.max(Number(params.monthsBack || 12), 3), 24)
+  const topLimit = Math.min(Math.max(Number(params.topLimit || 15), 5), 30)
+
+  try {
+    const customer = await validateCommercialClient(companyId, bsaleClientId)
+    if (!customer) return { error: 'Cliente no pertenece a la empresa activa' }
+
+    const now = new Date()
+    const firstMonth = addMonths(startOfMonth(now), -(monthsBack - 1))
+    const fromDate = monthKey(firstMonth) + '-01'
+    const pageSize = 1000
+    let from = 0
+    const invoices: PurchaseMixInvoiceRow[] = []
+    const lines: PurchaseMixLineRow[] = []
+
+    while (true) {
+      const { data, error } = await comAdmin()
+        .schema('integraciones')
+        .from('bsale_documents')
+        .select('bsale_id,number,emission_date')
+        .eq('company_id', companyId)
+        .eq('client_id', bsaleClientId)
+        .eq('document_type_id', 5)
+        .gte('emission_date', fromDate)
+        .order('emission_date', { ascending: false })
+        .order('bsale_id', { ascending: false })
+        .range(from, from + pageSize - 1)
+
+      if (error) throw error
+      const rows = (data || []) as PurchaseMixInvoiceRow[]
+      invoices.push(...rows)
+      if (rows.length < pageSize) break
+      from += pageSize
+    }
+
+    const invoiceMap = new Map(invoices.map(invoice => [Number(invoice.bsale_id), invoice]))
+    const invoiceIds = invoices.map(invoice => Number(invoice.bsale_id)).filter(Number.isFinite)
+
+    for (let i = 0; i < invoiceIds.length; i += 500) {
+      let detailFrom = 0
+      while (true) {
+        const { data, error } = await comAdmin()
+          .schema('integraciones')
+          .from('bsale_document_details')
+          .select('bsale_id,bsale_document_id,line_number,quantity,net_unit_value,total_unit_value,net_amount,tax_amount,total_amount,net_discount,variant_id,variant_code,variant_description')
+          .eq('company_id', companyId)
+          .in('bsale_document_id', invoiceIds.slice(i, i + 500))
+          .range(detailFrom, detailFrom + pageSize - 1)
+
+        if (error) throw error
+        const rows = (data || []) as Array<DetailLineRow & { bsale_document_id: number | string }>
+        lines.push(...rows.map(line => ({
+          ...line,
+          documents: invoiceMap.get(Number(line.bsale_document_id)) || null,
+        })))
+        if (rows.length < pageSize) break
+        detailFrom += pageSize
+      }
+    }
+
+    const variantIds = Array.from(new Set(lines.map(line => line.variant_id == null ? null : Number(line.variant_id)).filter((id): id is number => Number.isFinite(id))))
+    const variantMap = new Map<number, BsaleVariantRow>()
+    const productMap = new Map<number, BsaleProductRow>()
+
+    for (let i = 0; i < variantIds.length; i += 500) {
+      const { data, error } = await comAdmin()
+        .schema('integraciones')
+        .from('bsale_variants')
+        .select('bsale_id,bsale_product_id,code,description')
+        .eq('company_id', companyId)
+        .in('bsale_id', variantIds.slice(i, i + 500))
+
+      if (error) throw error
+      for (const variant of (data || []) as BsaleVariantRow[]) variantMap.set(Number(variant.bsale_id), variant)
+    }
+
+    const productIds = Array.from(new Set(Array.from(variantMap.values()).map(variant => Number(variant.bsale_product_id)).filter(Number.isFinite)))
+    for (let i = 0; i < productIds.length; i += 500) {
+      const { data, error } = await comAdmin()
+        .schema('integraciones')
+        .from('bsale_products')
+        .select('bsale_id,name,description')
+        .eq('company_id', companyId)
+        .in('bsale_id', productIds.slice(i, i + 500))
+
+      if (error) throw error
+      for (const product of (data || []) as BsaleProductRow[]) productMap.set(Number(product.bsale_id), product)
+    }
+
+    const monthlyQuantityEvolution = Array.from({ length: monthsBack }, (_, index) => {
+      const date = addMonths(firstMonth, index)
+      return {
+        month: monthKey(date),
+        monthLabel: date.toLocaleDateString('es-CL', { month: 'short', year: '2-digit' }).replace('.', ''),
+        totalUnits: 0,
+        invoiceCount: 0,
+        netSalesAmount: 0,
+        distinctProducts: 0,
+        avgUnitsPerInvoice: 0,
+      }
+    })
+    const monthIndex = new Map(monthlyQuantityEvolution.map((item, index) => [item.month, index]))
+    const monthInvoices = new Map<string, Set<number>>()
+    const monthProducts = new Map<string, Set<string>>()
+    const productMapAgg = new Map<string, CommercialCustomerPurchaseMixProduct & { invoiceIds: Set<number>; formatSet: Set<string> }>()
+    const recentProductActivity: CommercialCustomerPurchaseMix['recentProductActivity'] = []
+
+    for (const line of lines) {
+      const invoice = line.documents
+      const date = invoice?.emission_date || null
+      const variantId = line.variant_id == null ? null : Number(line.variant_id)
+      const variant = variantId == null ? null : variantMap.get(variantId)
+      const product = variant ? productMap.get(Number(variant.bsale_product_id)) : null
+      const sku = line.variant_code || variant?.code || 'Sin SKU'
+      const format = variant?.description || line.variant_description || null
+      const productName = product?.name || product?.description || (format ? null : line.variant_description) || 'Producto sin nombre'
+      const productKey = product ? `p:${product.bsale_id}` : `sku:${sku}`
+      const quantity = asNumber(line.quantity)
+      const amount = asNumber(line.total_amount)
+      const invoiceId = invoice ? Number(invoice.bsale_id) : Number(line.bsale_document_id)
+
+      if (date) {
+        const index = monthIndex.get(date.slice(0, 7))
+        if (index !== undefined) {
+          const month = monthlyQuantityEvolution[index]
+          month.totalUnits += quantity
+          month.netSalesAmount += amount
+          const invoices = monthInvoices.get(month.month) || new Set<number>()
+          invoices.add(invoiceId)
+          monthInvoices.set(month.month, invoices)
+          const products = monthProducts.get(month.month) || new Set<string>()
+          products.add(productKey)
+          monthProducts.set(month.month, products)
+        }
+      }
+
+      const current = productMapAgg.get(productKey) || {
+        sku,
+        productName,
+        totalAmount: 0,
+        totalUnits: 0,
+        invoiceCount: 0,
+        lastPurchaseDate: null,
+        daysSinceLastPurchase: null,
+        formats: [],
+        avgUnitPrice: 0,
+        invoiceIds: new Set<number>(),
+        formatSet: new Set<string>(),
+      }
+      current.totalAmount += amount
+      current.totalUnits += quantity
+      current.invoiceIds.add(invoiceId)
+      if (format) current.formatSet.add(format)
+      if (date && (!current.lastPurchaseDate || date > current.lastPurchaseDate)) current.lastPurchaseDate = date
+      current.avgUnitPrice = current.totalUnits > 0 ? Math.round(current.totalAmount / current.totalUnits) : 0
+      current.invoiceCount = current.invoiceIds.size
+      current.formats = Array.from(current.formatSet).sort()
+      current.daysSinceLastPurchase = daysBetweenToday(current.lastPurchaseDate)
+      productMapAgg.set(productKey, current)
+
+      recentProductActivity.push({
+        date,
+        invoiceNumber: invoice?.number == null ? null : Number(invoice.number),
+        sku,
+        productName,
+        format,
+        quantity,
+        totalAmount: amount,
+      })
+    }
+
+    for (const month of monthlyQuantityEvolution) {
+      month.invoiceCount = monthInvoices.get(month.month)?.size || 0
+      month.distinctProducts = monthProducts.get(month.month)?.size || 0
+      month.avgUnitsPerInvoice = month.invoiceCount > 0 ? Math.round(month.totalUnits / month.invoiceCount) : 0
+    }
+
+    const products = Array.from(productMapAgg.values()).map(product => ({
+      sku: product.sku,
+      productName: product.productName,
+      totalAmount: product.totalAmount,
+      totalUnits: product.totalUnits,
+      invoiceCount: product.invoiceCount,
+      lastPurchaseDate: product.lastPurchaseDate,
+      daysSinceLastPurchase: product.daysSinceLastPurchase,
+      formats: product.formats,
+      avgUnitPrice: product.avgUnitPrice,
+    }))
+    const topProductsByAmount = [...products].sort((a, b) => b.totalAmount - a.totalAmount).slice(0, topLimit)
+    const topProductsByUnits = [...products].sort((a, b) => b.totalUnits - a.totalUnits).slice(0, topLimit)
+    const staleProducts = [...products]
+      .filter(product => (product.daysSinceLastPurchase || 0) > 90)
+      .sort((a, b) => b.totalAmount - a.totalAmount)
+      .slice(0, 10)
+    const sortedRecentActivity = recentProductActivity
+      .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
+      .slice(0, 20)
+    const totalAmount12m = products.reduce((sum, product) => sum + product.totalAmount, 0)
+    const totalUnits12m = products.reduce((sum, product) => sum + product.totalUnits, 0)
+    const topProduct = topProductsByAmount[0] || null
+    const lastProductPurchaseDate = products.reduce<string | null>((latest, product) => {
+      if (!product.lastPurchaseDate) return latest
+      return !latest || product.lastPurchaseDate > latest ? product.lastPurchaseDate : latest
+    }, null)
+    const monthsWithPurchases = monthlyQuantityEvolution.filter(month => month.totalUnits > 0).length
+
+    return {
+      monthlyQuantityEvolution,
+      topProductsByAmount,
+      topProductsByUnits,
+      recentProductActivity: sortedRecentActivity,
+      staleProducts,
+      mixSummary: {
+        totalProducts: products.length,
+        totalUnits12m,
+        totalAmount12m,
+        topProductName: topProduct?.productName || null,
+        topProductSharePercent: topProduct && totalAmount12m > 0 ? Math.round((topProduct.totalAmount / totalAmount12m) * 100) : 0,
+        lastProductPurchaseDate,
+        monthsWithPurchases,
+        avgMonthlyUnits: monthsBack > 0 ? Math.round(totalUnits12m / monthsBack) : 0,
+      },
+    }
+  } catch (error) {
+    console.error('getCommercialCustomerPurchaseMix error:', error)
+    return { error: 'No se pudo cargar el mix de compra' }
   }
 }
 
