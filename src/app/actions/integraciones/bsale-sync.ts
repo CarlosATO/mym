@@ -61,6 +61,87 @@ type BsaleDocumentSellersResponse = {
   items?: BsaleDocumentSeller[]
 }
 
+type BsalePaymentType = {
+  id?: number | string | null
+  name?: string | null
+  state?: number | null
+}
+
+type BsalePaymentDocument = {
+  id?: number | string | null
+  amount?: number | string | null
+}
+
+type BsalePayment = {
+  id?: number | string | null
+  amount?: number | string | null
+  recordDate?: number | null
+  createdAt?: number | null
+  state?: number | null
+  operationNumber?: string | null
+  checkDate?: string | null
+  checkNumber?: number | string | null
+  isCreditPayment?: number | boolean | null
+  paymentsRelation?: string | null
+  payment_type?: { id?: number | string | null; href?: string | null } | null
+  document?: { id?: number | string | null; href?: string | null } | null
+  documents?: BsalePaymentDocument[] | null
+}
+
+type BsalePaymentsSyncOptions = {
+  recordDateFrom?: Date | number | string
+  recordDateTo?: Date | number | string
+  days?: number
+  mode?: 'incremental' | 'backfill'
+}
+
+type BsalePaymentTypeRecord = {
+  company_id: string
+  bsale_id: number
+  bsale_payment_type_id: number
+  name: string | null
+  is_active: boolean
+  raw_json: BsalePaymentType
+  synced_at: string
+  updated_at: string
+}
+
+type BsalePaymentRecord = {
+  company_id: string
+  bsale_id: number
+  bsale_payment_id: number
+  bsale_document_id: number | null
+  amount: number | null
+  payment_date: string | null
+  record_date: string | null
+  payment_type_id: number | null
+  payment_type_bsale_id: number | null
+  payment_type_name: string | null
+  is_credit_payment: boolean
+  state: number | null
+  created_at_bsale: string | null
+  operation_number: string | null
+  check_date: string | null
+  check_number: number | null
+  raw_json: BsalePayment
+  synced_at: string
+  updated_at: string
+}
+
+type BsaleDocumentPaymentRecord = {
+  company_id: string
+  bsale_payment_id: number
+  bsale_document_id: number
+  document_type_id: number | null
+  document_number: number | null
+  client_id: number | null
+  payment_record_date: string | null
+  amount_applied: number
+  raw_json: { payment: BsalePayment; document: BsalePaymentDocument | BsalePayment['document'] | null }
+  synced_at: string
+  updated_at: string
+}
+
 type BsaleDocumentSellerRecord = {
   company_id: string
   bsale_document_id: number
@@ -118,6 +199,51 @@ async function finishSyncRun(
   if (counts.document_details_count !== undefined) update.document_details_count = counts.document_details_count
 
   await db.from('bsale_sync_runs').update(update).eq('id', runId)
+}
+
+function toNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function epochToIso(value: unknown): string | null {
+  const parsed = toNumber(value)
+  return parsed !== null ? new Date(parsed * 1000).toISOString() : null
+}
+
+function epochToDate(value: unknown): string | null {
+  const iso = epochToIso(value)
+  return iso ? iso.slice(0, 10) : null
+}
+
+function dateInputToDate(value: Date | number | string): Date {
+  if (value instanceof Date) return value
+  if (typeof value === 'number') return new Date(value * 1000)
+  return new Date(value)
+}
+
+function dateToBsaleEpochDay(date: Date): number {
+  return Math.floor(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) / 1000)
+}
+
+function eachUtcDay(from: Date, to: Date) {
+  const days: number[] = []
+  const cursor = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()))
+  const end = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate()))
+  while (cursor <= end) {
+    days.push(dateToBsaleEpochDay(cursor))
+    cursor.setUTCDate(cursor.getUTCDate() + 1)
+  }
+  return days
+}
+
+function asBoolean(value: unknown): boolean {
+  return value === true || value === 1 || value === '1'
+}
+
+function isInitialCreditPayment(payment: BsalePayment, paymentTypeName: string | null) {
+  return !asBoolean(payment.isCreditPayment) && (paymentTypeName || '').trim().toUpperCase() === 'CREDITO'
 }
 
 // ─── Extract XML References ───────────────────────────────────────
@@ -1113,6 +1239,299 @@ async function syncDocuments(
   return { docsCount, detailsCount, detailErrors: finalErr, sellerSync, pages }
 }
 
+export async function syncBsalePaymentTypes(companyId: string): Promise<{ count: number; errors: number }> {
+  const db = integrDb()
+  const now = new Date().toISOString()
+  let count = 0
+  let errors = 0
+
+  const paymentTypes = await bsaleFetchAll<BsalePaymentType>('/payment_types.json')
+
+  for (let i = 0; i < paymentTypes.length; i += 100) {
+    const batch = paymentTypes.slice(i, i + 100)
+    const records: BsalePaymentTypeRecord[] = batch
+      .map(paymentType => {
+        const bsaleId = toNumber(paymentType.id)
+        if (bsaleId === null) return null
+        return {
+          company_id: companyId,
+          bsale_id: bsaleId,
+          bsale_payment_type_id: bsaleId,
+          name: paymentType.name || null,
+          is_active: paymentType.state !== 1,
+          raw_json: paymentType,
+          synced_at: now,
+          updated_at: now,
+        }
+      })
+      .filter((record): record is BsalePaymentTypeRecord => record !== null)
+
+    if (records.length === 0) continue
+
+    const { error } = await db.from('bsale_payment_types').upsert(records, {
+      onConflict: 'company_id, bsale_payment_type_id',
+      ignoreDuplicates: false,
+    })
+
+    if (error) {
+      errors += records.length
+      console.error('[syncBsalePaymentTypes] upsert error:', error.message)
+    } else {
+      count += records.length
+    }
+  }
+
+  return { count, errors }
+}
+
+async function getPaymentTypeNames(companyId: string) {
+  const db = integrDb()
+  const { data, error } = await db
+    .from('bsale_payment_types')
+    .select('bsale_payment_type_id, name')
+    .eq('company_id', companyId)
+
+  if (error) throw new Error(`Error leyendo payment types: ${error.message}`)
+  return new Map((data || []).map(row => [Number(row.bsale_payment_type_id), row.name as string | null]))
+}
+
+async function getDocumentMetadata(companyId: string, documentIds: number[]) {
+  const db = integrDb()
+  const byId = new Map<number, { document_type_id: number | null; number: number | null; client_id: number | null }>()
+  const uniqueIds = Array.from(new Set(documentIds)).filter(Number.isFinite)
+
+  for (let i = 0; i < uniqueIds.length; i += 200) {
+    const ids = uniqueIds.slice(i, i + 200)
+    const { data, error } = await db
+      .from('bsale_documents')
+      .select('bsale_id, document_type_id, number, client_id')
+      .eq('company_id', companyId)
+      .in('bsale_id', ids)
+
+    if (error) throw new Error(`Error leyendo documentos para pagos: ${error.message}`)
+    for (const row of data || []) {
+      byId.set(Number(row.bsale_id), {
+        document_type_id: row.document_type_id ?? null,
+        number: row.number ?? null,
+        client_id: row.client_id ?? null,
+      })
+    }
+  }
+
+  return byId
+}
+
+export async function syncBsalePayments(
+  companyId: string,
+  options: BsalePaymentsSyncOptions = { mode: 'incremental', days: 14 }
+): Promise<{ payments: number; documentPayments: number; days: number; errors: number }> {
+  const db = integrDb()
+  const now = new Date().toISOString()
+  const dateTo = options.recordDateTo ? dateInputToDate(options.recordDateTo) : new Date()
+  const dateFrom = options.recordDateFrom
+    ? dateInputToDate(options.recordDateFrom)
+    : new Date(dateTo.getTime() - (options.days || 14) * 86400000)
+  const recordDates = eachUtcDay(dateFrom, dateTo)
+  const paymentTypeNames = await getPaymentTypeNames(companyId)
+  const seen = new Map<number, BsalePayment>()
+  let errors = 0
+
+  for (const recorddate of recordDates) {
+    try {
+      const payments = await bsaleFetchAll<BsalePayment>('/payments.json', { recorddate })
+      for (const payment of payments) {
+        const paymentId = toNumber(payment.id)
+        if (paymentId !== null) seen.set(paymentId, payment)
+      }
+    } catch (err: unknown) {
+      errors++
+      console.error(`[syncBsalePayments] Error fetching recorddate=${recorddate}:`, err instanceof Error ? err.message : err)
+    }
+  }
+
+  const payments = Array.from(seen.values())
+  let paymentsCount = 0
+  let documentPaymentsCount = 0
+
+  for (let i = 0; i < payments.length; i += 100) {
+    const batch = payments.slice(i, i + 100)
+    const records: BsalePaymentRecord[] = batch
+      .map(payment => {
+        const paymentId = toNumber(payment.id)
+        if (paymentId === null) return null
+        const paymentTypeId = toNumber(payment.payment_type?.id)
+        return {
+          company_id: companyId,
+          bsale_id: paymentId,
+          bsale_payment_id: paymentId,
+          bsale_document_id: toNumber(payment.document?.id),
+          amount: toNumber(payment.amount),
+          payment_date: epochToIso(payment.recordDate),
+          record_date: epochToDate(payment.recordDate),
+          payment_type_id: paymentTypeId,
+          payment_type_bsale_id: paymentTypeId,
+          payment_type_name: paymentTypeId !== null ? paymentTypeNames.get(paymentTypeId) || null : null,
+          is_credit_payment: asBoolean(payment.isCreditPayment),
+          state: toNumber(payment.state),
+          created_at_bsale: epochToIso(payment.createdAt),
+          operation_number: payment.operationNumber || null,
+          check_date: payment.checkDate || null,
+          check_number: toNumber(payment.checkNumber),
+          raw_json: payment,
+          synced_at: now,
+          updated_at: now,
+        }
+      })
+      .filter((record): record is BsalePaymentRecord => record !== null)
+
+    if (records.length === 0) continue
+
+    const { error } = await db.from('bsale_payments').upsert(records, {
+      onConflict: 'company_id, bsale_payment_id',
+      ignoreDuplicates: false,
+    })
+
+    if (error) {
+      errors += records.length
+      console.error('[syncBsalePayments] payment upsert error:', error.message)
+    } else {
+      paymentsCount += records.length
+    }
+  }
+
+  const documentIds: number[] = []
+  for (const payment of payments) {
+    if (Array.isArray(payment.documents) && payment.documents.length > 0) {
+      for (const document of payment.documents) {
+        const documentId = toNumber(document.id)
+        if (documentId !== null) documentIds.push(documentId)
+      }
+    } else {
+      const documentId = toNumber(payment.document?.id)
+      if (documentId !== null) documentIds.push(documentId)
+    }
+  }
+
+  const documentMetadata = await getDocumentMetadata(companyId, documentIds)
+  const allocationRecords: BsaleDocumentPaymentRecord[] = []
+  const realPaymentDocumentIds = new Set<number>()
+
+  for (const payment of payments) {
+    if (!asBoolean(payment.isCreditPayment) || !Array.isArray(payment.documents)) continue
+    for (const document of payment.documents) {
+      const documentId = toNumber(document.id)
+      if (documentId !== null) realPaymentDocumentIds.add(documentId)
+    }
+  }
+
+  if (realPaymentDocumentIds.size > 0) {
+    const realDocumentIds = Array.from(realPaymentDocumentIds)
+    for (let i = 0; i < realDocumentIds.length; i += 200) {
+      const ids = realDocumentIds.slice(i, i + 200)
+      const { data, error } = await db
+        .from('bsale_payments')
+        .select('bsale_payment_id')
+        .eq('company_id', companyId)
+        .eq('is_credit_payment', false)
+        .in('bsale_document_id', ids)
+
+      if (error) {
+        errors++
+        console.error('[syncBsalePayments] Error reading initial payment allocations:', error.message)
+        continue
+      }
+
+      const initialPaymentIds = (data || []).map(row => Number(row.bsale_payment_id)).filter(Number.isFinite)
+      if (initialPaymentIds.length === 0) continue
+
+      const { error: deleteError } = await db
+        .from('bsale_document_payments')
+        .delete()
+        .eq('company_id', companyId)
+        .in('bsale_document_id', ids)
+        .in('bsale_payment_id', initialPaymentIds)
+
+      if (deleteError) {
+        errors++
+        console.error('[syncBsalePayments] Error deleting initial payment allocations:', deleteError.message)
+      }
+    }
+  }
+
+  for (const payment of payments) {
+    const paymentId = toNumber(payment.id)
+    if (paymentId === null) continue
+
+
+    const paymentTypeId = toNumber(payment.payment_type?.id)
+    const paymentTypeName = paymentTypeId !== null ? paymentTypeNames.get(paymentTypeId) || null : null
+    if (isInitialCreditPayment(payment, paymentTypeName)) continue
+
+    const paymentRecordDate = epochToIso(payment.recordDate)
+
+    if (Array.isArray(payment.documents) && payment.documents.length > 0) {
+      const paymentAmount = toNumber(payment.amount) || 0
+      const documentsTotal = payment.documents.reduce((sum, document) => sum + (toNumber(document.amount) || 0), 0)
+      const allocationRatio = documentsTotal > 0 && paymentAmount > 0 ? paymentAmount / documentsTotal : 1
+
+      for (const document of payment.documents) {
+        const documentId = toNumber(document.id)
+        if (documentId === null) continue
+        const meta = documentMetadata.get(documentId)
+        const documentAmount = toNumber(document.amount) || 0
+        allocationRecords.push({
+          company_id: companyId,
+          bsale_payment_id: paymentId,
+          bsale_document_id: documentId,
+          document_type_id: meta?.document_type_id ?? null,
+          document_number: meta?.number ?? null,
+          client_id: meta?.client_id ?? null,
+          payment_record_date: paymentRecordDate,
+          amount_applied: documentAmount * allocationRatio,
+          raw_json: { payment, document },
+          synced_at: now,
+          updated_at: now,
+        })
+      }
+    } else {
+      const documentId = toNumber(payment.document?.id)
+      if (documentId === null) continue
+      if (!asBoolean(payment.isCreditPayment) && realPaymentDocumentIds.has(documentId)) continue
+      const meta = documentMetadata.get(documentId)
+      allocationRecords.push({
+        company_id: companyId,
+        bsale_payment_id: paymentId,
+        bsale_document_id: documentId,
+        document_type_id: meta?.document_type_id ?? null,
+        document_number: meta?.number ?? null,
+        client_id: meta?.client_id ?? null,
+        payment_record_date: paymentRecordDate,
+        amount_applied: toNumber(payment.amount) || 0,
+        raw_json: { payment, document: payment.document || null },
+        synced_at: now,
+        updated_at: now,
+      })
+    }
+  }
+
+  for (let i = 0; i < allocationRecords.length; i += 100) {
+    const batch = allocationRecords.slice(i, i + 100)
+    const { error } = await db.from('bsale_document_payments').upsert(batch, {
+      onConflict: 'company_id, bsale_payment_id, bsale_document_id',
+      ignoreDuplicates: false,
+    })
+
+    if (error) {
+      errors += batch.length
+      console.error('[syncBsalePayments] document payment upsert error:', error.message)
+    } else {
+      documentPaymentsCount += batch.length
+    }
+  }
+
+  return { payments: paymentsCount, documentPayments: documentPaymentsCount, days: recordDates.length, errors }
+}
+
 export async function syncBsaleSales(
   companyId: string,
   options?: { days?: number, dateFrom?: string, dateTo?: string }
@@ -1339,7 +1758,27 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       finalStatus = 'PARTIAL';
     }
 
-    // 3. Hydrate orphan clients detected after document sync
+    // 3. Sync payments after documents because payment allocations reference document IDs.
+    let paymentTypesResult = { count: 0, errors: 0 };
+    let paymentsResult = { payments: 0, documentPayments: 0, days: 0, errors: 0 };
+    if (finalStatus !== 'FAILED') {
+      console.log('[runReplenishmentBsaleSync] Iniciando sync de payment types y payments (14 days)...');
+      try {
+        paymentTypesResult = await syncBsalePaymentTypes(companyId);
+        paymentsResult = await syncBsalePayments(companyId, { mode: 'incremental', days: 14 });
+        if (paymentTypesResult.errors > 0 || paymentsResult.errors > 0) {
+          finalStatus = 'PARTIAL';
+          errorMessage += (errorMessage ? ' | ' : '') + `Payments: type_errors=${paymentTypesResult.errors} payment_errors=${paymentsResult.errors}`;
+        }
+        console.log(`[runReplenishmentBsaleSync] Payments: types=${paymentTypesResult.count} payments=${paymentsResult.payments} allocations=${paymentsResult.documentPayments}`);
+      } catch (paymentsErr: unknown) {
+        console.error('[runReplenishmentBsaleSync] Error en payments:', paymentsErr);
+        finalStatus = 'PARTIAL';
+        errorMessage += (errorMessage ? ' | ' : '') + 'Error en payments: ' + (paymentsErr instanceof Error ? paymentsErr.message : String(paymentsErr));
+      }
+    }
+
+    // 4. Hydrate orphan clients detected after document sync
     let orphanResult = { hydrated: 0, errors: 0, orphanIds: [] as number[] };
     if (finalStatus !== 'FAILED') {
       console.log('[runReplenishmentBsaleSync] Hydrating orphan clients...');
@@ -1353,7 +1792,7 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       }
     }
 
-    // 4. Sync Stock
+    // 5. Sync Stock
     let stockCount = 0;
     if (finalStatus !== 'FAILED') {
       console.log('[runReplenishmentBsaleSync] Iniciando syncStock...');
@@ -1369,6 +1808,8 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
     const counts = {
       clients: clientStats,
       sales: salesRes.counts,
+      payments: paymentsResult,
+      payment_types: paymentTypesResult,
       orphans: orphanResult,
       stocks: stockCount
     };
