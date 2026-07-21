@@ -177,6 +177,178 @@ type CurrentMonthSalesAmounts = {
   net: number
 }
 
+export type CommercialCustomerBehaviorDocumentType = 'invoice' | 'sales_order' | 'credit_note'
+
+export type CommercialCustomerBehaviorDocument = {
+  bsale_document_id: number
+  documentTypeId: number
+  type: CommercialCustomerBehaviorDocumentType
+  label: string
+  date: string | null
+  number: number | null
+  amount: number
+  sellerName: string
+}
+
+export type CommercialCustomerMonthlyEvolution = {
+  month: string
+  monthLabel: string
+  invoiceGrossAmount: number
+  creditNoteAmount: number
+  netSalesAmount: number
+  invoiceCount: number
+  creditNoteCount: number
+  salesOrderAmount: number
+  salesOrderCount: number
+  avgTicket: number
+}
+
+export type CommercialCustomerBehaviorSummary = {
+  totalNetSales12m: number
+  totalInvoiceGross12m: number
+  totalCreditNotes12m: number
+  invoices12m: number
+  salesOrders12m: number
+  creditNotes12m: number
+  avgTicket12m: number
+  lastInvoiceDate: string | null
+  daysSinceLastInvoice: number | null
+  bestMonth: string | null
+  worstMonth: string | null
+  trendLabel: 'En crecimiento' | 'Estable' | 'En baja' | 'Sin información suficiente'
+}
+
+export type CommercialCustomerBehavior = {
+  monthlyEvolution: CommercialCustomerMonthlyEvolution[]
+  recentInvoices: CommercialCustomerBehaviorDocument[]
+  recentSalesOrders: CommercialCustomerBehaviorDocument[]
+  recentCreditNotes: CommercialCustomerBehaviorDocument[]
+  recentDocuments: CommercialCustomerBehaviorDocument[]
+  behaviorSummary: CommercialCustomerBehaviorSummary
+}
+
+export type CommercialCustomerMetricKey =
+  | 'current_month_sales'
+  | 'official_sales_total'
+  | 'official_sales_90d'
+  | 'official_sales_180d'
+  | 'invoices_total'
+  | 'avg_ticket'
+  | 'credit_notes_total'
+  | 'credit_notes_90d'
+  | 'sales_orders_90d'
+
+export type CommercialCustomerMetricDocuments = {
+  metricKey: CommercialCustomerMetricKey
+  title: string
+  note: string | null
+  documents: CommercialCustomerBehaviorDocument[]
+  summary: {
+    documentsCount: number
+    invoiceGrossAmount: number
+    creditNoteAmount: number
+    netAmount: number
+    salesOrderAmount: number
+  }
+}
+
+export type CommercialDocumentDetail = {
+  header: {
+    bsale_document_id: number
+    document_type_id: number
+    document_type_label: string
+    number: number | null
+    emission_date: string | null
+    generation_date: string | null
+    client_id: number | null
+    client_name: string | null
+    total_amount: number
+    net_amount: number
+    tax_amount: number
+    exempt_amount: number
+    discount_amount: number
+    state: number | null
+    url_pdf: string | null
+    seller_name: string
+  }
+  items: Array<{
+    line_number: number | null
+    bsale_detail_id: number
+    variant_id: number | null
+    sku: string | null
+    description: string | null
+    format: string | null
+    quantity: number
+    net_unit_value: number
+    total_unit_value: number
+    net_discount: number
+    net_amount: number
+    tax_amount: number
+    total_amount: number
+  }>
+  totals: {
+    lines: number
+    units: number
+    subtotal: number
+    discounts: number
+    taxes: number
+    total: number
+  }
+}
+
+type BehaviorDocumentRow = {
+  bsale_id: number | string
+  number: number | string | null
+  emission_date: string | null
+  total_amount: number | string | null
+  document_type_id: number | string | null
+}
+
+type DetailDocumentRow = BehaviorDocumentRow & {
+  generation_date: string | null
+  client_id: number | string | null
+  net_amount: number | string | null
+  tax_amount: number | string | null
+  exempt_amount: number | string | null
+  state: number | string | null
+  url_pdf: string | null
+  raw_json: Record<string, unknown> | null
+}
+
+type DetailLineRow = {
+  bsale_id: number | string
+  line_number: number | string | null
+  quantity: number | string | null
+  net_unit_value: number | string | null
+  total_unit_value: number | string | null
+  net_amount: number | string | null
+  tax_amount: number | string | null
+  total_amount: number | string | null
+  net_discount: number | string | null
+  variant_id: number | string | null
+  variant_code: string | null
+  variant_description: string | null
+}
+
+type BsaleVariantRow = {
+  bsale_id: number | string
+  bsale_product_id: number | string
+  code: string | null
+  description: string | null
+}
+
+type BsaleProductRow = {
+  bsale_id: number | string
+  name: string | null
+  description: string | null
+}
+
+type DocumentSellerRow = {
+  bsale_document_id: number | string
+  seller_name: string | null
+  is_primary: boolean | null
+}
+
 function cleanRut(rut: string | null) {
   if (!rut) return null
   return rut.replace(/[^0-9kK]/g, '').toUpperCase()
@@ -196,6 +368,146 @@ function currentMonthRange() {
   return {
     firstDay: `${year}-${month}-01`,
     today: `${year}-${month}-${day}`,
+  }
+}
+
+function monthKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
+function startOfMonth(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1)
+}
+
+function addMonths(date: Date, months: number) {
+  return new Date(date.getFullYear(), date.getMonth() + months, 1)
+}
+
+function documentLabel(typeId: number): { type: CommercialCustomerBehaviorDocumentType; label: string } | null {
+  if (typeId === 5) return { type: 'invoice', label: 'Factura' }
+  if (typeId === 23) return { type: 'sales_order', label: 'Nota de venta' }
+  if (typeId === 2) return { type: 'credit_note', label: 'Nota de crédito' }
+  return null
+}
+
+function daysBetweenToday(date: string | null) {
+  if (!date) return null
+  const start = new Date(date + 'T00:00:00')
+  const today = new Date()
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+  return Math.max(0, Math.floor((todayStart.getTime() - start.getTime()) / 86400000))
+}
+
+function buildTrendLabel(months: CommercialCustomerMonthlyEvolution[]): CommercialCustomerBehaviorSummary['trendLabel'] {
+  const recent = months.slice(-3)
+  const previous = months.slice(-6, -3)
+  const recentHasData = recent.some(m => m.invoiceCount > 0 || m.creditNoteCount > 0)
+  const previousHasData = previous.some(m => m.invoiceCount > 0 || m.creditNoteCount > 0)
+  if (recent.length < 3 || previous.length < 3 || !recentHasData || !previousHasData) return 'Sin información suficiente'
+
+  const recentTotal = recent.reduce((sum, m) => sum + m.netSalesAmount, 0)
+  const previousTotal = previous.reduce((sum, m) => sum + m.netSalesAmount, 0)
+  if (previousTotal === 0) return recentTotal > 0 ? 'En crecimiento' : 'Sin información suficiente'
+
+  const change = (recentTotal - previousTotal) / Math.abs(previousTotal)
+  if (change > 0.1) return 'En crecimiento'
+  if (change < -0.1) return 'En baja'
+  return 'Estable'
+}
+
+function sellerMapFromRows(rows: DocumentSellerRow[]) {
+  const map = new Map<number, string>()
+  const grouped = new Map<number, DocumentSellerRow[]>()
+
+  for (const row of rows) {
+    const docId = Number(row.bsale_document_id)
+    const current = grouped.get(docId) || []
+    current.push(row)
+    grouped.set(docId, current)
+  }
+
+  for (const [docId, sellers] of grouped) {
+    const primary = sellers.filter(s => s.is_primary && s.seller_name).map(s => s.seller_name as string)
+    const names = primary.length > 0 ? primary : sellers.filter(s => s.seller_name).map(s => s.seller_name as string)
+    map.set(docId, Array.from(new Set(names)).join(', ') || 'Pendiente')
+  }
+
+  return map
+}
+
+function mapBehaviorDocument(row: BehaviorDocumentRow, sellers: Map<number, string>): CommercialCustomerBehaviorDocument | null {
+  const typeId = Number(row.document_type_id)
+  const meta = documentLabel(typeId)
+  if (!meta) return null
+  const bsaleDocumentId = Number(row.bsale_id)
+  return {
+    bsale_document_id: bsaleDocumentId,
+    documentTypeId: typeId,
+    type: meta.type,
+    label: meta.label,
+    date: row.emission_date,
+    number: row.number == null ? null : Number(row.number),
+    amount: asNumber(row.total_amount),
+    sellerName: sellers.get(bsaleDocumentId) || 'Pendiente',
+  }
+}
+
+async function validateCommercialClient(companyId: string, bsaleClientId: number) {
+  const { data, error } = await comAdmin()
+    .from('customers')
+    .select('id, bsale_client_id, business_name, fantasy_name')
+    .eq('company_id', companyId)
+    .eq('bsale_client_id', bsaleClientId)
+    .maybeSingle()
+
+  if (error) throw error
+  return data as { id: string; bsale_client_id: number | string; business_name: string; fantasy_name: string | null } | null
+}
+
+async function loadCertifiedSellerMap(companyId: string, documentIds: number[]) {
+  const sellerRows: DocumentSellerRow[] = []
+  const uniqueIds = Array.from(new Set(documentIds.filter(Number.isFinite)))
+
+  for (let i = 0; i < uniqueIds.length; i += 500) {
+    const { data, error } = await comAdmin()
+      .schema('integraciones')
+      .from('bsale_document_sellers')
+      .select('bsale_document_id,seller_name,is_primary')
+      .eq('company_id', companyId)
+      .in('bsale_document_id', uniqueIds.slice(i, i + 500))
+
+    if (error) throw error
+    sellerRows.push(...((data || []) as DocumentSellerRow[]))
+  }
+
+  return sellerMapFromRows(sellerRows)
+}
+
+function metricConfig(metricKey: CommercialCustomerMetricKey) {
+  const { firstDay, today } = currentMonthRange()
+  const now = new Date()
+  const date90 = new Date(now.getTime() - 90 * 86400000).toISOString().slice(0, 10)
+  const date180 = new Date(now.getTime() - 180 * 86400000).toISOString().slice(0, 10)
+
+  switch (metricKey) {
+    case 'current_month_sales':
+      return { title: 'Detalle venta mes actual', types: [2, 5], from: firstDay, to: today, note: 'Venta neta = facturas - notas de crédito.' }
+    case 'official_sales_total':
+      return { title: 'Detalle venta oficial total', types: [5], from: null, to: null, note: 'Incluye facturas oficiales.' }
+    case 'official_sales_90d':
+      return { title: 'Detalle venta 90d', types: [5], from: date90, to: null, note: 'Incluye facturas oficiales de los últimos 90 días.' }
+    case 'official_sales_180d':
+      return { title: 'Detalle venta 180d', types: [5], from: date180, to: null, note: 'Incluye facturas oficiales de los últimos 180 días.' }
+    case 'invoices_total':
+      return { title: 'Detalle facturas totales', types: [5], from: null, to: null, note: 'Incluye todas las facturas del cliente.' }
+    case 'avg_ticket':
+      return { title: 'Documentos del ticket promedio', types: [5], from: null, to: null, note: 'Ticket promedio calculado sobre facturas oficiales totales.' }
+    case 'credit_notes_total':
+      return { title: 'Detalle notas de crédito', types: [2], from: null, to: null, note: 'Notas de crédito como corrección de venta.' }
+    case 'credit_notes_90d':
+      return { title: 'Detalle notas de crédito 90d', types: [2], from: date90, to: null, note: 'Notas de crédito de los últimos 90 días.' }
+    case 'sales_orders_90d':
+      return { title: 'Detalle notas de venta 90d', types: [23], from: date90, to: null, note: 'Notas de venta son pedidos operativos; no suman como venta oficial.' }
   }
 }
 
@@ -332,6 +644,383 @@ export async function getCommercialCustomersStats(): Promise<CommercialCustomerS
     withCreditNotes: rows.filter(r => r.credit_note_count_total > 0).length,
     withAnomalousReceipt: rows.filter(r => r.has_anomalous_receipt).length,
     lowQuality: rows.filter(r => r.quality_score < 60).length,
+  }
+}
+
+export async function getCommercialCustomerBehavior(params: {
+  bsaleClientId: number
+  monthsBack?: number
+  limit?: number
+}): Promise<CommercialCustomerBehavior | { error: string }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { error: 'No autorizado' }
+
+  const bsaleClientId = Number(params.bsaleClientId)
+  if (!Number.isFinite(bsaleClientId)) return { error: 'Cliente inválido' }
+
+  const monthsBack = Math.min(Math.max(Number(params.monthsBack || 12), 3), 24)
+  const limit = Math.min(Math.max(Number(params.limit || 20), 5), 50)
+
+  const { data: customer, error: customerError } = await comAdmin()
+    .from('customers')
+    .select('id, bsale_client_id')
+    .eq('company_id', companyId)
+    .eq('bsale_client_id', bsaleClientId)
+    .maybeSingle()
+
+  if (customerError) {
+    console.error('getCommercialCustomerBehavior customer error:', customerError)
+    return { error: 'No se pudo validar el cliente' }
+  }
+  if (!customer) return { error: 'Cliente no pertenece a la empresa activa' }
+
+  const now = new Date()
+  const firstMonth = addMonths(startOfMonth(now), -(monthsBack - 1))
+  const fromDate = monthKey(firstMonth) + '-01'
+  const pageSize = 1000
+  let from = 0
+  const monthlyRows: BehaviorDocumentRow[] = []
+
+  while (true) {
+    const { data, error } = await comAdmin()
+      .schema('integraciones')
+      .from('bsale_documents')
+      .select('bsale_id,number,emission_date,total_amount,document_type_id')
+      .eq('company_id', companyId)
+      .eq('client_id', bsaleClientId)
+      .in('document_type_id', [2, 5, 23])
+      .gte('emission_date', fromDate)
+      .order('emission_date', { ascending: false })
+      .range(from, from + pageSize - 1)
+
+    if (error) {
+      console.error('getCommercialCustomerBehavior documents error:', error)
+      return { error: 'No se pudieron cargar documentos del cliente' }
+    }
+
+    const rows = (data || []) as BehaviorDocumentRow[]
+    monthlyRows.push(...rows)
+    if (rows.length < pageSize) break
+    from += pageSize
+  }
+
+  const recentByType = await Promise.all([2, 5, 23].map(async documentTypeId => {
+    const { data, error } = await comAdmin()
+      .schema('integraciones')
+      .from('bsale_documents')
+      .select('bsale_id,number,emission_date,total_amount,document_type_id')
+      .eq('company_id', companyId)
+      .eq('client_id', bsaleClientId)
+      .eq('document_type_id', documentTypeId)
+      .order('emission_date', { ascending: false })
+      .order('bsale_id', { ascending: false })
+      .limit(limit)
+
+    if (error) throw error
+    return (data || []) as BehaviorDocumentRow[]
+  })).catch(error => {
+    console.error('getCommercialCustomerBehavior recent documents error:', error)
+    return null
+  })
+
+  if (!recentByType) return { error: 'No se pudieron cargar documentos recientes' }
+
+  const recentRows = recentByType.flat()
+
+  const sellerDocumentIds = Array.from(new Set([...monthlyRows, ...recentRows].map(row => Number(row.bsale_id)).filter(Number.isFinite)))
+  const sellerRows: DocumentSellerRow[] = []
+
+  for (let i = 0; i < sellerDocumentIds.length; i += 500) {
+    const { data, error } = await comAdmin()
+      .schema('integraciones')
+      .from('bsale_document_sellers')
+      .select('bsale_document_id,seller_name,is_primary')
+      .eq('company_id', companyId)
+      .in('bsale_document_id', sellerDocumentIds.slice(i, i + 500))
+
+    if (error) {
+      console.error('getCommercialCustomerBehavior sellers error:', error)
+      return { error: 'No se pudieron cargar vendedores certificados' }
+    }
+    sellerRows.push(...((data || []) as DocumentSellerRow[]))
+  }
+
+  const sellers = sellerMapFromRows(sellerRows)
+  const monthlyDocuments = monthlyRows
+    .map(row => mapBehaviorDocument(row, sellers))
+    .filter(Boolean) as CommercialCustomerBehaviorDocument[]
+  const recentDocumentsAll = recentRows
+    .map(row => mapBehaviorDocument(row, sellers))
+    .filter(Boolean) as CommercialCustomerBehaviorDocument[]
+
+  const monthlyEvolution: CommercialCustomerMonthlyEvolution[] = Array.from({ length: monthsBack }, (_, index) => {
+    const date = addMonths(firstMonth, index)
+    return {
+      month: monthKey(date),
+      monthLabel: date.toLocaleDateString('es-CL', { month: 'short', year: '2-digit' }).replace('.', ''),
+      invoiceGrossAmount: 0,
+      creditNoteAmount: 0,
+      netSalesAmount: 0,
+      invoiceCount: 0,
+      creditNoteCount: 0,
+      salesOrderAmount: 0,
+      salesOrderCount: 0,
+      avgTicket: 0,
+    }
+  })
+  const monthIndex = new Map(monthlyEvolution.map((item, index) => [item.month, index]))
+
+  for (const doc of monthlyDocuments) {
+    if (!doc.date) continue
+    const index = monthIndex.get(doc.date.slice(0, 7))
+    if (index === undefined) continue
+    const month = monthlyEvolution[index]
+    if (doc.documentTypeId === 5) {
+      month.invoiceGrossAmount += doc.amount
+      month.invoiceCount++
+    }
+    if (doc.documentTypeId === 2) {
+      month.creditNoteAmount += doc.amount
+      month.creditNoteCount++
+    }
+    if (doc.documentTypeId === 23) {
+      month.salesOrderAmount += doc.amount
+      month.salesOrderCount++
+    }
+    month.netSalesAmount = month.invoiceGrossAmount - month.creditNoteAmount
+    month.avgTicket = month.invoiceCount > 0 ? Math.round(month.invoiceGrossAmount / month.invoiceCount) : 0
+  }
+
+  const sortedDocuments = recentDocumentsAll.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || b.bsale_document_id - a.bsale_document_id)
+  const recentInvoices = sortedDocuments.filter(doc => doc.documentTypeId === 5).slice(0, limit)
+  const recentSalesOrders = sortedDocuments.filter(doc => doc.documentTypeId === 23).slice(0, limit)
+  const recentCreditNotes = sortedDocuments.filter(doc => doc.documentTypeId === 2).slice(0, limit)
+  const recentDocuments = sortedDocuments.slice(0, limit)
+
+  const invoiceMonths = monthlyEvolution.filter(m => m.invoiceCount > 0)
+  const bestMonth = invoiceMonths.length > 0 ? invoiceMonths.reduce((best, month) => month.netSalesAmount > best.netSalesAmount ? month : best).monthLabel : null
+  const worstMonth = invoiceMonths.length > 0 ? invoiceMonths.reduce((worst, month) => month.netSalesAmount < worst.netSalesAmount ? month : worst).monthLabel : null
+  const lastInvoiceDate = recentInvoices[0]?.date || null
+  const totalInvoiceGross12m = monthlyEvolution.reduce((sum, month) => sum + month.invoiceGrossAmount, 0)
+  const totalCreditNotes12m = monthlyEvolution.reduce((sum, month) => sum + month.creditNoteAmount, 0)
+  const invoices12m = monthlyEvolution.reduce((sum, month) => sum + month.invoiceCount, 0)
+
+  return {
+    monthlyEvolution,
+    recentInvoices,
+    recentSalesOrders,
+    recentCreditNotes,
+    recentDocuments,
+    behaviorSummary: {
+      totalNetSales12m: totalInvoiceGross12m - totalCreditNotes12m,
+      totalInvoiceGross12m,
+      totalCreditNotes12m,
+      invoices12m,
+      salesOrders12m: monthlyEvolution.reduce((sum, month) => sum + month.salesOrderCount, 0),
+      creditNotes12m: monthlyEvolution.reduce((sum, month) => sum + month.creditNoteCount, 0),
+      avgTicket12m: invoices12m > 0 ? Math.round(totalInvoiceGross12m / invoices12m) : 0,
+      lastInvoiceDate,
+      daysSinceLastInvoice: daysBetweenToday(lastInvoiceDate),
+      bestMonth,
+      worstMonth,
+      trendLabel: buildTrendLabel(monthlyEvolution),
+    },
+  }
+}
+
+export async function getCommercialCustomerMetricDocuments(params: {
+  bsaleClientId: number
+  metricKey: CommercialCustomerMetricKey
+  limit?: number
+}): Promise<CommercialCustomerMetricDocuments | { error: string }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { error: 'No autorizado' }
+
+  const bsaleClientId = Number(params.bsaleClientId)
+  if (!Number.isFinite(bsaleClientId)) return { error: 'Cliente inválido' }
+
+  const allowedKeys: CommercialCustomerMetricKey[] = ['current_month_sales', 'official_sales_total', 'official_sales_90d', 'official_sales_180d', 'invoices_total', 'avg_ticket', 'credit_notes_total', 'credit_notes_90d', 'sales_orders_90d']
+  if (!allowedKeys.includes(params.metricKey)) return { error: 'Métrica inválida' }
+
+  try {
+    const customer = await validateCommercialClient(companyId, bsaleClientId)
+    if (!customer) return { error: 'Cliente no pertenece a la empresa activa' }
+
+    const config = metricConfig(params.metricKey)
+    const limit = Math.min(Math.max(Number(params.limit || 120), 20), 500)
+    let query = comAdmin()
+      .schema('integraciones')
+      .from('bsale_documents')
+      .select('bsale_id,number,emission_date,total_amount,document_type_id')
+      .eq('company_id', companyId)
+      .eq('client_id', bsaleClientId)
+      .in('document_type_id', config.types)
+      .order('emission_date', { ascending: false })
+      .order('bsale_id', { ascending: false })
+      .limit(limit)
+
+    if (config.from) query = query.gte('emission_date', config.from)
+    if (config.to) query = query.lte('emission_date', config.to)
+
+    const { data, error } = await query
+    if (error) throw error
+
+    const rows = (data || []) as BehaviorDocumentRow[]
+    const sellers = await loadCertifiedSellerMap(companyId, rows.map(row => Number(row.bsale_id)))
+    const documents = rows
+      .map(row => mapBehaviorDocument(row, sellers))
+      .filter(Boolean) as CommercialCustomerBehaviorDocument[]
+
+    const summary = documents.reduce((acc, doc) => {
+      if (doc.documentTypeId === 5) acc.invoiceGrossAmount += doc.amount
+      if (doc.documentTypeId === 2) acc.creditNoteAmount += doc.amount
+      if (doc.documentTypeId === 23) acc.salesOrderAmount += doc.amount
+      acc.netAmount = acc.invoiceGrossAmount - acc.creditNoteAmount
+      return acc
+    }, { documentsCount: documents.length, invoiceGrossAmount: 0, creditNoteAmount: 0, netAmount: 0, salesOrderAmount: 0 })
+
+    return {
+      metricKey: params.metricKey,
+      title: config.title,
+      note: config.note,
+      documents,
+      summary,
+    }
+  } catch (error) {
+    console.error('getCommercialCustomerMetricDocuments error:', error)
+    return { error: 'No se pudo cargar el detalle de la métrica' }
+  }
+}
+
+export async function getCommercialDocumentDetail(params: {
+  bsaleDocumentId: number
+}): Promise<CommercialDocumentDetail | { error: string }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { error: 'No autorizado' }
+
+  const bsaleDocumentId = Number(params.bsaleDocumentId)
+  if (!Number.isFinite(bsaleDocumentId)) return { error: 'Documento inválido' }
+
+  try {
+    const { data: documentData, error: documentError } = await comAdmin()
+      .schema('integraciones')
+      .from('bsale_documents')
+      .select('bsale_id,number,emission_date,generation_date,total_amount,net_amount,tax_amount,exempt_amount,document_type_id,client_id,state,url_pdf,raw_json')
+      .eq('company_id', companyId)
+      .eq('bsale_id', bsaleDocumentId)
+      .maybeSingle()
+
+    if (documentError) throw documentError
+    if (!documentData) return { error: 'Documento no encontrado' }
+
+    const document = documentData as DetailDocumentRow
+    const clientId = document.client_id == null ? null : Number(document.client_id)
+    const customer = clientId == null ? null : await validateCommercialClient(companyId, clientId)
+    if (clientId != null && !customer) return { error: 'Documento no pertenece a la empresa activa' }
+
+    const { data: lineData, error: lineError } = await comAdmin()
+      .schema('integraciones')
+      .from('bsale_document_details')
+      .select('bsale_id,line_number,quantity,net_unit_value,total_unit_value,net_amount,tax_amount,total_amount,net_discount,variant_id,variant_code,variant_description')
+      .eq('company_id', companyId)
+      .eq('bsale_document_id', bsaleDocumentId)
+      .order('line_number', { ascending: true })
+
+    if (lineError) throw lineError
+
+    const sellers = await loadCertifiedSellerMap(companyId, [bsaleDocumentId])
+    const typeId = Number(document.document_type_id)
+    const label = documentLabel(typeId)?.label || 'Documento'
+    const rawClient = document.raw_json?.client as { company?: string; firstName?: string; lastName?: string } | undefined
+    const clientName = customer?.business_name || rawClient?.company || [rawClient?.firstName, rawClient?.lastName].filter(Boolean).join(' ') || null
+    const lines = (lineData || []) as DetailLineRow[]
+    const variantIds = Array.from(new Set(lines.map(line => line.variant_id == null ? null : Number(line.variant_id)).filter((id): id is number => Number.isFinite(id))))
+    const variantMap = new Map<number, BsaleVariantRow>()
+    const productMap = new Map<number, BsaleProductRow>()
+
+    if (variantIds.length > 0) {
+      const { data: variantData, error: variantError } = await comAdmin()
+        .schema('integraciones')
+        .from('bsale_variants')
+        .select('bsale_id,bsale_product_id,code,description')
+        .eq('company_id', companyId)
+        .in('bsale_id', variantIds)
+
+      if (variantError) throw variantError
+      const variants = (variantData || []) as BsaleVariantRow[]
+      for (const variant of variants) variantMap.set(Number(variant.bsale_id), variant)
+
+      const productIds = Array.from(new Set(variants.map(variant => Number(variant.bsale_product_id)).filter(Number.isFinite)))
+      if (productIds.length > 0) {
+        const { data: productData, error: productError } = await comAdmin()
+          .schema('integraciones')
+          .from('bsale_products')
+          .select('bsale_id,name,description')
+          .eq('company_id', companyId)
+          .in('bsale_id', productIds)
+
+        if (productError) throw productError
+        for (const product of (productData || []) as BsaleProductRow[]) productMap.set(Number(product.bsale_id), product)
+      }
+    }
+
+    const items = lines.map((line, index) => {
+      const variantId = line.variant_id == null ? null : Number(line.variant_id)
+      const variant = variantId == null ? null : variantMap.get(variantId)
+      const product = variant ? productMap.get(Number(variant.bsale_product_id)) : null
+      const lineNumber = line.line_number == null ? null : Number(line.line_number)
+      const format = variant?.description || line.variant_description || null
+      const productName = product?.name || product?.description || (format ? null : line.variant_description) || line.variant_code || null
+
+      return {
+      line_number: lineNumber && lineNumber > 0 ? lineNumber : index + 1,
+      bsale_detail_id: Number(line.bsale_id),
+      variant_id: variantId,
+      sku: line.variant_code || variant?.code || null,
+      description: productName,
+      format,
+      quantity: asNumber(line.quantity),
+      net_unit_value: asNumber(line.net_unit_value),
+      total_unit_value: asNumber(line.total_unit_value),
+      net_discount: asNumber(line.net_discount),
+      net_amount: asNumber(line.net_amount),
+      tax_amount: asNumber(line.tax_amount),
+      total_amount: asNumber(line.total_amount),
+    }
+    })
+
+    return {
+      header: {
+        bsale_document_id: Number(document.bsale_id),
+        document_type_id: typeId,
+        document_type_label: label,
+        number: document.number == null ? null : Number(document.number),
+        emission_date: document.emission_date,
+        generation_date: document.generation_date,
+        client_id: clientId,
+        client_name: clientName,
+        total_amount: asNumber(document.total_amount),
+        net_amount: asNumber(document.net_amount),
+        tax_amount: asNumber(document.tax_amount),
+        exempt_amount: asNumber(document.exempt_amount),
+        discount_amount: items.reduce((sum, item) => sum + item.net_discount, 0),
+        state: document.state == null ? null : Number(document.state),
+        url_pdf: document.url_pdf,
+        seller_name: sellers.get(bsaleDocumentId) || 'Pendiente',
+      },
+      items,
+      totals: {
+        lines: items.length,
+        units: items.reduce((sum, item) => sum + item.quantity, 0),
+        subtotal: items.reduce((sum, item) => sum + item.net_amount, 0),
+        discounts: items.reduce((sum, item) => sum + item.net_discount, 0),
+        taxes: items.reduce((sum, item) => sum + item.tax_amount, 0),
+        total: asNumber(document.total_amount),
+      },
+    }
+  } catch (error) {
+    console.error('getCommercialDocumentDetail error:', error)
+    return { error: 'No se pudo cargar el detalle del documento' }
   }
 }
 
