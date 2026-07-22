@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { ModuleLayout } from '@/components/modules/module-layout'
 import { CustomersPanel } from '@/modules/comercial/clientes/customers-panel'
 import { ReceivablesPanel } from '@/modules/comercial/cobranza/receivables-panel'
+import { CommissionsPanel } from '@/modules/comercial/comisiones/commissions-panel'
 import type { RibbonAction } from '@/components/layout/module-ribbon'
 
 const tabs = [
@@ -34,7 +35,8 @@ export function ComercialLayoutClient({ profile }: ComercialLayoutClientProps) {
   if (activeTab === 'maestros') {
     ribbonActions.push(
       { id: 'clientes', label: 'Clientes', icon: 'Users', onClick: () => setActiveActionId('clientes') },
-      { id: 'analisis-clientes', label: 'Análisis de clientes', icon: 'LineChart', onClick: () => setActiveActionId('analisis-clientes') }
+      { id: 'analisis-clientes', label: 'Análisis de clientes', icon: 'LineChart', onClick: () => setActiveActionId('analisis-clientes') },
+      { id: 'comisiones', label: 'Comisiones', icon: 'BadgeDollarSign', onClick: () => setActiveActionId('comisiones') }
     )
   }
 
@@ -56,6 +58,8 @@ export function ComercialLayoutClient({ profile }: ComercialLayoutClientProps) {
       content = <CustomersPanel />
     } else if (activeActionId === 'analisis-clientes') {
       content = <ReceivablesPanel />
+    } else if (activeActionId === 'comisiones') {
+      content = <CommissionsPanel />
     }
   } else {
     content = (
