@@ -71,7 +71,7 @@ export function SalesOrderCard({ card, onClick, isOverlay }: SalesOrderCardProps
         <span className="inline-block px-1.5 py-0.5 bg-theme-base border border-theme-border/80 text-theme-text text-[10px] font-bold rounded">
           NV #{card.nv_folio}
         </span>
-        <span className="text-[10px] text-theme-text-muted font-medium">{emitDate}</span>
+        <span className="text-[10px] text-theme-text-muted font-medium" title="Fecha de emisión de la Nota de Venta">Emisión: {emitDate}</span>
       </div>
 
       {/* Client */}
