@@ -5,11 +5,13 @@ import { Search, SlidersHorizontal, KanbanSquare, Loader2, RotateCcw, Lock } fro
 import { 
   getSalesOrderPreparationBoard, 
   getSalesOrderPreparationItems,
+  getSalesOrderPreparationTrace,
   previewNextRouteCandidates,
   PreviewNextRouteResult,
   SalesOrderPreparationCardInfo,
   SalesOrderPreparationItem,
 } from '@/app/actions/logistica/sales-order-preparation'
+import { getBsaleSalesSyncHealth, type BsaleSalesSyncHealth } from '@/app/actions/integraciones/sync'
 import { SalesOrderCard } from './sales-order-card'
 import { SalesOrderDrawer } from './sales-order-drawer'
 import { DndContext, DragEndEvent, DragStartEvent, DragOverlay, useDroppable, useSensor, useSensors, PointerSensor } from '@dnd-kit/core'
@@ -128,6 +130,8 @@ export function SalesOrderPreparationPanel() {
   const [previewInfo, setPreviewInfo] = useState<PreviewNextRouteResult | null>(null)
   const [loadingPreview, setLoadingPreview] = useState(true)
   const [previewError, setPreviewError] = useState<string | null>(null)
+  const [syncHealth, setSyncHealth] = useState<BsaleSalesSyncHealth | null>(null)
+  const [preparationTrace, setPreparationTrace] = useState<{ materialized: number; existing: number; outOfCutoff: number; completedAt: string | null } | null>(null)
 
   // Drawer state
   const [selectedCard, setSelectedCard] = useState<SalesOrderPreparationCardInfo | null>(null)
@@ -181,6 +185,12 @@ export function SalesOrderPreparationPanel() {
       setPreviewError(err.message || 'Error desconocido')
     } finally {
       setLoadingPreview(false)
+    }
+
+    const [syncResult, traceResult] = await Promise.all([getBsaleSalesSyncHealth(), getSalesOrderPreparationTrace()])
+    setSyncHealth(syncResult)
+    if (!traceResult.error && traceResult.data) {
+      setPreparationTrace(traceResult.data)
     }
   }
 
@@ -276,17 +286,22 @@ export function SalesOrderPreparationPanel() {
 
   const hasFilters = searchTerm || filterCity || filterSeller
   const clearFilters = () => { setSearchTerm(''); setFilterCity(''); setFilterSeller('') }
+  const routeCities = previewInfo?.cities || []
+  const routeCitiesLabel = routeCities.length <= 4 ? routeCities.join(', ') : `${routeCities.length} comunas`
+  const syncRun = syncHealth?.latestSuccessfulRun
+  const syncTrigger = syncRun?.trigger === 'SCHEDULED' ? 'SCHED' : syncRun?.trigger === 'MANUAL' ? 'MANUAL' : syncRun?.trigger || 'INIT'
+  const syncTime = syncRun?.completed_at || syncRun?.started_at
 
   return (
     <div className="flex flex-col h-[calc(100vh-110px)] w-full overflow-hidden">
       {/* ── Header / Toolbar ── */}
-      <div className="flex-none px-4 py-3 border-b border-theme-border bg-theme-panel shadow-sm z-10">
-        <div className="flex items-center justify-between gap-4">
+      <div className="flex-none px-4 py-2 border-b border-theme-border bg-theme-panel shadow-sm z-10">
+        <div className="flex items-center gap-2 whitespace-nowrap">
           
-          <div className="flex items-center gap-3 flex-1 min-w-0">
-            <div className="flex items-center gap-2 pr-3 border-r border-theme-border/50">
+          <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
+            <div className="flex items-center gap-1.5 shrink-0">
               <KanbanSquare className="w-4 h-4 text-theme-accent shrink-0" />
-              <h1 className="text-sm font-bold text-theme-text truncate">Próxima ruta a preparar</h1>
+              <h1 className="text-sm font-bold text-theme-text">Próxima ruta</h1>
               <span className="px-1.5 py-0.5 rounded bg-theme-base text-theme-text-muted text-[10px] font-bold border border-theme-border/50 shrink-0">
                 {filteredCards.length}
               </span>
@@ -303,62 +318,43 @@ export function SalesOrderPreparationPanel() {
                 <span className="opacity-80 truncate max-w-[150px]">({previewError})</span>
               </div>
             ) : previewInfo && previewInfo.has_route ? (
-              <div className="flex items-center gap-3 text-[11px] text-theme-text overflow-x-auto no-scrollbar">
-                <div className="flex items-center gap-1.5 bg-theme-base px-2 py-1 rounded border border-theme-border/50 whitespace-nowrap">
+              <div className="flex items-center gap-2 min-w-0 overflow-hidden text-[10px] text-theme-text">
+                <div className="flex items-center gap-1.5 shrink-0 bg-theme-base px-2 py-1 rounded border border-theme-border/50" title="Fecha de despacho de la ruta activa">
                   <span className="font-bold">
                     {previewInfo.route_date ? (() => { const [y,m,d] = previewInfo.route_date.split('-'); return `${d}-${m}-${y}`; })() : ''}
                   </span>
-                  <span className="text-theme-text-muted">·</span>
-                  <span className="truncate max-w-[150px] font-medium" title={previewInfo.cities?.join(', ')}>
-                    {previewInfo.cities?.join(', ') || ''}
+                  <span className="font-medium" title={routeCities.join(', ')}>
+                    {routeCitiesLabel}
                   </span>
                 </div>
 
-                <div className="flex items-center gap-1.5 whitespace-nowrap">
-                  <span className="text-theme-text-muted font-medium">Corte:</span>
-                  <span className="font-bold">
+                <span className="shrink-0 text-theme-text-muted" title="Hora de corte de la ruta activa">
+                  Corte <b className="text-theme-text">
                     {previewInfo.cutoff_at_chile ? (() => {
                       const [datePart, timePart] = previewInfo.cutoff_at_chile.split(' ')
                       const [y,m,d] = datePart.split('-')
                       return `${d}-${m}-${y} ${timePart.substring(0,5)}`
                     })() : previewInfo.cutoff_at ? new Date(previewInfo.cutoff_at).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
-                  </span>
-                </div>
+                  </b>
+                </span>
 
-                <div className="flex items-center gap-4 pl-4 border-l border-theme-border/50 whitespace-nowrap">
-                  {previewInfo.counts?.in_cutoff === 0 && (previewInfo.counts?.existing_cards ?? 0) > 0 ? (
-                    <span className="flex items-center gap-1.5 text-theme-text-muted font-medium text-[11px]">
-                      <span className="w-2 h-2 rounded-full bg-blue-500"></span>Materializados: {previewInfo.counts?.existing_cards}
-                    </span>
-                  ) : (
-                    <>
-                      <span className="flex items-center gap-1.5 text-theme-text font-bold text-[11px]">
-                        <span className="w-2 h-2 rounded-full bg-green-500"></span>Nuevos: {previewInfo.counts?.in_cutoff ?? 0}
-                      </span>
-                      {(previewInfo.counts?.existing_cards ?? 0) > 0 && (
-                        <span className="flex items-center gap-1.5 text-theme-text-muted font-medium text-[11px]">
-                          <span className="w-2 h-2 rounded-full bg-blue-500"></span>Existentes: {previewInfo.counts?.existing_cards}
-                        </span>
-                      )}
-                    </>
-                  )}
-                  <span className="flex items-center gap-1.5 text-theme-text font-bold text-[11px]">
-                    <span className="w-2 h-2 rounded-full bg-red-500"></span>Fuera de corte: {previewInfo.counts?.out_cutoff ?? 0}
-                  </span>
-                  {(previewInfo.counts?.out_cutoff ?? 0) > 0 && (
-                    <button
-                      onClick={() => setIsExceptionDialogOpen(true)}
-                      className="ml-1 text-[10px] bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20 px-2 py-0.5 rounded transition-colors font-semibold"
-                    >
-                      Incluir fuera de corte
-                    </button>
-                  )}
-                  {(previewInfo.counts?.exceptions ?? 0) > 0 && (
-                    <span className="flex items-center gap-1.5 text-theme-text font-bold text-[11px]">
-                      <span className="w-2 h-2 rounded-full bg-orange-500"></span>Excepciones: {previewInfo.counts?.exceptions}
-                    </span>
-                  )}
-                </div>
+                <span className="shrink-0 text-theme-text-muted" title="Tarjetas creadas por la última materialización automática">Mat. <b className="text-theme-text">{preparationTrace?.materialized ?? 0}</b></span>
+                <span className="shrink-0 text-theme-text-muted" title="Candidatas fuera del horario de corte">F/C <b className="text-theme-text">{previewInfo.counts?.out_cutoff ?? 0}</b></span>
+                <span className="shrink-0 text-theme-text-muted" title="Último sync de ventas y documentos Bsale">
+                  Sync <b className="text-theme-text">{syncRun ? `OK · ${syncTrigger} ${syncTime ? new Date(syncTime).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : ''}` : 'sin evidencia'}</b>
+                </span>
+                <span className="shrink-0 text-theme-text-muted" title={`Preparación: ${preparationTrace?.materialized ?? 0} materializadas · ${preparationTrace?.existing ?? 0} existentes · ${preparationTrace?.outOfCutoff ?? 0} fuera de corte`}>
+                  Prep <b className="text-theme-text">{preparationTrace ? `${preparationTrace.materialized} mat · ${preparationTrace.existing} exis · ${preparationTrace.outOfCutoff} F/C` : 'sin rastro'}</b>
+                </span>
+                {(previewInfo.counts?.out_cutoff ?? 0) > 0 && (
+                  <button
+                    onClick={() => setIsExceptionDialogOpen(true)}
+                    className="shrink-0 text-[10px] bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20 px-2 py-0.5 rounded transition-colors font-semibold"
+                  >
+                    Incluir F/C
+                  </button>
+                )}
+                {(previewInfo.counts?.exceptions ?? 0) > 0 && <span className="shrink-0 text-theme-text-muted" title="Excepciones autorizadas">Exc. <b className="text-theme-text">{previewInfo.counts?.exceptions}</b></span>}
               </div>
             ) : previewInfo && !previewInfo.has_route ? (
               <div className="text-[11px] text-theme-text-muted font-medium">
@@ -369,7 +365,7 @@ export function SalesOrderPreparationPanel() {
           
           {/* Controls */}
           <div className="flex items-center gap-2 shrink-0">
-            <div className="relative w-48">
+            <div className="relative w-40">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-text-muted" />
               <input
                 type="text"
@@ -381,7 +377,7 @@ export function SalesOrderPreparationPanel() {
             </div>
             <button
               onClick={() => setShowAdvanced(v => !v)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded border text-[11px] font-bold transition-colors ${showAdvanced ? 'bg-theme-accent/10 border-theme-accent/30 text-theme-accent' : 'bg-theme-base border-theme-border text-theme-text-muted hover:bg-theme-border/40'}`}
+              className={`flex items-center gap-1 px-2.5 py-1.5 rounded border text-[11px] font-bold transition-colors ${showAdvanced ? 'bg-theme-accent/10 border-theme-accent/30 text-theme-accent' : 'bg-theme-base border-theme-border text-theme-text-muted hover:bg-theme-border/40'}`}
             >
               <SlidersHorizontal className="w-3.5 h-3.5" />
               Filtros

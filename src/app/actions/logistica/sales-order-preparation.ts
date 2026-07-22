@@ -125,6 +125,15 @@ export type SyncNextRouteResult = {
   message?: string
 }
 
+export type SalesOrderPreparationTrace = {
+  materialized: number
+  existing: number
+  outOfCutoff: number
+  routeDate: string | null
+  cities: string[]
+  completedAt: string | null
+}
+
 export async function getSalesOrderPreparationBoard(companyId: string) {
   const supabase = await createClient()
   const admin = await createAdminClient()
@@ -265,6 +274,54 @@ export async function previewNextRouteCandidates() {
       hint: null,
       code: null
     }
+  }
+}
+
+export async function getSalesOrderPreparationTrace(): Promise<{ data: SalesOrderPreparationTrace | null; error: string | null }> {
+  try {
+    const admin = await createAdminClient()
+    const companyId = await getActiveCompanyId()
+    const { data, error } = await (admin as any)
+      .schema('logistica')
+      .rpc('preview_next_route_candidates', { p_company_id: companyId })
+
+    if (error) return { data: null, error: error.message }
+    if (!data?.has_route) return { data: null, error: null }
+
+    const { data: latestEvent, error: eventError } = await admin
+      .schema('logistica')
+      .from('sales_order_preparation_route_events')
+      .select('performed_at')
+      .eq('company_id', companyId)
+      .in('event_type', ['MATERIALIZED', 'MATERIALIZED_EXCEPTION'])
+      .order('performed_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (eventError) return { data: null, error: eventError.message }
+    const { count: materialized } = latestEvent?.performed_at
+      ? await admin
+        .schema('logistica')
+        .from('sales_order_preparation_route_events')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .in('event_type', ['MATERIALIZED', 'MATERIALIZED_EXCEPTION'])
+        .eq('performed_at', latestEvent.performed_at)
+      : { count: 0 }
+
+    return {
+      data: {
+        materialized: materialized || 0,
+        existing: Number(data.counts?.existing_cards || 0),
+        outOfCutoff: Number(data.counts?.out_cutoff || 0),
+        routeDate: data.route_date || null,
+        cities: data.cities || [],
+        completedAt: latestEvent?.performed_at || null,
+      },
+      error: null,
+    }
+  } catch (err: any) {
+    return { data: null, error: err?.message || 'Error leyendo rastro de preparación' }
   }
 }
 

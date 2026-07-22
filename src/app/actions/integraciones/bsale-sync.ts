@@ -1692,6 +1692,24 @@ export async function releaseSyncLock(companyId: string, lockName: string, runId
     .eq('run_id', runId);
 }
 
+async function materializePreparationAfterSalesSync(companyId: string) {
+  const { data, error } = await integrDb()
+    .schema('logistica')
+    .rpc('materialize_next_route_preparation_cards', {
+      p_company_id: companyId,
+      p_source: 'AUTO_SYNC',
+    })
+
+  if (error) throw new Error(`Error materializando preparación: ${error.message}`)
+  return data as {
+    materialized?: number
+    existing?: number
+    out_of_cutoff?: number
+    route_date?: string
+    cities?: string[]
+  }
+}
+
 export async function runReplenishmentBsaleSync(companyId: string, trigger: string = 'SCHEDULED'): Promise<{
   success: boolean;
   status: string;
@@ -1758,7 +1776,19 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       finalStatus = 'PARTIAL';
     }
 
-    // 3. Sync payments after documents because payment allocations reference document IDs.
+    // 3. Materialize eligible sales orders only after their documents are available locally.
+    let preparationResult: Awaited<ReturnType<typeof materializePreparationAfterSalesSync>> | null = null;
+    if (finalStatus !== 'FAILED') {
+      try {
+        preparationResult = await materializePreparationAfterSalesSync(companyId);
+        console.log(`[runReplenishmentBsaleSync] Preparation: materialized=${preparationResult.materialized || 0} existing=${preparationResult.existing || 0}`);
+      } catch (preparationErr: unknown) {
+        finalStatus = 'PARTIAL';
+        errorMessage += (errorMessage ? ' | ' : '') + 'Preparation: ' + (preparationErr instanceof Error ? preparationErr.message : String(preparationErr));
+      }
+    }
+
+    // 4. Sync payments after documents because payment allocations reference document IDs.
     let paymentTypesResult = { count: 0, errors: 0 };
     let paymentsResult = { payments: 0, documentPayments: 0, days: 0, errors: 0 };
     if (finalStatus !== 'FAILED') {
@@ -1778,7 +1808,7 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       }
     }
 
-    // 4. Hydrate orphan clients detected after document sync
+    // 5. Hydrate orphan clients detected after document sync
     let orphanResult = { hydrated: 0, errors: 0, orphanIds: [] as number[] };
     if (finalStatus !== 'FAILED') {
       console.log('[runReplenishmentBsaleSync] Hydrating orphan clients...');
@@ -1792,7 +1822,7 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       }
     }
 
-    // 5. Sync Stock
+    // 6. Sync Stock
     let stockCount = 0;
     if (finalStatus !== 'FAILED') {
       console.log('[runReplenishmentBsaleSync] Iniciando syncStock...');
@@ -1810,6 +1840,7 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       sales: salesRes.counts,
       payments: paymentsResult,
       payment_types: paymentTypesResult,
+      preparation: preparationResult,
       orphans: orphanResult,
       stocks: stockCount
     };
