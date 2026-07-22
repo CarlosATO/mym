@@ -9,7 +9,9 @@ import type { RibbonAction } from '@/components/layout/module-ribbon'
 
 const tabs = [
   { id: 'inicio', label: 'Inicio' },
-  { id: 'maestros', label: 'Maestros' },
+  { id: 'clientes', label: 'Clientes' },
+  { id: 'analisis-venta', label: 'Análisis de venta' },
+  { id: 'comisiones', label: 'Comisiones' },
   { id: 'transacciones', label: 'Transacciones' },
   { id: 'consultas', label: 'Consultas' },
   { id: 'reportes', label: 'Reportes' },
@@ -26,19 +28,10 @@ export function ComercialLayoutClient({ profile }: ComercialLayoutClientProps) {
 
   const handleTabChange = (tabId: string) => {
     setActiveTab(tabId)
-    if (tabId === 'inicio') setActiveActionId('resumen')
-    else if (tabId === 'maestros') setActiveActionId('clientes')
+    setActiveActionId(tabId === 'inicio' ? 'resumen' : tabId)
   }
 
   const ribbonActions: RibbonAction[] = []
-
-  if (activeTab === 'maestros') {
-    ribbonActions.push(
-      { id: 'clientes', label: 'Clientes', icon: 'Users', onClick: () => setActiveActionId('clientes') },
-      { id: 'analisis-clientes', label: 'Análisis de clientes', icon: 'LineChart', onClick: () => setActiveActionId('analisis-clientes') },
-      { id: 'comisiones', label: 'Comisiones', icon: 'BadgeDollarSign', onClick: () => setActiveActionId('comisiones') }
-    )
-  }
 
   let content = null
 
@@ -53,14 +46,12 @@ export function ComercialLayoutClient({ profile }: ComercialLayoutClientProps) {
         </div>
       </div>
     )
-  } else if (activeTab === 'maestros') {
-    if (activeActionId === 'clientes') {
-      content = <CustomersPanel />
-    } else if (activeActionId === 'analisis-clientes') {
-      content = <ReceivablesPanel />
-    } else if (activeActionId === 'comisiones') {
-      content = <CommissionsPanel />
-    }
+  } else if (activeTab === 'clientes') {
+    content = <CustomersPanel />
+  } else if (activeTab === 'analisis-venta') {
+    content = <ReceivablesPanel />
+  } else if (activeTab === 'comisiones') {
+    content = <CommissionsPanel />
   } else {
     content = (
       <div className="p-6 lg:p-8">
