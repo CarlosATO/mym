@@ -40,6 +40,13 @@ export type CommissionSellerProfileInput = {
   notes: string
 }
 
+export type CommissionEligibleSummary = {
+  lines_count: number
+  total_net_amount: number
+  period_from: string
+  period_to: string
+}
+
 function commissionDb() {
   return createSupabaseClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -135,4 +142,69 @@ export async function upsertCommissionSellerProfile(input: CommissionSellerProfi
   if (error) throw error
   revalidatePath('/dashboard/comercial')
   return data
+}
+
+function isIsoDate(value: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`))
+}
+
+export async function getCommissionEligibleSummary(params: {
+  seller_bsale_id: number
+  period_to: string
+  period_from?: string
+}): Promise<CommissionEligibleSummary> {
+  const { companyId } = await getAuthenticatedCompany()
+  const sellerId = Number(params.seller_bsale_id)
+  if (!Number.isSafeInteger(sellerId) || sellerId <= 0) throw new Error('Vendedor inválido')
+  if (!isIsoDate(params.period_to)) throw new Error('Fecha hasta inválida')
+  if (params.period_from && !isIsoDate(params.period_from)) throw new Error('Fecha desde inválida')
+  if (params.period_from && params.period_from > params.period_to) throw new Error('El período desde no puede ser posterior al hasta')
+
+  const db = commissionDb()
+  const [{ data: settings, error: settingsError }, { data: lastSettlement, error: settlementError }] = await Promise.all([
+    db
+      .from('commission_settings')
+      .select('first_eligible_date')
+      .eq('company_id', companyId)
+      .eq('active', true)
+      .maybeSingle(),
+    db
+      .from('commission_settlements')
+      .select('period_to')
+      .eq('company_id', companyId)
+      .eq('seller_bsale_id', sellerId)
+      .eq('status', 'ISSUED')
+      .in('source', ['NORMAL', 'ADJUSTMENT'])
+      .order('period_to', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ])
+
+  if (settingsError) throw settingsError
+  if (settlementError) throw settlementError
+  if (!settings) throw new Error('Falta la configuración de comisiones de la empresa')
+
+  const nextSettlementDate = lastSettlement?.period_to
+    ? new Date(`${lastSettlement.period_to}T00:00:00Z`)
+    : null
+  if (nextSettlementDate) nextSettlementDate.setUTCDate(nextSettlementDate.getUTCDate() + 1)
+  const periodFrom = params.period_from || nextSettlementDate?.toISOString().slice(0, 10) || settings.first_eligible_date
+
+  const { data, error } = await db.rpc('get_commission_eligible_invoice_lines', {
+    p_company_id: companyId,
+    p_seller_bsale_id: sellerId,
+    p_period_to: params.period_to,
+    p_period_from: periodFrom,
+  }).select('net_amount')
+
+  if (error) throw error
+  const lines = Array.isArray(data) ? data : data ? [data] : []
+  const totalNetAmount = lines.reduce((total, line) => total + Number(line.net_amount || 0), 0)
+
+  return {
+    lines_count: lines.length,
+    total_net_amount: totalNetAmount,
+    period_from: periodFrom,
+    period_to: params.period_to,
+  }
 }
