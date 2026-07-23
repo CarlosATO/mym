@@ -86,7 +86,14 @@ export type CommissionRule = {
   valid_to: string | null
   priority: number
   is_active: boolean
+  is_archived?: boolean
+  archived_at?: string | null
+  archive_reason?: string | null
   notes: string | null
+  rule_name?: string | null
+  rule_description?: string | null
+  rule_batch_id?: string | null
+  selection_summary?: Record<string, unknown> | null
 }
 
 export type CommissionPreviewLine = {
@@ -112,6 +119,9 @@ export type CommissionPreviewLine = {
   accumulated_quantity: number
   rule_id: string | null
   rule_scope: CommissionRuleScope
+  applied_rule_label: string
+  applied_rule_scope: CommissionRuleScope
+  applied_rule_batch_id: string | null
   rule_type: CommissionRuleType
   range_basis: string
   commission_percent: number
@@ -373,9 +383,10 @@ export async function searchCommissionSuppliers(query: string) {
   let request = commissionDb()
     .schema('adquisiciones')
     .from('suppliers')
-    .select('id,business_name,fantasy_name,parent_supplier_id,supplier_kind')
+    .select('id,business_name,fantasy_name,rut,parent_supplier_id,supplier_kind')
     .eq('company_id', companyId)
     .eq('is_active', true)
+    .or('supplier_kind.eq.REAL,supplier_kind.is.null')
     .order('business_name')
     .limit(30)
   if (term) request = request.or(`business_name.ilike.%${term}%,fantasy_name.ilike.%${term}%`)
@@ -384,12 +395,14 @@ export async function searchCommissionSuppliers(query: string) {
   return (data || []).map(row => ({
     id: row.id as string,
     name: String(row.business_name || row.fantasy_name || 'Proveedor sin nombre'),
+    rut: row.rut as string | null,
     parent_supplier_id: row.parent_supplier_id as string | null,
     supplier_kind: row.supplier_kind as string | null,
+    type_label: 'Proveedor real',
   }))
 }
 
-export async function searchCommissionProducts(query: string) {
+export async function searchCommissionProducts(query: string, supplierIds?: string[]) {
   const { companyId } = await getAuthenticatedCompany()
   const term = query.trim()
   if (term.length < 2) return []
@@ -403,14 +416,44 @@ export async function searchCommissionProducts(query: string) {
     .order('description')
     .limit(30)
   if (error) throw error
-  return (data || []).map(row => ({ id: row.id as string, sku: row.sku as string, description: row.description as string }))
+  const products = (data || []).map(row => ({ id: row.id as string, sku: row.sku as string, description: row.description as string }))
+  if (!products.length) return []
+
+  const mappingsRequest = commissionDb().schema('adquisiciones').from('product_supplier_mappings').select('product_id,supplier_id,is_preferred,updated_at').eq('company_id', companyId).eq('is_active', true).in('product_id', products.map(product => product.id)).order('is_preferred', { ascending: false }).order('updated_at', { ascending: false, nullsFirst: false })
+  const selectedSupplierIds = Array.from(new Set((supplierIds || []).filter(Boolean)))
+  const { data: mappings, error: mappingsError } = await mappingsRequest
+  if (mappingsError) throw mappingsError
+
+  const mappingSupplierIds = Array.from(new Set((mappings || []).map(mapping => mapping.supplier_id as string).filter(Boolean)))
+  const { data: mappedSuppliers, error: mappedSuppliersError } = mappingSupplierIds.length
+    ? await commissionDb().schema('adquisiciones').from('suppliers').select('id,business_name,fantasy_name,supplier_kind,parent_supplier_id').eq('company_id', companyId).eq('is_active', true).in('id', mappingSupplierIds)
+    : { data: [], error: null }
+  if (mappedSuppliersError) throw mappedSuppliersError
+  const parentIds = Array.from(new Set((mappedSuppliers || []).map(supplier => supplier.parent_supplier_id as string | null).filter((id): id is string => Boolean(id))))
+  const { data: parentSuppliers, error: parentSuppliersError } = parentIds.length
+    ? await commissionDb().schema('adquisiciones').from('suppliers').select('id,business_name,fantasy_name,supplier_kind').eq('company_id', companyId).eq('is_active', true).or('supplier_kind.eq.REAL,supplier_kind.is.null').in('id', parentIds)
+    : { data: [], error: null }
+  if (parentSuppliersError) throw parentSuppliersError
+
+  const parentsById = new Map((parentSuppliers || []).map(supplier => [supplier.id as string, supplier]))
+  const suppliersById = new Map((mappedSuppliers || []).map(supplier => {
+    const parent = supplier.parent_supplier_id ? parentsById.get(supplier.parent_supplier_id as string) : null
+    const effective = parent || supplier
+    return [supplier.id as string, { id: effective.id as string, name: String(effective.business_name || effective.fantasy_name || 'Proveedor sin nombre') }]
+  }))
+  const mappingByProduct = new Map<string, { supplier_id: string; supplier_name: string }>()
+  for (const mapping of mappings || []) {
+    const supplier = suppliersById.get(mapping.supplier_id as string)
+    if (supplier && !mappingByProduct.has(mapping.product_id as string)) mappingByProduct.set(mapping.product_id as string, { supplier_id: supplier.id, supplier_name: supplier.name })
+  }
+  return products.filter(product => !selectedSupplierIds.length || mappingByProduct.get(product.id)?.supplier_id && selectedSupplierIds.includes(mappingByProduct.get(product.id)!.supplier_id)).map(product => ({ ...product, supplier_id: mappingByProduct.get(product.id)?.supplier_id || null, supplier_name: mappingByProduct.get(product.id)?.supplier_name || null }))
 }
 
 export async function getCommissionRules(): Promise<CommissionRule[]> {
   const { companyId } = await getAuthenticatedCompany()
   const { data, error } = await commissionDb()
     .from('commission_rules')
-    .select('id,rule_scope,seller_profile_id,supplier_id,commission_group_id,product_id,rule_type,range_basis,min_amount,max_amount,min_quantity,max_quantity,commission_percent,valid_from,valid_to,priority,is_active,notes')
+    .select('id,rule_scope,seller_profile_id,supplier_id,commission_group_id,product_id,rule_type,range_basis,min_amount,max_amount,min_quantity,max_quantity,commission_percent,valid_from,valid_to,priority,is_active,is_archived,archived_at,archive_reason,notes,rule_name,rule_description,rule_batch_id,selection_summary')
     .eq('company_id', companyId)
     .order('is_active', { ascending: false })
     .order('rule_scope')
@@ -507,12 +550,178 @@ export async function deactivateCommissionRule(ruleId: string) {
   if (error) throw error
 }
 
+export async function getCommissionRuleBatchDetail(ruleBatchId: string) {
+  const { companyId } = await getAuthenticatedCompany()
+  if (!ruleBatchId.trim()) throw new Error('Condición inválida')
+  const { data: rules, error } = await commissionDb().from('commission_rules').select('id,rule_name,rule_description,rule_batch_id,rule_scope,rule_type,seller_profile_id,supplier_id,commission_group_id,product_id,min_amount,max_amount,min_quantity,max_quantity,commission_percent,valid_from,valid_to,is_active').eq('company_id', companyId).eq('rule_batch_id', ruleBatchId)
+  if (error) throw error
+  if (!rules?.length) throw new Error('La condición no pertenece a la empresa activa')
+
+  const sellerIds = Array.from(new Set(rules.map(rule => rule.seller_profile_id as string | null).filter((id): id is string => Boolean(id))))
+  const productIds = Array.from(new Set(rules.map(rule => rule.product_id as string | null).filter((id): id is string => Boolean(id))))
+  const supplierIds = Array.from(new Set(rules.map(rule => rule.supplier_id as string | null).filter((id): id is string => Boolean(id))))
+  const groupIds = Array.from(new Set(rules.map(rule => rule.commission_group_id as string | null).filter((id): id is string => Boolean(id))))
+  const [{ data: sellers, error: sellersError }, { data: products, error: productsError }, { data: suppliers, error: suppliersError }, { data: groups, error: groupsError }] = await Promise.all([
+    sellerIds.length ? commissionDb().from('commission_seller_profiles').select('id,seller_name,seller_bsale_id').eq('company_id', companyId).in('id', sellerIds) : Promise.resolve({ data: [], error: null }),
+    productIds.length ? commissionDb().schema('adquisiciones').from('products').select('id,sku,description').eq('company_id', companyId).in('id', productIds) : Promise.resolve({ data: [], error: null }),
+    supplierIds.length ? commissionDb().schema('adquisiciones').from('suppliers').select('id,business_name,fantasy_name').eq('company_id', companyId).in('id', supplierIds) : Promise.resolve({ data: [], error: null }),
+    groupIds.length ? commissionDb().from('commission_groups').select('id,name').eq('company_id', companyId).in('id', groupIds) : Promise.resolve({ data: [], error: null }),
+  ])
+  if (sellersError || productsError || suppliersError || groupsError) throw sellersError || productsError || suppliersError || groupsError
+  const { data: productMappings, error: productMappingsError } = productIds.length
+    ? await commissionDb().schema('adquisiciones').from('product_supplier_mappings').select('product_id,supplier_id,is_preferred').eq('company_id', companyId).eq('is_active', true).in('product_id', productIds).order('is_preferred', { ascending: false })
+    : { data: [], error: null }
+  if (productMappingsError) throw productMappingsError
+  const mappedSupplierIds = Array.from(new Set((productMappings || []).map(mapping => mapping.supplier_id as string).filter(Boolean)))
+  const { data: mappedSuppliers, error: mappedSuppliersError } = mappedSupplierIds.length
+    ? await commissionDb().schema('adquisiciones').from('suppliers').select('id,business_name,fantasy_name').eq('company_id', companyId).in('id', mappedSupplierIds)
+    : { data: [], error: null }
+  if (mappedSuppliersError) throw mappedSuppliersError
+  const mappedSupplierNames = new Map((mappedSuppliers || []).map(supplier => [supplier.id as string, String(supplier.business_name || supplier.fantasy_name || 'Sin proveedor asociado')]))
+  const productSupplierNames = new Map<string, string>()
+  for (const mapping of productMappings || []) if (!productSupplierNames.has(mapping.product_id as string)) productSupplierNames.set(mapping.product_id as string, mappedSupplierNames.get(mapping.supplier_id as string) || 'Sin proveedor asociado')
+  const first = rules[0]
+  return {
+    name: String(first.rule_name || 'Condición de comisión'), description: first.rule_description as string | null,
+    validFrom: first.valid_from as string, validTo: first.valid_to as string | null, isActive: Boolean(first.is_active),
+    scope: first.rule_scope as CommissionRuleScope, type: first.rule_type as CommissionRuleType, commissionPercent: Number(first.commission_percent),
+    minAmount: numberOrNull(first.min_amount), maxAmount: numberOrNull(first.max_amount), minQuantity: numberOrNull(first.min_quantity), maxQuantity: numberOrNull(first.max_quantity),
+    sellers: (sellers || []).map(seller => ({ name: seller.seller_name as string, bsaleId: Number(seller.seller_bsale_id) })),
+    products: (products || []).map(product => ({ sku: product.sku as string, name: product.description as string, supplierName: productSupplierNames.get(product.id as string) || 'Sin proveedor asociado' })),
+    suppliers: (suppliers || []).map(supplier => ({ name: String(supplier.business_name || supplier.fantasy_name || 'Proveedor sin nombre') })),
+    groups: (groups || []).map(group => ({ name: group.name as string })),
+  }
+}
+
+export async function deactivateCommissionRuleBatch(ruleBatchId: string) {
+  const { companyId, userId } = await getAuthenticatedCompany()
+  const { error } = await commissionDb().from('commission_rules').update({ is_active: false, updated_by: userId }).eq('company_id', companyId).eq('rule_batch_id', ruleBatchId)
+  if (error) throw error
+}
+
+export async function setCommissionRuleBatchActive(ruleBatchId: string, isActive: boolean) {
+  const { companyId, userId } = await getAuthenticatedCompany()
+  if (!ruleBatchId.trim()) throw new Error('Condición inválida')
+  let request = commissionDb().from('commission_rules').update({ is_active: isActive, updated_by: userId }).eq('company_id', companyId).eq('rule_batch_id', ruleBatchId)
+  if (isActive) request = request.eq('is_archived', false)
+  const { error } = await request
+  if (error) throw error
+  revalidatePath('/dashboard/comercial')
+}
+
+export async function archiveCommissionRuleBatch(input: { ruleBatchId: string; archiveReason?: string }) {
+  const { companyId, userId } = await getAuthenticatedCompany()
+  if (!input.ruleBatchId.trim()) throw new Error('Condición inválida')
+  const { error } = await commissionDb().from('commission_rules').update({ is_archived: true, archived_at: new Date().toISOString(), archived_by: userId, archive_reason: input.archiveReason?.trim() || null, is_active: false, updated_by: userId }).eq('company_id', companyId).eq('rule_batch_id', input.ruleBatchId)
+  if (error) throw error
+  revalidatePath('/dashboard/comercial')
+}
+
+export async function restoreCommissionRuleBatch(ruleBatchId: string) {
+  const { companyId, userId } = await getAuthenticatedCompany()
+  if (!ruleBatchId.trim()) throw new Error('Condición inválida')
+  const { error } = await commissionDb().from('commission_rules').update({ is_archived: false, archived_at: null, archived_by: null, archive_reason: null, is_active: false, updated_by: userId }).eq('company_id', companyId).eq('rule_batch_id', ruleBatchId)
+  if (error) throw error
+  revalidatePath('/dashboard/comercial')
+}
+
+export async function getCommissionGroupProducts(groupId: string) {
+  const { companyId } = await getAuthenticatedCompany()
+  const { data, error } = await commissionDb()
+    .from('commission_group_products')
+    .select('product_id,valid_from,valid_to,is_active')
+    .eq('company_id', companyId).eq('commission_group_id', groupId).eq('is_active', true)
+  if (error) throw error
+  const ids = (data || []).map(row => row.product_id as string)
+  if (!ids.length) return []
+  const { data: products, error: productsError } = await commissionDb().schema('adquisiciones').from('products').select('id,sku,description').in('id', ids)
+  if (productsError) throw productsError
+  return products || []
+}
+
+export async function updateCommissionGroupProducts(groupId: string, productIds: string[]) {
+  const { companyId, userId } = await getAuthenticatedCompany()
+  const uniqueIds = Array.from(new Set(productIds.filter(Boolean)))
+  const { error: deactivateError } = await commissionDb().from('commission_group_products').update({ is_active: false, updated_by: userId }).eq('company_id', companyId).eq('commission_group_id', groupId).eq('is_active', true)
+  if (deactivateError) throw deactivateError
+  if (!uniqueIds.length) return
+  const { error } = await commissionDb().from('commission_group_products').insert(uniqueIds.map(product_id => ({ company_id: companyId, commission_group_id: groupId, product_id, valid_from: new Date().toISOString().slice(0, 10), is_active: true, created_by: userId, updated_by: userId })))
+  if (error) throw error
+}
+
+export async function createGuidedCommissionRule(input: {
+  ruleName: string; description?: string; effectiveFrom: string; effectiveTo?: string
+  appliesToAllSellers: boolean; sellerProfileIds?: string[]
+  targetMode: 'GENERAL' | 'SUPPLIER_ALL_PRODUCTS' | 'SUPPLIER_SELECTED_PRODUCTS' | 'EXISTING_GROUP' | 'SELECTED_PRODUCTS'
+  supplierIds?: string[]; groupIds?: string[]; productIds?: string[]
+  commissionType: CommissionRuleType; minQuantity?: number | null; maxQuantity?: number | null; minAmount?: number | null; maxAmount?: number | null; commissionPercent: number
+}) {
+  const { companyId, userId } = await getAuthenticatedCompany()
+  if (!input.ruleName.trim() || !isIsoDate(input.effectiveFrom) || (input.effectiveTo && (!isIsoDate(input.effectiveTo) || input.effectiveTo < input.effectiveFrom))) throw new Error('Nombre o vigencia inválidos')
+  if (!Number.isFinite(input.commissionPercent) || input.commissionPercent < 0 || input.commissionPercent > 100) throw new Error('Porcentaje inválido')
+  const sellerIds = input.appliesToAllSellers ? [null] : Array.from(new Set(input.sellerProfileIds || []))
+  if (!sellerIds.length) throw new Error('Selecciona al menos un vendedor')
+  const batchId = crypto.randomUUID()
+  let targets: Array<{ scope: CommissionRuleScope; id: string | null }> = []
+  if (input.targetMode === 'GENERAL') targets = [{ scope: 'GENERAL', id: null }]
+  if (input.targetMode === 'SUPPLIER_ALL_PRODUCTS') {
+    const supplierIds = Array.from(new Set(input.supplierIds || []))
+    if (!supplierIds.length) throw new Error('Selecciona al menos un proveedor')
+    if (input.commissionType === 'FIXED_PERCENT') {
+      targets = supplierIds.map(id => ({ scope: 'SUPPLIER' as const, id }))
+    } else {
+      const { data: mappings, error } = await commissionDb().schema('adquisiciones').from('product_supplier_mappings').select('product_id,supplier_id').eq('company_id', companyId).eq('is_active', true).in('supplier_id', supplierIds)
+      if (error) throw error
+      const productIds = Array.from(new Set((mappings || []).map(row => row.product_id as string).filter(Boolean)))
+      if (!productIds.length) throw new Error('Los proveedores seleccionados no tienen productos activos para crear una regla variable por SKU')
+      targets = productIds.map(id => ({ scope: 'PRODUCT' as const, id }))
+    }
+  }
+  if (input.targetMode === 'EXISTING_GROUP') targets = (input.groupIds || []).map(id => ({ scope: input.commissionType === 'FIXED_PERCENT' ? 'GROUP' as const : 'PRODUCT' as const, id }))
+  if (input.targetMode === 'SUPPLIER_SELECTED_PRODUCTS' || input.targetMode === 'SELECTED_PRODUCTS') targets = (input.productIds || []).map(id => ({ scope: 'PRODUCT' as const, id }))
+  if (!targets.length) throw new Error('Selecciona al menos un destino')
+  if (input.commissionType !== 'FIXED_PERCENT' && ((input.commissionType === 'RANGE_BY_AMOUNT' && !(Number(input.minAmount) > 0)) || (input.commissionType === 'RANGE_BY_QUANTITY' && !(Number(input.minQuantity) > 0)))) throw new Error('Debes indicar un mínimo mayor a cero')
+  if (input.commissionType === 'RANGE_BY_AMOUNT' && input.maxAmount !== null && input.maxAmount !== undefined && Number(input.maxAmount) < Number(input.minAmount)) throw new Error('El monto máximo no puede ser menor al mínimo')
+  if (input.commissionType === 'RANGE_BY_QUANTITY' && input.maxQuantity !== null && input.maxQuantity !== undefined && Number(input.maxQuantity) < Number(input.minQuantity)) throw new Error('La cantidad máxima no puede ser menor a la mínima')
+
+  // Variable group rules require explicitly selected products so each SKU is evaluated independently.
+  if (input.commissionType !== 'FIXED_PERCENT' && input.targetMode === 'EXISTING_GROUP') throw new Error('Para una regla variable de grupo, selecciona los productos incluidos para evaluar cada SKU individualmente')
+  const { data: activeRules, error: activeRulesError } = await commissionDb().from('commission_rules').select('rule_name,rule_scope,seller_profile_id,supplier_id,commission_group_id,product_id,valid_from,valid_to').eq('company_id', companyId).eq('is_active', true).eq('is_archived', false)
+  if (activeRulesError) throw activeRulesError
+  const newPeriodEnd = input.effectiveTo || '9999-12-31'
+  const conflict = (activeRules || []).find(rule => targets.some(target => {
+    const sameTarget = target.scope === 'GENERAL' || target.scope === 'SUPPLIER' && rule.supplier_id === target.id || target.scope === 'GROUP' && rule.commission_group_id === target.id || target.scope === 'PRODUCT' && rule.product_id === target.id
+    const sellersOverlap = sellerIds.some(sellerId => sellerId === null || rule.seller_profile_id === null || rule.seller_profile_id === sellerId)
+    return rule.rule_scope === target.scope && sameTarget && sellersOverlap && rule.valid_from <= newPeriodEnd && (rule.valid_to === null || rule.valid_to >= input.effectiveFrom)
+  }))
+  if (conflict) {
+    const targetLabel = conflict.rule_scope === 'SUPPLIER' ? 'proveedor' : conflict.rule_scope === 'PRODUCT' ? 'producto' : conflict.rule_scope === 'GROUP' ? 'grupo/campaña' : 'general'
+    throw new Error(`Ya existe una condición activa para este ${targetLabel}, vendedor y período: ${conflict.rule_name || 'Condición sin nombre'}. Desactívala o archívala antes de crear otra.`)
+  }
+  const rows = targets.flatMap(target => sellerIds.map(seller_profile_id => ({
+    company_id: companyId, seller_profile_id, rule_scope: target.scope,
+    supplier_id: target.scope === 'SUPPLIER' ? target.id : null,
+    commission_group_id: target.scope === 'GROUP' ? target.id : null,
+    product_id: target.scope === 'PRODUCT' ? target.id : null,
+    rule_type: input.commissionType, range_basis: input.commissionType === 'FIXED_PERCENT' ? 'NONE' : input.commissionType === 'RANGE_BY_AMOUNT' ? 'AMOUNT' : 'QUANTITY',
+    min_amount: input.commissionType === 'RANGE_BY_AMOUNT' ? input.minAmount : null, max_amount: input.commissionType === 'RANGE_BY_AMOUNT' ? input.maxAmount || null : null,
+    min_quantity: input.commissionType === 'RANGE_BY_QUANTITY' ? input.minQuantity : null, max_quantity: input.commissionType === 'RANGE_BY_QUANTITY' ? input.maxQuantity || null : null,
+    commission_percent: input.commissionPercent, valid_from: input.effectiveFrom, valid_to: input.effectiveTo || null,
+    priority: target.scope === 'PRODUCT' ? 400 : target.scope === 'GROUP' ? 300 : target.scope === 'SUPPLIER' ? 200 : 100,
+    is_active: true, rule_name: input.ruleName.trim(), rule_description: input.description?.trim() || null, rule_batch_id: batchId,
+    source_workflow: 'GUIDED_WIZARD', selection_summary: { targetMode: input.targetMode, suppliers: input.supplierIds || [], groups: input.groupIds || [], products: input.productIds || [], sellers: sellerIds }, created_by: userId, updated_by: userId,
+  })))
+  const { error } = await commissionDb().from('commission_rules').insert(rows)
+  if (error) throw error
+  return { ruleBatchId: batchId, technicalRulesCreated: rows.length }
+}
+
 export async function previewCommissionSettlement(input: { seller_bsale_id: number; period_to: string; period_from?: string }): Promise<CommissionPreview> {
   const { companyId } = await getAuthenticatedCompany()
   const sellerId = Number(input.seller_bsale_id)
   if (!Number.isSafeInteger(sellerId) || sellerId <= 0 || !isIsoDate(input.period_to) || (input.period_from && !isIsoDate(input.period_from))) throw new Error('Parámetros de simulación inválidos')
 
-  const { data: seller, error: sellerError } = await commissionDb().from('vw_commission_sellers').select('is_commissionable,profile_active').eq('company_id', companyId).eq('seller_bsale_id', sellerId).maybeSingle()
+  const { data: seller, error: sellerError } = await commissionDb().from('vw_commission_sellers').select('seller_profile_id,is_commissionable,profile_active').eq('company_id', companyId).eq('seller_bsale_id', sellerId).maybeSingle()
   if (sellerError) throw sellerError
   if (!seller?.is_commissionable || seller.profile_active !== true) throw new Error('El vendedor no está habilitado para comisiones')
 
@@ -521,6 +730,7 @@ export async function previewCommissionSettlement(input: { seller_bsale_id: numb
     .select('id', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .eq('is_active', true)
+    .eq('is_archived', false)
   if (rulesError) throw rulesError
   const previewFunction = activeRulesCount ? 'preview_commission_settlement' : 'preview_default_commission_settlement'
 
@@ -535,13 +745,53 @@ export async function previewCommissionSettlement(input: { seller_bsale_id: numb
     rawLines.push(...page)
     if (page.length < pageSize) break
   }
-  const lines = rawLines.map(row => ({
+  const previewSupplierIds = Array.from(new Set(rawLines.map(row => String(row.supplier_id || '')).filter(Boolean)))
+  const { data: previewSuppliers, error: previewSuppliersError } = previewSupplierIds.length
+    ? await commissionDb().schema('adquisiciones').from('suppliers').select('id,business_name,fantasy_name,parent_supplier_id').eq('company_id', companyId).in('id', previewSupplierIds)
+    : { data: [], error: null }
+  if (previewSuppliersError) throw previewSuppliersError
+  const previewParentIds = Array.from(new Set((previewSuppliers || []).map(supplier => supplier.parent_supplier_id as string | null).filter((id): id is string => Boolean(id))))
+  const { data: previewParents, error: previewParentsError } = previewParentIds.length
+    ? await commissionDb().schema('adquisiciones').from('suppliers').select('id,business_name,fantasy_name').eq('company_id', companyId).in('id', previewParentIds)
+    : { data: [], error: null }
+  if (previewParentsError) throw previewParentsError
+  const previewParentsById = new Map((previewParents || []).map(supplier => [supplier.id as string, supplier]))
+  const previewSuppliersById = new Map((previewSuppliers || []).map(supplier => {
+    const effective = supplier.parent_supplier_id ? previewParentsById.get(supplier.parent_supplier_id as string) || supplier : supplier
+    return [supplier.id as string, { id: effective.id as string, name: String(effective.business_name || effective.fantasy_name || 'Proveedor sin nombre') }]
+  }))
+  const baseLines = rawLines.map(row => ({
     ...row,
+    supplier_id: previewSuppliersById.get(String(row.supplier_id || ''))?.id || row.supplier_id,
+    supplier_name: previewSuppliersById.get(String(row.supplier_id || ''))?.name || row.supplier_name,
     seller_bsale_id: Number(row.seller_bsale_id), invoice_bsale_id: Number(row.invoice_bsale_id), invoice_number: numberOrNull(row.invoice_number),
     quantity: Number(row.quantity), net_amount: Number(row.net_amount), commission_base_amount: Number(row.commission_base_amount),
     accumulated_amount: Number(row.accumulated_amount), accumulated_quantity: Number(row.accumulated_quantity),
     commission_percent: Number(row.commission_percent), commission_amount: Number(row.commission_amount),
-  })) as CommissionPreviewLine[]
+  })) as Omit<CommissionPreviewLine, 'applied_rule_label' | 'applied_rule_scope' | 'applied_rule_batch_id'>[]
+  const { data: supplierRules, error: supplierRulesError } = await commissionDb().from('commission_rules').select('id,rule_scope,rule_type,seller_profile_id,supplier_id,commission_percent,valid_from,valid_to,rule_name,rule_batch_id').eq('company_id', companyId).eq('is_active', true).eq('is_archived', false).eq('rule_scope', 'SUPPLIER').eq('rule_type', 'FIXED_PERCENT')
+  if (supplierRulesError) throw supplierRulesError
+  const linesWithEffectiveSupplierRules = baseLines.map(line => {
+    if (line.rule_id) return line
+    const applicable = (supplierRules || []).find(rule => rule.supplier_id === line.supplier_id && (!rule.seller_profile_id || rule.seller_profile_id === seller.seller_profile_id) && line.payment_completed_at && line.payment_completed_at.slice(0, 10) >= rule.valid_from && (!rule.valid_to || line.payment_completed_at.slice(0, 10) <= rule.valid_to))
+    return applicable ? { ...line, rule_id: applicable.id as string, rule_scope: 'SUPPLIER' as CommissionRuleScope, rule_type: 'FIXED_PERCENT' as CommissionRuleType, range_basis: 'NONE', commission_percent: Number(applicable.commission_percent), commission_amount: Math.round(line.net_amount * Number(applicable.commission_percent) / 100), warning_code: null, warning_message: null } : line
+  })
+  const ruleIds = Array.from(new Set(linesWithEffectiveSupplierRules.map(line => line.rule_id).filter((id): id is string => Boolean(id))))
+  const { data: appliedRules, error: appliedRulesError } = ruleIds.length
+    ? await commissionDb().from('commission_rules').select('id,rule_name,rule_scope,rule_batch_id').eq('company_id', companyId).in('id', ruleIds)
+    : { data: [], error: null }
+  if (appliedRulesError) throw appliedRulesError
+  const appliedRulesById = new Map((appliedRules || []).map(rule => [rule.id as string, rule]))
+  const fallbackLabel = (scope: CommissionRuleScope) => scope === 'PRODUCT' ? 'Regla por producto' : scope === 'SUPPLIER' ? 'Regla por proveedor' : scope === 'GROUP' ? 'Regla por grupo' : 'Regla general específica'
+  const lines = linesWithEffectiveSupplierRules.map(line => {
+    const rule = line.rule_id ? appliedRulesById.get(line.rule_id) : null
+    return {
+      ...line,
+      applied_rule_label: rule?.rule_name?.trim() || (line.rule_id ? fallbackLabel(line.rule_scope) : 'General'),
+      applied_rule_scope: rule?.rule_scope as CommissionRuleScope || line.rule_scope,
+      applied_rule_batch_id: rule?.rule_batch_id || null,
+    }
+  }) as CommissionPreviewLine[]
   const warnings = new Map<string, { code: string; message: string; count: number }>()
   for (const line of lines) if (line.warning_code) {
     const current = warnings.get(line.warning_code) || { code: line.warning_code, message: line.warning_message || line.warning_code, count: 0 }
