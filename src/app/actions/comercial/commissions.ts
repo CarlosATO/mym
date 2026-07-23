@@ -128,6 +128,14 @@ export type CommissionPreviewLine = {
   commission_amount: number
   warning_code: string | null
   warning_message: string | null
+  commission_line_type?: string | null
+  source_document_type?: string | null
+  source_document_id?: number | null
+  source_document_number?: number | null
+  source_detail_id?: string | null
+  original_invoice_id?: number | null
+  original_invoice_number?: number | null
+  adjustment_reason?: string | null
 }
 
 export type CommissionPreview = {
