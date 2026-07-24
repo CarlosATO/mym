@@ -18,7 +18,7 @@ export default async function DashboardPage() {
   const { data: modules } = await supabase.rpc('get_visible_modules', { p_user_id: user.id })
 
   const allModules: Modulo[] = modules ?? []
-  let operationalModules = allModules.filter(m => !adminCodes.includes(m.code))
+  const operationalModules = allModules.filter(m => !adminCodes.includes(m.code))
   
   if (!operationalModules.find(m => m.code === 'comercial')) {
     operationalModules.push({
@@ -29,6 +29,18 @@ export default async function DashboardPage() {
       icon: 'Briefcase',
       route: '/dashboard/comercial',
       sort_order: 30
+    })
+  }
+
+  if (!operationalModules.find(m => m.code === 'analisis-comercial')) {
+    operationalModules.push({
+      id: 'mock-analisis-comercial-id',
+      code: 'analisis-comercial',
+      name: 'Análisis Comercial',
+      description: 'Análisis amplio por proveedor real, producto, ventas, stock, clientes y recepción vs venta.',
+      icon: 'BarChart3',
+      route: '/dashboard/analisis-comercial',
+      sort_order: 25
     })
   }
 
