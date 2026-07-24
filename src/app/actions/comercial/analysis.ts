@@ -84,10 +84,10 @@ export async function getCommercialAnalysisOverview(params: {
   const uniqueClients = new Set(docs5ByClient.map(d => d.client_id).filter(Boolean))
 
   let netSales = 0
-  let grossSales = 0
+  let grossSalesFE = 0
   docs5.forEach(d => {
     netSales += toNum(d.net_amount)
-    grossSales += toNum(d.total_amount)
+    grossSalesFE += toNum(d.total_amount)
   })
 
   const docClientMap: Record<number, number> = {}
@@ -183,7 +183,7 @@ export async function getCommercialAnalysisOverview(params: {
 
   const ncDocs = await fetchAll<any>(
     integQuery('bsale_documents')
-      .select('net_amount')
+      .select('net_amount, total_amount')
       .eq('company_id', COMPANY_ID)
       .eq('document_type_id', 2)
       .gte('emission_date', frm)
@@ -191,6 +191,7 @@ export async function getCommercialAnalysisOverview(params: {
       .order('bsale_id')
   )
   const ncNet = ncDocs.reduce((a: number, d: any) => a + toNum(d.net_amount), 0)
+  const grossNC = ncDocs.reduce((a: number, d: any) => a + toNum(d.total_amount), 0)
 
   const { data: stockData } = await integQuery('bsale_stock_current')
     .select('variant_code, quantity')
@@ -236,10 +237,14 @@ export async function getCommercialAnalysisOverview(params: {
     .sort((a, b) => b.stock_value - a.stock_value)
     .slice(0, 5)
 
+  const ventasBsale = Math.round(grossSalesFE - grossNC)
+
   return {
+    grossSalesFE: Math.round(grossSalesFE),
     netSales: Math.round(netSales),
-    grossSales: Math.round(grossSales),
+    grossNC: Math.round(grossNC),
     ncNet: Math.round(ncNet),
+    ventasBsale,
     netSalesAfterNC: Math.round(netSales - ncNet),
     totalUnits: Math.round(totalUnits),
     uniqueClients: uniqueClients.size,
@@ -257,6 +262,7 @@ export async function getCommercialAnalysisOverview(params: {
       documentType: 'FE (5)',
       includesNC: true,
       ncIncludedInNet: false,
+      bsaleCriterion: 'Ventas Bsale = FE total_amount - NC total_amount (con IVA)',
       dateMin: globalMin,
       dateMax: globalMax,
       dateFrom: frm,
