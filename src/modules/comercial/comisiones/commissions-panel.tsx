@@ -418,8 +418,12 @@ function SellerTable({ sellers, drafts, busy, onSellerChange, onSaveSeller }: { 
 function General({ settings, busy, onSettingsChange, onSaveSettings }: { settings: CommissionSettings | null; busy: boolean; onSettingsChange: (percent: number) => void; onSaveSettings: () => void }) {
   const initVal = String(settings?.default_commission_percent ?? '')
   const [raw, setRaw] = useState(initVal)
-  const [localSettings, setLocalSettings] = useState(settings)
-  if (localSettings !== settings) { setLocalSettings(settings); if (raw !== String(settings?.default_commission_percent ?? '')) setRaw(String(settings?.default_commission_percent ?? '')) }
+  const [prevSettings, setPrevSettings] = useState(settings)
+  if (settings !== prevSettings && JSON.stringify(settings) !== JSON.stringify(prevSettings)) {
+    setPrevSettings(settings)
+    const newVal = String(settings?.default_commission_percent ?? '')
+    if (raw !== newVal) setRaw(newVal)
+  }
   if (!settings) return <Loading />
   const parsed = parsePercent(raw)
-  return <div className="w-full rounded-xl border border-theme-border bg-theme-bg/30 p-4"><div className="grid gap-3 md:grid-cols-4"><Field label="Comisión general (%)"><input type="text" inputMode="decimal" value={raw} onChange={e => { setRaw(e.target.value); onSettingsChange(parsePercent(e.target.value)) }} placeholder="Ej: 1,5" /></Field><div className="text-sm"><b>Valor:</b> {formatPercent(parsed)}<br /><b>Base:</b> NET<br /><b>Pago completo:</b> Sí</div><div className="text-sm"><b>Cierre histórico:</b> {settings.historical_cutoff_date}<br /><b>Primer día elegible:</b> {settings.first_eligible_date}</div><button disabled={busy} onClick={onSaveSettings} className="btn-primary self-end"><Save className="h-3.5 w-3.5" />Guardar</button></div></div> }
+  return <div className="w-full rounded-xl border border-theme-border bg-theme-bg/30 p-4"><div className="grid gap-3 md:grid-cols-4"><Field label="Comisión general (%)"><input type="text" inputMode="decimal" value={raw} onChange={e => { setRaw(e.target.value); }} placeholder="Ej: 1,5" /></Field><div className="text-sm"><b>Valor:</b> {formatPercent(parsed)}<br /><b>Base:</b> NET<br /><b>Pago completo:</b> Sí</div><div className="text-sm"><b>Cierre histórico:</b> {settings.historical_cutoff_date}<br /><b>Primer día elegible:</b> {settings.first_eligible_date}</div><button disabled={busy} onClick={() => { onSettingsChange(parsePercent(raw)); onSaveSettings() }} className="btn-primary self-end"><Save className="h-3.5 w-3.5" />Guardar</button></div></div> }
