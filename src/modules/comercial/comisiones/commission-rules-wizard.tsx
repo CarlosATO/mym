@@ -1,53 +1,34 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Check, ChevronLeft, ChevronRight, LoaderCircle, X } from "lucide-react";
+import { useState } from "react";
 import {
-  Check,
-  ChevronLeft,
-  ChevronRight,
-  LoaderCircle,
-  Plus,
-  Search,
-  X,
-  Edit2,
-} from "lucide-react";
-import {
-  archiveCommissionRuleBatch,
   createGuidedCommissionRule,
-  getCommissionRuleBatchDetail,
-  restoreCommissionRuleBatch,
-  searchCommissionRuleProductCandidates,
   searchCommissionProducts,
   searchCommissionSuppliers,
-  setCommissionRuleBatchActive,
-  addProductsToCommissionRuleBatch,
   type CommissionGroup,
-  type CommissionRuleProductCandidate,
   type CommissionRule,
   type CommissionRuleType,
   type CommissionSeller,
 } from "@/app/actions/comercial/commissions";
-import { cn, parsePercent, formatPercent } from "@/lib/utils";
+import { cn, formatPercent, parsePercent } from "@/lib/utils";
+import { ExistingRules } from "./components/rules/rules-list";
+import {
+  Chips,
+  Field,
+  Item,
+  Mode,
+  ProductResults,
+  SearchBox,
+  SupplierResults,
+  Title,
+} from "./components/rules/rule-ui";
+import type {
+  Product,
+  Supplier,
+  TargetMode,
+} from "./commission-rules-wizard-types";
 
-type Supplier = {
-  id: string;
-  name: string;
-  rut: string | null;
-  type_label?: string;
-};
-type Product = {
-  id: string;
-  sku: string;
-  description: string;
-  supplier_name: string | null;
-};
-type RuleProductCandidate = CommissionRuleProductCandidate;
-type TargetMode =
-  | "GENERAL"
-  | "SUPPLIER_ALL_PRODUCTS"
-  | "SUPPLIER_SELECTED_PRODUCTS"
-  | "EXISTING_GROUP"
-  | "SELECTED_PRODUCTS";
 const stepNames = [
   "Identificación",
   "Alcance y selección",
@@ -154,18 +135,19 @@ export function CommissionRulesWizard({
     }
     return true;
   };
+
   const add = <T extends { id: string }>(
     item: T,
     update: React.Dispatch<React.SetStateAction<T[]>>,
   ) =>
     update((current) =>
-      current.some((value) => value.id === item.id)
-        ? current
-        : [...current, item],
+      current.some((value) => value.id === item.id) ? current : [...current, item],
     );
+
   const next = () => {
     if (validate()) setStep((current) => Math.min(current + 1, 4));
   };
+
   const cancel = () => {
     setStep(0);
     setName("");
@@ -184,6 +166,7 @@ export function CommissionRulesWizard({
     setMinAmount("");
     setMaxAmount("");
   };
+
   const findSuppliers = async () => {
     setLoading("suppliers");
     try {
@@ -194,6 +177,7 @@ export function CommissionRulesWizard({
       setLoading(null);
     }
   };
+
   const findProducts = async () => {
     if (productQuery.trim().length < 2) {
       setProductResults([]);
@@ -215,6 +199,7 @@ export function CommissionRulesWizard({
       setLoading(null);
     }
   };
+
   const save = async () => {
     if (!validate()) return;
     setLoading("save");
@@ -241,9 +226,7 @@ export function CommissionRulesWizard({
       cancel();
     } catch (error) {
       onError(
-        error instanceof Error
-          ? error.message
-          : "No se pudo guardar la condición.",
+        error instanceof Error ? error.message : "No se pudo guardar la condición.",
       );
     } finally {
       setLoading(null);
@@ -251,7 +234,7 @@ export function CommissionRulesWizard({
   };
 
   let content: React.ReactNode;
-  if (step === 0)
+  if (step === 0) {
     content = (
       <>
         <Title
@@ -260,10 +243,7 @@ export function CommissionRulesWizard({
         />
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Nombre de regla o campaña">
-            <input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-            />
+            <input value={name} onChange={(event) => setName(event.target.value)} />
           </Field>
           <Field label="Descripción opcional">
             <input
@@ -272,11 +252,7 @@ export function CommissionRulesWizard({
             />
           </Field>
           <Field label="Vigente desde">
-            <input
-              type="date"
-              value={from}
-              onChange={(event) => setFrom(event.target.value)}
-            />
+            <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
           </Field>
           <Field label="Vigente hasta opcional">
             <input
@@ -289,7 +265,7 @@ export function CommissionRulesWizard({
         </div>
       </>
     );
-  else if (step === 1)
+  } else if (step === 1) {
     content = (
       <ScopeAndSelection
         mode={mode}
@@ -319,7 +295,7 @@ export function CommissionRulesWizard({
         }
       />
     );
-  else if (step === 2)
+  } else if (step === 2) {
     content = (
       <>
         <Title
@@ -353,9 +329,7 @@ export function CommissionRulesWizard({
                   onChange={() =>
                     setSellerIds((current) =>
                       current.includes(seller.seller_profile_id!)
-                        ? current.filter(
-                            (id) => id !== seller.seller_profile_id,
-                          )
+                        ? current.filter((id) => id !== seller.seller_profile_id)
                         : [...current, seller.seller_profile_id!],
                     )
                   }
@@ -367,7 +341,7 @@ export function CommissionRulesWizard({
         )}
       </>
     );
-  else if (step === 3)
+  } else if (step === 3) {
     content = (
       <Commission
         type={type}
@@ -384,7 +358,7 @@ export function CommissionRulesWizard({
         setMaxAmount={setMaxAmount}
       />
     );
-  else
+  } else {
     content = (
       <Summary
         name={name}
@@ -402,14 +376,14 @@ export function CommissionRulesWizard({
         minAmount={minAmount}
       />
     );
+  }
 
   return (
     <section className="w-full space-y-4">
       <header>
         <h3 className="text-base font-semibold">Nueva condición de comisión</h3>
         <p className="mt-1 text-sm text-theme-text-muted">
-          Define cuándo una venta debe pagar una comisión distinta a la comisión
-          general.
+          Define cuándo una venta debe pagar una comisión distinta a la comisión general.
         </p>
       </header>
       <div className="sim-card">
@@ -522,6 +496,7 @@ function ScopeAndSelection(props: Parameters<typeof Selection>[0]) {
     </>
   );
 }
+
 function Selection(props: {
   mode: TargetMode;
   setMode: (mode: TargetMode) => void;
@@ -548,7 +523,7 @@ function Selection(props: {
   const supplierMode =
     props.mode === "SUPPLIER_ALL_PRODUCTS" ||
     props.mode === "SUPPLIER_SELECTED_PRODUCTS";
-  if (props.mode === "GENERAL")
+  if (props.mode === "GENERAL") {
     return (
       <>
         <Title
@@ -557,7 +532,8 @@ function Selection(props: {
         />
       </>
     );
-  if (props.mode === "EXISTING_GROUP")
+  }
+  if (props.mode === "EXISTING_GROUP") {
     return (
       <>
         <Title
@@ -598,12 +574,11 @@ function Selection(props: {
         )}
       </>
     );
+  }
   return (
     <>
       <Title
-        value={
-          supplierMode ? "Selección de proveedor" : "Selección de productos"
-        }
+        value={supplierMode ? "Selección de proveedor" : "Selección de productos"}
         help={
           supplierMode
             ? "Busca y selecciona proveedores reales de PetGroup."
@@ -640,9 +615,7 @@ function Selection(props: {
                   type="button"
                   onClick={() => props.setMode("SUPPLIER_ALL_PRODUCTS")}
                   className={
-                    props.mode === "SUPPLIER_ALL_PRODUCTS"
-                      ? "btn-primary"
-                      : "btn-secondary"
+                    props.mode === "SUPPLIER_ALL_PRODUCTS" ? "btn-primary" : "btn-secondary"
                   }
                 >
                   Sí, todos los productos
@@ -692,6 +665,7 @@ function Selection(props: {
     </>
   );
 }
+
 function Commission(props: {
   type: CommissionRuleType;
   setType: (type: CommissionRuleType) => void;
@@ -792,6 +766,7 @@ function Commission(props: {
     </>
   );
 }
+
 function Summary({
   name,
   mode,
@@ -838,6 +813,7 @@ function Summary({
         ? `Cada SKU debe alcanzar ${minQuantity} unidades`
         : `Cada SKU debe alcanzar $${minAmount} netos`;
   const percentVal = parsePercent(percent);
+
   return (
     <>
       <Title
@@ -850,9 +826,7 @@ function Summary({
         <Item
           label="Vendedores"
           value={
-            allSellers
-              ? "Todos los vendedores comisionables"
-              : `${sellerCount} vendedor(es)`
+            allSellers ? "Todos los vendedores comisionables" : `${sellerCount} vendedor(es)`
           }
         />
         <Item
@@ -867,1038 +841,8 @@ function Summary({
         />
         <Item label="Condición" value={condition} />
         <Item label="Comisión" value={formatPercent(percentVal)} />
-        <Item
-          label="Vigencia"
-          value={`${from}${to ? ` a ${to}` : " en adelante"}`}
-        />
+        <Item label="Vigencia" value={`${from}${to ? ` a ${to}` : " en adelante"}`} />
       </dl>
     </>
-  );
-}
-function ExistingRules({
-  rules,
-  onSaved,
-  onError,
-}: {
-  rules: CommissionRule[];
-  onSaved: () => Promise<void>;
-  onError: (message: string) => void;
-}) {
-  const [busy, setBusy] = useState<string | null>(null);
-  const [detail, setDetail] = useState<Awaited<
-    ReturnType<typeof getCommissionRuleBatchDetail>
-  > | null>(null);
-  const [detailMode, setDetailMode] = useState<"view" | "edit">("view");
-  const [status, setStatus] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
-  const [showArchived, setShowArchived] = useState(false);
-  const [actionMessage, setActionMessage] = useState("");
-  useEffect(() => {
-    if (!actionMessage) return;
-    const timer = window.setTimeout(() => {
-      setActionMessage("");
-      onError("");
-    }, 2500);
-    return () => window.clearTimeout(timer);
-  }, [actionMessage, onError]);
-  const batches = Array.from(
-    rules
-      .reduce((map, rule) => {
-        const id = rule.rule_batch_id || rule.id;
-        map.set(id, [...(map.get(id) || []), rule]);
-        return map;
-      }, new Map<string, CommissionRule[]>())
-      .entries(),
-  );
-  const setActive = async (id: string, isActive: boolean) => {
-    setActionMessage("");
-    setBusy(id);
-    try {
-      await setCommissionRuleBatchActive(id, isActive);
-      await onSaved();
-      const message = isActive
-        ? "Condición activada correctamente."
-        : "Condición desactivada correctamente.";
-      setActionMessage(message);
-      onError(message);
-    } catch {
-      onError(
-        isActive
-          ? "No se pudo activar la condición."
-          : "No se pudo desactivar la condición.",
-      );
-    } finally {
-      setBusy(null);
-    }
-  };
-  const view = async (
-    id: string,
-    rule: CommissionRule,
-    mode: "view" | "edit" = "view",
-  ) => {
-    if (!rule.rule_batch_id)
-      return onError(
-        "Esta condición antigua no tiene un lote agrupado para mostrar detalle.",
-      );
-    setBusy(id);
-    try {
-      setDetailMode(mode);
-      setDetail(await getCommissionRuleBatchDetail(rule.rule_batch_id));
-    } catch (error) {
-      onError(
-        error instanceof Error
-          ? error.message
-          : "No se pudo cargar el detalle.",
-      );
-    } finally {
-      setBusy(null);
-    }
-  };
-  const archive = async (id: string) => {
-    if (
-      !window.confirm(
-        "Esta condición se ocultará de la lista principal y dejará de aplicar. No será eliminada.",
-      )
-    )
-      return;
-    setActionMessage("");
-    setBusy(id);
-    try {
-      await archiveCommissionRuleBatch({ ruleBatchId: id });
-      await onSaved();
-      const message = "Condición archivada correctamente.";
-      setActionMessage(message);
-      onError(message);
-    } catch {
-      onError("No se pudo archivar la condición.");
-    } finally {
-      setBusy(null);
-    }
-  };
-  const restore = async (id: string) => {
-    if (
-      !window.confirm(
-        "La condición volverá a la lista como inactiva. Luego podrás activarla manualmente.",
-      )
-    )
-      return;
-    setActionMessage("");
-    setBusy(id);
-    try {
-      await restoreCommissionRuleBatch(id);
-      await onSaved();
-      const message = "Condición restaurada correctamente.";
-      setActionMessage(message);
-      onError(message);
-    } catch {
-      onError("No se pudo restaurar la condición.");
-    } finally {
-      setBusy(null);
-    }
-  };
-  const visible = batches.filter(([, batch]) => {
-    const rule = batch[0];
-    if (rule.is_archived && !showArchived) return false;
-    if (status === "ACTIVE") return !rule.is_archived && rule.is_active;
-    if (status === "INACTIVE") return !rule.is_archived && !rule.is_active;
-    return true;
-  });
-  return (
-    <section className="sim-card p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h3 className="font-semibold">Condiciones existentes</h3>
-        <div className="flex items-center gap-3">
-          <select
-            className="h-7 text-[11px]"
-            value={status}
-            onChange={(event) => setStatus(event.target.value as typeof status)}
-          >
-            <option value="ALL">Todas</option>
-            <option value="ACTIVE">Activas</option>
-            <option value="INACTIVE">Inactivas</option>
-          </select>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={showArchived}
-              onChange={(event) => setShowArchived(event.target.checked)}
-            />
-            Mostrar archivadas
-          </label>
-        </div>
-      </div>
-      {visible.length ? (
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full min-w-[820px] text-sm">
-            <thead>
-              <tr>
-                <th>Nombre</th>
-                <th>Aplica sobre</th>
-                <th>Tipo</th>
-                <th>Comisión</th>
-                <th>Vigencia</th>
-                <th>Estado</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map(([id, batch]) => {
-                const rule = batch[0];
-                const archived = Boolean(rule.is_archived);
-                const canEditProducts =
-                  Boolean(rule.rule_batch_id) &&
-                  !archived &&
-                  rule.is_active &&
-                  rule.rule_scope === "PRODUCT";
-                const editHelp = archived
-                  ? "No disponible en condiciones archivadas."
-                  : !rule.is_active
-                    ? "Activa la condición para agregar productos."
-                    : rule.rule_scope !== "PRODUCT"
-                      ? "Edición disponible para reglas por producto."
-                      : "";
-                return (
-                  <tr key={id}>
-                    <td>
-                      <b>{rule.rule_name || "Condición de comisión"}</b>
-                    </td>
-                    <td>
-                      {rule.rule_scope === "GENERAL"
-                        ? "General"
-                        : rule.rule_scope === "SUPPLIER"
-                          ? "Proveedor"
-                          : rule.rule_scope === "GROUP"
-                            ? "Grupo"
-                            : `${batch.length} producto(s)`}
-                    </td>
-                    <td>
-                      {rule.rule_type === "FIXED_PERCENT"
-                        ? "Fija"
-                        : rule.rule_type === "RANGE_BY_QUANTITY"
-                          ? "Por cantidad"
-                          : "Por monto"}
-                    </td>
-                    <td>
-                      {rule.commission_percent != null
-                        ? formatPercent(Number(rule.commission_percent))
-                        : "-"}
-                    </td>
-                    <td>
-                      {rule.valid_from}
-                      {rule.valid_to ? ` a ${rule.valid_to}` : " en adelante"}
-                    </td>
-                    <td>
-                      <span className="rounded-full border border-theme-border px-2 py-1 text-xs">
-                        {archived
-                          ? "Archivada"
-                          : rule.is_active
-                            ? "Activa"
-                            : "Inactiva"}
-                      </span>
-                    </td>
-                    <td className="whitespace-nowrap">
-                      <div className="flex flex-wrap justify-end gap-2">
-                        <button
-                          type="button"
-                          disabled={busy === id}
-                          onClick={() => void view(id, rule)}
-                          className="btn-secondary"
-                        >
-                          Ver detalle
-                        </button>
-                        <span
-                          className="inline-flex"
-                          title={editHelp || undefined}
-                        >
-                          <button
-                            type="button"
-                            disabled={busy === id || !canEditProducts}
-                            onClick={() => void view(id, rule, "edit")}
-                            className="btn-secondary"
-                          >
-                            Agregar productos
-                          </button>
-                        </span>
-                      </div>
-                      {!canEditProducts && !archived && rule.is_active && (
-                        <p className="mt-1 text-[11px] text-theme-text-muted">
-                          {editHelp}
-                        </p>
-                      )}
-                      {rule.rule_batch_id &&
-                        (archived ? (
-                          <button
-                            type="button"
-                            disabled={busy === id}
-                            onClick={() => void restore(id)}
-                            className="btn-secondary ml-2"
-                          >
-                            Restaurar
-                          </button>
-                        ) : (
-                          <>
-                            <button
-                              type="button"
-                              disabled={busy === id}
-                              onClick={() =>
-                                void setActive(id, !rule.is_active)
-                              }
-                              className="btn-secondary ml-2"
-                            >
-                              {busy === id
-                                ? "Guardando..."
-                                : rule.is_active
-                                  ? "Desactivar"
-                                  : "Activar"}
-                            </button>
-                            <button
-                              type="button"
-                              disabled={busy === id}
-                              onClick={() => void archive(id)}
-                              className="btn-secondary ml-2"
-                            >
-                              Archivar
-                            </button>
-                          </>
-                        ))}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <p className="mt-3 text-sm text-theme-text-muted">
-          No hay condiciones que coincidan con los filtros.
-        </p>
-      )}
-      {detail && (
-        <RuleDetail
-          detail={detail}
-          initialMode={detailMode}
-          onClose={() => setDetail(null)}
-          onRefresh={() => {
-            setDetail(null);
-            void onSaved();
-          }}
-        />
-      )}
-    </section>
-  );
-}
-function RuleDetail({
-  detail,
-  initialMode,
-  onClose,
-  onRefresh,
-}: {
-  detail: Awaited<ReturnType<typeof getCommissionRuleBatchDetail>>;
-  initialMode: "view" | "edit";
-  onClose: () => void;
-  onRefresh: () => void;
-}) {
-  const type =
-    detail.type === "FIXED_PERCENT"
-      ? "Comisión fija"
-      : detail.type === "RANGE_BY_QUANTITY"
-        ? "Variable por cantidad"
-        : "Variable por monto";
-  const [editing, setEditing] = useState(initialMode === "edit");
-  const canEditProducts = detail.scope === "PRODUCT" && detail.isActive;
-  const editHelp = !detail.isActive
-    ? "Activa la condición para agregar productos."
-    : detail.scope !== "PRODUCT"
-      ? "Edición disponible para reglas por producto."
-      : "";
-  if (editing)
-    return (
-      <EditRuleModal
-        detail={detail}
-        onClose={() => setEditing(false)}
-        onSaved={() => {
-          setEditing(false);
-          onRefresh();
-        }}
-      />
-    );
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <section className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-xl border border-theme-border bg-theme-surface p-5 text-theme-text">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h3 className="text-lg font-semibold">{detail.name}</h3>
-            <p className="mt-1 text-sm text-theme-text-muted">
-              {detail.description || "Sin descripción"}
-            </p>
-          </div>
-          <div className="flex flex-col items-end gap-2">
-            <div className="flex gap-2">
-              <span className="inline-flex" title={editHelp || undefined}>
-                <button
-                  type="button"
-                  onClick={() => setEditing(true)}
-                  disabled={!canEditProducts}
-                  className="btn-secondary"
-                >
-                  <Edit2 className="h-3.5 w-3.5" />
-                  Agregar productos
-                </button>
-              </span>
-              <button type="button" onClick={onClose} className="btn-secondary">
-                Cerrar
-              </button>
-            </div>
-            {!canEditProducts && detail.isActive && (
-              <p className="text-[11px] text-theme-text-muted">{editHelp}</p>
-            )}
-          </div>
-        </div>
-        <dl className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <Detail
-            label="Estado"
-            value={detail.isActive ? "Activa" : "Inactiva"}
-          />
-          <Detail
-            label="Vigencia"
-            value={`${detail.validFrom}${detail.validTo ? ` a ${detail.validTo}` : " en adelante"}`}
-          />
-          <Detail
-            label="Comisión"
-            value={formatPercent(detail.commissionPercent)}
-          />
-          <Detail label="Tipo" value={type} />
-          <Detail
-            label="Alcance"
-            value={
-              detail.scope === "GENERAL"
-                ? "General"
-                : detail.scope === "SUPPLIER"
-                  ? "Proveedor"
-                  : detail.scope === "GROUP"
-                    ? "Grupo de productos"
-                    : "Productos seleccionados"
-            }
-          />
-          {detail.type === "RANGE_BY_QUANTITY" && (
-            <Detail
-              label="Cantidad"
-              value={`${detail.minQuantity ?? 0}${detail.maxQuantity ? ` a ${detail.maxQuantity}` : "+"}`}
-            />
-          )}
-          {detail.type === "RANGE_BY_AMOUNT" && (
-            <Detail
-              label="Monto"
-              value={`${detail.minAmount ?? 0}${detail.maxAmount ? ` a ${detail.maxAmount}` : "+"}`}
-            />
-          )}
-        </dl>
-        <div className="mt-5 grid gap-5 lg:grid-cols-2">
-          <DetailList
-            title="Vendedores"
-            items={detail.sellers.map(
-              (seller) => `${seller.name} (${seller.bsaleId})`,
-            )}
-            empty="Todos los vendedores comisionables"
-          />
-          <DetailList
-            title="Proveedores"
-            items={detail.suppliers.map((supplier) => supplier.name)}
-            empty="No aplica"
-          />
-          <DetailList
-            title="Grupos"
-            items={detail.groups.map((group) => group.name)}
-            empty="No aplica"
-          />
-          <div>
-            <h4 className="font-semibold">Productos incluidos</h4>
-            {detail.products.length ? (
-              <div className="mt-2 overflow-x-auto rounded-lg border border-theme-border">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr>
-                      <th>SKU</th>
-                      <th>Producto</th>
-                      <th>Proveedor</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detail.products.map((product) => (
-                      <tr key={product.sku}>
-                        <td className="font-mono text-xs">{product.sku}</td>
-                        <td>{product.name}</td>
-                        <td>{product.supplierName}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <p className="mt-2 text-sm text-theme-text-muted">No aplica</p>
-            )}
-          </div>
-        </div>
-        <p className="mt-5 text-xs text-theme-text-muted">
-          Para cambiar productos, proveedor, vendedor, alcance o tipo de
-          comisión, desactiva esta condición y crea una nueva.
-        </p>
-      </section>
-    </div>
-  );
-}
-function EditRuleModal({
-  detail,
-  onClose,
-  onSaved,
-}: {
-  detail: Awaited<ReturnType<typeof getCommissionRuleBatchDetail>>;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const [productQuery, setProductQuery] = useState("");
-  const [productResults, setProductResults] = useState<RuleProductCandidate[]>(
-    [],
-  );
-  const [searching, setSearching] = useState(false);
-  const [selected, setSelected] = useState<RuleProductCandidate[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [hasSearched, setHasSearched] = useState(false);
-  const doSearch = async () => {
-    const normalizedQuery = productQuery.trim();
-    if (normalizedQuery.length < 2) {
-      setProductResults([]);
-      setHasSearched(false);
-      return;
-    }
-    setSearching(true);
-    setError("");
-    try {
-      setProductResults(
-        await searchCommissionRuleProductCandidates(normalizedQuery, detail.id),
-      );
-      setHasSearched(true);
-    } catch {
-      setError("Error al buscar productos");
-    } finally {
-      setSearching(false);
-    }
-  };
-  useEffect(() => {
-    const normalizedQuery = productQuery.trim();
-    if (normalizedQuery.length < 2) return;
-
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      setSearching(true);
-      setError("");
-      void searchCommissionRuleProductCandidates(normalizedQuery, detail.id)
-        .then((results) => {
-          if (cancelled) return;
-          setProductResults(results);
-          setHasSearched(true);
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setError("Error al buscar productos");
-        })
-        .finally(() => {
-          if (!cancelled) setSearching(false);
-        });
-    }, 300);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [detail.id, productQuery]);
-  const existingIds = new Set(detail.products.map((p) => p.id));
-  const toAddIds = new Set(selected.map((p) => p.id));
-  const save = async () => {
-    if (!selected.length) return;
-    setBusy(true);
-    setError("");
-    try {
-      await addProductsToCommissionRuleBatch(detail.id, Array.from(toAddIds));
-      onSaved();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error al guardar");
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <section className="max-h-[90vh] w-full max-w-3xl overflow-auto flex flex-col rounded-xl border border-theme-border bg-theme-surface p-5 text-theme-text">
-        <div>
-          <h3 className="text-lg font-semibold">
-            Agregar productos a {detail.name}
-          </h3>
-          <p className="mt-1 text-sm text-theme-text-muted">
-            Busca y selecciona los nuevos productos que deseas incluir en esta
-            condición.
-          </p>
-        </div>
-        {error && (
-          <div className="mt-3 rounded border border-red-500/30 bg-red-500/10 p-2 text-sm text-red-600">
-            {error}
-          </div>
-        )}
-        <div className="mt-4 rounded-lg border border-theme-border p-3">
-          <h4 className="font-semibold">Productos actuales</h4>
-          {detail.products.length ? (
-            <div className="mt-3 overflow-x-auto rounded-lg border border-theme-border">
-              <table className="w-full min-w-[600px] text-sm">
-                <thead>
-                  <tr>
-                    <th>SKU</th>
-                    <th>Producto</th>
-                    <th>Proveedor</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {detail.products.map((product) => (
-                    <tr key={product.id}>
-                      <td className="font-mono text-xs">{product.sku}</td>
-                      <td>{product.name}</td>
-                      <td>{product.supplierName}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p className="mt-2 text-sm text-theme-text-muted">
-              Esta condición aún no tiene productos cargados.
-            </p>
-          )}
-        </div>
-        <SearchBox
-          value={productQuery}
-          setValue={(value) => {
-            setProductQuery(value);
-            if (value.trim().length < 2) {
-              setProductResults([]);
-              setHasSearched(false);
-              setSearching(false);
-            }
-          }}
-          search={doSearch}
-          loading={searching}
-          placeholder="Buscar por SKU, producto, proveedor o pseudoproveedor..."
-        />
-        <RuleProductResults
-          query={productQuery.trim()}
-          items={productResults}
-          searching={searching}
-          hasSearched={hasSearched}
-          selected={
-            new Set([...Array.from(existingIds), ...Array.from(toAddIds)])
-          }
-          add={(p) =>
-            setSelected((current) =>
-              current.some((item) => item.id === p.id)
-                ? current
-                : [...current, p],
-            )
-          }
-        />
-        <Chips
-          items={selected}
-          label={(p) => `${p.sku} · ${p.description}`}
-          remove={(id) => setSelected((c) => c.filter((p) => p.id !== id))}
-          empty="No has seleccionado nuevos productos aún."
-        />
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            className="btn-secondary"
-          >
-            Cancelar
-          </button>
-          <button
-            type="button"
-            onClick={save}
-            disabled={busy || !selected.length}
-            className="btn-primary"
-          >
-            {busy ? "Guardando..." : `Agregar ${selected.length} producto(s)`}
-          </button>
-        </div>
-      </section>
-    </div>
-  );
-}
-function Detail({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-xs font-semibold uppercase text-theme-text-muted">
-        {label}
-      </dt>
-      <dd className="mt-1 text-sm">{value}</dd>
-    </div>
-  );
-}
-function DetailList({
-  title,
-  items,
-  empty,
-}: {
-  title: string;
-  items: string[];
-  empty: string;
-}) {
-  return (
-    <div>
-      <h4 className="font-semibold">{title}</h4>
-      {items.length ? (
-        <ul className="mt-2 space-y-1 text-sm">
-          {items.map((item) => (
-            <li key={item}>{item}</li>
-          ))}
-        </ul>
-      ) : (
-        <p className="mt-2 text-sm text-theme-text-muted">{empty}</p>
-      )}
-    </div>
-  );
-}
-function SearchBox({
-  value,
-  setValue,
-  search,
-  loading,
-  placeholder,
-}: {
-  value: string;
-  setValue: (value: string) => void;
-  search: () => Promise<void>;
-  loading: boolean;
-  placeholder: string;
-}) {
-  return (
-    <div className="mt-4 flex gap-2">
-      <input
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            void search();
-          }
-        }}
-        placeholder={placeholder}
-      />
-      <button
-        type="button"
-        onClick={() => void search()}
-        className="btn-secondary"
-      >
-        {loading ? (
-          <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-        ) : (
-          <Search className="h-3.5 w-3.5" />
-        )}
-        Buscar
-      </button>
-    </div>
-  );
-}
-function RuleProductResults({
-  query,
-  items,
-  searching,
-  hasSearched,
-  selected,
-  add,
-}: {
-  query: string;
-  items: RuleProductCandidate[];
-  searching: boolean;
-  hasSearched: boolean;
-  selected: Set<string>;
-  add: (item: RuleProductCandidate) => void;
-}) {
-  const showNoResults =
-    hasSearched && !searching && query.length >= 2 && !items.length;
-  return (
-    <div className="mt-3 overflow-x-auto rounded-lg border border-theme-border">
-      <table className="w-full min-w-[820px] text-sm">
-        <thead>
-          <tr>
-            <th>SKU</th>
-            <th>Producto</th>
-            <th>Proveedor real</th>
-            <th>Pseudoproveedor</th>
-            <th>Stock</th>
-            <th>Acción</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((item) => (
-            <tr key={item.id}>
-              <td className="font-mono text-xs">{item.sku}</td>
-              <td>
-                <div>{item.description}</div>
-                {item.bsale_product_id && (
-                  <div className="text-[10px] text-theme-text-muted">
-                    Bsale #{item.bsale_product_id}
-                  </div>
-                )}
-              </td>
-              <td>{item.real_supplier_name || "Sin proveedor real"}</td>
-              <td>{item.operative_supplier_name || "Sin pseudoproveedor"}</td>
-              <td className="text-right">
-                {item.stock_available != null
-                  ? item.stock_available.toLocaleString("es-CL")
-                  : "-"}
-              </td>
-              <td>
-                {item.already_included ? (
-                  <span className="text-xs font-semibold text-amber-600">
-                    Ya incluido en la regla
-                  </span>
-                ) : selected.has(item.id) ? (
-                  <span className="text-xs font-semibold text-theme-text-muted">
-                    Seleccionado
-                  </span>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => add(item)}
-                    className="btn-secondary"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    Agregar
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {searching && (
-        <p className="p-4 text-center text-sm text-theme-text-muted">
-          Buscando productos...
-        </p>
-      )}
-      {showNoResults && (
-        <div className="p-4 text-center text-sm text-theme-text-muted">
-          <p>No se encontraron productos para &lsquo;{query}&rsquo;.</p>
-          <p className="mt-1">
-            Busca por SKU, producto, proveedor o pseudoproveedor.
-          </p>
-        </div>
-      )}
-      {!searching && !hasSearched && query.length < 2 && (
-        <p className="p-4 text-center text-sm text-theme-text-muted">
-          Escribe al menos 2 caracteres para buscar productos.
-        </p>
-      )}
-    </div>
-  );
-}
-function SupplierResults({
-  items,
-  selected,
-  add,
-}: {
-  items: Supplier[];
-  selected: Set<string>;
-  add: (item: Supplier) => void;
-}) {
-  return (
-    <div className="mt-3 overflow-x-auto rounded-lg border border-theme-border">
-      <table className="w-full min-w-[560px] text-sm">
-        <thead>
-          <tr>
-            <th>Proveedor</th>
-            <th>RUT</th>
-            <th>Tipo</th>
-            <th>Acción</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((item) => (
-            <tr key={item.id}>
-              <td>{item.name}</td>
-              <td>{item.rut || "Sin RUT"}</td>
-              <td>{item.type_label || "Proveedor real"}</td>
-              <td>
-                {selected.has(item.id) ? (
-                  "Agregado"
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => add(item)}
-                    className="btn-secondary"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    Agregar
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {!items.length && (
-        <p className="p-4 text-center text-sm text-theme-text-muted">
-          Sin proveedores reales para mostrar.
-        </p>
-      )}
-    </div>
-  );
-}
-function ProductResults({
-  items,
-  selected,
-  add,
-}: {
-  items: Product[];
-  selected: Set<string>;
-  add: (item: Product) => void;
-}) {
-  return (
-    <div className="mt-3 overflow-x-auto rounded-lg border border-theme-border">
-      <table className="w-full min-w-[600px] text-sm">
-        <thead>
-          <tr>
-            <th>SKU</th>
-            <th>Producto</th>
-            <th>Proveedor</th>
-            <th>Acción</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((item) => (
-            <tr key={item.id}>
-              <td className="font-mono text-xs">{item.sku}</td>
-              <td>{item.description}</td>
-              <td>{item.supplier_name || "Sin proveedor asociado"}</td>
-              <td>
-                {selected.has(item.id) ? (
-                  "Agregado"
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => add(item)}
-                    className="btn-secondary"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    Agregar
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {!items.length && (
-        <p className="p-4 text-center text-sm text-theme-text-muted">
-          Sin productos para mostrar.
-        </p>
-      )}
-    </div>
-  );
-}
-function Chips<T extends { id: string }>({
-  items,
-  label,
-  remove,
-  empty,
-}: {
-  items: T[];
-  label: (item: T) => string;
-  remove: (id: string) => void;
-  empty: string;
-}) {
-  return (
-    <div className="mt-3 rounded-lg border border-theme-border p-3">
-      {items.length ? (
-        <div className="flex flex-wrap gap-2">
-          {items.map((item) => (
-            <span
-              key={item.id}
-              className="inline-flex items-center gap-2 rounded-full bg-theme-accent-muted px-3 py-1 text-xs"
-            >
-              {label(item)}
-              <button type="button" onClick={() => remove(item.id)}>
-                Quitar
-              </button>
-            </span>
-          ))}
-        </div>
-      ) : (
-        <p className="text-sm text-theme-text-muted">{empty}</p>
-      )}
-    </div>
-  );
-}
-function Title({ value, help }: { value: string; help: string }) {
-  const title =
-    value === "5. Tipo de comisión"
-      ? "4. Tipo de comisión"
-      : value === "6. Resumen antes de guardar"
-        ? "5. Resumen antes de guardar"
-        : value;
-  return (
-    <>
-      <h4 className="font-semibold">{title}</h4>
-      <p className="mt-1 text-sm text-theme-text-muted">{help}</p>
-    </>
-  );
-}
-function Mode({
-  selected,
-  onClick,
-  title,
-  text,
-}: {
-  selected: boolean;
-  onClick: () => void;
-  title: string;
-  text: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "rounded-lg border p-3 text-left",
-        selected
-          ? "border-theme-accent bg-theme-accent-muted"
-          : "border-theme-border bg-theme-surface",
-      )}
-    >
-      <b className="block text-sm">{title}</b>
-      <span className="mt-1 block text-xs text-theme-text-muted">{text}</span>
-    </button>
-  );
-}
-function Field({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="text-sm font-medium">
-      {label}
-      <span className="mt-1 block">{children}</span>
-    </label>
-  );
-}
-function Item({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-xs font-semibold uppercase text-theme-text-muted">
-        {label}
-      </dt>
-      <dd className="mt-1">{value}</dd>
-    </div>
   );
 }
