@@ -4,6 +4,7 @@ import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { revalidatePath } from 'next/cache'
 import { getActiveCompanyId } from '@/app/actions/companies'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 
 const sellerTypes = ['FIELD', 'ADMIN', 'MANAGEMENT', 'DISPATCH', 'OTHER'] as const
 
@@ -153,6 +154,16 @@ export type CommissionPreview = {
   }
   lines: CommissionPreviewLine[]
   warnings: Array<{ code: string; message: string; count: number }>
+}
+
+export type CommissionSyncHealth = {
+  latestRun: {
+    started_at: string
+    completed_at: string | null
+    status: string
+  } | null
+  isFresh: boolean
+  lastSuccessAgeMinutes: number | null
 }
 
 export type CommissionSettlementHeader = {
@@ -640,12 +651,13 @@ export async function getCommissionRuleBatchDetail(ruleBatchId: string) {
   for (const mapping of productMappings || []) if (!productSupplierNames.has(mapping.product_id as string)) productSupplierNames.set(mapping.product_id as string, mappedSupplierNames.get(mapping.supplier_id as string) || 'Sin proveedor asociado')
   const first = rules[0]
   return {
+    id: ruleBatchId,
     name: String(first.rule_name || 'Condición de comisión'), description: first.rule_description as string | null,
     validFrom: first.valid_from as string, validTo: first.valid_to as string | null, isActive: Boolean(first.is_active),
     scope: first.rule_scope as CommissionRuleScope, type: first.rule_type as CommissionRuleType, commissionPercent: Number(first.commission_percent),
     minAmount: numberOrNull(first.min_amount), maxAmount: numberOrNull(first.max_amount), minQuantity: numberOrNull(first.min_quantity), maxQuantity: numberOrNull(first.max_quantity),
     sellers: (sellers || []).map(seller => ({ name: seller.seller_name as string, bsaleId: Number(seller.seller_bsale_id) })),
-    products: (products || []).map(product => ({ sku: product.sku as string, name: product.description as string, supplierName: productSupplierNames.get(product.id as string) || 'Sin proveedor asociado' })),
+    products: (products || []).map(product => ({ id: product.id as string, sku: product.sku as string, name: product.description as string, supplierName: productSupplierNames.get(product.id as string) || 'Sin proveedor asociado' })),
     suppliers: (suppliers || []).map(supplier => ({ name: String(supplier.business_name || supplier.fantasy_name || 'Proveedor sin nombre') })),
     groups: (groups || []).map(group => ({ name: group.name as string })),
   }
@@ -774,6 +786,38 @@ export async function createGuidedCommissionRule(input: {
   return { ruleBatchId: batchId, technicalRulesCreated: rows.length }
 }
 
+export async function addProductsToCommissionRuleBatch(ruleBatchId: string, productIds: string[]) {
+  const { companyId, userId } = await getAuthenticatedCompany()
+  if (!ruleBatchId.trim()) throw new Error('Condición inválida')
+  const uniqueIds = Array.from(new Set(productIds.filter(Boolean)))
+  if (!uniqueIds.length) throw new Error('Debes seleccionar al menos un producto')
+  
+  const { data: existing, error } = await commissionDb().from('commission_rules').select('*').eq('company_id', companyId).eq('rule_batch_id', ruleBatchId)
+  if (error) throw error
+  if (!existing?.length) throw new Error('La condición no pertenece a la empresa activa')
+  
+  const first = existing[0]
+  if (first.rule_scope !== 'PRODUCT') throw new Error('Esta operación solo aplica para condiciones basadas en productos')
+  
+  const sellerIds = Array.from(new Set(existing.map(rule => rule.seller_profile_id as string | null)))
+  
+  const newRows = uniqueIds.flatMap(productId => sellerIds.map(sellerProfileId => {
+    const row = { ...first }
+    delete (row as any).id
+    delete (row as any).created_at
+    delete (row as any).updated_at
+    row.seller_profile_id = sellerProfileId
+    row.product_id = productId
+    row.created_by = userId
+    row.updated_by = userId
+    return row
+  }))
+  
+  const { error: insertError } = await commissionDb().from('commission_rules').insert(newRows)
+  if (insertError) throw insertError
+  return { technicalRulesCreated: newRows.length }
+}
+
 export async function previewCommissionSettlement(input: { seller_bsale_id: number; period_to: string; period_from?: string }): Promise<CommissionPreview> {
   const { companyId } = await getAuthenticatedCompany()
   const sellerId = Number(input.seller_bsale_id)
@@ -873,6 +917,40 @@ export async function previewCommissionSettlement(input: { seller_bsale_id: numb
     lines,
     warnings: Array.from(warnings.values()),
   }
+}
+
+export async function getCommissionsSyncHealth(): Promise<CommissionSyncHealth> {
+  const { companyId } = await getAuthenticatedCompany()
+  const admin = createAdminClient()
+  const { data, error } = await admin.from('bsale_sync_runs')
+    .select('started_at, completed_at, status')
+    .eq('company_id', companyId)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .single()
+  
+  if (error || !data) return { latestRun: null, isFresh: false, lastSuccessAgeMinutes: null }
+  
+  const lastSuccessAgeMinutes = data.status === 'COMPLETED' && data.completed_at
+    ? Math.round((Date.now() - new Date(data.completed_at).getTime()) / 60000)
+    : null
+  
+  const isFresh = data.status === 'COMPLETED' && (new Date().getTime() - new Date(data.completed_at || 0).getTime()) < 1000 * 60 * 60 * 24
+  return { latestRun: data as any, isFresh, lastSuccessAgeMinutes }
+}
+
+export async function triggerManualCommissionsSync() {
+  const { companyId, userId } = await getAuthenticatedCompany()
+  const admin = createAdminClient()
+  const { data: profile } = await admin.from('users').select('role_id, roles:role_id(name)').eq('id', userId).single()
+  const roleName = String((profile?.roles as any)?.name || '').toUpperCase()
+  
+  if (roleName !== 'SUPER_USUARIO') {
+    throw new Error('Solo SUPER_USUARIO puede ejecutar sincronización manual.')
+  }
+  
+  const { runReplenishmentBsaleSync } = await import('@/app/actions/integraciones/bsale-sync')
+  return runReplenishmentBsaleSync(companyId, 'MANUAL')
 }
 
 export async function createCommissionSettlementDraft(input: {

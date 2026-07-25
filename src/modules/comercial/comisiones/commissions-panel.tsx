@@ -1,13 +1,13 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { AlertCircle, ArrowLeft, Ban, Check, Download, FileText, FileUp, RefreshCw, Save, Settings2, SlidersHorizontal, UsersRound, X } from 'lucide-react'
 import {
   getCommissionGroups, getCommissionRules, getCommissionSettings, getCommissionSellers,
   getCommissionAnnulledSettlements, getCommissionSettlementById, getCommissionSettlementDrafts, getCommissionSettlements,
   previewCommissionSettlement, searchCommissionSuppliers, updateCommissionSettings,
   upsertCommissionSellerProfile, annulCommissionSettlement, cancelCommissionSettlementDraft, createCommissionSettlementDraft,
-  issueCommissionSettlement,
+  issueCommissionSettlement, getCommissionsSyncHealth, triggerManualCommissionsSync, type CommissionSyncHealth,
   type CommissionGroup, type CommissionPreview, type CommissionPreviewLine, type CommissionRule,
   type CommissionSeller, type CommissionSellerProfileInput, type CommissionSellerType, type CommissionSettings,
   type CommissionSettlementHeader, type CommissionSettlementLine,
@@ -44,6 +44,8 @@ export function CommissionsPanel() {
   const [periodFrom, setPeriodFrom] = useState('2026-06-26')
   const [periodTo, setPeriodTo] = useState(today)
   const [preview, setPreview] = useState<CommissionPreview | null>(null)
+  const [syncHealth, setSyncHealth] = useState<CommissionSyncHealth | null>(null)
+  const [syncBusy, setSyncBusy] = useState(false)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -61,6 +63,14 @@ export function CommissionsPanel() {
     setLoading(true); setError(null)
     try { const rows = await getCommissionSellers(); setSellers(rows); setDrafts(Object.fromEntries(rows.map(row => [row.seller_bsale_id, sellerDraft(row)]))) }
     catch (err) { setError(errorMessage(err)) } finally { setLoading(false) }
+  }
+  const loadSyncHealth = async () => {
+    try { setSyncHealth(await getCommissionsSyncHealth()) } catch (err) { console.error('Failed to load sync health', err) }
+  }
+  const handleManualSync = async () => {
+    setSyncBusy(true); setError(null)
+    try { await triggerManualCommissionsSync(); await loadSyncHealth() }
+    catch (err) { setError(errorMessage(err)) } finally { setSyncBusy(false) }
   }
   const loadConfig = async () => {
     setBusy(true); setError(null)
@@ -84,7 +94,7 @@ export function CommissionsPanel() {
     try { setAnnulledList(await getCommissionAnnulledSettlements()) }
     catch (err) { setError(errorMessage(err)) } finally { setBusy(false) }
   }
-  useEffect(() => { const handle = setTimeout(() => { void loadSellers() }, 0); return () => clearTimeout(handle) }, [])
+  useEffect(() => { const handle = setTimeout(() => { void loadSellers(); void loadSyncHealth() }, 0); return () => clearTimeout(handle) }, [])
   useEffect(() => { if (!error) return; const t = setTimeout(() => setError(null), error.includes('éxito') || error.includes('exitosamente') ? 3000 : 7000); return () => clearTimeout(t) }, [error])
 
   const commissionable = sellers.filter(seller => seller.is_commissionable && seller.profile_active === true)
@@ -189,7 +199,7 @@ export function CommissionsPanel() {
   }
 
   return <div className="commission-panel flex h-full min-h-0 flex-col overflow-hidden bg-theme-surface text-theme-text">
-    <Header view={view} onConfig={openConfig} onBack={() => setView('main')} mainTab={mainTab} onMainTab={setMainTab} />
+    <Header view={view} onConfig={openConfig} onBack={() => setView('main')} mainTab={mainTab} onMainTab={setMainTab} syncHealth={syncHealth} syncBusy={syncBusy} onManualSync={handleManualSync} />
     {error && <div className="mx-4 mt-3 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-theme-text"><AlertCircle className="h-4 w-4 text-red-600" />{error}</div>}
     {confirmAction && <ConfirmModal action={confirmAction} reason={cancelReason} onReason={setCancelReason} busy={busy} onConfirm={confirmAction.type === 'create_draft' ? doCreateDraft : confirmAction.type === 'cancel' ? doCancelDraft : confirmAction.type === 'issue' ? doIssue : doAnnul} onCancel={() => { setConfirmAction(null); setCancelReason('') }} />}
     {pdfPreview && <PdfPreviewModal base64={pdfPreview.base64} filename={pdfPreview.filename} onClose={() => setPdfPreview(null)} onDownload={downloadPdf} />}
@@ -206,7 +216,25 @@ const mainTabs: Array<{ key: MainTab; label: string }> = [
   { key: 'annulled', label: 'Anuladas' },
 ]
 
-function Header({ view, onConfig, onBack, mainTab, onMainTab }: { view: View; onConfig: () => void; onBack: () => void; mainTab: MainTab; onMainTab: (t: MainTab) => void }) { return <><header className="shrink-0 border-b border-theme-border px-4 py-3 md:px-5"><div className="flex items-center justify-between gap-3"><div><div className="flex items-center gap-2"><UsersRound className="h-4 w-4 text-theme-accent" /><h2 className="font-accent text-lg font-semibold">Comisiones de Vendedores</h2></div><p className="mt-1 text-sm text-theme-text-muted">{view === 'main' ? 'Simulación. No emite liquidación ni bloquea facturas.' : 'Configuración de vendedores, comisión general, grupos y reglas.'}</p></div>{view === 'main' ? <button onClick={onConfig} className="btn-secondary"><Settings2 className="h-3.5 w-3.5" />Configuración</button> : <button onClick={onBack} className="btn-secondary"><ArrowLeft className="h-3.5 w-3.5" />Volver a comisiones</button>}</div>{view === 'main' && <div className="mt-2 flex gap-1">{(mainTabs).map(t => <button key={t.key} onClick={() => onMainTab(t.key)} className={cn('rounded-t px-3 py-1.5 text-xs font-semibold', mainTab === t.key ? 'bg-theme-accent-muted text-theme-text' : 'text-theme-text-muted hover:bg-theme-surface-hover')}>{t.label}</button>)}</div>}</header><CommissionStyles /></> }
+function Header({ view, onConfig, onBack, mainTab, onMainTab, syncHealth, syncBusy, onManualSync }: { view: View; onConfig: () => void; onBack: () => void; mainTab: MainTab; onMainTab: (t: MainTab) => void; syncHealth?: CommissionSyncHealth | null; syncBusy?: boolean; onManualSync?: () => void }) { 
+  return <><header className="shrink-0 border-b border-theme-border px-4 py-3 md:px-5">
+    <div className="flex items-center justify-between gap-3">
+      <div>
+        <div className="flex items-center gap-2"><UsersRound className="h-4 w-4 text-theme-accent" /><h2 className="font-accent text-lg font-semibold">Comisiones de Vendedores</h2></div>
+        <p className="mt-1 text-sm text-theme-text-muted">{view === 'main' ? 'Simulación. No emite liquidación ni bloquea facturas.' : 'Configuración de vendedores, comisión general, grupos y reglas.'}</p>
+      </div>
+      <div className="flex items-center gap-2">
+        {syncHealth && syncHealth.latestRun?.completed_at && <div className="text-[10px] text-theme-text-muted">Última sinc. Bsale: {new Date(syncHealth.latestRun.completed_at).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} {syncHealth.isFresh ? <span className="text-emerald-500">✔</span> : <span className="text-amber-500">⚠</span>}</div>}
+        {onManualSync && <button onClick={onManualSync} disabled={syncBusy} className="btn-secondary" title="Forzar sincronización de documentos de Bsale">
+          <RefreshCw className={cn("h-3.5 w-3.5", syncBusy && "animate-spin")} />
+          {syncBusy ? 'Sincronizando...' : 'Sincronizar ahora'}
+        </button>}
+        {view === 'main' ? <button onClick={onConfig} className="btn-secondary"><Settings2 className="h-3.5 w-3.5" />Configuración</button> : <button onClick={onBack} className="btn-secondary"><ArrowLeft className="h-3.5 w-3.5" />Volver a comisiones</button>}
+      </div>
+    </div>
+    {view === 'main' && <div className="mt-2 flex gap-1">{(mainTabs).map(t => <button key={t.key} onClick={() => onMainTab(t.key)} className={cn('rounded-t px-3 py-1.5 text-xs font-semibold', mainTab === t.key ? 'bg-theme-accent-muted text-theme-text' : 'text-theme-text-muted hover:bg-theme-surface-hover')}>{t.label}</button>)}</div>}
+  </header><CommissionStyles /></> 
+}
 
 function ConfirmModal({ action, reason, onReason, busy, onConfirm, onCancel }: { action: { type: 'create_draft' | 'cancel' | 'issue' | 'annul'; settlementId?: string }; reason: string; onReason: (v: string) => void; busy: boolean; onConfirm: () => void; onCancel: () => void }) {
   const messages = {
@@ -244,12 +272,30 @@ function Empty({ onConfig }: { onConfig: () => void }) { return <section classNa
 function SimulateTab({ sellerId, setSellerId, periodFrom, setPeriodFrom, periodTo, setPeriodTo, busy, sellers, preview, onSimulate, onCreateDraft }: {
   sellerId: string; setSellerId: (v: string) => void; periodFrom: string; setPeriodFrom: (v: string) => void; periodTo: string; setPeriodTo: (v: string) => void; busy: boolean; sellers: CommissionSeller[]; preview: CommissionPreview | null; onSimulate: (id?: string) => void; onCreateDraft: () => void
 }) {
+  const [filters, setFilters] = useState({ invoice: '', supplier: '', product: '', rule: '', percent: '' })
+  
+  const filtered = useMemo(() => {
+    if (!preview) return []
+    return preview.lines.filter(l => {
+      if (filters.invoice && !String(l.original_invoice_id || l.invoice_number || '').includes(filters.invoice)) return false
+      if (filters.supplier && !`${l.supplier_name} ${l.commission_group_name}`.toLowerCase().includes(filters.supplier.toLowerCase())) return false
+      if (filters.product && !`${l.sku} ${l.product_name}`.toLowerCase().includes(filters.product.toLowerCase())) return false
+      if (filters.rule && l.applied_rule_label !== filters.rule) return false
+      if (filters.percent && String(l.commission_percent) !== filters.percent) return false
+      return true
+    })
+  }, [preview, filters])
+
+  const hasFilters = Object.values(filters).some(Boolean)
+  const totalNet = filtered.reduce((s: number, l: any) => s + (l.net_amount || 0), 0)
+  const totalCom = filtered.reduce((s: number, l: any) => s + (l.commission_amount || 0), 0)
+
   const kpis = preview ? [
-    { label: 'Facturas', value: preview.summary.invoices_count.toLocaleString('es-CL') },
-    { label: 'Líneas', value: preview.summary.lines_count.toLocaleString('es-CL') },
-    { label: 'Neto', value: money(preview.summary.total_net_amount) },
-    { label: 'Comisión', value: money(preview.summary.total_commission_amount) },
-    { label: '% efectivo', value: `${preview.summary.total_net_amount ? (preview.summary.total_commission_amount / preview.summary.total_net_amount * 100).toFixed(2) : '0.00'}%` },
+    { label: 'Facturas', value: new Set(filtered.map((l: any) => l.original_invoice_id || l.invoice_bsale_id)).size.toLocaleString('es-CL') },
+    { label: 'Líneas', value: filtered.length.toLocaleString('es-CL') },
+    { label: 'Neto', value: money(totalNet) },
+    { label: 'Comisión', value: money(totalCom) },
+    { label: '% efectivo', value: `${totalNet ? (totalCom / totalNet * 100).toFixed(2) : '0.00'}%` },
   ] : []
   return <div className="w-full space-y-3">
     <section className="sim-card p-3">
@@ -266,11 +312,13 @@ function SimulateTab({ sellerId, setSellerId, periodFrom, setPeriodFrom, periodT
         <button disabled={!sellerId || busy} onClick={() => onSimulate()} className="btn-primary h-[34px] self-end">{busy ? 'Simulando...' : 'Simular'}</button>
         {preview && preview.lines.length > 0 && <button disabled={busy} onClick={onCreateDraft} className="btn-primary h-[34px] self-end !bg-emerald-600 hover:!bg-emerald-700"><FileUp className="h-3.5 w-3.5" />Crear borrador</button>}
       </div>
-      {kpis.length > 0 && <div className="mt-2.5 flex flex-wrap gap-1.5">
+      {kpis.length > 0 && <div className="mt-2.5 flex items-center flex-wrap gap-1.5">
         {kpis.map(k => <div key={k.label} className="sim-kpi"><span className="sim-kpi-label">{k.label}</span><span className="sim-kpi-value">{k.value}</span></div>)}
+        {hasFilters && <span className="ml-1 rounded bg-amber-500/10 px-2 py-1 text-[10px] font-semibold text-amber-600">Filtros activos</span>}
+        {hasFilters && filtered.length > 0 && preview && <span className="text-xs text-theme-text-muted">Mostrando {filtered.length} de {preview.lines.length} líneas</span>}
       </div>}
     </section>
-    {preview && <PreviewReport preview={preview} />}
+    {preview && <PreviewReport preview={preview} filters={filters} setFilters={setFilters} filtered={filtered} hasFilters={hasFilters} />}
   </div>
 }
 
@@ -368,9 +416,7 @@ function SettlementDetailView({ detail, onBack, onPdf, onExcel, busyPdf, busyExc
   </div>
 }
 
-function PreviewReport({ preview }: { preview: CommissionPreview }) {
-  const [filters, setFilters] = useState({ invoice: '', supplier: '', product: '', rule: '', percent: '' })
-  const filtered = preview.lines.filter(line => String(line.invoice_number || line.invoice_bsale_id).includes(filters.invoice.trim()) && `${line.supplier_name || ''} ${line.commission_group_name || ''}`.toLowerCase().includes(filters.supplier.trim().toLowerCase()) && `${line.sku || ''} ${line.product_name || ''}`.toLowerCase().includes(filters.product.trim().toLowerCase()) && line.applied_rule_label.toLowerCase().includes(filters.rule.trim().toLowerCase()) && (!filters.percent || Number(line.commission_percent) === Number(filters.percent)))
+function PreviewReport({ preview, filters, setFilters, filtered, hasFilters }: { preview: CommissionPreview; filters: any; setFilters: any; filtered: CommissionPreviewLine[]; hasFilters: boolean }) {
   const general = filtered.filter(line => line.warning_code === 'DEFAULT_RULE_USED').length
   const ncCount = filtered.filter(line => line.commission_line_type === 'CREDIT_NOTE_LINE').length
   const percentages = Array.from(new Set(preview.lines.map(line => Number(line.commission_percent)))).sort((a, b) => a - b)
@@ -379,11 +425,11 @@ function PreviewReport({ preview }: { preview: CommissionPreview }) {
     <div className="sim-card overflow-hidden">
       <div className="border-b border-theme-border bg-theme-bg/40 px-3 py-1.5 text-[11px] font-semibold text-theme-text-muted flex items-center gap-1.5"><SlidersHorizontal className="h-3 w-3 text-theme-accent" />Filtros de simulación</div>
       <div className="grid gap-2 p-3 md:grid-cols-2 xl:grid-cols-[170px_1fr_1fr_1fr_130px_auto]">
-        <input value={filters.invoice} onChange={e => setFilters(current => ({ ...current, invoice: e.target.value }))} placeholder="Factura" className="h-7 text-[11px]" />
-        <input value={filters.supplier} onChange={e => setFilters(current => ({ ...current, supplier: e.target.value }))} placeholder="Proveedor o grupo" className="h-7 text-[11px]" />
-        <input value={filters.product} onChange={e => setFilters(current => ({ ...current, product: e.target.value }))} placeholder="SKU o producto" className="h-7 text-[11px]" />
-        <select value={filters.rule} onChange={e => setFilters(current => ({ ...current, rule: e.target.value }))} className="h-7 text-[11px]"><option value="">Todas las reglas</option>{ruleLabels.map(label => <option key={label} value={label}>{label}</option>)}</select>
-        <select value={filters.percent} onChange={e => setFilters(current => ({ ...current, percent: e.target.value }))} className="h-7 text-[11px]"><option value="">Todos los %</option>{percentages.map(percent => <option key={percent} value={percent}>{percent}%</option>)}</select>
+        <input value={filters.invoice} onChange={e => setFilters((current: any) => ({ ...current, invoice: e.target.value }))} placeholder="Factura" className="h-7 text-[11px]" />
+        <input value={filters.supplier} onChange={e => setFilters((current: any) => ({ ...current, supplier: e.target.value }))} placeholder="Proveedor o grupo" className="h-7 text-[11px]" />
+        <input value={filters.product} onChange={e => setFilters((current: any) => ({ ...current, product: e.target.value }))} placeholder="SKU o producto" className="h-7 text-[11px]" />
+        <select value={filters.rule} onChange={e => setFilters((current: any) => ({ ...current, rule: e.target.value }))} className="h-7 text-[11px]"><option value="">Todas las reglas</option>{ruleLabels.map(label => <option key={label} value={label}>{label}</option>)}</select>
+        <select value={filters.percent} onChange={e => setFilters((current: any) => ({ ...current, percent: e.target.value }))} className="h-7 text-[11px]"><option value="">Todos los %</option>{percentages.map(percent => <option key={percent} value={percent}>{percent}%</option>)}</select>
         <button onClick={() => setFilters({ invoice: '', supplier: '', product: '', rule: '', percent: '' })} className="btn-secondary h-7 text-[11px]"><X className="h-3 w-3" />Limpiar</button>
       </div>
     </div>
