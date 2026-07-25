@@ -51,7 +51,7 @@ export function ComercialLayoutClient({ profile }: ComercialLayoutClientProps) {
   } else if (activeTab === 'analisis-venta') {
     content = <ReceivablesPanel />
   } else if (activeTab === 'comisiones') {
-    content = <CommissionsPanel />
+    content = <CommissionsPanel isSuperUser={profile.roles?.name === 'SUPER_USUARIO'} />
   } else {
     content = (
       <div className="p-6 lg:p-8">
