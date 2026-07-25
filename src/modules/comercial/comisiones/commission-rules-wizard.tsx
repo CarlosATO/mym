@@ -16,11 +16,13 @@ import {
   createGuidedCommissionRule,
   getCommissionRuleBatchDetail,
   restoreCommissionRuleBatch,
+  searchCommissionRuleProductCandidates,
   searchCommissionProducts,
   searchCommissionSuppliers,
   setCommissionRuleBatchActive,
   addProductsToCommissionRuleBatch,
   type CommissionGroup,
+  type CommissionRuleProductCandidate,
   type CommissionRule,
   type CommissionRuleType,
   type CommissionSeller,
@@ -39,6 +41,7 @@ type Product = {
   description: string;
   supplier_name: string | null;
 };
+type RuleProductCandidate = CommissionRuleProductCandidate;
 type TargetMode =
   | "GENERAL"
   | "SUPPLIER_ALL_PRODUCTS"
@@ -1353,23 +1356,62 @@ function EditRuleModal({
   onSaved: () => void;
 }) {
   const [productQuery, setProductQuery] = useState("");
-  const [productResults, setProductResults] = useState<Product[]>([]);
+  const [productResults, setProductResults] = useState<RuleProductCandidate[]>(
+    [],
+  );
   const [searching, setSearching] = useState(false);
-  const [selected, setSelected] = useState<Product[]>([]);
+  const [selected, setSelected] = useState<RuleProductCandidate[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [hasSearched, setHasSearched] = useState(false);
   const doSearch = async () => {
-    if (productQuery.length < 3) return;
+    const normalizedQuery = productQuery.trim();
+    if (normalizedQuery.length < 2) {
+      setProductResults([]);
+      setHasSearched(false);
+      return;
+    }
     setSearching(true);
     setError("");
     try {
-      setProductResults(await searchCommissionProducts(productQuery));
+      setProductResults(
+        await searchCommissionRuleProductCandidates(normalizedQuery, detail.id),
+      );
+      setHasSearched(true);
     } catch {
       setError("Error al buscar productos");
     } finally {
       setSearching(false);
     }
   };
+  useEffect(() => {
+    const normalizedQuery = productQuery.trim();
+    if (normalizedQuery.length < 2) return;
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setSearching(true);
+      setError("");
+      void searchCommissionRuleProductCandidates(normalizedQuery, detail.id)
+        .then((results) => {
+          if (cancelled) return;
+          setProductResults(results);
+          setHasSearched(true);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setError("Error al buscar productos");
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [detail.id, productQuery]);
   const existingIds = new Set(detail.products.map((p) => p.id));
   const toAddIds = new Set(selected.map((p) => p.id));
   const save = async () => {
@@ -1433,13 +1475,23 @@ function EditRuleModal({
         </div>
         <SearchBox
           value={productQuery}
-          setValue={setProductQuery}
+          setValue={(value) => {
+            setProductQuery(value);
+            if (value.trim().length < 2) {
+              setProductResults([]);
+              setHasSearched(false);
+              setSearching(false);
+            }
+          }}
           search={doSearch}
           loading={searching}
-          placeholder="Buscar producto por SKU o nombre..."
+          placeholder="Buscar por SKU, producto, proveedor o pseudoproveedor..."
         />
-        <ProductResults
+        <RuleProductResults
+          query={productQuery.trim()}
           items={productResults}
+          searching={searching}
+          hasSearched={hasSearched}
           selected={
             new Set([...Array.from(existingIds), ...Array.from(toAddIds)])
           }
@@ -1453,7 +1505,7 @@ function EditRuleModal({
         />
         <Chips
           items={selected}
-          label={(p) => p.sku}
+          label={(p) => `${p.sku} · ${p.description}`}
           remove={(id) => setSelected((c) => c.filter((p) => p.id !== id))}
           empty="No has seleccionado nuevos productos aún."
         />
@@ -1551,6 +1603,100 @@ function SearchBox({
         )}
         Buscar
       </button>
+    </div>
+  );
+}
+function RuleProductResults({
+  query,
+  items,
+  searching,
+  hasSearched,
+  selected,
+  add,
+}: {
+  query: string;
+  items: RuleProductCandidate[];
+  searching: boolean;
+  hasSearched: boolean;
+  selected: Set<string>;
+  add: (item: RuleProductCandidate) => void;
+}) {
+  const showNoResults =
+    hasSearched && !searching && query.length >= 2 && !items.length;
+  return (
+    <div className="mt-3 overflow-x-auto rounded-lg border border-theme-border">
+      <table className="w-full min-w-[820px] text-sm">
+        <thead>
+          <tr>
+            <th>SKU</th>
+            <th>Producto</th>
+            <th>Proveedor real</th>
+            <th>Pseudoproveedor</th>
+            <th>Stock</th>
+            <th>Acción</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => (
+            <tr key={item.id}>
+              <td className="font-mono text-xs">{item.sku}</td>
+              <td>
+                <div>{item.description}</div>
+                {item.bsale_product_id && (
+                  <div className="text-[10px] text-theme-text-muted">
+                    Bsale #{item.bsale_product_id}
+                  </div>
+                )}
+              </td>
+              <td>{item.real_supplier_name || "Sin proveedor real"}</td>
+              <td>{item.operative_supplier_name || "Sin pseudoproveedor"}</td>
+              <td className="text-right">
+                {item.stock_available != null
+                  ? item.stock_available.toLocaleString("es-CL")
+                  : "-"}
+              </td>
+              <td>
+                {item.already_included ? (
+                  <span className="text-xs font-semibold text-amber-600">
+                    Ya incluido en la regla
+                  </span>
+                ) : selected.has(item.id) ? (
+                  <span className="text-xs font-semibold text-theme-text-muted">
+                    Seleccionado
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => add(item)}
+                    className="btn-secondary"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Agregar
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {searching && (
+        <p className="p-4 text-center text-sm text-theme-text-muted">
+          Buscando productos...
+        </p>
+      )}
+      {showNoResults && (
+        <div className="p-4 text-center text-sm text-theme-text-muted">
+          <p>No se encontraron productos para &lsquo;{query}&rsquo;.</p>
+          <p className="mt-1">
+            Busca por SKU, producto, proveedor o pseudoproveedor.
+          </p>
+        </div>
+      )}
+      {!searching && !hasSearched && query.length < 2 && (
+        <p className="p-4 text-center text-sm text-theme-text-muted">
+          Escribe al menos 2 caracteres para buscar productos.
+        </p>
+      )}
     </div>
   );
 }
