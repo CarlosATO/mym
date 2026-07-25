@@ -224,7 +224,9 @@ function Header({ view, onConfig, onBack, mainTab, onMainTab, syncHealth, syncBu
         <p className="mt-1 text-sm text-theme-text-muted">{view === 'main' ? 'Simulación. No emite liquidación ni bloquea facturas.' : 'Configuración de vendedores, comisión general, grupos y reglas.'}</p>
       </div>
       <div className="flex items-center gap-2">
-        {syncHealth && syncHealth.latestRun?.completed_at && <div className="text-[10px] text-theme-text-muted">Última sinc. Bsale: {new Date(syncHealth.latestRun.completed_at).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })} {syncHealth.isFresh ? <span className="text-emerald-500">✔</span> : <span className="text-amber-500">⚠</span>}</div>}
+        <div className="text-[10px] text-theme-text-muted">
+          {!syncHealth ? 'Última sincronización: cargando...' : !syncHealth.latestRun ? 'Última sincronización: sin registro disponible' : syncHealth.latestRun.status === 'ERROR' ? <>Última sincronización con error: {syncHealth.latestRun.completed_at ? new Date(syncHealth.latestRun.completed_at).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'reciente'} <span className="text-red-500">✖</span></> : <>Última sincronización exitosa: {syncHealth.latestRun.completed_at ? new Date(syncHealth.latestRun.completed_at).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'reciente'} {syncHealth.isFresh ? <span className="text-emerald-500">✔</span> : <span className="text-amber-500">⚠</span>}</>}
+        </div>
         {onManualSync && <button onClick={onManualSync} disabled={syncBusy} className="btn-secondary" title="Forzar sincronización de documentos de Bsale">
           <RefreshCw className={cn("h-3.5 w-3.5", syncBusy && "animate-spin")} />
           {syncBusy ? 'Sincronizando...' : 'Sincronizar ahora'}
