@@ -171,19 +171,32 @@ export type CommissionPreview = {
 };
 
 export type CommissionSyncHealth = {
-  latestRun: {
-    started_at: string;
-    completed_at: string | null;
-    status: string;
-  } | null;
+  latestRun: CommissionSyncRun | null;
+  latestSuccessfulRun: CommissionSyncRun | null;
   isFresh: boolean;
   lastSuccessAgeMinutes: number | null;
 };
 
-type SyncRunRow = {
+export type CommissionSyncRun = {
   started_at: string;
   completed_at: string | null;
   status: string;
+  trigger: string | null;
+  documents_count: number | null;
+  document_details_count: number | null;
+  error_message: string | null;
+};
+
+export type CommissionRuleProductCandidate = {
+  id: string;
+  sku: string;
+  description: string;
+  real_supplier_name: string | null;
+  operative_supplier_name: string | null;
+  stock_available: number | null;
+  already_included: boolean;
+  bsale_product_id: number | null;
+  bsale_variant_id: number | null;
 };
 
 type RoleRelation = { name?: string | null };
@@ -700,6 +713,299 @@ export async function searchCommissionProducts(
       supplier_id: mappingByProduct.get(product.id)?.supplier_id || null,
       supplier_name: mappingByProduct.get(product.id)?.supplier_name || null,
     }));
+}
+
+export async function searchCommissionRuleProductCandidates(
+  query: string,
+  ruleBatchId?: string,
+): Promise<CommissionRuleProductCandidate[]> {
+  const { companyId } = await getAuthenticatedCompany();
+  const term = query.trim();
+  if (term.length < 2) return [];
+
+  const normalizedTerm = term.replace(/,/g, " ");
+  const numericTerm = /^\d+$/.test(term) ? Number(term) : null;
+
+  const [
+    { data: directProducts, error: directProductsError },
+    { data: matchedSuppliers, error: matchedSuppliersError },
+    { data: includedRules, error: includedRulesError },
+  ] = await Promise.all([
+    commissionDb()
+      .schema("adquisiciones")
+      .from("products")
+      .select(
+        "id,sku,description,internal_code,barcode,bsale_product_id,bsale_variant_id,is_active",
+      )
+      .eq("company_id", companyId)
+      .eq("is_active", true)
+      .or(
+        `sku.ilike.%${normalizedTerm}%,description.ilike.%${normalizedTerm}%,internal_code.ilike.%${normalizedTerm}%,barcode.ilike.%${normalizedTerm}%`,
+      )
+      .limit(40),
+    commissionDb()
+      .schema("adquisiciones")
+      .from("suppliers")
+      .select("id,business_name,fantasy_name,supplier_kind,parent_supplier_id")
+      .eq("company_id", companyId)
+      .eq("is_active", true)
+      .or(
+        `business_name.ilike.%${normalizedTerm}%,fantasy_name.ilike.%${normalizedTerm}%`,
+      )
+      .limit(40),
+    ruleBatchId?.trim()
+      ? commissionDb()
+          .from("commission_rules")
+          .select("product_id")
+          .eq("company_id", companyId)
+          .eq("rule_batch_id", ruleBatchId)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (directProductsError || matchedSuppliersError || includedRulesError)
+    throw (
+      directProductsError ||
+      matchedSuppliersError ||
+      includedRulesError ||
+      new Error("No se pudieron buscar productos candidatos")
+    );
+
+  const matchedSupplierRows = matchedSuppliers || [];
+  const matchedSupplierIds = new Set(
+    matchedSupplierRows.map((supplier) => supplier.id as string),
+  );
+  const matchedRealSupplierIds = Array.from(
+    new Set(
+      matchedSupplierRows
+        .filter(
+          (supplier) =>
+            (supplier.supplier_kind as string | null) === "REAL" ||
+            supplier.parent_supplier_id === null,
+        )
+        .map((supplier) => supplier.id as string),
+    ),
+  );
+
+  const { data: childSuppliers, error: childSuppliersError } =
+    matchedRealSupplierIds.length
+      ? await commissionDb()
+          .schema("adquisiciones")
+          .from("suppliers")
+          .select("id,parent_supplier_id")
+          .eq("company_id", companyId)
+          .eq("is_active", true)
+          .in("parent_supplier_id", matchedRealSupplierIds)
+      : { data: [], error: null };
+  if (childSuppliersError) throw childSuppliersError;
+  for (const supplier of childSuppliers || [])
+    matchedSupplierIds.add(supplier.id as string);
+  for (const supplier of matchedSupplierRows) {
+    if (supplier.parent_supplier_id)
+      matchedSupplierIds.add(supplier.parent_supplier_id as string);
+  }
+
+  const { data: mappingMatches, error: mappingMatchesError } =
+    matchedSupplierIds.size
+      ? await commissionDb()
+          .schema("adquisiciones")
+          .from("product_supplier_mappings")
+          .select("product_id,supplier_id")
+          .eq("company_id", companyId)
+          .eq("is_active", true)
+          .in("supplier_id", Array.from(matchedSupplierIds))
+          .limit(200)
+      : { data: [], error: null };
+  if (mappingMatchesError) throw mappingMatchesError;
+
+  const candidateProductIds = new Set<string>(
+    (directProducts || []).map((product) => product.id as string),
+  );
+  for (const mapping of mappingMatches || []) {
+    if (mapping.product_id)
+      candidateProductIds.add(mapping.product_id as string);
+  }
+
+  if (numericTerm !== null) {
+    const { data: numericProducts, error: numericProductsError } =
+      await commissionDb()
+        .schema("adquisiciones")
+        .from("products")
+        .select("id")
+        .eq("company_id", companyId)
+        .eq("is_active", true)
+        .or(
+          `bsale_product_id.eq.${numericTerm},bsale_variant_id.eq.${numericTerm}`,
+        )
+        .limit(20);
+    if (numericProductsError) throw numericProductsError;
+    for (const product of numericProducts || [])
+      candidateProductIds.add(product.id as string);
+  }
+
+  if (!candidateProductIds.size) return [];
+
+  const { data: candidateProducts, error: candidateProductsError } =
+    await commissionDb()
+      .schema("adquisiciones")
+      .from("products")
+      .select("id,sku,description,bsale_product_id,bsale_variant_id")
+      .eq("company_id", companyId)
+      .eq("is_active", true)
+      .in("id", Array.from(candidateProductIds))
+      .limit(60);
+  if (candidateProductsError) throw candidateProductsError;
+
+  const { data: candidateMappings, error: candidateMappingsError } =
+    await commissionDb()
+      .schema("adquisiciones")
+      .from("product_supplier_mappings")
+      .select("product_id,supplier_id,is_preferred,updated_at")
+      .eq("company_id", companyId)
+      .eq("is_active", true)
+      .in("product_id", Array.from(candidateProductIds))
+      .order("is_preferred", { ascending: false })
+      .order("updated_at", { ascending: false, nullsFirst: false });
+  if (candidateMappingsError) throw candidateMappingsError;
+
+  const candidateSupplierIds = Array.from(
+    new Set(
+      (candidateMappings || [])
+        .map((mapping) => mapping.supplier_id as string | null)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+  const { data: candidateSuppliers, error: candidateSuppliersError } =
+    candidateSupplierIds.length
+      ? await commissionDb()
+          .schema("adquisiciones")
+          .from("suppliers")
+          .select(
+            "id,business_name,fantasy_name,supplier_kind,parent_supplier_id",
+          )
+          .eq("company_id", companyId)
+          .eq("is_active", true)
+          .in("id", candidateSupplierIds)
+      : { data: [], error: null };
+  if (candidateSuppliersError) throw candidateSuppliersError;
+
+  const parentSupplierIds = Array.from(
+    new Set(
+      (candidateSuppliers || [])
+        .map((supplier) => supplier.parent_supplier_id as string | null)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+  const { data: parentSuppliers, error: parentSuppliersError } =
+    parentSupplierIds.length
+      ? await commissionDb()
+          .schema("adquisiciones")
+          .from("suppliers")
+          .select("id,business_name,fantasy_name")
+          .eq("company_id", companyId)
+          .eq("is_active", true)
+          .in("id", parentSupplierIds)
+      : { data: [], error: null };
+  if (parentSuppliersError) throw parentSuppliersError;
+
+  const variantIds = Array.from(
+    new Set(
+      (candidateProducts || [])
+        .map((product) => Number(product.bsale_variant_id || 0))
+        .filter((id) => Number.isFinite(id) && id > 0),
+    ),
+  );
+  const { data: stockRows, error: stockRowsError } = variantIds.length
+    ? await createAdminClient()
+        .schema("integraciones")
+        .from("bsale_stock_current")
+        .select("variant_id,quantity_available")
+        .eq("company_id", companyId)
+        .in("variant_id", variantIds)
+    : { data: [], error: null };
+  if (stockRowsError) throw stockRowsError;
+
+  const includedProductIds = new Set(
+    (includedRules || [])
+      .map((rule) => rule.product_id as string | null)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const parentSuppliersById = new Map(
+    (parentSuppliers || []).map((supplier) => [
+      supplier.id as string,
+      String(
+        supplier.business_name ||
+          supplier.fantasy_name ||
+          "Proveedor sin nombre",
+      ),
+    ]),
+  );
+  const suppliersById = new Map(
+    (candidateSuppliers || []).map((supplier) => [
+      supplier.id as string,
+      supplier,
+    ]),
+  );
+  const preferredSupplierByProduct = new Map<
+    string,
+    {
+      operative_supplier_name: string | null;
+      real_supplier_name: string | null;
+    }
+  >();
+  for (const mapping of candidateMappings || []) {
+    const productId = mapping.product_id as string;
+    if (preferredSupplierByProduct.has(productId)) continue;
+    const supplier = suppliersById.get(mapping.supplier_id as string);
+    if (!supplier) continue;
+    const operativeName = String(
+      supplier.business_name || supplier.fantasy_name || "Proveedor sin nombre",
+    );
+    const realName = supplier.parent_supplier_id
+      ? parentSuppliersById.get(supplier.parent_supplier_id as string) ||
+        operativeName
+      : operativeName;
+    preferredSupplierByProduct.set(productId, {
+      operative_supplier_name: operativeName,
+      real_supplier_name: realName,
+    });
+  }
+
+  const stockByVariantId = new Map<number, number>();
+  for (const row of stockRows || []) {
+    const variantId = Number(row.variant_id || 0);
+    if (!variantId) continue;
+    stockByVariantId.set(
+      variantId,
+      (stockByVariantId.get(variantId) || 0) +
+        Number(row.quantity_available || 0),
+    );
+  }
+
+  return (candidateProducts || [])
+    .map((product) => {
+      const names = preferredSupplierByProduct.get(product.id as string);
+      const bsaleVariantId = Number(product.bsale_variant_id || 0) || null;
+      return {
+        id: product.id as string,
+        sku: String(product.sku || ""),
+        description: String(product.description || "Sin descripción"),
+        real_supplier_name: names?.real_supplier_name || null,
+        operative_supplier_name: names?.operative_supplier_name || null,
+        stock_available:
+          bsaleVariantId && stockByVariantId.has(bsaleVariantId)
+            ? Math.round(stockByVariantId.get(bsaleVariantId) || 0)
+            : null,
+        already_included: includedProductIds.has(product.id as string),
+        bsale_product_id: Number(product.bsale_product_id || 0) || null,
+        bsale_variant_id: bsaleVariantId,
+      };
+    })
+    .sort((a, b) => {
+      if (a.already_included !== b.already_included) {
+        return a.already_included ? 1 : -1;
+      }
+      return a.description.localeCompare(b.description, "es");
+    })
+    .slice(0, 50);
 }
 
 export async function getCommissionRules(): Promise<CommissionRule[]> {
@@ -1756,27 +2062,53 @@ export async function previewCommissionSettlement(input: {
 export async function getCommissionsSyncHealth(): Promise<CommissionSyncHealth> {
   const { companyId } = await getAuthenticatedCompany();
   const admin = createAdminClient();
-  const { data, error } = await admin
-    .from("bsale_sync_runs")
-    .select("started_at, completed_at, status")
-    .eq("company_id", companyId)
-    .order("started_at", { ascending: false })
-    .limit(1)
-    .single();
+  const runs = admin.schema("integraciones").from("bsale_sync_runs");
+  const columns =
+    "started_at,completed_at,status,trigger,documents_count,document_details_count,error_message";
 
-  if (error || !data)
-    return { latestRun: null, isFresh: false, lastSuccessAgeMinutes: null };
+  const [latestResult, latestSuccessfulResult] = await Promise.all([
+    runs
+      .select(columns)
+      .eq("company_id", companyId)
+      .not("documents_count", "is", null)
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    runs
+      .select(columns)
+      .eq("company_id", companyId)
+      .in("status", ["COMPLETED", "PARTIAL"])
+      .not("documents_count", "is", null)
+      .order("completed_at", { ascending: false, nullsFirst: false })
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
 
-  const lastSuccessAgeMinutes =
-    data.status === "COMPLETED" && data.completed_at
-      ? Math.round((Date.now() - new Date(data.completed_at).getTime()) / 60000)
-      : null;
+  const firstError = latestResult.error || latestSuccessfulResult.error;
+  if (firstError) {
+    throw new Error(
+      `Error leyendo sync health de comisiones: ${firstError.message}`,
+    );
+  }
 
-  const isFresh =
-    data.status === "COMPLETED" &&
-    new Date().getTime() - new Date(data.completed_at || 0).getTime() <
-      1000 * 60 * 60 * 24;
-  return { latestRun: data as SyncRunRow, isFresh, lastSuccessAgeMinutes };
+  const latestRun = (latestResult.data as CommissionSyncRun | null) || null;
+  const latestSuccessfulRun =
+    (latestSuccessfulResult.data as CommissionSyncRun | null) || null;
+  const lastCompletedAt =
+    latestSuccessfulRun?.completed_at ||
+    latestSuccessfulRun?.started_at ||
+    null;
+  const lastSuccessAgeMinutes = lastCompletedAt
+    ? Math.round((Date.now() - new Date(lastCompletedAt).getTime()) / 60000)
+    : null;
+
+  return {
+    latestRun,
+    latestSuccessfulRun,
+    isFresh: lastSuccessAgeMinutes !== null && lastSuccessAgeMinutes <= 180,
+    lastSuccessAgeMinutes,
+  };
 }
 
 export async function triggerManualCommissionsSync() {

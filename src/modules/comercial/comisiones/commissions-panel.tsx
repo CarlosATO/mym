@@ -722,9 +722,15 @@ function getSyncStatusLabel(
   syncBusy: boolean | undefined,
 ) {
   const latestRun = syncHealth?.latestRun;
+  const latestSuccessfulRun = syncHealth?.latestSuccessfulRun;
   const status = String(latestRun?.status || "").toUpperCase();
 
-  if (syncBusy || status === "RUNNING" || status === "IN_PROGRESS") {
+  if (
+    syncBusy ||
+    status === "RUNNING" ||
+    status === "IN_PROGRESS" ||
+    status === "STARTED"
+  ) {
     return "Sincronización en curso...";
   }
   if (syncHealthLoading) return "Última sincronización: cargando...";
@@ -732,11 +738,18 @@ function getSyncStatusLabel(
 
   const timestamp = latestRun.completed_at || latestRun.started_at;
   if (!timestamp) return "Última sincronización: sin registro disponible";
-  if (status === "COMPLETED") {
+  if (status === "COMPLETED" || status === "PARTIAL") {
     return `Última sincronización exitosa: ${formatSyncDateTime(timestamp)}`;
   }
   if (status === "ERROR" || status === "FAILED") {
     return `Última sincronización con error: ${formatSyncDateTime(timestamp)}`;
+  }
+  if (latestSuccessfulRun) {
+    const successTimestamp =
+      latestSuccessfulRun.completed_at || latestSuccessfulRun.started_at;
+    if (successTimestamp) {
+      return `Última sincronización exitosa: ${formatSyncDateTime(successTimestamp)}`;
+    }
   }
   return `Última sincronización: ${formatSyncDateTime(timestamp)}`;
 }
