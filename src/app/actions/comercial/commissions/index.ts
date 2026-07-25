@@ -1,51 +1,3 @@
-"use server";
-
-import {
-  getCommissionSellers,
-  upsertCommissionSellerProfile,
-  getCommissionEligibleSummary,
-  getCommissionSettings,
-  updateCommissionSettings,
-  getCommissionGroups,
-  upsertCommissionGroup,
-  searchCommissionSuppliers,
-} from "./commissions/settings";
-import {
-  searchCommissionProducts,
-  searchCommissionRuleProductCandidates,
-} from "./commissions/rules-search";
-import {
-  getCommissionRules,
-  upsertCommissionRule,
-  deactivateCommissionRule,
-  getCommissionRuleBatchDetail,
-  deactivateCommissionRuleBatch,
-  setCommissionRuleBatchActive,
-  archiveCommissionRuleBatch,
-  restoreCommissionRuleBatch,
-  getCommissionGroupProducts,
-  updateCommissionGroupProducts,
-  createGuidedCommissionRule,
-  addProductsToCommissionRuleBatch,
-} from "./commissions/rules-management";
-import { previewCommissionSettlement } from "./commissions/simulation";
-import {
-  getCommissionsSyncHealth,
-  triggerManualCommissionsSync,
-} from "./commissions/sync";
-import {
-  createCommissionSettlementDraft,
-  getCommissionSettlementDrafts,
-  getCommissionSettlements,
-  getCommissionSettlementById,
-  cancelCommissionSettlementDraft,
-  issueCommissionSettlement,
-  exportCommissionSettlementPdf,
-  exportCommissionSettlementXlsx,
-  getCommissionAnnulledSettlements,
-  annulCommissionSettlement,
-} from "./commissions/settlements";
-
 export type {
   CommissionEligibleSummary,
   CommissionGroup,
@@ -63,7 +15,7 @@ export type {
   CommissionSettlementLine,
   CommissionSyncHealth,
   CommissionSyncRun,
-} from "./commissions/types";
+} from "./types";
 
 export {
   getCommissionSellers,
@@ -74,14 +26,11 @@ export {
   getCommissionGroups,
   upsertCommissionGroup,
   searchCommissionSuppliers,
-};
+} from "./settings";
 
 export {
   searchCommissionProducts,
   searchCommissionRuleProductCandidates,
-};
-
-export {
   getCommissionRules,
   upsertCommissionRule,
   deactivateCommissionRule,
@@ -94,14 +43,14 @@ export {
   updateCommissionGroupProducts,
   createGuidedCommissionRule,
   addProductsToCommissionRuleBatch,
-};
+} from "./rules";
 
-export { previewCommissionSettlement };
+export { previewCommissionSettlement } from "./simulation";
 
 export {
   getCommissionsSyncHealth,
   triggerManualCommissionsSync,
-};
+} from "./sync";
 
 export {
   createCommissionSettlementDraft,
@@ -114,4 +63,4 @@ export {
   exportCommissionSettlementXlsx,
   getCommissionAnnulledSettlements,
   annulCommissionSettlement,
-};
+} from "./settlements";
