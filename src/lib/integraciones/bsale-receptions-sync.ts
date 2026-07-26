@@ -83,6 +83,10 @@ function fmtBsaleDate(date: Date) {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`
 }
 
+function toBsaleAdmissionDateParam(date: string) {
+  return String(Math.floor(new Date(`${date}T00:00:00Z`).getTime() / 1000))
+}
+
 function listDates(from: string, to: string) {
   const result: string[] = []
   const current = new Date(`${from}T00:00:00Z`)
@@ -136,7 +140,7 @@ async function fetchReceptionHeaders(params: { dateFrom?: string; dateTo?: strin
     const all: BsaleReception[] = []
     for (const date of dates) {
       const dayItems = await bsaleFetchAll<BsaleReception>('/stocks/receptions.json', {
-        admissiondate: date,
+        admissiondate: toBsaleAdmissionDateParam(date),
       })
       all.push(...dayItems)
     }
