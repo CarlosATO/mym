@@ -3,6 +3,12 @@
 import type { AnalysisSupplierOption, SupplierCatalogRow, SupplierMonthlyPoint, SupplierPurchaseSales360 } from './types'
 import { adqQuery, fetchAll, getAuthedCompany, integQuery, monthKey, monthLabel, toNum } from './utils'
 
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = []
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size))
+  return chunks
+}
+
 type SupplierRow = {
   id: string
   business_name: string
@@ -62,6 +68,23 @@ type ReceptionRow = {
   document_number: string | number | null
 }
 
+function uniqueSkuPreview(values: Set<string>) {
+  const items = Array.from(values).filter(Boolean).sort((a, b) => a.localeCompare(b, 'es'))
+  const preview = items.slice(0, 3)
+  const remaining = Math.max(0, items.length - preview.length)
+  const productsSummary = items.length === 0
+    ? 'Sin detalle de productos'
+    : items.length <= 3
+      ? preview.join(', ')
+      : `${items.length} SKUs · ${preview.join(', ')} +${remaining} más`
+
+  return {
+    preview,
+    count: items.length,
+    productsSummary,
+  }
+}
+
 export async function getAnalysisSuppliers(): Promise<AnalysisSupplierOption[]> {
   const { companyId } = await getAuthedCompany()
   const { data, error } = await adqQuery('suppliers')
@@ -114,16 +137,19 @@ export async function getSupplierPurchaseSales360(params: {
     pseudoNameBySupplierId[child.id] = child.business_name || child.bsale_product_type_name || ''
   })
 
-  const { data: products, error: productsError } = productIds.length
-    ? await adqQuery('products')
-        .select('id,sku,description,bsale_variant_id')
-        .eq('company_id', companyId)
-        .in('id', productIds)
-    : { data: [], error: null }
-  if (productsError) throw productsError
-
-  const typedProducts = (products || []) as ProductRow[]
+  const typedProducts: ProductRow[] = []
+  for (const skuChunk of chunkArray(skus, 150)) {
+    const { data: products, error: productsError } = skuChunk.length
+      ? await adqQuery('products')
+          .select('id,sku,description,bsale_variant_id')
+          .eq('company_id', companyId)
+          .in('sku', skuChunk)
+      : { data: [], error: null }
+    if (productsError) throw productsError
+    typedProducts.push(...((products || []) as ProductRow[]))
+  }
   const productById = new Map(typedProducts.map((p) => [p.id, p]))
+  const productBySku = new Map(typedProducts.map((p) => [String(p.sku || ''), p]))
   const preferredMappingByProductId = new Map<string, MappingRow>()
   for (const mapping of typedMappings) {
     const productId = String(mapping.product_id || '')
@@ -131,20 +157,21 @@ export async function getSupplierPurchaseSales360(params: {
     preferredMappingByProductId.set(productId, mapping)
   }
 
-  const variantIds = Array.from(new Set(typedProducts.map((p) => Number(p.bsale_variant_id || 0)).filter((id) => Number.isFinite(id) && id > 0)))
-  const { data: stockRows, error: stockError } = variantIds.length
-    ? await integQuery('bsale_stock_current')
-        .select('variant_id,quantity_available')
-        .eq('company_id', companyId)
-        .in('variant_id', variantIds)
-    : { data: [], error: null }
-  if (stockError) throw stockError
-
   const stockByVariantId = new Map<number, number>()
-  for (const row of (stockRows || []) as StockRow[]) {
-    const variantId = Number(row.variant_id || 0)
-    if (!variantId) continue
-    stockByVariantId.set(variantId, (stockByVariantId.get(variantId) || 0) + toNum(row.quantity_available))
+  const variantIds = Array.from(new Set(typedProducts.map((p) => Number(p.bsale_variant_id || 0)).filter((id) => Number.isFinite(id) && id > 0)))
+  for (const variantChunk of chunkArray(variantIds, 150)) {
+    const { data: stockRows, error: stockError } = variantChunk.length
+      ? await integQuery('bsale_stock_current')
+          .select('variant_id,quantity_available')
+          .eq('company_id', companyId)
+          .in('variant_id', variantChunk)
+      : { data: [], error: null }
+    if (stockError) throw stockError
+    for (const row of (stockRows || []) as StockRow[]) {
+      const variantId = Number(row.variant_id || 0)
+      if (!variantId) continue
+      stockByVariantId.set(variantId, (stockByVariantId.get(variantId) || 0) + toNum(row.quantity_available))
+    }
   }
 
   const allDocs5forRange = await fetchAll<{ emission_date?: string }>(
@@ -250,15 +277,18 @@ export async function getSupplierPurchaseSales360(params: {
   const hasReceptionData = Boolean((receptionCountResult.count || 0) > 0 && (receptionDetailCountResult.count || 0) > 0)
   let purchasesAmount: number | null = null
   let lastPurchaseDate: string | null = null
-  let lastPurchases: Array<{ date: string; document: string; products: number; units: number; amount: number }> = []
+  let lastPurchases: Array<{ date: string; document: string; documentNumber?: string; productsSummary: string; productSkusPreview: string[]; productCount: number; units: number; amount: number }> = []
 
   if (hasReceptionData && skus.length > 0) {
-    const { data: receptionDetails, error: receptionDetailsError } = await integQuery('bsale_reception_details')
-      .select('bsale_reception_id,variant_code,quantity,cost')
-      .eq('company_id', companyId)
-      .in('variant_code', skus)
-    if (receptionDetailsError) throw receptionDetailsError
-    const typedReceptionDetails = (receptionDetails || []) as ReceptionDetailRow[]
+    const typedReceptionDetails: ReceptionDetailRow[] = []
+    for (const skuChunk of chunkArray(skus, 150)) {
+      const { data: receptionDetails, error: receptionDetailsError } = await integQuery('bsale_reception_details')
+        .select('bsale_reception_id,variant_code,quantity,cost')
+        .eq('company_id', companyId)
+        .in('variant_code', skuChunk)
+      if (receptionDetailsError) throw receptionDetailsError
+      typedReceptionDetails.push(...((receptionDetails || []) as ReceptionDetailRow[]))
+    }
 
     const receptionIds = Array.from(new Set(typedReceptionDetails.map((row) => Number(row.bsale_reception_id || 0)).filter((id) => id > 0)))
     const { data: receptions, error: receptionsError } = receptionIds.length
@@ -271,7 +301,7 @@ export async function getSupplierPurchaseSales360(params: {
     const typedReceptions = (receptions || []) as ReceptionRow[]
 
     const receptionById = new Map(typedReceptions.map((row) => [Number(row.bsale_id || 0), row]))
-    const purchaseMap = new Map<number, { date: string; document: string; products: Set<string>; units: number; amount: number }>()
+    const purchaseMap = new Map<number, { date: string; document: string; documentNumber?: string; products: Set<string>; units: number; amount: number }>()
     purchasesAmount = 0
 
     for (const detail of typedReceptionDetails) {
@@ -279,13 +309,14 @@ export async function getSupplierPurchaseSales360(params: {
       const header = receptionById.get(receptionId)
       if (!header) continue
       const date = String(header.raw_admission_date || String(header.admission_date || '').slice(0, 10) || '')
-      const document = `${header.document || 'Sin Documento'}${header.document_number ? ` ${header.document_number}` : ''}`.trim()
+      const documentNumber = header.document_number ? String(header.document_number).trim() : ''
+      const document = `${header.document || 'Sin Documento'}${documentNumber ? ` ${documentNumber}` : ''}`.trim()
       const qty = toNum(detail.quantity)
       const amount = qty * toNum(detail.cost)
       purchasesAmount += amount
       if (!lastPurchaseDate || (date && date > lastPurchaseDate)) lastPurchaseDate = date || lastPurchaseDate
       if (!purchaseMap.has(receptionId)) {
-        purchaseMap.set(receptionId, { date, document, products: new Set(), units: 0, amount: 0 })
+        purchaseMap.set(receptionId, { date, document, documentNumber, products: new Set(), units: 0, amount: 0 })
       }
       const current = purchaseMap.get(receptionId)!
       if (detail.variant_code) current.products.add(String(detail.variant_code))
@@ -296,19 +327,25 @@ export async function getSupplierPurchaseSales360(params: {
     lastPurchases = Array.from(purchaseMap.values())
       .sort((a, b) => b.date.localeCompare(a.date))
       .slice(0, 10)
-      .map((row) => ({
-        date: row.date,
-        document: row.document,
-        products: row.products.size,
-        units: Math.round(row.units),
-        amount: Math.round(row.amount),
-      }))
+      .map((row) => {
+        const productPreview = uniqueSkuPreview(row.products)
+        return {
+          date: row.date,
+          document: row.document,
+          documentNumber: row.documentNumber,
+          productsSummary: productPreview.productsSummary,
+          productSkusPreview: productPreview.preview,
+          productCount: productPreview.count,
+          units: Math.round(row.units),
+          amount: Math.round(row.amount),
+        }
+      })
     purchasesAmount = Math.round(purchasesAmount)
   }
 
   const catalog: SupplierCatalogRow[] = productIds.map((productId) => {
-    const product = productById.get(productId)
     const preferred = preferredMappingByProductId.get(productId)
+    const product = productById.get(productId) || productBySku.get(String(preferred?.sku || ''))
     const sku = String(product?.sku || preferred?.sku || '')
     const variantId = Number(product?.bsale_variant_id || preferred?.bsale_variant_id || 0)
     const stockCurrent = variantId ? Math.round(stockByVariantId.get(variantId) || 0) : 0

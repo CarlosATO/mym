@@ -27,7 +27,7 @@ export function SupplierLastPurchasesTable({ rows }: { rows: SupplierPurchaseRow
               <tr className="border-b border-theme-border/50">
                 <th className="px-3 py-2 text-left font-semibold text-theme-text-muted/70">Fecha</th>
                 <th className="px-3 py-2 text-left font-semibold text-theme-text-muted/70">Documento</th>
-                <th className="px-3 py-2 text-right font-semibold text-theme-text-muted/70">Productos</th>
+                <th className="px-3 py-2 text-left font-semibold text-theme-text-muted/70">Productos</th>
                 <th className="px-3 py-2 text-right font-semibold text-theme-text-muted/70">Unidades</th>
                 <th className="px-3 py-2 text-right font-semibold text-theme-text-muted/70">Monto</th>
               </tr>
@@ -37,7 +37,7 @@ export function SupplierLastPurchasesTable({ rows }: { rows: SupplierPurchaseRow
                 <tr key={`${row.document}-${row.date}`} className="border-b border-theme-border/20">
                   <td className="px-3 py-2 text-theme-text">{dateLabel(row.date)}</td>
                   <td className="px-3 py-2 text-theme-text">{row.document}</td>
-                  <td className="px-3 py-2 text-right text-theme-text">{row.products}</td>
+                  <td className="px-3 py-2 text-theme-text">{row.productsSummary}</td>
                   <td className="px-3 py-2 text-right text-theme-text">{row.units}</td>
                   <td className="px-3 py-2 text-right font-semibold text-theme-text">{money(row.amount)}</td>
                 </tr>

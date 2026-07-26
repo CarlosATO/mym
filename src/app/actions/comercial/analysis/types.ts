@@ -12,7 +12,10 @@ export type SupplierMonthlyPoint = {
 export type SupplierPurchaseRow = {
   date: string
   document: string
-  products: number
+  documentNumber?: string
+  productsSummary: string
+  productSkusPreview: string[]
+  productCount: number
   units: number
   amount: number
 }
