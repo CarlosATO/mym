@@ -9,22 +9,12 @@ import { SupplierKpis } from '../components/provider/supplier-kpis'
 import { SupplierLastPurchasesTable } from '../components/provider/supplier-last-purchases-table'
 import { SupplierPurchaseSalesChart } from '../components/provider/supplier-purchase-sales-chart'
 import { SupplierSelector } from '../components/provider/supplier-selector'
-
-function todayLocal() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
-function firstOfMonthLocal() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
-}
+import { setDateRange, useDateRange } from '../hooks/use-date-range'
 
 export function Proveedor360() {
   const [suppliers, setSuppliers] = useState<AnalysisSupplierOption[]>([])
   const [selectedId, setSelectedId] = useState('')
-  const [dateFrom, setDateFrom] = useState(firstOfMonthLocal())
-  const [dateTo, setDateTo] = useState(todayLocal())
+  const { dateFrom, dateTo } = useDateRange()
   const [data, setData] = useState<SupplierPurchaseSales360 | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
@@ -69,12 +59,12 @@ export function Proveedor360() {
         }}
         dateFrom={dateFrom}
         onDateFrom={(value) => {
-          setDateFrom(value)
+          setDateRange(value, dateTo)
           setData(null)
         }}
         dateTo={dateTo}
         onDateTo={(value) => {
-          setDateTo(value)
+          setDateRange(dateFrom, value)
           setData(null)
         }}
       />
