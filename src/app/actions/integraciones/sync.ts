@@ -1,11 +1,44 @@
 'use server'
 
 import { getActiveCompanyId } from '@/app/actions/companies'
+import { createClient as createServerClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { syncBsaleClients } from '@/lib/integraciones/bsale-clients-sync'
 import { syncBsaleProductTypes } from '@/lib/integraciones/bsale-product-types-sync'
 import { syncBsaleProducts } from '@/lib/integraciones/bsale-products-sync'
+import { syncBsaleReceptions } from '@/lib/integraciones/bsale-receptions-sync'
 import { getSyncStatus as getStatus } from '@/lib/integraciones/sync-core'
 import { createClient } from '@supabase/supabase-js'
+
+async function requireSuperUsuario() {
+  const supabase = await createServerClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('No autorizado')
+
+  const admin = createAdminClient()
+  const { data: profile, error } = await admin
+    .from('users')
+    .select('role_id, roles:role_id(name)')
+    .eq('id', user.id)
+    .single()
+  if (error) throw new Error(error.message)
+  const roleName = String((profile?.roles as { name?: string } | null)?.name || '').toUpperCase()
+  if (roleName !== 'SUPER_USUARIO') {
+    throw new Error('Solo SUPER_USUARIO puede ejecutar sincronización manual.')
+  }
+
+  return { userId: user.id }
+}
+
+function isoDate(value: Date) {
+  return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}-${String(value.getUTCDate()).padStart(2, '0')}`
+}
+
+function daysBetween(from: string, to: string) {
+  const fromDate = new Date(`${from}T00:00:00Z`)
+  const toDate = new Date(`${to}T00:00:00Z`)
+  return Math.floor((toDate.getTime() - fromDate.getTime()) / 86400000) + 1
+}
 
 export async function forceSyncBsaleClients() {
   const companyId = await getActiveCompanyId()
@@ -47,6 +80,38 @@ export async function forceSyncBsaleProducts() {
   })
 
   return result
+}
+
+export async function forceSyncBsaleReceptions(params?: { dateFrom?: string; dateTo?: string; allowLargeBackfill?: boolean }) {
+  await requireSuperUsuario()
+  const companyId = await getActiveCompanyId()
+  if (!companyId) throw new Error('Empresa no activa')
+
+  const today = new Date()
+  const defaultTo = isoDate(today)
+  const defaultFromDate = new Date(today)
+  defaultFromDate.setUTCDate(defaultFromDate.getUTCDate() - 6)
+  const defaultFrom = isoDate(defaultFromDate)
+
+  const dateFrom = params?.dateFrom || defaultFrom
+  const dateTo = params?.dateTo || defaultTo
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
+    throw new Error('dateFrom/dateTo deben venir en formato YYYY-MM-DD')
+  }
+  if (dateFrom > dateTo) throw new Error('dateFrom no puede ser mayor que dateTo')
+
+  const rangeDays = daysBetween(dateFrom, dateTo)
+  if (rangeDays > 31 && !params?.allowLargeBackfill) {
+    throw new Error('El rango máximo permitido sin allowLargeBackfill es de 31 días')
+  }
+
+  return syncBsaleReceptions({
+    companyId,
+    trigger: 'MANUAL',
+    dateFrom,
+    dateTo,
+    allowLargeBackfill: Boolean(params?.allowLargeBackfill),
+  })
 }
 
 export async function getSyncStatus(provider: string, entity: string) {
