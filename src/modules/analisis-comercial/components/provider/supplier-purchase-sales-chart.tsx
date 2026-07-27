@@ -8,7 +8,7 @@ const MONTHS_SHORT = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'S
 
 function formatCompactMoney(value: number) {
   if (value >= 1000000) return '$' + (value / 1000000).toFixed(1).replace('.0', '') + 'M'
-  if (value >= 1000) return '$' + Math.round(value / 1000) + 'k'
+  if (value >= 1000) return '$' + Math.round(value / 1000) + 'K'
   return '$' + value
 }
 
@@ -30,8 +30,6 @@ function getEpoch(dateStr: string) {
   return new Date(`${dateStr}T00:00:00Z`).getTime()
 }
 
-
-
 function getMonthBoundaries(weekly: SupplierWeeklyPoint[]) {
   const boundaries: { label: string; startIndex: number; weeks: SupplierWeeklyPoint[] }[] = []
   weekly.forEach((w, i) => {
@@ -49,17 +47,66 @@ const baselineY_pct = 90
 const usableHeight_pct = 80
 
 export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionData }: { supplierId: string; weekly: SupplierWeeklyPoint[]; hasReceptionData: boolean }) {
-  const maxValue = Math.max(1, ...weekly.flatMap((item) => [item.purchases, item.sales, item.margin || 0]))
-  const maxPurchases = Math.max(...weekly.map(w => w.purchases))
-  const maxSales = Math.max(...weekly.map(w => w.sales))
-
-  const n = weekly.length
+  const [salesGrowth, setSalesGrowth] = useState<number>(0)
+  const [purchasesGrowth, setPurchasesGrowth] = useState<number>(0)
+  
+  const { fullSeries, forecastStartIndex, historicalMaxPurchases, historicalMaxSales, peakSalesWeek, peakPurchasesWeek } = useMemo(() => {
+    let peakSales = -1
+    let peakSalesW: SupplierWeeklyPoint | null = null as SupplierWeeklyPoint | null
+    let peakPurchases = -1
+    let peakPurchasesW: SupplierWeeklyPoint | null = null as SupplierWeeklyPoint | null
+    
+    weekly.forEach(w => {
+      if (w.sales > peakSales) { peakSales = w.sales; peakSalesW = w; }
+      if (w.purchases > peakPurchases) { peakPurchases = w.purchases; peakPurchasesW = w; }
+    })
+    
+    const recent = weekly.slice(-8)
+    const avgSales = recent.length ? recent.reduce((sum, w) => sum + w.sales, 0) / recent.length : 0
+    const avgPurchases = recent.length ? recent.reduce((sum, w) => sum + w.purchases, 0) / recent.length : 0
+    
+    const projected: (SupplierWeeklyPoint & { isProjection: boolean })[] = []
+    if (weekly.length > 0) {
+      const lastWeek = new Date(weekly[weekly.length - 1].weekStart + 'T00:00:00Z')
+      for (let i = 1; i <= 12; i++) {
+        const nextStart = new Date(lastWeek.getTime() + i * 7 * 24 * 60 * 60 * 1000)
+        const nextEnd = new Date(nextStart.getTime() + 6 * 24 * 60 * 60 * 1000)
+        const s = nextStart.toISOString().slice(0, 10)
+        const e = nextEnd.toISOString().slice(0, 10)
+        
+        const mSales = avgSales * (1 + salesGrowth / 100)
+        const mPurchases = avgPurchases * (1 + purchasesGrowth / 100)
+        
+        projected.push({
+          label: `${shortDate(s)} - ${shortDate(e)}`,
+          weekStart: s,
+          weekEnd: e,
+          sales: mSales,
+          purchases: mPurchases,
+          margin: mSales - mPurchases,
+          isProjection: true
+        })
+      }
+    }
+    
+    return {
+      fullSeries: [...weekly.map(w => ({ ...w, isProjection: false })), ...projected],
+      forecastStartIndex: weekly.length,
+      historicalMaxPurchases: peakPurchases,
+      historicalMaxSales: peakSales,
+      peakSalesWeek: peakSalesW,
+      peakPurchasesWeek: peakPurchasesW
+    }
+  }, [weekly, salesGrowth, purchasesGrowth])
+  
+  const maxValue = Math.max(1, ...fullSeries.flatMap((item) => [item.purchases, item.sales, item.margin || 0]))
+  const n = fullSeries.length
 
   const [selectedWeekKey, setSelectedWeekKey] = useState<string | null>(null)
   const [cache, setCache] = useState<Record<string, SupplierWeeklyDetail>>({})
   const [error, setError] = useState<string | null>(null)
+  const [hoveredPoint, setHoveredPoint] = useState<(SupplierWeeklyPoint & { isProjection: boolean; x: number }) | null>(null)
 
-  // States for Document Detail
   const [documentDetail, setDocumentDetail] = useState<SupplierDocumentDetail | null>(null)
   const [docCache, setDocCache] = useState<Record<string, SupplierDocumentDetail>>({})
   const [loadingDocId, setLoadingDocId] = useState<string | null>(null)
@@ -67,13 +114,13 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
   const [showMargin, setShowMargin] = useState(false)
   const [isPending, startTransition] = useTransition()
 
-  // Clear selected week if supplier changes
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedWeekKey(null)
   }, [supplierId])
 
-  const handleSelectWeek = (w: SupplierWeeklyPoint) => {
+  const handleSelectWeek = (w: SupplierWeeklyPoint & { isProjection?: boolean }) => {
+    if (w.isProjection) return
     const key = w.weekStart
     const cacheKey = `${supplierId}:${w.weekStart}:${w.weekEnd}`
 
@@ -121,235 +168,319 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
 
   const pointsWithX = useMemo(() => {
     if (n === 0) return []
-    const minTime = getEpoch(weekly[0].weekStart)
-    const maxTime = getEpoch(weekly[n - 1].weekStart)
+    const minTime = getEpoch(fullSeries[0].weekStart)
+    const maxTime = getEpoch(fullSeries[n - 1].weekStart)
     const timeSpan = maxTime - minTime || 1
 
-    return weekly.map((w, i) => {
+    return fullSeries.map((w, i) => {
       const time = getEpoch(w.weekStart)
       const ratio = n === 1 ? 0.5 : (time - minTime) / timeSpan
       const x = 2 + ratio * 96
 
       let showLabel = false
-      if (n <= 6 && (w.purchases > 0 || w.sales > 0)) showLabel = true
-      else if (n > 6) {
-        if (w.purchases === maxPurchases && w.purchases > 0) showLabel = true
-        if (w.sales === maxSales && w.sales > 0) showLabel = true
+      if (!w.isProjection) {
+        if (n <= 6 && (w.purchases > 0 || w.sales > 0)) showLabel = true
+        else if (n > 6) {
+          if (w.purchases === historicalMaxPurchases && w.purchases > 0) showLabel = true
+          if (w.sales === historicalMaxSales && w.sales > 0) showLabel = true
+        }
       }
 
       return { ...w, x, time, index: i, showLabel }
     })
-  }, [weekly, n, maxPurchases, maxSales])
+  }, [fullSeries, n, historicalMaxPurchases, historicalMaxSales])
+  
+  const { histPurchaseLine, projPurchaseLine, histSalesLine, projSalesLine } = useMemo(() => {
+    if (!pointsWithX.length) return { histPurchaseLine: '', projPurchaseLine: '', histSalesLine: '', projSalesLine: '' }
+    
+    const hist = pointsWithX.filter(p => !p.isProjection)
+    const proj = pointsWithX.filter(p => p.isProjection)
+    
+    if (hist.length && proj.length) {
+      proj.unshift(hist[hist.length - 1])
+    }
+    
+    const pLine = (pts: typeof pointsWithX) => pts.map((p) => `${p.x.toFixed(2)},${(baselineY_pct - (p.purchases / maxValue) * usableHeight_pct).toFixed(2)}`).join(' ')
+    const sLine = (pts: typeof pointsWithX) => pts.map((p) => `${p.x.toFixed(2)},${(baselineY_pct - (p.sales / maxValue) * usableHeight_pct).toFixed(2)}`).join(' ')
+    
+    return {
+      histPurchaseLine: pLine(hist),
+      projPurchaseLine: pLine(proj),
+      histSalesLine: sLine(hist),
+      projSalesLine: sLine(proj)
+    }
+  }, [pointsWithX, maxValue])
 
-  const purchaseLine = useMemo(
-    () => {
-      if (!pointsWithX.length) return ''
-      if (pointsWithX.length === 1) {
-        const y = baselineY_pct - (pointsWithX[0].purchases / maxValue) * usableHeight_pct
-        return `50,${y.toFixed(2)} 50,${y.toFixed(2)}`
-      }
-      return pointsWithX.map((p) => `${p.x.toFixed(2)},${(baselineY_pct - (p.purchases / maxValue) * usableHeight_pct).toFixed(2)}`).join(' ')
-    },
-    [pointsWithX, maxValue],
-  )
-
-  const salesLine = useMemo(
-    () => {
-      if (!pointsWithX.length) return ''
-      if (pointsWithX.length === 1) {
-        const y = baselineY_pct - (pointsWithX[0].sales / maxValue) * usableHeight_pct
-        return `50,${y.toFixed(2)} 50,${y.toFixed(2)}`
-      }
-      return pointsWithX.map((p) => `${p.x.toFixed(2)},${(baselineY_pct - (p.sales / maxValue) * usableHeight_pct).toFixed(2)}`).join(' ')
-    },
-    [pointsWithX, maxValue],
-  )
-
-  const marginLine = useMemo(
-    () => {
-      if (!pointsWithX.length) return ''
-      if (pointsWithX.length === 1) {
-        const y = baselineY_pct - ((pointsWithX[0].margin || 0) / maxValue) * usableHeight_pct
-        return `50,${y.toFixed(2)} 50,${y.toFixed(2)}`
-      }
-      return pointsWithX.map((p) => `${p.x.toFixed(2)},${(baselineY_pct - ((p.margin || 0) / maxValue) * usableHeight_pct).toFixed(2)}`).join(' ')
-    },
-    [pointsWithX, maxValue],
-  )
-
-  const monthBoundaries = useMemo(() => getMonthBoundaries(weekly), [weekly])
+  const monthBoundaries = useMemo(() => getMonthBoundaries(fullSeries), [fullSeries])
 
   const selectedWeek = useMemo(() => weekly.find(w => w.weekStart === selectedWeekKey), [weekly, selectedWeekKey])
   const cacheKey = selectedWeek ? `${supplierId}:${selectedWeek.weekStart}:${selectedWeek.weekEnd}` : null
   const detail = cacheKey ? cache[cacheKey] : null
   const loadingDetail = isPending && selectedWeekKey && !detail
 
+  const forecastStartPct = pointsWithX.length > forecastStartIndex ? pointsWithX[forecastStartIndex].x : 100
+
   return (
-    <section className="rounded-xl border border-theme-border bg-theme-surface/80 p-5 shadow-sm">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+    <section className="rounded-xl border border-theme-border bg-theme-surface/80 shadow-sm relative">
+      <div className="p-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between border-b border-theme-border/50">
         <div>
-          <h3 className="text-sm font-bold text-theme-text">Compra vs Venta Semanal</h3>
+          <h3 className="text-base font-bold text-theme-text">Compra vs Venta Semanal</h3>
           <p className="mt-1 text-xs text-theme-text-muted/80">
             {hasReceptionData
-              ? 'Haz clic en una semana para ver el detalle de productos y documentos.'
+              ? 'Haz clic en una semana histórica para ver el detalle de productos y documentos.'
               : 'Ventas semanales disponibles. Compras en 0 porque recepciones Bsale aún no están sincronizadas.'}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-4 text-xs font-medium text-theme-text-muted flex-wrap justify-end">
           <span className="inline-flex items-center gap-1.5">
             <span className="h-2.5 w-2.5 rounded-full bg-blue-500 dark:bg-blue-400" />
-            Compras
+            Compras (Histórico)
+          </span>
+          <span className="inline-flex items-center gap-1.5 opacity-60">
+            <svg width="12" height="12" viewBox="0 0 24 24" className="fill-none stroke-blue-500 stroke-2"><polygon points="12 2 22 20 2 20" /></svg>
+            Compras (Proyectado)
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 dark:bg-emerald-400" />
-            Ventas
+            Ventas (Histórico)
+          </span>
+          <span className="inline-flex items-center gap-1.5 opacity-60">
+            <svg width="12" height="12" viewBox="0 0 24 24" className="fill-none stroke-emerald-500 stroke-2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
+            Ventas (Proyectado)
           </span>
           <label className="inline-flex items-center gap-1.5 cursor-pointer hover:text-theme-text transition-colors">
-            <input type="checkbox" checked={showMargin} onChange={(e) => setShowMargin(e.target.checked)} className="rounded border-theme-border text-purple-500 focus:ring-purple-500 bg-transparent" />
-            <span className="h-2.5 w-2.5 rounded-full bg-purple-500 dark:bg-purple-400" />
-            <span title="Margen estimado según costo registrado. No incluye todos los gastos operacionales.">Margen estimado</span>
+            <input type="checkbox" checked={showMargin} onChange={(e) => setShowMargin(e.target.checked)} className="rounded border-theme-border text-emerald-500 focus:ring-emerald-500 bg-transparent" />
+            <span className="h-3 w-3 rounded-sm bg-emerald-500/30 border border-emerald-500/50" />
+            <span title="Margen estimado según costo registrado. No incluye gastos operacionales.">Margen estimado</span>
           </label>
         </div>
       </div>
 
-      <div className="mt-6 w-full">
+      <div className="px-5 py-4 flex flex-col md:flex-row gap-4 justify-between bg-theme-surface/40 border-b border-theme-border/50">
+        <div className="flex gap-4">
+          <div className="rounded-lg border border-theme-border/50 bg-theme-surface p-3 min-w-[140px]">
+            <div className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">Semana pico venta</div>
+            <div className="mt-1 text-xs text-theme-text-muted">{peakSalesWeek ? `${shortDate(peakSalesWeek.weekStart)} – ${shortDate(peakSalesWeek.weekEnd)}` : '—'}</div>
+            <div className="mt-1 text-lg font-bold text-theme-text">{peakSalesWeek ? formatCompactMoney(peakSalesWeek.sales) : '$0'}</div>
+          </div>
+          <div className="rounded-lg border border-theme-border/50 bg-theme-surface p-3 min-w-[140px]">
+            <div className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">Semana pico compra</div>
+            <div className="mt-1 text-xs text-theme-text-muted">{peakPurchasesWeek ? `${shortDate(peakPurchasesWeek.weekStart)} – ${shortDate(peakPurchasesWeek.weekEnd)}` : '—'}</div>
+            <div className="mt-1 text-lg font-bold text-theme-text">{peakPurchasesWeek ? formatCompactMoney(peakPurchasesWeek.purchases) : '$0'}</div>
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-theme-border bg-theme-surface shadow-sm p-3 flex flex-col sm:flex-row gap-4 items-center w-full md:w-auto">
+          <div className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider w-full sm:w-auto text-center sm:text-left">Forecast (Crecimiento %)</div>
+          <div className="flex items-center gap-6 w-full sm:w-auto justify-center">
+            <div className="flex flex-col gap-1 w-full sm:w-36">
+              <div className="flex justify-between text-[10px] font-medium">
+                <span className="text-emerald-600 dark:text-emerald-400">Ventas</span>
+                <span className="text-theme-text font-bold">{salesGrowth > 0 ? '+' : ''}{salesGrowth}%</span>
+              </div>
+              <input type="range" min="-50" max="50" step="1" value={salesGrowth} onChange={e => setSalesGrowth(Number(e.target.value))} className="w-full accent-emerald-500" />
+            </div>
+            <div className="flex flex-col gap-1 w-full sm:w-36">
+              <div className="flex justify-between text-[10px] font-medium">
+                <span className="text-blue-600 dark:text-blue-400">Compras</span>
+                <span className="text-theme-text font-bold">{purchasesGrowth > 0 ? '+' : ''}{purchasesGrowth}%</span>
+              </div>
+              <input type="range" min="-50" max="50" step="1" value={purchasesGrowth} onChange={e => setPurchasesGrowth(Number(e.target.value))} className="w-full accent-blue-500" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 w-full relative px-5" onMouseLeave={() => setHoveredPoint(null)}>
         {weekly.length === 0 ? (
           <div className="rounded-lg border border-theme-border bg-theme-bg/40 px-4 py-8 text-center text-sm text-theme-text-muted/70">
             No hay datos semanales en el período seleccionado.
           </div>
-        ) : weekly.length === 1 ? (
-          <div className="rounded-lg border border-theme-border bg-theme-bg/40 p-6 flex flex-col items-center justify-center text-center shadow-sm">
-            <h4 className="text-lg font-bold text-theme-text mb-1">{weekly[0].label}</h4>
-            <div className="flex flex-wrap items-center justify-center gap-6 mt-4">
-              <div className="space-y-1">
-                <div className="text-xs font-semibold text-theme-text-muted uppercase">Compras</div>
-                <div className="text-lg font-bold text-blue-600 dark:text-blue-400">{money(weekly[0].purchases)}</div>
-              </div>
-              <div className="space-y-1">
-                <div className="text-xs font-semibold text-theme-text-muted uppercase">Ventas</div>
-                <div className="text-lg font-bold text-emerald-600 dark:text-emerald-400">{money(weekly[0].sales)}</div>
-              </div>
-              {showMargin && (
-                <div className="space-y-1">
-                  <div className="text-xs font-semibold text-theme-text-muted uppercase">Margen Est.</div>
-                  <div className="text-lg font-bold text-purple-600 dark:text-purple-400">{money(weekly[0].margin || 0)}</div>
-                </div>
-              )}
-            </div>
-            <button onClick={() => handleSelectWeek(weekly[0])} className="mt-6 rounded-lg bg-theme-border/50 px-4 py-2 text-sm font-semibold hover:bg-theme-border transition-colors">
-              {selectedWeekKey === weekly[0].weekStart ? 'Cerrar detalle' : 'Ver detalle semanal'}
-            </button>
-          </div>
         ) : (
           <>
-            <div className="relative group/chart w-full h-56">
-              <svg className="absolute inset-0 w-full h-full overflow-visible">
-                {[0, 0.25, 0.5, 0.75, 1].map((r) => {
-                  const y = baselineY_pct - r * usableHeight_pct
-                  return (
-                    <line
-                      key={r}
-                      x1="0%" y1={`${y}%`} x2="100%" y2={`${y}%`}
-                      stroke="currentColor" className="text-theme-border/30" strokeWidth="1px" strokeDasharray={r > 0 ? "4 4" : "none"}
-                    />
-                  )
-                })}
+            <div className="relative group/chart w-full h-72">
+              
+              <div className="absolute left-0 top-0 bottom-0 w-12 flex flex-col justify-between text-[10px] text-theme-text-muted/60 pointer-events-none pb-[10%]">
+                {[1, 0.75, 0.5, 0.25, 0].map(r => (
+                  <div key={r} className="absolute w-full text-right pr-2 font-medium" style={{ top: `${(1 - r) * usableHeight_pct}%`, transform: 'translateY(-50%)' }}>
+                    {formatCompactMoney(maxValue * r)}
+                  </div>
+                ))}
+              </div>
 
-                <svg viewBox="0 0 100 100" preserveAspectRatio="none" x="0" y="0" width="100%" height="100%" className="overflow-visible pointer-events-none">
-                  {showMargin && (
-                    <polyline
-                      points={marginLine}
-                      fill="none" className="stroke-purple-500/70 dark:stroke-purple-400/70" strokeWidth="2.5"
-                      strokeLinecap="round" strokeLinejoin="round" strokeDasharray="6 6" vectorEffect="non-scaling-stroke"
+              <div className="absolute left-14 right-4 top-0 bottom-0">
+                <svg className="absolute inset-0 w-full h-full overflow-visible">
+                  {[0, 0.25, 0.5, 0.75, 1].map((r) => {
+                    const y = baselineY_pct - r * usableHeight_pct
+                    return (
+                      <line
+                        key={r}
+                        x1="0%" y1={`${y}%`} x2="100%" y2={`${y}%`}
+                        stroke="currentColor" className="text-theme-border/30" strokeWidth="1px" strokeDasharray={r > 0 ? "4 4" : "none"}
+                      />
+                    )
+                  })}
+
+                  {forecastStartPct < 100 && (
+                    <rect 
+                      x={`${forecastStartPct}%`} y="0%" width={`${100 - forecastStartPct}%`} height="100%" 
+                      className="fill-purple-500/5 dark:fill-purple-400/5 pointer-events-none"
                     />
                   )}
-                  <polyline
-                    points={purchaseLine}
-                    fill="none" className="stroke-blue-500 dark:stroke-blue-400" strokeWidth="2.5"
-                    strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke"
-                  />
-                  <polyline
-                    points={salesLine}
-                    fill="none" className="stroke-emerald-500 dark:stroke-emerald-400" strokeWidth="2.5"
-                    strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke"
-                  />
+                  {forecastStartPct < 100 && (
+                    <text x={`${forecastStartPct + 1}%`} y="5%" className="fill-purple-500/50 dark:fill-purple-400/50 text-[10px] font-bold uppercase pointer-events-none">
+                      Proyección
+                    </text>
+                  )}
+
+                  <svg viewBox="0 0 100 100" preserveAspectRatio="none" x="0" y="0" width="100%" height="100%" className="overflow-visible pointer-events-none">
+                    {showMargin && pointsWithX.map(p => {
+                      const mY = baselineY_pct - (Math.max(0, p.margin || 0) / maxValue) * usableHeight_pct
+                      const barHeight = baselineY_pct - mY
+                      if (barHeight <= 0) return null
+                      return (
+                        <rect 
+                          key={p.time}
+                          x={`${p.x - 0.6}%`} y={`${mY}%`} width="1.2%" height={`${barHeight}%`}
+                          className="fill-emerald-500/20 dark:fill-emerald-400/20"
+                        />
+                      )
+                    })}
+
+                    <polyline
+                      points={histPurchaseLine}
+                      fill="none" className="stroke-blue-500 dark:stroke-blue-400" strokeWidth="3"
+                      strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke"
+                    />
+                    <polyline
+                      points={projPurchaseLine}
+                      fill="none" className="stroke-blue-500/60 dark:stroke-blue-400/60" strokeWidth="3"
+                      strokeLinecap="round" strokeLinejoin="round" strokeDasharray="6 6" vectorEffect="non-scaling-stroke"
+                    />
+                    
+                    <polyline
+                      points={histSalesLine}
+                      fill="none" className="stroke-emerald-500 dark:stroke-emerald-400" strokeWidth="3"
+                      strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke"
+                    />
+                    <polyline
+                      points={projSalesLine}
+                      fill="none" className="stroke-emerald-500/60 dark:stroke-emerald-400/60" strokeWidth="3"
+                      strokeLinecap="round" strokeLinejoin="round" strokeDasharray="6 6" vectorEffect="non-scaling-stroke"
+                    />
+                  </svg>
+
+                  {pointsWithX.map((item, i) => {
+                    const purchaseY = baselineY_pct - (item.purchases / maxValue) * usableHeight_pct
+                    const salesY = baselineY_pct - (item.sales / maxValue) * usableHeight_pct
+                    const isSelected = selectedWeekKey === item.weekStart
+                    const isHovered = hoveredPoint?.weekStart === item.weekStart
+
+                    const prevX = i > 0 ? pointsWithX[i-1].x : 0
+                    const nextX = i < n - 1 ? pointsWithX[i+1].x : 100
+                    const leftBound = i === 0 ? 0 : (item.x + prevX) / 2
+                    const rightBound = i === n - 1 ? 100 : (item.x + nextX) / 2
+                    const width = rightBound - leftBound
+
+                    return (
+                      <g key={item.weekStart} className={`transition-opacity ${isSelected || isHovered ? 'opacity-100' : 'opacity-70 hover:opacity-100 group-hover/chart:opacity-50'}`}>
+                        <rect
+                          x={`${leftBound}%`} y="0%" width={`${width}%`} height="100%"
+                          className={`cursor-pointer transition-colors ${isSelected ? 'fill-theme-border/30' : isHovered ? 'fill-theme-border/20' : 'fill-transparent'}`}
+                          onClick={() => handleSelectWeek(item)}
+                          onMouseEnter={() => setHoveredPoint(item)}
+                        />
+
+                        {(isSelected || isHovered) && (
+                          <line x1={`${item.x}%`} y1="0%" x2={`${item.x}%`} y2={`${baselineY_pct}%`} stroke="currentColor" className="text-theme-text-muted/40 pointer-events-none" strokeWidth="1px" strokeDasharray="4 4" />
+                        )}
+
+                        {item.isProjection ? (
+                          <>
+                            <polygon 
+                              points={`${item.x},${purchaseY - 2.5} ${item.x - 2},${purchaseY + 2.5} ${item.x + 2},${purchaseY + 2.5}`} 
+                              className="fill-theme-surface stroke-blue-500/80 stroke-[2] pointer-events-none" 
+                            />
+                            <polygon 
+                              points={`${item.x},${salesY - 2.5} ${item.x - 2.5},${salesY - 0.7} ${item.x - 1.5},${salesY + 2} ${item.x + 1.5},${salesY + 2} ${item.x + 2.5},${salesY - 0.7}`} 
+                              className="fill-theme-surface stroke-emerald-500/80 stroke-[2] pointer-events-none" 
+                            />
+                          </>
+                        ) : (
+                          <>
+                            <circle cx={`${item.x}%`} cy={`${purchaseY}%`} r={isSelected || isHovered ? "6" : "4.5"} className="fill-blue-500 dark:fill-blue-400 transition-all cursor-pointer pointer-events-none" stroke="var(--theme-surface)" strokeWidth="2" />
+                            <circle cx={`${item.x}%`} cy={`${salesY}%`} r={isSelected || isHovered ? "6" : "4.5"} className="fill-emerald-500 dark:fill-emerald-400 transition-all cursor-pointer pointer-events-none" stroke="var(--theme-surface)" strokeWidth="2" />
+                          </>
+                        )}
+                        
+                        {item.showLabel && !item.isProjection && (
+                          <>
+                            <text x={`${item.x}%`} y={`${purchaseY - 4}%`} textAnchor="middle" className="fill-blue-600 dark:fill-blue-400 text-[10px] font-bold pointer-events-none">{formatCompactMoney(item.purchases)}</text>
+                            <text x={`${item.x}%`} y={`${salesY - 4}%`} textAnchor="middle" className="fill-emerald-600 dark:fill-emerald-400 text-[10px] font-bold pointer-events-none">{formatCompactMoney(item.sales)}</text>
+                          </>
+                        )}
+                      </g>
+                    )
+                  })}
                 </svg>
+                
+                {hoveredPoint && (
+                  <div 
+                    className="absolute pointer-events-none z-10 -translate-x-1/2 -translate-y-full pb-4 transition-all duration-75"
+                    style={{ 
+                      left: `${hoveredPoint.x}%`, 
+                      top: `${baselineY_pct - (Math.max(hoveredPoint.purchases, hoveredPoint.sales, hoveredPoint.margin || 0) / maxValue) * usableHeight_pct}%` 
+                    }}
+                  >
+                    <div className="bg-theme-surface/90 backdrop-blur border border-theme-border shadow-xl rounded-xl p-3 min-w-[160px]">
+                      <div className="text-xs font-bold text-theme-text border-b border-theme-border/50 pb-2 mb-2 text-center">
+                        {hoveredPoint.label}
+                        {hoveredPoint.isProjection && <div className="text-[10px] text-purple-600 dark:text-purple-400 mt-1 uppercase tracking-wider font-bold bg-purple-500/10 py-1 px-2 rounded">Proyección estimada</div>}
+                      </div>
+                      <div className="space-y-1.5 text-xs">
+                        <div className="flex justify-between items-center gap-4">
+                          <span className="flex items-center gap-1.5 text-theme-text-muted">
+                            <span className="h-2 w-2 rounded-full bg-blue-500" />
+                            Compras
+                          </span>
+                          <span className="font-bold text-theme-text">{formatCompactMoney(hoveredPoint.purchases)}</span>
+                        </div>
+                        <div className="flex justify-between items-center gap-4">
+                          <span className="flex items-center gap-1.5 text-theme-text-muted">
+                            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                            Ventas
+                          </span>
+                          <span className="font-bold text-theme-text">{formatCompactMoney(hoveredPoint.sales)}</span>
+                        </div>
+                        {showMargin && (
+                          <div className="flex justify-between items-center gap-4 pt-1.5 mt-1.5 border-t border-theme-border/30">
+                            <span className="flex items-center gap-1.5 text-theme-text-muted">
+                              <span className="h-2 w-2 rounded-sm bg-emerald-500/40 border border-emerald-500/60" />
+                              Margen Est.
+                            </span>
+                            <span className="font-bold text-theme-text">{formatCompactMoney(hoveredPoint.margin || 0)}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
-                {pointsWithX.map((item, i) => {
-                  const purchaseY = baselineY_pct - (item.purchases / maxValue) * usableHeight_pct
-                  const salesY = baselineY_pct - (item.sales / maxValue) * usableHeight_pct
-                  const marginY = baselineY_pct - ((item.margin || 0) / maxValue) * usableHeight_pct
-                  const isSelected = selectedWeekKey === item.weekStart
-
-                  const prevX = i > 0 ? pointsWithX[i-1].x : 0
-                  const nextX = i < n - 1 ? pointsWithX[i+1].x : 100
-                  const leftBound = i === 0 ? 0 : (item.x + prevX) / 2
-                  const rightBound = i === n - 1 ? 100 : (item.x + nextX) / 2
-                  const width = rightBound - leftBound
-
-                  return (
-                    <g key={item.weekStart} className={`transition-opacity ${isSelected ? 'opacity-100' : 'opacity-70 hover:opacity-100 group-hover/chart:opacity-50'}`}>
-                      <rect
-                        x={`${leftBound}%`} y="0%" width={`${width}%`} height="100%"
-                        className={`cursor-pointer transition-colors ${isSelected ? 'fill-theme-border/30' : 'fill-transparent hover:fill-theme-border/10'}`}
-                        onClick={() => handleSelectWeek(item)}
-                      >
-                        <title>{`${item.label}\nCompras: ${money(item.purchases)}\nVentas: ${money(item.sales)}${showMargin ? `\nMargen Est.: ${money(item.margin || 0)}` : ''}`}</title>
-                      </rect>
-
-                      {isSelected && (
-                        <line x1={`${item.x}%`} y1="0%" x2={`${item.x}%`} y2={`${baselineY_pct}%`} stroke="currentColor" className="text-theme-text-muted/40 pointer-events-none" strokeWidth="1px" strokeDasharray="4 4" />
-                      )}
-
-                      {showMargin && (
-                        <circle cx={`${item.x}%`} cy={`${marginY}%`} r={isSelected ? "5" : "3.5"} className="fill-purple-500 dark:fill-purple-400 transition-all cursor-pointer pointer-events-auto" stroke="var(--theme-surface)" strokeWidth="1.5" onClick={() => handleSelectWeek(item)}>
-                          <title>{`Margen Est.: ${money(item.margin || 0)}`}</title>
-                        </circle>
-                      )}
-
-                      <circle cx={`${item.x}%`} cy={`${purchaseY}%`} r={isSelected ? "5" : "3.5"} className="fill-blue-500 dark:fill-blue-400 transition-all cursor-pointer pointer-events-auto" stroke="var(--theme-surface)" strokeWidth="1.5" onClick={() => handleSelectWeek(item)}>
-                        <title>{`Compras: ${money(item.purchases)}`}</title>
-                      </circle>
-
-                      <circle cx={`${item.x}%`} cy={`${salesY}%`} r={isSelected ? "5" : "3.5"} className="fill-emerald-500 dark:fill-emerald-400 transition-all cursor-pointer pointer-events-auto" stroke="var(--theme-surface)" strokeWidth="1.5" onClick={() => handleSelectWeek(item)}>
-                        <title>{`Ventas: ${money(item.sales)}`}</title>
-                      </circle>
-
-                      {item.showLabel && (
-                        <>
-                          <text x={`${item.x}%`} y={`${purchaseY - 3}%`} textAnchor="middle" className="fill-blue-600 dark:fill-blue-400 text-[9px] font-semibold pointer-events-none">{formatCompactMoney(item.purchases)}</text>
-                          <text x={`${item.x}%`} y={`${salesY - 3}%`} textAnchor="middle" className="fill-emerald-600 dark:fill-emerald-400 text-[9px] font-semibold pointer-events-none">{formatCompactMoney(item.sales)}</text>
-                        </>
-                      )}
-                    </g>
-                  )
-                })}
-              </svg>
+              </div>
             </div>
 
-            <div className="mt-3 w-full px-[2%]">
-              <div className="flex text-[11px] font-semibold text-theme-text-muted">
+            <div className="mt-3 w-full pl-14 pr-4">
+              <div className="flex text-[10px] font-bold text-theme-text-muted uppercase tracking-wider">
                 {monthBoundaries.map((mb) => (
                   <div key={mb.label} className="text-center first:text-left last:text-right" style={{ flex: mb.weeks.length }}>
                     {mb.label}
                   </div>
                 ))}
               </div>
-              {n <= 12 && (
-                <div className="mt-1 flex text-[10px] text-theme-text-muted/80">
-                  {weekly.map((w) => (
-                    <div key={w.weekStart} className={`flex-1 text-center first:text-left last:text-right cursor-pointer transition-colors ${selectedWeekKey === w.weekStart ? 'text-theme-text font-bold' : 'hover:text-theme-text'}`} onClick={() => handleSelectWeek(w)}>
-                      {shortDate(w.weekStart)}
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
 
-
-            {/* Panel de Detalle */}
             {selectedWeekKey && (
-              <div className="mt-6 rounded-lg border border-theme-border bg-theme-bg/60 p-5 shadow-sm animate-in fade-in slide-in-from-top-4 duration-300">
+              <div className="mt-6 mx-5 rounded-lg border border-theme-border bg-theme-bg/60 p-5 shadow-sm animate-in fade-in slide-in-from-top-4 duration-300">
                 {error && (
                   <div className="mb-4 rounded border border-rose-500/20 bg-rose-500/5 px-3 py-2 text-xs text-rose-600">
                     {error}
@@ -358,7 +489,7 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
 
                 <div className="flex items-center justify-between border-b border-theme-border/50 pb-4">
                   <div>
-                    <h4 className="text-sm font-bold text-theme-text">Detalle Semanal</h4>
+                    <h4 className="text-sm font-bold text-theme-text">Detalle Semanal Histórico</h4>
                     <p className="text-xs text-theme-text-muted">{weekly.find(w => w.weekStart === selectedWeekKey)?.label}</p>
                   </div>
                   {loadingDetail && (
@@ -380,7 +511,6 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
                 {detail && !loadingDetail && (
                   <div className="mt-4 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
 
-                    {/* Compras */}
                     <div className="space-y-3">
                       <h5 className="text-xs font-bold text-blue-600 dark:text-blue-400 border-b border-theme-border/40 pb-1">
                         Compras: {money(detail.purchases)}
@@ -400,7 +530,7 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
                                 <span>{doc.units} unid.</span>
                               </div>
                               <div className="mt-1 text-theme-text-muted/80 truncate" title={doc.productsSummary}>
-                                📦 {doc.productsSummary}
+                                {doc.productsSummary}
                               </div>
                             </div>
                           ))}
@@ -408,7 +538,6 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
                       )}
                     </div>
 
-                    {/* Ventas */}
                     <div className="space-y-3">
                       <h5 className="text-xs font-bold text-emerald-600 dark:text-emerald-400 border-b border-theme-border/40 pb-1">
                         Ventas: {money(detail.sales)}
@@ -430,7 +559,7 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
                                 <span>{doc.units} unid.</span>
                               </div>
                               <div className="mt-1 text-theme-text-muted/80 truncate" title={doc.productsSummary}>
-                                📦 {doc.productsSummary}
+                                {doc.productsSummary}
                               </div>
                             </div>
                           ))}
@@ -438,7 +567,6 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
                       )}
                     </div>
 
-                    {/* Top Productos */}
                     <div className="space-y-3 md:col-span-2 lg:col-span-1">
                       <h5 className="text-xs font-bold text-theme-text border-b border-theme-border/40 pb-1">
                         Top Productos (Volumen)
@@ -466,7 +594,6 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
                   </div>
                 )}
 
-                {/* Detalle Documento Inline */}
                 {(documentDetail || loadingDocId) && (
                   <div className="mt-6 border-t border-theme-border/50 pt-4 animate-in fade-in slide-in-from-top-2 duration-300">
                     <div className="flex items-center justify-between mb-4">
@@ -521,13 +648,12 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
               </div>
             )}
 
-            {/* Data Table */}
-            <div className="mt-8 overflow-hidden rounded-lg border border-theme-border bg-theme-bg/50">
+            <div className="mt-8 mx-5 mb-5 overflow-hidden rounded-lg border border-theme-border bg-theme-bg/50">
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs whitespace-nowrap">
                   <thead>
                     <tr className="border-b border-theme-border/70 bg-theme-surface/50">
-                      <th className="py-3 pl-4 pr-3 font-semibold text-theme-text">Semana</th>
+                      <th className="py-3 pl-4 pr-3 font-semibold text-theme-text">Semana Histórica</th>
                       <th className="px-3 py-3 text-right font-semibold text-theme-text">Compras</th>
                       <th className="px-3 py-3 text-right font-semibold text-theme-text">Ventas</th>
                       <th className="py-3 pl-3 pr-4 text-right font-semibold text-theme-text">Diferencia</th>
@@ -570,7 +696,7 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
       </div>
 
       {!hasReceptionData && (
-        <div className="mt-5 rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-700 dark:text-amber-400">
+        <div className="mt-5 rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-700 dark:text-amber-400 mx-5 mb-5">
           Recepciones Bsale aún no sincronizadas. Para completar el análisis cruzado de compras se requiere el espejo de recepciones.
         </div>
       )}

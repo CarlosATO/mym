@@ -21,6 +21,13 @@ export type SupplierPurchaseRow = {
   productCount: number
   units: number
   amount: number
+  products: {
+    sku: string
+    name: string
+    quantity: number
+    unitCost?: number
+    subtotal?: number
+  }[]
 }
 
 export type SupplierCatalogRow = {

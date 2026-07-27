@@ -1,6 +1,6 @@
 'use server'
 
-import type { AnalysisSupplierOption, SupplierCatalogRow, SupplierPurchaseSales360, SupplierWeeklyPoint, SupplierWeeklyDetail, SupplierWeeklyDocumentDetail, SupplierWeeklyProductDetail, SupplierDocumentDetail, SupplierDocumentLineDetail } from './types'
+import type { AnalysisSupplierOption, SupplierCatalogRow, SupplierPurchaseSales360, SupplierWeeklyPoint, SupplierWeeklyDetail, SupplierWeeklyDocumentDetail, SupplierWeeklyProductDetail, SupplierDocumentDetail, SupplierDocumentLineDetail, SupplierPurchaseRow } from './types'
 import { adqQuery, fetchAll, getAuthedCompany, integQuery, toNum } from './utils'
 
 function chunkArray<T>(items: T[], size: number) {
@@ -342,7 +342,7 @@ export async function getSupplierPurchaseSales360(params: {
   const hasReceptionData = Boolean((receptionCountResult.count || 0) > 0 && (receptionDetailCountResult.count || 0) > 0)
   let purchasesAmount: number | null = null
   let lastPurchaseDate: string | null = null
-  let lastPurchases: Array<{ date: string; document: string; documentNumber?: string; productsSummary: string; productSkusPreview: string[]; productCount: number; units: number; amount: number }> = []
+  let lastPurchases: SupplierPurchaseRow[] = []
   const purchasesByDate = new Map<string, number>()
 
   if (hasReceptionData && skus.length > 0) {
@@ -369,7 +369,7 @@ export async function getSupplierPurchaseSales360(params: {
     const typedReceptions = (receptions || []) as ReceptionRow[]
 
     const receptionById = new Map(typedReceptions.map((row) => [Number(row.bsale_id || 0), row]))
-    const purchaseMap = new Map<number, { date: string; document: string; documentNumber?: string; products: Set<string>; units: number; amount: number }>()
+    const purchaseMap = new Map<number, { date: string; document: string; documentNumber?: string; products: Map<string, { sku: string; quantity: number; unitCost: number; amount: number }>; units: number; amount: number }>()
     purchasesAmount = 0
 
     for (const detail of typedReceptionDetails) {
@@ -385,10 +385,18 @@ export async function getSupplierPurchaseSales360(params: {
       if (date) purchasesByDate.set(date, (purchasesByDate.get(date) || 0) + amount)
       if (!lastPurchaseDate || (date && date > lastPurchaseDate)) lastPurchaseDate = date || lastPurchaseDate
       if (!purchaseMap.has(receptionId)) {
-        purchaseMap.set(receptionId, { date, document, documentNumber, products: new Set(), units: 0, amount: 0 })
+        purchaseMap.set(receptionId, { date, document, documentNumber, products: new Map(), units: 0, amount: 0 })
       }
       const current = purchaseMap.get(receptionId)!
-      if (detail.variant_code) current.products.add(String(detail.variant_code))
+      const sku = detail.variant_code ? String(detail.variant_code) : ''
+      if (sku) {
+        if (!current.products.has(sku)) {
+          current.products.set(sku, { sku, quantity: 0, unitCost: toNum(detail.cost), amount: 0 })
+        }
+        const p = current.products.get(sku)!
+        p.quantity += qty
+        p.amount += amount
+      }
       current.units += qty
       current.amount += amount
     }
@@ -397,7 +405,21 @@ export async function getSupplierPurchaseSales360(params: {
       .sort((a, b) => b.date.localeCompare(a.date))
       .slice(0, 10)
       .map((row) => {
-        const productPreview = uniqueSkuPreview(row.products)
+        const skuSet = new Set(row.products.keys())
+        const productPreview = uniqueSkuPreview(skuSet)
+        
+        const productsList = Array.from(row.products.values()).map(p => {
+          const product = productBySku.get(p.sku)
+          const name = String(product?.description || p.sku || 'Sin descripción')
+          return {
+            sku: p.sku,
+            name,
+            quantity: Math.round(p.quantity),
+            unitCost: Math.round(p.unitCost),
+            subtotal: Math.round(p.amount)
+          }
+        })
+
         return {
           date: row.date,
           document: row.document,
@@ -407,6 +429,7 @@ export async function getSupplierPurchaseSales360(params: {
           productCount: productPreview.count,
           units: Math.round(row.units),
           amount: Math.round(row.amount),
+          products: productsList,
         }
       })
     purchasesAmount = Math.round(purchasesAmount)
