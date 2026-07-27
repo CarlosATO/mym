@@ -17,8 +17,8 @@ function dateLabel(value: string | null) {
 export function SupplierKpis({ data, loading }: { data: SupplierPurchaseSales360 | null; loading: boolean }) {
   return (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-      <KpiCard title="Compras del período" value={data ? money(data.kpis.purchases_amount) : '—'} icon="ShoppingBasket" loading={loading} />
-      <KpiCard title="Ventas del período" value={data ? money(data.kpis.sales_amount) : '—'} icon="TrendingUp" accent loading={loading} />
+      <KpiCard title="Compras recepcionadas netas" value={data ? money(data.kpis.purchases_amount) : '—'} icon="ShoppingBasket" loading={loading} />
+      <KpiCard title="Ventas netas del período" value={data ? money(data.kpis.sales_amount) : '—'} icon="TrendingUp" accent loading={loading} />
       <KpiCard title="Margen estimado" value={data ? money(data.kpis.estimated_margin) : '—'} icon="BadgeDollarSign" loading={loading} />
       <KpiCard title="Stock valorizado" value={data ? money(data.kpis.stock_value) : '—'} icon="Warehouse" loading={loading} />
       <KpiCard title="Última compra" value={data ? dateLabel(data.kpis.last_purchase_date) : '—'} icon="CalendarClock" loading={loading} />
