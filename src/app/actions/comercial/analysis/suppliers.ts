@@ -696,7 +696,7 @@ export async function getSupplierWeeklyDetail(params: {
 
 type BsaleReceptionDetail = { variant_code: string; quantity: number; cost: number }
 type BsaleDocumentDetail = { variant_code: string; quantity: number; net_amount: number; total_amount: number }
-type MappingRow = { sku: string; supplier_id: string }
+type SupplierMappingRow = { sku: string; supplier_id: string }
 
 export async function getSupplierDocumentDetail({ supplierId, documentKind, documentId }: { supplierId: string; documentKind: 'PURCHASE' | 'SALE' | 'CREDIT_NOTE'; documentId: string }): Promise<SupplierDocumentDetail | null> {
   const { companyId } = await getAuthedCompany()
@@ -713,7 +713,7 @@ export async function getSupplierDocumentDetail({ supplierId, documentKind, docu
     // We must filter the lines to only those that map to this supplierId
     const skus = (reception.bsale_reception_details || []).map((d) => d.variant_code).filter(Boolean)
     const { data: mapData } = await adqQuery('product_supplier_mappings').select('sku,supplier_id').eq('company_id', companyId).in('sku', skus)
-    const mappings = mapData as unknown as MappingRow[]
+    const mappings = mapData as unknown as SupplierMappingRow[]
 
     let totalAmount = 0
     let totalUnits = 0
