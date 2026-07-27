@@ -3,6 +3,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { bsaleFetchAll, normalizeSku, getBsaleHeaders } from '@/lib/bsale/client'
 import { syncBsaleClients } from '@/lib/integraciones/bsale-clients-sync'
+import { runCatalogAutoSyncStep } from '@/lib/integraciones/bsale-catalog-auto-sync'
 import crypto from 'crypto'
 
 const BSALE_API_BASE = process.env.BSALE_API_BASE_URL || 'https://api.bsale.cl/v1'
@@ -1631,6 +1632,14 @@ export async function syncBsaleCatalog(companyId: string): Promise<{
     counts.sellers = await syncSellers(companyId, runId)
     console.log(`[bsale-sync] Vendedores sincronizados: ${counts.sellers}`)
 
+    // 5. Auto-mapping producto → pseudoproveedor
+    console.log('[bsale-sync] Iniciando auto-mapping...')
+    const catalogResult = await runCatalogAutoSyncStep(companyId, 'MANUAL', 'CATALOG')
+    counts.mappings_created = catalogResult.mappingResult.mappingsCreated
+    counts.mappings_updated = catalogResult.mappingResult.mappingsUpdated
+    counts.mappings_skipped = catalogResult.mappingResult.mappingsSkippedExisting + catalogResult.mappingResult.mappingsSkippedManualConflict
+    counts.operative_suppliers_created = catalogResult.mappingResult.operativeSuppliersCreated
+    console.log(`[bsale-sync] Mappings: created=${catalogResult.mappingResult.mappingsCreated} errors=${catalogResult.mappingResult.errors.length}`)
 
     await finishSyncRun(runId, 'COMPLETED', counts)
 
@@ -1737,6 +1746,13 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
     let finalStatus: 'COMPLETED' | 'PARTIAL' | 'FAILED' = 'COMPLETED';
     let errorMessage = '';
 
+    // 0a-0c. Catalog auto-sync: product types → products → auto-mapping
+    const catalogResult = await runCatalogAutoSyncStep(companyId, trigger, 'SCHEDULED');
+    if (catalogResult.finalStatus === 'PARTIAL') {
+      finalStatus = 'PARTIAL';
+      errorMessage += (errorMessage ? ' | ' : '') + catalogResult.errorMessage;
+    }
+
     // 1. Sync Clients (before documents to reduce orphans)
     console.log('[runReplenishmentBsaleSync] Iniciando syncBsaleClients...');
     let clientStats = { bsaleTotal: 0, bsaleFetched: 0, insertedCount: 0, updatedCount: 0, skippedCount: 0, errorCount: 0 };
@@ -1836,6 +1852,9 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
     }
 
     const counts = {
+      productTypes: catalogResult.productTypesResult,
+      products: catalogResult.productsResult,
+      mappings: catalogResult.mappingResult,
       clients: clientStats,
       sales: salesRes.counts,
       payments: paymentsResult,
@@ -1846,6 +1865,8 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
     };
 
     await finishSyncRun(runId, finalStatus, {
+       products: (catalogResult.productsResult.stats as any)?.newProducts || 0,
+       variants: (catalogResult.productsResult.stats as any)?.bsaleFetched || 0,
        clients_fetched: clientStats.bsaleFetched,
        clients_inserted: clientStats.insertedCount,
        clients_updated: clientStats.updatedCount,
