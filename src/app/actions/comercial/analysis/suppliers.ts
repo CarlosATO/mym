@@ -1,7 +1,7 @@
 'use server'
 
-import type { AnalysisSupplierOption, SupplierCatalogRow, SupplierMonthlyPoint, SupplierPurchaseSales360 } from './types'
-import { adqQuery, fetchAll, getAuthedCompany, integQuery, monthKey, monthLabel, toNum } from './utils'
+import type { AnalysisSupplierOption, SupplierCatalogRow, SupplierPurchaseSales360, SupplierWeeklyPoint, SupplierWeeklyDetail, SupplierWeeklyDocumentDetail, SupplierWeeklyProductDetail, SupplierDocumentDetail, SupplierDocumentLineDetail } from './types'
+import { adqQuery, fetchAll, getAuthedCompany, integQuery, toNum } from './utils'
 
 function chunkArray<T>(items: T[], size: number) {
   const chunks: T[][] = []
@@ -83,6 +83,70 @@ function uniqueSkuPreview(values: Set<string>) {
     count: items.length,
     productsSummary,
   }
+}
+
+function formatWeekLabel(weekStart: string, weekEnd: string) {
+  const format = (value: string) => {
+    const [year, month, day] = value.split('-')
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    return `${day} ${monthNames[Math.max(0, Number(month) - 1)] || month} ${year}`
+  }
+  return `${format(weekStart)} - ${format(weekEnd)}`
+}
+
+function startOfIsoWeek(date: Date) {
+  const current = new Date(date)
+  const day = current.getUTCDay() || 7
+  current.setUTCDate(current.getUTCDate() - day + 1)
+  current.setUTCHours(0, 0, 0, 0)
+  return current
+}
+
+function isoDate(date: Date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`
+}
+
+function buildWeeklySeries(from: string, to: string, salesByDate: Map<string, number>, purchasesByDate: Map<string, number>, marginByDate: Map<string, number>): SupplierWeeklyPoint[] {
+  const fromDate = new Date(`${from}T00:00:00Z`)
+  const toDate = new Date(`${to}T00:00:00Z`)
+  const bucketMap = new Map<string, SupplierWeeklyPoint>()
+
+  const cursor = new Date(fromDate)
+  while (cursor <= toDate) {
+    const weekStartDate = startOfIsoWeek(cursor)
+    const weekStart = isoDate(weekStartDate)
+    const weekEndDate = new Date(weekStartDate)
+    weekEndDate.setUTCDate(weekEndDate.getUTCDate() + 6)
+    const clampedEnd = weekEndDate > toDate ? toDate : weekEndDate
+    if (!bucketMap.has(weekStart)) {
+      bucketMap.set(weekStart, {
+        label: formatWeekLabel(weekStart, isoDate(clampedEnd)),
+        weekStart,
+        weekEnd: isoDate(clampedEnd),
+        purchases: 0,
+        sales: 0,
+        margin: 0,
+      })
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1)
+  }
+
+  for (const [date, amount] of salesByDate.entries()) {
+    const bucket = bucketMap.get(isoDate(startOfIsoWeek(new Date(`${date}T00:00:00Z`))))
+    if (bucket) bucket.sales += Math.round(amount)
+  }
+  for (const [date, amount] of purchasesByDate.entries()) {
+    const bucket = bucketMap.get(isoDate(startOfIsoWeek(new Date(`${date}T00:00:00Z`))))
+    if (bucket) bucket.purchases += Math.round(amount)
+  }
+  for (const [date, amount] of marginByDate.entries()) {
+    const bucket = bucketMap.get(isoDate(startOfIsoWeek(new Date(`${date}T00:00:00Z`))))
+    if (bucket) {
+      bucket.margin = (bucket.margin || 0) + Math.round(amount)
+    }
+  }
+
+  return Array.from(bucketMap.values()).sort((a, b) => a.weekStart.localeCompare(b.weekStart))
 }
 
 export async function getAnalysisSuppliers(): Promise<AnalysisSupplierOption[]> {
@@ -218,9 +282,10 @@ export async function getSupplierPurchaseSales360(params: {
   const ncDocsById = new Map(docsNc.map((d) => [d.bsale_id as number, d]))
 
   const salesBySku: Record<string, { units: number; net: number; gross: number; lastSale: string | null }> = {}
-  const monthlySales = new Map<string, number>()
-  let totalSalesGross = 0
+  const salesByDate = new Map<string, number>()
+  const marginByDate = new Map<string, number>()
   let totalSalesNet = 0
+  let totalSalesGross = 0
   let totalEstimatedCost = 0
 
   const processDetailRows = (rows: DetailRow[], docMap: Map<number, { total_amount?: unknown; net_amount?: unknown; emission_date?: string }>, sign: 1 | -1) => {
@@ -245,8 +310,8 @@ export async function getSupplierPurchaseSales360(params: {
       totalSalesGross += gross
       totalEstimatedCost += qty * unitCost
       if (date) {
-        const key = monthKey(date)
-        monthlySales.set(key, (monthlySales.get(key) || 0) + gross)
+        salesByDate.set(date, (salesByDate.get(date) || 0) + gross)
+        marginByDate.set(date, (marginByDate.get(date) || 0) + (net - (qty * unitCost)))
       }
     }
   }
@@ -278,6 +343,7 @@ export async function getSupplierPurchaseSales360(params: {
   let purchasesAmount: number | null = null
   let lastPurchaseDate: string | null = null
   let lastPurchases: Array<{ date: string; document: string; documentNumber?: string; productsSummary: string; productSkusPreview: string[]; productCount: number; units: number; amount: number }> = []
+  const purchasesByDate = new Map<string, number>()
 
   if (hasReceptionData && skus.length > 0) {
     const typedReceptionDetails: ReceptionDetailRow[] = []
@@ -292,9 +358,11 @@ export async function getSupplierPurchaseSales360(params: {
 
     const receptionIds = Array.from(new Set(typedReceptionDetails.map((row) => Number(row.bsale_reception_id || 0)).filter((id) => id > 0)))
     const { data: receptions, error: receptionsError } = receptionIds.length
-      ? await integQuery('bsale_receptions')
+        ? await integQuery('bsale_receptions')
           .select('bsale_id,raw_admission_date,admission_date,document,document_number')
           .eq('company_id', companyId)
+          .gte('raw_admission_date', from)
+          .lte('raw_admission_date', to)
           .in('bsale_id', receptionIds)
       : { data: [], error: null }
     if (receptionsError) throw receptionsError
@@ -314,6 +382,7 @@ export async function getSupplierPurchaseSales360(params: {
       const qty = toNum(detail.quantity)
       const amount = qty * toNum(detail.cost)
       purchasesAmount += amount
+      if (date) purchasesByDate.set(date, (purchasesByDate.get(date) || 0) + amount)
       if (!lastPurchaseDate || (date && date > lastPurchaseDate)) lastPurchaseDate = date || lastPurchaseDate
       if (!purchaseMap.has(receptionId)) {
         purchaseMap.set(receptionId, { date, document, documentNumber, products: new Set(), units: 0, amount: 0 })
@@ -364,13 +433,7 @@ export async function getSupplierPurchaseSales360(params: {
     }
   }).sort((a, b) => b.sales_amount - a.sales_amount || a.product_name.localeCompare(b.product_name, 'es'))
 
-  const monthlyMap = new Map<string, SupplierMonthlyPoint>()
-  for (const [month, sales] of monthlySales.entries()) {
-    monthlyMap.set(month, { month: monthLabel(month), purchases: 0, sales: Math.round(sales) })
-  }
-  const monthly = Array.from(monthlyMap.entries())
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([, value]) => value)
+  const weekly = buildWeeklySeries(from, to, salesByDate, purchasesByDate, marginByDate)
 
   return {
     supplier: {
@@ -393,8 +456,334 @@ export async function getSupplierPurchaseSales360(params: {
       last_purchase_date: hasReceptionData ? lastPurchaseDate : null,
     },
     hasReceptionData,
-    monthly,
+    weekly,
     lastPurchases,
     catalog,
+  }
+}
+
+export async function getSupplierWeeklyDetail(params: {
+  supplierId: string
+  dateFrom: string
+  dateTo: string
+}): Promise<SupplierWeeklyDetail> {
+  const { companyId } = await getAuthedCompany()
+  const { supplierId, dateFrom, dateTo } = params
+
+  const { data: supplier, error: supplierError } = await adqQuery('suppliers')
+    .select('id,business_name,supplier_kind,parent_supplier_id')
+    .eq('company_id', companyId)
+    .eq('id', supplierId)
+    .single()
+  if (supplierError) throw supplierError
+  if (!supplier) throw new Error('Proveedor no encontrado')
+
+  const childIds: string[] = [supplierId]
+  const { data: children } = await adqQuery('suppliers')
+    .select('id,business_name')
+    .eq('company_id', companyId)
+    .eq('parent_supplier_id', supplierId)
+    .eq('is_active', true)
+  if (children?.length) childIds.push(...(children as SupplierRow[]).map((c) => c.id))
+
+  const { data: mappings, error: mappingsError } = await adqQuery('product_supplier_mappings')
+    .select('product_id,sku,unit_cost,supplier_id,bsale_variant_id,is_preferred,product_name')
+    .eq('company_id', companyId)
+    .in('supplier_id', childIds)
+    .eq('is_active', true)
+  if (mappingsError) throw mappingsError
+
+  const typedMappings = (mappings || []) as MappingRow[]
+  const skus = Array.from(new Set(typedMappings.map((m) => m.sku).filter(Boolean))) as string[]
+  const skuSet = new Set(skus)
+
+  const typedProducts: ProductRow[] = []
+  for (const skuChunk of chunkArray(skus, 150)) {
+    const { data: products } = skuChunk.length
+      ? await adqQuery('products').select('id,sku,description,bsale_variant_id').eq('company_id', companyId).in('sku', skuChunk)
+      : { data: [] }
+    typedProducts.push(...((products || []) as ProductRow[]))
+  }
+  const productBySku = new Map(typedProducts.map((p) => [String(p.sku || ''), p]))
+  const preferredMappingBySku = new Map<string, MappingRow>()
+  for (const mapping of typedMappings) {
+    if (mapping.sku && !preferredMappingBySku.has(mapping.sku)) preferredMappingBySku.set(mapping.sku, mapping)
+  }
+
+  function getProductName(sku: string) {
+    const p = productBySku.get(sku)
+    const m = preferredMappingBySku.get(sku)
+    return String(p?.description || m?.product_name || sku || 'Sin descripción')
+  }
+
+  const docs5 = await fetchAll<DocumentRow>(
+    integQuery('bsale_documents')
+      .select('bsale_id,total_amount,net_amount,emission_date')
+      .eq('company_id', companyId)
+      .eq('document_type_id', 5)
+      .gte('emission_date', dateFrom)
+      .lte('emission_date', dateTo)
+      .order('bsale_id')
+  )
+  const docsNc = await fetchAll<DocumentRow>(
+    integQuery('bsale_documents')
+      .select('bsale_id,total_amount,net_amount,emission_date')
+      .eq('company_id', companyId)
+      .eq('document_type_id', 2)
+      .gte('emission_date', dateFrom)
+      .lte('emission_date', dateTo)
+      .order('bsale_id')
+  )
+
+  const saleDocuments: SupplierWeeklyDocumentDetail[] = []
+  let totalSales = 0
+
+  const topProductsMap = new Map<string, SupplierWeeklyProductDetail>()
+  const ensureTopProduct = (sku: string) => {
+    if (!topProductsMap.has(sku)) {
+      topProductsMap.set(sku, { sku, description: getProductName(sku), units: 0, amount: 0 })
+    }
+    return topProductsMap.get(sku)!
+  }
+
+  const processSalesDetailRows = (rows: DetailRow[], docMap: Map<number, DocumentRow>, kind: 'SALE' | 'CREDIT_NOTE', sign: 1 | -1) => {
+    const docSummaryMap = new Map<number, { doc: DocumentRow; amount: number; units: number; skus: Set<string> }>()
+
+    for (const row of rows) {
+      const sku = String(row.variant_code || '')
+      if (!skuSet.has(sku)) continue
+
+      const docId = Number(row.bsale_document_id || 0)
+      const doc = docMap.get(docId)
+      if (!doc) continue
+
+      const qty = toNum(row.quantity) * sign
+      const net = toNum(row.net_amount) * sign
+      const docNet = toNum(doc.net_amount)
+      const docGross = toNum(doc.total_amount)
+      const gross = docNet > 0 ? net * (docGross / docNet) : net
+
+      totalSales += gross
+      const tp = ensureTopProduct(sku)
+      tp.units += qty
+      tp.amount += Math.abs(gross)
+
+      if (!docSummaryMap.has(docId)) {
+        docSummaryMap.set(docId, { doc, amount: 0, units: 0, skus: new Set() })
+      }
+      const s = docSummaryMap.get(docId)!
+      s.amount += gross
+      s.units += qty
+      s.skus.add(sku)
+    }
+
+    for (const [docId, s] of docSummaryMap.entries()) {
+      if (s.amount === 0 && s.units === 0) continue
+      saleDocuments.push({
+        id: `sale-${docId}`,
+        date: String(s.doc.emission_date || ''),
+        document: kind === 'SALE' ? 'Factura' : 'Nota Crédito',
+        documentNumber: String(docId),
+        amount: Math.round(s.amount),
+        units: Math.round(s.units),
+        productsSummary: uniqueSkuPreview(s.skus).productsSummary,
+        kind,
+        customerName: null
+      })
+    }
+  }
+
+  const invoiceIds = docs5.map(d => d.bsale_id)
+  const ncIds = docsNc.map(d => d.bsale_id)
+  const docsById = new Map(docs5.map(d => [d.bsale_id, d]))
+  const ncDocsById = new Map(docsNc.map(d => [d.bsale_id, d]))
+
+  const detailChunkSize = 200
+  for (let idx = 0; idx < invoiceIds.length; idx += detailChunkSize) {
+    const chunk = invoiceIds.slice(idx, idx + detailChunkSize)
+    const { data: details } = await integQuery('bsale_document_details').select('variant_code,quantity,net_amount,bsale_document_id').eq('company_id', companyId).in('bsale_document_id', chunk)
+    processSalesDetailRows((details || []) as DetailRow[], docsById, 'SALE', 1)
+  }
+  for (let idx = 0; idx < ncIds.length; idx += detailChunkSize) {
+    const chunk = ncIds.slice(idx, idx + detailChunkSize)
+    const { data: details } = await integQuery('bsale_document_details').select('variant_code,quantity,net_amount,bsale_document_id').eq('company_id', companyId).in('bsale_document_id', chunk)
+    processSalesDetailRows((details || []) as DetailRow[], ncDocsById, 'CREDIT_NOTE', -1)
+  }
+
+  const purchaseDocuments: SupplierWeeklyDocumentDetail[] = []
+  let totalPurchases = 0
+
+  if (skus.length > 0) {
+    const typedReceptionDetails: ReceptionDetailRow[] = []
+    for (const skuChunk of chunkArray(skus, 150)) {
+      const { data: receptionDetails } = await integQuery('bsale_reception_details').select('bsale_reception_id,variant_code,quantity,cost').eq('company_id', companyId).in('variant_code', skuChunk)
+      typedReceptionDetails.push(...((receptionDetails || []) as ReceptionDetailRow[]))
+    }
+
+    const receptionIds = Array.from(new Set(typedReceptionDetails.map(row => Number(row.bsale_reception_id || 0)).filter(id => id > 0)))
+    const { data: receptions } = receptionIds.length
+      ? await integQuery('bsale_receptions')
+          .select('bsale_id,raw_admission_date,admission_date,document,document_number')
+          .eq('company_id', companyId)
+          .gte('raw_admission_date', dateFrom)
+          .lte('raw_admission_date', dateTo)
+          .in('bsale_id', receptionIds)
+      : { data: [] }
+    const typedReceptions = (receptions || []) as ReceptionRow[]
+    const receptionById = new Map(typedReceptions.map(row => [Number(row.bsale_id || 0), row]))
+
+    const docSummaryMap = new Map<number, { doc: ReceptionRow; amount: number; units: number; skus: Set<string> }>()
+
+    for (const detail of typedReceptionDetails) {
+      const receptionId = Number(detail.bsale_reception_id || 0)
+      const header = receptionById.get(receptionId)
+      if (!header) continue
+
+      const sku = String(detail.variant_code || '')
+      const qty = toNum(detail.quantity)
+      const amount = qty * toNum(detail.cost)
+
+      totalPurchases += amount
+      const tp = ensureTopProduct(sku)
+      tp.units += Math.abs(qty)
+      tp.amount += Math.abs(amount)
+
+      if (!docSummaryMap.has(receptionId)) {
+        docSummaryMap.set(receptionId, { doc: header, amount: 0, units: 0, skus: new Set() })
+      }
+      const s = docSummaryMap.get(receptionId)!
+      s.amount += amount
+      s.units += qty
+      s.skus.add(sku)
+    }
+
+    for (const [receptionId, s] of docSummaryMap.entries()) {
+      if (s.amount === 0 && s.units === 0) continue
+      const date = String(s.doc.raw_admission_date || String(s.doc.admission_date || '').slice(0, 10) || '')
+      purchaseDocuments.push({
+        id: `purchase-${receptionId}`,
+        date,
+        document: String(s.doc.document || 'Sin Doc'),
+        documentNumber: String(s.doc.document_number || '').trim(),
+        amount: Math.round(s.amount),
+        units: Math.round(s.units),
+        productsSummary: uniqueSkuPreview(s.skus).productsSummary,
+        kind: 'PURCHASE'
+      })
+    }
+  }
+
+  const topProducts = Array.from(topProductsMap.values())
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 5)
+    .map(p => ({ ...p, amount: Math.round(p.amount), units: Math.round(p.units) }))
+
+  saleDocuments.sort((a, b) => b.date.localeCompare(a.date))
+  purchaseDocuments.sort((a, b) => b.date.localeCompare(a.date))
+
+  return {
+    weekStart: dateFrom,
+    weekEnd: dateTo,
+    label: formatWeekLabel(dateFrom, dateTo),
+    purchases: Math.round(totalPurchases),
+    sales: Math.round(totalSales),
+    difference: Math.round(totalSales) - Math.round(totalPurchases),
+    purchaseDocuments,
+    saleDocuments,
+    topProducts
+  }
+}
+
+type BsaleReceptionDetail = { variant_code: string; quantity: number; cost: number }
+type BsaleDocumentDetail = { variant_code: string; quantity: number; net_amount: number; total_amount: number }
+type MappingRow = { sku: string; supplier_id: string }
+
+export async function getSupplierDocumentDetail({ supplierId, documentKind, documentId }: { supplierId: string; documentKind: 'PURCHASE' | 'SALE' | 'CREDIT_NOTE'; documentId: string }): Promise<SupplierDocumentDetail | null> {
+  const { companyId } = await getAuthedCompany()
+
+  const { data: children } = await adqQuery('product_suppliers').select('id').eq('parent_supplier_id', supplierId).eq('company_id', companyId)
+  const childIds: string[] = [supplierId]
+  if (children?.length) childIds.push(...(children as { id: string }[]).map((c) => c.id))
+
+  if (documentKind === 'PURCHASE') {
+    const { data } = await integQuery('bsale_receptions').select('id,raw_admission_date,document,document_number,bsale_reception_details(id,variant_code,quantity,cost)').eq('company_id', companyId).eq('id', Number(documentId)).single()
+    const reception = data as unknown as { raw_admission_date: string; document: string; document_number: string; bsale_reception_details: BsaleReceptionDetail[] }
+    if (!reception) return null
+
+    // We must filter the lines to only those that map to this supplierId
+    const skus = (reception.bsale_reception_details || []).map((d) => d.variant_code).filter(Boolean)
+    const { data: mapData } = await adqQuery('product_supplier_mappings').select('sku,supplier_id').eq('company_id', companyId).in('sku', skus)
+    const mappings = mapData as unknown as MappingRow[]
+
+    let totalAmount = 0
+    let totalUnits = 0
+    const lines: SupplierDocumentLineDetail[] = []
+
+    for (const line of (reception.bsale_reception_details || [])) {
+      const mapping = mappings?.find((m) => m.sku === line.variant_code && childIds.includes(m.supplier_id))
+      if (mapping) {
+        totalAmount += line.quantity * line.cost
+        totalUnits += line.quantity
+        lines.push({
+          sku: line.variant_code,
+          description: line.variant_code, // Ideal would be to fetch description, but sku is fine for now
+          quantity: line.quantity,
+          unitAmount: line.cost,
+          totalAmount: line.quantity * line.cost,
+          kind: 'PURCHASE'
+        })
+      }
+    }
+
+    if (lines.length === 0) return null
+    return {
+      id: documentId,
+      date: String(reception.raw_admission_date || ''),
+      document: String(reception.document || 'Recepción'),
+      documentNumber: String(reception.document_number || documentId),
+      totalAmount: Math.round(totalAmount),
+      units: totalUnits,
+      lines
+    }
+  } else {
+    const { data } = await integQuery('bsale_documents').select('id,emission_date,document_type_id,number,client_organization,bsale_document_details(id,variant_code,quantity,net_amount,total_amount)').eq('company_id', companyId).eq('id', Number(documentId)).single()
+    const doc = data as unknown as { emission_date: string; number: string; client_organization: string; bsale_document_details: BsaleDocumentDetail[] }
+    if (!doc) return null
+
+    const skus = (doc.bsale_document_details || []).map((d) => d.variant_code).filter(Boolean)
+    const { data: mapData } = await adqQuery('product_supplier_mappings').select('sku,supplier_id').eq('company_id', companyId).in('sku', skus)
+    const mappings = mapData as unknown as MappingRow[]
+
+    let totalAmount = 0
+    let totalUnits = 0
+    const lines: SupplierDocumentLineDetail[] = []
+
+    for (const line of (doc.bsale_document_details || [])) {
+      const mapping = mappings?.find((m) => m.sku === line.variant_code && childIds.includes(m.supplier_id))
+      if (mapping) {
+        totalAmount += line.total_amount
+        totalUnits += line.quantity
+        lines.push({
+          sku: line.variant_code,
+          description: line.variant_code,
+          quantity: line.quantity,
+          unitAmount: line.quantity > 0 ? line.total_amount / line.quantity : 0,
+          totalAmount: line.total_amount,
+          kind: documentKind as 'SALE' | 'CREDIT_NOTE'
+        })
+      }
+    }
+
+    if (lines.length === 0) return null
+    return {
+      id: documentId,
+      date: String(doc.emission_date || ''),
+      document: documentKind === 'SALE' ? 'Factura' : 'Nota de Crédito',
+      documentNumber: String(doc.number || documentId),
+      customerName: String(doc.client_organization || 'Sin Cliente'),
+      totalAmount: Math.round(totalAmount),
+      units: totalUnits,
+      lines
+    }
   }
 }

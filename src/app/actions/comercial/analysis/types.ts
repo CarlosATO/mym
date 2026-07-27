@@ -3,10 +3,13 @@ export type AnalysisSupplierOption = {
   business_name: string
 }
 
-export type SupplierMonthlyPoint = {
-  month: string
+export type SupplierWeeklyPoint = {
+  label: string
+  weekStart: string
+  weekEnd: string
   purchases: number
   sales: number
+  margin?: number
 }
 
 export type SupplierPurchaseRow = {
@@ -56,7 +59,59 @@ export type SupplierPurchaseSales360 = {
     last_purchase_date: string | null
   }
   hasReceptionData: boolean
-  monthly: SupplierMonthlyPoint[]
+  weekly: SupplierWeeklyPoint[]
   lastPurchases: SupplierPurchaseRow[]
   catalog: SupplierCatalogRow[]
+}
+
+export type SupplierWeeklyDocumentDetail = {
+  id: string
+  date: string
+  document: string
+  documentNumber: string
+  amount: number
+  units: number
+  productsSummary: string
+  kind: 'PURCHASE' | 'SALE' | 'CREDIT_NOTE'
+  customerName?: string | null
+}
+
+export type SupplierWeeklyProductDetail = {
+  sku: string
+  description: string
+  units: number
+  amount: number
+}
+
+export type SupplierWeeklyDetail = {
+  weekStart: string
+  weekEnd: string
+  label: string
+  purchases: number
+  sales: number
+  difference: number
+  purchaseDocuments: SupplierWeeklyDocumentDetail[]
+  saleDocuments: SupplierWeeklyDocumentDetail[]
+  topProducts: SupplierWeeklyProductDetail[]
+}
+
+export type SupplierDocumentLineDetail = {
+  sku: string
+  description: string
+  quantity: number
+  unitAmount: number
+  totalAmount: number
+  kind: 'SALE' | 'CREDIT_NOTE' | 'PURCHASE'
+}
+
+export type SupplierDocumentDetail = {
+  id: string
+  date: string
+  document: string
+  documentNumber: string
+  customerName?: string
+  supplierName?: string
+  totalAmount: number
+  units: number
+  lines: SupplierDocumentLineDetail[]
 }
