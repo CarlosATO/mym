@@ -140,9 +140,9 @@ export function Proveedor360() {
 
           <div className={hasPendingChanges || loading ? 'opacity-50 pointer-events-none transition-opacity' : 'transition-opacity'}>
 
-            {appliedDateFrom < '2026-06-26' && (
+            {appliedDateFrom < '2026-01-01' && (
               <div className="mb-5 rounded-xl border border-yellow-500/20 bg-yellow-500/5 px-4 py-3 text-sm text-yellow-700 dark:text-yellow-500">
-                Compras sincronizadas desde 26/06/2026. Los períodos anteriores pueden aparecer en $0 hasta completar el backfill histórico.
+                Compras sincronizadas desde 01/01/2026. Los períodos anteriores pueden aparecer en $0 hasta completar el backfill histórico anterior a 2026.
               </div>
             )}
 
