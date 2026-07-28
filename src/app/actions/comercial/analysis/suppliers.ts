@@ -2,7 +2,7 @@
 
 import type { AnalysisSupplierOption, SupplierCatalogRow, SupplierPurchaseSales360, SupplierWeeklyPoint, SupplierWeeklyDetail, SupplierWeeklyDocumentDetail, SupplierWeeklyProductDetail, SupplierDocumentDetail, SupplierDocumentLineDetail, SupplierPurchaseRow } from './types'
 import { adqQuery, fetchAll, getAuthedCompany, integQuery, toNum } from './utils'
-import { getPurchaseReceptionSign } from './document-sign'
+import { getPurchaseReceptionSign, isCreditNote } from './document-sign'
 
 function chunkArray<T>(items: T[], size: number) {
   const chunks: T[][] = []
@@ -223,6 +223,7 @@ export async function getSupplierPurchaseSales360(params: {
   }
 
   const stockByVariantId = new Map<number, number>()
+  const costByVariantId = new Map<number, number>()
   const variantIds = Array.from(new Set(typedProducts.map((p) => Number(p.bsale_variant_id || 0)).filter((id) => Number.isFinite(id) && id > 0)))
   for (const variantChunk of chunkArray(variantIds, 150)) {
     const { data: stockRows, error: stockError } = variantChunk.length
@@ -236,6 +237,91 @@ export async function getSupplierPurchaseSales360(params: {
       const variantId = Number(row.variant_id || 0)
       if (!variantId) continue
       stockByVariantId.set(variantId, (stockByVariantId.get(variantId) || 0) + toNum(row.quantity_available))
+    }
+  }
+  // Query Bsale variant costs for stock valorization
+  const variantIdToSku = new Map<number, string>()
+  for (const p of typedProducts) {
+    const vid = Number(p.bsale_variant_id || 0)
+    if (vid && p.sku) variantIdToSku.set(vid, p.sku)
+  }
+  for (const variantChunk of chunkArray(variantIds, 150)) {
+    const { data: costRows, error: costError } = variantChunk.length
+      ? await integQuery('bsale_variant_costs')
+          .select('variant_id,average_cost')
+          .eq('company_id', companyId)
+          .in('variant_id', variantChunk)
+      : { data: [], error: null }
+    if (costError) throw costError
+    for (const row of (costRows || []) as { variant_id: number; average_cost?: number }[]) {
+      const c = toNum(row.average_cost)
+      if (c > 0) costByVariantId.set(Number(row.variant_id), c)
+    }
+  }
+  // Fallback 3: last reception cost (excluding NCs) for variants still without cost
+  const missingVariantIds = variantIds.filter(vid => !costByVariantId.has(vid))
+  const missingSkus = [...new Set(missingVariantIds.map(vid => variantIdToSku.get(vid)).filter(Boolean) as string[])]
+  if (missingSkus.length > 0) {
+    // Get all reception IDs for these SKUs and their document type
+    const { data: allRepRows } = await integQuery('bsale_reception_details')
+      .select('bsale_reception_id')
+      .eq('company_id', companyId)
+      .in('variant_code', missingSkus)
+    const detailRows = (allRepRows || []) as { bsale_reception_id: number }[]
+    const detailRepIds = [...new Set(detailRows.map(r => Number(r.bsale_reception_id)).filter(Boolean))]
+    // Check which receptions are NOT credit notes
+    const validRepIdsSet = new Set<number>()
+    if (detailRepIds.length > 0) {
+      const { data: repDocs } = await integQuery('bsale_receptions')
+        .select('bsale_id,document')
+        .eq('company_id', companyId)
+        .in('bsale_id', detailRepIds)
+      for (const r of (repDocs || []) as { bsale_id: number; document?: string | null }[]) {
+        if (!isCreditNote(r.document)) validRepIdsSet.add(r.bsale_id)
+      }
+    }
+    // Query latest non-NC cost per SKU, ordered by admission_date DESC
+    const validRepIdArr = [...validRepIdsSet]
+    if (validRepIdArr.length > 0) {
+      // Get reception dates for ordering
+      const { data: repDates } = await integQuery('bsale_receptions')
+        .select('bsale_id,admission_date,raw_admission_date')
+        .eq('company_id', companyId)
+        .in('bsale_id', validRepIdArr)
+      const repDateMap = new Map<number, string>()
+      for (const r of (repDates || []) as { bsale_id: number; admission_date?: string | null; raw_admission_date?: string | null }[]) {
+        repDateMap.set(r.bsale_id, r.raw_admission_date || String(r.admission_date || '').slice(0, 10) || '')
+      }
+      // Get all details for valid receptions
+      const allValidRows: { variant_code: string; cost: number; bsale_reception_id: number }[] = []
+      for (const chunk of chunkArray(validRepIdArr, 150)) {
+        const { data: repCostRows } = await integQuery('bsale_reception_details')
+          .select('variant_code,cost,bsale_reception_id')
+          .eq('company_id', companyId)
+          .in('bsale_reception_id', chunk)
+        allValidRows.push(...((repCostRows || []) as { variant_code: string; cost: number; bsale_reception_id: number }[]))
+      }
+      // Sort by admission_date DESC, bsale_id DESC
+      allValidRows.sort((a, b) => {
+        const da = repDateMap.get(a.bsale_reception_id) || ''
+        const db = repDateMap.get(b.bsale_reception_id) || ''
+        if (da !== db) return da > db ? -1 : 1
+        return b.bsale_reception_id - a.bsale_reception_id
+      })
+      // Take first (most recent) per SKU
+      const seen = new Set<string>()
+      for (const row of allValidRows) {
+        if (seen.has(row.variant_code)) continue
+        seen.add(row.variant_code)
+        const c = toNum(row.cost)
+        if (c > 0) {
+          for (const vid of missingVariantIds) {
+            if (variantIdToSku.get(vid) === row.variant_code && !costByVariantId.has(vid)) {
+              costByVariantId.set(vid, c)
+            }
+          }
+        }
+      }
     }
   }
 
@@ -277,7 +363,28 @@ export async function getSupplierPurchaseSales360(params: {
   )
 
   const invoiceIds = docs5.map((d) => d.bsale_id)
-  const ncIds = docsNc.map((d) => d.bsale_id)
+  const allNcIds = docsNc.map((d) => d.bsale_id)
+  // Filter out NCs that reference excluded document types (boleta=1, nota venta=23, guia=7)
+  const { data: rawNcRefs } = allNcIds.length > 0
+    ? await integQuery('bsale_document_references').select('bsale_document_id,referenced_document_id').eq('company_id', companyId).in('bsale_document_id', allNcIds)
+    : { data: [] }
+  const ncRefs = (rawNcRefs || []) as { bsale_document_id: number; referenced_document_id: number }[]
+  const excludedNcIds = new Set<number>()
+  if (ncRefs.length > 0) {
+    const refDocIds = [...new Set(ncRefs.map(r => Number(r.referenced_document_id)))]
+    const { data: rawRefDocs } = refDocIds.length > 0
+      ? await integQuery('bsale_documents').select('bsale_id,document_type_id').eq('company_id', companyId).in('bsale_id', refDocIds)
+      : { data: [] }
+    const refDocs = (rawRefDocs || []) as { bsale_id: number; document_type_id: number }[]
+    const refTypeMap = new Map(refDocs.map(d => [d.bsale_id, d.document_type_id]))
+    const excludedTypes = new Set([1, 7, 23])
+    for (const ref of ncRefs) {
+      const refType = refTypeMap.get(Number(ref.referenced_document_id))
+      if (refType && excludedTypes.has(refType)) excludedNcIds.add(Number(ref.bsale_document_id))
+    }
+  }
+  const ncIds = allNcIds.filter(id => !excludedNcIds.has(id))
+
   const skuSet = new Set(skus)
   const docsById = new Map(docs5.map((d) => [d.bsale_id as number, d]))
   const ncDocsById = new Map(docsNc.map((d) => [d.bsale_id as number, d]))
@@ -311,7 +418,7 @@ export async function getSupplierPurchaseSales360(params: {
       totalSalesGross += gross
       totalEstimatedCost += qty * unitCost
       if (date) {
-        salesByDate.set(date, (salesByDate.get(date) || 0) + gross)
+        salesByDate.set(date, (salesByDate.get(date) || 0) + net)
         marginByDate.set(date, (marginByDate.get(date) || 0) + (net - (qty * unitCost)))
       }
     }
@@ -443,7 +550,9 @@ export async function getSupplierPurchaseSales360(params: {
     const sku = String(product?.sku || preferred?.sku || '')
     const variantId = Number(product?.bsale_variant_id || preferred?.bsale_variant_id || 0)
     const stockCurrent = variantId ? Math.round(stockByVariantId.get(variantId) || 0) : 0
-    const averageCost = Math.round(toNum(preferred?.unit_cost))
+    const bsaleCost = variantId ? costByVariantId.get(variantId) || 0 : 0
+    const mappingCost = bsaleCost > 0 ? bsaleCost : toNum(preferred?.unit_cost)
+    const averageCost = Math.round(mappingCost)
     const sales = salesBySku[sku] || { units: 0, net: 0, gross: 0, lastSale: null }
     return {
       product_id: productId,
@@ -452,7 +561,7 @@ export async function getSupplierPurchaseSales360(params: {
       pseudo_supplier: preferred?.supplier_id && preferred.supplier_id !== supplierId ? pseudoNameBySupplierId[preferred.supplier_id] || '' : '',
       stock_current: stockCurrent,
       average_cost: averageCost,
-      sales_amount: Math.round(sales.gross),
+      sales_amount: Math.round(sales.net),
       units_sold: Math.round(sales.units),
       last_sale: sales.lastSale,
     }
@@ -475,10 +584,11 @@ export async function getSupplierPurchaseSales360(params: {
     period: { from, to },
     kpis: {
       purchases_amount: hasReceptionData ? purchasesAmount : null,
-      sales_amount: Math.round(totalSalesGross),
-      estimated_margin: Math.round(totalSalesNet - totalEstimatedCost),
+      sales_amount: Math.round(totalSalesNet),
+      estimated_margin_pct: totalSalesNet > 0 && totalEstimatedCost > 0 ? Math.round(((totalSalesNet - totalEstimatedCost) / totalSalesNet) * 100) : null,
+      estimated_margin: totalEstimatedCost > 0 ? Math.round(totalSalesNet - totalEstimatedCost) : null,
+      total_estimated_cost: Math.round(totalEstimatedCost),
       stock_value: Math.round(catalog.reduce((sum, row) => sum + row.stock_current * row.average_cost, 0)),
-      last_purchase_date: hasReceptionData ? lastPurchaseDate : null,
     },
     hasReceptionData,
     weekly,
@@ -560,6 +670,27 @@ export async function getSupplierWeeklyDetail(params: {
       .order('bsale_id')
   )
 
+  // Filter out NCs referencing excluded document types (same as getSupplierPurchaseSales360)
+  const allWeeklyNcIds = docsNc.map(d => d.bsale_id)
+  const { data: rawWeeklyNcRefs } = allWeeklyNcIds.length > 0
+    ? await integQuery('bsale_document_references').select('bsale_document_id,referenced_document_id').eq('company_id', companyId).in('bsale_document_id', allWeeklyNcIds)
+    : { data: [] }
+  const weeklyNcRefs = (rawWeeklyNcRefs || []) as { bsale_document_id: number; referenced_document_id: number }[]
+  const weeklyExcludedNcIds = new Set<number>()
+  if (weeklyNcRefs.length > 0) {
+    const refDocIds = [...new Set(weeklyNcRefs.map(r => Number(r.referenced_document_id)))]
+    const { data: rawRefDocs } = refDocIds.length > 0
+      ? await integQuery('bsale_documents').select('bsale_id,document_type_id').eq('company_id', companyId).in('bsale_id', refDocIds)
+      : { data: [] }
+    const refDocs = (rawRefDocs || []) as { bsale_id: number; document_type_id: number }[]
+    const refTypeMap = new Map(refDocs.map(d => [d.bsale_id, d.document_type_id]))
+    const exclTypes = new Set([1, 7, 23])
+    for (const ref of weeklyNcRefs) {
+      const refType = refTypeMap.get(Number(ref.referenced_document_id))
+      if (refType && exclTypes.has(refType)) weeklyExcludedNcIds.add(Number(ref.bsale_document_id))
+    }
+  }
+
   const saleDocuments: SupplierWeeklyDocumentDetail[] = []
   let totalSales = 0
 
@@ -611,7 +742,9 @@ export async function getSupplierWeeklyDetail(params: {
         documentNumber: String(docId),
         amount: Math.round(s.amount),
         units: Math.round(s.units),
+        skuCount: s.skus.size,
         productsSummary: uniqueSkuPreview(s.skus).productsSummary,
+        sourceIds: [String(docId)],
         kind,
         customerName: null
       })
@@ -619,7 +752,7 @@ export async function getSupplierWeeklyDetail(params: {
   }
 
   const invoiceIds = docs5.map(d => d.bsale_id)
-  const ncIds = docsNc.map(d => d.bsale_id)
+  const ncIds = docsNc.map(d => d.bsale_id).filter(id => !weeklyExcludedNcIds.has(id))
   const docsById = new Map(docs5.map(d => [d.bsale_id, d]))
   const ncDocsById = new Map(docsNc.map(d => [d.bsale_id, d]))
 
@@ -657,7 +790,7 @@ export async function getSupplierWeeklyDetail(params: {
     const typedReceptions = (receptions || []) as ReceptionRow[]
     const receptionById = new Map(typedReceptions.map(row => [Number(row.bsale_id || 0), row]))
 
-    const docSummaryMap = new Map<number, { doc: ReceptionRow; amount: number; units: number; skus: Set<string> }>()
+    const docGroupMap = new Map<string, { date: string; document: string; documentNumber: string; amount: number; units: number; skus: Set<string>; sourceIds: string[]; kind: 'PURCHASE' | 'CREDIT_NOTE' }>()
 
     for (const detail of typedReceptionDetails) {
       const receptionId = Number(detail.bsale_reception_id || 0)
@@ -674,27 +807,35 @@ export async function getSupplierWeeklyDetail(params: {
       tp.units += Math.abs(qty)
       tp.amount += Math.abs(amount)
 
-      if (!docSummaryMap.has(receptionId)) {
-        docSummaryMap.set(receptionId, { doc: header, amount: 0, units: 0, skus: new Set() })
+      const docNumber = String(header.document_number || '').trim()
+      const docName = String(header.document || 'Sin Doc')
+      const docKey = docNumber || `reception-${receptionId}`
+      const date = String(header.raw_admission_date || String(header.admission_date || '').slice(0, 10) || '')
+      const kind = purchaseSign < 0 ? 'CREDIT_NOTE' : 'PURCHASE'
+
+      if (!docGroupMap.has(docKey)) {
+        docGroupMap.set(docKey, { date, document: docName, documentNumber: docNumber, amount: 0, units: 0, skus: new Set(), sourceIds: [], kind })
       }
-      const s = docSummaryMap.get(receptionId)!
-      s.amount += amount
-      s.units += qty
-      s.skus.add(sku)
+      const g = docGroupMap.get(docKey)!
+      g.amount += amount
+      g.units += qty
+      g.skus.add(sku)
+      if (!g.sourceIds.includes(String(receptionId))) g.sourceIds.push(String(receptionId))
     }
 
-    for (const [receptionId, s] of docSummaryMap.entries()) {
-      if (s.amount === 0 && s.units === 0) continue
-      const date = String(s.doc.raw_admission_date || String(s.doc.admission_date || '').slice(0, 10) || '')
+    for (const [docKey, g] of docGroupMap.entries()) {
+      if (g.amount === 0 && g.units === 0) continue
       purchaseDocuments.push({
-        id: `purchase-${receptionId}`,
-        date,
-        document: String(s.doc.document || 'Sin Doc'),
-        documentNumber: String(s.doc.document_number || '').trim(),
-        amount: Math.round(s.amount),
-        units: Math.round(s.units),
-        productsSummary: uniqueSkuPreview(s.skus).productsSummary,
-        kind: 'PURCHASE'
+        id: `purchase:${g.sourceIds.join(',')}`,
+        date: g.date,
+        document: g.document,
+        documentNumber: g.documentNumber,
+        amount: Math.round(g.amount),
+        units: Math.round(g.units),
+        skuCount: g.skus.size,
+        productsSummary: uniqueSkuPreview(g.skus).productsSummary,
+        sourceIds: g.sourceIds,
+        kind: g.kind
       })
     }
   }
@@ -723,62 +864,114 @@ export async function getSupplierWeeklyDetail(params: {
 type BsaleReceptionDetail = { variant_code: string; quantity: number; cost: number }
 type BsaleDocumentDetail = { variant_code: string; quantity: number; net_amount: number; total_amount: number }
 type SupplierMappingRow = { sku: string; supplier_id: string }
+type BsaleReceptionHeaderRow = { bsale_id: number; raw_admission_date: string | null; document: string | null; document_number: string | null }
+type BsaleReceptionDetailRow = { bsale_reception_id: number; variant_code: string; quantity: number; cost: number }
+type BsaleDocumentRow = { id: number; emission_date: string | null; document_type_id: number; number: string | null; client_organization: string | null }
+type BsaleDocumentDetailRow = { bsale_document_id: number; variant_code: string; quantity: number; net_amount: number; total_amount: number }
 
 export async function getSupplierDocumentDetail({ supplierId, documentKind, documentId }: { supplierId: string; documentKind: 'PURCHASE' | 'SALE' | 'CREDIT_NOTE'; documentId: string }): Promise<SupplierDocumentDetail | null> {
   const { companyId } = await getAuthedCompany()
 
-  const { data: children } = await adqQuery('product_suppliers').select('id').eq('parent_supplier_id', supplierId).eq('company_id', companyId)
+  const { data: children } = await adqQuery('suppliers').select('id').eq('company_id', companyId).eq('parent_supplier_id', supplierId).eq('is_active', true)
   const childIds: string[] = [supplierId]
   if (children?.length) childIds.push(...(children as { id: string }[]).map((c) => c.id))
 
-  if (documentKind === 'PURCHASE') {
-    const { data } = await integQuery('bsale_receptions').select('id,raw_admission_date,document,document_number,bsale_reception_details(id,variant_code,quantity,cost)').eq('company_id', companyId).eq('id', Number(documentId)).single()
-    const reception = data as unknown as { raw_admission_date: string; document: string; document_number: string; bsale_reception_details: BsaleReceptionDetail[] }
-    if (!reception) return null
+  if (documentKind === 'PURCHASE' || documentKind === 'CREDIT_NOTE') {
+    // documentId format: "purchase:id1,id2,..." where ids are bsale_receptions.bsale_id
+    const prefix = 'purchase:'
+    const idStr = documentId.startsWith(prefix) ? documentId.slice(prefix.length) : documentId
+    const receptionIds = idStr.split(',').filter(Boolean).map(Number).filter(id => id > 0)
 
-    const sign = getPurchaseReceptionSign(reception)
+    if (receptionIds.length === 0) return null
 
-    const skus = (reception.bsale_reception_details || []).map((d) => d.variant_code).filter(Boolean)
-    const { data: mapData } = await adqQuery('product_supplier_mappings').select('sku,supplier_id').eq('company_id', companyId).in('sku', skus)
+    const { data: rawReceptions } = await integQuery('bsale_receptions')
+      .select('bsale_id,raw_admission_date,document,document_number')
+      .eq('company_id', companyId)
+      .in('bsale_id', receptionIds)
+    const receptions = (rawReceptions || []) as BsaleReceptionHeaderRow[]
+    if (receptions.length === 0) return null
+
+    const sign = getPurchaseReceptionSign(receptions[0])
+
+    const { data: rawDetails } = await integQuery('bsale_reception_details')
+      .select('bsale_reception_id,variant_code,quantity,cost')
+      .eq('company_id', companyId)
+      .in('bsale_reception_id', receptionIds)
+    const repDetails = (rawDetails || []) as BsaleReceptionDetailRow[]
+
+    const allSkus = [...new Set(repDetails.map(d => d.variant_code).filter(Boolean))]
+    const { data: mapData } = await adqQuery('product_supplier_mappings').select('sku,supplier_id').eq('company_id', companyId).in('sku', allSkus as string[])
     const mappings = mapData as unknown as SupplierMappingRow[]
+    const mappedSkus = new Set((mappings || []).filter(m => childIds.includes(m.supplier_id)).map(m => m.sku))
+
+    // Look up product descriptions for the mapped SKUs
+    const skuArr = [...mappedSkus]
+    const prodDescMap = new Map<string, string>()
+    for (const skuChunk of chunkArray(skuArr, 150)) {
+      const { data: rawProds } = skuChunk.length
+        ? await adqQuery('products').select('sku,description').or(`company_id.is.null,company_id.eq.${companyId}`).in('sku', skuChunk)
+        : { data: [] }
+      const products = (rawProds || []) as { sku: string; description: string | null }[]
+      for (const p of products) {
+        if (p.sku) prodDescMap.set(p.sku, p.description || p.sku)
+      }
+    }
 
     let totalAmount = 0
     let totalUnits = 0
-    const lines: SupplierDocumentLineDetail[] = []
+    const linesMap = new Map<string, { sku: string; quantity: number; unitAmount: number; totalAmount: number }>()
 
-    for (const line of (reception.bsale_reception_details || [])) {
-      const mapping = mappings?.find((m) => m.sku === line.variant_code && childIds.includes(m.supplier_id))
-      if (mapping) {
-        const lineTotal = line.quantity * line.cost * sign
-        totalAmount += lineTotal
-        totalUnits += line.quantity
-        lines.push({
-          sku: line.variant_code,
-          description: line.variant_code,
-          quantity: line.quantity,
-          unitAmount: line.cost,
-          totalAmount: lineTotal,
-          kind: sign === -1 ? 'CREDIT_NOTE' : 'PURCHASE'
-        })
+    for (const line of repDetails) {
+      if (!mappedSkus.has(line.variant_code)) continue
+      const key = `${line.variant_code}|${line.cost}`
+      const lineTotal = line.quantity * line.cost * sign
+      if (linesMap.has(key)) {
+        const existing = linesMap.get(key)!
+        existing.quantity += line.quantity
+        existing.totalAmount += lineTotal
+      } else {
+        linesMap.set(key, { sku: line.variant_code, quantity: line.quantity, unitAmount: line.cost, totalAmount: lineTotal })
       }
+      totalUnits += line.quantity
+    }
+
+    const lines: SupplierDocumentLineDetail[] = []
+    for (const l of linesMap.values()) {
+      totalAmount += l.totalAmount
+      lines.push({
+        sku: l.sku,
+        description: prodDescMap.get(l.sku) || l.sku,
+        quantity: Math.round(l.quantity),
+        unitAmount: l.unitAmount,
+        totalAmount: Math.round(l.totalAmount),
+        kind: sign === -1 ? 'CREDIT_NOTE' : 'PURCHASE'
+      })
     }
 
     if (lines.length === 0) return null
     return {
       id: documentId,
-      date: String(reception.raw_admission_date || ''),
-      document: String(reception.document || 'Recepción'),
-      documentNumber: String(reception.document_number || documentId),
+      date: String(receptions[0].raw_admission_date || ''),
+      document: String(receptions[0].document || 'Recepción'),
+      documentNumber: String(receptions[0].document_number || ''),
       totalAmount: Math.round(totalAmount),
-      units: totalUnits,
+      units: Math.round(totalUnits),
+      skuCount: lines.length,
+      sourceIds: receptionIds.map(String),
       lines
     }
   } else {
-    const { data } = await integQuery('bsale_documents').select('id,emission_date,document_type_id,number,client_organization,bsale_document_details(id,variant_code,quantity,net_amount,total_amount)').eq('company_id', companyId).eq('id', Number(documentId)).single()
-    const doc = data as unknown as { emission_date: string; number: string; client_organization: string; bsale_document_details: BsaleDocumentDetail[] }
+    const { data: rawDoc } = await integQuery('bsale_documents').select('id,emission_date,document_type_id,number,client_organization').eq('company_id', companyId).eq('id', Number(documentId)).single()
+    const doc = rawDoc as BsaleDocumentRow | null
     if (!doc) return null
 
-    const skus = (doc.bsale_document_details || []).map((d) => d.variant_code).filter(Boolean)
+    const { data: rawDocDetails } = await integQuery('bsale_document_details')
+      .select('bsale_document_id,variant_code,quantity,net_amount,total_amount')
+      .eq('company_id', companyId)
+      .eq('bsale_document_id', Number(documentId))
+    const docDetails = (rawDocDetails || []) as BsaleDocumentDetailRow[]
+
+    const skus = docDetails.map(d => d.variant_code).filter(Boolean)
     const { data: mapData } = await adqQuery('product_supplier_mappings').select('sku,supplier_id').eq('company_id', companyId).in('sku', skus)
     const mappings = mapData as unknown as MappingRow[]
 
@@ -786,7 +979,7 @@ export async function getSupplierDocumentDetail({ supplierId, documentKind, docu
     let totalUnits = 0
     const lines: SupplierDocumentLineDetail[] = []
 
-    for (const line of (doc.bsale_document_details || [])) {
+    for (const line of docDetails) {
       const mapping = mappings?.find((m) => m.sku === line.variant_code && childIds.includes(m.supplier_id))
       if (mapping) {
         totalAmount += line.total_amount
@@ -811,6 +1004,8 @@ export async function getSupplierDocumentDetail({ supplierId, documentKind, docu
       customerName: String(doc.client_organization || 'Sin Cliente'),
       totalAmount: Math.round(totalAmount),
       units: totalUnits,
+      skuCount: lines.length,
+      sourceIds: [String(documentId)],
       lines
     }
   }

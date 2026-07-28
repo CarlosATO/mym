@@ -61,9 +61,10 @@ export type SupplierPurchaseSales360 = {
   kpis: {
     purchases_amount: number | null
     sales_amount: number
-    estimated_margin: number
+    estimated_margin: number | null
+    estimated_margin_pct: number | null
     stock_value: number
-    last_purchase_date: string | null
+    total_estimated_cost: number
   }
   hasReceptionData: boolean
   weekly: SupplierWeeklyPoint[]
@@ -78,7 +79,9 @@ export type SupplierWeeklyDocumentDetail = {
   documentNumber: string
   amount: number
   units: number
+  skuCount: number
   productsSummary: string
+  sourceIds: string[]
   kind: 'PURCHASE' | 'SALE' | 'CREDIT_NOTE'
   customerName?: string | null
 }
@@ -120,5 +123,7 @@ export type SupplierDocumentDetail = {
   supplierName?: string
   totalAmount: number
   units: number
+  skuCount: number
+  sourceIds: string[]
   lines: SupplierDocumentLineDetail[]
 }

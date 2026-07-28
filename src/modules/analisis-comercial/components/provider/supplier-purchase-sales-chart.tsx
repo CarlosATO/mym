@@ -1,15 +1,18 @@
 'use client'
 
-import type { SupplierWeeklyPoint, SupplierWeeklyDetail, SupplierDocumentDetail } from '@/app/actions/comercial/analysis/types'
-import { getSupplierWeeklyDetail, getSupplierDocumentDetail } from '@/app/actions/comercial/analysis/suppliers'
+import type { SupplierWeeklyPoint, SupplierWeeklyDetail } from '@/app/actions/comercial/analysis/types'
+import { getSupplierWeeklyDetail } from '@/app/actions/comercial/analysis/suppliers'
+import { SupplierDocumentModal } from './supplier-document-modal'
 import { useMemo, useState, useTransition, useEffect } from 'react'
 
 const MONTHS_SHORT = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
 
 function formatCompactMoney(value: number) {
-  if (value >= 1000000) return '$' + (value / 1000000).toFixed(1).replace('.0', '') + 'M'
-  if (value >= 1000) return '$' + Math.round(value / 1000) + 'K'
-  return '$' + value
+  const abs = Math.abs(value)
+  const sign = value < 0 ? '-' : ''
+  if (abs >= 1000000) return sign + '$' + (abs / 1000000).toFixed(1).replace('.0', '') + 'M'
+  if (abs >= 1000) return sign + '$' + Math.round(abs / 1000) + 'K'
+  return sign + '$' + abs
 }
 
 function money(value: number) {
@@ -46,122 +49,113 @@ function getMonthBoundaries(weekly: SupplierWeeklyPoint[]) {
 const baselineY_pct = 90
 const usableHeight_pct = 80
 
-export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionData }: { supplierId: string; weekly: SupplierWeeklyPoint[]; hasReceptionData: boolean }) {
-  const [salesGrowth, setSalesGrowth] = useState<number>(0)
-  const [purchasesGrowth, setPurchasesGrowth] = useState<number>(0)
+export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionData, totalEstimatedCost }: { supplierId: string; weekly: SupplierWeeklyPoint[]; hasReceptionData: boolean; totalEstimatedCost: number }) {
+  const [tab, setTab] = useState<'profitability' | 'supply'>('profitability')
+  const isProfit = tab === 'profitability'
+  const hasCostData = totalEstimatedCost > 0
   
-  const { fullSeries, forecastStartIndex, historicalMaxPurchases, historicalMaxSales, peakSalesWeek, peakPurchasesWeek } = useMemo(() => {
+  const { fullSeries, forecastStartIndex, historicalMaxPurchases, historicalMaxSales, peakSalesWeek, peakPurchasesWeek, peakMarginWeek, confidence, avgSales, avgPurchases, avgMargin } = useMemo(() => {
     let peakSales = -1
     let peakSalesW: SupplierWeeklyPoint | null = null as SupplierWeeklyPoint | null
     let peakPurchases = -1
     let peakPurchasesW: SupplierWeeklyPoint | null = null as SupplierWeeklyPoint | null
-    
+    let peakMargin = -Infinity
+    let peakMarginW: SupplierWeeklyPoint | null = null as SupplierWeeklyPoint | null
+
     weekly.forEach(w => {
+      const m = (w.margin ?? w.sales - w.purchases)
       if (w.sales > peakSales) { peakSales = w.sales; peakSalesW = w; }
       if (w.purchases > peakPurchases) { peakPurchases = w.purchases; peakPurchasesW = w; }
+      if (m > peakMargin) { peakMargin = m; peakMarginW = w; }
     })
     
     const recent = weekly.slice(-8)
-    const avgSales = recent.length ? recent.reduce((sum, w) => sum + w.sales, 0) / recent.length : 0
-    const avgPurchases = recent.length ? recent.reduce((sum, w) => sum + w.purchases, 0) / recent.length : 0
+    const recentCount = recent.length
+    const avgSales = recentCount ? recent.reduce((sum, w) => sum + w.sales, 0) / recentCount : 0
+    const avgPurchases = recentCount ? recent.reduce((sum, w) => sum + w.purchases, 0) / recentCount : 0
+    const avgMargin = recentCount ? recent.reduce((sum, w) => sum + (w.margin ?? w.sales - w.purchases), 0) / recentCount : 0
     
     const projected: (SupplierWeeklyPoint & { isProjection: boolean })[] = []
     if (weekly.length > 0) {
       const lastWeek = new Date(weekly[weekly.length - 1].weekStart + 'T00:00:00Z')
-      for (let i = 1; i <= 12; i++) {
+      for (let i = 1; i <= 13; i++) {
         const nextStart = new Date(lastWeek.getTime() + i * 7 * 24 * 60 * 60 * 1000)
         const nextEnd = new Date(nextStart.getTime() + 6 * 24 * 60 * 60 * 1000)
         const s = nextStart.toISOString().slice(0, 10)
         const e = nextEnd.toISOString().slice(0, 10)
-        
-        const mSales = avgSales * (1 + salesGrowth / 100)
-        const mPurchases = avgPurchases * (1 + purchasesGrowth / 100)
-        
         projected.push({
           label: `${shortDate(s)} - ${shortDate(e)}`,
-          weekStart: s,
-          weekEnd: e,
-          sales: mSales,
-          purchases: mPurchases,
-          margin: mSales - mPurchases,
+          weekStart: s, weekEnd: e,
+          sales: avgSales, purchases: avgPurchases,
+          margin: avgMargin,
           isProjection: true
         })
       }
     }
     
+    let confidence: 'alta' | 'media' | 'baja' = 'baja'
+    if (recentCount >= 8) confidence = 'alta'
+    else if (recentCount >= 4) confidence = 'media'
+    if (recentCount > 0) {
+      const totalSales = recent.reduce((s, w) => s + w.sales, 0)
+      const totalPurchases = recent.reduce((s, w) => s + w.purchases, 0)
+      const maxSalesShare = totalSales > 0 ? Math.max(...recent.map(w => w.sales / totalSales)) : 0
+      const maxPurchasesShare = totalPurchases > 0 ? Math.max(...recent.map(w => w.purchases / totalPurchases)) : 0
+      if (Math.max(maxSalesShare, maxPurchasesShare) > 0.6) {
+        if (confidence === 'alta') confidence = 'media'
+        else if (confidence === 'media') confidence = 'baja'
+      }
+    }
+
     return {
       fullSeries: [...weekly.map(w => ({ ...w, isProjection: false })), ...projected],
       forecastStartIndex: weekly.length,
-      historicalMaxPurchases: peakPurchases,
-      historicalMaxSales: peakSales,
-      peakSalesWeek: peakSalesW,
-      peakPurchasesWeek: peakPurchasesW
+      peakSalesWeek: peakSalesW, peakPurchasesWeek: peakPurchasesW, peakMarginWeek: peakMarginW,
+      confidence, avgSales, avgPurchases, avgMargin,
+      historicalMaxPurchases: peakPurchases, historicalMaxSales: peakSales
     }
-  }, [weekly, salesGrowth, purchasesGrowth])
+  }, [weekly])
   
-  const maxValue = Math.max(1, ...fullSeries.flatMap((item) => [item.purchases, item.sales, item.margin || 0]))
+  const maxValue = Math.max(1, ...fullSeries.flatMap((item) => isProfit
+    ? [item.sales, Math.max(0, item.margin ?? 0)]
+    : [item.purchases, item.sales, item.margin || 0]))
   const n = fullSeries.length
 
-  const [selectedWeekKey, setSelectedWeekKey] = useState<string | null>(null)
   const [cache, setCache] = useState<Record<string, SupplierWeeklyDetail>>({})
-  const [error, setError] = useState<string | null>(null)
   const [hoveredPoint, setHoveredPoint] = useState<(SupplierWeeklyPoint & { isProjection: boolean; x: number }) | null>(null)
-
-  const [documentDetail, setDocumentDetail] = useState<SupplierDocumentDetail | null>(null)
-  const [docCache, setDocCache] = useState<Record<string, SupplierDocumentDetail>>({})
-  const [loadingDocId, setLoadingDocId] = useState<string | null>(null)
+  const [modalOpen, setModalOpen] = useState(false)
+  const [modalData, setModalData] = useState<SupplierWeeklyDetail | null>(null)
+  const [modalType, setModalType] = useState<'PURCHASE' | 'SALE'>('PURCHASE')
+  const [loadingModal, setLoadingModal] = useState(false)
 
   const [showMargin, setShowMargin] = useState(false)
-  const [isPending, startTransition] = useTransition()
+  const [, startTransition] = useTransition()
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setSelectedWeekKey(null)
-  }, [supplierId])
-
-  const handleSelectWeek = (w: SupplierWeeklyPoint & { isProjection?: boolean }) => {
+  const handleOpenModal = (w: SupplierWeeklyPoint & { isProjection?: boolean }, type: 'PURCHASE' | 'SALE') => {
     if (w.isProjection) return
-    const key = w.weekStart
     const cacheKey = `${supplierId}:${w.weekStart}:${w.weekEnd}`
+    const cached = cache[cacheKey]
+    setModalType(type)
 
-    if (selectedWeekKey === key) {
-      setSelectedWeekKey(null)
+    if (cached) {
+      setModalData(cached)
+      setModalOpen(true)
       return
     }
-    setSelectedWeekKey(key)
-    if (cache[cacheKey]) return
 
-    setError(null)
+    setLoadingModal(true)
     startTransition(() => {
       getSupplierWeeklyDetail({ supplierId, dateFrom: w.weekStart, dateTo: w.weekEnd })
         .then((detail) => {
           setCache((prev) => ({ ...prev, [cacheKey]: detail }))
+          setModalData(detail)
+          setModalOpen(true)
         })
         .catch((err) => {
-          setError(err instanceof Error ? err.message : 'Error al cargar detalle semanal')
-        })
-    })
-  }
-
-  const handleDocumentDoubleClick = (docId: string, kind: 'PURCHASE' | 'SALE' | 'CREDIT_NOTE') => {
-    const cacheKey = `${supplierId}:${kind}:${docId}`
-    if (docCache[cacheKey]) {
-      setDocumentDetail(docCache[cacheKey])
-      return
-    }
-
-    setLoadingDocId(docId)
-    startTransition(() => {
-      getSupplierDocumentDetail({ supplierId, documentKind: kind, documentId: docId })
-        .then((res) => {
-          if (res) setDocCache(prev => ({ ...prev, [cacheKey]: res }))
-          setDocumentDetail(res)
-        })
-        .catch(() => {
-          alert('Error al cargar detalle del documento.')
+          alert(err instanceof Error ? err.message : 'Error al cargar detalle semanal')
         })
         .finally(() => {
-          setLoadingDocId(null)
+          setLoadingModal(false)
         })
     })
   }
@@ -179,19 +173,19 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
 
       let showLabel = false
       if (!w.isProjection) {
-        if (n <= 6 && (w.purchases > 0 || w.sales > 0)) showLabel = true
+        if (n <= 6 && (w.sales > 0 || (isProfit ? false : w.purchases > 0))) showLabel = true
         else if (n > 6) {
-          if (w.purchases === historicalMaxPurchases && w.purchases > 0) showLabel = true
           if (w.sales === historicalMaxSales && w.sales > 0) showLabel = true
+          if (!isProfit && w.purchases === historicalMaxPurchases && w.purchases > 0) showLabel = true
         }
       }
 
       return { ...w, x, time, index: i, showLabel }
     })
-  }, [fullSeries, n, historicalMaxPurchases, historicalMaxSales])
+  }, [fullSeries, n, historicalMaxPurchases, historicalMaxSales, isProfit])
   
-  const { histPurchaseLine, projPurchaseLine, histSalesLine, projSalesLine } = useMemo(() => {
-    if (!pointsWithX.length) return { histPurchaseLine: '', projPurchaseLine: '', histSalesLine: '', projSalesLine: '' }
+  const { histPurchaseLine, projPurchaseLine, histSalesLine, projSalesLine, histCostLine, projCostLine, histMarginLine } = useMemo(() => {
+    if (!pointsWithX.length) return { histPurchaseLine: '', projPurchaseLine: '', histSalesLine: '', projSalesLine: '', histCostLine: '', projCostLine: '', histMarginLine: '' }
     
     const hist = pointsWithX.filter(p => !p.isProjection)
     const proj = pointsWithX.filter(p => p.isProjection)
@@ -202,57 +196,71 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
     
     const pLine = (pts: typeof pointsWithX) => pts.map((p) => `${p.x.toFixed(2)},${(baselineY_pct - (p.purchases / maxValue) * usableHeight_pct).toFixed(2)}`).join(' ')
     const sLine = (pts: typeof pointsWithX) => pts.map((p) => `${p.x.toFixed(2)},${(baselineY_pct - (p.sales / maxValue) * usableHeight_pct).toFixed(2)}`).join(' ')
+    const cLine = (pts: typeof pointsWithX) => pts.map((p) => `${p.x.toFixed(2)},${(baselineY_pct - ((p.sales - (p.margin ?? 0)) / maxValue) * usableHeight_pct).toFixed(2)}`).join(' ')
+    const mLines = (pts: typeof pointsWithX) => pts.map((p) => `${p.x.toFixed(2)},${(baselineY_pct - (Math.max(0, p.margin ?? 0) / maxValue) * usableHeight_pct).toFixed(2)}`).join(' ')
     
     return {
-      histPurchaseLine: pLine(hist),
-      projPurchaseLine: pLine(proj),
-      histSalesLine: sLine(hist),
-      projSalesLine: sLine(proj)
+      histPurchaseLine: pLine(hist), projPurchaseLine: pLine(proj),
+      histSalesLine: sLine(hist), projSalesLine: sLine(proj),
+      histCostLine: cLine(hist), projCostLine: cLine(proj),
+      histMarginLine: mLines(hist)
     }
   }, [pointsWithX, maxValue])
 
   const monthBoundaries = useMemo(() => getMonthBoundaries(fullSeries), [fullSeries])
-
-  const selectedWeek = useMemo(() => weekly.find(w => w.weekStart === selectedWeekKey), [weekly, selectedWeekKey])
-  const cacheKey = selectedWeek ? `${supplierId}:${selectedWeek.weekStart}:${selectedWeek.weekEnd}` : null
-  const detail = cacheKey ? cache[cacheKey] : null
-  const loadingDetail = isPending && selectedWeekKey && !detail
 
   const forecastStartPct = pointsWithX.length > forecastStartIndex ? pointsWithX[forecastStartIndex].x : 100
 
   return (
     <section className="rounded-xl border border-theme-border bg-theme-surface/80 shadow-sm relative">
       <div className="p-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between border-b border-theme-border/50">
-        <div>
-          <h3 className="text-base font-bold text-theme-text">Compra vs Venta Semanal</h3>
-          <p className="mt-1 text-xs text-theme-text-muted/80">
-            {hasReceptionData
-              ? 'Haz clic en una semana histórica para ver el detalle de productos y documentos.'
-              : 'Ventas semanales disponibles. Compras en 0 porque recepciones Bsale aún no están sincronizadas.'}
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <button onClick={() => setTab('profitability')} className={`px-3 py-1 text-xs font-bold rounded-md transition-colors ${isProfit ? 'bg-theme-accent/15 text-theme-accent' : 'text-theme-text-muted hover:text-theme-text bg-theme-surface/50'}`}>Rentabilidad semanal</button>
+            <button onClick={() => setTab('supply')} className={`px-3 py-1 text-xs font-bold rounded-md transition-colors ${!isProfit ? 'bg-theme-accent/15 text-theme-accent' : 'text-theme-text-muted hover:text-theme-text bg-theme-surface/50'}`}>Abastecimiento</button>
+          </div>
+          <p className="text-xs text-theme-text-muted/80">
+            {isProfit
+              ? hasCostData
+                ? 'Ventas vs costo vendido estimado. Margen = venta neta − costo. No incluye gastos operacionales.'
+                : 'Ventas semanales. Margen no calculable: faltan costos para los SKUs vendidos.'
+              : hasReceptionData
+                ? 'Compras recepcionadas vs ventas. Haz clic en una semana histórica para ver documentos.'
+                : 'Ventas semanales disponibles. Compras en 0 porque recepciones Bsale aún no están sincronizadas.'}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-4 text-xs font-medium text-theme-text-muted flex-wrap justify-end">
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-full bg-blue-500 dark:bg-blue-400" />
-            Compras recepcionadas netas
-          </span>
-          <span className="inline-flex items-center gap-1.5 opacity-60">
-            <svg width="12" height="12" viewBox="0 0 24 24" className="fill-none stroke-blue-500 stroke-2"><polygon points="12 2 22 20 2 20" /></svg>
-            Compras (Proyectado)
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 dark:bg-emerald-400" />
-            Ventas (Histórico)
-          </span>
-          <span className="inline-flex items-center gap-1.5 opacity-60">
-            <svg width="12" height="12" viewBox="0 0 24 24" className="fill-none stroke-emerald-500 stroke-2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg>
-            Ventas (Proyectado)
-          </span>
-          <label className="inline-flex items-center gap-1.5 cursor-pointer hover:text-theme-text transition-colors">
-            <input type="checkbox" checked={showMargin} onChange={(e) => setShowMargin(e.target.checked)} className="rounded border-theme-border text-emerald-500 focus:ring-emerald-500 bg-transparent" />
-            <span className="h-3 w-3 rounded-sm bg-emerald-500/30 border border-emerald-500/50" />
-            <span title="Margen estimado según costo registrado. No incluye gastos operacionales.">Margen estimado</span>
-          </label>
+          {isProfit ? (
+            <>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 dark:bg-emerald-400" />
+                Ventas netas
+              </span>
+              {hasCostData && (
+                <>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="h-2.5 w-2.5 rounded-full bg-amber-500 dark:bg-amber-400" />
+                    Costo vendido est.
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="h-2.5 w-2.5 rounded-full bg-blue-500 dark:bg-blue-400" />
+                    Margen bruto
+                  </span>
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-blue-500 dark:bg-blue-400" />
+                Compras recepcionadas netas
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 dark:bg-emerald-400" />
+                Ventas
+              </span>
+            </>
+          )}
         </div>
       </div>
 
@@ -263,30 +271,44 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
             <div className="mt-1 text-xs text-theme-text-muted">{peakSalesWeek ? `${shortDate(peakSalesWeek.weekStart)} – ${shortDate(peakSalesWeek.weekEnd)}` : '—'}</div>
             <div className="mt-1 text-lg font-bold text-theme-text">{peakSalesWeek ? formatCompactMoney(peakSalesWeek.sales) : '$0'}</div>
           </div>
-          <div className="rounded-lg border border-theme-border/50 bg-theme-surface p-3 min-w-[140px]">
-            <div className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">Semana pico compra</div>
-            <div className="mt-1 text-xs text-theme-text-muted">{peakPurchasesWeek ? `${shortDate(peakPurchasesWeek.weekStart)} – ${shortDate(peakPurchasesWeek.weekEnd)}` : '—'}</div>
-            <div className="mt-1 text-lg font-bold text-theme-text">{peakPurchasesWeek ? formatCompactMoney(peakPurchasesWeek.purchases) : '$0'}</div>
-          </div>
+          {isProfit ? (
+            <div className="rounded-lg border border-theme-border/50 bg-theme-surface p-3 min-w-[140px]">
+              <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider">Semana pico margen</div>
+              <div className="mt-1 text-xs text-theme-text-muted">{peakMarginWeek ? `${shortDate(peakMarginWeek.weekStart)} – ${shortDate(peakMarginWeek.weekEnd)}` : '—'}</div>
+              <div className="mt-1 text-lg font-bold text-theme-text">{peakMarginWeek ? formatCompactMoney((peakMarginWeek.margin ?? peakMarginWeek.sales - peakMarginWeek.purchases)) : '$0'}</div>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-theme-border/50 bg-theme-surface p-3 min-w-[140px]">
+              <div className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">Semana pico compra</div>
+              <div className="mt-1 text-xs text-theme-text-muted">{peakPurchasesWeek ? `${shortDate(peakPurchasesWeek.weekStart)} – ${shortDate(peakPurchasesWeek.weekEnd)}` : '—'}</div>
+              <div className="mt-1 text-lg font-bold text-theme-text">{peakPurchasesWeek ? formatCompactMoney(peakPurchasesWeek.purchases) : '$0'}</div>
+            </div>
+          )}
+          {!isProfit && (
+            <div className="rounded-lg border border-theme-border/50 bg-theme-surface p-3 min-w-[140px]">
+              <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider">Brecha compra-venta</div>
+              <div className="mt-1 text-xs text-theme-text-muted">Flujo del período</div>
+              <div className="mt-1 text-lg font-bold text-theme-text">{weekly.length > 0 ? formatCompactMoney(weekly.reduce((s, w) => s + w.purchases - w.sales, 0)) : '$0'}</div>
+            </div>
+          )}
         </div>
 
-        <div className="rounded-lg border border-theme-border bg-theme-surface shadow-sm p-3 flex flex-col sm:flex-row gap-4 items-center w-full md:w-auto">
-          <div className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider w-full sm:w-auto text-center sm:text-left">Forecast (Crecimiento %)</div>
-          <div className="flex items-center gap-6 w-full sm:w-auto justify-center">
-            <div className="flex flex-col gap-1 w-full sm:w-36">
-              <div className="flex justify-between text-[10px] font-medium">
-                <span className="text-emerald-600 dark:text-emerald-400">Ventas</span>
-                <span className="text-theme-text font-bold">{salesGrowth > 0 ? '+' : ''}{salesGrowth}%</span>
-              </div>
-              <input type="range" min="-50" max="50" step="1" value={salesGrowth} onChange={e => setSalesGrowth(Number(e.target.value))} className="w-full accent-emerald-500" />
-            </div>
-            <div className="flex flex-col gap-1 w-full sm:w-36">
-              <div className="flex justify-between text-[10px] font-medium">
-                <span className="text-blue-600 dark:text-blue-400">Compras</span>
-                <span className="text-theme-text font-bold">{purchasesGrowth > 0 ? '+' : ''}{purchasesGrowth}%</span>
-              </div>
-              <input type="range" min="-50" max="50" step="1" value={purchasesGrowth} onChange={e => setPurchasesGrowth(Number(e.target.value))} className="w-full accent-blue-500" />
-            </div>
+        <div className="rounded-lg border border-theme-border bg-theme-surface shadow-sm p-3 min-w-[180px]">
+          <div className="text-[10px] font-bold text-purple-600 dark:text-purple-400 uppercase tracking-wider">Proyección 3 meses</div>
+          <div className="mt-1 text-xs text-theme-text-muted">
+            {isProfit ? (
+              hasCostData
+                ? <><span className="font-semibold text-theme-text">Ventas:</span> {formatCompactMoney(avgSales * 13)}<span className="mx-1.5">&middot;</span><span className="font-semibold text-theme-text">Margen:</span> {formatCompactMoney(avgMargin * 13)}</>
+                : <><span className="font-semibold text-theme-text">Ventas:</span> {formatCompactMoney(avgSales * 13)}<span className="mx-1.5">&middot;</span><span className="text-theme-text-muted/60">Margen: Sin costo</span></>
+            ) : (
+              <><span className="font-semibold text-theme-text">Ventas:</span> {formatCompactMoney(avgSales * 13)}<span className="mx-1.5">&middot;</span><span className="font-semibold text-theme-text">Compras:</span> {formatCompactMoney(avgPurchases * 13)}</>
+            )}
+          </div>
+          <div className="text-[10px] mt-0.5">
+            <span className="text-theme-text-muted">Confianza: </span>
+            <span className={confidence === 'alta' ? 'text-emerald-500 font-semibold' : confidence === 'media' ? 'text-amber-500 font-semibold' : 'text-rose-500 font-semibold'}>
+              {confidence.toUpperCase()}
+            </span>
           </div>
         </div>
       </div>
@@ -334,46 +356,35 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
                   )}
 
                   <svg viewBox="0 0 100 100" preserveAspectRatio="none" x="0" y="0" width="100%" height="100%" className="overflow-visible pointer-events-none">
-                    {showMargin && pointsWithX.map(p => {
-                      const mY = baselineY_pct - (Math.max(0, p.margin || 0) / maxValue) * usableHeight_pct
-                      const barHeight = baselineY_pct - mY
-                      if (barHeight <= 0) return null
-                      return (
-                        <rect 
-                          key={p.time}
-                          x={`${p.x - 0.6}%`} y={`${mY}%`} width="1.2%" height={`${barHeight}%`}
-                          className="fill-emerald-500/20 dark:fill-emerald-400/20"
-                        />
-                      )
-                    })}
-
-                    <polyline
-                      points={histPurchaseLine}
-                      fill="none" className="stroke-blue-500 dark:stroke-blue-400" strokeWidth="3"
-                      strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke"
-                    />
-                    <polyline
-                      points={projPurchaseLine}
-                      fill="none" className="stroke-blue-500/60 dark:stroke-blue-400/60" strokeWidth="3"
-                      strokeLinecap="round" strokeLinejoin="round" strokeDasharray="6 6" vectorEffect="non-scaling-stroke"
-                    />
-                    
-                    <polyline
-                      points={histSalesLine}
-                      fill="none" className="stroke-emerald-500 dark:stroke-emerald-400" strokeWidth="3"
-                      strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke"
-                    />
-                    <polyline
-                      points={projSalesLine}
-                      fill="none" className="stroke-emerald-500/60 dark:stroke-emerald-400/60" strokeWidth="3"
-                      strokeLinecap="round" strokeLinejoin="round" strokeDasharray="6 6" vectorEffect="non-scaling-stroke"
-                    />
+                    {isProfit ? (
+                      <>
+                        {hasCostData && pointsWithX.map(p => {
+                          const m = p.margin ?? 0
+                          if (m <= 0) return null
+                          const salesY_pct = baselineY_pct - (p.sales / maxValue) * usableHeight_pct
+                          const costY_pct = baselineY_pct - ((p.sales - m) / maxValue) * usableHeight_pct
+                          return <rect key={p.time} x={`${p.x - 0.8}%`} y={`${costY_pct}%`} width="1.6%" height={`${salesY_pct - costY_pct}%`} className="fill-blue-500/40 dark:fill-blue-400/40 pointer-events-none" />
+                        })}
+                        {hasCostData && <polyline points={histCostLine} fill="none" className="stroke-amber-500 dark:stroke-amber-400" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />}
+                        {hasCostData && <polyline points={projCostLine} fill="none" className="stroke-amber-500/60 dark:stroke-amber-400/60" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="6 6" vectorEffect="non-scaling-stroke" />}
+                        <polyline points={histSalesLine} fill="none" className="stroke-emerald-500 dark:stroke-emerald-400" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+                        <polyline points={projSalesLine} fill="none" className="stroke-emerald-500/60 dark:stroke-emerald-400/60" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="6 6" vectorEffect="non-scaling-stroke" />
+                      </>
+                    ) : (
+                      <>
+                        <polyline points={histPurchaseLine} fill="none" className="stroke-blue-500 dark:stroke-blue-400" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+                        <polyline points={projPurchaseLine} fill="none" className="stroke-blue-500/60 dark:stroke-blue-400/60" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="6 6" vectorEffect="non-scaling-stroke" />
+                        <polyline points={histSalesLine} fill="none" className="stroke-emerald-500 dark:stroke-emerald-400" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+                        <polyline points={projSalesLine} fill="none" className="stroke-emerald-500/60 dark:stroke-emerald-400/60" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="6 6" vectorEffect="non-scaling-stroke" />
+                      </>
+                    )}
                   </svg>
 
                   {pointsWithX.map((item, i) => {
                     const purchaseY = baselineY_pct - (item.purchases / maxValue) * usableHeight_pct
                     const salesY = baselineY_pct - (item.sales / maxValue) * usableHeight_pct
-                    const isSelected = selectedWeekKey === item.weekStart
+                    const marginY = baselineY_pct - (Math.max(0, item.margin ?? 0) / maxValue) * usableHeight_pct
+                    const costY = baselineY_pct - ((item.sales - (item.margin ?? 0)) / maxValue) * usableHeight_pct
                     const isHovered = hoveredPoint?.weekStart === item.weekStart
 
                     const prevX = i > 0 ? pointsWithX[i-1].x : 0
@@ -383,41 +394,52 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
                     const width = rightBound - leftBound
 
                     return (
-                      <g key={item.weekStart} className={`transition-opacity ${isSelected || isHovered ? 'opacity-100' : 'opacity-70 hover:opacity-100 group-hover/chart:opacity-50'}`}>
+                      <g key={item.weekStart} className={`transition-opacity ${isHovered ? 'opacity-100' : 'opacity-70 hover:opacity-100 group-hover/chart:opacity-50'}`}>
                         <rect
                           x={`${leftBound}%`} y="0%" width={`${width}%`} height="100%"
-                          className={`cursor-pointer transition-colors ${isSelected ? 'fill-theme-border/30' : isHovered ? 'fill-theme-border/20' : 'fill-transparent'}`}
-                          onClick={() => handleSelectWeek(item)}
+                          className={`cursor-pointer transition-colors ${isHovered ? 'fill-theme-border/20' : 'fill-transparent'}`}
+                          onDoubleClick={() => handleOpenModal(item, isProfit ? 'SALE' : 'PURCHASE')}
                           onMouseEnter={() => setHoveredPoint(item)}
                         />
 
-                        {(isSelected || isHovered) && (
+                        {isHovered && (
                           <line x1={`${item.x}%`} y1="0%" x2={`${item.x}%`} y2={`${baselineY_pct}%`} stroke="currentColor" className="text-theme-text-muted/40 pointer-events-none" strokeWidth="1px" strokeDasharray="4 4" />
                         )}
 
                         {item.isProjection ? (
+                          isProfit ? (
+                            <>
+                              <polygon points={`${item.x},${marginY - 2.5} ${item.x - 2},${marginY + 2.5} ${item.x + 2},${marginY + 2.5}`} className="fill-theme-surface stroke-blue-500/80 stroke-[2] pointer-events-none" />
+                              <polygon points={`${item.x},${salesY - 2.5} ${item.x - 2.5},${salesY - 0.7} ${item.x - 1.5},${salesY + 2} ${item.x + 1.5},${salesY + 2} ${item.x + 2.5},${salesY - 0.7}`} className="fill-theme-surface stroke-emerald-500/80 stroke-[2] pointer-events-none" />
+                            </>
+                          ) : (
+                            <>
+                              <polygon points={`${item.x},${purchaseY - 2.5} ${item.x - 2},${purchaseY + 2.5} ${item.x + 2},${purchaseY + 2.5}`} className="fill-theme-surface stroke-blue-500/80 stroke-[2] pointer-events-none" />
+                              <polygon points={`${item.x},${salesY - 2.5} ${item.x - 2.5},${salesY - 0.7} ${item.x - 1.5},${salesY + 2} ${item.x + 1.5},${salesY + 2} ${item.x + 2.5},${salesY - 0.7}`} className="fill-theme-surface stroke-emerald-500/80 stroke-[2] pointer-events-none" />
+                            </>
+                          )
+                        ) : isProfit ? (
                           <>
-                            <polygon 
-                              points={`${item.x},${purchaseY - 2.5} ${item.x - 2},${purchaseY + 2.5} ${item.x + 2},${purchaseY + 2.5}`} 
-                              className="fill-theme-surface stroke-blue-500/80 stroke-[2] pointer-events-none" 
-                            />
-                            <polygon 
-                              points={`${item.x},${salesY - 2.5} ${item.x - 2.5},${salesY - 0.7} ${item.x - 1.5},${salesY + 2} ${item.x + 1.5},${salesY + 2} ${item.x + 2.5},${salesY - 0.7}`} 
-                              className="fill-theme-surface stroke-emerald-500/80 stroke-[2] pointer-events-none" 
-                            />
+                            <circle cx={`${item.x}%`} cy={`${salesY}%`} r={isHovered ? "6" : "4.5"} className="fill-emerald-500 dark:fill-emerald-400 transition-all cursor-pointer pointer-events-none" stroke="var(--theme-surface)" strokeWidth="2" />
+                            {hasCostData && <circle cx={`${item.x}%`} cy={`${costY}%`} r={isHovered ? "5" : "3.5"} className="fill-amber-500 dark:fill-amber-400 transition-all pointer-events-none" stroke="var(--theme-surface)" strokeWidth="2" />}
+                            {hasCostData && <rect x={`${item.x - 0.6}%`} y={`${marginY}%`} width="1.2%" height={`${salesY - marginY}%`} className="fill-blue-500/40 dark:fill-blue-400/40 pointer-events-none" />}
                           </>
                         ) : (
                           <>
-                            <circle cx={`${item.x}%`} cy={`${purchaseY}%`} r={isSelected || isHovered ? "6" : "4.5"} className="fill-blue-500 dark:fill-blue-400 transition-all cursor-pointer pointer-events-none" stroke="var(--theme-surface)" strokeWidth="2" />
-                            <circle cx={`${item.x}%`} cy={`${salesY}%`} r={isSelected || isHovered ? "6" : "4.5"} className="fill-emerald-500 dark:fill-emerald-400 transition-all cursor-pointer pointer-events-none" stroke="var(--theme-surface)" strokeWidth="2" />
+                            <circle cx={`${item.x}%`} cy={`${purchaseY}%`} r={isHovered ? "6" : "4.5"} className="fill-blue-500 dark:fill-blue-400 transition-all cursor-pointer pointer-events-none" stroke="var(--theme-surface)" strokeWidth="2" />
+                            <circle cx={`${item.x}%`} cy={`${salesY}%`} r={isHovered ? "6" : "4.5"} className="fill-emerald-500 dark:fill-emerald-400 transition-all cursor-pointer pointer-events-none" stroke="var(--theme-surface)" strokeWidth="2" />
                           </>
                         )}
                         
                         {item.showLabel && !item.isProjection && (
-                          <>
-                            <text x={`${item.x}%`} y={`${purchaseY - 4}%`} textAnchor="middle" className="fill-blue-600 dark:fill-blue-400 text-[10px] font-bold pointer-events-none">{formatCompactMoney(item.purchases)}</text>
+                          isProfit ? (
                             <text x={`${item.x}%`} y={`${salesY - 4}%`} textAnchor="middle" className="fill-emerald-600 dark:fill-emerald-400 text-[10px] font-bold pointer-events-none">{formatCompactMoney(item.sales)}</text>
-                          </>
+                          ) : (
+                            <>
+                              <text x={`${item.x}%`} y={`${purchaseY - 4}%`} textAnchor="middle" className="fill-blue-600 dark:fill-blue-400 text-[10px] font-bold pointer-events-none">{formatCompactMoney(item.purchases)}</text>
+                              <text x={`${item.x}%`} y={`${salesY - 4}%`} textAnchor="middle" className="fill-emerald-600 dark:fill-emerald-400 text-[10px] font-bold pointer-events-none">{formatCompactMoney(item.sales)}</text>
+                            </>
+                          )
                         )}
                       </g>
                     )
@@ -438,28 +460,51 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
                         {hoveredPoint.isProjection && <div className="text-[10px] text-purple-600 dark:text-purple-400 mt-1 uppercase tracking-wider font-bold bg-purple-500/10 py-1 px-2 rounded">Proyección estimada</div>}
                       </div>
                       <div className="space-y-1.5 text-xs">
-                        <div className="flex justify-between items-center gap-4">
-                          <span className="flex items-center gap-1.5 text-theme-text-muted">
-                            <span className="h-2 w-2 rounded-full bg-blue-500" />
-                            Compras netas
-                          </span>
-                          <span className="font-bold text-theme-text">{formatCompactMoney(hoveredPoint.purchases)}</span>
-                        </div>
-                        <div className="flex justify-between items-center gap-4">
-                          <span className="flex items-center gap-1.5 text-theme-text-muted">
-                            <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                            Ventas
-                          </span>
-                          <span className="font-bold text-theme-text">{formatCompactMoney(hoveredPoint.sales)}</span>
-                        </div>
-                        {showMargin && (
-                          <div className="flex justify-between items-center gap-4 pt-1.5 mt-1.5 border-t border-theme-border/30">
-                            <span className="flex items-center gap-1.5 text-theme-text-muted">
-                              <span className="h-2 w-2 rounded-sm bg-emerald-500/40 border border-emerald-500/60" />
-                              Margen Est.
-                            </span>
-                            <span className="font-bold text-theme-text">{formatCompactMoney(hoveredPoint.margin || 0)}</span>
-                          </div>
+                        {isProfit ? (
+                          <>
+                            <div className="flex justify-between items-center gap-4">
+                              <span className="flex items-center gap-1.5 text-theme-text-muted">
+                                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                                Ventas netas
+                              </span>
+                              <span className="font-bold text-theme-text">{formatCompactMoney(hoveredPoint.sales)}</span>
+                            </div>
+                            {hasCostData && (
+                              <>
+                                <div className="flex justify-between items-center gap-4">
+                                  <span className="flex items-center gap-1.5 text-theme-text-muted">
+                                    <span className="h-2 w-2 rounded-full bg-amber-500" />
+                                    Costo vendido est.
+                                  </span>
+                                  <span className="font-bold text-theme-text">{formatCompactMoney(Math.max(0, hoveredPoint.sales - (hoveredPoint.margin ?? 0)))}</span>
+                                </div>
+                                <div className="flex justify-between items-center gap-4 pt-1.5 mt-1.5 border-t border-theme-border/30">
+                                  <span className="flex items-center gap-1.5 text-theme-text-muted">
+                                    <span className="h-2 w-2 rounded-full bg-blue-500" />
+                                    Margen bruto
+                                  </span>
+                                  <span className="font-bold text-theme-text">{formatCompactMoney(hoveredPoint.margin ?? 0)}</span>
+                                </div>
+                              </>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <div className="flex justify-between items-center gap-4">
+                              <span className="flex items-center gap-1.5 text-theme-text-muted">
+                                <span className="h-2 w-2 rounded-full bg-blue-500" />
+                                Compras netas
+                              </span>
+                              <span className="font-bold text-theme-text">{formatCompactMoney(hoveredPoint.purchases)}</span>
+                            </div>
+                            <div className="flex justify-between items-center gap-4">
+                              <span className="flex items-center gap-1.5 text-theme-text-muted">
+                                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                                Ventas netas
+                              </span>
+                              <span className="font-bold text-theme-text">{formatCompactMoney(hoveredPoint.sales)}</span>
+                            </div>
+                          </>
                         )}
                       </div>
                     </div>
@@ -479,172 +524,12 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
               </div>
             </div>
 
-            {selectedWeekKey && (
-              <div className="mt-6 mx-5 rounded-lg border border-theme-border bg-theme-bg/60 p-5 shadow-sm animate-in fade-in slide-in-from-top-4 duration-300">
-                {error && (
-                  <div className="mb-4 rounded border border-rose-500/20 bg-rose-500/5 px-3 py-2 text-xs text-rose-600">
-                    {error}
-                  </div>
-                )}
-
-                <div className="flex items-center justify-between border-b border-theme-border/50 pb-4">
-                  <div>
-                    <h4 className="text-sm font-bold text-theme-text">Detalle Semanal Histórico</h4>
-                    <p className="text-xs text-theme-text-muted">{weekly.find(w => w.weekStart === selectedWeekKey)?.label}</p>
-                  </div>
-                  {loadingDetail && (
-                    <div className="text-xs text-theme-text-muted flex items-center gap-2">
-                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-theme-border border-t-blue-500" />
-                      Cargando detalle...
-                    </div>
-                  )}
-                  {detail && !loadingDetail && (
-                    <button
-                      onClick={() => setSelectedWeekKey(null)}
-                      className="text-xs text-theme-text-muted hover:text-theme-text transition-colors"
-                    >
-                      Cerrar detalle ✕
-                    </button>
-                  )}
+            {loadingModal && (
+              <div className="mt-6 mx-5 rounded-lg border border-theme-border bg-theme-bg/60 p-5 shadow-sm animate-in fade-in">
+                <div className="flex items-center justify-center gap-2 text-sm text-theme-text-muted">
+                  <span className="h-5 w-5 animate-spin rounded-full border-2 border-theme-border border-t-blue-500" />
+                  Cargando detalle semanal...
                 </div>
-
-                {detail && !loadingDetail && (
-                  <div className="mt-4 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-
-                    <div className="space-y-3">
-                      <h5 className="text-xs font-bold text-blue-600 dark:text-blue-400 border-b border-theme-border/40 pb-1">
-                        Compras netas: {money(detail.purchases)}
-                      </h5>
-                      {detail.purchaseDocuments.length === 0 ? (
-                        <div className="text-xs text-theme-text-muted/60">Sin recepciones registradas.</div>
-                      ) : (
-                        <div className="space-y-2 max-h-48 overflow-y-auto pr-1 custom-scrollbar">
-                          {detail.purchaseDocuments.map(doc => (
-                            <div key={doc.id} onDoubleClick={() => handleDocumentDoubleClick(String(doc.id), 'PURCHASE')} className="text-[11px] rounded bg-theme-surface/50 p-2 border border-theme-border/30 hover:border-theme-border transition-colors cursor-pointer" title="Doble clic para ver detalle de documento">
-                              <div className="flex justify-between font-semibold text-theme-text mb-1">
-                                <span>{doc.document} {doc.documentNumber}</span>
-                                <span>{money(doc.amount)}</span>
-                              </div>
-                              <div className="text-theme-text-muted flex justify-between">
-                                <span>{doc.date}</span>
-                                <span>{doc.units} unid.</span>
-                              </div>
-                              <div className="mt-1 text-theme-text-muted/80 truncate" title={doc.productsSummary}>
-                                {doc.productsSummary}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="space-y-3">
-                      <h5 className="text-xs font-bold text-emerald-600 dark:text-emerald-400 border-b border-theme-border/40 pb-1">
-                        Ventas: {money(detail.sales)}
-                      </h5>
-                      {detail.saleDocuments.length === 0 ? (
-                        <div className="text-xs text-theme-text-muted/60">Sin facturas emitidas.</div>
-                      ) : (
-                        <div className="space-y-2 max-h-48 overflow-y-auto pr-1 custom-scrollbar">
-                          {detail.saleDocuments.map(doc => (
-                            <div key={doc.id} onDoubleClick={() => handleDocumentDoubleClick(String(doc.id), doc.kind as 'SALE' | 'CREDIT_NOTE')} className={`text-[11px] rounded bg-theme-surface/50 p-2 border border-theme-border/30 hover:border-theme-border transition-colors cursor-pointer ${doc.kind === 'CREDIT_NOTE' ? 'opacity-80' : ''}`} title="Doble clic para ver detalle de documento">
-                              <div className="flex justify-between font-semibold text-theme-text mb-1">
-                                <span className={doc.kind === 'CREDIT_NOTE' ? 'text-rose-600/80' : ''}>{doc.document} {doc.documentNumber}</span>
-                                <span className={doc.kind === 'CREDIT_NOTE' ? 'text-rose-600/80' : ''}>
-                                  {doc.kind === 'CREDIT_NOTE' ? '-' : ''}{money(Math.abs(doc.amount))}
-                                </span>
-                              </div>
-                              <div className="text-theme-text-muted flex justify-between">
-                                <span>{doc.date}</span>
-                                <span>{doc.units} unid.</span>
-                              </div>
-                              <div className="mt-1 text-theme-text-muted/80 truncate" title={doc.productsSummary}>
-                                {doc.productsSummary}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="space-y-3 md:col-span-2 lg:col-span-1">
-                      <h5 className="text-xs font-bold text-theme-text border-b border-theme-border/40 pb-1">
-                        Top Productos (Volumen)
-                      </h5>
-                      {detail.topProducts.length === 0 ? (
-                        <div className="text-xs text-theme-text-muted/60">Sin movimientos.</div>
-                      ) : (
-                        <div className="space-y-2">
-                          {detail.topProducts.map(p => (
-                            <div key={p.sku} className="text-[11px] rounded bg-theme-surface/50 p-2 border border-theme-border/30 flex items-center justify-between gap-3">
-                              <div className="min-w-0 flex-1">
-                                <div className="font-semibold text-theme-text truncate" title={p.description}>{p.description}</div>
-                                <div className="text-theme-text-muted/80 text-[10px]">{p.sku}</div>
-                              </div>
-                              <div className="text-right shrink-0">
-                                <div className="font-medium text-theme-text">{money(p.amount)}</div>
-                                <div className="text-theme-text-muted">{p.units} unid.</div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                  </div>
-                )}
-
-                {(documentDetail || loadingDocId) && (
-                  <div className="mt-6 border-t border-theme-border/50 pt-4 animate-in fade-in slide-in-from-top-2 duration-300">
-                    <div className="flex items-center justify-between mb-4">
-                      <div>
-                        <h5 className="text-sm font-bold text-theme-text">Detalle asociado a este proveedor</h5>
-                        {documentDetail && !loadingDocId && (
-                          <p className="text-xs text-theme-text-muted">{documentDetail.document} {documentDetail.documentNumber} • {shortDate(documentDetail.date)}</p>
-                        )}
-                      </div>
-                      {loadingDocId && (
-                        <div className="text-xs text-theme-text-muted flex items-center gap-2">
-                          <span className="h-4 w-4 animate-spin rounded-full border-2 border-theme-border border-t-blue-500" />
-                          Cargando documento...
-                        </div>
-                      )}
-                      {documentDetail && !loadingDocId && (
-                        <button onClick={() => setDocumentDetail(null)} className="text-xs text-theme-text-muted hover:text-theme-text transition-colors">
-                          Cerrar documento ✕
-                        </button>
-                      )}
-                    </div>
-                    {documentDetail && !loadingDocId && (
-                      <div className="overflow-x-auto rounded-lg border border-theme-border/50 bg-theme-surface/30">
-                        <table className="w-full text-left text-xs whitespace-nowrap">
-                          <thead>
-                            <tr className="border-b border-theme-border/50 bg-theme-surface/50">
-                              <th className="py-2 pl-3 pr-2 font-semibold text-theme-text">SKU</th>
-                              <th className="px-2 py-2 font-semibold text-theme-text">Cantidad</th>
-                              <th className="px-2 py-2 text-right font-semibold text-theme-text">Unitario</th>
-                              <th className="py-2 pl-2 pr-3 text-right font-semibold text-theme-text">Total</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-theme-border/30">
-                            {documentDetail.lines.map((line, idx) => (
-                              <tr key={idx} className="hover:bg-theme-surface/50">
-                                <td className="py-2 pl-3 pr-2 text-theme-text">{line.sku}</td>
-                                <td className="px-2 py-2 text-theme-text-muted">{line.quantity}</td>
-                                <td className="px-2 py-2 text-right text-theme-text-muted">{money(line.unitAmount)}</td>
-                                <td className="py-2 pl-2 pr-3 text-right font-medium text-theme-text">{money(line.totalAmount)}</td>
-                              </tr>
-                            ))}
-                            <tr className="bg-theme-surface/20">
-                              <td colSpan={3} className="py-2.5 px-3 text-right font-semibold text-theme-text text-[11px] uppercase tracking-wider">Total en Proveedor</td>
-                              <td className="py-2.5 pl-2 pr-3 text-right font-bold text-theme-text text-sm">{money(documentDetail.totalAmount)}</td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
             )}
 
@@ -653,37 +538,42 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
                 <table className="w-full text-left text-xs whitespace-nowrap">
                   <thead>
                     <tr className="border-b border-theme-border/70 bg-theme-surface/50">
-                      <th className="py-3 pl-4 pr-3 font-semibold text-theme-text">Semana Histórica</th>
-<th className="px-3 py-3 text-right font-semibold text-theme-text">Compras netas</th>
-          <th className="px-3 py-3 text-right font-semibold text-theme-text">Ventas netas</th>
-                      <th className="py-3 pl-3 pr-4 text-right font-semibold text-theme-text">Diferencia</th>
+                      <th className="py-3 pl-4 pr-3 font-semibold text-theme-text">Semana</th>
+                      {isProfit ? (
+                        hasCostData
+                          ? <><th className="px-3 py-3 text-right font-semibold text-theme-text">Ventas netas</th><th className="px-3 py-3 text-right font-semibold text-theme-text">Costo est.</th><th className="px-3 py-3 text-right font-semibold text-theme-text">Margen</th><th className="py-3 pl-3 pr-4 text-right font-semibold text-theme-text">Margen %</th></>
+                          : <><th className="px-3 py-3 text-right font-semibold text-theme-text">Ventas netas</th><th colSpan={3} className="py-3 pl-3 pr-4 text-right font-semibold text-theme-text-muted/60">Margen: Sin costo</th></>
+                      ) : (
+                        <><th className="px-3 py-3 text-right font-semibold text-theme-text">Compras netas</th><th className="px-3 py-3 text-right font-semibold text-theme-text">Ventas netas</th><th className="py-3 pl-3 pr-4 text-right font-semibold text-theme-text">Brecha</th></>
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-theme-border/30">
                     {weekly.map((w) => {
-                      const diff = w.sales - w.purchases
-                      const isPos = diff > 0
-                      const isNeg = diff < 0
-                      const isSelected = selectedWeekKey === w.weekStart
-
+                      const margin = w.margin ?? w.sales - w.purchases
+                      const cost = w.sales - margin
+                      const marginPct = w.sales > 0 ? Math.round((margin / w.sales) * 100) : null
                       return (
-                        <tr
-                          key={w.weekStart}
-                          onClick={() => handleSelectWeek(w)}
-                          className={`cursor-pointer transition-colors ${isSelected ? 'bg-theme-border/20 border-l-2 border-l-blue-500' : 'hover:bg-theme-surface/80 border-l-2 border-l-transparent'}`}
-                        >
-                          <td className={`py-2.5 pl-4 pr-3 font-medium transition-colors ${isSelected ? 'text-theme-text' : 'text-theme-text-muted/90'}`}>
-                            {w.label}
-                          </td>
-                          <td className="px-3 py-2.5 text-right tabular-nums text-theme-text-muted/90">
-                            {money(w.purchases)}
-                          </td>
-                          <td className="px-3 py-2.5 text-right font-medium tabular-nums text-theme-text">
-                            {money(w.sales)}
-                          </td>
-                          <td className={`py-2.5 pl-3 pr-4 text-right tabular-nums font-semibold ${isPos ? 'text-emerald-600 dark:text-emerald-400' : isNeg ? 'text-rose-600 dark:text-rose-400' : 'text-theme-text-muted/60'}`}>
-                            {isPos ? '+' : ''}{money(diff)}
-                          </td>
+                        <tr key={w.weekStart} onDoubleClick={() => handleOpenModal(w, isProfit ? 'SALE' : 'PURCHASE')} className="cursor-pointer hover:bg-theme-surface/80 border-l-2 border-l-transparent hover:border-l-blue-500 transition-colors">
+                          <td className="py-2.5 pl-4 pr-3 font-medium text-theme-text-muted/90">{w.label}</td>
+                          {isProfit ? (
+                            hasCostData ? (
+                              <>
+                                <td className="px-3 py-2.5 text-right font-medium tabular-nums text-theme-text">{money(w.sales)}</td>
+                                <td className="px-3 py-2.5 text-right tabular-nums text-theme-text-muted/90">{money(cost)}</td>
+                                <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${margin > 0 ? 'text-emerald-600' : margin < 0 ? 'text-rose-600' : ''}`}>{margin > 0 ? '+' : ''}{money(margin)}</td>
+                                <td className={`py-2.5 pl-3 pr-4 text-right tabular-nums ${marginPct !== null ? 'font-semibold' : ''} ${marginPct !== null && marginPct > 0 ? 'text-emerald-600' : marginPct !== null && marginPct < 0 ? 'text-rose-600' : 'text-theme-text-muted/60'}`}>{marginPct !== null ? `${marginPct}%` : '—'}</td>
+                              </>
+                            ) : (
+                              <td className="px-3 py-2.5 text-right font-medium tabular-nums text-theme-text" colSpan={4}>{money(w.sales)}</td>
+                            )
+                          ) : (
+                            <>
+                              <td className="px-3 py-2.5 text-right tabular-nums text-theme-text-muted/90">{money(w.purchases)}</td>
+                              <td className="px-3 py-2.5 text-right font-medium tabular-nums text-theme-text">{money(w.sales)}</td>
+                              <td className={`py-2.5 pl-3 pr-4 text-right tabular-nums font-semibold ${w.purchases > w.sales ? 'text-emerald-600' : w.purchases < w.sales ? 'text-rose-600' : 'text-theme-text-muted/60'}`}>{formatCompactMoney(w.purchases - w.sales)}</td>
+                            </>
+                          )}
                         </tr>
                       )
                     })}
@@ -694,6 +584,14 @@ export function SupplierPurchaseSalesChart({ supplierId, weekly, hasReceptionDat
           </>
         )}
       </div>
+
+      <SupplierDocumentModal
+        weeklyDetail={modalData}
+        modalType={modalType}
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        supplierId={supplierId}
+      />
 
       {!hasReceptionData && (
         <div className="mt-5 rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-700 dark:text-amber-400 mx-5 mb-5">

@@ -4,6 +4,7 @@ import Link from 'next/link'
 import * as LucideIcons from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useDateRange, setDateRange } from '../hooks/use-date-range'
+import { useSidebarSection } from '../hooks/use-sidebar-section'
 
 interface AnalisisTopbarProps {
   profile: { nombre: string; apellido: string; email: string; roles: { name: string } }
@@ -13,6 +14,8 @@ interface AnalisisTopbarProps {
 
 export function AnalisisTopbar({ onToggleSidebar, isSidebarExpanded }: AnalisisTopbarProps) {
   const { dateFrom, dateTo } = useDateRange()
+  const { activeSection } = useSidebarSection()
+  const showDateFilter = activeSection !== 'proveedor-360'
 
   return (
     <header className="fixed top-0 left-0 right-0 z-30 h-9 bg-theme-surface/70 backdrop-blur-md border-b border-theme-border/60">
@@ -51,31 +54,33 @@ export function AnalisisTopbar({ onToggleSidebar, isSidebarExpanded }: AnalisisT
           </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-theme-accent/8 border border-theme-accent/15">
-            <LucideIcons.CalendarDays className="h-3 w-3 text-theme-accent" />
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={e => setDateRange(e.target.value, dateTo)}
-              className="w-20 bg-transparent text-[10px] font-semibold text-theme-text-muted outline-none border-none p-0 [color-scheme:dark]"
-            />
-            <span className="text-[10px] text-theme-text-muted/50">→</span>
-            <input
-              type="date"
-              value={dateTo}
-              onChange={e => setDateRange(dateFrom, e.target.value)}
-              className="w-20 bg-transparent text-[10px] font-semibold text-theme-text-muted outline-none border-none p-0 [color-scheme:dark]"
-            />
-          </div>
+        {showDateFilter && (
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-theme-accent/8 border border-theme-accent/15">
+              <LucideIcons.CalendarDays className="h-3 w-3 text-theme-accent" />
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={e => setDateRange(e.target.value, dateTo)}
+                className="w-20 bg-transparent text-[10px] font-semibold text-theme-text-muted outline-none border-none p-0 [color-scheme:dark]"
+              />
+              <span className="text-[10px] text-theme-text-muted/50">→</span>
+              <input
+                type="date"
+                value={dateTo}
+                onChange={e => setDateRange(dateFrom, e.target.value)}
+                className="w-20 bg-transparent text-[10px] font-semibold text-theme-text-muted outline-none border-none p-0 [color-scheme:dark]"
+              />
+            </div>
 
-          <div className="w-px h-3 bg-theme-border/60 shrink-0" />
+            <div className="w-px h-3 bg-theme-border/60 shrink-0" />
 
-          <div className="flex items-center gap-1 text-[10px] text-theme-text-muted/60">
-            <LucideIcons.Database className="h-3 w-3" />
-            <span className="hidden sm:inline">FE tipo 5</span>
+            <div className="flex items-center gap-1 text-[10px] text-theme-text-muted/60">
+              <LucideIcons.Database className="h-3 w-3" />
+              <span className="hidden sm:inline">FE tipo 5</span>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </header>
   )

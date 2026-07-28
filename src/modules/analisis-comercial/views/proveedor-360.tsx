@@ -153,7 +153,7 @@ export function Proveedor360() {
               Ventas desde facturas Bsale menos notas de crédito. Compras desde recepciones Bsale menos notas de crédito, calculado por líneas/SKUs asociados al proveedor (cantidad × costo unitario). Stock desde `bsale_stock_current`.
             </div>
 
-            <SupplierPurchaseSalesChart supplierId={appliedSupplierId} weekly={data?.weekly || []} hasReceptionData={Boolean(data?.hasReceptionData)} />
+            <SupplierPurchaseSalesChart supplierId={appliedSupplierId} weekly={data?.weekly || []} hasReceptionData={Boolean(data?.hasReceptionData)} totalEstimatedCost={data?.kpis.total_estimated_cost ?? 0} />
 
             <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)]">
               <SupplierLastPurchasesTable rows={data?.lastPurchases || []} />

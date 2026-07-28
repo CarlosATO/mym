@@ -8,6 +8,7 @@ interface KpiCardProps {
   value: string
   subtitle?: string
   icon?: string
+  tooltip?: string
   trend?: 'up' | 'down' | 'neutral'
   accent?: boolean
   loading?: boolean
@@ -28,14 +29,14 @@ function KpiIcon({ iconName, accent }: { iconName: string; accent?: boolean }) {
   )
 }
 
-export function KpiCard({ title, value, subtitle, icon, accent, loading }: KpiCardProps) {
+export function KpiCard({ title, value, subtitle, icon, tooltip, accent, loading }: KpiCardProps) {
   return (
     <div className={cn(
       'rounded-xl border p-4 transition-all duration-200',
       accent
         ? 'border-theme-border-accent bg-theme-accent/8 shadow-sm'
         : 'border-theme-border bg-theme-surface/60 shadow-sm'
-    )}>
+    )} title={tooltip}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 space-y-1">
           <p className="text-[11px] font-semibold text-theme-text-muted/70 uppercase tracking-wider truncate">
