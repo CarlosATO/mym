@@ -61,7 +61,7 @@ export default async function DashboardPage() {
             <div className="w-1 h-5 rounded-full bg-theme-accent-hover" />
             <h2 className="text-sm font-semibold text-theme-text-muted uppercase tracking-wider">Módulos Disponibles</h2>
           </div>
-          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {operationalModules.map((mod) => (
               <ModuleCard key={mod.id} module={mod} />
             ))}

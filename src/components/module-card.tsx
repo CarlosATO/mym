@@ -18,8 +18,8 @@ function getIcon(iconName: string) {
 function getDisplayModule(module: Modulo) {
   if (module.route === '/dashboard/logistica' || module.code === 'logistica') {
     return {
-      name: 'WMS · Warehouse Management System',
-      description: 'Gestion de bodegas, rutas, despachos, movimientos e inventario.'
+      name: 'WMS · Logística de Bodegas',
+      description: 'Gestión de bodegas, rutas, despachos, movimientos e inventario.'
     }
   }
 
@@ -36,72 +36,57 @@ export function ModuleCard({ module, disabled }: ModuleCardProps) {
   const content = (
     <div
       className={cn(
-        'group relative overflow-hidden rounded-2xl border p-6 transition-all duration-300 h-full',
+        'group flex items-center gap-4 rounded-xl border px-4 py-3.5 transition-all duration-200',
         disabled
-          ? 'border-theme-border bg-theme-text/5 opacity-50 cursor-default'
-          : 'border-theme-border bg-theme-text/5 backdrop-blur-sm hover:border-theme-accent-hover/30 hover:bg-theme-text/10 hover:shadow-2xl hover:shadow-theme-bg/40 hover:-translate-y-1 cursor-pointer'
+          ? 'border-theme-border bg-theme-text/3 opacity-50 cursor-default'
+          : 'border-theme-border bg-theme-text/5 hover:bg-theme-text/10 hover:border-theme-border-accent hover:shadow-md hover:shadow-theme-bg/30 cursor-pointer'
       )}
     >
-      {/* Brillo de esquina al hover */}
-      {!disabled && (
-        <div className="absolute top-0 right-0 w-40 h-40 -translate-y-1/3 translate-x-1/3 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-          <div className="w-full h-full bg-gradient-to-br from-theme-accent-hover/15 to-transparent rounded-full" />
-        </div>
-      )}
+      {/* Icono */}
+      <div className={cn(
+        'flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center transition-all duration-200',
+        disabled
+          ? 'bg-theme-text/5 text-theme-text-muted/40'
+          : 'bg-theme-text/8 text-theme-text-muted group-hover:text-theme-accent group-hover:bg-theme-accent/10'
+      )}>
+        <Icon className="h-4 w-4" />
+      </div>
 
-      <div className="flex flex-col gap-5">
-        <div className={cn(
-          'w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-300',
-          disabled
-            ? 'bg-theme-text/5 text-theme-text-muted'
-            : 'bg-gradient-to-br from-theme-accent-hover to-theme-accent text-white shadow-lg shadow-theme-bg/30 group-hover:shadow-xl group-hover:shadow-theme-accent/25 group-hover:scale-105'
+      {/* Texto */}
+      <div className="min-w-0 flex-1">
+        <p className={cn(
+          'text-sm font-semibold leading-tight truncate',
+          disabled ? 'text-theme-text/40' : 'text-theme-text'
         )}>
-          <Icon className={cn('h-7 w-7', disabled && 'text-theme-text-muted')} />
-        </div>
-
-        <div className="space-y-1.5">
-          <h3 className={cn(
-            'text-lg font-semibold leading-tight',
-            disabled ? 'text-theme-text/40' : 'text-theme-text'
+          {displayModule.name}
+        </p>
+        {displayModule.description && (
+          <p className={cn(
+            'text-xs mt-0.5 leading-snug line-clamp-1',
+            disabled ? 'text-theme-text-muted/30' : 'text-theme-text-muted/60'
           )}>
-            {displayModule.name}
-          </h3>
-          {displayModule.description && (
-            <p className={cn(
-              'text-sm leading-relaxed',
-              disabled ? 'text-theme-text-muted/40' : 'text-theme-text-muted/70'
-            )}>
-              {displayModule.description}
-            </p>
-          )}
-        </div>
-
-        {disabled && (
-          <div className="flex items-center gap-2 text-amber-500/50 text-xs font-semibold uppercase tracking-wider pt-1">
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="11" width="18" height="11" rx="2" />
-              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-            </svg>
-            Próximamente
-          </div>
-        )}
-
-        {!disabled && (
-          <div className="flex items-center gap-1.5 text-theme-accent font-medium pt-1">
-            <span>Disponible</span>
-            <LucideIcons.ArrowRight className="h-3.5 w-3.5 group-hover:translate-x-0.5 transition-transform" />
-          </div>
+            {displayModule.description}
+          </p>
         )}
       </div>
+
+      {/* Indicador derecho */}
+      {disabled ? (
+        <span className="flex-shrink-0 text-[10px] font-medium text-theme-text-muted/40 uppercase tracking-wider">
+          Pronto
+        </span>
+      ) : (
+        <LucideIcons.ChevronRight className="flex-shrink-0 h-4 w-4 text-theme-text-muted/40 group-hover:text-theme-accent group-hover:translate-x-0.5 transition-all duration-200" />
+      )}
     </div>
   )
 
   if (disabled) {
-    return <div className="h-full">{content}</div>
+    return <div>{content}</div>
   }
 
   return (
-    <Link href={module.route} className="block h-full">
+    <Link href={module.route} className="block">
       {content}
     </Link>
   )
