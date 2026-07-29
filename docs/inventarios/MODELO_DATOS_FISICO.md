@@ -157,6 +157,8 @@ Al pausar se informan los campos de pausa; al reanudar se limpian. Al completar 
 
 El inicio operacional de una tarea asignada conserva `validation_cycle`, pausa y finalizacion. Con un unico instante actualiza `status` a `IN_PROGRESS`, incrementa `version`, informa `opened_at`, `active_user_id`, `updated_at` y `updated_by`. La asignacion vigente se identifica por `task_assignments.released_at IS NULL` y debe coincidir con `tasks.current_assignment_id`, el participante `COUNTER` y el actor autenticado. `task_events` no contiene ni recibe `assignment_id`; esa relacion se persiste estructuralmente en `task_state_transitions`.
 
+La finalizacion desde `IN_PROGRESS` conserva apertura, ciclo y pausa; actualiza `status` a `COMPLETED`, incrementa `version`, informa `completed_at`, `completed_by`, `updated_at` y `updated_by`, y limpia `active_user_id`. Su historial es una transicion `IN_PROGRESS -> COMPLETED`; no se crea un `task_event` porque `COMPLETED` es un estado persistente, no un tipo de evento.
+
 ### 5.2 task_events
 
 La definicion oficial de `task_events.cycle` es `integer NOT NULL DEFAULT 1` y su check exige `cycle > 0`. La migracion 4B.2 hace backfill seguro (`UPDATE inventarios.task_events SET cycle = 1 WHERE cycle = 0`), reemplaza el check previo y cambia el default. No altera el catalogo de eventos ni migraciones de Fase 2.

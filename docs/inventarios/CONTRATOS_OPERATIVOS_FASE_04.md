@@ -199,6 +199,12 @@ La RPC valida `inventarios.tasks.execute`, adquiere `pg_advisory_xact_lock(hasht
 
 Con un unico `occurred_at`, inicio actualiza exclusivamente `status = 'IN_PROGRESS'`, `version = version + 1`, `opened_at`, `active_user_id`, `updated_at` y `updated_by`; conserva ciclo, pausa y finalizacion. Inserta un evento `STARTED` y una transicion `ASSIGNED -> IN_PROGRESS`, ambos con el ciclo vigente. `task_events` no tiene `assignment_id` ni lo serializa en metadata tecnica; la asignacion queda estructurada en `task_state_transitions` y el envelope. La funcion se crea como `SECURITY DEFINER`, propietaria `postgres`, con `search_path = pg_catalog`, sin `EXECUTE` para `PUBLIC`, `anon`, `authenticated` ni `service_role`; la exposicion autenticada queda para 4E.
 
+### 6.2 Finalizacion de tarea
+
+`inventarios.complete_inventory_task(p_company_id uuid, p_task_id uuid, p_expected_version integer, p_idempotency_key uuid) RETURNS jsonb` usa el codigo `inventarios.task.complete` y el payload funcional `{"operation":"inventarios.task.complete","company_id":"uuid","task_id":"uuid","expected_version":4}`. Exige `inventarios.tasks.execute`, participante `COUNTER`, asignacion vigente y tarea `IN_PROGRESS` con version esperada; no agrega prerrequisitos de conteos, incidencias, reconteos, validacion ni consolidacion.
+
+Con un unico instante actualiza exclusivamente `status = 'COMPLETED'`, `version = version + 1`, `completed_at`, `completed_by`, limpia `active_user_id`, e informa `updated_at` y `updated_by`. Conserva `opened_at`, ciclo y pausa. Inserta solo la transicion `IN_PROGRESS -> COMPLETED`; no crea `task_events` y el envelope tiene `event_id: null`. Usa el lock `pg_advisory_xact_lock(hashtext('inventarios.complete_inventory_task'), hashtext(company_id::text || ':' || actor_id::text))` y mantiene la ACL operacional aplazada a 4E.
+
 ## 7. Maquina de estados y auditoria
 
 La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. Solo reapertura pasa `COMPLETED -> IN_PROGRESS`. No se reasigna ni cancela desde `IN_PROGRESS`: primero se pausa. Cada mutacion exitosa de asignacion, reasignacion, inicio, pausa, reanudacion, finalizacion, validacion, reapertura o cancelacion incrementa `tasks.version` exactamente una vez. Solo reapertura incrementa ciclo.
