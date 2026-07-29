@@ -44,6 +44,12 @@ export default async function DashboardPage() {
     })
   }
 
+  operationalModules.sort((a, b) => {
+    const aHasRoute = typeof a.route === 'string' && a.route.trim().length > 0
+    const bHasRoute = typeof b.route === 'string' && b.route.trim().length > 0
+    return Number(bHasRoute) - Number(aHasRoute)
+  })
+
   return (
     <div className="space-y-10">
       <div className="space-y-1.5">
