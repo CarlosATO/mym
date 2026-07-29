@@ -1,0 +1,266 @@
+# Contratos Operativos - Inventory Engine Fase 04
+
+## 1. Objetivo y alcance
+
+Este documento define contratos de RPC, idempotencia, transiciones de tarea, autorizacion y seguridad para operar las estructuras inmutables de Fases 1-3. No contiene SQL ejecutable ni altera consolidacion, valorizacion, versiones oficiales, exportaciones, conciliacion, UI o Android.
+
+Las RPC canonicas se ubicaran en `inventarios`. El esquema no se expone aun en `api.schemas`; 4E decidira exposicion o wrappers `public` minimos, despues de grants y RLS. Ningun wrapper existe para evadir RLS.
+
+## 2. Principios transaccionales
+
+- Toda mutacion usa `SECURITY DEFINER`, `SET search_path` fijo, objetos calificados, `auth.uid()` y validacion interna de empresa, actor y permiso.
+- El cliente nunca es fuente confiable de empresa, actor, estado, ciclo o contexto. La empresa se deriva del recurso bloqueado.
+- La RPC bloquea la raiz relevante con `FOR UPDATE`: sesion, tarea, conteo efectivo, incidencia, solicitud o decision vigente.
+- Conteos, correcciones, eventos, resoluciones y decisiones se preservan; las sustituciones cierran vigencia mediante RPC.
+- Los errores abortan con SQLSTATE controlado, codigo `INV_*`, mensaje publico seguro, `retryable` y metadata no sensible. No exponen SQL, constraints ni datos de otra empresa.
+
+### Respuesta canonica unica
+
+Toda RPC mutadora devuelve exclusivamente un objeto `jsonb` plano con esta estructura:
+
+```json
+{
+  "operation": "inventarios.nombre_operacion",
+  "entity_id": "uuid_o_null",
+  "state": "estado_o_null",
+  "version": 1,
+  "cycle_number": 1,
+  "assignment_id": "uuid_o_null",
+  "event_id": "uuid_o_null",
+  "replayed": false,
+  "occurred_at": "timestamptz",
+  "data": {}
+}
+```
+
+Todos los campos principales estan presentes. Los no aplicables son `null`. `data` contiene solo datos adicionales propios de la RPC. `replayed` indica que la operacion ya se proceso. Un replay no cambia version, ciclo, estado, timestamps operacionales, asignaciones ni eventos. `occurred_at` es el instante original y el resultado persistido se reutiliza; logicamente solo se devuelve `replayed: true` sin alterar el resultado almacenado.
+
+### Parametros comunes de tarea
+
+| Parametro | Tipo | Nulo | Regla |
+| --- | --- | --- | --- |
+| `p_task_id` | uuid | no | tarea objetivo |
+| `p_expected_version` | integer | no | debe igualar `tasks.version` |
+| `p_expected_cycle` | integer | no | debe igualar el ciclo actual |
+| `p_idempotency_key` | uuid | no | clave persistida de la mutacion |
+| `p_reason` | text | depende | obligatorio en reasignacion, reapertura y cancelacion |
+
+Ninguna RPC acepta `p_actor_id`, `p_validated_by` o `p_completed_by`: el actor es `auth.uid()`.
+
+## 3. Cambios fisicos obligatorios
+
+### 3.1 Fase 4B.0: idempotencia persistida
+
+**CAMBIO FISICO REQUERIDO EN FASE 4B.0:** crear `inventarios.operation_idempotency` para garantizar ejecucion exactamente una vez desde la perspectiva del cliente, replay del resultado original, deteccion de payload distinto, concurrencia segura y trazabilidad de empresa, actor y operacion.
+
+| Columna | Tipo | Nulo | Regla |
+| --- | --- | --- | --- |
+| `id` | uuid | no | PK, `gen_random_uuid()` |
+| `company_id` | uuid | no | empresa derivada del recurso |
+| `operation_code` | text | no | nombre estable de la operacion |
+| `idempotency_key` | uuid | no | clave enviada por cliente |
+| `actor_id` | uuid | no | usuario de `auth.uid()` |
+| `request_hash` | text | no | SHA-256 hexadecimal de 64 caracteres en minusculas del payload canonico |
+| `status` | text | no | `DEFAULT 'IN_PROGRESS'`; `IN_PROGRESS` o `COMPLETED` |
+| `entity_id` | uuid | si | entidad principal afectada |
+| `response_payload` | jsonb | si | envelope original persistido |
+| `created_at` | timestamptz | no | `now()` |
+| `completed_at` | timestamptz | si | finalizacion de la operacion |
+
+La definicion fisica exacta es `status text NOT NULL DEFAULT 'IN_PROGRESS'`. Constraints requeridos: `status IN ('IN_PROGRESS', 'COMPLETED')`, `request_hash ~ '^[0-9a-f]{64}$'`, y cuando `status = 'COMPLETED'`, `response_payload` y `completed_at` no son nulos. La unicidad es `(company_id, operation_code, idempotency_key)`. La normalizacion del payload produce y guarda el hash en minusculas; no se aceptan hashes en mayusculas.
+
+La identidad, empresa, operacion, clave, actor y hash son inmutables. Solo se permite `IN_PROGRESS -> COMPLETED`; `response_payload` se escribe una vez y nunca se reescribe. La proteccion definitiva se implementa con trigger en 4E.
+
+### 3.2 Fase 4B.2: ciclo, actores y transiciones
+
+**CAMBIO FISICO REQUERIDO EN FASE 4B.2:**
+
+- Cambiar `tasks.validation_cycle DEFAULT 0` por `DEFAULT 1`, exigir `validation_cycle > 0` y normalizar las filas existentes con valor `0` a `1` mediante nueva migracion.
+- Cambiar `task_events.cycle DEFAULT 0` por `DEFAULT 1` y exigir `cycle > 0`.
+- Agregar `tasks.paused_by uuid NULL REFERENCES portal.users(id) ON DELETE RESTRICT`.
+- Agregar `tasks.completed_by uuid NULL REFERENCES portal.users(id) ON DELETE RESTRICT`.
+- Agregar checks de coherencia: ambos campos de cada par `paused_at`/`paused_by` y `completed_at`/`completed_by` son nulos o ambos informados.
+
+Los campos `paused_at`, `paused_by`, `completed_at` y `completed_by` son la proyeccion actual o mas reciente. Al reanudar se limpian los campos de pausa; al reabrir se limpian los de finalizacion. Ninguna limpieza borra historia.
+
+**CAMBIO FISICO REQUERIDO EN FASE 4B.2:** crear `inventarios.task_state_transitions` para conservar append-only cada cambio real del estado persistente de una tarea.
+
+| Columna | Tipo | Nulo | Regla |
+| --- | --- | --- | --- |
+| `id` | uuid | no | PK, `gen_random_uuid()` |
+| `company_id`, `session_id`, `session_zone_id`, `task_id` | uuid | no | contexto y FK compuestas de tarea |
+| `assignment_id` | uuid | si | asignacion aplicable |
+| `operation_idempotency_id` | uuid | no | FK contextual a `operation_idempotency` |
+| `transition_type` | text | no | catalogo cerrado |
+| `previous_status`, `next_status` | text | no | estados persistentes |
+| `previous_version`, `next_version` | integer | no | version antes/despues |
+| `previous_cycle`, `next_cycle` | integer | no | ciclo antes/despues |
+| `actor_id` | uuid | no | actor autenticado |
+| `reason` | text | si | obligatorio al reabrir |
+| `occurred_at` | timestamptz | no | `now()` |
+| `metadata` | jsonb | no | `'{}'::jsonb` |
+
+`transition_type` admite exclusivamente `STARTED`, `PAUSED`, `RESUMED`, `COMPLETED` y `REOPENED`. Los estados admitidos son `ASSIGNED`, `IN_PROGRESS`, `PAUSED` y `COMPLETED`. La tabla es append-only: no permite `UPDATE` ni `DELETE`.
+
+Reglas: `previous_status <> next_status`; versiones y ciclos son mayores que cero; `next_version = previous_version + 1`; el ciclo solo cambia en `REOPENED`; alli `next_cycle = previous_cycle + 1`; en las demas transiciones `next_cycle = previous_cycle`; `reason` es obligatorio para `REOPENED`; y una operacion idempotente solo crea una transicion.
+
+### 3.3 Fase 4D: vinculo de ejecucion de reconteo
+
+**CAMBIO FISICO REQUERIDO EN FASE 4D:** agregar `recount_requests.execution_task_id uuid NULL`. Identifica inequivocamente la tarea `RECOUNT` que ejecuta la solicitud y es nullable mientras la solicitud este `REQUESTED`.
+
+Debe tener FK contextual con `company_id`, `session_id`, `session_zone_id` y `execution_task_id` hacia la candidate key correspondiente de `inventarios.tasks`, mas unicidad parcial `UNIQUE (company_id, execution_task_id) WHERE execution_task_id IS NOT NULL`. Una tarea RECOUNT no puede ejecutar dos solicitudes.
+
+La RPC valida que la tarea sea `RECOUNT`, comparta empresa, jornada y zona, sea creada para esa solicitud, no este cancelada, invalidada o supersedida, tenga producto y contexto de la solicitud, y no exista otra tarea ejecutora vigente. No basta una FK simple por `id`.
+
+### 3.4 Correccion documental pendiente
+
+`docs/inventarios/MODELO_DATOS_FISICO.md` debe dejar de declarar `PAUSED` y `COMPLETED` como valores de `task_events.event_type`. No se modifica en esta fase documental. El catalogo aplicado y oficial de `task_events` es exclusivamente `STARTED`, `RESUMED`, `REOPENED`, `REASSIGNED`, `VALIDATED`, `INVALIDATED` y `CANCELLED`. `PAUSED` y `COMPLETED` solo son estados de `tasks` y tipos de `task_state_transitions`.
+
+## 4. Idempotencia y concurrencia
+
+Todas las RPC mutadoras de 4B requieren `p_idempotency_key uuid NOT NULL` y usan idempotencia persistida: `prepare_inventory_session`, `start_inventory_session`, `create_session_zone`, `assign_inventory_task`, `reassign_inventory_task`, `start_inventory_task`, `pause_inventory_task`, `resume_inventory_task`, `complete_inventory_task`, `validate_inventory_task`, `reopen_inventory_task` y `cancel_inventory_task`. No usan `STATE_BASED_REPLAY`.
+
+La primera ejecucion ocurre en una unica transaccion: deriva empresa y actor, construye payload, calcula `request_hash`, inserta `IN_PROGRESS`, ejecuta la operacion, guarda el envelope original en `response_payload`, cambia a `COMPLETED` y confirma. Si falla, toda la transaccion hace rollback y no deja fila confirmada.
+
+Una ejecucion concurrente con igual `(company_id, operation_code, idempotency_key)` espera la resolucion del bloqueo de unicidad. Si la primera confirma, vuelve a consultar la fila con bloqueo: mismo actor, hash y `COMPLETED` devuelve el envelope original con solo `replayed: true`; actor o hash distintos devuelven `INV_IDEMPOTENCY_CONFLICT`. Si la primera hace rollback, no existe fila y la segunda inserta su propia operacion.
+
+Una fila confirmada `IN_PROGRESS` no es resultado normal, pero tiene conducta defensiva: tras adquirir el bloqueo, mismo actor y hash abortan con `INV_IDEMPOTENCY_IN_PROGRESS`, reintentable, mensaje seguro `La operacion todavia esta siendo procesada. Intenta nuevamente.`; actor o hash distintos devuelven `INV_IDEMPOTENCY_CONFLICT`. No hay polling interno, ciclos de espera, `pg_sleep`, envelope incompleto ni reutilizacion de una fila `IN_PROGRESS`.
+
+El payload canonico incluye operacion, recurso objetivo, empresa derivada, actor autenticado, version y ciclo esperados, participante o usuario objetivo cuando corresponda, motivo normalizado y parametros funcionales especificos. Antes del hash se ordenan claves JSON, UUID se convierten a minusculas, textos reciben `trim`, cadenas opcionales vacias se vuelven `null`, se conserva la diferencia entre `null`, cero y `false`, y las fechas recibidas usan ISO 8601 UTC. Excluye timestamps generados por servidor, `occurred_at` y el resultado. El SHA-256 resultante se representa y guarda exclusivamente como hexadecimal de 64 caracteres en minusculas.
+
+Para conteos de 4C, `offline_id` conserva su unicidad por `(company_id, offline_id)`. Su payload canonico incluye empresa derivada, sesion, snapshot, zona, tarea, ciclo, participante, producto, ubicacion, solicitud de reconteo opcional, cantidades, origen, dispositivo y captura local; excluye orden JSON, valores generados y timestamps posteriores.
+
+Las transiciones bloquean la tarea y comparan version/ciclo. Inicio, reanudacion y reapertura adquieren primero un `pg_advisory_xact_lock` determinista y namespaced por empresa y usuario, luego bloquean tarea y asignacion vigente y verifican otra tarea activa. La violacion residual de `uq_inventarios_tasks_active_user` se traduce a `INV_CONCURRENT_MODIFICATION`.
+
+## 5. Roles y autorizacion
+
+Los roles funcionales son `COUNTER`, `SUPERVISOR`, `ADMINISTRATOR` y `MANAGER`. Su mapeo a roles globales y permisos `inventarios.*` pertenece a 4B.0 y 4E.
+
+| Rol | Puede operar | Nunca directamente |
+| --- | --- | --- |
+| `ADMINISTRATOR` | preparar jornada, zonas, participantes, asignar y cancelar | consolidar, aprobar, exportar o cambiar stock |
+| `SUPERVISOR` | reasignar, validacion estructural, reapertura, incidencias y reconteos | editar cantidades historicas o aprobar resultado oficial |
+| `COUNTER` | tarea asignada, conteos e incidencias de contexto | validar, reasignar, decidir reconteos, stock o costos |
+| `MANAGER` | lectura autorizada | escritura operativa |
+| `service_role` | mantenimiento tecnico controlado | suplantar `auth.uid()` o auditoria funcional |
+
+El seed 4B.0a usa las estructuras existentes `portal.modules(code, name, description, icon, route, is_active, sort_order)` y `portal.permissions(code, name, description, module_id, is_active)`. Las claves naturales unicas aplicadas son `portal.modules.code` y `portal.permissions.code`.
+
+El modulo usa `code = 'inventarios'` y `name = 'Inventarios'`. Su upsert es `ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name`: crea o reutiliza una unica fila, corrige solo el nombre visible y no modifica otras columnas ni genera duplicados.
+
+| Codigo | Nombre visible |
+| --- | --- |
+| `inventarios.read` | Ver Inventarios |
+| `inventarios.sessions.prepare` | Preparar jornadas de inventario |
+| `inventarios.sessions.start` | Iniciar jornadas de inventario |
+| `inventarios.zones.manage` | Administrar zonas de inventario |
+| `inventarios.tasks.assign` | Asignar tareas de inventario |
+| `inventarios.tasks.execute` | Ejecutar tareas de inventario |
+| `inventarios.tasks.validate` | Validar tareas de inventario |
+| `inventarios.tasks.reopen` | Reabrir tareas de inventario |
+| `inventarios.tasks.cancel` | Cancelar tareas de inventario |
+| `inventarios.counts.record` | Registrar conteos de inventario |
+| `inventarios.counts.correct` | Corregir conteos de inventario |
+| `inventarios.incidents.manage` | Gestionar incidencias de inventario |
+| `inventarios.recounts.manage` | Gestionar reconteos de inventario |
+| `inventarios.recounts.decide` | Decidir resultados de reconteo |
+| `inventarios.recounts.override_assignee` | Autorizar excepción de asignación de reconteo |
+
+Cada permiso resuelve `module_id` mediante `portal.modules.code = 'inventarios'` sin UUID fijo. Su upsert es `ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, module_id = EXCLUDED.module_id`: conserva el `id`, corrige solo nombre y modulo, no borra asignaciones ni modifica otras columnas.
+
+4B.0a no inserta ni actualiza `portal.role_permissions` o `portal.user_permissions`, no amplia roles ni asigna usuarios, no crea roles, no elimina asignaciones y no modifica `portal.has_permission`. El bypass existente de `portal.has_permission('system.admin')` se conserva; la asignacion futura a roles de Inventarios sera explicita y controlada.
+
+Toda RPC deriva empresa del recurso, valida `core.has_company_access(auth.uid(), company_id)` y luego `portal.has_permission(...)`. `system.admin` puede omitir permiso funcional, nunca estado de jornada, aislamiento multiempresa, contexto de tarea, ciclos, asignaciones ni concurrencia. Ejecutar tareas exige adicionalmente participante activo asociado a `auth.uid()` y asignacion vigente. `service_role` es tecnico, no actor operativo. Un `company_id` recibido solo se compara contra el recurso; no se confia en el.
+
+## 6. Catalogo de RPC 4B
+
+| RPC | Proposito | Actor | Precondicion principal |
+| --- | --- | --- | --- |
+| `prepare_inventory_session` | preparar alcance, snapshot, zonas y participantes | administrador | jornada DRAFT/PREPARED |
+| `start_inventory_session` | confirmar snapshot e iniciar | administrador | jornada PREPARED |
+| `create_session_zone` | crear zona y membresia V1 atomica | administrador | scope INCLUDED |
+| `assign_inventory_task` | crear/asignar PRIMARY o RECOUNT | administrador/supervisor | participante activo |
+| `reassign_inventory_task` | cerrar asignacion vigente y abrir otra | supervisor | ASSIGNED o PAUSED |
+| `start_inventory_task` | ASSIGNED a IN_PROGRESS | contador asignado | zona confirmada |
+| `pause_inventory_task` | IN_PROGRESS a PAUSED | contador asignado/supervisor | tarea activa |
+| `resume_inventory_task` | PAUSED a IN_PROGRESS | contador asignado/supervisor | asignacion vigente |
+| `complete_inventory_task` | IN_PROGRESS a COMPLETED | contador asignado | tarea activa |
+| `validate_inventory_task` | validacion acumulativa, sin consolidar | supervisor | capa aplicable completada |
+| `reopen_inventory_task` | invalidar validacion vigente y reabrir | supervisor | COMPLETED validada |
+| `cancel_inventory_task` | cancelar conservando historia | administrador/supervisor | ASSIGNED o PAUSED |
+
+Firmas de tarea: reasignar, iniciar, pausar, reanudar, completar, validar, reabrir y cancelar incluyen `p_task_id`, `p_expected_version`, `p_expected_cycle` y `p_idempotency_key`. Reasignar y reabrir incluyen participante y motivo; cancelar incluye motivo. Toda firma retorna el envelope canonico.
+
+## 7. Maquina de estados y auditoria
+
+La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. Solo reapertura pasa `COMPLETED -> IN_PROGRESS`. No se reasigna ni cancela desde `IN_PROGRESS`: primero se pausa. Cada mutacion exitosa de asignacion, reasignacion, inicio, pausa, reanudacion, finalizacion, validacion, reapertura o cancelacion incrementa `tasks.version` exactamente una vez. Solo reapertura incrementa ciclo.
+
+| Transicion | `task_state_transitions` | `task_events` |
+| --- | --- | --- |
+| Inicio | `STARTED` | `STARTED` |
+| Pausa | `PAUSED` | ninguno |
+| Reanudacion | `RESUMED` | `RESUMED` |
+| Finalizacion | `COMPLETED` | ninguno |
+| Reapertura | `REOPENED` | `REOPENED` y, si aplica, `INVALIDATED` |
+
+`task_state_transitions` audita el estado persistente. `task_events` conserva los hechos funcionales aprobados en Fase 2. No son estructuras intercambiables y no se agregan `PAUSED` ni `COMPLETED` a `task_events.event_type`.
+
+La reapertura pertenece a 4B.2. Exige `current_validation_event_id`, tarea `COMPLETED`, permiso `inventarios.tasks.reopen`, version y ciclo coincidentes. Registra `INVALIDATED`, conserva `VALIDATED`, guarda en metadata el ID invalidado, crea asignacion nueva, incrementa ciclo, crea transicion y evento `REOPENED`, limpia validacion y campos de finalizacion, y deja la tarea `IN_PROGRESS`.
+
+## 8. Validacion acumulativa de tarea
+
+### Fase 4B.2: validacion estructural interna
+
+`validate_inventory_task` comprueba exclusivamente actor autenticado, acceso empresarial, `inventarios.tasks.validate`, tarea existente, version/ciclo esperados, estado `COMPLETED`, ausencia de cancelacion, invalidacion o supersesion, `active_user_id IS NULL`, ausencia de asignacion vigente, ausencia de otra validacion vigente, coherencia de timestamps/ciclo y ausencia de transicion concurrente.
+
+La funcion puede existir internamente en 4B.2, pero no recibe exposicion operacional definitiva antes de 4C y 4D: sin `EXECUTE` operacional a `authenticated` ni wrapper publico. La autorizacion operacional definitiva pertenece a 4E.
+
+### Fase 4C: endurecimiento por conteos e incidencias
+
+Se agregan existencia de conteos efectivos del ciclo, ausencia de ramas de correccion inconsistentes, ausencia de conteos efectivos invalidados, cantidades estructuralmente validas, incidencias `BLOCKING` no resueltas, incidencias `CRITICAL` no tratadas segun contrato y ausencia de modificaciones concurrentes de conteos o incidencias.
+
+### Fase 4D: endurecimiento por reconteos
+
+Se agregan reconteos obligatorios completados, ausencia de solicitudes vigentes `REQUESTED`, `ASSIGNED` o `IN_PROGRESS`, decision supervisora vigente cuando corresponda, conteo seleccionado valido y ausencia de decision concurrente.
+
+## 9. Conteos, incidencias y reconteos
+
+`record_inventory_count` exige tarea `IN_PROGRESS`, participante y asignacion vigente, ciclo positivo, snapshot, zona, producto, ubicacion y scope `INCLUDED` coherentes. Las correcciones crean reemplazo y relacion append-only; nunca actualizan cantidades. Incidencias cambian estado mediante resolucion append-only y actualizacion atomica de su proyeccion.
+
+El reconteo sigue `REQUESTED -> ASSIGNED -> IN_PROGRESS -> COMPLETED`, con cancelacion desde los tres primeros estados. Una persona distinta del contador original es obligatoria salvo que no exista participante apto, el actor tenga `inventarios.recounts.override_assignee` y persista justificacion. Antes de completar, el ejecutor no ve stock, aporte original, correcciones, otros reconteos, diferencias ni decisiones. El supervisor compara solo despues de completar. No hay promedio automatico.
+
+## 10. Triggers, RLS y errores
+
+4E implementa triggers defensivos para inmutabilidad de snapshots, `task_events`, `task_state_transitions`, conteos, correcciones, resoluciones y decisiones; mutabilidad controlada de `operation_idempotency`; y escritura directa denegada. Los triggers no deciden autorizacion compleja ni consolidacion.
+
+En 4B.0b, `operation_idempotency` habilita RLS y termina con cero politicas funcionales. Se revoca todo acceso directo de `PUBLIC`, `anon` y `authenticated`; solo `service_role` recibe `SELECT`, `INSERT` y `UPDATE`, nunca `DELETE`, `TRUNCATE`, `REFERENCES` ni `TRIGGER`. No hay lectura directa de `authenticated`, no se agrega `inventarios` a `api.schemas`, no hay wrappers `public` ni grants `EXECUTE`. Las RPC futuras `SECURITY DEFINER` acceden mediante propietario controlado, `search_path` fijo, objetos calificados, `auth.uid()`, empresa derivada, `REVOKE EXECUTE FROM PUBLIC` y grants explicitos por firma.
+
+Codigos minimos: `INV_UNAUTHENTICATED`, `INV_COMPANY_ACCESS_DENIED`, `INV_PERMISSION_REQUIRED`, `INV_ROLE_NOT_ALLOWED`, `INV_SESSION_INVALID_STATE`, `INV_SESSION_NOT_PREPARED`, `INV_SCOPE_NOT_INCLUDED`, `INV_TASK_NOT_ASSIGNED`, `INV_TASK_INVALID_STATE`, `INV_TASK_CYCLE_CONFLICT`, `INV_VERSION_CONFLICT`, `INV_PARTICIPANT_INACTIVE`, `INV_USER_ALREADY_ACTIVE`, `INV_IDEMPOTENCY_CONFLICT`, `INV_IDEMPOTENCY_IN_PROGRESS`, `INV_OPERATION_ALREADY_APPLIED`, `INV_COUNT_IDEMPOTENCY_CONFLICT`, `INV_COUNT_CONTEXT_MISMATCH`, `INV_COUNT_QUANTITY_MISMATCH`, `INV_INCIDENT_BLOCKING`, `INV_RECOUNT_INVALID_STATE`, `INV_RECOUNT_INCOMPLETE`, `INV_DECISION_CONTEXT_MISMATCH`, `INV_DECISION_NOT_FOUND`, `INV_CONCURRENT_MODIFICATION` e `INV_NOT_FOUND`. `INV_IDEMPOTENCY_IN_PROGRESS` es reintentable y usa el mensaje seguro definido en idempotencia.
+
+## 11. Matriz de cambios fisicos requeridos
+
+| Fase | Objeto | Cambio |
+| --- | --- | --- |
+| 4B.0 | `operation_idempotency` | nueva tabla de idempotencia persistida |
+| 4B.2 | `tasks.validation_cycle` | default y check desde 1 |
+| 4B.2 | `task_events.cycle` | default y check desde 1 |
+| 4B.2 | `tasks.paused_by` | nueva columna y FK |
+| 4B.2 | `tasks.completed_by` | nueva columna y FK |
+| 4B.2 | `task_state_transitions` | nueva tabla append-only |
+| 4D | `recount_requests.execution_task_id` | nueva columna, FK contextual y unicidad parcial |
+| Documentacion | `task_events.event_type` | corregir catalogo en modelo fisico |
+
+## 12. Plan de implementacion
+
+| Subfase | Entrega | Criterio de aceptacion |
+| --- | --- | --- |
+| 4B.0a - Permisos | seed idempotente de modulo `inventarios` y quince permisos; sin asignaciones, tablas, RLS, grants ni RPC | modulo/permisos unicos y sin acceso otorgado accidentalmente |
+| 4B.0b - Idempotencia estructural | `operation_idempotency`, PK, FKs, candidate key, checks, unique, indices, RLS habilitado, cero politicas y grants exactos | tabla inaccesible a clientes y apta para helpers posteriores |
+| 4B.0c - Helpers internos | helpers de autorizacion e idempotencia despues de aplicar/verificar 4B.0a y 4B.0b | sin RPC de negocio ni exposicion API |
+| 4B.1 - Jornadas y zonas | preparacion, inicio, zona-membresia atomica e idempotencia persistida | snapshot completo, PREPARED/COUNTING y una ubicacion por zona V1 |
+| 4B.2 - Tareas y auditoria | ciclo inicial, actores, `task_state_transitions`, asignacion, transiciones, cancelacion, validacion estructural interna, reapertura, eventos y locks | version/ciclo, historia persistente y usuario activo consistentes |
+| 4C - Conteos e incidencias | payload canonico, conteos, correcciones, incidencias, resoluciones, evidencias y endurecimiento de validacion | contexto, cantidades, historia e incidencias comprobables |
+| 4D - Reconteos | `execution_task_id`, tarea RECOUNT, lectura ciega, excepcion supervisora, decisiones y endurecimiento final | solicitud/tarea vinculadas, ordinal, ceguera y decision vigente sin promedio |
+| 4E - Seguridad y exposicion | triggers, RLS, grants, ownership, wrappers/exposicion y habilitacion operacional de validacion | escritura directa denegada, RPC autorizadas y auditoria protegida |
+
+Cada subfase se divide en migraciones pequenas: primero contratos y objetos de datos, luego funciones, despues triggers/RLS y pruebas de concurrencia/permisos. No se modifica ninguna migracion de Fases 1-3.
