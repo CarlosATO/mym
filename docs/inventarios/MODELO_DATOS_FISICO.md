@@ -155,6 +155,8 @@ La definicion oficial de `tasks` contiene `validation_cycle integer NOT NULL DEF
 
 Al pausar se informan los campos de pausa; al reanudar se limpian. Al completar se informan los de finalizacion; al reabrir se limpian. Son proyecciones actuales, no historia. No se requieren indices para esos actores.
 
+El inicio operacional de una tarea asignada conserva `validation_cycle`, pausa y finalizacion. Con un unico instante actualiza `status` a `IN_PROGRESS`, incrementa `version`, informa `opened_at`, `active_user_id`, `updated_at` y `updated_by`. La asignacion vigente se identifica por `task_assignments.released_at IS NULL` y debe coincidir con `tasks.current_assignment_id`, el participante `COUNTER` y el actor autenticado. `task_events` no contiene ni recibe `assignment_id`; esa relacion se persiste estructuralmente en `task_state_transitions`.
+
 ### 5.2 task_events
 
 La definicion oficial de `task_events.cycle` es `integer NOT NULL DEFAULT 1` y su check exige `cycle > 0`. La migracion 4B.2 hace backfill seguro (`UPDATE inventarios.task_events SET cycle = 1 WHERE cycle = 0`), reemplaza el check previo y cambia el default. No altera el catalogo de eventos ni migraciones de Fase 2.

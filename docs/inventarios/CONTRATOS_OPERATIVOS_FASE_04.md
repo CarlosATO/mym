@@ -189,7 +189,15 @@ Toda RPC deriva empresa del recurso, valida `core.has_company_access(auth.uid(),
 | `reopen_inventory_task` | invalidar validacion vigente y reabrir | supervisor | COMPLETED validada |
 | `cancel_inventory_task` | cancelar conservando historia | administrador/supervisor | ASSIGNED o PAUSED |
 
-Firmas de tarea: reasignar, iniciar, pausar, reanudar, completar, validar, reabrir y cancelar incluyen `p_task_id`, `p_expected_version`, `p_expected_cycle` y `p_idempotency_key`. Reasignar y reabrir incluyen participante y motivo; cancelar incluye motivo. Toda firma retorna el envelope canonico.
+Firmas de tarea: reasignar, pausar, reanudar, completar, validar, reabrir y cancelar incluyen `p_task_id`, `p_expected_version`, `p_expected_cycle` y `p_idempotency_key`. Reasignar y reabrir incluyen participante y motivo; cancelar incluye motivo. El inicio usa la firma especifica de la seccion 6.1. Toda firma retorna el envelope canonico.
+
+### 6.1 Inicio de tarea asignada
+
+La primera RPC operacional es `inventarios.start_inventory_task(p_company_id uuid, p_task_id uuid, p_expected_version integer, p_idempotency_key uuid) RETURNS jsonb`. Los cuatro parametros son obligatorios; la empresa se contrasta contra la tarea bloqueada. No acepta actor, asignacion, estado ni ciclo desde cliente. Su codigo de idempotencia es `inventarios.task.start` y su payload funcional exacto es `{"operation":"inventarios.task.start","company_id":"uuid","task_id":"uuid","expected_version":1}`.
+
+La RPC valida `inventarios.tasks.execute`, adquiere `pg_advisory_xact_lock(hashtext('inventarios.start_inventory_task'), hashtext(company_id::text || ':' || actor_id::text))`, y solo permite una tarea `ASSIGNED` con version esperada. El actor debe ser el participante `COUNTER` vigente de la jornada y coincidir con la asignacion vigente de la tarea. Tarea ausente retorna `INV_NOT_FOUND`, estado distinto retorna `INV_TASK_INVALID_STATE`, version distinta retorna `INV_CONCURRENT_MODIFICATION`, y asignacion de otro actor retorna `INV_ASSIGNMENT_REQUIRED`.
+
+Con un unico `occurred_at`, inicio actualiza exclusivamente `status = 'IN_PROGRESS'`, `version = version + 1`, `opened_at`, `active_user_id`, `updated_at` y `updated_by`; conserva ciclo, pausa y finalizacion. Inserta un evento `STARTED` y una transicion `ASSIGNED -> IN_PROGRESS`, ambos con el ciclo vigente. `task_events` no tiene `assignment_id` ni lo serializa en metadata tecnica; la asignacion queda estructurada en `task_state_transitions` y el envelope. La funcion se crea como `SECURITY DEFINER`, propietaria `postgres`, con `search_path = pg_catalog`, sin `EXECUTE` para `PUBLIC`, `anon`, `authenticated` ni `service_role`; la exposicion autenticada queda para 4E.
 
 ## 7. Maquina de estados y auditoria
 
