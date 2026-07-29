@@ -47,7 +47,7 @@ Usar `text` con `CHECK` para estados estables, siguiendo el repositorio. No crea
 | `sessions.inventory_type` | `GENERAL`, `PARTIAL`, `CYCLIC`, `CONTROL`, `RECOUNT` | Tipos aprobados; V1 habilita GENERAL/PARTIAL. |
 | `tasks.status` | `ASSIGNED`, `IN_PROGRESS`, `PAUSED`, `COMPLETED` | Unicos estados persistentes permitidos. |
 | `task_events.event_type` | `STARTED`, `RESUMED`, `REOPENED`, `REASSIGNED`, `VALIDATED`, `INVALIDATED`, `CANCELLED`, `PAUSED`, `COMPLETED` | Hechos auditables, no estados. |
-| `count_entries.source` | `ANDROID`, `WEB` | Origen tecnico cerrado. |
+| `count_entries.capture_source` | `MOBILE`, `WEB` | Origen tecnico cerrado. |
 | condiciones | `AVAILABLE`, `DAMAGED`, `EXPIRED`, `BLOCKED`, `OTHER_UNAVAILABLE` | Mutuamente excluyentes por unidad. |
 | incidencias | severidad `INFORMATIONAL`, `OPERATIONAL`, `CRITICAL`, `BLOCKING`; estado `OPEN`, `UNDER_REVIEW`, `RESOLVED`, `CLOSED` | Clasificacion funcional estable. |
 | export/archivo | formato `XLSX`, `CSV`, `PDF`; estado `REQUESTED`, `GENERATING`, `GENERATED`, `FAILED`, `SUPERSEDED` | Salidas tecnicas controladas. |
@@ -164,37 +164,21 @@ UNIQUE `(company_id,idempotency_key)` cuando exista; indices `(company_id,task_i
 
 ### 5.4 Conteos, incidencias, evidencias y reconteos
 
-**`inventarios.count_entries`** y **`inventarios.count_entry_corrections`**. Elegir correcciones como nuevas filas vinculadas al aporte original: preserva historia, admite offline y evita sobreescritura.
+**`inventarios.count_entries`**. Append-only; toda correccion inserta un nuevo aporte. Columnas: `id uuid`; `company_id`, `session_id`, `snapshot_id`, `session_zone_id`, `task_id`, `session_participant_id`, `counted_by`, `snapshot_product_id`, `snapshot_location_id` uuid NOT NULL; `recount_request_id uuid NULL`; `bsale_variant_id integer NOT NULL`; `identification_method text NOT NULL`; `scanned_code text NULL`; `task_cycle integer NOT NULL`; `capture_source text NOT NULL`; `offline_id uuid NULL`; `device_id text NULL`; `captured_at timestamptz NOT NULL`; `server_received_at timestamptz NOT NULL DEFAULT now()`; `synced_at timestamptz NULL`; `synced_by uuid NULL`; `invalidated_at timestamptz NULL`; `invalidated_by uuid NULL`; `invalidation_reason text NULL`; las seis cantidades `physical_quantity`, `available_quantity`, `damaged_quantity`, `expired_quantity`, `blocked_quantity`, `other_unavailable_quantity numeric(14,3) NOT NULL DEFAULT 0`; y auditoria estandar `created_at timestamptz NOT NULL DEFAULT now()`, `created_by uuid NOT NULL`.
 
-| Tabla / columna | Tipo PostgreSQL | Nulo | Default | FK/Regla | Proposito |
-| --- | --- | --- | --- | --- | --- |
-| `count_entries` contexto | uuid | no | UUID | session, task, zone, snapshot, producto snapshot por FK compuesta | aporte |
-| `count_entries` producto/origen | `integer`, `text`, `uuid` | no/no/si | ninguno | variante, fuente, offline idempotency | identidad movil |
-| cantidades | `numeric(14,3)` x 6 | no | `0` | CHECK no negativas y suma obligatoria | fisico/condiciones |
-| captura | `timestamptz`, `uuid`, `text`, `uuid`, `timestamptz` | no/no/no/si/si | `now()` | usuario, dispositivo, offline ID, sincronizacion | evidencia |
-| vigencia | `timestamptz`, `uuid` | si | ninguno | invalidacion logica | exclusiones |
-| correccion | `id`, contexto, `original_entry_id`, `replacement_entry_id`, `reason`, actor/fecha | uuid/texto/tiempo | no | FK a entradas; no ciclos | enlaza reemplazo append-only |
+FKs compuestas: tarea `(company_id,session_id,session_zone_id,task_id)`; zona/snapshot `(company_id,session_id,snapshot_id,session_zone_id)`; participante `(company_id,session_id,session_participant_id)`; producto `(company_id,snapshot_id,snapshot_product_id,bsale_variant_id)`; y ubicacion de la zona `(company_id,session_id,snapshot_id,session_zone_id,snapshot_location_id)`. `counted_by` referencia `portal.users(id)` y la RPC valida que sea el usuario del participante activo de la misma empresa/jornada. Cuando `recount_request_id` exista, FK `(company_id,session_id,session_zone_id,snapshot_product_id,recount_request_id)` a la solicitud. Candidate keys requeridas: `snapshot_products(company_id,snapshot_id,id,bsale_variant_id)`, `session_zone_locations(company_id,session_id,snapshot_id,session_zone_id,snapshot_location_id)`, `recount_requests(company_id,session_id,session_zone_id,snapshot_product_id,id)`, `count_entries(company_id,session_id,id)` y `count_entries(company_id,session_id,session_zone_id,snapshot_product_id,id)`. Checks: `task_cycle > 0`; `capture_source IN ('MOBILE','WEB')`; MOBILE exige `offline_id` y `device_id`; las cantidades son no negativas y `physical_quantity = available_quantity + damaged_quantity + expired_quantity + blocked_quantity + other_unavailable_quantity`; e invalidacion es todo nulo o exige actor y `length(trim(invalidation_reason)) > 0`. `scanned_code` conserva el valor realmente leido y no tiene unicidad; es obligatorio conceptualmente para identificacion por escaneo y puede ser nulo para busqueda manual. `identification_method` queda validado por RPC/servicio hasta definir un catalogo cerrado. UNIQUE `(company_id,session_id,id)`, `(company_id,session_id,task_id,snapshot_product_id,id)` y parcial `(company_id,offline_id) WHERE offline_id IS NOT NULL`; indices por jornada, tarea/captura, zona, snapshot/variante y solicitud de reconteo. La RPC posterior valida tarea `IN_PROGRESS`, participante activo y ciclo vigente.
 
-UNIQUE `(company_id,offline_idempotency_key)` y, cuando aplique, `(company_id,task_id,offline_sequence)`; indice `(company_id,task_id,captured_at)` y `(company_id,snapshot_id,bsale_variant_id)`. CHECK: `physical_quantity = available_quantity + damaged_quantity + expired_quantity + blocked_quantity + other_unavailable_quantity`; ninguna cantidad negativa. El aporte original nunca se actualiza. Una correccion inserta un nuevo aporte y una fila de relacion; el original recibe solo marcas de vigencia mediante RPC.
+**`inventarios.count_entry_corrections`**. Relacion append-only sin cantidades: `id uuid`; `company_id`, `session_id`, `task_id`, `snapshot_product_id`, `root_count_entry_id`, `previous_count_entry_id`, `replacement_count_entry_id` uuid NOT NULL; `supersedes_correction_id uuid NULL`; `revision_number integer NOT NULL`; `reason text NOT NULL`; `corrected_by uuid NOT NULL`; `corrected_at timestamptz NOT NULL DEFAULT now()`; `superseded_at timestamptz NULL`; `created_at timestamptz NOT NULL DEFAULT now()`. Las tres entradas usan FK compuesta `(company_id,session_id,task_id,snapshot_product_id,count_entry_id)` a `count_entries`; `supersedes_correction_id` usa `(company_id,root_count_entry_id,supersedes_correction_id)` a la candidate key propia `(company_id,root_count_entry_id,id)`. Checks: `revision_number > 0`, `previous_count_entry_id <> replacement_count_entry_id`, `root_count_entry_id <> replacement_count_entry_id` y motivo no vacio. UNIQUE `(company_id,replacement_count_entry_id)`, `(company_id,root_count_entry_id,revision_number)`, `(company_id,root_count_entry_id,id)` y parcial `(company_id,root_count_entry_id) WHERE superseded_at IS NULL`. La deteccion total de ciclos y el cierre controlado de `superseded_at` quedan para RPC.
 
-**`inventarios.incidents`**, **`incident_resolutions`** y **`evidence_files`**.
+**`inventarios.incidents`**. Contiene `id`, `company_id`, `session_id`, `snapshot_id` UUID NOT NULL; `session_zone_id`, `task_id`, `count_entry_id`, `snapshot_product_id`, `recount_request_id`, `responsible_user_id` UUID NULL; `category_code text NOT NULL`; `severity text NOT NULL`; `status text NOT NULL`; `affected_quantity numeric(14,3) NULL`; `description text NOT NULL`; `is_blocking boolean NOT NULL DEFAULT false`; `reported_by uuid NOT NULL`; `reported_at timestamptz NOT NULL DEFAULT now()`; `created_at`, `created_by`, `updated_at`, `updated_by` de auditoria. El contexto minimo obligatorio es empresa, jornada y Snapshot Operacional; producto, zona, tarea, conteo y reconteo son opcionales. FK `(company_id,session_id,snapshot_id)` a `operational_snapshots(company_id,session_id,id)` y, cuando existe producto, FK `(company_id,snapshot_id,snapshot_product_id)` a `snapshot_products(company_id,snapshot_id,id)`. Sus checks limitan severidad a `INFORMATIONAL`, `OPERATIONAL`, `CRITICAL`, `BLOCKING`, estado a `OPEN`, `UNDER_REVIEW`, `RESOLVED`, `CLOSED` y cantidad no negativa. Las FKs opcionales conservan empresa/jornada/zona cuando aplica; `recount_request_id` usa `(company_id,session_id,session_zone_id,recount_request_id)`, y cuando existe producto usa la candidate key de solicitud que tambien lo incluye. Candidate key de incidencia: `(company_id,session_id,id)`. No hay XOR, pues una incidencia puede relacionar simultaneamente tarea, conteo y reconteo. `category_code` se valida posteriormente por RPC/servicio: codigos iniciales `PRODUCT_WITHOUT_CODE`, `UNKNOWN_CODE`, `UNIDENTIFIED_PRODUCT`, `DAMAGED_PRODUCT`, `EXPIRED_PRODUCT`, `OPEN_BOX`, `DAMAGED_PACKAGE`, `MIXED_PRODUCT`, `PRODUCT_OUT_OF_ZONE`, `VISUAL_DISCREPANCY`, `OTHER`; no hay tabla, enum ni CHECK cerrado en esta fase.
 
-| Tabla | Columnas tecnicas principales | Integridad / proposito |
-| --- | --- | --- |
-| `incidents` | IDs y contexto de session/zone/task/count/product snapshot, `category text`, `severity text`, `status text`, `affected_quantity numeric(14,3) null`, `description text`, `is_blocking boolean`, actor/fechas | CHECK cantidad no negativa; CRITICAL bloquea aprobacion; FK de contexto opcional pero exige al menos zona, tarea, conteo o producto. |
-| `incident_resolutions` | IDs, `incident_id`, `resolution text`, `resolved_by`, `resolved_at`, `metadata jsonb` | append-only; una resolucion vigente por incidencia mediante UNIQUE parcial. |
-| `evidence_files` | IDs, session, incidente/tarea/conteo opcional, `storage_bucket text`, `storage_path text`, `original_name text`, `mime_type text`, `file_size_bytes bigint`, `sha256 char(64)`, captor/cargador/fechas, `device_id`, `offline_idempotency_key uuid`, `sync_status`, `invalidated_at/by/reason` | CHECK MIME, 20 MB, hash, exactamente un contexto; UNIQUE path y offline key por empresa; metadata sin URL firmada. |
+**`inventarios.incident_resolutions`**. Historial append-only de revision/resolucion: `id uuid NOT NULL DEFAULT gen_random_uuid()`; `company_id`, `session_id`, `incident_id` uuid NOT NULL; `resolution_type text NOT NULL`; `previous_status`, `next_status text NOT NULL`; `description text NOT NULL`; `resolved_by uuid NOT NULL`; `resolved_at timestamptz NOT NULL DEFAULT now()`; `supersedes_resolution_id uuid NULL`; `superseded_at timestamptz NULL`; `created_at timestamptz NOT NULL DEFAULT now()`. FK `(company_id,session_id,incident_id)` a `incidents`; autorreferencia `(company_id,session_id,incident_id,supersedes_resolution_id)` mediante candidate key `(company_id,session_id,incident_id,id)`. Checks: estados solo `OPEN`, `UNDER_REVIEW`, `RESOLVED`, `CLOSED`; descripcion no vacia; `previous_status <> next_status`; y sin autorreferencia. UNIQUE `(company_id,session_id,incident_id,id)` y parcial `(company_id,incident_id) WHERE superseded_at IS NULL`. `incidents.status` es la proyeccion operativa; la futura RPC actualiza estado y agrega/supersede resolucion en una transaccion.
 
-Bucket futuro fijo: `inventory-evidence`, privado. Ruta: `<company_id>/sessions/<session_id>/incidents/<incident_id>/<evidence_id>/<sha256>.<ext>`; tareas y conteos sustituyen el segmento de incidencia. No hay DELETE fisico desde clientes; invalidacion conserva objeto y metadata. Indices: incidencias abiertas por `(company_id,session_id,severity,status)`, evidencias por `(company_id,session_id)` y por cada FK contextual.
+**`inventarios.evidence_files`**. Columnas: `id`, `company_id`, `session_id` UUID NOT NULL; exactamente uno de `incident_id`, `task_id`, `count_entry_id`, `recount_request_id` UUID NOT NULL; `storage_bucket text NOT NULL DEFAULT 'inventory-evidence'`; `storage_path text NOT NULL`; `original_name text NOT NULL`; `mime_type text NOT NULL`; `file_size_bytes bigint NOT NULL`; `sha256 char(64) NOT NULL`; `captured_by uuid NOT NULL`; `captured_at timestamptz NOT NULL`; `uploaded_by uuid NULL`; `uploaded_at timestamptz NULL`; `device_id text NULL`; `offline_idempotency_key uuid NULL`; `source text NOT NULL`; `sync_status text NOT NULL`; `invalidated_at`, `invalidated_by`, `invalidation_reason`, `notes` nullable; auditoria estandar. FKs incluyen empresa, jornada y el contexto compatible mediante candidate keys `(company_id,session_id,id)` de incidencias, tareas, conteos y solicitudes. CHECK XOR de los cuatro contextos, MIME `image/jpeg`, `image/png`, `image/webp`, `application/pdf`, tamano entre 0 y 20971520, hash hexadecimal de 64 caracteres y sync `PENDING`, `SYNCED`, `FAILED`, `INVALIDATED`. UNIQUE `(storage_bucket,storage_path)` y parcial `(company_id,offline_idempotency_key) WHERE offline_idempotency_key IS NOT NULL`; indices por jornada y cada contexto. No persiste URL, binario ni credencial.
 
-**`inventarios.recount_requests`** y **`recount_decisions`**.
+**`inventarios.recount_requests`**. No existe `recount_results`; sus aportes son `count_entries.recount_request_id`. Columnas: `id`, `company_id`, `session_id`, `snapshot_id`, `session_zone_id`, `snapshot_product_id`, `source_task_id` UUID NOT NULL; `source_count_entry_id uuid NULL`; `reason text NOT NULL`; `ordinal integer NOT NULL`; `cycle_number integer NOT NULL`; `requested_by uuid NOT NULL`; `requested_at timestamptz NOT NULL DEFAULT now()`; `assigned_participant_id`, `assigned_user_id` UUID NULL; `assigned_at`, `started_at`, `completed_at`, `cancelled_at` timestamptz NULL; `cancelled_by uuid NULL`; `cancellation_reason text NULL`; `status text NOT NULL DEFAULT 'REQUESTED'`; auditoria estandar mutable (`created_at`, `created_by`, `updated_at`, `updated_by`). FKs compuestas preservan sesion, snapshot, zona, producto, tarea/conteo origen y participante asignado. Checks: `ordinal > 0`, `cycle_number > 0`, motivo no vacio, estado `REQUESTED`, `ASSIGNED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`, y cancelacion todo nulo o actor/motivo no vacios. UNIQUE `(company_id,session_id,session_zone_id,snapshot_product_id,ordinal)` y candidate keys `(company_id,session_id,session_zone_id,snapshot_product_id,id)` y `(company_id,session_id,session_zone_id,id)`; indices por estado, producto y asignado. La coincidencia participante-usuario, transiciones y ceguera pertenecen a RPC.
 
-| Tabla | Columnas tecnicas principales | Integridad / proposito |
-| --- | --- | --- |
-| `recount_requests` | IDs de session/zone/product snapshot/task origen, `ordinal integer`, motivo, solicitante, tarea de reconteo, asignado, solicitado/finalizado | UNIQUE `(company_id,session_id,session_zone_id,snapshot_product_id,ordinal)`; ordinal positivo, sin limite maximo. |
-| `recount_decisions` | IDs de solicitud, `selected_count_entry_id`, supervisor, fecha, justificacion, `confidence_score numeric(5,2) null` | UNIQUE `(company_id,recount_request_id)`; confianza derivada, nunca promedio oficial. |
-
-Las tareas de reconteo usan `tasks.task_kind = RECOUNT`, son ciegas y se crean atomica y separadamente de la tarea origen.
+**`inventarios.recount_decisions`**. Append-only: `id`, `company_id`, `session_id`, `session_zone_id`, `snapshot_product_id`, `recount_request_id`, `selected_count_entry_id` UUID NOT NULL; `supersedes_decision_id uuid NULL`; `superseded_at timestamptz NULL`; `cycle_number integer NOT NULL`; `decided_by uuid NOT NULL`; `decided_at timestamptz NOT NULL DEFAULT now()`; `justification text NOT NULL`; `confidence_score numeric(5,2) NULL`; `created_at timestamptz NOT NULL DEFAULT now()`, `created_by uuid NOT NULL`. FKs compuestas preservan solicitud, contexto comun y conteo elegido; `supersedes_decision_id` referencia otra decision de la misma solicitud mediante candidate key `(company_id,recount_request_id,id)`. Checks: ciclo positivo, justificacion no vacia, autorreferencia prohibida y confianza entre 0 y 100. Hay multiples decisiones historicas, UNIQUE `(company_id,recount_request_id,id)`, parcial `(company_id,recount_request_id) WHERE superseded_at IS NULL`, e indices por solicitud, conteo seleccionado y vigencia. No existe UNIQUE total por solicitud, ni promedio automatico; la validacion semantica del conteo original o de reconteo queda para RPC.
 
 ### 5.5 Consolidacion, versiones, exportacion y conciliacion
 
@@ -241,7 +225,9 @@ La RPC exige sync posterior a importacion, `COMPLETED`, terminado, sin error y q
 - Referencias a maestros externos se validan por FK simple y RPC/trigger de integridad porque no todas exponen clave unica compuesta. Validar empresa de bodega, ubicacion, sync y usuario; producto debe ser de empresa o global.
 - No usar `ON DELETE CASCADE` en snapshots, conteos, eventos, versiones, evidencias, exportaciones o conciliaciones. Usar `RESTRICT` para relaciones requeridas e historial/autorizacion para cancelaciones.
 - CHECK de cantidades, fechas de estado, costo nulo controlado, hashes de 64 caracteres, tamanos de archivo y MIME. `numeric(14,3)` para cantidades; `numeric(14,2)` para costo/valores monetarios, acorde a integraciones.
-- UNIQUE parcial: tarea PRIMARY activa por zona; usuario con una tarea IN_PROGRESS; participante vigente; asignacion vigente; offline idempotency; version oficial; exportacion oficial por tipo; resolucion vigente.
+- Toda incidencia exige `(company_id,session_id,snapshot_id)` contra el Snapshot Operacional; `snapshot_product_id` permanece nullable, pero cuando existe usa la FK compuesta al mismo snapshot.
+- UNIQUE parcial: tarea PRIMARY activa por zona; usuario con una tarea IN_PROGRESS; participante vigente; asignacion vigente; offline idempotency; resolucion vigente; y una decision de reconteo vigente por solicitud donde `superseded_at IS NULL`.
+- `evidence_files` exige XOR de exactamente uno entre `incident_id`, `task_id`, `count_entry_id` y `recount_request_id`. Una evidencia de captura fisica de reconteo se vincula al conteo; la evidencia de solicitud, asignacion o investigacion se vincula a la solicitud de reconteo.
 - La validez de consolidacion se determina por evento VALIDATED vigente y ausencia de INVALIDATED/CANCELLED posterior; no por una bandera manual editable.
 
 ## 7. Indices
@@ -256,8 +242,12 @@ La RPC exige sync posterior a importacion, `COMPLETED`, terminado, sin error y q
 | `task_events` | `(company_id,task_id,occurred_at DESC)` | btree | historia |
 | `count_entries` | `(company_id,task_id,captured_at)` | btree | sincronizacion y consolidacion |
 | `count_entries` | `(company_id,snapshot_id,bsale_variant_id)` | btree | consolidacion por SKU |
+| `count_entry_corrections` | `(company_id,root_count_entry_id)` parcial vigente | unique btree | una correccion vigente |
 | `incidents` | `(company_id,session_id,severity,status)` | btree | bloqueos/aprobacion |
-| `evidence_files` | `(company_id,session_id)` | btree | evidencia jornada |
+| `incident_resolutions` | `(company_id,incident_id)` parcial vigente | unique btree | decision vigente e historia |
+| `evidence_files` | `(company_id,session_id)` y cada FK contextual | btree | evidencia jornada/contexto |
+| `recount_requests` | `(company_id,session_id,status)`, producto y asignado | btree | pendientes y operacion |
+| `recount_decisions` | solicitud parcial vigente y conteo seleccionado | btree/unique | seleccion supervisora |
 | `snapshot_stocks` | `(company_id,snapshot_id,bsale_variant_id,office_id)` | unique btree | corte Bsale |
 | `official_version_items` | `(company_id,official_version_id,bsale_variant_id)` | btree | exportacion |
 | `reconciliation_items` | `(company_id,reconciliation_run_id,variant_id,office_id)` | unique btree | comparacion Bsale |
@@ -352,8 +342,9 @@ Todas las politicas SELECT filtran `core.has_company_access(auth.uid(), company_
 | scope/zones/participants | RPC | hasta snapshot o revocacion | no | snapshot/revocacion | RPC |
 | snapshots y componentes | RPC | no | no | insercion completa | RPC |
 | tasks/asignaciones | RPC | transiciones autorizadas | no | COMPLETED salvo REOPENED | RPC |
-| task_events/counts/corrections | RPC | no | no | insercion | RPC |
-| incidents/resolutions | RPC | estado autorizado / no | no | CLOSED / insercion | RPC |
+| task_events/counts/corrections | RPC | solo `superseded_at` controlado en correcciones | no | insercion | RPC |
+| incidents | RPC | estado operativo mediante RPC | no | CLOSED | RPC |
+| incident_resolutions | RPC | solo `superseded_at` controlado | no | insercion | RPC |
 | evidence_files | RPC | solo estado tecnico/invalidation | no | SYNCED | RPC |
 | consolidation caches | RPC/servicio | regenerable | no | version oficial | servicio |
 | official_versions/items | RPC | no | no | insercion | RPC |
@@ -375,9 +366,13 @@ erDiagram
     TASKS ||--o{ TASK_EVENTS : logs
     TASKS ||--o{ COUNT_ENTRIES : captures
     COUNT_ENTRIES ||--o{ COUNT_ENTRY_CORRECTIONS : replaces
+    RECOUNT_REQUESTS ||--o{ COUNT_ENTRIES : produces
     SESSIONS ||--o{ INCIDENTS : has
+    OPERATIONAL_SNAPSHOTS ||--o{ INCIDENTS : contextualizes
+    INCIDENTS ||--o{ INCIDENT_RESOLUTIONS : explains
     INCIDENTS ||--o{ EVIDENCE_FILES : supports
     SESSIONS ||--o{ RECOUNT_REQUESTS : requests
+    RECOUNT_REQUESTS ||--o{ RECOUNT_DECISIONS : decides
     SESSIONS ||--o{ OFFICIAL_VERSIONS : approves
     OFFICIAL_VERSIONS ||--o{ OFFICIAL_VERSION_ITEMS : freezes
     OFFICIAL_VERSIONS ||--o{ EXPORTS : renders
@@ -390,11 +385,11 @@ erDiagram
 1. Crear esquema `inventarios`, grants minimos, checks y convenciones compartidas.
 2. Crear sesiones, alcance, zonas V1, participantes y constraints multiempresa.
 3. Crear Snapshot Operacional y validacion de referencias externas.
-4. Crear tareas, asignaciones, eventos, conteos y correcciones idempotentes.
-5. Crear incidencias, evidencias y reconteos.
+4. Crear tareas, asignaciones y eventos.
+5. Crear Fase 3: las siete tablas `count_entries`, `count_entry_corrections`, `incidents`, `incident_resolutions`, `evidence_files`, `recount_requests` y `recount_decisions`, con RLS y grants iniciales. No existe `recount_results`: los resultados de reconteo usan `count_entries`.
 6. Crear consolidacion, valorizacion, versiones oficiales y hashes.
 7. Crear exportaciones, conciliaciones y auditoria funcional.
-8. Crear RPC, triggers de inmutabilidad/integridad, RLS y grants.
+8. Crear RPC, triggers de inmutabilidad/integridad y RLS funcional.
 9. Crear vistas, indices finales y validaciones de rendimiento.
 
 Cada migracion futura debe mantenerse bajo 500 lineas y desplegarse en orden; primero estructuras y constraints, despues RPC/RLS, finalmente vistas e indices no esenciales.
