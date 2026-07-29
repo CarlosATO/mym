@@ -32,12 +32,16 @@ function getDisplayModule(module: Modulo) {
 export function ModuleCard({ module, disabled }: ModuleCardProps) {
   const Icon = getIcon(module.icon)
   const displayModule = getDisplayModule(module)
+  const route = typeof module.route === 'string' && module.route.trim().length > 0
+    ? module.route.trim()
+    : null
+  const isDisabled = disabled || route === null
 
   const content = (
     <div
       className={cn(
         'group flex items-center gap-4 rounded-xl border px-4 py-3.5 transition-all duration-200',
-        disabled
+        isDisabled
           ? 'border-theme-border bg-theme-text/3 opacity-50 cursor-default'
           : 'border-theme-border bg-theme-text/5 hover:bg-theme-text/10 hover:border-theme-border-accent hover:shadow-md hover:shadow-theme-bg/30 cursor-pointer'
       )}
@@ -45,7 +49,7 @@ export function ModuleCard({ module, disabled }: ModuleCardProps) {
       {/* Icono */}
       <div className={cn(
         'flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center transition-all duration-200',
-        disabled
+        isDisabled
           ? 'bg-theme-text/5 text-theme-text-muted/40'
           : 'bg-theme-text/8 text-theme-text-muted group-hover:text-theme-accent group-hover:bg-theme-accent/10'
       )}>
@@ -56,14 +60,14 @@ export function ModuleCard({ module, disabled }: ModuleCardProps) {
       <div className="min-w-0 flex-1">
         <p className={cn(
           'text-sm font-semibold leading-tight truncate',
-          disabled ? 'text-theme-text/40' : 'text-theme-text'
+          isDisabled ? 'text-theme-text/40' : 'text-theme-text'
         )}>
           {displayModule.name}
         </p>
         {displayModule.description && (
           <p className={cn(
             'text-xs mt-0.5 leading-snug line-clamp-1',
-            disabled ? 'text-theme-text-muted/30' : 'text-theme-text-muted/60'
+            isDisabled ? 'text-theme-text-muted/30' : 'text-theme-text-muted/60'
           )}>
             {displayModule.description}
           </p>
@@ -71,7 +75,7 @@ export function ModuleCard({ module, disabled }: ModuleCardProps) {
       </div>
 
       {/* Indicador derecho */}
-      {disabled ? (
+      {isDisabled ? (
         <span className="flex-shrink-0 text-[10px] font-medium text-theme-text-muted/40 uppercase tracking-wider">
           Pronto
         </span>
@@ -81,12 +85,12 @@ export function ModuleCard({ module, disabled }: ModuleCardProps) {
     </div>
   )
 
-  if (disabled) {
+  if (isDisabled || route === null) {
     return <div>{content}</div>
   }
 
   return (
-    <Link href={module.route} className="block">
+    <Link href={route} className="block">
       {content}
     </Link>
   )

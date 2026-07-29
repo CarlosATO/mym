@@ -30,7 +30,7 @@ export interface Modulo {
   name: string
   description: string | null
   icon: string
-  route: string
+  route: string | null
   sort_order: number
 }
 
