@@ -165,6 +165,8 @@ La invalidacion de una validacion vigente conserva la tarea en `COMPLETED` y el 
 
 La reapertura desde `COMPLETED` inicia de inmediato un nuevo ciclo en `IN_PROGRESS`. Conserva la asignacion vigente y usa su `user_id` como `active_user_id`; incrementa `validation_cycle`, limpia validacion, pausa y finalizacion, e informa `opened_at` con el instante de reapertura. Inserta `REOPENED` en `task_events` y `task_state_transitions` para `COMPLETED -> IN_PROGRESS`, ambos en el nuevo ciclo; no inserta `STARTED`, no modifica asignaciones y conserva todo el historial anterior.
 
+La reasignacion cierra una asignacion vigente y crea otra para un participante `COUNTER` vigente de la misma jornada. Conserva el estado y `validation_cycle`, actualiza `current_assignment_id`, incrementa version y mantiene el historial. En `IN_PROGRESS` el nuevo usuario pasa a `active_user_id`; en `ASSIGNED` y `PAUSED` queda nulo. Registra `REASSIGNED` en `task_events`, pero no crea `task_state_transitions` porque no hay cambio de estado.
+
 ### 5.2 task_events
 
 La definicion oficial de `task_events.cycle` es `integer NOT NULL DEFAULT 1` y su check exige `cycle > 0`. La migracion 4B.2 hace backfill seguro (`UPDATE inventarios.task_events SET cycle = 1 WHERE cycle = 0`), reemplaza el check previo y cambia el default. No altera el catalogo de eventos ni migraciones de Fase 2.
