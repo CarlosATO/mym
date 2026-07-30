@@ -308,6 +308,12 @@ Asigna un `COUNTER` vigente de la misma jornada. La solicitud pasa a `ASSIGNED`.
 
 `inventarios.start_inventory_recount(p_company_id uuid, p_recount_request_id uuid, p_expected_status text, p_idempotency_key uuid) RETURNS jsonb` usa el codigo `inventarios.recount.start`, permiso `inventarios.recounts.manage` y `expected_status = ASSIGNED`. El actor debe ser `assigned_user_id` de la solicitud y el participante asignado debe continuar vigente como `COUNTER`. Requiere `task.status = COMPLETED`, `session.status = UNDER_REVIEW`, tarea no cancelada y sin validacion vigente. La solicitud pasa de `ASSIGNED` a `IN_PROGRESS`. No modifica la tarea, el ciclo, la jornada ni la asignacion. No registra capturas.
 
+### 6.16 Captura de recuento
+
+`inventarios.record_inventory_recount(p_company_id uuid, p_recount_request_id uuid, p_expected_status text, p_quantities jsonb, p_identification_method text, p_scanned_code text, p_capture_source text, p_offline_id uuid, p_device_id text, p_captured_at timestamptz, p_idempotency_key uuid) RETURNS jsonb` usa el codigo `inventarios.recount.record`, permiso `inventarios.recounts.manage` y `expected_status = IN_PROGRESS`. El actor debe ser `assigned_user_id` de la solicitud y `COUNTER` vigente. Requiere `task.status = COMPLETED`, `session.status = UNDER_REVIEW`.
+
+El contexto (sesion, snapshot, zona, producto, tarea, ciclo) se hereda de la solicitud. `snapshot_location_id` se deriva de la zona. `bsale_variant_id` se deriva del producto snapshot. Captura append-only con las mismas cinco cantidades y reglas WEB/MOBILE de `record_inventory_count`. `captured_at` no puede ser anterior a `started_at` de la solicitud. No modifica `recount_requests`, tarea ni ciclo. Multiples capturas permitidas.
+
 ## 7. Maquina de estados y auditoria
 
 La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. La reapertura inicia inmediatamente el nuevo ciclo con `COMPLETED -> IN_PROGRESS`; no crea un estado `REOPENED` ni un evento `STARTED` adicional. La reasignacion se permite en `ASSIGNED`, `IN_PROGRESS` y `PAUSED` sin cambiar estado; no se cancela desde `IN_PROGRESS`: primero se pausa. Cada mutacion exitosa de asignacion, reasignacion, inicio, pausa, reanudacion, finalizacion, validacion, reapertura o cancelacion incrementa `tasks.version` exactamente una vez. Solo reapertura incrementa ciclo.
