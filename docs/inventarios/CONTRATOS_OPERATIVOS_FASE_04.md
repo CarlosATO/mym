@@ -236,6 +236,16 @@ El nuevo responsable debe ser un usuario activo, no eliminado, con acceso activo
 
 La reasignacion conserva estado y ciclo. Si la tarea esta `IN_PROGRESS`, `active_user_id` cambia al nuevo contador; en `ASSIGNED` y `PAUSED` queda `null`. Inserta un unico evento `REASSIGNED` con metadata `{"previous_assignment_id":"uuid","previous_user_id":"uuid","new_assignment_id":"uuid","new_user_id":"uuid","reason":"texto"}` y no inserta `task_state_transitions`: `REASSIGNED` es un evento operativo, no una transicion de estado.
 
+### 6.7 Cancelacion terminal de tarea
+
+`inventarios.cancel_inventory_task(p_company_id uuid, p_task_id uuid, p_expected_version integer, p_expected_cycle integer, p_reason text, p_idempotency_key uuid) RETURNS jsonb` usa el codigo `inventarios.task.cancel`, permiso `inventarios.tasks.cancel` y participante vigente `SUPERVISOR` o `ADMINISTRATOR` de la jornada. Exige tarea `ASSIGNED` o `PAUSED`, version y ciclo esperados, jornada `DRAFT`, `PREPARED`, `COUNTING` o `UNDER_REVIEW`, y una asignacion vigente coherente con `current_assignment_id`. No admite `IN_PROGRESS`, `COMPLETED`, jornadas aprobadas o posteriores, ni jornadas canceladas.
+
+El motivo se normaliza con `btrim`, es obligatorio y debe tener entre 5 y 500 caracteres. El payload idempotente contiene solo operacion, empresa, tarea, version esperada, ciclo esperado y motivo normalizado. Un replay retorna el envelope persistido con solo `replayed: true`; una clave reutilizada con payload distinto retorna `INV_IDEMPOTENCY_CONFLICT`.
+
+`CANCELLED` es un evento y una proyeccion terminal mediante `tasks.cancelled_at` y `tasks.cancelled_by`; no es un estado persistente de `tasks`. La operacion conserva estado y ciclo, libera la asignacion vigente con el motivo, limpia `current_assignment_id` y `active_user_id`, incrementa version e inserta un unico evento `CANCELLED` con `reason` y metadata `{"previous_assignment_id":"uuid","previous_user_id":"uuid"}`. No crea `task_state_transitions`. Una tarea ya cancelada con una nueva clave retorna `INV_TASK_ALREADY_CANCELLED`; una proyeccion de cancelacion incoherente retorna `INV_CONCURRENT_MODIFICATION`.
+
+Las consultas y operaciones de tareas activas deben exigir `cancelled_at IS NULL`. Aunque conserva su estado historico, una tarea cancelada no puede volver a operar: inicio, reanudacion y reasignacion requieren asignacion vigente y `current_assignment_id` coherente, que la cancelacion elimina. Cualquier operacion futura de asignacion tambien debe exigir `tasks.cancelled_at IS NULL`. La cancelacion no se confunde con `INVALIDATED`, `REOPENED` ni `REASSIGNED`; `REOPENED` sigue exigiendo `COMPLETED`.
+
 ## 7. Maquina de estados y auditoria
 
 La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. La reapertura inicia inmediatamente el nuevo ciclo con `COMPLETED -> IN_PROGRESS`; no crea un estado `REOPENED` ni un evento `STARTED` adicional. La reasignacion se permite en `ASSIGNED`, `IN_PROGRESS` y `PAUSED` sin cambiar estado; no se cancela desde `IN_PROGRESS`: primero se pausa. Cada mutacion exitosa de asignacion, reasignacion, inicio, pausa, reanudacion, finalizacion, validacion, reapertura o cancelacion incrementa `tasks.version` exactamente una vez. Solo reapertura incrementa ciclo.
@@ -249,6 +259,7 @@ La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. 
 | Reapertura | `REOPENED` | `REOPENED` |
 | Reasignacion | ninguno | `REASSIGNED` |
 | Invalidacion | ninguno | `INVALIDATED` |
+| Cancelacion | ninguno | `CANCELLED` |
 
 `task_state_transitions` audita el estado persistente. `task_events` conserva los hechos funcionales aprobados en Fase 2. No son estructuras intercambiables y no se agregan `PAUSED` ni `COMPLETED` a `task_events.event_type`.
 
@@ -282,7 +293,7 @@ El reconteo sigue `REQUESTED -> ASSIGNED -> IN_PROGRESS -> COMPLETED`, con cance
 
 En 4B.0b, `operation_idempotency` habilita RLS y termina con cero politicas funcionales. Se revoca todo acceso directo de `PUBLIC`, `anon` y `authenticated`; solo `service_role` recibe `SELECT`, `INSERT` y `UPDATE`, nunca `DELETE`, `TRUNCATE`, `REFERENCES` ni `TRIGGER`. No hay lectura directa de `authenticated`, no se agrega `inventarios` a `api.schemas`, no hay wrappers `public` ni grants `EXECUTE`. Las RPC futuras `SECURITY DEFINER` acceden mediante propietario controlado, `search_path` fijo, objetos calificados, `auth.uid()`, empresa derivada, `REVOKE EXECUTE FROM PUBLIC` y grants explicitos por firma.
 
-Codigos minimos: `INV_UNAUTHENTICATED`, `INV_COMPANY_ACCESS_DENIED`, `INV_PERMISSION_REQUIRED`, `INV_ROLE_NOT_ALLOWED`, `INV_SESSION_INVALID_STATE`, `INV_SESSION_NOT_PREPARED`, `INV_SCOPE_NOT_INCLUDED`, `INV_TASK_NOT_ASSIGNED`, `INV_TASK_ALREADY_ASSIGNED`, `INV_TASK_INVALID_STATE`, `INV_TASK_NOT_VALIDATED`, `INV_TASK_CYCLE_CONFLICT`, `INV_VERSION_CONFLICT`, `INV_PARTICIPANT_INACTIVE`, `INV_USER_ALREADY_ACTIVE`, `INV_IDEMPOTENCY_CONFLICT`, `INV_IDEMPOTENCY_IN_PROGRESS`, `INV_OPERATION_ALREADY_APPLIED`, `INV_COUNT_IDEMPOTENCY_CONFLICT`, `INV_COUNT_CONTEXT_MISMATCH`, `INV_COUNT_QUANTITY_MISMATCH`, `INV_INCIDENT_BLOCKING`, `INV_RECOUNT_INVALID_STATE`, `INV_RECOUNT_INCOMPLETE`, `INV_DECISION_CONTEXT_MISMATCH`, `INV_DECISION_NOT_FOUND`, `INV_CONCURRENT_MODIFICATION` e `INV_NOT_FOUND`. `INV_IDEMPOTENCY_IN_PROGRESS` es reintentable y usa el mensaje seguro definido en idempotencia.
+Codigos minimos: `INV_UNAUTHENTICATED`, `INV_COMPANY_ACCESS_DENIED`, `INV_PERMISSION_REQUIRED`, `INV_ROLE_NOT_ALLOWED`, `INV_SESSION_INVALID_STATE`, `INV_SESSION_NOT_PREPARED`, `INV_SCOPE_NOT_INCLUDED`, `INV_TASK_NOT_ASSIGNED`, `INV_TASK_ALREADY_ASSIGNED`, `INV_TASK_ALREADY_CANCELLED`, `INV_TASK_INVALID_STATE`, `INV_TASK_NOT_VALIDATED`, `INV_TASK_CYCLE_CONFLICT`, `INV_VERSION_CONFLICT`, `INV_PARTICIPANT_INACTIVE`, `INV_USER_ALREADY_ACTIVE`, `INV_IDEMPOTENCY_CONFLICT`, `INV_IDEMPOTENCY_IN_PROGRESS`, `INV_OPERATION_ALREADY_APPLIED`, `INV_COUNT_IDEMPOTENCY_CONFLICT`, `INV_COUNT_CONTEXT_MISMATCH`, `INV_COUNT_QUANTITY_MISMATCH`, `INV_INCIDENT_BLOCKING`, `INV_RECOUNT_INVALID_STATE`, `INV_RECOUNT_INCOMPLETE`, `INV_DECISION_CONTEXT_MISMATCH`, `INV_DECISION_NOT_FOUND`, `INV_CONCURRENT_MODIFICATION` e `INV_NOT_FOUND`. `INV_IDEMPOTENCY_IN_PROGRESS` es reintentable y usa el mensaje seguro definido en idempotencia.
 
 ## 11. Matriz de cambios fisicos requeridos
 
