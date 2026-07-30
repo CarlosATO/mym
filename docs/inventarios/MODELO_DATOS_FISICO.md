@@ -169,6 +169,8 @@ La reasignacion cierra una asignacion vigente y crea otra para un participante `
 
 La cancelacion terminal solo admite tareas `ASSIGNED` o `PAUSED`. Conserva ambos estado y ciclo, informa `cancelled_at` y `cancelled_by`, libera la asignacion vigente, limpia `current_assignment_id` y `active_user_id`, e incrementa version y auditoria. Inserta `CANCELLED` con motivo obligatorio en `task_events.reason` y no crea `task_state_transitions`. `CANCELLED` no es un estado de `tasks`: las consultas y operaciones de tarea activa deben exigir `cancelled_at IS NULL`; toda futura asignacion debe hacerlo tambien. La tarea cancelada conserva historia, pero no puede reactivarse mediante inicio, reanudacion, reasignacion, invalidacion o reapertura.
 
+La captura append-only inserta una fila en `count_entries` por cada aporte. No actualiza filas previas, no usa `ON CONFLICT` para acumular y no modifica `tasks.version`, `tasks.status`, `tasks.active_user_id` ni `task_assignments`. La operacion bloquea la tarea con `FOR SHARE`, valida `IN_PROGRESS`, ciclo coherente y asignacion vigente. `physical_quantity` se calcula como suma de las cinco categorias. El ciclo corresponde a `tasks.validation_cycle`. La tabla no posee `assignment_id` propio; la relacion se deriva mediante `tasks.current_assignment_id`.
+
 ### 5.2 task_events
 
 La definicion oficial de `task_events.cycle` es `integer NOT NULL DEFAULT 1` y su check exige `cycle > 0`. La migracion 4B.2 hace backfill seguro (`UPDATE inventarios.task_events SET cycle = 1 WHERE cycle = 0`), reemplaza el check previo y cambia el default. No altera el catalogo de eventos ni migraciones de Fase 2.
