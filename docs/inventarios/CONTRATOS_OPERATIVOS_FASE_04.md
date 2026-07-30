@@ -320,6 +320,12 @@ El contexto (sesion, snapshot, zona, producto, tarea, ciclo) se hereda de la sol
 
 Valida que todas las capturas vinculadas compartan contexto coherente, aplica la cadena de correcciones para derivar el candidate efectivo de cada raiz, y exige al menos un candidate no invalidado (`INV_RECOUNT_NO_COUNTS` en caso contrario). `completed_at` se registra con timestamp servidor. La solicitud pasa a `COMPLETED`. No modifica capturas, tarea, ciclo ni jornada. No crea `recount_decision`. `COMPLETED` es terminal para la ejecucion; la decision definitiva corresponde a 4C.5B.
 
+### 6.18 Cancelacion de solicitud de recuento
+
+`inventarios.cancel_inventory_recount(p_company_id uuid, p_recount_request_id uuid, p_expected_status text, p_reason text, p_idempotency_key uuid) RETURNS jsonb` usa el codigo `inventarios.recount.cancel`, permiso `inventarios.recounts.manage` y rol `SUPERVISOR` vigente. Acepta `expected_status = REQUESTED`, `ASSIGNED` o `IN_PROGRESS`. Requiere `session.status = COUNTING` o `UNDER_REVIEW`. `source_task` se valida solo contextualmente, sin exigir estado ni ciclo actual.
+
+`cancellation_reason` obligatorio (5-1000 caracteres). Conserva asignacion, `started_at` y capturas vinculadas. No invalida capturas ni crea decisiones. `CANCELLED` es terminal. Una nueva solicitud para el mismo producto y zona queda permitida. `COMPLETED` no puede cancelarse.
+
 ## 7. Maquina de estados y auditoria
 
 La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. La reapertura inicia inmediatamente el nuevo ciclo con `COMPLETED -> IN_PROGRESS`; no crea un estado `REOPENED` ni un evento `STARTED` adicional. La reasignacion se permite en `ASSIGNED`, `IN_PROGRESS` y `PAUSED` sin cambiar estado; no se cancela desde `IN_PROGRESS`: primero se pausa. Cada mutacion exitosa de asignacion, reasignacion, inicio, pausa, reanudacion, finalizacion, validacion, reapertura o cancelacion incrementa `tasks.version` exactamente una vez. Solo reapertura incrementa ciclo.
