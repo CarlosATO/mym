@@ -171,6 +171,8 @@ La cancelacion terminal solo admite tareas `ASSIGNED` o `PAUSED`. Conserva ambos
 
 La captura append-only inserta una fila en `count_entries` por cada aporte. No actualiza filas previas, no usa `ON CONFLICT` para acumular y no modifica `tasks.version`, `tasks.status`, `tasks.active_user_id` ni `task_assignments`. La operacion bloquea la tarea con `FOR SHARE`, valida `IN_PROGRESS`, ciclo coherente y asignacion vigente. `physical_quantity` se calcula como suma de las cinco categorias. El ciclo corresponde a `tasks.validation_cycle`. La tabla no posee `assignment_id` propio; la relacion se deriva mediante `tasks.current_assignment_id`.
 
+La asignacion de recuento actualiza `recount_requests.status` a `ASSIGNED` e informa `assigned_participant_id`, `assigned_user_id` y `assigned_at`. La asignacion es propia de la solicitud e independiente de `task_assignments`. No existe reasignacion en V1.
+
 La solicitud de recuento crea una fila en `recount_requests` con `status = REQUESTED`. Cada solicitud pertenece a un `snapshot_product_id` y `session_zone_id` concretos. La RPC asigna un `ordinal` correlativo, rechaza solicitudes activas duplicadas del mismo producto y zona, y no modifica la tarea ni incrementa `validation_cycle`.
 
 La resolucion de incidentes actualiza `incidents.status` e inserta una fila en `incident_resolutions` con `previous_status`, `next_status`, `resolution_type`, `description`, `resolved_by` y `resolved_at`. La resolucion anterior (si existe) se marca con `superseded_at`. El indice parcial `uq_inventarios_resolutions_current_incident WHERE superseded_at IS NULL` garantiza una sola resolucion vigente por incidente. La resolucion no modifica `is_blocking`, `severity`, tareas ni conteos.
