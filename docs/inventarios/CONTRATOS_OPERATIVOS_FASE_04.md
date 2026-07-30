@@ -256,6 +256,14 @@ Las consultas y operaciones de tareas activas deben exigir `cancelled_at IS NULL
 
 La RPC bloquea la tarea y la asignacion vigente con `FOR SHARE`, no `FOR UPDATE`. Usa advisory lock namespaced por empresa y `p_idempotency_key` para concurrencia fina. No incrementa `tasks.version`, no modifica la tarea, no crea `task_events` ni `task_state_transitions`. Inserta una unica fila append-only en `count_entries`. Un mismo `offline_id` no puede reutilizarse; una repeticion tecnica con la misma `p_idempotency_key` devuelve replay.
 
+### 6.9 Correccion append-only de conteo
+
+`inventarios.correct_inventory_count(p_company_id uuid, p_root_count_entry_id uuid, p_expected_current_count_entry_id uuid, p_quantities jsonb, p_reason text, p_capture_source text, p_offline_id uuid, p_device_id text, p_captured_at timestamptz, p_idempotency_key uuid) RETURNS jsonb` usa el codigo `inventarios.count.correct`, permiso `inventarios.counts.correct` y dos modalidades:
+
+Modalidad COUNTER: `task.status = IN_PROGRESS` y `session.status = COUNTING`. El actor debe ser participante `COUNTER` vigente y responsable asignado de la tarea. Modalidad SUPERVISOR: `task.status = COMPLETED` y `session.status = UNDER_REVIEW`, sin validacion vigente (`current_validation_event_id IS NULL`). El actor debe ser participante `SUPERVISOR` vigente. No se admite tarea cancelada, ciclo historico, raiz invalidada ni sesion posterior a `COUNTING`/`UNDER_REVIEW`.
+
+Crea un nuevo `count_entry` de reemplazo con cantidades corregidas, contexto heredado de la raiz e identificacion heredada del aporte efectivo. La correccion activa anterior (si existe) se supersede. Cada correccion genera una `count_entry_correction` con `revision_number` secuencial. No actualiza ninguna fila de `count_entries` existente, no modifica `tasks.version`, no invalida la raiz ni el aporte previo, y no crea eventos ni transiciones. Para cada raiz existe como maximo una correccion activa (`superseded_at IS NULL`).
+
 ## 7. Maquina de estados y auditoria
 
 La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. La reapertura inicia inmediatamente el nuevo ciclo con `COMPLETED -> IN_PROGRESS`; no crea un estado `REOPENED` ni un evento `STARTED` adicional. La reasignacion se permite en `ASSIGNED`, `IN_PROGRESS` y `PAUSED` sin cambiar estado; no se cancela desde `IN_PROGRESS`: primero se pausa. Cada mutacion exitosa de asignacion, reasignacion, inicio, pausa, reanudacion, finalizacion, validacion, reapertura o cancelacion incrementa `tasks.version` exactamente una vez. Solo reapertura incrementa ciclo.

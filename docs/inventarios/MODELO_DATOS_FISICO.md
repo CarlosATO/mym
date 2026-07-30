@@ -171,6 +171,8 @@ La cancelacion terminal solo admite tareas `ASSIGNED` o `PAUSED`. Conserva ambos
 
 La captura append-only inserta una fila en `count_entries` por cada aporte. No actualiza filas previas, no usa `ON CONFLICT` para acumular y no modifica `tasks.version`, `tasks.status`, `tasks.active_user_id` ni `task_assignments`. La operacion bloquea la tarea con `FOR SHARE`, valida `IN_PROGRESS`, ciclo coherente y asignacion vigente. `physical_quantity` se calcula como suma de las cinco categorias. El ciclo corresponde a `tasks.validation_cycle`. La tabla no posee `assignment_id` propio; la relacion se deriva mediante `tasks.current_assignment_id`.
 
+La correccion de un conteo no actualiza filas: crea un nuevo `count_entry` con las cantidades corregidas y lo vincula mediante `count_entry_corrections` a la raiz de la cadena. La correccion activa anterior se marca con `superseded_at`, y el indice parcial `uq_inventarios_corrections_current_root` garantiza como maximo una correccion activa por raiz. La correccion no modifica `invalidated_at` del aporte original ni del previo, no cambia `tasks.version` y no crea eventos ni transiciones. El `revision_number` se incrementa secuencialmente para cada raiz.
+
 ### 5.2 task_events
 
 La definicion oficial de `task_events.cycle` es `integer NOT NULL DEFAULT 1` y su check exige `cycle > 0`. La migracion 4B.2 hace backfill seguro (`UPDATE inventarios.task_events SET cycle = 1 WHERE cycle = 0`), reemplaza el check previo y cambia el default. No altera el catalogo de eventos ni migraciones de Fase 2.
