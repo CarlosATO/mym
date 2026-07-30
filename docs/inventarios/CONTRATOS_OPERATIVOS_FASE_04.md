@@ -314,6 +314,12 @@ Asigna un `COUNTER` vigente de la misma jornada. La solicitud pasa a `ASSIGNED`.
 
 El contexto (sesion, snapshot, zona, producto, tarea, ciclo) se hereda de la solicitud. `snapshot_location_id` se deriva de la zona. `bsale_variant_id` se deriva del producto snapshot. Captura append-only con las mismas cinco cantidades y reglas WEB/MOBILE de `record_inventory_count`. `captured_at` no puede ser anterior a `started_at` de la solicitud. No modifica `recount_requests`, tarea ni ciclo. Multiples capturas permitidas.
 
+### 6.17 Finalizacion de solicitud de recuento
+
+`inventarios.complete_inventory_recount(p_company_id uuid, p_recount_request_id uuid, p_expected_status text, p_idempotency_key uuid) RETURNS jsonb` usa el codigo `inventarios.recount.complete`, permiso `inventarios.recounts.manage` y `expected_status = IN_PROGRESS`. El actor debe ser `assigned_user_id` y `COUNTER` vigente. Requiere `task.status = COMPLETED`, `session.status = UNDER_REVIEW`.
+
+Valida que todas las capturas vinculadas compartan contexto coherente, aplica la cadena de correcciones para derivar el candidate efectivo de cada raiz, y exige al menos un candidate no invalidado (`INV_RECOUNT_NO_COUNTS` en caso contrario). `completed_at` se registra con timestamp servidor. La solicitud pasa a `COMPLETED`. No modifica capturas, tarea, ciclo ni jornada. No crea `recount_decision`. `COMPLETED` es terminal para la ejecucion; la decision definitiva corresponde a 4C.5B.
+
 ## 7. Maquina de estados y auditoria
 
 La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. La reapertura inicia inmediatamente el nuevo ciclo con `COMPLETED -> IN_PROGRESS`; no crea un estado `REOPENED` ni un evento `STARTED` adicional. La reasignacion se permite en `ASSIGNED`, `IN_PROGRESS` y `PAUSED` sin cambiar estado; no se cancela desde `IN_PROGRESS`: primero se pausa. Cada mutacion exitosa de asignacion, reasignacion, inicio, pausa, reanudacion, finalizacion, validacion, reapertura o cancelacion incrementa `tasks.version` exactamente una vez. Solo reapertura incrementa ciclo.
