@@ -290,6 +290,14 @@ Matriz contractual: OPEN→UNDER_REVIEW, OPEN→RESOLVED, UNDER_REVIEW→RESOLVE
 
 La RPC bloquea el incidente y la resolucion vigente con `FOR UPDATE`, inserta una nueva `incident_resolution`, supersede la anterior, actualiza `incidents.status` y asigna `responsible_user_id` solo en la primera transicion desde OPEN. No modifica `is_blocking`, `severity`, tareas ni conteos. `CLOSED` es terminal.
 
+### 6.13 Solicitud de recuento por producto
+
+`inventarios.request_inventory_recount(p_company_id uuid, p_task_id uuid, p_expected_cycle integer, p_snapshot_product_id uuid, p_source_count_entry_id uuid, p_reason text, p_idempotency_key uuid) RETURNS jsonb` usa el codigo `inventarios.recount.request`, permiso `inventarios.recounts.manage` y dos modalidades.
+
+Modalidad COUNTER: `task.status = IN_PROGRESS`, `session.status = COUNTING`, actor `COUNTER` vigente y asignado. Modalidad SUPERVISOR: `task.status = COMPLETED`, `session.status = UNDER_REVIEW`, sin validacion vigente, actor `SUPERVISOR` vigente.
+
+`snapshot_product_id` es obligatorio y debe pertenecer al snapshot de la jornada. `source_count_entry_id` es opcional y debe coincidir contextualmente. El motivo es obligatorio (5-1000 caracteres). La RPC asigna ordinal correlativo por producto y zona y rechaza solicitudes activas duplicadas mediante `INV_RECOUNT_ALREADY_REQUESTED`. No modifica la tarea, no incrementa `validation_cycle` ni ejecuta el recuento. La ejecucion queda para Fase 4D.
+
 ## 7. Maquina de estados y auditoria
 
 La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. La reapertura inicia inmediatamente el nuevo ciclo con `COMPLETED -> IN_PROGRESS`; no crea un estado `REOPENED` ni un evento `STARTED` adicional. La reasignacion se permite en `ASSIGNED`, `IN_PROGRESS` y `PAUSED` sin cambiar estado; no se cancela desde `IN_PROGRESS`: primero se pausa. Cada mutacion exitosa de asignacion, reasignacion, inicio, pausa, reanudacion, finalizacion, validacion, reapertura o cancelacion incrementa `tasks.version` exactamente una vez. Solo reapertura incrementa ciclo.
