@@ -264,6 +264,38 @@ Modalidad COUNTER: `task.status = IN_PROGRESS` y `session.status = COUNTING`. El
 
 Crea un nuevo `count_entry` de reemplazo con cantidades corregidas, contexto heredado de la raiz e identificacion heredada del aporte efectivo. La correccion activa anterior (si existe) se supersede. Cada correccion genera una `count_entry_correction` con `revision_number` secuencial. No actualiza ninguna fila de `count_entries` existente, no modifica `tasks.version`, no invalida la raiz ni el aporte previo, y no crea eventos ni transiciones. Para cada raiz existe como maximo una correccion activa (`superseded_at IS NULL`).
 
+### 6.10 Invalidacion terminal de un aporte de conteo
+
+`inventarios.invalidate_inventory_count(p_company_id uuid, p_root_count_entry_id uuid, p_expected_current_count_entry_id uuid, p_reason text, p_idempotency_key uuid) RETURNS jsonb` usa la operacion `inventarios.count.invalidate`, permiso `inventarios.counts.correct` y dos modalidades (COUNTER y SUPERVISOR, idénticas a corrección). No requiere modificar `correct_inventory_count`. No se admiten tareas canceladas, con validación vigente, ni ciclos históricos. La unidad invalidada es el aporte efectivo actual.
+
+El motivo se normaliza con `btrim`, es obligatorio (5-500 caracteres). El payload idempotente contiene solo operacion, empresa, raiz, expected current y motivo.
+
+Si la raíz ya está invalidada, devuelve `INV_COUNT_ALREADY_INVALIDATED`. Deriva el aporte efectivo mediante la corrección activa actual, y si no coincide con el `expected_current_count_entry_id`, devuelve `INV_CONCURRENT_MODIFICATION` (reintentable). Se actualiza *exclusivamente* el aporte efectivo mediante las columnas `invalidated_at`, `invalidated_by`, y `invalidation_reason` a través de la obtención de `pg_catalog.now()`. La función emplea FOR UPDATE en estricto orden: 1. raíz, 2. corrección activa, 3. aporte efectivo.
+
+La invalidacion no crea reemplazo, ni correccion, ni supercede la activa. Para la futura consolidacion, aplica la regla documental estricta de aporte para cada raiz:
+1. buscar la correccion activa con `superseded_at IS NULL`;
+2. si no existe, `candidate` = raiz;
+3. si existe, `candidate` = `replacement_count_entry_id`;
+4. si `candidate.invalidated_at IS NOT NULL`, no aportar;
+5. no buscar una raiz historica alternativa;
+6. no retroceder al `previous_count_entry_id`;
+7. aplicar posteriormente filtros de tarea, ciclo y validacion vigente.
+
+Ejemplos:
+- A sin correccion e invalidada: no aporta.
+- A -> B con B invalidado: no aporta A ni B.
+- A -> B -> C con C invalidado: no aporta A, B ni C.
+
+El envelope retorna las 10 claves canonicas. El `entity_id` contiene el UUID de la fila realmente invalidada (el aporte efectivo).
+
+### 6.10 Invalidacion terminal de aporte
+
+`inventarios.invalidate_inventory_count(p_company_id uuid, p_root_count_entry_id uuid, p_expected_current_count_entry_id uuid, p_reason text, p_idempotency_key uuid) RETURNS jsonb` usa el codigo `inventarios.count.invalidate`, permiso `inventarios.counts.correct` y dos modalidades. No crea reemplazo, no modifica la correccion activa, no crea `count_entry_correction`.
+
+Modalidad COUNTER: `task.status = IN_PROGRESS` y `session.status = COUNTING`. El actor debe ser participante `COUNTER` vigente y responsable asignado. Modalidad SUPERVISOR: `task.status = COMPLETED` y `session.status = UNDER_REVIEW`, sin validacion vigente. El actor debe ser participante `SUPERVISOR` vigente.
+
+Invalida exclusivamente el aporte efectivo actual de la raiz. La correccion activa permanece vigente apuntando al aporte invalidado, lo que evita que reaparezcan la raiz o reemplazos intermedios. La futura consolidacion debe excluir el candidate si `invalidated_at IS NOT NULL`. No se permite correccion posterior sobre la misma raiz. `INV_COUNT_ALREADY_INVALIDATED` si el aporte ya fue invalidado.
+
 ## 7. Maquina de estados y auditoria
 
 La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. La reapertura inicia inmediatamente el nuevo ciclo con `COMPLETED -> IN_PROGRESS`; no crea un estado `REOPENED` ni un evento `STARTED` adicional. La reasignacion se permite en `ASSIGNED`, `IN_PROGRESS` y `PAUSED` sin cambiar estado; no se cancela desde `IN_PROGRESS`: primero se pausa. Cada mutacion exitosa de asignacion, reasignacion, inicio, pausa, reanudacion, finalizacion, validacion, reapertura o cancelacion incrementa `tasks.version` exactamente una vez. Solo reapertura incrementa ciclo.
@@ -311,7 +343,7 @@ El reconteo sigue `REQUESTED -> ASSIGNED -> IN_PROGRESS -> COMPLETED`, con cance
 
 En 4B.0b, `operation_idempotency` habilita RLS y termina con cero politicas funcionales. Se revoca todo acceso directo de `PUBLIC`, `anon` y `authenticated`; solo `service_role` recibe `SELECT`, `INSERT` y `UPDATE`, nunca `DELETE`, `TRUNCATE`, `REFERENCES` ni `TRIGGER`. No hay lectura directa de `authenticated`, no se agrega `inventarios` a `api.schemas`, no hay wrappers `public` ni grants `EXECUTE`. Las RPC futuras `SECURITY DEFINER` acceden mediante propietario controlado, `search_path` fijo, objetos calificados, `auth.uid()`, empresa derivada, `REVOKE EXECUTE FROM PUBLIC` y grants explicitos por firma.
 
-Codigos minimos: `INV_UNAUTHENTICATED`, `INV_COMPANY_ACCESS_DENIED`, `INV_PERMISSION_REQUIRED`, `INV_ROLE_NOT_ALLOWED`, `INV_SESSION_INVALID_STATE`, `INV_SESSION_NOT_PREPARED`, `INV_SCOPE_NOT_INCLUDED`, `INV_TASK_NOT_ASSIGNED`, `INV_TASK_ALREADY_ASSIGNED`, `INV_TASK_ALREADY_CANCELLED`, `INV_TASK_INVALID_STATE`, `INV_TASK_NOT_VALIDATED`, `INV_TASK_CYCLE_CONFLICT`, `INV_VERSION_CONFLICT`, `INV_PARTICIPANT_INACTIVE`, `INV_USER_ALREADY_ACTIVE`, `INV_IDEMPOTENCY_CONFLICT`, `INV_IDEMPOTENCY_IN_PROGRESS`, `INV_OPERATION_ALREADY_APPLIED`, `INV_COUNT_IDEMPOTENCY_CONFLICT`, `INV_COUNT_CONTEXT_MISMATCH`, `INV_COUNT_QUANTITY_MISMATCH`, `INV_OFFLINE_CAPTURE_CONFLICT`, `INV_INCIDENT_BLOCKING`, `INV_RECOUNT_INVALID_STATE`, `INV_RECOUNT_INCOMPLETE`, `INV_DECISION_CONTEXT_MISMATCH`, `INV_DECISION_NOT_FOUND`, `INV_CONCURRENT_MODIFICATION` e `INV_NOT_FOUND`. `INV_IDEMPOTENCY_IN_PROGRESS` es reintentable y usa el mensaje seguro definido en idempotencia.
+Codigos minimos: `INV_UNAUTHENTICATED`, `INV_COMPANY_ACCESS_DENIED`, `INV_PERMISSION_REQUIRED`, `INV_ROLE_NOT_ALLOWED`, `INV_SESSION_INVALID_STATE`, `INV_SESSION_NOT_PREPARED`, `INV_SCOPE_NOT_INCLUDED`, `INV_TASK_NOT_ASSIGNED`, `INV_TASK_ALREADY_ASSIGNED`, `INV_TASK_ALREADY_CANCELLED`, `INV_TASK_INVALID_STATE`, `INV_TASK_NOT_VALIDATED`, `INV_TASK_CYCLE_CONFLICT`, `INV_VERSION_CONFLICT`, `INV_PARTICIPANT_INACTIVE`, `INV_USER_ALREADY_ACTIVE`, `INV_IDEMPOTENCY_CONFLICT`, `INV_IDEMPOTENCY_IN_PROGRESS`, `INV_OPERATION_ALREADY_APPLIED`, `INV_COUNT_IDEMPOTENCY_CONFLICT`, `INV_COUNT_CONTEXT_MISMATCH`, `INV_COUNT_QUANTITY_MISMATCH`, `INV_OFFLINE_CAPTURE_CONFLICT`, `INV_INCIDENT_BLOCKING`, `INV_RECOUNT_INVALID_STATE`, `INV_RECOUNT_INCOMPLETE`, `INV_DECISION_CONTEXT_MISMATCH`, `INV_DECISION_NOT_FOUND`, `INV_CONCURRENT_MODIFICATION`, `INV_COUNT_ALREADY_INVALIDATED` e `INV_NOT_FOUND`. `INV_IDEMPOTENCY_IN_PROGRESS` es reintentable y usa el mensaje seguro definido en idempotencia.
 
 ## 11. Matriz de cambios fisicos requeridos
 
