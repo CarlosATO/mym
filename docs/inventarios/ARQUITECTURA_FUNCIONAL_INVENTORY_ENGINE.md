@@ -84,7 +84,7 @@ El Engine no escribe stock a un proveedor. La salida es un resultado oficial ver
 
 ### 3.1 Inventory Session
 
-Responsable unicamente de crear jornadas, controlar su ciclo de vida, preparar, iniciar, llevar a revision, aprobar, cerrar, registrar rectificaciones posteriores y conciliar oficialmente.
+Responsable unicamente de crear jornadas, controlar su ciclo de vida, preparar, iniciar, llevar a revision, aprobar (`inventarios.approve_inventory_session`), cerrar, registrar rectificaciones posteriores y conciliar oficialmente. La aprobacion congela el resultado en `official_versions` y `official_version_items`.
 
 Define el contexto funcional de empresa, alcance, responsable, proveedor, sucursal y bodega. Coordina dominios, pero no cuenta productos, no calcula costos, no genera archivos ni toma decisiones de auditoria.
 
