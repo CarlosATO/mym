@@ -173,6 +173,8 @@ La captura append-only inserta una fila en `count_entries` por cada aporte. No a
 
 La asignacion de recuento actualiza `recount_requests.status` a `ASSIGNED` e informa `assigned_participant_id`, `assigned_user_id` y `assigned_at`. La asignacion es propia de la solicitud e independiente de `task_assignments`. No existe reasignacion en V1.
 
+La captura de recuento (`record_inventory_recount`) inserta un `count_entry` con `recount_request_id` vinculado a una solicitud `IN_PROGRESS`. El contexto (sesion, snapshot, zona, producto, tarea y ciclo) se hereda de la solicitud. `snapshot_location_id` se deriva de la zona mediante `uq_inventarios_zone_locations_company_zone` (una ubicacion por zona en V1). La asignacion del recuento se representa mediante `assigned_participant_id` en la solicitud y `session_participant_id` en el conteo; no existe `task_assignment` implicada. La captura es append-only.
+
 La solicitud de recuento crea una fila en `recount_requests` con `status = REQUESTED`. Cada solicitud pertenece a un `snapshot_product_id` y `session_zone_id` concretos. La RPC asigna un `ordinal` correlativo, rechaza solicitudes activas duplicadas del mismo producto y zona, y no modifica la tarea ni incrementa `validation_cycle`.
 
 La resolucion de incidentes actualiza `incidents.status` e inserta una fila en `incident_resolutions` con `previous_status`, `next_status`, `resolution_type`, `description`, `resolved_by` y `resolved_at`. La resolucion anterior (si existe) se marca con `superseded_at`. El indice parcial `uq_inventarios_resolutions_current_incident WHERE superseded_at IS NULL` garantiza una sola resolucion vigente por incidente. La resolucion no modifica `is_blocking`, `severity`, tareas ni conteos.
