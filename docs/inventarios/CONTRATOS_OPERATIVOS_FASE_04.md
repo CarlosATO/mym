@@ -272,6 +272,14 @@ Modalidad COUNTER: `task.status = IN_PROGRESS` y `session.status = COUNTING`. El
 
 Invalida exclusivamente el aporte efectivo actual de la raiz. La correccion activa permanece vigente apuntando al aporte invalidado, lo que evita que reaparezcan la raiz o reemplazos intermedios. La futura consolidacion debe excluir el candidate si `invalidated_at IS NOT NULL`. No se permite correccion posterior sobre la misma raiz. `INV_COUNT_ALREADY_INVALIDATED` si el aporte ya fue invalidado.
 
+### 6.11 Reporte WEB de incidentes de inventario
+
+`inventarios.report_inventory_incident(p_company_id uuid, p_task_id uuid, p_expected_cycle integer, p_category_code text, p_severity text, p_description text, p_affected_quantity numeric, p_snapshot_product_id uuid, p_count_entry_id uuid, p_idempotency_key uuid) RETURNS jsonb` usa el codigo `inventarios.incident.report`, permiso `inventarios.incidents.manage` y dos modalidades.
+
+Modalidad COUNTER: `task.status = IN_PROGRESS`, `session.status = COUNTING`, actor `COUNTER` vigente y asignado. Modalidad SUPERVISOR: `task.status = COMPLETED`, `session.status = UNDER_REVIEW`, sin validacion vigente, actor `SUPERVISOR` vigente.
+
+`p_category_code` admite `UNKNOWN_PRODUCT_CODE`, `EXPECTED_PRODUCT_NOT_FOUND`, `PRODUCT_LOCATION_MISMATCH`, `UNKNOWN_LOCATION`, `DAMAGED_PRODUCT`, `EXPIRED_PRODUCT`, `BLOCKED_PRODUCT`, `QUANTITY_DISCREPANCY`, `LABEL_OR_BARCODE_ISSUE` y `OPERATIONAL_ISSUE`. `p_severity` admite `INFORMATIONAL`, `OPERATIONAL`, `CRITICAL` y `BLOCKING`; la RPC deriva `is_blocking` automaticamente desde `BLOCKING`. `p_snapshot_product_id` y `p_count_entry_id` son opcionales y mutuamente excluyentes como entrada; ciertas categorias exigen producto. La RPC no acepta parametros MOBILE, no modifica tareas ni conteos, y establece `status = OPEN`. Incidentes con `is_blocking = true` deberan impedir completar, validar o aprobar la tarea en fases posteriores.
+
 ## 7. Maquina de estados y auditoria
 
 La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. La reapertura inicia inmediatamente el nuevo ciclo con `COMPLETED -> IN_PROGRESS`; no crea un estado `REOPENED` ni un evento `STARTED` adicional. La reasignacion se permite en `ASSIGNED`, `IN_PROGRESS` y `PAUSED` sin cambiar estado; no se cancela desde `IN_PROGRESS`: primero se pausa. Cada mutacion exitosa de asignacion, reasignacion, inicio, pausa, reanudacion, finalizacion, validacion, reapertura o cancelacion incrementa `tasks.version` exactamente una vez. Solo reapertura incrementa ciclo.
