@@ -125,6 +125,7 @@ El modulo usa `code = 'inventarios'` y `name = 'Inventarios'`. Su upsert es `ON 
 | `inventarios.read` | Ver Inventarios |
 | `inventarios.sessions.prepare` | Preparar jornadas de inventario |
 | `inventarios.sessions.start` | Iniciar jornadas de inventario |
+| `inventarios.sessions.approve` | Aprobar jornadas de inventario |
 | `inventarios.zones.manage` | Administrar zonas de inventario |
 | `inventarios.tasks.assign` | Asignar tareas de inventario |
 | `inventarios.tasks.execute` | Ejecutar tareas de inventario |
