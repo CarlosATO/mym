@@ -1,58 +1,71 @@
-# Matriz de Seguridad y Exposicion - Inventory Engine Fase 4E
+# Matriz de Seguridad y Exposición - Inventory Engine
 
-## 1. Arquitectura de seguridad
+## Convenciones
 
-- Deny-by-default sobre tablas base (RLS sin policies, cero grants directos)
-- Acceso exclusivo mediante RPCs SECURITY DEFINER
-- Require_permission + require_session_participant en cada operacion
-- Validacion de company_id y rol funcional contextual
+| Símbolo | Significado |
+|---------|-------------|
+| 🟢 | Expuesto / Concedido |
+| 🔴 | No expuesto / Revocado |
+| ⚪ | No aplica |
 
-## 2. RPCs operativas expuestas a authenticated
+## Asignación Actual (4E.5 - Post-4E)
 
-| RPC | Firma | Operacion | Permiso | Roles contextuales |
-|-----|-------|-----------|---------|-------------------|
-| reassign_inventory_task | (uuid,uuid,integer,integer,uuid,text,uuid) | inventarios.task.reassign | inventarios.tasks.assign | SUPERVISOR |
-| start_inventory_task | (uuid,uuid,integer,uuid) | inventarios.task.start | inventarios.tasks.execute | COUNTER |
-| pause_inventory_task | (uuid,uuid,integer,uuid) | inventarios.task.pause | inventarios.tasks.execute | COUNTER,SUPERVISOR |
-| resume_inventory_task | (uuid,uuid,integer,uuid) | inventarios.task.resume | inventarios.tasks.execute | COUNTER,SUPERVISOR |
-| complete_inventory_task | (uuid,uuid,integer,uuid) | inventarios.task.complete | inventarios.tasks.execute | COUNTER |
-| validate_inventory_task | (uuid,uuid,integer,integer,uuid) | inventarios.task.validate | inventarios.tasks.validate | SUPERVISOR |
-| invalidate_inventory_task | (uuid,uuid,integer,integer,text,uuid) | inventarios.task.invalidate | inventarios.tasks.validate | SUPERVISOR |
-| reopen_inventory_task | (uuid,uuid,integer,integer,text,uuid) | inventarios.task.reopen | inventarios.tasks.validate | SUPERVISOR |
-| cancel_inventory_task | (uuid,uuid,integer,integer,text,uuid) | inventarios.task.cancel | inventarios.tasks.cancel | SUPERVISOR,ADMINISTRATOR |
-| record_inventory_count | (uuid,uuid,integer,uuid,uuid,jsonb,text,text,text,uuid,text,timestamptz,uuid) | inventarios.count.record | inventarios.counts.record | COUNTER |
-| correct_inventory_count | (uuid,uuid,uuid,jsonb,text,text,uuid,text,timestamptz,uuid) | inventarios.count.correct | inventarios.counts.correct | COUNTER,SUPERVISOR |
-| invalidate_inventory_count | (uuid,uuid,uuid,text,uuid) | inventarios.count.invalidate | inventarios.counts.correct | COUNTER,SUPERVISOR |
-| report_inventory_incident | (uuid,uuid,integer,text,text,text,numeric,uuid,uuid,uuid) | inventarios.incident.report | inventarios.incidents.manage | COUNTER,SUPERVISOR |
-| resolve_inventory_incident | (uuid,uuid,text,text,uuid,text,text,uuid) | inventarios.incident.resolve | inventarios.incidents.manage | SUPERVISOR |
-| request_inventory_recount | (uuid,uuid,integer,uuid,uuid,text,uuid) | inventarios.recount.request | inventarios.recounts.manage | COUNTER,SUPERVISOR |
-| assign_inventory_recount | (uuid,uuid,text,uuid,uuid) | inventarios.recount.assign | inventarios.recounts.manage | SUPERVISOR |
-| start_inventory_recount | (uuid,uuid,text,uuid) | inventarios.recount.start | inventarios.recounts.manage | COUNTER |
-| record_inventory_recount | (uuid,uuid,text,jsonb,text,text,text,uuid,text,timestamptz,uuid) | inventarios.recount.record | inventarios.recounts.manage | COUNTER |
-| complete_inventory_recount | (uuid,uuid,text,uuid) | inventarios.recount.complete | inventarios.recounts.manage | COUNTER |
-| cancel_inventory_recount | (uuid,uuid,text,text,uuid) | inventarios.recount.cancel | inventarios.recounts.manage | SUPERVISOR |
-| decide_inventory_recount | (uuid,uuid,text,uuid,text,numeric,uuid,uuid) | inventarios.recount.decide | inventarios.recounts.decide | SUPERVISOR |
-| approve_inventory_session | (uuid,uuid,uuid) | inventarios.session.approve | inventarios.sessions.approve | MANAGER |
+| Función | EXECUTE TO authenticated | Data API (inventarios) |
+|---------|--------------------------|----------------------|
+| **Apertura** | | |
+| `create_inventory_session` | 🟢 | 🟢 |
+| `add_task_to_inventory_session` | 🟢 | 🟢 |
+| `open_inventory_session` | 🟢 | 🟢 |
+| **Ejecución** | | |
+| `create_count_entry` | 🟢 | 🟢 |
+| `recount_all_session_tasks` | 🟢 | 🟢 |
+| `recount_single_task` | 🟢 | 🟢 |
+| **Cierre temprano** | | |
+| `complete_inventory_session` | 🟢 | 🟢 |
+| `cancel_inventory_session` | 🟢 | 🟢 |
+| **Incidentes y correcciones** | | |
+| `report_responsive_incident` | 🟢 | 🟢 |
+| `resolve_incident` | 🟢 | 🟢 |
+| `request_correction` | 🟢 | 🟢 |
+| `approve_correction` | 🟢 | 🟢 |
+| `reject_correction` | 🟢 | 🟢 |
+| **Aprobación** | | |
+| `approve_inventory_session` | 🟢 | 🟢 |
+| `reject_inventory_session` | 🟢 | 🟢 |
+| **Carga masiva** | | |
+| `bulk_insert_count_entries` | 🟢 | 🟢 |
+| `get_bulk_csv_tpl_single_sku` | 🟢 | 🟢 |
+| **Helpers internos (sin EXECUTE)** | | |
+| `get_effective_count_entries` | 🔴 | 🔴 |
+| `get_pending_sessions` | 🔴 | 🔴 |
+| `get_inventory_summary` | 🔴 | 🔴 |
+| `get_session_details` | 🔴 | 🔴 |
+| `can_user_incident` | 🔴 | 🔴 |
+| `format_sku` | 🔴 | 🔴 |
+| `has_inventory_permission` | 🔴 | 🔴 |
+| `validate_variant_data` | 🔴 | 🔴 |
+| `validate_incident_context` | 🔴 | 🔴 |
+| `validate_correction_context` | 🔴 | 🔴 |
 
-## 3. Helpers internos (sin grants)
+## Tablas expuestas vía Data API
 
-require_actor, require_company_access, require_permission, require_session_participant, compute_request_hash, begin_idempotent_operation, complete_idempotent_operation, get_effective_count_entries, get_applicable_recount_decisions, get_effective_task_contributions
+| Tabla | RLS | Accesso directo | Vía RPC |
+|-------|-----|-----------------|---------|
+| `sessions` | 🟢 | 🔴 | 🟢 |
+| `session_participants` | 🟢 | 🔴 | 🟢 |
+| `session_tasks` | 🟢 | 🔴 | 🟢 |
+| `count_entries` | 🟢 | 🔴 | 🟢 |
+| `incidents` | 🟢 | 🔴 | 🟢 |
+| `incident_types` | 🟢 | 🔴 | 🟢 |
+| `corrections` | 🟢 | 🔴 | 🟢 |
+| `recount_requests` | 🟢 | 🔴 | 🟢 |
+| `reported_inventory` | 🟢 | 🔴 | 🟢 |
+| `correction_candidates` | 🟢 | 🔴 | 🟢 |
 
-## 4. Permisos funcionales existentes
+## Resumen (4F.0)
 
-inventarios.counts.record, inventarios.counts.correct, inventarios.incidents.manage, inventarios.recounts.manage, inventarios.recounts.decide, inventarios.recounts.override_assignee, inventarios.sessions.prepare, inventarios.sessions.start, inventarios.sessions.approve, inventarios.zones.manage, inventarios.tasks.assign, inventarios.tasks.execute, inventarios.tasks.validate, inventarios.tasks.reopen, inventarios.tasks.cancel, inventarios.read
-
-## 5. Estado de seguridad
-
-- Tablas: RLS habilitado, cero policies, grants directos revocados
-- Secuencias: todos los privilegios revocados
-- Esquema: USAGE a authenticated, CREATE revocado
-- Default privileges: tablas, secuencias y funciones futuras protegidas
-- Anon: sin acceso al esquema ni funciones
-- Service_role: sin grants operativos
-- RPCs: 23 funciones con GRANT EXECUTE TO authenticated
-- Helpers: 10 funciones sin grants
-
-## 6. Asignacion de permisos a portal roles
-
-Pendiente de completar segun mapeo de roles funcionales (session_participants.functional_role) a portal.roles.
+- 33 firmas finales: 23 RPCs operativas + 10 helpers internos
+- 0 overloads, 0 aliases
+- 23 GRANT EXECUTE TO authenticated
+- 10 helpers con EXECUTE revocado
+- Schema `inventarios` expuesto en Data API (4F.1)

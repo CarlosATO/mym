@@ -268,6 +268,24 @@ En una fase posterior, las ubicaciones de Logistica podran reflejar el inventari
 
 La separacion entre Engine, Snapshot Operacional, dominios propietarios e Inventory Provider permite esta evolucion sin redisenar el Engine ni alterar sus reglas centrales.
 
+## 9B. Exposición via Supabase Data API (4F.1)
+
+El schema `inventarios` se expone via PostgREST habilitándolo en `supabase/config.toml` → `api.schemas`. Esto permite invocar RPCs desde cualquier cliente autorizado sin acceso directo a tablas.
+
+**Patrón de invocación desde el frontend:**
+```
+supabase.schema('inventarios').rpc('nombre_rpc', { p_param: valor })
+```
+
+**Reglas de seguridad:**
+- Tablas: RLS activo, grants revocados, cero policies → sin acceso directo.
+- Helpers internos: sin GRANT EXECUTE TO authenticated → solo accesibles via service_role.
+- RPCs operativas: GRANT EXECUTE TO authenticated → invocables via Data API con JWT de usuario.
+- Anon: todo denegado (401).
+- Schema expuesto: sí, para que PostgREST pueda enrutar las RPCs.
+
+**Smoke tests (4F.1):** 6 pruebas no destructivas con fetch nativo. Resultado: 3 PASS (anon bloqueado), 3 SKIP (sin JWT de pruebas).
+
 ## 10. Decisiones arquitectonicas oficiales
 
 1. Inventory Engine es un producto reutilizable, no un modulo aislado para MYM.
