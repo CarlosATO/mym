@@ -332,6 +332,10 @@ Valida que todas las capturas vinculadas compartan contexto coherente, aplica la
 
 `p_selected_count_entry_id` debe ser un candidate efectivo de la solicitud (raiz sin correccion activa o `replacement_count_entry_id` de la correccion activa), no invalidado y del mismo contexto. `p_expected_current_decision_id` debe ser NULL para la primera decision o el UUID exacto de la decision vigente para supersederla. `p_justification` obligatorio (5-1000). `p_confidence_score` opcional (0-100, 2 decimales). La decision anterior se marca con `superseded_at`; la nueva decision tiene `supersedes_decision_id` apuntando a la anterior. No modifica `recount_requests`, `count_entries`, tarea ni ciclo. Una sola decision vigente por solicitud.
 
+### 7.0 Helper interno de aportes efectivos
+
+`inventarios.get_effective_count_entries(p_company_id uuid, p_session_id uuid, p_task_id uuid, p_recount_request_id uuid) RETURNS TABLE(...)` es funcion `STABLE SECURITY DEFINER` exclusivamente interna, sin grants. Resuelve cadenas de correccion de `count_entries`: para cada raiz (ninguna correccion la referencia como `replacement_count_entry_id`), si existe correccion activa (`superseded_at IS NULL`) el candidate es `replacement_count_entry_id`; si no, la raiz. Excluye candidates invalidados y verifica integridad contextual. Tres modos: jornada (ambos filtros NULL), tarea (`p_task_id` solo) y recuento (`p_recount_request_id` informado). No suma ni consolida.
+
 ## 7. Maquina de estados y auditoria
 
 La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. La reapertura inicia inmediatamente el nuevo ciclo con `COMPLETED -> IN_PROGRESS`; no crea un estado `REOPENED` ni un evento `STARTED` adicional. La reasignacion se permite en `ASSIGNED`, `IN_PROGRESS` y `PAUSED` sin cambiar estado; no se cancela desde `IN_PROGRESS`: primero se pausa. Cada mutacion exitosa de asignacion, reasignacion, inicio, pausa, reanudacion, finalizacion, validacion, reapertura o cancelacion incrementa `tasks.version` exactamente una vez. Solo reapertura incrementa ciclo.
