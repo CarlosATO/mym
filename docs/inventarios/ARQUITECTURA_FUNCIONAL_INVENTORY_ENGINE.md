@@ -102,7 +102,7 @@ Garantiza las reglas de exclusividad por zona y por usuario. No conoce stock teo
 
 ### 3.4 Counting
 
-Responsable de conteos, cantidades, aportes, captura movil, busqueda de productos y condiciones fisicas. Internamente utiliza `inventarios.get_effective_count_entries` para resolver las cadenas de correccion y determinar el aporte efectivo de cada raiz. Distingue cantidades fisicas, disponibles, danadas, vencidas, bloqueadas y otras condiciones segun las reglas aprobadas.
+Responsable de conteos, cantidades, aportes, captura movil, busqueda de productos y condiciones fisicas. Internamente utiliza `inventarios.get_effective_count_entries` para resolver las cadenas de correccion y determinar el aporte efectivo de cada raiz, y `inventarios.get_applicable_recount_decisions` para determinar las decisiones de recuento aplicables por alcance (zona, producto, tarea, ciclo). Distingue cantidades fisicas, disponibles, danadas, vencidas, bloqueadas y otras condiciones segun las reglas aprobadas.
 
 No conoce costos, valorizaciones, diferencias contra Bsale ni decisiones de aprobacion. Conserva cada aporte y cada correccion sin sustituir historia.
 
