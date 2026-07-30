@@ -163,6 +163,8 @@ La validacion de una tarea `COMPLETED` se representa con un evento `VALIDATED` y
 
 La invalidacion de una validacion vigente conserva la tarea en `COMPLETED` y el mismo `validation_cycle`. Requiere un puntero coherente y proyecciones `validated_at` y `validated_by` coincidentes con el evento `VALIDATED`; inserta un evento `INVALIDATED`, limpia exclusivamente `current_validation_event_id`, `validated_at` y `validated_by`, e incrementa version y auditoria. El evento `VALIDATED` se conserva, no se crea `task_state_transitions` y el metadata tecnico del nuevo evento contiene solo `invalidated_validation_event_id` y `reason` normalizado.
 
+La reapertura desde `COMPLETED` inicia de inmediato un nuevo ciclo en `IN_PROGRESS`. Conserva la asignacion vigente y usa su `user_id` como `active_user_id`; incrementa `validation_cycle`, limpia validacion, pausa y finalizacion, e informa `opened_at` con el instante de reapertura. Inserta `REOPENED` en `task_events` y `task_state_transitions` para `COMPLETED -> IN_PROGRESS`, ambos en el nuevo ciclo; no inserta `STARTED`, no modifica asignaciones y conserva todo el historial anterior.
+
 ### 5.2 task_events
 
 La definicion oficial de `task_events.cycle` es `integer NOT NULL DEFAULT 1` y su check exige `cycle > 0`. La migracion 4B.2 hace backfill seguro (`UPDATE inventarios.task_events SET cycle = 1 WHERE cycle = 0`), reemplaza el check previo y cambia el default. No altera el catalogo de eventos ni migraciones de Fase 2.
@@ -212,7 +214,7 @@ No permite `UPDATE`, `DELETE` ni supersesion; una correccion se representa por n
 | Pausa | `PAUSED` | ninguno |
 | Reanudacion | `RESUMED` | `RESUMED` |
 | Finalizacion | `COMPLETED` | ninguno |
-| Reapertura | `REOPENED` | `REOPENED` y opcionalmente `INVALIDATED` |
+| Reapertura | `REOPENED` | `REOPENED` |
 | Reasignacion | ninguno | `REASSIGNED` |
 | Validacion | ninguno | `VALIDATED` |
 | Invalidacion de validacion | ninguno | `INVALIDATED` |

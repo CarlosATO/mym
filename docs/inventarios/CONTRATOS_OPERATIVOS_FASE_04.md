@@ -187,10 +187,10 @@ Toda RPC deriva empresa del recurso, valida `core.has_company_access(auth.uid(),
 | `complete_inventory_task` | IN_PROGRESS a COMPLETED | contador asignado | tarea activa |
 | `validate_inventory_task` | validacion acumulativa, sin consolidar | supervisor | capa aplicable completada |
 | `invalidate_inventory_task` | invalidar validacion vigente, sin reabrir | supervisor | COMPLETED validada |
-| `reopen_inventory_task` | invalidar validacion vigente y reabrir | supervisor | COMPLETED validada |
+| `reopen_inventory_task` | reabrir e iniciar un nuevo ciclo | supervisor | COMPLETED |
 | `cancel_inventory_task` | cancelar conservando historia | administrador/supervisor | ASSIGNED o PAUSED |
 
-Firmas de tarea: reasignar, pausar, reanudar, completar, validar, invalidar, reabrir y cancelar incluyen `p_task_id`, `p_expected_version`, `p_expected_cycle` y `p_idempotency_key`. Reasignar y reabrir incluyen participante y motivo; invalidar y cancelar incluyen motivo. El inicio usa la firma especifica de la seccion 6.1. Toda firma retorna el envelope canonico.
+Firmas de tarea: reasignar, pausar, reanudar, completar, validar, invalidar, reabrir y cancelar incluyen `p_task_id`, `p_expected_version`, `p_expected_cycle` y `p_idempotency_key`. Reasignar incluye participante y motivo; invalidar, reabrir y cancelar incluyen motivo. El inicio usa la firma especifica de la seccion 6.1. Toda firma retorna el envelope canonico.
 
 ### 6.1 Inicio de tarea asignada
 
@@ -220,9 +220,17 @@ La validacion vigente existe solo si `current_validation_event_id` apunta a un `
 
 La fuente de verdad es `current_validation_event_id`. Un puntero nulo retorna `INV_TASK_NOT_VALIDATED`; un puntero o proyeccion incoherente retorna `INV_CONCURRENT_MODIFICATION` reintentable. La RPC conserva `COMPLETED` y el mismo ciclo, inserta un unico evento `INVALIDATED` con metadata `{"invalidated_validation_event_id":"uuid","reason":"texto"}`, limpia `current_validation_event_id`, `validated_at` y `validated_by`, incrementa `version` y actualiza auditoria. No elimina el evento `VALIDATED`, no crea `task_state_transitions` y deja la tarea fuera de consolidaciones que exijan validacion vigente. Puede validarse nuevamente en el mismo ciclo.
 
+### 6.5 Reapertura e inicio de nuevo ciclo
+
+`inventarios.reopen_inventory_task(p_company_id uuid, p_task_id uuid, p_expected_version integer, p_expected_cycle integer, p_reason text, p_idempotency_key uuid) RETURNS jsonb` usa el codigo `inventarios.task.reopen`, permiso `inventarios.tasks.validate` y participante `SUPERVISOR`. Exige tarea `COMPLETED`, version y ciclo esperados, y serializa por empresa/tarea con `pg_advisory_xact_lock(hashtext('inventarios.reopen_inventory_task'), hashtext(company_id::text || ':' || task_id::text))`.
+
+El motivo se normaliza con `btrim`, es obligatorio y debe tener entre 5 y 500 caracteres. La RPC conserva exactamente una asignacion vigente, obtiene su usuario y lo establece como `active_user_id`; el supervisor es el actor del evento, de la transicion y de la auditoria, sin necesidad de ser el contador asignado. El payload idempotente contiene solo operacion, empresa, tarea, version esperada, ciclo esperado y motivo normalizado; el replay retorna el envelope persistido con solo `replayed: true`.
+
+La validacion vigente es opcional. Si existe, su puntero y proyeccion deben ser coherentes con un evento `VALIDATED` contextual; si no, retorna `INV_CONCURRENT_MODIFICATION`. La reapertura incrementa `validation_cycle`, inserta un unico evento `REOPENED` y una transicion `COMPLETED -> IN_PROGRESS` en el nuevo ciclo, y no inserta `STARTED`. Limpia validacion, pausa y finalizacion anteriores; establece `opened_at` al instante de reapertura y deja la tarea en `IN_PROGRESS`. El metadata del evento contiene solo `previous_cycle`, `previous_validation_event_id` y `reason`; no se modifica la asignacion ni se elimina historia.
+
 ## 7. Maquina de estados y auditoria
 
-La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. Solo reapertura pasa `COMPLETED -> IN_PROGRESS`. No se reasigna ni cancela desde `IN_PROGRESS`: primero se pausa. Cada mutacion exitosa de asignacion, reasignacion, inicio, pausa, reanudacion, finalizacion, validacion, reapertura o cancelacion incrementa `tasks.version` exactamente una vez. Solo reapertura incrementa ciclo.
+La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. La reapertura inicia inmediatamente el nuevo ciclo con `COMPLETED -> IN_PROGRESS`; no crea un estado `REOPENED` ni un evento `STARTED` adicional. No se reasigna ni cancela desde `IN_PROGRESS`: primero se pausa. Cada mutacion exitosa de asignacion, reasignacion, inicio, pausa, reanudacion, finalizacion, validacion, reapertura o cancelacion incrementa `tasks.version` exactamente una vez. Solo reapertura incrementa ciclo.
 
 | Transicion | `task_state_transitions` | `task_events` |
 | --- | --- | --- |
@@ -230,12 +238,12 @@ La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. 
 | Pausa | `PAUSED` | ninguno |
 | Reanudacion | `RESUMED` | `RESUMED` |
 | Finalizacion | `COMPLETED` | ninguno |
-| Reapertura | `REOPENED` | `REOPENED` y, si aplica, `INVALIDATED` |
+| Reapertura | `REOPENED` | `REOPENED` |
 | Invalidacion | ninguno | `INVALIDATED` |
 
 `task_state_transitions` audita el estado persistente. `task_events` conserva los hechos funcionales aprobados en Fase 2. No son estructuras intercambiables y no se agregan `PAUSED` ni `COMPLETED` a `task_events.event_type`.
 
-La reapertura pertenece a 4B.2. Exige `current_validation_event_id`, tarea `COMPLETED`, permiso `inventarios.tasks.reopen`, version y ciclo coincidentes. Registra `INVALIDATED`, conserva `VALIDATED`, guarda en metadata el ID invalidado, crea asignacion nueva, incrementa ciclo, crea transicion y evento `REOPENED`, limpia validacion y campos de finalizacion, y deja la tarea `IN_PROGRESS`.
+La reapertura exige tarea `COMPLETED`, permiso `inventarios.tasks.validate`, participante `SUPERVISOR`, version y ciclo coincidentes, y exactamente una asignacion vigente. La validacion vigente puede estar ausente; si existe, su puntero y proyeccion deben ser coherentes. Conserva la asignacion, incrementa ciclo, crea un evento `REOPENED` y una transicion `COMPLETED -> IN_PROGRESS`, limpia validacion, pausa y finalizacion, establece el usuario asignado como activo y deja la tarea `IN_PROGRESS`. No crea asignacion, no elimina historia y no inserta `STARTED`.
 
 ## 8. Validacion acumulativa de tarea
 
