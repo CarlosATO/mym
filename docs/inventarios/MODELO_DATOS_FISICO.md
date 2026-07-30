@@ -159,6 +159,8 @@ El inicio operacional de una tarea asignada conserva `validation_cycle`, pausa y
 
 La finalizacion desde `IN_PROGRESS` conserva apertura, ciclo y pausa; actualiza `status` a `COMPLETED`, incrementa `version`, informa `completed_at`, `completed_by`, `updated_at` y `updated_by`, y limpia `active_user_id`. Su historial es una transicion `IN_PROGRESS -> COMPLETED`; no se crea un `task_event` porque `COMPLETED` es un estado persistente, no un tipo de evento.
 
+La validacion de una tarea `COMPLETED` se representa con un evento `VALIDATED` y el puntero `current_validation_event_id`. La vigencia depende exclusivamente de que ese puntero apunte a un evento `VALIDATED` contextual del mismo ciclo. La operacion actualiza el puntero, `validated_at`, `validated_by`, version, `updated_at` y `updated_by`; no cambia estado, ciclo ni crea `task_state_transitions`.
+
 ### 5.2 task_events
 
 La definicion oficial de `task_events.cycle` es `integer NOT NULL DEFAULT 1` y su check exige `cycle > 0`. La migracion 4B.2 hace backfill seguro (`UPDATE inventarios.task_events SET cycle = 1 WHERE cycle = 0`), reemplaza el check previo y cambia el default. No altera el catalogo de eventos ni migraciones de Fase 2.

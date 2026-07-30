@@ -205,6 +205,12 @@ Con un unico `occurred_at`, inicio actualiza exclusivamente `status = 'IN_PROGRE
 
 Con un unico instante actualiza exclusivamente `status = 'COMPLETED'`, `version = version + 1`, `completed_at`, `completed_by`, limpia `active_user_id`, e informa `updated_at` y `updated_by`. Conserva `opened_at`, ciclo y pausa. Inserta solo la transicion `IN_PROGRESS -> COMPLETED`; no crea `task_events` y el envelope tiene `event_id: null`. Usa el lock `pg_advisory_xact_lock(hashtext('inventarios.complete_inventory_task'), hashtext(company_id::text || ':' || actor_id::text))` y mantiene la ACL operacional aplazada a 4E.
 
+### 6.3 Validacion de tarea completada
+
+`inventarios.validate_inventory_task(p_company_id uuid, p_task_id uuid, p_expected_version integer, p_expected_cycle integer, p_idempotency_key uuid) RETURNS jsonb` usa `inventarios.task.validate`, permiso `inventarios.tasks.validate` y participante `SUPERVISOR`. Exige tarea `COMPLETED`, version y ciclo esperados. Su lock es por empresa/tarea: `pg_advisory_xact_lock(hashtext('inventarios.validate_inventory_task'), hashtext(company_id::text || ':' || task_id::text))`.
+
+La validacion vigente existe solo si `current_validation_event_id` apunta a un `task_events` `VALIDATED` de la misma empresa, jornada, tarea y ciclo. Un puntero nulo permite validar; uno valido retorna `INV_OPERATION_ALREADY_APPLIED`; uno inconsistente retorna `INV_CONCURRENT_MODIFICATION`. La validacion inserta un unico `VALIDATED`, actualiza el puntero, `validated_at`, `validated_by`, version y auditoria, y no cambia estado, ciclo, asignacion ni crea transicion. Futuras operaciones `INVALIDATED` y `REOPENED` limpian el puntero y proyecciones de validacion sin borrar historia.
+
 ## 7. Maquina de estados y auditoria
 
 La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. Solo reapertura pasa `COMPLETED -> IN_PROGRESS`. No se reasigna ni cancela desde `IN_PROGRESS`: primero se pausa. Cada mutacion exitosa de asignacion, reasignacion, inicio, pausa, reanudacion, finalizacion, validacion, reapertura o cancelacion incrementa `tasks.version` exactamente una vez. Solo reapertura incrementa ciclo.
