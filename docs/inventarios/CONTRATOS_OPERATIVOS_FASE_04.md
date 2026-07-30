@@ -304,6 +304,10 @@ Modalidad COUNTER: `task.status = IN_PROGRESS`, `session.status = COUNTING`, act
 
 Asigna un `COUNTER` vigente de la misma jornada. La solicitud pasa a `ASSIGNED`. No reasigna: cambiar de contador requiere cancelar y crear una nueva solicitud. No modifica `task_assignments`, tarea, ciclo ni jornada. `assignment_id` superior del envelope es `null`.
 
+### 6.15 Inicio de solicitud de recuento
+
+`inventarios.start_inventory_recount(p_company_id uuid, p_recount_request_id uuid, p_expected_status text, p_idempotency_key uuid) RETURNS jsonb` usa el codigo `inventarios.recount.start`, permiso `inventarios.recounts.manage` y `expected_status = ASSIGNED`. El actor debe ser `assigned_user_id` de la solicitud y el participante asignado debe continuar vigente como `COUNTER`. Requiere `task.status = COMPLETED`, `session.status = UNDER_REVIEW`, tarea no cancelada y sin validacion vigente. La solicitud pasa de `ASSIGNED` a `IN_PROGRESS`. No modifica la tarea, el ciclo, la jornada ni la asignacion. No registra capturas.
+
 ## 7. Maquina de estados y auditoria
 
 La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. La reapertura inicia inmediatamente el nuevo ciclo con `COMPLETED -> IN_PROGRESS`; no crea un estado `REOPENED` ni un evento `STARTED` adicional. La reasignacion se permite en `ASSIGNED`, `IN_PROGRESS` y `PAUSED` sin cambiar estado; no se cancela desde `IN_PROGRESS`: primero se pausa. Cada mutacion exitosa de asignacion, reasignacion, inicio, pausa, reanudacion, finalizacion, validacion, reapertura o cancelacion incrementa `tasks.version` exactamente una vez. Solo reapertura incrementa ciclo.
