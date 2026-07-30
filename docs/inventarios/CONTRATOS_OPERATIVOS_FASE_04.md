@@ -280,6 +280,16 @@ Modalidad COUNTER: `task.status = IN_PROGRESS`, `session.status = COUNTING`, act
 
 `p_category_code` admite `UNKNOWN_PRODUCT_CODE`, `EXPECTED_PRODUCT_NOT_FOUND`, `PRODUCT_LOCATION_MISMATCH`, `UNKNOWN_LOCATION`, `DAMAGED_PRODUCT`, `EXPIRED_PRODUCT`, `BLOCKED_PRODUCT`, `QUANTITY_DISCREPANCY`, `LABEL_OR_BARCODE_ISSUE` y `OPERATIONAL_ISSUE`. `p_severity` admite `INFORMATIONAL`, `OPERATIONAL`, `CRITICAL` y `BLOCKING`; la RPC deriva `is_blocking` automaticamente desde `BLOCKING`. `p_snapshot_product_id` y `p_count_entry_id` son opcionales y mutuamente excluyentes como entrada; ciertas categorias exigen producto. La RPC no acepta parametros MOBILE, no modifica tareas ni conteos, y establece `status = OPEN`. Incidentes con `is_blocking = true` deberan impedir completar, validar o aprobar la tarea en fases posteriores.
 
+### 6.12 Resolucion de incidentes (revision, resolucion y cierre)
+
+`inventarios.resolve_inventory_incident(p_company_id uuid, p_incident_id uuid, p_next_status text, p_expected_current_status text, p_expected_current_resolution_id uuid, p_resolution_type text, p_description text, p_idempotency_key uuid) RETURNS jsonb` usa el codigo `inventarios.incident.resolve`, permiso `inventarios.incidents.manage` y rol `SUPERVISOR`. Requiere `task.status = COMPLETED`, `session.status = UNDER_REVIEW` y ausencia de validacion vigente.
+
+Matriz contractual: OPEN→UNDER_REVIEW, OPEN→RESOLVED, UNDER_REVIEW→RESOLVED, RESOLVED→CLOSED. Prohibidas: OPEN→CLOSED, UNDER_REVIEW→CLOSED, reapertura y transiciones al mismo estado.
+
+`p_resolution_type` es obligatorio para RESOLVED con catalogo fijo (`COUNT_CORRECTED`, `COUNT_INVALIDATED`, `RECOUNT_REQUESTED`, `PRODUCT_IDENTIFIED`, `LOCATION_CONFIRMED`, `DISMISSED`, `NO_ACTION_REQUIRED`, `OTHER`). UNDER_REVIEW usa `REVIEW_STARTED` y CLOSED usa `CLOSURE_CONFIRMED`, ambos derivados automaticamente. `p_expected_current_resolution_id` debe ser NULL para OPEN y no nulo para UNDER_REVIEW o RESOLVED.
+
+La RPC bloquea el incidente y la resolucion vigente con `FOR UPDATE`, inserta una nueva `incident_resolution`, supersede la anterior, actualiza `incidents.status` y asigna `responsible_user_id` solo en la primera transicion desde OPEN. No modifica `is_blocking`, `severity`, tareas ni conteos. `CLOSED` es terminal.
+
 ## 7. Maquina de estados y auditoria
 
 La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. La reapertura inicia inmediatamente el nuevo ciclo con `COMPLETED -> IN_PROGRESS`; no crea un estado `REOPENED` ni un evento `STARTED` adicional. La reasignacion se permite en `ASSIGNED`, `IN_PROGRESS` y `PAUSED` sin cambiar estado; no se cancela desde `IN_PROGRESS`: primero se pausa. Cada mutacion exitosa de asignacion, reasignacion, inicio, pausa, reanudacion, finalizacion, validacion, reapertura o cancelacion incrementa `tasks.version` exactamente una vez. Solo reapertura incrementa ciclo.
