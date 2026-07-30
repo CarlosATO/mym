@@ -415,3 +415,7 @@ Codigos minimos: `INV_UNAUTHENTICATED`, `INV_COMPANY_ACCESS_DENIED`, `INV_PERMIS
 | 4E - Seguridad y exposicion | triggers, RLS, grants, ownership, wrappers/exposicion y habilitacion operacional de validacion | escritura directa denegada, RPC autorizadas y auditoria protegida |
 
 Cada subfase se divide en migraciones pequenas: primero contratos y objetos de datos, luego funciones, despues triggers/RLS y pruebas de concurrencia/permisos. No se modifica ninguna migracion de Fases 1-3.
+
+### Exposicion de RPCs y seguridad
+
+Las RPCs operativas de inventarios estan expuestas exclusivamente a `authenticated` mediante GRANT EXECUTE individual por firma exacta. Helpers internos no tienen grants. El esquema `inventarios` concede USAGE a `authenticated` y deniega CREATE. Todas las tablas tienen RLS habilitado sin policies (deny-by-default); los privilegios directos fueron revocados a PUBLIC, anon, authenticated y service_role. Los privilegios por defecto protegen tablas, secuencias y funciones futuras. Anon y service_role no tienen acceso. La matriz completa de seguridad se documenta en `MATRIZ_SEGURIDAD_EXPOSICION_FASE_04E.md`.
