@@ -173,6 +173,8 @@ La captura append-only inserta una fila en `count_entries` por cada aporte. No a
 
 La asignacion de recuento actualiza `recount_requests.status` a `ASSIGNED` e informa `assigned_participant_id`, `assigned_user_id` y `assigned_at`. La asignacion es propia de la solicitud e independiente de `task_assignments`. No existe reasignacion en V1.
 
+`inventarios.get_effective_task_contributions` es un helper `STABLE` que produce las contribuciones finales de una tarea combinando conteos normales (via 4E.1) y recuentos decididos (via 4E.2), excluyendo aportes normales reemplazados por scopes de recuento.
+
 `inventarios.get_applicable_recount_decisions` es un helper interno `STABLE` que determina las decisiones de recuento aplicables por alcance `(zona, producto, tarea, ciclo)`, usando ordinal como criterio de precedencia y validando la efectividad del `selected_count_entry` mediante `get_effective_count_entries`.
 
 `inventarios.get_effective_count_entries` es un helper interno `STABLE` que resuelve cadenas efectivas de `count_entries`. Para cada raiz aplica la correccion activa (`superseded_at IS NULL`) y retorna el candidate efectivo (raiz o `replacement_count_entry_id`). Excluye candidates invalidados y verifica integridad de contexto entre raiz y candidate. No retorna cantidades ni consolida. Usado internamente por otras RPCs.
