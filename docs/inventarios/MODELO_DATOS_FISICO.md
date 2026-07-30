@@ -161,6 +161,8 @@ La finalizacion desde `IN_PROGRESS` conserva apertura, ciclo y pausa; actualiza 
 
 La validacion de una tarea `COMPLETED` se representa con un evento `VALIDATED` y el puntero `current_validation_event_id`. La vigencia depende exclusivamente de que ese puntero apunte a un evento `VALIDATED` contextual del mismo ciclo. La operacion actualiza el puntero, `validated_at`, `validated_by`, version, `updated_at` y `updated_by`; no cambia estado, ciclo ni crea `task_state_transitions`.
 
+La invalidacion de una validacion vigente conserva la tarea en `COMPLETED` y el mismo `validation_cycle`. Requiere un puntero coherente y proyecciones `validated_at` y `validated_by` coincidentes con el evento `VALIDATED`; inserta un evento `INVALIDATED`, limpia exclusivamente `current_validation_event_id`, `validated_at` y `validated_by`, e incrementa version y auditoria. El evento `VALIDATED` se conserva, no se crea `task_state_transitions` y el metadata tecnico del nuevo evento contiene solo `invalidated_validation_event_id` y `reason` normalizado.
+
 ### 5.2 task_events
 
 La definicion oficial de `task_events.cycle` es `integer NOT NULL DEFAULT 1` y su check exige `cycle > 0`. La migracion 4B.2 hace backfill seguro (`UPDATE inventarios.task_events SET cycle = 1 WHERE cycle = 0`), reemplaza el check previo y cambia el default. No altera el catalogo de eventos ni migraciones de Fase 2.
@@ -213,6 +215,7 @@ No permite `UPDATE`, `DELETE` ni supersesion; una correccion se representa por n
 | Reapertura | `REOPENED` | `REOPENED` y opcionalmente `INVALIDATED` |
 | Reasignacion | ninguno | `REASSIGNED` |
 | Validacion | ninguno | `VALIDATED` |
+| Invalidacion de validacion | ninguno | `INVALIDATED` |
 | Cancelacion | ninguno | `CANCELLED` |
 
 ## 7. Reconteos: tarea ejecutora (4D)

@@ -43,7 +43,7 @@ Todos los campos principales estan presentes. Los no aplicables son `null`. `dat
 | `p_expected_version` | integer | no | debe igualar `tasks.version` |
 | `p_expected_cycle` | integer | no | debe igualar el ciclo actual |
 | `p_idempotency_key` | uuid | no | clave persistida de la mutacion |
-| `p_reason` | text | depende | obligatorio en reasignacion, reapertura y cancelacion |
+| `p_reason` | text | depende | obligatorio en reasignacion, reapertura, cancelacion e invalidacion |
 
 Ninguna RPC acepta `p_actor_id`, `p_validated_by` o `p_completed_by`: el actor es `auth.uid()`.
 
@@ -118,7 +118,7 @@ La RPC valida que la tarea sea `RECOUNT`, comparta empresa, jornada y zona, sea 
 
 ## 4. Idempotencia y concurrencia
 
-Todas las RPC mutadoras de 4B requieren `p_idempotency_key uuid NOT NULL` y usan idempotencia persistida: `prepare_inventory_session`, `start_inventory_session`, `create_session_zone`, `assign_inventory_task`, `reassign_inventory_task`, `start_inventory_task`, `pause_inventory_task`, `resume_inventory_task`, `complete_inventory_task`, `validate_inventory_task`, `reopen_inventory_task` y `cancel_inventory_task`. No usan `STATE_BASED_REPLAY`.
+Todas las RPC mutadoras de 4B requieren `p_idempotency_key uuid NOT NULL` y usan idempotencia persistida: `prepare_inventory_session`, `start_inventory_session`, `create_session_zone`, `assign_inventory_task`, `reassign_inventory_task`, `start_inventory_task`, `pause_inventory_task`, `resume_inventory_task`, `complete_inventory_task`, `validate_inventory_task`, `invalidate_inventory_task`, `reopen_inventory_task` y `cancel_inventory_task`. No usan `STATE_BASED_REPLAY`.
 
 La primera ejecucion ocurre en una unica transaccion: deriva empresa y actor, construye payload, calcula `request_hash`, inserta `IN_PROGRESS`, ejecuta la operacion, guarda el envelope original en `response_payload`, cambia a `COMPLETED` y confirma. Si falla, toda la transaccion hace rollback y no deja fila confirmada.
 
@@ -186,10 +186,11 @@ Toda RPC deriva empresa del recurso, valida `core.has_company_access(auth.uid(),
 | `resume_inventory_task` | PAUSED a IN_PROGRESS | contador asignado/supervisor | asignacion vigente |
 | `complete_inventory_task` | IN_PROGRESS a COMPLETED | contador asignado | tarea activa |
 | `validate_inventory_task` | validacion acumulativa, sin consolidar | supervisor | capa aplicable completada |
+| `invalidate_inventory_task` | invalidar validacion vigente, sin reabrir | supervisor | COMPLETED validada |
 | `reopen_inventory_task` | invalidar validacion vigente y reabrir | supervisor | COMPLETED validada |
 | `cancel_inventory_task` | cancelar conservando historia | administrador/supervisor | ASSIGNED o PAUSED |
 
-Firmas de tarea: reasignar, pausar, reanudar, completar, validar, reabrir y cancelar incluyen `p_task_id`, `p_expected_version`, `p_expected_cycle` y `p_idempotency_key`. Reasignar y reabrir incluyen participante y motivo; cancelar incluye motivo. El inicio usa la firma especifica de la seccion 6.1. Toda firma retorna el envelope canonico.
+Firmas de tarea: reasignar, pausar, reanudar, completar, validar, invalidar, reabrir y cancelar incluyen `p_task_id`, `p_expected_version`, `p_expected_cycle` y `p_idempotency_key`. Reasignar y reabrir incluyen participante y motivo; invalidar y cancelar incluyen motivo. El inicio usa la firma especifica de la seccion 6.1. Toda firma retorna el envelope canonico.
 
 ### 6.1 Inicio de tarea asignada
 
@@ -211,6 +212,14 @@ Con un unico instante actualiza exclusivamente `status = 'COMPLETED'`, `version 
 
 La validacion vigente existe solo si `current_validation_event_id` apunta a un `task_events` `VALIDATED` de la misma empresa, jornada, tarea y ciclo. Un puntero nulo permite validar; uno valido retorna `INV_OPERATION_ALREADY_APPLIED`; uno inconsistente retorna `INV_CONCURRENT_MODIFICATION`. La validacion inserta un unico `VALIDATED`, actualiza el puntero, `validated_at`, `validated_by`, version y auditoria, y no cambia estado, ciclo, asignacion ni crea transicion. Futuras operaciones `INVALIDATED` y `REOPENED` limpian el puntero y proyecciones de validacion sin borrar historia.
 
+### 6.4 Invalidacion de validacion vigente
+
+`inventarios.invalidate_inventory_task(p_company_id uuid, p_task_id uuid, p_expected_version integer, p_expected_cycle integer, p_reason text, p_idempotency_key uuid) RETURNS jsonb` usa el codigo `inventarios.task.invalidate`, permiso `inventarios.tasks.validate` y participante `SUPERVISOR`. Exige tarea `COMPLETED`, version y ciclo esperados, y serializa por empresa/tarea con `pg_advisory_xact_lock(hashtext('inventarios.invalidate_inventory_task'), hashtext(company_id::text || ':' || task_id::text))`.
+
+`p_reason` se normaliza con `btrim`, es obligatorio y debe tener entre 5 y 500 caracteres; entradas invalidas retornan `INV_INVALID_REQUEST_PAYLOAD`. El payload idempotente contiene solo operacion, empresa, tarea, version esperada, ciclo esperado y motivo normalizado. Un replay retorna el envelope persistido con solo `replayed: true`; la misma clave con un payload distinto retorna `INV_IDEMPOTENCY_CONFLICT`.
+
+La fuente de verdad es `current_validation_event_id`. Un puntero nulo retorna `INV_TASK_NOT_VALIDATED`; un puntero o proyeccion incoherente retorna `INV_CONCURRENT_MODIFICATION` reintentable. La RPC conserva `COMPLETED` y el mismo ciclo, inserta un unico evento `INVALIDATED` con metadata `{"invalidated_validation_event_id":"uuid","reason":"texto"}`, limpia `current_validation_event_id`, `validated_at` y `validated_by`, incrementa `version` y actualiza auditoria. No elimina el evento `VALIDATED`, no crea `task_state_transitions` y deja la tarea fuera de consolidaciones que exijan validacion vigente. Puede validarse nuevamente en el mismo ciclo.
+
 ## 7. Maquina de estados y auditoria
 
 La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. Solo reapertura pasa `COMPLETED -> IN_PROGRESS`. No se reasigna ni cancela desde `IN_PROGRESS`: primero se pausa. Cada mutacion exitosa de asignacion, reasignacion, inicio, pausa, reanudacion, finalizacion, validacion, reapertura o cancelacion incrementa `tasks.version` exactamente una vez. Solo reapertura incrementa ciclo.
@@ -222,6 +231,7 @@ La tarea sigue `ASSIGNED -> IN_PROGRESS -> PAUSED -> IN_PROGRESS -> COMPLETED`. 
 | Reanudacion | `RESUMED` | `RESUMED` |
 | Finalizacion | `COMPLETED` | ninguno |
 | Reapertura | `REOPENED` | `REOPENED` y, si aplica, `INVALIDATED` |
+| Invalidacion | ninguno | `INVALIDATED` |
 
 `task_state_transitions` audita el estado persistente. `task_events` conserva los hechos funcionales aprobados en Fase 2. No son estructuras intercambiables y no se agregan `PAUSED` ni `COMPLETED` a `task_events.event_type`.
 
@@ -255,7 +265,7 @@ El reconteo sigue `REQUESTED -> ASSIGNED -> IN_PROGRESS -> COMPLETED`, con cance
 
 En 4B.0b, `operation_idempotency` habilita RLS y termina con cero politicas funcionales. Se revoca todo acceso directo de `PUBLIC`, `anon` y `authenticated`; solo `service_role` recibe `SELECT`, `INSERT` y `UPDATE`, nunca `DELETE`, `TRUNCATE`, `REFERENCES` ni `TRIGGER`. No hay lectura directa de `authenticated`, no se agrega `inventarios` a `api.schemas`, no hay wrappers `public` ni grants `EXECUTE`. Las RPC futuras `SECURITY DEFINER` acceden mediante propietario controlado, `search_path` fijo, objetos calificados, `auth.uid()`, empresa derivada, `REVOKE EXECUTE FROM PUBLIC` y grants explicitos por firma.
 
-Codigos minimos: `INV_UNAUTHENTICATED`, `INV_COMPANY_ACCESS_DENIED`, `INV_PERMISSION_REQUIRED`, `INV_ROLE_NOT_ALLOWED`, `INV_SESSION_INVALID_STATE`, `INV_SESSION_NOT_PREPARED`, `INV_SCOPE_NOT_INCLUDED`, `INV_TASK_NOT_ASSIGNED`, `INV_TASK_INVALID_STATE`, `INV_TASK_CYCLE_CONFLICT`, `INV_VERSION_CONFLICT`, `INV_PARTICIPANT_INACTIVE`, `INV_USER_ALREADY_ACTIVE`, `INV_IDEMPOTENCY_CONFLICT`, `INV_IDEMPOTENCY_IN_PROGRESS`, `INV_OPERATION_ALREADY_APPLIED`, `INV_COUNT_IDEMPOTENCY_CONFLICT`, `INV_COUNT_CONTEXT_MISMATCH`, `INV_COUNT_QUANTITY_MISMATCH`, `INV_INCIDENT_BLOCKING`, `INV_RECOUNT_INVALID_STATE`, `INV_RECOUNT_INCOMPLETE`, `INV_DECISION_CONTEXT_MISMATCH`, `INV_DECISION_NOT_FOUND`, `INV_CONCURRENT_MODIFICATION` e `INV_NOT_FOUND`. `INV_IDEMPOTENCY_IN_PROGRESS` es reintentable y usa el mensaje seguro definido en idempotencia.
+Codigos minimos: `INV_UNAUTHENTICATED`, `INV_COMPANY_ACCESS_DENIED`, `INV_PERMISSION_REQUIRED`, `INV_ROLE_NOT_ALLOWED`, `INV_SESSION_INVALID_STATE`, `INV_SESSION_NOT_PREPARED`, `INV_SCOPE_NOT_INCLUDED`, `INV_TASK_NOT_ASSIGNED`, `INV_TASK_INVALID_STATE`, `INV_TASK_NOT_VALIDATED`, `INV_TASK_CYCLE_CONFLICT`, `INV_VERSION_CONFLICT`, `INV_PARTICIPANT_INACTIVE`, `INV_USER_ALREADY_ACTIVE`, `INV_IDEMPOTENCY_CONFLICT`, `INV_IDEMPOTENCY_IN_PROGRESS`, `INV_OPERATION_ALREADY_APPLIED`, `INV_COUNT_IDEMPOTENCY_CONFLICT`, `INV_COUNT_CONTEXT_MISMATCH`, `INV_COUNT_QUANTITY_MISMATCH`, `INV_INCIDENT_BLOCKING`, `INV_RECOUNT_INVALID_STATE`, `INV_RECOUNT_INCOMPLETE`, `INV_DECISION_CONTEXT_MISMATCH`, `INV_DECISION_NOT_FOUND`, `INV_CONCURRENT_MODIFICATION` e `INV_NOT_FOUND`. `INV_IDEMPOTENCY_IN_PROGRESS` es reintentable y usa el mensaje seguro definido en idempotencia.
 
 ## 11. Matriz de cambios fisicos requeridos
 
