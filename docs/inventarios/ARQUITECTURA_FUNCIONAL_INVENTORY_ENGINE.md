@@ -330,6 +330,20 @@ Reglas:
 - Authenticated (tabla, helper, sin permiso, BODEGA, GERENCIA, SUPER_USUARIO): SKIPPED por ausencia de JWT de prueba.
 - Cero mutaciones: todas las pruebas usan UUIDs aleatorios y actores no autorizados.
 
+### Reconciliación de superficie (4F.2-H1)
+
+La superficie física final es de **32 firmas: 22 RPC operativas + 10 helpers internos**.
+La cifra de 23 RPCs / 33 firmas de 4F.0 fue documentalmente incorrecta: provino de la
+matriz conceptual 4E que listaba nombres de un diseño previo que nunca fueron
+implementados (`create_inventory_session`, `create_count_entry`,
+`reject_inventory_session`, `bulk_insert_count_entries`, etc.). La migración 4E.5 cubre
+las 32 firmas (22 grants + 10 revokes de helpers) y la matriz 4F.2 asigna los 10 permisos
+usados por las 22 RPCs. No existe RPC vigente sin grant ni sin permiso.
+
+Las RPCs de ciclo de sesión (crear, preparar, iniciar, cancelar jornada) no fueron
+implementadas; la única RPC de sesión es `approve_inventory_session` (UNDER_REVIEW →
+APPROVED). El permiso `inventarios.sessions.start` queda reservado, sin RPC que lo use.
+
 ## 10. Decisiones arquitectonicas oficiales
 
 1. Inventory Engine es un producto reutilizable, no un modulo aislado para MYM.

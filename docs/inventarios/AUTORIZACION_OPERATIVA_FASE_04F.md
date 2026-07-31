@@ -9,6 +9,32 @@
 - 0 aliases
 - Superficie segura para exposición
 
+## Reconciliación definitiva (4F.2-H1)
+
+La cifra de 23 RPCs / 33 firmas informada en 4F.0 fue un error documental. La matriz
+conceptual 4E original listaba nombres de un diseño previo (`create_inventory_session`,
+`create_count_entry`, `reject_inventory_session`, `bulk_insert_count_entries`, etc.) que
+**nunca fueron implementados** como funciones. El estado físico aplicado es de **32
+firmas: 22 RPC operativas + 10 helpers internos**, todos cubiertos por la migración 4E.5
+(22 GRANT EXECUTE a authenticated + 10 helpers revocados) y por la matriz de permisos 4F.2
+(10 permisos usados por las RPCs). No existe RPC vigente sin grant ni sin permiso asignado.
+
+### Estado de `inventarios.sessions.start`
+
+Permiso reservado creado en 4B.0a; usado solo por la primera versión de
+`approve_inventory_session` (04e4), reemplazada por el hotfix que usa
+`inventarios.sessions.approve`. Ninguna RPC final lo usa; no fue asignado en 4F.2.
+Queda reservado para una futura RPC de inicio de jornada.
+
+### Ciclo de vida de jornada
+
+- Creación → DRAFT: NO implementada (escritura directa; requiere backend antes del UI).
+- DRAFT → PREPARED: NO implementada.
+- PREPARED → COUNTING: NO implementada.
+- COUNTING → UNDER_REVIEW: NO implementada.
+- UNDER_REVIEW → APPROVED: implementada (`approve_inventory_session`).
+- Cancelación de jornada: NO implementada.
+
 ## Separación de autorización
 
 - `portal.permissions` y `portal.role_permissions` controlan acceso general al módulo

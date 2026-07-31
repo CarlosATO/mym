@@ -125,8 +125,7 @@ El modulo usa `code = 'inventarios'` y `name = 'Inventarios'`. Su upsert es `ON 
 | `inventarios.read` | Ver Inventarios |
 | `inventarios.sessions.prepare` | Preparar jornadas de inventario |
 | `inventarios.sessions.start` | Iniciar jornadas de inventario |
-| `inventarios.sessions.approve` | Aprobar jornadas de inventario |
-| `inventarios.zones.manage` | Administrar zonas de inventario |
+| `inventarios.sessions.approve` | Aprobar jornadas de inventario || `inventarios.zones.manage` | Administrar zonas de inventario |
 | `inventarios.tasks.assign` | Asignar tareas de inventario |
 | `inventarios.tasks.execute` | Ejecutar tareas de inventario |
 | `inventarios.tasks.validate` | Validar tareas de inventario |
@@ -142,6 +141,13 @@ El modulo usa `code = 'inventarios'` y `name = 'Inventarios'`. Su upsert es `ON 
 Cada permiso resuelve `module_id` mediante `portal.modules.code = 'inventarios'`, sin UUID fijo. Su upsert es `ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, module_id = EXCLUDED.module_id`: conserva el `id`, corrige exclusivamente nombre y modulo, no crea segunda fila, no borra asignaciones y no modifica otras columnas.
 
 4B.0a no inserta ni actualiza `portal.role_permissions` o `portal.user_permissions`, no crea ni modifica roles, no asigna usuarios, no elimina asignaciones y no modifica `portal.has_permission`. Tampoco cambia RLS, politicas, grants, funciones ni permisos existentes de `portal`. El rol de migracion ejecuta este seed idempotente mediante las claves empresariales estables.
+
+Nota de reconciliacion (4F.2-H1): `inventarios.sessions.start` es un permiso reservado en
+`portal.permissions`. Fue usado por la primera version de `approve_inventory_session`
+(04e4), reemplazada por el hotfix 04e4 que usa `inventarios.sessions.approve`. Ninguna RPC
+final lo usa y no fue asignado en 4F.2; queda reservado para una futura RPC de inicio de
+jornada que aun no existe. No se elimina. La superficie final aplicada es de 32 firmas:
+22 RPC operativas + 10 helpers internos.
 
 ## 5. Tareas: ciclo, proyecciones y eventos
 

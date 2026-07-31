@@ -14,6 +14,16 @@ Superficie física confirmada: **22 RPCs operativas + 10 helpers internos = 32 f
 Los documentos previos de 4E usaban nombres de un diseño anterior que no existe en el
 código aplicado; esta matriz refleja las firmas físicas reales con `EXECUTE` concedido.
 
+### Reconciliación (4F.2-H1)
+
+La cifra de 23 RPCs / 33 firmas informada en 4F.0 fue un error documental: provino de la
+matriz conceptual 4E original, cuyos nombres (`create_inventory_session`,
+`create_count_entry`, `reject_inventory_session`, `bulk_insert_count_entries`, etc.)
+nunca fueron implementados como funciones. La migración 4E.5 cubre las 32 firmas reales
+(22 GRANT EXECUTE a authenticated + 10 helpers revocados) y la matriz 4F.2 asigna los 10
+permisos usados por las 22 RPCs. No existe RPC vigente sin grant ni sin permiso asignado.
+El permiso `inventarios.sessions.start` queda reservado, sin RPC que lo use.
+
 ### RPCs operativas (EXECUTE TO authenticated) y autorización
 
 | RPC | Permiso | functional_role | Grant |

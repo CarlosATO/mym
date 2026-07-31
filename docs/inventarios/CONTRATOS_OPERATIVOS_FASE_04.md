@@ -118,7 +118,7 @@ La RPC valida que la tarea sea `RECOUNT`, comparta empresa, jornada y zona, sea 
 
 ## 4. Idempotencia y concurrencia
 
-Todas las RPC mutadoras de 4B requieren `p_idempotency_key uuid NOT NULL` y usan idempotencia persistida: `prepare_inventory_session`, `start_inventory_session`, `create_session_zone`, `assign_inventory_task`, `reassign_inventory_task`, `start_inventory_task`, `pause_inventory_task`, `resume_inventory_task`, `complete_inventory_task`, `validate_inventory_task`, `invalidate_inventory_task`, `reopen_inventory_task` y `cancel_inventory_task`. No usan `STATE_BASED_REPLAY`.
+Todas las RPC mutadoras de 4B requieren `p_idempotency_key uuid NOT NULL` y usan idempotencia persistida: `reassign_inventory_task`, `start_inventory_task`, `pause_inventory_task`, `resume_inventory_task`, `complete_inventory_task`, `validate_inventory_task`, `invalidate_inventory_task`, `reopen_inventory_task` y `cancel_inventory_task`. No usan `STATE_BASED_REPLAY`.
 
 La primera ejecucion ocurre en una unica transaccion: deriva empresa y actor, construye payload, calcula `request_hash`, inserta `IN_PROGRESS`, ejecuta la operacion, guarda el envelope original en `response_payload`, cambia a `COMPLETED` y confirma. Si falla, toda la transaccion hace rollback y no deja fila confirmada.
 
@@ -175,12 +175,13 @@ Toda RPC deriva empresa del recurso, valida `core.has_company_access(auth.uid(),
 
 ## 6. Catalogo de RPC 4B
 
+> Nota de reconciliacion (4F.2-H1): `prepare_inventory_session`, `start_inventory_session`,
+> `create_session_zone` y `assign_inventory_task` pertenecieron al diseno conceptual 4B.1
+> (jornadas y zonas) y **no fueron implementadas** en el codigo fisico. No existe ninguna
+> funcion con esas firmas. La tabla siguiente refleja el catalogo real de RPC de tareas.
+
 | RPC | Proposito | Actor | Precondicion principal |
 | --- | --- | --- | --- |
-| `prepare_inventory_session` | preparar alcance, snapshot, zonas y participantes | administrador | jornada DRAFT/PREPARED |
-| `start_inventory_session` | confirmar snapshot e iniciar | administrador | jornada PREPARED |
-| `create_session_zone` | crear zona y membresia V1 atomica | administrador | scope INCLUDED |
-| `assign_inventory_task` | crear/asignar PRIMARY o RECOUNT | administrador/supervisor | participante activo |
 | `reassign_inventory_task` | cerrar asignacion vigente y abrir otra sin cambiar estado | supervisor | ASSIGNED, IN_PROGRESS o PAUSED |
 | `start_inventory_task` | ASSIGNED a IN_PROGRESS | contador asignado | zona confirmada |
 | `pause_inventory_task` | IN_PROGRESS a PAUSED | contador asignado/supervisor | tarea activa |
@@ -419,3 +420,66 @@ Cada subfase se divide en migraciones pequenas: primero contratos y objetos de d
 ### Exposicion de RPCs y seguridad
 
 Las RPCs operativas de inventarios estan expuestas exclusivamente a `authenticated` mediante GRANT EXECUTE individual por firma exacta. Helpers internos no tienen grants. El esquema `inventarios` concede USAGE a `authenticated` y deniega CREATE. Todas las tablas tienen RLS habilitado sin policies (deny-by-default); los privilegios directos fueron revocados a PUBLIC, anon, authenticated y service_role. Los privilegios por defecto protegen tablas, secuencias y funciones futuras. Anon y service_role no tienen acceso. La matriz completa de seguridad se documenta en `MATRIZ_SEGURIDAD_EXPOSICION_FASE_04E.md`.
+
+## 13. Reconciliacion definitiva (4F.2-H1)
+
+### Superficie final de firmas
+
+El estado fisico aplicado es de **32 firmas finales**: **22 RPC operativas** con GRANT
+EXECUTE a `authenticated` y **10 helpers internos** sin EXECUTE. La cifra de 23 RPCs
+(33 firmas) informada en 4F.0 fue un error documental: provino de la matriz conceptual
+4E original que listaba nombres de un diseno previo (`create_inventory_session`,
+`add_task_to_inventory_session`, `open_inventory_session`, `create_count_entry`,
+`recount_all_session_tasks`, `recount_single_task`, `complete_inventory_session`,
+`cancel_inventory_session`, `report_responsive_incident`, `resolve_incident`,
+`request_correction`, `approve_correction`, `reject_correction`,
+`reject_inventory_session`, `bulk_insert_count_entries`,
+`get_bulk_csv_tpl_single_sku` y otros) que **nunca fueron implementados** como funciones.
+Ninguna funcion del catalogo conceptual de 4E existe en el codigo aplicado.
+
+### Funciones de sesion no implementadas
+
+No existen RPC de creacion (`create_inventory_session`), preparacion
+(`prepare_inventory_session`), inicio (`start_inventory_session`), zona
+(`create_session_zone`) ni asignacion de tarea (`assign_inventory_task`) en el codigo
+fisico. Las sesiones se crean actualmente por escritura directa; la unica RPC de sesion
+implementada es `approve_inventory_session` (UNDER_REVIEW → APPROVED).
+
+### Ciclo de vida de jornada
+
+| Transicion | Estado | Implementacion |
+| --- | --- | --- |
+| Creacion → DRAFT | disenada (4B.1) | NO implementada; escritura directa |
+| DRAFT → PREPARED | disenada (4B.1) | NO implementada |
+| PREPARED → COUNTING | disenada (4B.1) | NO implementada |
+| COUNTING → UNDER_REVIEW | disenada (4B.1) | NO implementada |
+| UNDER_REVIEW → APPROVED | implementada | `approve_inventory_session` |
+| Cancelacion de jornada | disenada (4B.1) | NO implementada |
+
+Las transiciones pendientes de sesion requieren backend antes del UI.
+
+### Permiso `inventarios.sessions.start`
+
+`inventarios.sessions.start` existe en `portal.permissions` (creado en 4B.0a) y fue usado
+por la primera version de `approve_inventory_session` (04e4), reemplazada por el hotfix
+04e4 que usa `inventarios.sessions.approve`. Ninguna RPC final usa `sessions.start`; no
+fue asignado en 4F.2. Se clasifica como **permiso reservado** para una futura RPC de
+inicio de jornada (aun no implementada). No se elimina en esta fase.
+
+### Permisos usados por las 22 RPC operativas
+
+| Permission code | RPCs que lo usan | Roles portal (4F.2) |
+| --- | --- | --- |
+| `inventarios.tasks.execute` | start, pause, resume, complete | BODEGA, SUPER_USUARIO |
+| `inventarios.tasks.validate` | validate, invalidate, reopen | BODEGA, SUPER_USUARIO |
+| `inventarios.tasks.assign` | reassign | BODEGA, SUPER_USUARIO |
+| `inventarios.tasks.cancel` | cancel | BODEGA, SUPER_USUARIO |
+| `inventarios.counts.record` | record | BODEGA, SUPER_USUARIO |
+| `inventarios.counts.correct` | correct, invalidate | BODEGA, SUPER_USUARIO |
+| `inventarios.incidents.manage` | report, resolve | BODEGA, SUPER_USUARIO |
+| `inventarios.recounts.manage` | request, assign, start, record, complete, cancel | BODEGA, SUPER_USUARIO |
+| `inventarios.recounts.decide` | decide | BODEGA, SUPER_USUARIO |
+| `inventarios.sessions.approve` | approve | GERENCIA, SUPER_USUARIO |
+
+La matriz 4F.2 esta completa: los 10 permisos usados por las 22 RPC operativas fueron
+asignados a los roles del portal. No existe RPC operativa sin permiso asignado.
