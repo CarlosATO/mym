@@ -286,6 +286,50 @@ supabase.schema('inventarios').rpc('nombre_rpc', { p_param: valor })
 
 **Smoke tests (4F.1):** 6 pruebas no destructivas con fetch nativo. Resultado: 3 PASS (anon bloqueado), 3 SKIP (sin JWT de pruebas).
 
+## 9C. Autorización híbrida (4F.2)
+
+Existen dos modelos de autorización independientes que se aplican en conjunto:
+
+### Portal roles (autorización general)
+
+- `portal.roles`: 6 roles físicos (`SUPER_USUARIO`, `GERENCIA`, `BODEGA`, `CONSULTA_DE_BODEGA`, `FINANZAS`, `VENDEDOR`).
+- `portal.permissions`: permisos funcionales del módulo `inventarios` (10 usados por RPC operativas).
+- `portal.role_permissions`: pares `(role, permission)` que definen qué conjunto general de operaciones puede intentar un usuario.
+- `portal.has_permission(...)`: resuelve la autorización general para `auth.uid()`.
+
+### Functional role (autorización contextual)
+
+- `inventarios.session_participants.functional_role`: `COUNTER`, `SUPERVISOR`, `ADMINISTRATOR` o `MANAGER`.
+- Es una autorización contextual por jornada, no un rol global del portal.
+- No existe relación FK entre `functional_role` y `portal.roles`.
+- `require_session_participant(...)` valida participación vigente y rol contextual.
+
+### Matriz de roles (4F.2)
+
+| Portal role | Permisos de Inventarios | Restricción contextual |
+|-------------|-------------------------|------------------------|
+| `SUPER_USUARIO` | 10 permisos usados por RPC operativas (asignación explícita) | No elimina controles contextuales: no cuenta sin participar, no valida sin SUPERVISOR, no aprueba sin MANAGER, no opera sin acceso a empresa |
+| `BODEGA` | 9 permisos operativos (tasks.assign/execute/validate/cancel, counts.record/correct, incidents.manage, recounts.manage/decide) | COUNTER, SUPERVISOR o ADMINISTRATOR según operación |
+| `GERENCIA` | `inventarios.sessions.approve` únicamente | MANAGER contextual vigente |
+| `CONSULTA_DE_BODEGA` | Ninguno | — |
+| `FINANZAS` | Ninguno | — |
+| `VENDEDOR` | Ninguno | — |
+
+Reglas:
+
+- SUPER_USUARIO recibe permisos mediante filas explícitas en `portal.role_permissions`, sin herencia automática.
+- BODEGA no recibe `inventarios.sessions.approve`.
+- GERENCIA no recibe permisos operativos de BODEGA.
+- Aprobar exige simultáneamente permiso general (GERENCIA o SUPER_USUARIO) y `functional_role = MANAGER` vigente en la jornada.
+- No se crearon roles nuevos, permisos nuevos, user_permissions ni asignaciones directas a usuarios.
+- La validación dinámica completa de `functional_role` (sesión existente, participante, rol incorrecto) queda pendiente hasta disponer de una jornada controlada de pruebas antes del UI productivo.
+
+### Smoke tests (4F.2)
+
+- Anon: tabla (PASS 401), RPC (PASS 401), helper (PASS 401).
+- Authenticated (tabla, helper, sin permiso, BODEGA, GERENCIA, SUPER_USUARIO): SKIPPED por ausencia de JWT de prueba.
+- Cero mutaciones: todas las pruebas usan UUIDs aleatorios y actores no autorizados.
+
 ## 10. Decisiones arquitectonicas oficiales
 
 1. Inventory Engine es un producto reutilizable, no un modulo aislado para MYM.
