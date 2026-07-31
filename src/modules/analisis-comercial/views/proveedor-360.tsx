@@ -156,7 +156,7 @@ export function Proveedor360() {
             <SupplierPurchaseSalesChart supplierId={appliedSupplierId} weekly={data?.weekly || []} hasReceptionData={Boolean(data?.hasReceptionData)} />
 
             <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)]">
-              <SupplierLastPurchasesTable rows={data?.lastPurchases || []} />
+              <SupplierLastPurchasesTable rows={data?.lastPurchases || []} supplierId={appliedSupplierId} />
               <SupplierCatalogTable rows={data?.catalog || []} />
             </div>
           </div>

@@ -78,9 +78,11 @@ export type SupplierWeeklyDocumentDetail = {
   documentNumber: string
   amount: number
   units: number
-  productsSummary: string
+  skuCount: number
+  productsSummary?: string
   kind: 'PURCHASE' | 'SALE' | 'CREDIT_NOTE'
   customerName?: string | null
+  sellerName?: string | null
 }
 
 export type SupplierWeeklyProductDetail = {
@@ -116,9 +118,10 @@ export type SupplierDocumentDetail = {
   date: string
   document: string
   documentNumber: string
-  customerName?: string
-  supplierName?: string
+  customerName?: string | null
+  sellerName?: string | null
   totalAmount: number
   units: number
+  skuCount: number
   lines: SupplierDocumentLineDetail[]
 }

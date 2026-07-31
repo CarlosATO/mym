@@ -407,7 +407,7 @@ export async function getSupplierPurchaseSales360(params: {
       .map((row) => {
         const skuSet = new Set(row.products.keys())
         const productPreview = uniqueSkuPreview(skuSet)
-        
+
         const productsList = Array.from(row.products.values()).map(p => {
           const product = productBySku.get(p.sku)
           const name = String(product?.description || p.sku || 'Sin descripción')
@@ -541,7 +541,7 @@ export async function getSupplierWeeklyDetail(params: {
 
   const docs5 = await fetchAll<DocumentRow>(
     integQuery('bsale_documents')
-      .select('bsale_id,total_amount,net_amount,emission_date')
+      .select('bsale_id,total_amount,net_amount,emission_date,client_organization,number')
       .eq('company_id', companyId)
       .eq('document_type_id', 5)
       .gte('emission_date', dateFrom)
@@ -550,7 +550,7 @@ export async function getSupplierWeeklyDetail(params: {
   )
   const docsNc = await fetchAll<DocumentRow>(
     integQuery('bsale_documents')
-      .select('bsale_id,total_amount,net_amount,emission_date')
+      .select('bsale_id,total_amount,net_amount,emission_date,client_organization,number')
       .eq('company_id', companyId)
       .eq('document_type_id', 2)
       .gte('emission_date', dateFrom)
@@ -606,12 +606,14 @@ export async function getSupplierWeeklyDetail(params: {
         id: `sale-${docId}`,
         date: String(s.doc.emission_date || ''),
         document: kind === 'SALE' ? 'Factura' : 'Nota Crédito',
-        documentNumber: String(docId),
+        documentNumber: String((s.doc as any).number || docId),
         amount: Math.round(s.amount),
         units: Math.round(s.units),
+        skuCount: s.skus.size,
         productsSummary: uniqueSkuPreview(s.skus).productsSummary,
         kind,
-        customerName: null
+        customerName: (s.doc as any).client_organization || 'Sin Cliente',
+        sellerName: sellerByDocId.get(docId) || null
       })
     }
   }
@@ -620,6 +622,24 @@ export async function getSupplierWeeklyDetail(params: {
   const ncIds = docsNc.map(d => d.bsale_id)
   const docsById = new Map(docs5.map(d => [d.bsale_id, d]))
   const ncDocsById = new Map(docsNc.map(d => [d.bsale_id, d]))
+  const allDocIds = [...invoiceIds, ...ncIds]
+
+  let sellerByDocId = new Map<number, string>()
+  if (allDocIds.length > 0) {
+    const detailChunkSize = 200
+    for (let idx = 0; idx < allDocIds.length; idx += detailChunkSize) {
+      const chunk = allDocIds.slice(idx, idx + detailChunkSize)
+      const { data: sellersData } = await integQuery('bsale_document_sellers')
+        .select('bsale_document_id,seller_name')
+        .eq('company_id', companyId)
+        .in('bsale_document_id', chunk)
+      if (sellersData) {
+        for (const s of (sellersData as any[])) {
+          if (s.seller_name) sellerByDocId.set(s.bsale_document_id, s.seller_name)
+        }
+      }
+    }
+  }
 
   const detailChunkSize = 200
   for (let idx = 0; idx < invoiceIds.length; idx += detailChunkSize) {
@@ -646,7 +666,7 @@ export async function getSupplierWeeklyDetail(params: {
     const receptionIds = Array.from(new Set(typedReceptionDetails.map(row => Number(row.bsale_reception_id || 0)).filter(id => id > 0)))
     const { data: receptions } = receptionIds.length
       ? await integQuery('bsale_receptions')
-          .select('bsale_id,raw_admission_date,admission_date,document,document_number')
+          .select('bsale_id,raw_admission_date,admission_date,document,document_number,raw_json')
           .eq('company_id', companyId)
           .gte('raw_admission_date', dateFrom)
           .lte('raw_admission_date', dateTo)
@@ -683,13 +703,18 @@ export async function getSupplierWeeklyDetail(params: {
     for (const [receptionId, s] of docSummaryMap.entries()) {
       if (s.amount === 0 && s.units === 0) continue
       const date = String(s.doc.raw_admission_date || String(s.doc.admission_date || '').slice(0, 10) || '')
+
+      const rawJson = (s.doc as any).raw_json || {}
+      const docNum = String(s.doc.document_number || rawJson.documentNumber || rawJson.document_number || rawJson.number || '').trim()
+
       purchaseDocuments.push({
         id: `purchase-${receptionId}`,
         date,
         document: String(s.doc.document || 'Sin Doc'),
-        documentNumber: String(s.doc.document_number || '').trim(),
+        documentNumber: docNum || 'Sin número',
         amount: Math.round(s.amount),
         units: Math.round(s.units),
+        skuCount: s.skus.size,
         productsSummary: uniqueSkuPreview(s.skus).productsSummary,
         kind: 'PURCHASE'
       })
@@ -729,8 +754,8 @@ export async function getSupplierDocumentDetail({ supplierId, documentKind, docu
   if (children?.length) childIds.push(...(children as { id: string }[]).map((c) => c.id))
 
   if (documentKind === 'PURCHASE') {
-    const { data } = await integQuery('bsale_receptions').select('id,raw_admission_date,document,document_number,bsale_reception_details(id,variant_code,quantity,cost)').eq('company_id', companyId).eq('id', Number(documentId)).single()
-    const reception = data as unknown as { raw_admission_date: string; document: string; document_number: string; bsale_reception_details: BsaleReceptionDetail[] }
+    const { data } = await integQuery('bsale_receptions').select('id,bsale_id,raw_admission_date,document,document_number,raw_json,bsale_reception_details(id,variant_code,quantity,cost)').eq('company_id', companyId).eq('bsale_id', Number(documentId)).single()
+    const reception = data as unknown as { raw_admission_date: string; document: string; document_number: string; raw_json: any; bsale_reception_details: BsaleReceptionDetail[] }
     if (!reception) return null
 
     // We must filter the lines to only those that map to this supplierId
@@ -738,18 +763,23 @@ export async function getSupplierDocumentDetail({ supplierId, documentKind, docu
     const { data: mapData } = await adqQuery('product_supplier_mappings').select('sku,supplier_id').eq('company_id', companyId).in('sku', skus)
     const mappings = mapData as unknown as SupplierMappingRow[]
 
+    const { data: productsData } = await adqQuery('products').select('sku,description').eq('company_id', companyId).in('sku', skus)
+    const descMap = new Map((productsData as unknown as { sku: string; description: string }[])?.map(p => [p.sku, p.description]) || [])
+
     let totalAmount = 0
     let totalUnits = 0
     const lines: SupplierDocumentLineDetail[] = []
+    let skuCount = 0
 
     for (const line of (reception.bsale_reception_details || [])) {
       const mapping = mappings?.find((m) => m.sku === line.variant_code && childIds.includes(m.supplier_id))
       if (mapping) {
         totalAmount += line.quantity * line.cost
         totalUnits += line.quantity
+        skuCount++
         lines.push({
           sku: line.variant_code,
-          description: line.variant_code, // Ideal would be to fetch description, but sku is fine for now
+          description: descMap.get(line.variant_code) || line.variant_code,
           quantity: line.quantity,
           unitAmount: line.cost,
           totalAmount: line.quantity * line.cost,
@@ -758,18 +788,22 @@ export async function getSupplierDocumentDetail({ supplierId, documentKind, docu
       }
     }
 
+    const rawJson = reception.raw_json || {}
+    const docNum = String(reception.document_number || rawJson.documentNumber || rawJson.document_number || rawJson.number || '').trim()
+
     if (lines.length === 0) return null
     return {
       id: documentId,
       date: String(reception.raw_admission_date || ''),
       document: String(reception.document || 'Recepción'),
-      documentNumber: String(reception.document_number || documentId),
+      documentNumber: docNum || 'Sin número',
       totalAmount: Math.round(totalAmount),
       units: totalUnits,
+      skuCount,
       lines
     }
   } else {
-    const { data } = await integQuery('bsale_documents').select('id,emission_date,document_type_id,number,client_organization,bsale_document_details(id,variant_code,quantity,net_amount,total_amount)').eq('company_id', companyId).eq('id', Number(documentId)).single()
+    const { data } = await integQuery('bsale_documents').select('id,bsale_id,emission_date,document_type_id,number,client_organization,bsale_document_details(id,variant_code,quantity,net_amount,total_amount)').eq('company_id', companyId).eq('bsale_id', Number(documentId)).single()
     const doc = data as unknown as { emission_date: string; number: string; client_organization: string; bsale_document_details: BsaleDocumentDetail[] }
     if (!doc) return null
 
@@ -777,18 +811,31 @@ export async function getSupplierDocumentDetail({ supplierId, documentKind, docu
     const { data: mapData } = await adqQuery('product_supplier_mappings').select('sku,supplier_id').eq('company_id', companyId).in('sku', skus)
     const mappings = mapData as unknown as MappingRow[]
 
+    const { data: productsData } = await adqQuery('products').select('sku,description').eq('company_id', companyId).in('sku', skus)
+    const descMap = new Map((productsData as unknown as { sku: string; description: string }[])?.map(p => [p.sku, p.description]) || [])
+
+    let sellerName: string | null = null
+    try {
+      const { data: sellerData } = await integQuery('bsale_document_sellers').select('seller_name').eq('company_id', companyId).eq('bsale_document_id', Number(documentId)).maybeSingle()
+      if (sellerData) sellerName = (sellerData as any).seller_name
+    } catch (e) {
+      // ignore
+    }
+
     let totalAmount = 0
     let totalUnits = 0
     const lines: SupplierDocumentLineDetail[] = []
+    let skuCount = 0
 
     for (const line of (doc.bsale_document_details || [])) {
       const mapping = mappings?.find((m) => m.sku === line.variant_code && childIds.includes(m.supplier_id))
       if (mapping) {
         totalAmount += line.total_amount
         totalUnits += line.quantity
+        skuCount++
         lines.push({
           sku: line.variant_code,
-          description: line.variant_code,
+          description: descMap.get(line.variant_code) || line.variant_code,
           quantity: line.quantity,
           unitAmount: line.quantity > 0 ? line.total_amount / line.quantity : 0,
           totalAmount: line.total_amount,
@@ -804,8 +851,10 @@ export async function getSupplierDocumentDetail({ supplierId, documentKind, docu
       document: documentKind === 'SALE' ? 'Factura' : 'Nota de Crédito',
       documentNumber: String(doc.number || documentId),
       customerName: String(doc.client_organization || 'Sin Cliente'),
+      sellerName,
       totalAmount: Math.round(totalAmount),
       units: totalUnits,
+      skuCount,
       lines
     }
   }
