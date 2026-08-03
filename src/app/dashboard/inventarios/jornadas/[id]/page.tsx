@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation'
-import { ClipboardList, FileCheck2, PlayCircle, Eye, Settings2 } from 'lucide-react'
+import { ClipboardList, FileCheck2, Eye, Settings2 } from 'lucide-react'
 import { getActiveCompanySessionDetail, getActiveCompanySessionReview, getInventorySessionCatalogs, type CatalogUserOption } from '@/app/actions/inventarios/sessions'
 import { InventorySessionHeader } from '@/modules/inventarios/components/inventory-session-header'
 import { InventorySessionTabs, type InventoryTab } from '@/modules/inventarios/components/inventory-session-tabs'
@@ -9,6 +9,7 @@ import { InventoryParticipantsStep } from '@/modules/inventarios/components/inve
 import { InventoryZonesStep } from '@/modules/inventarios/components/inventory-zones-step'
 import { InventoryTasksStep } from '@/modules/inventarios/components/inventory-tasks-step'
 import { InventoryReviewStep } from '@/modules/inventarios/components/inventory-review-step'
+import { InventoryOperationPanel } from '@/modules/inventarios/components/inventory-operation-panel'
 import { InventoryZonesPanel } from '@/modules/inventarios/components/inventory-zones-panel'
 import { InventoryTasksPanel } from '@/modules/inventarios/components/inventory-tasks-panel'
 import { InventoryReviewPanel } from '@/modules/inventarios/components/inventory-review-panel'
@@ -164,16 +165,7 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
       )}
 
       {safeTab === 'operacion' && (
-        <div className="space-y-4">
-          <div className="flex items-center gap-2 text-sm text-theme-text-muted">
-            <PlayCircle className="h-4 w-4" />
-            {status === 'PREPARED' ? 'Jornada preparada y lista para abrir.' : 'Jornada en conteo.'}
-          </div>
-          <InventorySessionOverview detail={detail} />
-          <InventoryZonesPanel detail={detail} />
-          <InventoryTasksPanel detail={detail} />
-          <InventoryParticipantsPanel detail={detail} />
-        </div>
+        <InventoryOperationPanel companyId={companyId} sessionId={id} initialDetail={detail} />
       )}
 
       {safeTab === 'revision' && (
