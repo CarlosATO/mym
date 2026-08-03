@@ -265,9 +265,17 @@ export interface CatalogUserOption {
   apellido: string
 }
 
+export interface CatalogLocationOption {
+  id: string
+  warehouse_id: string
+  code: string
+  name: string | null
+}
+
 export interface InventorySessionCatalogResult {
   warehouses: WarehouseOption[]
   offices: OfficeOption[]
+  locations: CatalogLocationOption[]
   users: CatalogUserOption[]
 }
 
@@ -371,6 +379,7 @@ export async function getInventorySessionCatalogs(
       data: (data as InventorySessionCatalogResult) ?? {
         warehouses: [],
         offices: [],
+        locations: [],
         users: [],
       },
       error: null,

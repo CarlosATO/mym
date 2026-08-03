@@ -6,6 +6,7 @@ import { InventorySessionTabs, type InventoryTab } from '@/modules/inventarios/c
 import { InventorySessionOverview } from '@/modules/inventarios/components/inventory-session-overview'
 import { InventoryParticipantsPanel } from '@/modules/inventarios/components/inventory-participants-panel'
 import { InventoryParticipantsStep } from '@/modules/inventarios/components/inventory-participants-step'
+import { InventoryZonesStep } from '@/modules/inventarios/components/inventory-zones-step'
 import { InventoryZonesPanel } from '@/modules/inventarios/components/inventory-zones-panel'
 import { InventoryTasksPanel } from '@/modules/inventarios/components/inventory-tasks-panel'
 import { InventoryReviewPanel } from '@/modules/inventarios/components/inventory-review-panel'
@@ -80,9 +81,11 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
   }
 
   let eligibleUsers: CatalogUserOption[] = []
-  if (status === 'DRAFT' && safeTab === 'configuracion' && activeStep === 3 && companyId) {
+  let catalogLocations: Array<{ id: string; warehouse_id: string; code: string; name: string | null }> = []
+  if (status === 'DRAFT' && safeTab === 'configuracion' && (activeStep === 3 || activeStep === 4) && companyId) {
     const catalogs = await getInventorySessionCatalogs(companyId)
     eligibleUsers = catalogs.data?.users ?? []
+    catalogLocations = catalogs.data?.locations ?? []
   }
 
   const isCancelled = status === 'CANCELLED'
@@ -127,6 +130,18 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
               companyId={companyId}
               sessionId={id}
               users={eligibleUsers}
+            />
+          ) : status === 'DRAFT' && activeStep === 4 ? (
+            <InventoryZonesStep
+              companyId={companyId}
+              sessionId={id}
+              sessionWarehouseId={detail.session.warehouse_id}
+              catalogs={{
+                warehouses: [],
+                offices: [],
+                users: [],
+                locations: catalogLocations,
+              }}
             />
           ) : (
             <>
