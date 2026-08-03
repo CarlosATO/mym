@@ -290,3 +290,28 @@ export async function approveInventorySession(
     return { data: null, error: 'No se pudo aprobar la jornada.' }
   }
 }
+
+export async function cancelInventorySession(
+  companyId: string,
+  sessionId: string,
+  reason: string,
+  idempotencyKey: string
+): Promise<{ data: { session_id: string; state: string } | null; error: string | null }> {
+  try {
+    const db = inventariosAdmin()
+    const { error } = await db.rpc('cancel_inventory_session', {
+      p_company_id: companyId,
+      p_session_id: sessionId,
+      p_reason: reason,
+      p_idempotency_key: idempotencyKey,
+    })
+    if (error) {
+      console.error('cancel_inventory_session error:', error.message)
+      return { data: null, error: 'No se pudo cancelar la jornada.' }
+    }
+    return { data: { session_id: sessionId, state: 'CANCELLED' }, error: null }
+  } catch (err) {
+    console.error('cancel_inventory_session exception:', err)
+    return { data: null, error: 'No se pudo cancelar la jornada.' }
+  }
+}

@@ -16,6 +16,7 @@ import { InventoryTasksPanel } from '@/modules/inventarios/components/inventory-
 import { InventoryReviewDashboard } from '@/modules/inventarios/components/inventory-review-dashboard'
 import { InventoryResultsPanel } from '@/modules/inventarios/components/inventory-results-panel'
 import { InventoryCancellationPanel } from '@/modules/inventarios/components/inventory-cancellation-panel'
+import { InventoryCancelSessionPanel } from '@/modules/inventarios/components/inventory-cancel-session-panel'
 import { InventoryEmptyState } from '@/modules/inventarios/components/inventory-empty-state'
 import { InventoryErrorState } from '@/modules/inventarios/components/inventory-error-state'
 import { inventoryStatusLabel } from '@/modules/inventarios/lib/states'
@@ -114,6 +115,15 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
       <InventorySessionHeader detail={detail} />
 
       <InventorySessionTabs tabs={tabs} />
+
+      {['DRAFT', 'PREPARED', 'COUNTING', 'UNDER_REVIEW'].includes(status) && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-red-500/15 bg-red-500/5 p-3">
+          <p className="text-xs text-theme-text-muted">
+            ¿Necesitas detener esta jornada antes de su aprobación? Puedes cancelarla; se preserva toda la evidencia registrada.
+          </p>
+          <InventoryCancelSessionPanel companyId={companyId} sessionId={id} />
+        </div>
+      )}
 
       {safeTab === 'resumen' && (
         <div className="space-y-4">

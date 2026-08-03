@@ -1,12 +1,25 @@
 import Link from 'next/link'
-import { ArrowRight, Bell, Boxes, ClipboardList, Eye, History, ListChecks, PlayCircle, Plus } from 'lucide-react'
+import { ArrowRight, Bell, Boxes, ClipboardList, Eye, History, ListChecks, PlayCircle, Plus, ShieldAlert } from 'lucide-react'
+import { getActiveCompanyDashboardSummary } from '@/app/actions/inventarios/summary'
 import { InventoryPageHeader } from '@/modules/inventarios/components/inventory-page-header'
 import { InventoryKpiCard } from '@/modules/inventarios/components/inventory-kpi-card'
 import { InventoryQuickAction } from '@/modules/inventarios/components/inventory-quick-action'
 import { InventoryEmptyState } from '@/modules/inventarios/components/inventory-empty-state'
 import { InventoryStatusBadge } from '@/modules/inventarios/components/inventory-status-badge'
+import { InventoryErrorState } from '@/modules/inventarios/components/inventory-error-state'
+import { formatDateChile } from '@/modules/inventarios/lib/format'
 
-export default function InventariosResumenPage() {
+function kpiPercent(value: number): string {
+  return `${Math.round(value)}%`
+}
+
+export default async function InventariosResumenPage() {
+  const { data, error, companyId } = await getActiveCompanyDashboardSummary()
+
+  const kpis = data?.kpis
+  const attention = data?.attention_sessions ?? []
+  const alerts = data?.recent_alerts ?? []
+
   return (
     <div className="space-y-6">
       <InventoryPageHeader
@@ -29,28 +42,28 @@ export default function InventariosResumenPage() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <InventoryKpiCard
             label="Jornadas activas"
-            value={null}
-            hint="Jornadas en preparación, conteo o revisión."
-            href="/dashboard/inventarios/jornadas"
+            value={kpis?.active_count ?? null}
+            hint="Jornadas en preparación o en conteo."
+            href="/dashboard/inventarios/operacion"
             icon={<Boxes className="h-4 w-4" />}
           />
           <InventoryKpiCard
             label="Avance de conteo"
-            value={null}
-            hint="Progreso de las tareas completadas en jornadas en conteo."
+            value={kpis ? kpiPercent(kpis.average_progress) : null}
+            hint="Tareas completadas en jornadas en conteo."
             href="/dashboard/inventarios/operacion"
             icon={<ListChecks className="h-4 w-4" />}
           />
           <InventoryKpiCard
             label="Pendientes de revisión"
-            value={null}
+            value={kpis?.review_count ?? null}
             hint="Jornadas cerradas que esperan validación y aprobación."
             href="/dashboard/inventarios/revision"
             icon={<Eye className="h-4 w-4" />}
           />
           <InventoryKpiCard
             label="Incidencias bloqueantes"
-            value={null}
+            value={kpis?.blocking_count ?? null}
             hint="Incidencias activas que impiden continuar una jornada."
             href="/dashboard/inventarios/jornadas"
             icon={<Bell className="h-4 w-4" />}
@@ -99,11 +112,46 @@ export default function InventariosResumenPage() {
             </Link>
           </div>
           <div className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
-            <InventoryEmptyState
-              title="Sin jornadas pendientes"
-              description="Las jornadas que necesiten tu atención aparecerán aquí."
-              icon={<Bell className="h-5 w-5" />}
-            />
+            {error && !companyId ? (
+              <InventoryErrorState description={error} />
+            ) : attention.length === 0 ? (
+              <InventoryEmptyState
+                title="Sin jornadas pendientes"
+                description="Las jornadas que necesiten tu atención aparecerán aquí."
+                icon={<Bell className="h-5 w-5" />}
+              />
+            ) : (
+              <ul className="space-y-2">
+                {attention.map(session => (
+                  <li key={session.id}>
+                    <Link
+                      href={
+                        session.status === 'UNDER_REVIEW'
+                          ? `/dashboard/inventarios/jornadas/${session.id}?tab=revision`
+                          : `/dashboard/inventarios/jornadas/${session.id}`
+                      }
+                      className="flex items-center justify-between gap-2 rounded-lg border border-theme-border/50 bg-theme-text/2 px-3 py-2 transition-colors hover:bg-theme-text/5"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-theme-text">
+                          #{session.session_number} {session.name}
+                        </p>
+                        <p className="mt-0.5 flex items-center gap-2 text-xs text-theme-text-muted">
+                          <span>{session.warehouse_name ?? '—'}</span>
+                          {session.blocking_incident_count > 0 && (
+                            <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-400">
+                              <ShieldAlert className="h-3 w-3" />
+                              {session.blocking_incident_count} bloqueante(s)
+                            </span>
+                          )}
+                        </p>
+                      </div>
+                      <InventoryStatusBadge status={session.status} />
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </section>
 
@@ -111,15 +159,45 @@ export default function InventariosResumenPage() {
         <section aria-label="Alertas y actividad reciente">
           <h2 className="mb-2.5 text-sm font-semibold text-theme-text-muted uppercase tracking-wider">Alertas recientes</h2>
           <div className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center gap-3">
-                <InventoryStatusBadge status="DRAFT" />
-                <span className="text-sm text-theme-text-muted">Sin actividad reciente aún.</span>
+            {error && !companyId ? (
+              <InventoryErrorState description={error} />
+            ) : alerts.length === 0 ? (
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-3">
+                  <InventoryStatusBadge status="UNDER_REVIEW" />
+                  <span className="text-sm text-theme-text-muted">Sin alertas activas.</span>
+                </div>
+                <p className="text-xs text-theme-text-muted/70">
+                  Las incidencias abiertas de tus jornadas aparecerán aquí.
+                </p>
               </div>
-              <p className="text-xs text-theme-text-muted/70">
-                Esta sección mostrará los últimos eventos de tus jornadas una vez comiences a operar.
-              </p>
-            </div>
+            ) : (
+              <ul className="space-y-2">
+                {alerts.map(alert => (
+                  <li key={alert.id}>
+                    <Link
+                      href={`/dashboard/inventarios/jornadas/${alert.session_id}?tab=revision`}
+                      className="flex items-start justify-between gap-2 rounded-lg border border-theme-border/50 bg-theme-text/2 px-3 py-2 transition-colors hover:bg-theme-text/5"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-theme-text">
+                          <span className="font-semibold">#{alert.session_number}</span> {alert.session_name}
+                        </p>
+                        <p className="mt-0.5 line-clamp-2 text-xs text-theme-text-muted">{alert.description}</p>
+                        <p className="mt-0.5 text-[11px] text-theme-text-muted/70">
+                          {alert.reported_by_name ?? '—'} · {formatDateChile(alert.reported_at)}
+                        </p>
+                      </div>
+                      {alert.is_blocking && (
+                        <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-red-600 dark:text-red-400">
+                          <ShieldAlert className="h-3 w-3" /> Bloqueante
+                        </span>
+                      )}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </section>
       </div>
