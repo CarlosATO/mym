@@ -17,7 +17,6 @@ export interface InventorySite {
   warehouse_name: string | null
   is_active: boolean
   inventory_enabled: boolean
-  include_in_general: boolean
   location_count: number
   created_at: string
   updated_at: string
@@ -65,8 +64,7 @@ export async function getActiveCompanySites(): Promise<{
 
 export async function updateInventorySiteInventoryConfig(
   siteId: string,
-  inventoryEnabled: boolean,
-  includeInGeneral: boolean
+  inventoryEnabled: boolean
 ): Promise<{ data: { site_id: string } | null; error: string | null }> {
   const companyId = await getActiveCompanyId()
   if (!companyId) {
@@ -78,7 +76,6 @@ export async function updateInventorySiteInventoryConfig(
       p_company_id: companyId,
       p_site_id: siteId,
       p_inventory_enabled: inventoryEnabled,
-      p_include_in_general: includeInGeneral,
     })
     if (error) {
       console.error('set_inventory_site_inventory_config error:', error.message)

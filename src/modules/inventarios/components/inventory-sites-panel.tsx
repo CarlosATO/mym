@@ -48,10 +48,10 @@ function SiteCard({ site }: { site: InventorySite }) {
   const [error, setError] = useState<string | null>(null)
   const isInternal = site.site_type === 'INTERNAL_WAREHOUSE'
 
-  const setConfig = async (inventoryEnabled: boolean, includeInGeneral: boolean) => {
+  const setConfig = async (inventoryEnabled: boolean) => {
     setSaving(true)
     setError(null)
-    const result = await updateInventorySiteInventoryConfig(site.id, inventoryEnabled, includeInGeneral)
+    const result = await updateInventorySiteInventoryConfig(site.id, inventoryEnabled)
     setSaving(false)
     if (result.error) {
       setError(result.error)
@@ -99,25 +99,14 @@ function SiteCard({ site }: { site: InventorySite }) {
             checked={site.inventory_enabled}
             disabled={saving}
             label="Disponible para inventarios"
-            onChange={v => setConfig(v, site.include_in_general)}
+            onChange={v => setConfig(v)}
           />
         </div>
 
         {isInternal ? (
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-sm text-theme-text">Incluir en inventario general</p>
-              <p className="text-xs text-theme-text-muted/70">
-                Afecta únicamente campañas creadas después de guardar este cambio.
-              </p>
-            </div>
-            <Toggle
-              checked={site.include_in_general}
-              disabled={saving || !site.inventory_enabled}
-              label="Incluir en inventario general"
-              onChange={v => setConfig(site.inventory_enabled, v)}
-            />
-          </div>
+          <p className="rounded-lg border border-theme-border/50 bg-theme-text/2 px-2 py-1.5 text-xs text-theme-text-muted">
+            Todas las bodegas internas activas y habilitadas participan automáticamente en futuras campañas generales.
+          </p>
         ) : (
           <p className="rounded-lg border border-theme-border/50 bg-theme-text/2 px-2 py-1.5 text-xs text-theme-text-muted">
             Solo campañas selectivas o externas.
