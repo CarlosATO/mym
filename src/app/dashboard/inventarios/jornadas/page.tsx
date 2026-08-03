@@ -30,10 +30,6 @@ export default async function InventariosJornadasPage({ searchParams }: PageProp
   const pageSize = 25
 
   const { data: warehouses } = await getActiveCompanyWarehouses()
-  const warehouseNames: Record<string, string> = {}
-  for (const w of warehouses ?? []) {
-    warehouseNames[w.id] = w.name
-  }
 
   const { data, error, companyId } = await listActiveCompanyInventorySessions({
     status: status || undefined,
@@ -106,10 +102,10 @@ export default async function InventariosJornadasPage({ searchParams }: PageProp
         ) : (
           <>
             <div className="hidden lg:block">
-              <InventorySessionTable sessions={data.sessions} warehouseNames={warehouseNames} />
+              <InventorySessionTable sessions={data.sessions} />
             </div>
             <div className="lg:hidden">
-              <InventorySessionMobileList sessions={data.sessions} warehouseNames={warehouseNames} />
+              <InventorySessionMobileList sessions={data.sessions} />
             </div>
             <div className="px-4 py-3">
               <InventoryPagination

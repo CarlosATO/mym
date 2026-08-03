@@ -1,0 +1,173 @@
+import { notFound } from 'next/navigation'
+import { ClipboardList, FileCheck2, PlayCircle, Eye, Settings2 } from 'lucide-react'
+import { getActiveCompanySessionDetail, getActiveCompanySessionReview } from '@/app/actions/inventarios/sessions'
+import { InventorySessionHeader } from '@/modules/inventarios/components/inventory-session-header'
+import { InventorySessionTabs, type InventoryTab } from '@/modules/inventarios/components/inventory-session-tabs'
+import { InventorySessionOverview } from '@/modules/inventarios/components/inventory-session-overview'
+import { InventoryParticipantsPanel } from '@/modules/inventarios/components/inventory-participants-panel'
+import { InventoryZonesPanel } from '@/modules/inventarios/components/inventory-zones-panel'
+import { InventoryTasksPanel } from '@/modules/inventarios/components/inventory-tasks-panel'
+import { InventoryReviewPanel } from '@/modules/inventarios/components/inventory-review-panel'
+import { InventoryCancellationPanel } from '@/modules/inventarios/components/inventory-cancellation-panel'
+import { InventoryEmptyState } from '@/modules/inventarios/components/inventory-empty-state'
+import { InventoryErrorState } from '@/modules/inventarios/components/inventory-error-state'
+import { inventoryStatusLabel } from '@/modules/inventarios/lib/states'
+import { formatDateChile } from '@/modules/inventarios/lib/format'
+
+interface PageProps {
+  params: Promise<{ id: string }>
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}
+
+function getTabsForStatus(status: string): InventoryTab[] {
+  const tabs: InventoryTab[] = [{ id: 'resumen', label: 'Resumen' }]
+  if (status === 'DRAFT' || status === 'PREPARED') {
+    tabs.push({ id: 'configuracion', label: 'Configuración' })
+  }
+  if (status === 'PREPARED' || status === 'COUNTING') {
+    tabs.push({ id: 'operacion', label: 'Operación' })
+  }
+  if (status === 'UNDER_REVIEW') {
+    tabs.push({ id: 'revision', label: 'Revisión' })
+  }
+  if (status === 'APPROVED' || status === 'EXPORTED' || status === 'RECONCILED' || status === 'CANCELLED') {
+    tabs.push({ id: 'resultados', label: 'Resultados' })
+  }
+  return tabs
+}
+
+export default async function InventariosJornadaDetallePage({ params, searchParams }: PageProps) {
+  const { id } = await params
+  const sp = await searchParams
+  const activeTab = typeof sp.tab === 'string' ? sp.tab : 'resumen'
+
+  const { data: detail, error, companyId } = await getActiveCompanySessionDetail(id)
+
+  if (!companyId) {
+    return (
+      <div className="space-y-5">
+        <InventoryEmptyState
+          title="Selecciona una empresa"
+          description="No tienes una empresa activa seleccionada."
+          icon={<ClipboardList className="h-5 w-5" />}
+        />
+      </div>
+    )
+  }
+
+  if (error && !detail) {
+    return (
+      <div className="space-y-5">
+        <InventoryErrorState description={error} />
+      </div>
+    )
+  }
+
+  if (!detail) {
+    notFound()
+  }
+
+  const status = detail.session.status
+  const tabs = getTabsForStatus(status)
+  const safeTab = tabs.some(t => t.id === activeTab) ? activeTab : tabs[0].id
+
+  let review = null
+  if (status === 'UNDER_REVIEW' && (safeTab === 'revision' || safeTab === 'resumen')) {
+    const reviewResult = await getActiveCompanySessionReview(id)
+    if (reviewResult.data) review = reviewResult.data
+  }
+
+  const isCancelled = status === 'CANCELLED'
+
+  return (
+    <div className="space-y-5">
+      <InventorySessionHeader detail={detail} />
+
+      <InventorySessionTabs tabs={tabs} />
+
+      {safeTab === 'resumen' && (
+        <div className="space-y-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-theme-text-muted">
+              Estado: <span className="font-semibold text-theme-text">{inventoryStatusLabel(status)}</span>
+            </p>
+            {isCancelled ? (
+              <span className="text-sm text-theme-text-muted">
+                Cancelada el {formatDateChile(detail.session.cancelled_at)}
+              </span>
+            ) : status === 'UNDER_REVIEW' ? (
+              <span className="text-sm text-theme-text-muted">En revisión por el supervisor.</span>
+            ) : status === 'APPROVED' ? (
+              <span className="text-sm text-theme-text-muted">
+                Aprobada el {formatDateChile(detail.session.approved_at)}
+              </span>
+            ) : null}
+          </div>
+          <InventorySessionOverview detail={detail} />
+          {isCancelled && <InventoryCancellationPanel detail={detail} />}
+        </div>
+      )}
+
+      {safeTab === 'configuracion' && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 text-sm text-theme-text-muted">
+            <Settings2 className="h-4 w-4" />
+            {status === 'DRAFT' ? 'Configuración en edición.' : 'Configuración congelada.'}
+          </div>
+          <InventoryParticipantsPanel detail={detail} />
+          <InventoryZonesPanel detail={detail} />
+          <InventoryTasksPanel detail={detail} />
+        </div>
+      )}
+
+      {safeTab === 'operacion' && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 text-sm text-theme-text-muted">
+            <PlayCircle className="h-4 w-4" />
+            {status === 'PREPARED' ? 'Jornada preparada y lista para abrir.' : 'Jornada en conteo.'}
+          </div>
+          <InventorySessionOverview detail={detail} />
+          <InventoryZonesPanel detail={detail} />
+          <InventoryTasksPanel detail={detail} />
+          <InventoryParticipantsPanel detail={detail} />
+        </div>
+      )}
+
+      {safeTab === 'revision' && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 text-sm text-theme-text-muted">
+            <Eye className="h-4 w-4" />
+            Revisión de la jornada.
+          </div>
+          {review ? (
+            <InventoryReviewPanel review={review} />
+          ) : (
+            <InventoryEmptyState
+              title="Revisión no disponible"
+              description="No se pudo cargar la revisión de esta jornada."
+              icon={<Eye className="h-5 w-5" />}
+            />
+          )}
+        </div>
+      )}
+
+      {safeTab === 'resultados' && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 text-sm text-theme-text-muted">
+            <FileCheck2 className="h-4 w-4" />
+            Resultados de la jornada.
+          </div>
+          {isCancelled ? (
+            <InventoryCancellationPanel detail={detail} />
+          ) : (
+            <InventoryEmptyState
+              title="Resultados oficiales"
+              description="Los resultados oficiales detallados se incorporarán en una fase posterior."
+              icon={<FileCheck2 className="h-5 w-5" />}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  )
+}

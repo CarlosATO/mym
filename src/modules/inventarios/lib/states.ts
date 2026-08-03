@@ -45,3 +45,28 @@ export const INVENTORY_NAV_ITEMS = [
   { id: 'revision', label: 'Revisión', href: '/dashboard/inventarios/revision', icon: 'Eye' },
   { id: 'resultados', label: 'Resultados', href: '/dashboard/inventarios/resultados', icon: 'FileCheck2' },
 ] as const
+
+export const INVENTORY_ROLE_LABELS: Record<string, string> = {
+  COUNTER: 'Contador',
+  SUPERVISOR: 'Supervisor',
+  ADMINISTRATOR: 'Administrador',
+  MANAGER: 'Gerente',
+}
+
+export function inventoryRoleLabel(role: string | null | undefined): string {
+  if (!role) return '—'
+  return INVENTORY_ROLE_LABELS[role] ?? role
+}
+
+export const INVENTORY_TYPE_LABELS: Record<string, string> = {
+  GENERAL: 'General',
+  PARTIAL: 'Parcial',
+  CYCLIC: 'Cíclico',
+  CONTROL: 'Control',
+  RECOUNT: 'Recuento',
+}
+
+export function inventoryTypeLabel(type: string | null | undefined): string {
+  if (!type) return '—'
+  return INVENTORY_TYPE_LABELS[type] ?? type
+}

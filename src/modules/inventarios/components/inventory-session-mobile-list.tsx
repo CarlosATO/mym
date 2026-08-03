@@ -6,10 +6,9 @@ import { computeProgress, formatDateChile } from '@/modules/inventarios/lib/form
 
 interface InventorySessionMobileListProps {
   sessions: InventorySessionSummary[]
-  warehouseNames: Record<string, string>
 }
 
-export function InventorySessionMobileList({ sessions, warehouseNames }: InventorySessionMobileListProps) {
+export function InventorySessionMobileList({ sessions }: InventorySessionMobileListProps) {
   return (
     <div className="divide-y divide-theme-border/40 lg:hidden">
       {sessions.map(session => {
@@ -27,7 +26,7 @@ export function InventorySessionMobileList({ sessions, warehouseNames }: Invento
               </div>
               <p className="truncate text-sm font-medium text-theme-text">{session.name}</p>
               <div className="flex items-center gap-3 text-xs text-theme-text-muted">
-                <span className="truncate">{warehouseNames[session.warehouse_id ?? ''] ?? '—'}</span>
+                <span className="truncate">{session.warehouse_name ?? '—'}</span>
                 <span>{formatDateChile(session.created_at)}</span>
               </div>
               {progress !== null && (

@@ -6,15 +6,9 @@ import { computeProgress, formatDateChile } from '@/modules/inventarios/lib/form
 
 interface InventorySessionTableProps {
   sessions: InventorySessionSummary[]
-  warehouseNames: Record<string, string>
 }
 
-function shortId(id: string | null | undefined): string {
-  if (!id) return '—'
-  return id.slice(0, 8)
-}
-
-export function InventorySessionTable({ sessions, warehouseNames }: InventorySessionTableProps) {
+export function InventorySessionTable({ sessions }: InventorySessionTableProps) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full border-collapse text-sm">
@@ -38,7 +32,7 @@ export function InventorySessionTable({ sessions, warehouseNames }: InventorySes
                 <td className="px-3 py-2.5 font-semibold text-theme-text">#{session.session_number}</td>
                 <td className="max-w-[180px] truncate px-3 py-2.5 text-theme-text">{session.name}</td>
                 <td className="max-w-[140px] truncate px-3 py-2.5 text-theme-text-muted">
-                  {warehouseNames[session.warehouse_id ?? ''] ?? '—'}
+                  {session.warehouse_name ?? '—'}
                 </td>
                 <td className="px-3 py-2.5">
                   <InventoryStatusBadge status={session.status} />
@@ -58,8 +52,8 @@ export function InventorySessionTable({ sessions, warehouseNames }: InventorySes
                     </div>
                   )}
                 </td>
-                <td className="px-3 py-2.5 font-mono text-xs text-theme-text-muted">
-                  {shortId(session.responsible_user_id)}
+                <td className="px-3 py-2.5 text-theme-text-muted">
+                  {session.responsible_name ?? '—'}
                 </td>
                 <td className="whitespace-nowrap px-3 py-2.5 text-theme-text-muted">
                   {formatDateChile(session.created_at)}
