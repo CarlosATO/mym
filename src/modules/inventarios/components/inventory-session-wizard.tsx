@@ -1,10 +1,16 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowLeft, ArrowRight, Loader2, Save } from 'lucide-react'
 import type { WizardCatalogs, WizardData } from '@/modules/inventarios/lib/wizard'
-import { EMPTY_WIZARD_DATA } from '@/modules/inventarios/lib/wizard'
+import {
+  EMPTY_WIZARD_DATA,
+  loadWizardDraft,
+  saveWizardDraft,
+  clearWizardDraft,
+  ensureDraftIdempotencyKey,
+} from '@/modules/inventarios/lib/wizard'
 import {
   createInventoryDraftSession,
   setInventoryProductScope,
@@ -23,46 +29,23 @@ const STEPS: WizardStep[] = [
   { id: 6, label: 'Revisión y preparación' },
 ]
 
-const DRAFT_STORAGE_KEY = 'mym.inventory.wizardDraft'
-
 interface InventorySessionWizardProps {
   companyId: string
   catalogs: WizardCatalogs
 }
 
-function loadDraft(): WizardData | null {
-  if (typeof window === 'undefined') return null
-  try {
-    const raw = window.localStorage.getItem(DRAFT_STORAGE_KEY)
-    if (!raw) return null
-    return JSON.parse(raw) as WizardData
-  } catch {
-    return null
-  }
-}
-
 export function InventorySessionWizard({ companyId, catalogs }: InventorySessionWizardProps) {
   const router = useRouter()
   const [step, setStep] = useState(1)
-  const [data, setData] = useState<WizardData>(() => loadDraft() ?? EMPTY_WIZARD_DATA)
+  const [data, setData] = useState<WizardData>(() => loadWizardDraft() ?? EMPTY_WIZARD_DATA)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const idempotencyRef = useRef<string | null>(null)
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(data))
-    } catch {
-      // localStorage no disponible
-    }
-  }, [data])
-
-  const draftKey = useMemo(() => `draft:${companyId}:${data.general.name || 'unnamed'}`, [companyId, data.general.name])
 
   const markDirty = useCallback((next: WizardData) => {
     setData(next)
     setDirty(true)
+    saveWizardDraft(next)
   }, [])
 
   const generalValid = data.general.name.trim().length > 0
@@ -75,29 +58,10 @@ export function InventorySessionWizard({ companyId, catalogs }: InventorySession
 
   const canContinue = step === 1 ? generalValid : step === 2 ? scopeValid : true
 
-  const ensureIdempotencyKey = useCallback(() => {
-    if (idempotencyRef.current) return idempotencyRef.current
-    if (typeof window !== 'undefined') {
-      const stored = window.sessionStorage.getItem(draftKey)
-      if (stored) {
-        idempotencyRef.current = stored
-        return stored
-      }
-    }
-    const generated = typeof crypto !== 'undefined' && 'randomUUID' in crypto
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`
-    idempotencyRef.current = generated
-    if (typeof window !== 'undefined') {
-      window.sessionStorage.setItem(draftKey, generated)
-    }
-    return generated
-  }, [draftKey])
-
   const performCreate = useCallback(async () => {
     setSaving(true)
     setError(null)
-    const key = ensureIdempotencyKey()
+    const key = ensureDraftIdempotencyKey(companyId, data.sessionId)
     const general = data.general
 
     const created = await createInventoryDraftSession(companyId, {
@@ -118,6 +82,8 @@ export function InventorySessionWizard({ companyId, catalogs }: InventorySession
     }
 
     const sessionId = created.data.session_id
+    const withSession = { ...data, sessionId }
+    saveWizardDraft(withSession)
 
     if (general.scope_mode === 'PARTIAL') {
       const scope = await setInventoryProductScope(companyId, sessionId, data.scope.variant_ids, key)
@@ -129,8 +95,9 @@ export function InventorySessionWizard({ companyId, catalogs }: InventorySession
     }
 
     setSaving(false)
+    clearWizardDraft()
     router.push(`/dashboard/inventarios/jornadas/${sessionId}?tab=configuracion&step=3`)
-  }, [companyId, data.general, data.scope.variant_ids, ensureIdempotencyKey, router])
+  }, [companyId, data, router])
 
   const handleContinue = useCallback(() => {
     if (step === 2) {

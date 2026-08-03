@@ -207,6 +207,27 @@ export interface InventorySessionReview {
   }
 }
 
+export interface InventorySessionSetupResult {
+  session: InventorySessionDetail['session'] | null
+  snapshot: InventorySessionDetail['snapshot'] | null
+  participants: InventoryParticipant[]
+  zones: InventorySessionZone[]
+  tasks: InventorySessionTask[]
+  product_scope: Array<Record<string, unknown>>
+  indicators: {
+    snapshot_pending: boolean
+    has_responsible: boolean
+    active_participant_count: number
+    zone_count: number
+    location_count: number
+    task_count: number
+    product_scope_count: number
+    zones_without_locations: number
+    zones_without_tasks: number
+    ready_to_prepare: boolean
+  }
+}
+
 export interface InventorySessionListResult {
   total: number
   page: number
@@ -541,4 +562,82 @@ export async function getActiveCompanySessionReview(
   }
   const result = await getInventorySessionReview(companyId, sessionId)
   return { ...result, companyId }
+}
+
+export async function getActiveCompanySessionSetup(
+  sessionId: string
+): Promise<{ data: InventorySessionSetupResult | null; error: string | null; companyId: string | null }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) {
+    return { data: null, error: 'No tienes una empresa activa seleccionada.', companyId: null }
+  }
+  try {
+    const db = inventariosAdmin()
+    const { data, error } = await db.rpc('get_inventory_session_setup', {
+      p_company_id: companyId,
+      p_session_id: sessionId,
+    })
+    if (error) {
+      console.error('get_inventory_session_setup error:', error.message)
+      return { data: null, error: 'No se pudo cargar la configuración de la jornada.', companyId }
+    }
+    return { data: data as InventorySessionSetupResult, error: null, companyId }
+  } catch (err) {
+    console.error('get_inventory_session_setup exception:', err)
+    return { data: null, error: 'No se pudo cargar la configuración de la jornada.', companyId }
+  }
+}
+
+export async function addInventorySessionParticipant(
+  companyId: string,
+  sessionId: string,
+  userId: string,
+  functionalRole: string,
+  idempotencyKey: string
+): Promise<{ data: { session_id: string; user_id: string } | null; error: string | null }> {
+  try {
+    const db = inventariosAdmin()
+    const { error } = await db.rpc('add_inventory_session_participant', {
+      p_company_id: companyId,
+      p_session_id: sessionId,
+      p_user_id: userId,
+      p_functional_role: functionalRole,
+      p_idempotency_key: idempotencyKey,
+    })
+    if (error) {
+      console.error('add_inventory_session_participant error:', error.message)
+      return { data: null, error: 'No se pudo agregar el participante.' }
+    }
+    return { data: { session_id: sessionId, user_id: userId }, error: null }
+  } catch (err) {
+    console.error('add_inventory_session_participant exception:', err)
+    return { data: null, error: 'No se pudo agregar el participante.' }
+  }
+}
+
+export async function revokeInventorySessionParticipant(
+  companyId: string,
+  sessionId: string,
+  userId: string,
+  reason: string,
+  idempotencyKey: string
+): Promise<{ data: { session_id: string; user_id: string } | null; error: string | null }> {
+  try {
+    const db = inventariosAdmin()
+    const { error } = await db.rpc('revoke_inventory_session_participant', {
+      p_company_id: companyId,
+      p_session_id: sessionId,
+      p_user_id: userId,
+      p_reason: reason,
+      p_idempotency_key: idempotencyKey,
+    })
+    if (error) {
+      console.error('revoke_inventory_session_participant error:', error.message)
+      return { data: null, error: 'No se pudo revocar el participante.' }
+    }
+    return { data: { session_id: sessionId, user_id: userId }, error: null }
+  } catch (err) {
+    console.error('revoke_inventory_session_participant exception:', err)
+    return { data: null, error: 'No se pudo revocar el participante.' }
+  }
 }

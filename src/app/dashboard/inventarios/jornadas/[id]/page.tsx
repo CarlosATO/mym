@@ -1,10 +1,11 @@
 import { notFound } from 'next/navigation'
 import { ClipboardList, FileCheck2, PlayCircle, Eye, Settings2 } from 'lucide-react'
-import { getActiveCompanySessionDetail, getActiveCompanySessionReview } from '@/app/actions/inventarios/sessions'
+import { getActiveCompanySessionDetail, getActiveCompanySessionReview, getInventorySessionCatalogs, type CatalogUserOption } from '@/app/actions/inventarios/sessions'
 import { InventorySessionHeader } from '@/modules/inventarios/components/inventory-session-header'
 import { InventorySessionTabs, type InventoryTab } from '@/modules/inventarios/components/inventory-session-tabs'
 import { InventorySessionOverview } from '@/modules/inventarios/components/inventory-session-overview'
 import { InventoryParticipantsPanel } from '@/modules/inventarios/components/inventory-participants-panel'
+import { InventoryParticipantsStep } from '@/modules/inventarios/components/inventory-participants-step'
 import { InventoryZonesPanel } from '@/modules/inventarios/components/inventory-zones-panel'
 import { InventoryTasksPanel } from '@/modules/inventarios/components/inventory-tasks-panel'
 import { InventoryReviewPanel } from '@/modules/inventarios/components/inventory-review-panel'
@@ -40,6 +41,7 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
   const { id } = await params
   const sp = await searchParams
   const activeTab = typeof sp.tab === 'string' ? sp.tab : 'resumen'
+  const activeStep = typeof sp.step === 'string' ? Number.parseInt(sp.step, 10) || 1 : 1
 
   const { data: detail, error, companyId } = await getActiveCompanySessionDetail(id)
 
@@ -75,6 +77,12 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
   if (status === 'UNDER_REVIEW' && (safeTab === 'revision' || safeTab === 'resumen')) {
     const reviewResult = await getActiveCompanySessionReview(id)
     if (reviewResult.data) review = reviewResult.data
+  }
+
+  let eligibleUsers: CatalogUserOption[] = []
+  if (status === 'DRAFT' && safeTab === 'configuracion' && activeStep === 3 && companyId) {
+    const catalogs = await getInventorySessionCatalogs(companyId)
+    eligibleUsers = catalogs.data?.users ?? []
   }
 
   const isCancelled = status === 'CANCELLED'
@@ -114,9 +122,19 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
             <Settings2 className="h-4 w-4" />
             {status === 'DRAFT' ? 'Configuración en edición.' : 'Configuración congelada.'}
           </div>
-          <InventoryParticipantsPanel detail={detail} />
-          <InventoryZonesPanel detail={detail} />
-          <InventoryTasksPanel detail={detail} />
+          {status === 'DRAFT' && activeStep === 3 ? (
+            <InventoryParticipantsStep
+              companyId={companyId}
+              sessionId={id}
+              users={eligibleUsers}
+            />
+          ) : (
+            <>
+              <InventoryParticipantsPanel detail={detail} />
+              <InventoryZonesPanel detail={detail} />
+              <InventoryTasksPanel detail={detail} />
+            </>
+          )}
         </div>
       )}
 
