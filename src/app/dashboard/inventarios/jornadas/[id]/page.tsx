@@ -7,6 +7,7 @@ import { InventorySessionOverview } from '@/modules/inventarios/components/inven
 import { InventoryParticipantsPanel } from '@/modules/inventarios/components/inventory-participants-panel'
 import { InventoryParticipantsStep } from '@/modules/inventarios/components/inventory-participants-step'
 import { InventoryZonesStep } from '@/modules/inventarios/components/inventory-zones-step'
+import { InventoryTasksStep } from '@/modules/inventarios/components/inventory-tasks-step'
 import { InventoryZonesPanel } from '@/modules/inventarios/components/inventory-zones-panel'
 import { InventoryTasksPanel } from '@/modules/inventarios/components/inventory-tasks-panel'
 import { InventoryReviewPanel } from '@/modules/inventarios/components/inventory-review-panel'
@@ -82,7 +83,7 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
 
   let eligibleUsers: CatalogUserOption[] = []
   let catalogLocations: Array<{ id: string; warehouse_id: string; code: string; name: string | null }> = []
-  if (status === 'DRAFT' && safeTab === 'configuracion' && (activeStep === 3 || activeStep === 4) && companyId) {
+  if (status === 'DRAFT' && safeTab === 'configuracion' && (activeStep === 3 || activeStep === 4 || activeStep === 5) && companyId) {
     const catalogs = await getInventorySessionCatalogs(companyId)
     eligibleUsers = catalogs.data?.users ?? []
     catalogLocations = catalogs.data?.locations ?? []
@@ -142,6 +143,12 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
                 users: [],
                 locations: catalogLocations,
               }}
+            />
+          ) : status === 'DRAFT' && activeStep === 5 ? (
+            <InventoryTasksStep
+              companyId={companyId}
+              sessionId={id}
+              users={eligibleUsers}
             />
           ) : (
             <>
