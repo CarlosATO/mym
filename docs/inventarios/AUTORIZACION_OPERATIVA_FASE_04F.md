@@ -30,7 +30,8 @@ Queda reservado para una futura RPC de inicio de jornada.
 
 - Creación → DRAFT: implementada desde 4G.1 (`create_inventory_session` + snapshot temprano).
 - Configuración DRAFT (participantes, zonas, ubicaciones, tareas): implementada desde 4G.1.
-- DRAFT → PREPARED: NO implementada (será la barrera de inmutabilidad del snapshot).
+- DRAFT → PREPARED: implementada desde 4G.2 (`prepare_inventory_session`); valida configuración,
+  construye snapshot_products desde Bsale y congela el snapshot (COMPLETED + content_hash).
 - PREPARED → COUNTING: NO implementada.
 - COUNTING → UNDER_REVIEW: NO implementada.
 - UNDER_REVIEW → APPROVED: implementada (`approve_inventory_session`).

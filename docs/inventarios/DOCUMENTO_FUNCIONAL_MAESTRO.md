@@ -53,8 +53,12 @@ atomicamente su unico `operational_snapshots` en estado `PENDING`. Este snapshot
 es una version oficial ni una exportacion: es un contenedor operativo que las RPCs de
 configuracion completan mientras la jornada permanece en `DRAFT`. Toda RPC de
 configuracion (participantes, zonas, ubicaciones, tareas) exige `status = 'DRAFT'`.
-La transicion `DRAFT → PREPARED` (aun no implementada) sera la barrera de
-inmutabilidad del snapshot. Existe exactamente un snapshot por jornada.
+La transicion `DRAFT → PREPARED` (implementada en 4G.2 como `prepare_inventory_session`)
+es la barrera de inmutabilidad del snapshot: al preparar, se validan participantes,
+zonas, ubicaciones, tareas y asignaciones; se construye `snapshot_products` desde el
+catalogo Bsale y se congela con `completion_status = 'COMPLETED'` y `content_hash`.
+Toda RPC de configuracion exige `status = 'DRAFT'`. Existe exactamente un snapshot
+por jornada.
 
 ## 6. Ciclo de vida de una tarea de zona
 

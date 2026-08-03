@@ -565,3 +565,70 @@ BODEGA y SUPER_USUARIO. GERENCIA conserva unicamente `inventarios.sessions.appro
 
 Las RPCs de configuracion requieren DRAFT; cualquier operacion sobre una jornada
 que haya salido de DRAFT es rechazada con `INV_SESSION_INVALID_STATE`.
+
+---
+
+## Fase 4G.2 — Preparar y congelar jornada (DRAFT → PREPARED)
+
+### RPC: `prepare_inventory_session`
+
+Firma: `prepare_inventory_session(p_company_id uuid, p_session_id uuid,
+p_idempotency_key uuid) RETURNS jsonb`
+
+Permiso: `inventarios.sessions.configure` (BODEGA, SUPER_USUARIO).
+Rol contextual: participante `ADMINISTRATOR` activo de la jornada.
+
+### Validaciones de preparacion
+
+Exige, en orden: sesion `DRAFT`; snapshot `PENDING` de la misma jornada; al menos
+un participante activo de cada rol `COUNTER`, `SUPERVISOR` y `MANAGER`; al menos
+una zona habilitada; toda zona con al menos una ubicacion; toda zona con al menos
+una tarea activa; toda tarea `ASSIGNED`; toda tarea con assignment vigente; toda
+asignacion vigente con participante `COUNTER` activo y acceso a la empresa; al
+menos una ubicacion `INCLUDED` en el alcance; toda ubicacion del alcance
+perteneciente a exactamente una zona; cero duplicados de ubicaciones.
+
+Cualquier incumplimiento produce `INV_SESSION_SETUP_INCOMPLETE` con conteos en el
+DETAIL. Errores adicionales: `INV_SNAPSHOT_INCOMPLETE` (snapshot sin estado
+PENDING o sin productos) y `INV_SESSION_ALREADY_PREPARED`.
+
+### Construccion del snapshot
+
+Durante la preparacion se construyen `snapshot_products` y `snapshot_stocks`
+desde fuentes Bsale:
+
+- `scope_mode = 'GENERAL'`: todas las `integraciones.bsale_variants` activas
+  (`state = 0`) de la empresa con SKU no vacio.
+- `scope_mode = 'PARTIAL'`: variantes de `session_product_scopes` con
+  `inclusion_type = 'INCLUDED'` y variante Bsale activa.
+- `snapshot_products`: conserva `bsale_variant_id`, `sku`, `barcode` y `name`
+  (descripcion Bsale con fallback al SKU). Sin costos (el contrato funcional no
+  los exige en preparacion).
+- `snapshot_stocks`: stock teorico por oficina (`office_id = sessions.bsale_office_id`)
+  desde `bsale_stock_current` (`quantity_available`), con procedencia
+  (`source_sync_run_id`, `source_synced_at`).
+
+Si el catalogo Bsale no entrega ningun producto para el alcance, la operacion se
+detiene con `INV_SNAPSHOT_INCOMPLETE` (sin snapshot parcial).
+
+### Congelamiento
+
+Al pasar todas las validaciones: el snapshot pasa a `COMPLETED` con `content_hash`
+determinista (sha256 de los ids ordenados de productos, stocks, zonas y tareas del
+snapshot); `sessions.status` pasa a `PREPARED` con `prepared_at`/`prepared_by`.
+No se modifican tareas ni asignaciones, no se generan eventos STARTED y no se
+inician conteos. La inmutabilidad posterior se garantiza porque todas las RPCs de
+configuracion de 4G.1 solo aceptan sesiones `DRAFT` (`INV_SESSION_INVALID_STATE`).
+
+### Transiciones todavia pendientes
+
+| Transicion | Estado |
+| --- | --- |
+| PREPARED → COUNTING | NO implementada |
+| COUNTING → UNDER_REVIEW | NO implementada |
+| Cancelacion de jornada | NO implementada |
+
+### Permisos
+
+`inventarios.sessions.configure` se creo en 4G.1 y se reutiliza en 4G.2 sin
+cambios de matriz.
