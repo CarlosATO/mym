@@ -1,11 +1,12 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import Link from 'next/link'
 import { AppTopbar } from '@/components/layout/app-topbar'
 import { InventorySidebar } from '@/modules/inventarios/components/inventory-sidebar'
 import { getActiveCompany, type Company } from '@/app/actions/companies'
 import type { Profile } from '@/lib/types'
-import { Loader2 } from 'lucide-react'
+import { LayoutDashboard, Loader2 } from 'lucide-react'
 
 interface InventoryModuleShellProps {
   children: React.ReactNode
@@ -65,6 +66,19 @@ export function InventoryModuleShell({ children, profile, permissions }: Invento
         <InventorySidebar mobileOpen={mobileOpen} onMobileOpen={openMobile} onMobileClose={closeMobile} />
 
         <main className="min-w-0 flex-1">
+          {/* Volver al portal: extremo superior derecho del área del módulo */}
+          <div className="flex justify-end px-4 pt-3 lg:px-6">
+            <Link
+              href="/dashboard"
+              aria-label="Volver al portal"
+              title="Volver al portal"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-2.5 text-xs font-medium text-theme-text-muted shadow-sm transition-colors hover:bg-theme-text/5 hover:text-theme-text"
+            >
+              <LayoutDashboard className="h-3.5 w-3.5 shrink-0" />
+              <span className="hidden sm:inline">Volver al portal</span>
+            </Link>
+          </div>
+
           <div className="mx-auto max-w-7xl p-4 lg:p-6">{children}</div>
         </main>
       </div>

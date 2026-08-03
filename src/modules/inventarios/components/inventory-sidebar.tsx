@@ -4,7 +4,7 @@ import { useCallback, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
-import { Boxes, ChevronsLeft, ChevronsRight, Menu, Plus, X } from 'lucide-react'
+import { Boxes, Menu, PanelLeftClose, Plus, X } from 'lucide-react'
 import { INVENTORY_NAV_ITEMS } from '@/modules/inventarios/lib/states'
 
 const STORAGE_KEY = 'mym.inventory.sidebarCollapsed'
@@ -38,24 +38,36 @@ function SidebarContent({
 
   return (
     <nav className="flex h-full w-full flex-col" aria-label="Navegación de Inventarios">
-      {/* Cabecera */}
-      <div className={cn('flex h-12 shrink-0 items-center border-b border-theme-border/60', collapsed ? 'justify-center' : 'justify-between px-3')}>
-        <div className={cn('flex items-center gap-2', collapsed && 'justify-center')}>
-          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-theme-accent/10 text-theme-accent">
+      {/* Cabecera: encabezado del módulo + botón contraer (desktop) / cerrar (móvil) */}
+      <div className={cn('flex h-12 shrink-0 items-center border-b border-theme-border/60', collapsed ? 'px-1.5' : 'justify-between px-3')}>
+        <div className={cn('flex min-w-0 items-center gap-2', collapsed && 'flex-1 justify-center')}>
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-theme-accent/10 text-theme-accent">
             <Boxes className="h-4 w-4" />
           </span>
-          {!collapsed && <span className="text-sm font-bold text-theme-text">Inventarios</span>}
+          {!collapsed && <span className="truncate text-sm font-bold text-theme-text">Inventarios</span>}
         </div>
-        {!collapsed && (
+
+        <div className="flex shrink-0 items-center">
           <button
             type="button"
-            onClick={onNavigate}
-            aria-label="Cerrar menú"
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-theme-text-muted transition-colors hover:bg-theme-text/5 lg:hidden"
+            onClick={onToggle}
+            aria-label={collapsed ? 'Expandir sidebar' : 'Contraer sidebar'}
+            title={collapsed ? 'Expandir sidebar' : 'Contraer sidebar'}
+            className="hidden h-7 w-7 items-center justify-center rounded-md text-theme-text-muted transition-colors hover:bg-theme-text/5 hover:text-theme-text lg:flex"
           >
-            <X className="h-4 w-4" />
+            <PanelLeftClose className={cn('h-4 w-4 transition-transform duration-200', collapsed && 'rotate-180')} />
           </button>
-        )}
+          {!collapsed && (
+            <button
+              type="button"
+              onClick={onNavigate}
+              aria-label="Cerrar menú"
+              className="flex h-7 w-7 items-center justify-center rounded-md text-theme-text-muted transition-colors hover:bg-theme-text/5 lg:hidden"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Acción destacada */}
@@ -101,22 +113,6 @@ function SidebarContent({
             </Link>
           )
         })}
-      </div>
-
-      {/* Pie: colapsar/expandir (desktop) */}
-      <div className={cn('shrink-0 border-t border-theme-border/60 py-2', collapsed ? 'px-2' : 'px-3')}>
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-label={collapsed ? 'Expandir menú' : 'Contraer menú'}
-          className={cn(
-            'flex w-full items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-medium text-theme-text-muted transition-colors hover:bg-theme-text/5 hover:text-theme-text',
-            collapsed && 'justify-center'
-          )}
-        >
-          {collapsed ? <ChevronsRight className="h-4 w-4" /> : <ChevronsLeft className="h-4 w-4" />}
-          {!collapsed && <span>Contraer</span>}
-        </button>
       </div>
     </nav>
   )
