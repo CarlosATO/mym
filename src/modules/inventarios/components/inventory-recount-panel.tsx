@@ -24,10 +24,16 @@ type Action = 'assign' | 'cancel' | 'decide' | 'request' | null
 interface ContributionRow {
   task_id?: string | null
   task_cycle?: number | null
+  session_zone_id?: string | null
   snapshot_product_id?: string | null
   contribution_source?: string | null
   contribution_count_entry_id?: string | null
   recount_request_id?: string | null
+  sku?: string | null
+  barcode?: string | null
+  product_name?: string | null
+  zone_code?: string | null
+  zone_display_name?: string | null
 }
 
 function asContributions(rows: InventorySessionReview['contributions']): ContributionRow[] {
@@ -37,6 +43,7 @@ function asContributions(rows: InventorySessionReview['contributions']): Contrib
 export function InventoryRecountPanel({ companyId, recounts, contributions, counters, onChanged }: InventoryRecountPanelProps) {
   const [action, setAction] = useState<Action>(null)
   const [target, setTarget] = useState<InventoryRecount | null>(null)
+  const [requestTarget, setRequestTarget] = useState<ContributionRow | null>(null)
   const [counterUserId, setCounterUserId] = useState('')
   const [reason, setReason] = useState('')
   const [decision, setDecision] = useState<'accept' | 'reject' | null>(null)
@@ -56,17 +63,32 @@ export function InventoryRecountPanel({ companyId, recounts, contributions, coun
     setJustification('')
   }
 
+  const activeRecountKeys = new Set(
+    recounts
+      .filter(r => ['REQUESTED', 'ASSIGNED', 'IN_PROGRESS'].includes(r.status))
+      .map(r => `${r.session_zone_id}:${r.snapshot_product_id}`)
+  )
+
   const requestable = contribs.filter(c =>
     c.recount_request_id === null
     && c.contribution_source === 'NORMAL'
     && c.task_id
     && c.snapshot_product_id
     && c.contribution_count_entry_id
+    && !activeRecountKeys.has(`${c.session_zone_id ?? ''}:${c.snapshot_product_id}`)
   )
 
+  const openRequest = (row: ContributionRow) => {
+    setAction('request')
+    setTarget(null)
+    setRequestTarget(row)
+    setError(null)
+    setReason('')
+  }
+
   const handleRequest = async () => {
-    if (busy || requestable.length === 0) return
-    const src = requestable[0]
+    if (busy || !requestTarget) return
+    const src = requestTarget
     setBusy(true)
     setError(null)
     const result = await requestInventoryRecount(
@@ -80,6 +102,7 @@ export function InventoryRecountPanel({ companyId, recounts, contributions, coun
     setBusy(false)
     if (result.error) { setError(result.error); return }
     setAction(null)
+    setRequestTarget(null)
     onChanged()
   }
 
@@ -147,17 +170,43 @@ export function InventoryRecountPanel({ companyId, recounts, contributions, coun
         <h3 className="flex items-center gap-2 text-sm font-semibold text-theme-text">
           <ListRestart className="h-4 w-4 text-sky-500" /> Recuentos ({recounts.length})
         </h3>
-        {requestable.length > 0 && (
-          <button
-            type="button"
-            onClick={() => openAction('request', null)}
-            className="inline-flex h-7 items-center gap-1 rounded-lg bg-sky-600 px-2 text-xs font-semibold text-white hover:bg-sky-700"
-          >
-            <ListRestart className="h-3 w-3" /> Solicitar recuento
-          </button>
-        )}
       </div>
       {error && <p className="mb-2 text-sm text-red-600 dark:text-red-400">{error}</p>}
+
+      {requestable.length > 0 && (
+        <div className="mb-3 rounded-lg border border-sky-500/20 bg-sky-500/5 p-3">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-300">
+            Productos con conteo normal elegibles para recuento
+          </p>
+          <ul className="space-y-1.5">
+            {requestable.map((row, index) => {
+              const key = `${row.task_id}-${row.snapshot_product_id}-${row.contribution_count_entry_id}`
+              return (
+                <li key={key} className="flex items-center justify-between gap-2 rounded-lg border border-theme-border/50 bg-theme-surface px-2 py-1.5">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-theme-text">
+                      {row.product_name ?? 'Producto sin nombre'}
+                      {row.sku && <span className="ml-1.5 font-mono text-xs text-theme-text-muted">{row.sku}</span>}
+                    </p>
+                    <p className="truncate text-xs text-theme-text-muted">
+                      {row.zone_display_name || row.zone_code || `Zona ${index + 1}`}
+                      {row.task_cycle ? ` · ciclo ${row.task_cycle}` : ''}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openRequest(row)}
+                    className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg bg-sky-600 px-2 text-xs font-semibold text-white hover:bg-sky-700"
+                  >
+                    <ListRestart className="h-3 w-3" /> Solicitar
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      )}
+
       {recounts.length === 0 ? (
         <p className="text-sm text-theme-text-muted">Sin recuentos solicitados.</p>
       ) : (
@@ -256,8 +305,19 @@ export function InventoryRecountPanel({ companyId, recounts, contributions, coun
             </h3>
             {action === 'request' && (
               <>
+                {requestTarget && (
+                  <div className="mt-2 rounded-lg border border-theme-border/50 bg-theme-text/2 p-2.5">
+                    <p className="text-sm font-medium text-theme-text">
+                      {requestTarget.product_name ?? 'Producto sin nombre'}
+                      {requestTarget.sku && <span className="ml-1.5 font-mono text-xs text-theme-text-muted">{requestTarget.sku}</span>}
+                    </p>
+                    <p className="mt-0.5 text-xs text-theme-text-muted">
+                      {requestTarget.zone_display_name || requestTarget.zone_code || 'Zona'}{requestTarget.task_cycle ? ` · ciclo ${requestTarget.task_cycle}` : ''}
+                    </p>
+                  </div>
+                )}
                 <p className="mt-2 text-sm text-theme-text-muted">
-                  Se solicitará un recuento para un producto contado. Solo se solicita; el recuento físico se realizará en la aplicación móvil.
+                  Se solicitará un recuento para este producto. Solo se solicita; el recuento físico se realizará en la aplicación móvil.
                 </p>
                 <textarea
                   value={reason}
@@ -309,7 +369,7 @@ export function InventoryRecountPanel({ companyId, recounts, contributions, coun
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setAction(null)}
+                onClick={() => { setAction(null); setRequestTarget(null) }}
                 disabled={busy}
                 className="inline-flex h-8 items-center rounded-lg border border-theme-border bg-theme-surface px-3 text-sm font-medium text-theme-text-muted hover:bg-theme-text/5"
               >
@@ -327,7 +387,7 @@ export function InventoryRecountPanel({ companyId, recounts, contributions, coun
                   busy
                   || (action === 'assign' && !counterUserId)
                   || (action === 'cancel' && reason.trim().length < 5)
-                  || (action === 'request' && reason.trim().length < 5)
+                  || (action === 'request' && (!requestTarget || reason.trim().length < 5))
                   || (action === 'decide' && justification.trim().length < 5)
                 }
                 className="inline-flex h-8 items-center gap-1 rounded-lg bg-theme-accent px-3 text-sm font-semibold text-white disabled:opacity-40"
