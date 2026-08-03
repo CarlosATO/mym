@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation'
 import { ClipboardList, FileCheck2, Settings2 } from 'lucide-react'
 import { getActiveCompanySessionDetail, getActiveCompanySessionReview, getInventorySessionCatalogs, type CatalogUserOption } from '@/app/actions/inventarios/sessions'
+import { getActiveCompanyResults } from '@/app/actions/inventarios/results'
 import { InventorySessionHeader } from '@/modules/inventarios/components/inventory-session-header'
 import { InventorySessionTabs, type InventoryTab } from '@/modules/inventarios/components/inventory-session-tabs'
 import { InventorySessionOverview } from '@/modules/inventarios/components/inventory-session-overview'
@@ -13,6 +14,7 @@ import { InventoryOperationPanel } from '@/modules/inventarios/components/invent
 import { InventoryZonesPanel } from '@/modules/inventarios/components/inventory-zones-panel'
 import { InventoryTasksPanel } from '@/modules/inventarios/components/inventory-tasks-panel'
 import { InventoryReviewDashboard } from '@/modules/inventarios/components/inventory-review-dashboard'
+import { InventoryResultsPanel } from '@/modules/inventarios/components/inventory-results-panel'
 import { InventoryCancellationPanel } from '@/modules/inventarios/components/inventory-cancellation-panel'
 import { InventoryEmptyState } from '@/modules/inventarios/components/inventory-empty-state'
 import { InventoryErrorState } from '@/modules/inventarios/components/inventory-error-state'
@@ -81,6 +83,20 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
   if (status === 'UNDER_REVIEW' && (safeTab === 'revision' || safeTab === 'resumen')) {
     const reviewResult = await getActiveCompanySessionReview(id)
     if (reviewResult.data) review = reviewResult.data
+  }
+
+  let results = null
+  let resultsError = null
+  const resultStatuses = ['APPROVED', 'EXPORTED', 'RECONCILED']
+  if (resultStatuses.includes(status) && safeTab === 'resultados') {
+    const resultsResult = await getActiveCompanyResults(id, {
+      search: typeof sp.q === 'string' ? sp.q : '',
+      difference_type: typeof sp.dif === 'string' ? sp.dif : '',
+      page: Math.max(1, Number.parseInt(typeof sp.page === 'string' ? sp.page : '1', 10) || 1),
+      page_size: 50,
+    })
+    if (resultsResult.data) results = resultsResult.data
+    else if (resultsResult.error) resultsError = resultsResult.error
   }
 
   let eligibleUsers: CatalogUserOption[] = []
@@ -174,16 +190,27 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
 
       {safeTab === 'resultados' && (
         <div className="space-y-4">
-          <div className="flex items-center gap-2 text-sm text-theme-text-muted">
-            <FileCheck2 className="h-4 w-4" />
-            Resultados de la jornada.
-          </div>
           {isCancelled ? (
             <InventoryCancellationPanel detail={detail} />
+          ) : status === 'APPROVED' || status === 'EXPORTED' || status === 'RECONCILED' ? (
+            results ? (
+              <InventoryResultsPanel
+                sessionId={id}
+                results={results}
+                search={typeof sp.q === 'string' ? sp.q : ''}
+                differenceType={typeof sp.dif === 'string' ? sp.dif : ''}
+              />
+            ) : resultsError ? (
+              <InventoryErrorState description={resultsError} />
+            ) : (
+              <div className="rounded-xl border border-theme-border bg-theme-surface p-8 text-center text-sm text-theme-text-muted">
+                Cargando resultados…
+              </div>
+            )
           ) : (
             <InventoryEmptyState
               title="Resultados oficiales"
-              description="Los resultados oficiales detallados se incorporarán en una fase posterior."
+              description="Los resultados oficiales se publican una vez aprobada la jornada."
               icon={<FileCheck2 className="h-5 w-5" />}
             />
           )}

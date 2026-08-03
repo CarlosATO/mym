@@ -6,15 +6,16 @@ interface InventoryPaginationProps {
   pageSize: number
   total: number
   buildHref: (page: number) => string
+  label?: string
 }
 
-export function InventoryPagination({ page, pageSize, total, buildHref }: InventoryPaginationProps) {
+export function InventoryPagination({ page, pageSize, total, buildHref, label = 'jornadas' }: InventoryPaginationProps) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   return (
     <div className="flex items-center justify-between gap-3 border-t border-theme-border/60 px-1 pt-3">
       <p className="text-xs text-theme-text-muted/70">
-        Mostrando {total === 0 ? 0 : (page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} de {total} jornadas
+        Mostrando {total === 0 ? 0 : (page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} de {total} {label}
       </p>
       <div className="flex items-center gap-1.5">
         {page > 1 ? (

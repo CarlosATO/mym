@@ -7,6 +7,7 @@ import {
   assignInventoryRecount,
   cancelInventoryRecount,
   decideInventoryRecount,
+  requestInventoryRecount,
 } from '@/app/actions/inventarios/review'
 import { formatDateTimeChile } from '@/modules/inventarios/lib/format'
 
@@ -18,10 +19,11 @@ interface InventoryRecountPanelProps {
   onChanged: () => void
 }
 
-type Action = 'assign' | 'cancel' | 'decide' | null
+type Action = 'assign' | 'cancel' | 'decide' | 'request' | null
 
 interface ContributionRow {
   task_id?: string | null
+  task_cycle?: number | null
   snapshot_product_id?: string | null
   contribution_source?: string | null
   contribution_count_entry_id?: string | null
@@ -44,7 +46,7 @@ export function InventoryRecountPanel({ companyId, recounts, contributions, coun
 
   const contribs = asContributions(contributions)
 
-  const openAction = (mode: Action, recount: InventoryRecount) => {
+  const openAction = (mode: Action, recount: InventoryRecount | null) => {
     setAction(mode)
     setTarget(recount)
     setError(null)
@@ -52,6 +54,33 @@ export function InventoryRecountPanel({ companyId, recounts, contributions, coun
     setReason('')
     setDecision(null)
     setJustification('')
+  }
+
+  const requestable = contribs.filter(c =>
+    c.recount_request_id === null
+    && c.contribution_source === 'NORMAL'
+    && c.task_id
+    && c.snapshot_product_id
+    && c.contribution_count_entry_id
+  )
+
+  const handleRequest = async () => {
+    if (busy || requestable.length === 0) return
+    const src = requestable[0]
+    setBusy(true)
+    setError(null)
+    const result = await requestInventoryRecount(
+      companyId,
+      src.task_id!,
+      src.task_cycle ?? 1,
+      src.snapshot_product_id!,
+      src.contribution_count_entry_id!,
+      reason
+    )
+    setBusy(false)
+    if (result.error) { setError(result.error); return }
+    setAction(null)
+    onChanged()
   }
 
   const recountContributions = (recount: InventoryRecount) =>
@@ -110,13 +139,24 @@ export function InventoryRecountPanel({ companyId, recounts, contributions, coun
     onChanged()
   }
 
-  const confirmLabel = action === 'assign' ? 'Asignar' : action === 'cancel' ? 'Cancelar' : action === 'decide' ? (decision === 'accept' ? 'Aceptar resultado' : 'Rechazar resultado') : ''
+  const confirmLabel = action === 'assign' ? 'Asignar' : action === 'cancel' ? 'Cancelar' : action === 'request' ? 'Solicitar' : action === 'decide' ? (decision === 'accept' ? 'Aceptar resultado' : 'Rechazar resultado') : ''
 
   return (
     <div className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
-      <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-theme-text">
-        <ListRestart className="h-4 w-4 text-sky-500" /> Recuentos ({recounts.length})
-      </h3>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-theme-text">
+          <ListRestart className="h-4 w-4 text-sky-500" /> Recuentos ({recounts.length})
+        </h3>
+        {requestable.length > 0 && (
+          <button
+            type="button"
+            onClick={() => openAction('request', null)}
+            className="inline-flex h-7 items-center gap-1 rounded-lg bg-sky-600 px-2 text-xs font-semibold text-white hover:bg-sky-700"
+          >
+            <ListRestart className="h-3 w-3" /> Solicitar recuento
+          </button>
+        )}
+      </div>
       {error && <p className="mb-2 text-sm text-red-600 dark:text-red-400">{error}</p>}
       {recounts.length === 0 ? (
         <p className="text-sm text-theme-text-muted">Sin recuentos solicitados.</p>
@@ -208,12 +248,26 @@ export function InventoryRecountPanel({ companyId, recounts, contributions, coun
         </ul>
       )}
 
-      {action && target && (
+      {action && (target || action === 'request') && (
         <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-xl border border-theme-border bg-theme-surface p-5 shadow-2xl">
             <h3 className="text-base font-bold text-theme-text">
-              {action === 'assign' ? 'Asignar recuento' : action === 'cancel' ? 'Cancelar recuento' : 'Decidir recuento'}
+              {action === 'assign' ? 'Asignar recuento' : action === 'cancel' ? 'Cancelar recuento' : action === 'request' ? 'Solicitar recuento' : 'Decidir recuento'}
             </h3>
+            {action === 'request' && (
+              <>
+                <p className="mt-2 text-sm text-theme-text-muted">
+                  Se solicitará un recuento para un producto contado. Solo se solicita; el recuento físico se realizará en la aplicación móvil.
+                </p>
+                <textarea
+                  value={reason}
+                  onChange={e => setReason(e.target.value)}
+                  rows={3}
+                  placeholder="Motivo de la solicitud"
+                  className="mt-3 w-full rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-sm text-theme-text outline-none focus:border-theme-border-accent"
+                />
+              </>
+            )}
             {action === 'assign' && (
               <select
                 value={counterUserId}
@@ -263,11 +317,17 @@ export function InventoryRecountPanel({ companyId, recounts, contributions, coun
               </button>
               <button
                 type="button"
-                onClick={action === 'assign' ? handleAssign : action === 'cancel' ? handleCancel : handleDecide}
+                onClick={
+                  action === 'assign' ? handleAssign
+                  : action === 'cancel' ? handleCancel
+                  : action === 'request' ? handleRequest
+                  : handleDecide
+                }
                 disabled={
                   busy
                   || (action === 'assign' && !counterUserId)
                   || (action === 'cancel' && reason.trim().length < 5)
+                  || (action === 'request' && reason.trim().length < 5)
                   || (action === 'decide' && justification.trim().length < 5)
                 }
                 className="inline-flex h-8 items-center gap-1 rounded-lg bg-theme-accent px-3 text-sm font-semibold text-white disabled:opacity-40"
