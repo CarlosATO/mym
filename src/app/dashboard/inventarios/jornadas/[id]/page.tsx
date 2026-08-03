@@ -8,6 +8,7 @@ import { InventoryParticipantsPanel } from '@/modules/inventarios/components/inv
 import { InventoryParticipantsStep } from '@/modules/inventarios/components/inventory-participants-step'
 import { InventoryZonesStep } from '@/modules/inventarios/components/inventory-zones-step'
 import { InventoryTasksStep } from '@/modules/inventarios/components/inventory-tasks-step'
+import { InventoryReviewStep } from '@/modules/inventarios/components/inventory-review-step'
 import { InventoryZonesPanel } from '@/modules/inventarios/components/inventory-zones-panel'
 import { InventoryTasksPanel } from '@/modules/inventarios/components/inventory-tasks-panel'
 import { InventoryReviewPanel } from '@/modules/inventarios/components/inventory-review-panel'
@@ -150,6 +151,8 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
               sessionId={id}
               users={eligibleUsers}
             />
+          ) : status === 'DRAFT' && activeStep === 6 ? (
+            <InventoryReviewStep companyId={companyId} sessionId={id} />
           ) : (
             <>
               <InventoryParticipantsPanel detail={detail} />

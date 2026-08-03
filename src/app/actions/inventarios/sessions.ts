@@ -575,8 +575,7 @@ export async function getActiveCompanySessionReview(
 
 export async function getActiveCompanySessionSetup(
   sessionId: string
-): Promise<{ data: InventorySessionSetupResult | null; error: string | null; companyId: string | null }> {
-  const companyId = await getActiveCompanyId()
+): Promise<{ data: InventorySessionSetupResult | null; error: string | null; companyId: string | null }> {  const companyId = await getActiveCompanyId()
   if (!companyId) {
     return { data: null, error: 'No tienes una empresa activa seleccionada.', companyId: null }
   }
@@ -649,4 +648,33 @@ export async function revokeInventorySessionParticipant(
     console.error('revoke_inventory_session_participant exception:', err)
     return { data: null, error: 'No se pudo revocar el participante.' }
   }
+}
+
+export async function prepareInventorySession(
+  companyId: string,
+  sessionId: string,
+  idempotencyKey: string
+): Promise<{ data: { session_id: string; state: string } | null; error: string | null }> {
+  try {
+    const db = inventariosAdmin()
+    const { error } = await db.rpc('prepare_inventory_session', {
+      p_company_id: companyId,
+      p_session_id: sessionId,
+      p_idempotency_key: idempotencyKey,
+    })
+    if (error) {
+      console.error('prepare_inventory_session error:', error.message)
+      return { data: null, error: 'No se pudo preparar la jornada. Verifica que la configuración esté completa.' }
+    }
+    return { data: { session_id: sessionId, state: 'PREPARED' }, error: null }
+  } catch (err) {
+    console.error('prepare_inventory_session exception:', err)
+    return { data: null, error: 'No se pudo preparar la jornada.' }
+  }
+}
+
+export async function getActiveCompanyPrepareSetup(
+  sessionId: string
+): Promise<{ data: InventorySessionSetupResult | null; error: string | null; companyId: string | null }> {
+  return getActiveCompanySessionSetup(sessionId)
 }
