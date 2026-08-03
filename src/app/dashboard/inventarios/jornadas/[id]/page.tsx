@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation'
-import { ClipboardList, FileCheck2, Eye, Settings2 } from 'lucide-react'
+import { ClipboardList, FileCheck2, Settings2 } from 'lucide-react'
 import { getActiveCompanySessionDetail, getActiveCompanySessionReview, getInventorySessionCatalogs, type CatalogUserOption } from '@/app/actions/inventarios/sessions'
 import { InventorySessionHeader } from '@/modules/inventarios/components/inventory-session-header'
 import { InventorySessionTabs, type InventoryTab } from '@/modules/inventarios/components/inventory-session-tabs'
@@ -12,7 +12,7 @@ import { InventoryReviewStep } from '@/modules/inventarios/components/inventory-
 import { InventoryOperationPanel } from '@/modules/inventarios/components/inventory-operation-panel'
 import { InventoryZonesPanel } from '@/modules/inventarios/components/inventory-zones-panel'
 import { InventoryTasksPanel } from '@/modules/inventarios/components/inventory-tasks-panel'
-import { InventoryReviewPanel } from '@/modules/inventarios/components/inventory-review-panel'
+import { InventoryReviewDashboard } from '@/modules/inventarios/components/inventory-review-dashboard'
 import { InventoryCancellationPanel } from '@/modules/inventarios/components/inventory-cancellation-panel'
 import { InventoryEmptyState } from '@/modules/inventarios/components/inventory-empty-state'
 import { InventoryErrorState } from '@/modules/inventarios/components/inventory-error-state'
@@ -169,21 +169,7 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
       )}
 
       {safeTab === 'revision' && (
-        <div className="space-y-4">
-          <div className="flex items-center gap-2 text-sm text-theme-text-muted">
-            <Eye className="h-4 w-4" />
-            Revisión de la jornada.
-          </div>
-          {review ? (
-            <InventoryReviewPanel review={review} />
-          ) : (
-            <InventoryEmptyState
-              title="Revisión no disponible"
-              description="No se pudo cargar la revisión de esta jornada."
-              icon={<Eye className="h-5 w-5" />}
-            />
-          )}
-        </div>
+        <InventoryReviewDashboard companyId={companyId} sessionId={id} initialReview={review} />
       )}
 
       {safeTab === 'resultados' && (
