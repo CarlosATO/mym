@@ -28,8 +28,9 @@ Queda reservado para una futura RPC de inicio de jornada.
 
 ### Ciclo de vida de jornada
 
-- Creación → DRAFT: NO implementada (escritura directa; requiere backend antes del UI).
-- DRAFT → PREPARED: NO implementada.
+- Creación → DRAFT: implementada desde 4G.1 (`create_inventory_session` + snapshot temprano).
+- Configuración DRAFT (participantes, zonas, ubicaciones, tareas): implementada desde 4G.1.
+- DRAFT → PREPARED: NO implementada (será la barrera de inmutabilidad del snapshot).
 - PREPARED → COUNTING: NO implementada.
 - COUNTING → UNDER_REVIEW: NO implementada.
 - UNDER_REVIEW → APPROVED: implementada (`approve_inventory_session`).

@@ -37,14 +37,24 @@ No incluira lotes, vencimientos operativos por lote, FEFO, dispositivos autoriza
 
 | Estado | Descripcion |
 | --- | --- |
-| `DRAFT` | Jornada creada; aun puede configurarse. |
-| `PREPARED` | Tiene bodega, alcance, snapshot, zonas, usuarios y asignaciones; esta lista para iniciar. |
+| `DRAFT` | Jornada creada; aun puede configurarse. Posee desde su creacion un snapshot operativo temprano en estado `PENDING`, que actua como contenedor configurable y se congelara al pasar a PREPARED. |
+| `PREPARED` | Tiene bodega, alcance, snapshot, zonas, usuarios y asignaciones; esta lista para iniciar. El snapshot queda inmutable al alcanzar este estado (transicion aun no implementada). |
 | `COUNTING` | El conteo fisico esta en ejecucion. |
 | `UNDER_REVIEW` | Finalizaron las tareas principales y el supervisor revisa diferencias, incidencias, reconteos, costos y resultado final. |
 | `APPROVED` | La jornada fue aprobada y queda inmutable. |
 | `EXPORTED` | Se genero el archivo oficial para Bsale. |
 | `RECONCILED` | El inventario fue cargado en Bsale y validado contra el stock oficial. |
 | `CANCELLED` | La jornada fue cancelada por un usuario autorizado; nunca se elimina fisicamente. |
+
+### Snapshot operativo temprano (4G.1)
+
+Desde la fase 4G.1, la creacion de una jornada (`create_inventory_session`) genera
+atomicamente su unico `operational_snapshots` en estado `PENDING`. Este snapshot no
+es una version oficial ni una exportacion: es un contenedor operativo que las RPCs de
+configuracion completan mientras la jornada permanece en `DRAFT`. Toda RPC de
+configuracion (participantes, zonas, ubicaciones, tareas) exige `status = 'DRAFT'`.
+La transicion `DRAFT → PREPARED` (aun no implementada) sera la barrera de
+inmutabilidad del snapshot. Existe exactamente un snapshot por jornada.
 
 ## 6. Ciclo de vida de una tarea de zona
 

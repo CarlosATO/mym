@@ -483,3 +483,85 @@ inicio de jornada (aun no implementada). No se elimina en esta fase.
 
 La matriz 4F.2 esta completa: los 10 permisos usados por las 22 RPC operativas fueron
 asignados a los roles del portal. No existe RPC operativa sin permiso asignado.
+
+---
+
+## Fase 4G.1 — Configuracion DRAFT con snapshot operativo temprano
+
+### Semantica del snapshot
+
+1. `create_inventory_session` crea atomicamente la jornada en `DRAFT` y su unico
+   `inventarios.operational_snapshots` (`completion_status = 'PENDING'`). No es una
+   version oficial ni una exportacion.
+2. El snapshot en DRAFT es un contenedor operativo: solo las RPCs de configuracion
+   pueden completar sus componentes (ubicaciones, alcance).
+3. Todas las RPCs de configuracion exigen `session.status = 'DRAFT'`.
+4. `PREPARED` sera la barrera de inmutabilidad en la fase siguiente (aun no implementada).
+5. Existe exactamente un snapshot por jornada (`UNIQUE (company_id, session_id)`).
+
+### RPCs implementadas (7)
+
+| RPC | Permiso | Estado requerido | Rol participante |
+| --- | --- | --- | --- |
+| `create_inventory_session` | `inventarios.sessions.create` | - | crea ADMINISTRATOR |
+| `add_inventory_session_participant` | `inventarios.participants.manage` | DRAFT | COUNTER/SUPERVISOR/ADMINISTRATOR/MANAGER |
+| `revoke_inventory_session_participant` | `inventarios.participants.manage` | DRAFT | - |
+| `create_inventory_session_zone` | `inventarios.zones.manage` | DRAFT | - |
+| `add_inventory_zone_location` | `inventarios.zones.manage` | DRAFT | - |
+| `create_inventory_task` | `inventarios.tasks.assign` | DRAFT | COUNTER |
+| `get_inventory_session_setup` | `inventarios.sessions.read` | - | - |
+
+Firmas:
+
+- `create_inventory_session(p_company_id uuid, p_name text, p_inventory_type text,
+  p_warehouse_id uuid, p_bsale_office_id integer, p_scope_mode text,
+  p_responsible_user_id uuid, p_notes text, p_idempotency_key uuid) RETURNS jsonb`
+  — valida empresa, bodega, oficina Bsale, responsable y scope; genera
+  `session_number` por empresa; crea snapshot PENDING y participante
+  ADMINISTRATOR. Duplicacion funcional: rechaza una jornada configurable
+  (DRAFT/PREPARED) para la misma bodega y tipo.
+- `add_inventory_session_participant(p_company_id uuid, p_session_id uuid,
+  p_user_id uuid, p_functional_role text, p_idempotency_key uuid) RETURNS jsonb`
+  — solo DRAFT; valida acceso activo del usuario a la empresa; evita duplicados
+  activos; conserva historial.
+- `revoke_inventory_session_participant(p_company_id uuid, p_session_id uuid,
+  p_user_id uuid, p_reason text, p_idempotency_key uuid) RETURNS jsonb` — solo
+  DRAFT; marca `revoked_at/revoked_by`; bloquea la revocacion si el participante
+  tiene tareas activas asignadas.
+- `create_inventory_session_zone(p_company_id uuid, p_session_id uuid,
+  p_zone_code text, p_scan_code text, p_display_name text, p_priority integer,
+  p_idempotency_key uuid) RETURNS jsonb` — solo DRAFT; deriva snapshot_id desde
+  la jornada; evita zone_code/scan_code duplicados.
+- `add_inventory_zone_location(p_company_id uuid, p_session_id uuid,
+  p_session_zone_id uuid, p_location_id uuid, p_idempotency_key uuid)
+  RETURNS jsonb` — solo DRAFT; valida ubicacion de la empresa; crea o reutiliza
+  `session_location_scope` y `snapshot_location`; impide ubicacion duplicada en
+  la jornada.
+- `create_inventory_task(p_company_id uuid, p_session_id uuid,
+  p_session_zone_id uuid, p_counter_user_id uuid, p_idempotency_key uuid)
+  RETURNS jsonb` — solo DRAFT; valida zona y snapshot de la misma jornada y
+  participante COUNTER activo; crea task `ASSIGNED` y assignment vigente; no
+  genera evento STARTED ni inicia la tarea.
+- `get_inventory_session_setup(p_company_id uuid, p_session_id uuid)
+  RETURNS jsonb` — lectura; devuelve cabecera, snapshot, participantes activos,
+  zonas con ubicaciones, tareas con asignacion vigente e indicadores de
+  configuracion pendiente. Sin SELECT directo a tablas desde el cliente.
+
+### Permisos nuevos (4G.1)
+
+`inventarios.sessions.create`, `inventarios.sessions.configure`,
+`inventarios.participants.manage`, `inventarios.sessions.read`. Asignados a
+BODEGA y SUPER_USUARIO. GERENCIA conserva unicamente `inventarios.sessions.approve`.
+`inventarios.zones.manage` y `inventarios.tasks.assign` ya existian y se reutilizan.
+
+### Transiciones todavia pendientes
+
+| Transicion | Estado |
+| --- | --- |
+| DRAFT → PREPARED | NO implementada (barrera de congelamiento del snapshot) |
+| PREPARED → COUNTING | NO implementada |
+| COUNTING → UNDER_REVIEW | NO implementada |
+| Cancelacion de jornada | NO implementada |
+
+Las RPCs de configuracion requieren DRAFT; cualquier operacion sobre una jornada
+que haya salido de DRAFT es rechazada con `INV_SESSION_INVALID_STATE`.
