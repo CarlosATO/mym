@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
+import { cookies } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
-import { createAdminClient } from '@/lib/supabase/admin'
+import { createInventariosClient } from '@/lib/supabase/inventarios'
 import { InventoryModuleShell } from '@/modules/inventarios/components/inventory-module-shell'
 
 const MODULE_VIEW_PERMISSION = 'module.inventarios.view'
@@ -24,8 +25,15 @@ export default async function InventariosLayout({ children }: { children: React.
     .eq('id', profile.role_id)
     .single()
 
-  const admin = createAdminClient()
-  const { data: permissions } = await admin.rpc('get_user_permissions', { p_user_id: user.id })
+  const cookieStore = await cookies()
+  const companyId = cookieStore.get('active_company_id')?.value
+  if (!companyId) redirect('/dashboard')
+
+  const db = await createInventariosClient()
+  const { data: permissions } = await db.rpc('get_company_permissions', {
+    p_user_id: user.id,
+    p_company_id: companyId,
+  })
   const permissionCodes: string[] = (permissions ?? []).map((p: { permission_code: string }) => p.permission_code)
 
   if (!permissionCodes.includes(MODULE_VIEW_PERMISSION)) {
