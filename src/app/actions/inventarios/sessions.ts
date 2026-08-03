@@ -496,6 +496,36 @@ export async function listActiveCompanyInventorySessions(
   return { ...result, companyId }
 }
 
+/**
+ * Consulta todas las páginas de una lista de jornadas con un límite defensivo.
+ * Recorre páginas de a 100 mientras has_more sea true y no se supere el límite,
+ * combina sin duplicados y ordena por created_at descendente.
+ */
+export async function listActiveCompanySessionsAll(
+  filters: InventorySessionFilters = {}
+): Promise<{ data: InventorySessionSummary[] | null; error: string | null; companyId: string | null }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) {
+    return { data: null, error: 'No tienes una empresa activa seleccionada.', companyId: null }
+  }
+  const MAX_PAGES = 50
+  const pageSize = 100
+  const byId = new Map<string, InventorySessionSummary>()
+  let page = 1
+  let hasMore = true
+  while (hasMore && page <= MAX_PAGES) {
+    const result = await listInventorySessions(companyId, { ...filters, page, page_size: pageSize })
+    if (result.error || !result.data) {
+      return { data: null, error: result.error ?? 'No se pudieron cargar las jornadas.', companyId }
+    }
+    for (const session of result.data.sessions) byId.set(session.id, session)
+    hasMore = result.data.has_more
+    page += 1
+  }
+  const sessions = Array.from(byId.values()).sort((a, b) => b.created_at.localeCompare(a.created_at))
+  return { data: sessions, error: null, companyId }
+}
+
 export async function getActiveCompanyWarehouses(): Promise<{
   data: WarehouseOption[] | null
   error: string | null

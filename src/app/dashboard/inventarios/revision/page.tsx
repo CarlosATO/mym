@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { Eye } from 'lucide-react'
-import { listActiveCompanyInventorySessions } from '@/app/actions/inventarios/sessions'
+import { listActiveCompanySessionsAll } from '@/app/actions/inventarios/sessions'
 import { InventoryPageHeader } from '@/modules/inventarios/components/inventory-page-header'
 import { InventoryStatusBadge } from '@/modules/inventarios/components/inventory-status-badge'
 import { InventoryEmptyState } from '@/modules/inventarios/components/inventory-empty-state'
@@ -8,12 +8,11 @@ import { InventoryErrorState } from '@/modules/inventarios/components/inventory-
 import { formatDateChile } from '@/modules/inventarios/lib/format'
 
 export default async function InventariosRevisionPage() {
-  const { data, error, companyId } = await listActiveCompanyInventorySessions({
+  const { data, error, companyId } = await listActiveCompanySessionsAll({
     status: 'UNDER_REVIEW',
-    page_size: 200,
   })
 
-  const sessions = data?.sessions ?? []
+  const sessions = data ?? []
 
   return (
     <div className="space-y-5">

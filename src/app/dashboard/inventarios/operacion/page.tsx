@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { Monitor, Play, Plus } from 'lucide-react'
-import { listActiveCompanyInventorySessions, type InventorySessionSummary } from '@/app/actions/inventarios/sessions'
+import { listActiveCompanySessionsAll } from '@/app/actions/inventarios/sessions'
 import { InventoryPageHeader } from '@/modules/inventarios/components/inventory-page-header'
 import { InventoryStatusBadge } from '@/modules/inventarios/components/inventory-status-badge'
 import { InventoryEmptyState } from '@/modules/inventarios/components/inventory-empty-state'
@@ -9,15 +9,15 @@ import { computeProgress, formatDateChile } from '@/modules/inventarios/lib/form
 
 export default async function InventariosOperacionPage() {
   const [prepared, counting] = await Promise.all([
-    listActiveCompanyInventorySessions({ status: 'PREPARED', page_size: 200 }),
-    listActiveCompanyInventorySessions({ status: 'COUNTING', page_size: 200 }),
+    listActiveCompanySessionsAll({ status: 'PREPARED' }),
+    listActiveCompanySessionsAll({ status: 'COUNTING' }),
   ])
 
   const companyId = prepared.companyId ?? counting.companyId
   const error = prepared.error ?? counting.error
-  const byId = new Map<string, InventorySessionSummary>()
-  for (const s of prepared.data?.sessions ?? []) byId.set(s.id, s)
-  for (const s of counting.data?.sessions ?? []) byId.set(s.id, s)
+  const byId = new Map<string, import('@/app/actions/inventarios/sessions').InventorySessionSummary>()
+  for (const s of prepared.data ?? []) byId.set(s.id, s)
+  for (const s of counting.data ?? []) byId.set(s.id, s)
   const operational = Array.from(byId.values()).sort((a, b) => b.created_at.localeCompare(a.created_at))
 
   return (

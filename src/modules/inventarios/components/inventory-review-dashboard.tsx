@@ -2,10 +2,14 @@
 
 import { useEffect, useState } from 'react'
 import { Eye } from 'lucide-react'
-import type { InventorySessionReview } from '@/app/actions/inventarios/sessions'
+import type { InventoryParticipant, InventorySessionReview } from '@/app/actions/inventarios/sessions'
 import { getActiveCompanyReviewFor } from '@/app/actions/inventarios/review'
+import { getActiveCompanyZonesSetup } from '@/app/actions/inventarios/zones'
 import { InventoryReviewBlockers } from '@/modules/inventarios/components/inventory-review-blockers'
 import { InventoryTaskReviewCard } from '@/modules/inventarios/components/inventory-task-review-card'
+import { InventoryIncidentPanel } from '@/modules/inventarios/components/inventory-incident-panel'
+import { InventoryRecountPanel } from '@/modules/inventarios/components/inventory-recount-panel'
+import { InventoryApprovalPanel } from '@/modules/inventarios/components/inventory-approval-panel'
 import { InventoryLoadingState } from '@/modules/inventarios/components/inventory-loading-state'
 import { InventoryErrorState } from '@/modules/inventarios/components/inventory-error-state'
 import { InventoryEmptyState } from '@/modules/inventarios/components/inventory-empty-state'
@@ -18,6 +22,7 @@ interface InventoryReviewDashboardProps {
 
 export function InventoryReviewDashboard({ companyId, sessionId, initialReview }: InventoryReviewDashboardProps) {
   const [review, setReview] = useState<InventorySessionReview | null>(initialReview ?? null)
+  const [counters, setCounters] = useState<InventoryParticipant[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(!initialReview)
 
@@ -45,6 +50,11 @@ export function InventoryReviewDashboard({ companyId, sessionId, initialReview }
         setLoading(false)
       })
     }
+    getActiveCompanyZonesSetup(sessionId).then(result => {
+      if (result.data) {
+        setCounters(result.data.participants.filter(p => !p.revoked_at && p.functional_role === 'COUNTER'))
+      }
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
 
@@ -108,6 +118,21 @@ export function InventoryReviewDashboard({ companyId, sessionId, initialReview }
           </div>
         )}
       </div>
+
+      {/* Incidencias */}
+      <InventoryIncidentPanel companyId={companyId} incidents={review.incidents} onChanged={load} />
+
+      {/* Recuentos */}
+      <InventoryRecountPanel
+        companyId={companyId}
+        recounts={review.recounts}
+        contributions={review.contributions}
+        counters={counters}
+        onChanged={load}
+      />
+
+      {/* Aprobación */}
+      <InventoryApprovalPanel companyId={companyId} sessionId={sessionId} review={review} />
     </div>
   )
 }
