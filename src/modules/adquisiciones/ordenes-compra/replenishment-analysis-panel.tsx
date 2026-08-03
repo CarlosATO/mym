@@ -1,9 +1,10 @@
 'use client'
 
 import { useState, useMemo, useCallback, useEffect } from 'react'
-import { ArrowLeft, Search, Loader2, AlertTriangle, X, Check, Eye, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
+import { ArrowLeft, Search, Loader2, AlertTriangle, X, Check, Eye, ChevronUp, ChevronDown, ChevronsUpDown, Download } from 'lucide-react'
 import { getReplenishmentDatasetFromBsale } from '@/app/actions/integraciones/bsale-dataset'
 import { generateReplenishmentPurchaseOrders } from '@/app/actions/adquisiciones/purchase-orders'
+import { downloadReplenishmentExcel, type ReplenishmentExcelRow } from '@/modules/adquisiciones/ordenes-compra/replenishment-excel'
 import { buildSkuSummary, classifySkus } from '@/modules/adquisiciones/analisis-ventas/utils/analytics'
 import type { NormalizedSale, SkuSummary } from '@/modules/adquisiciones/analisis-ventas/utils/analytics'
 
@@ -161,6 +162,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [downloadingExcel, setDownloadingExcel] = useState(false)
   const [createResult, setCreateResult] = useState<any>(null)
 
   const periodDays = PERIOD_OPTIONS[periodIdx].value
@@ -347,15 +349,16 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   const criticos = rows.filter(r => r.sku.alerta === 'Quiebre crítico' || r.sku.alerta === 'Demanda histórica sin stock').length
   const sinCosto = rows.filter(r => r.sku.costo_unitario === 0 && r.suggestedQty > 0).length
   const confirmedRows = useMemo(() => rows.filter(r => confirmedSet.has(r.sku.SKU)), [rows, confirmedSet])
-  const confirmedSkus = confirmedRows.length
-  const confirmedUnits = confirmedRows.reduce((a, r) => a + r.confirmedQty, 0)
-  const confirmedMonto = confirmedRows.reduce((a, r) => a + r.confirmedCost, 0)
+  // Colección efectiva compartida por Excel y creación de OC:
+  // solo filas confirmadas con cantidad > 0.
+  const effectiveRows = useMemo(() => confirmedRows.filter(r => r.confirmedQty > 0), [confirmedRows])
+  const effectiveSkus = effectiveRows.length
 
   const modalGroups = useMemo(() => {
     if (!showCreateModal) return []
     const groups = new Map<string, { count: number, units: number, cost: number, hasZeroCost: boolean, hasNoRealSupplier: boolean, unresolved: boolean }>()
     
-    for (const r of confirmedRows) {
+    for (const r of effectiveRows) {
       const sup = getRealSupplierName(r.sku)
       const productName = getProductName(r.sku)
       const unresolved = productName === 'Producto no encontrado en catálogo'
@@ -374,13 +377,13 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
       if (unresolved) g.unresolved = true
     }
     return Array.from(groups.entries()).map(([sup, data]) => ({ name: sup, ...data }))
-  }, [showCreateModal, confirmedRows])
+  }, [showCreateModal, effectiveRows])
 
   async function handleCreateOrders() {
     setCreating(true)
     setError('')
     try {
-      const itemsToOrder = confirmedRows.map(r => ({
+      const itemsToOrder = effectiveRows.map(r => ({
         sku: r.sku.SKU,
         product_name: getProductName(r.sku),
         suggested_qty: r.suggestedQty,
@@ -406,6 +409,44 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
       setError(e.message || 'Error inesperado al crear OC')
     }
     setCreating(false)
+  }
+
+  function handleDownloadExcel() {
+    if (effectiveRows.length === 0) return
+    setDownloadingExcel(true)
+    setError('')
+    try {
+      const excelRows: ReplenishmentExcelRow[] = effectiveRows.map(r => {
+        const critical = r.sku.alerta === 'Quiebre crítico' || r.sku.alerta === 'Demanda histórica sin stock'
+        const noCost = r.sku.costo_unitario === 0
+        return {
+          sku: r.sku.SKU,
+          product: getProductName(r.sku),
+          variant: r.sku.variante || r.sku.tipo_producto || '',
+          realSupplier: getRealSupplierName(r.sku),
+          pseudoSupplier: getPseudoSupplierName(r.sku),
+          stockAvailable: r.sku.cantidad_disponible,
+          buckets: r.buckets,
+          totalSold: r.totalUnits,
+          avgPer7: r.avgPer7,
+          suggestedQty: r.suggestedQty,
+          confirmedQty: r.confirmedQty,
+          unitCost: r.sku.costo_unitario,
+          subtotal: r.confirmedQty * r.sku.costo_unitario,
+          critical,
+          noCost,
+          trend: r.estadoTendencia,
+        }
+      })
+      downloadReplenishmentExcel({
+        periodLabel: `${PERIOD_OPTIONS[periodIdx].label} (${periodDays} días)`,
+        coverageLabel: COVERAGE_OPTIONS[coverageIdx].label,
+        rows: excelRows,
+      })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error al generar el Excel')
+    }
+    setDownloadingExcel(false)
   }
 
   // ─── Bucket labels (usa effectiveEndDate, no Date.now()) ──────────
@@ -510,22 +551,32 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-3">
-          {!loading && !error && confirmedSkus > 0 && (
+          {!loading && !error && effectiveSkus > 0 && (
             <div className="flex items-center gap-2.5 rounded-lg border border-theme-border bg-theme-bg/30 px-3 py-1.5 text-[11px] leading-tight">
               <span className="font-medium text-theme-text-muted">Confirmado:</span>
-              <span>SKU <strong className="font-semibold text-theme-text">{confirmedSkus}</strong></span>
-              <span>Unidades <strong className="font-semibold text-theme-text">{fmtN(confirmedUnits)}</strong></span>
-              <span>Monto <strong className="font-semibold text-theme-text">{fmt(confirmedMonto)}</strong></span>
+              <span>SKU <strong className="font-semibold text-theme-text">{effectiveSkus}</strong></span>
+              <span>Unidades <strong className="font-semibold text-theme-text">{fmtN(effectiveRows.reduce((a, r) => a + r.confirmedQty, 0))}</strong></span>
+              <span>Monto <strong className="font-semibold text-theme-text">{fmt(effectiveRows.reduce((a, r) => a + r.confirmedCost, 0))}</strong></span>
             </div>
           )}
           {!loading && !error && (
-            <button 
-              onClick={() => setShowCreateModal(true)} 
-              disabled={loading || creating || confirmedSkus === 0}
-              title={confirmedSkus === 0 ? "Selecciona productos para crear una OC" : "Crear OC con los productos seleccionados"}
-              className="flex h-9 items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-xs font-bold text-white shadow-sm shadow-emerald-600/15 transition hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed">
-              Crear borrador de OC
-            </button>
+            <>
+              <button
+                onClick={handleDownloadExcel}
+                disabled={loading || creating || downloadingExcel || effectiveSkus === 0}
+                title={effectiveSkus === 0 ? "Selecciona productos con cantidad mayor a 0 para exportar" : "Descargar productos seleccionados en Excel"}
+                className="flex h-9 items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-3.5 text-xs font-bold text-theme-text-muted transition hover:bg-theme-text/5 hover:text-theme-text disabled:opacity-50 disabled:cursor-not-allowed">
+                {downloadingExcel ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                Descargar Excel
+              </button>
+              <button
+                onClick={() => setShowCreateModal(true)}
+                disabled={loading || creating || effectiveSkus === 0}
+                title={effectiveSkus === 0 ? "Selecciona productos con cantidad mayor a 0 para crear una OC" : "Crear OC con los productos seleccionados"}
+                className="flex h-9 items-center gap-1.5 rounded-lg bg-emerald-600 px-4 text-xs font-bold text-white shadow-sm shadow-emerald-600/15 transition hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                Crear borrador de OC
+              </button>
+            </>
           )}
           <button onClick={loadData} disabled={loading}
             className="flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-xs font-bold text-white shadow-sm shadow-theme-accent/15 transition hover:bg-theme-accent-hover disabled:opacity-50">
