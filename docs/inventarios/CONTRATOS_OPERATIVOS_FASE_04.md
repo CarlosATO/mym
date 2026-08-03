@@ -835,3 +835,49 @@ ninguna correccion de guardas en 4G.5.**
 | COUNTING → UNDER_REVIEW | implementada (4G.4) |
 | UNDER_REVIEW → APPROVED | implementada (4E.4) |
 | Cualquier estado pre-APPROVED → CANCELLED | implementada (4G.5) |
+
+---
+
+## Fase 4H.1 — Contratos de consulta para UI web
+
+### RPCs de lectura nuevas
+
+| RPC | Firma | Permiso |
+| --- | --- | --- |
+| `list_inventory_sessions` | `(uuid, text, uuid, date, date, text, integer, integer)` | `sessions.read` |
+| `get_inventory_session_detail` | `(uuid, uuid)` | `sessions.read` |
+| `get_inventory_session_catalogs` | `(uuid)` | `sessions.read` |
+| `get_inventory_session_review` | `(uuid, uuid)` | `sessions.read` |
+
+Todas STABLE, SECURITY DEFINER, owner postgres, `SET search_path = pg_catalog`,
+EXECUTE solo authenticated, sin SELECT directo a tablas desde el cliente.
+
+### Matriz pantalla web → RPC → permiso → roles → datos
+
+| Pantalla | RPC | Permiso | Roles | Datos devueltos |
+| --- | --- | --- | --- | --- |
+| Listado de jornadas | `list_inventory_sessions` | `sessions.read` | BODEGA, SUPER_USUARIO, GERENCIA | total, page, page_size, has_more, sessions (cabecera + zone/task/count/incident counts). Filtros: status, bodega, rango de fechas, texto; paginacion 1..100 |
+| Detalle de jornada | `get_inventory_session_detail` | `sessions.read` | BODEGA, SUPER_USUARIO, GERENCIA | cabecera, snapshot, participantes, zonas+ubicaciones, tareas+asignacion, incidentes, recuentos, counts resumidos |
+| Crear/configurar (catálogos) | `get_inventory_session_catalogs` | `sessions.read` | BODEGA, SUPER_USUARIO | bodegas activas, oficinas Bsale, ubicaciones activas, usuarios con acceso, roles funcionales |
+| Revisión UNDER_REVIEW | `get_inventory_session_review` | `sessions.read` | BODEGA, SUPER_USUARIO, GERENCIA | tareas por validar, contribuciones efectivas, incidentes, recuentos+decisiones, indicadores (incluye ready_to_approve) |
+| Configuración DRAFT/PREPARED | `get_inventory_session_setup` (4G.1) | `sessions.read` | BODEGA, SUPER_USUARIO | cabecera, snapshot, participantes activos, zonas, tareas, indicadores de configuracion |
+
+`get_inventory_session_setup` se conserva como contrato de configuracion DRAFT/PREPARED;
+`get_inventory_session_detail` cubre el resto de estados sin duplicar su logica.
+
+### Permiso y roles
+
+- Se reutilizo `inventarios.sessions.read` (sin permiso nuevo).
+- Se asigno `inventarios.sessions.read` a **GERENCIA** (solo lectura) para que pueda
+  consultar jornadas y aprobar (`sessions.approve`) sin permisos de configuracion.
+- BODEGA y SUPER_USUARIO conservan lectura + configuracion.
+
+### Correccion 4H.1c
+
+`get_inventory_session_detail` se redefinio en 4H.1c para corregir el subquery de
+asignacion que mezclaba `count(*)` con columnas no agregadas. Comportamiento
+identico al contrato original.
+
+### Operaciones pendientes
+
+Exportacion y reconciliacion siguen sin implementar. No se creo UI en esta fase.
