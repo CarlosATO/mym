@@ -460,7 +460,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
       const labelEnd = new Date(bEnd.getTime() - 86400000)
       const s = `${bStart.getUTCDate()}/${bStart.getUTCMonth() + 1}`
       const e = `${labelEnd.getUTCDate()}/${labelEnd.getUTCMonth() + 1}`
-      labels.push(`${s} al ${e}`)
+      labels.push(`${s}–${e}`)
     }
     return labels
   }, [numBuckets, effectiveEndDate])
@@ -672,7 +672,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
               <tr className="sticky top-0 z-[70] bg-theme-surface shadow-[0_2px_4px_-4px_rgba(0,0,0,0.15)]">
                 <th colSpan={6} className={`${thGroupClass} text-left`}>Producto</th>
                 <th colSpan={1} className={thGroupClass}>Stock</th>
-                <th colSpan={bucketLabels.length} className={thGroupClass}>Unidades vendidas cada 7 días</th>
+                <th colSpan={bucketLabels.length} className={`${thGroupClass} text-center`}>Unidades vendidas cada 7 días</th>
                 <th colSpan={4} className={thGroupClass}>Confirmación de compra</th>
                 <th colSpan={4} className={`${thGroupClass} border-r-0`}>Cálculo sugerido</th>
               </tr>
@@ -703,8 +703,8 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
                   <ColumnResizer currentWidth={colWidths.disponible} onResizeCommit={w => updateColWidth('disponible', w)} />
                 </th>
                 {bucketLabels.map((label, bi) => (
-                  <th key={bi} className={`${thClass} text-right font-mono relative`} style={{ width: 68, minWidth: 68, maxWidth: 68 }} title={label}>
-                    <div className="w-full text-right pr-1 truncate">{label}</div>
+                  <th key={bi} className={`${thClass} text-center font-mono relative`} style={{ width: 90, minWidth: 90, maxWidth: 90 }} title={label}>
+                    <div className="w-full text-center px-0.5 whitespace-nowrap">{label}</div>
                   </th>
                 ))}
                 <th className={`${thClass} text-right`} title="stock_objetivo = prom_7d * cobertura - stock_actual" style={{ width: colWidths.sugerido, minWidth: colWidths.sugerido, maxWidth: colWidths.sugerido }}>
@@ -764,6 +764,13 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
                   : isHovered
                   ? 'bg-theme-text/5'
                   : idx % 2 === 0 ? 'bg-theme-surface' : 'bg-theme-bg'
+                // Fondo opaco para celdas sticky: mezcla translúcida sobre la base
+                // de la fila para evitar que el contenido bajo scroll se transparente.
+                const stickyBg = isActive
+                  ? `color-mix(in oklch, var(--theme-accent) 15%, ${idx % 2 === 0 ? 'var(--theme-surface)' : 'var(--theme-bg)'})`
+                  : isHovered
+                  ? `color-mix(in oklch, var(--theme-text) 5%, ${idx % 2 === 0 ? 'var(--theme-surface)' : 'var(--theme-bg)'})`
+                  : idx % 2 === 0 ? 'var(--theme-surface)' : 'var(--theme-bg)'
                   
                 const statusCls = costBadge
                   ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/25'
@@ -786,11 +793,11 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
                     onMouseEnter={() => setHoveredRowSku(s.SKU)}
                     onMouseLeave={() => setHoveredRowSku(null)}
                     className={`cursor-pointer ${activeCls}`}>
-                    <td className={`${stickyCellBase} ${rowBg} left-0 text-theme-text-muted text-center font-mono`} style={{ width: 36, minWidth: 36, maxWidth: 36 }}>{idx + 1}</td>
-                    <td className={`${stickyCellBase} ${rowBg} font-mono font-medium text-theme-accent`} style={{ left: skuLeft, width: colWidths.sku, minWidth: colWidths.sku, maxWidth: colWidths.sku }}>
+                    <td className={`${stickyCellBase} left-0 text-theme-text-muted text-center font-mono`} style={{ backgroundColor: stickyBg, width: 36, minWidth: 36, maxWidth: 36 }}>{idx + 1}</td>
+                    <td className={`${stickyCellBase} font-mono font-medium text-theme-accent`} style={{ backgroundColor: stickyBg, left: skuLeft, width: colWidths.sku, minWidth: colWidths.sku, maxWidth: colWidths.sku }}>
                       <div className="truncate">{s.SKU}</div>
                     </td>
-                    <td className={`${stickyLastClass} ${rowBg} ${unresolved ? 'text-amber-600 dark:text-amber-300' : 'text-theme-text'}`} style={{ left: productLeft, width: colWidths.product, minWidth: colWidths.product, maxWidth: colWidths.product }} title={productName}>
+                    <td className={`${stickyLastClass} ${unresolved ? 'text-amber-600 dark:text-amber-300' : 'text-theme-text'}`} style={{ backgroundColor: stickyBg, left: productLeft, width: colWidths.product, minWidth: colWidths.product, maxWidth: colWidths.product }} title={productName}>
                       <div className="truncate">{productName}</div>
                     </td>
                     <td className={`${tdClass} ${rowBg} text-theme-text-muted`} style={{ width: colWidths.variant, minWidth: colWidths.variant, maxWidth: colWidths.variant }} title={s.variante || s.tipo_producto || ''}>
@@ -804,7 +811,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
                     </td>
                     <td className={`${tdClass} ${rowBg} text-center font-semibold text-theme-text`} style={{ width: colWidths.disponible, minWidth: colWidths.disponible, maxWidth: colWidths.disponible }}>{s.cantidad_disponible || '—'}</td>
                     {row.buckets.map((val, bi) => (
-                      <td key={bi} className={`${tdClass} ${rowBg} text-right font-mono text-theme-text`} style={{ width: 68, minWidth: 68, maxWidth: 68 }}>{val > 0 ? val : '—'}</td>
+                      <td key={bi} className={`${tdClass} ${rowBg} text-right font-mono text-theme-text`} style={{ width: 90, minWidth: 90, maxWidth: 90 }}>{val > 0 ? val : '—'}</td>
                     ))}
                     <td className={`${tdClass} ${rowBg} text-right font-semibold text-theme-text`} style={{ width: colWidths.sugerido, minWidth: colWidths.sugerido, maxWidth: colWidths.sugerido }}>{row.suggestedQty > 0 ? row.suggestedQty : '—'}</td>
                     <td className={`${tdClass} ${rowBg} text-center`} style={{ width: colWidths.cantidad, minWidth: colWidths.cantidad, maxWidth: colWidths.cantidad }}>
