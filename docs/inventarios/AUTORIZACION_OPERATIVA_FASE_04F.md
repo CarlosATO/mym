@@ -40,7 +40,9 @@ Queda reservado para una futura RPC de inicio de jornada.
   exige todas las tareas COMPLETED con contribución efectiva y sin incidencias bloqueantes,
   y registra `reviewed_at`.
 - UNDER_REVIEW → APPROVED: implementada (`approve_inventory_session`).
-- Cancelación de jornada: NO implementada.
+- Cancelación de jornada: implementada desde 4G.5 (`cancel_inventory_session`); permiso
+  `inventarios.sessions.cancel` (BODEGA y SUPER_USUARIO), rol ADMINISTRATOR activo, desde
+  DRAFT/PREPARED/COUNTING/UNDER_REVIEW, nunca después de APPROVED.
 
 ## Separación de autorización
 

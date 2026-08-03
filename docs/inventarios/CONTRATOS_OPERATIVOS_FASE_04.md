@@ -765,3 +765,73 @@ Se creo el helper `inventarios.require_session_review` (rechaza con
 | --- | --- |
 | UNDER_REVIEW → APPROVED | implementada (`approve_inventory_session`) |
 | Cancelacion de jornada | NO implementada |
+
+---
+
+## Fase 4G.5 — Cancelacion de jornadas
+
+### RPC: `cancel_inventory_session`
+
+Firma: `cancel_inventory_session(p_company_id uuid, p_session_id uuid,
+p_reason text, p_idempotency_key uuid) RETURNS jsonb`
+
+Permiso: `inventarios.sessions.cancel` (nuevo en 4G.5, asignado a BODEGA y
+SUPER_USUARIO). Rol contextual: participante `ADMINISTRATOR` activo de la jornada.
+Motivo obligatorio: normalizado, minimo 5 caracteres, maximo 1000.
+
+### Estados cancelables y rechazados
+
+- **Cancelables**: `DRAFT`, `PREPARED`, `COUNTING`, `UNDER_REVIEW`.
+- **Rechazados**: `APPROVED`, `EXPORTED`, `RECONCILED`, `CANCELLED` (→
+  `INV_SESSION_INVALID_STATE`). La prohibicion posterior a APPROVED es estructural:
+  las constraints de `sessions` exigen que una jornada CANCELLED no tenga
+  `approved_at`, `exported_at` ni `reconciled_at`.
+
+### Campos fisicos de cancelacion
+
+`sessions.cancelled_at`, `sessions.cancelled_by`, `sessions.cancellation_reason`
+(par `cancelled_at/cancelled_by` exigido por `chk_inventarios_sessions_cancelled_fields`;
+motivo obligatorio para CANCELLED segun `chk_inventarios_sessions_cancelled`).
+
+### Tratamiento de tareas y asignaciones
+
+- Solo se cancelan tareas `ASSIGNED`, `IN_PROGRESS` o `PAUSED`.
+- Por cada tarea: se inserta `task_events` `CANCELLED` (evento permitido por el
+  CHECK de `task_events`), se liberan las asignaciones vigentes
+  (`released_at/released_by/release_reason`), se marcan `cancelled_at/cancelled_by`,
+  se limpian `current_assignment_id` y `active_user_id`, se incrementa `version`.
+- **No se inserta en `task_state_transitions`**: su CHECK (04b0d2) no admite
+  `CANCELLED`; se replica la semantica de `cancel_inventory_task`.
+- **No se modifican tareas `COMPLETED`** ni se invalidan conteos.
+
+### Tratamiento de recuentos
+
+Se cancelan `recount_requests` en `REQUESTED`, `ASSIGNED` o `IN_PROGRESS` sin
+decisiones emitidas, con la misma semantica de `cancel_inventory_recount`
+(`status='CANCELLED'`, `cancelled_at/by`, `cancellation_reason`). Los recuentos
+con `recount_decisions` o `COMPLETED` se conservan intactos.
+
+### Preservacion de evidencia
+
+El snapshot, los conteos (`count_entries`), las incidencias y las evidencias no se
+modifican ni eliminan. No se crea `official_version`. Solo se anotan eventos de
+cancelacion.
+
+### Guardas CANCELLED auditadas
+
+`require_session_participant` bloquea explicitamente sesiones `CANCELLED`; todas las
+RPCs de tareas, conteos, incidentes y recuentos validan un estado de sesion especifico
+(`COUNTING`/`UNDER_REVIEW`/DRAFT/PREPARED), por lo que rechazan `CANCELLED`. Las RPCs
+de preparacion, apertura y cierre validan su estado previo exacto. **No se requirio
+ninguna correccion de guardas en 4G.5.**
+
+### Transiciones del ciclo completo
+
+| Transicion | Estado |
+| --- | --- |
+| Creacion → DRAFT | implementada (4G.1) |
+| DRAFT → PREPARED | implementada (4G.2) |
+| PREPARED → COUNTING | implementada (4G.3) |
+| COUNTING → UNDER_REVIEW | implementada (4G.4) |
+| UNDER_REVIEW → APPROVED | implementada (4E.4) |
+| Cualquier estado pre-APPROVED → CANCELLED | implementada (4G.5) |

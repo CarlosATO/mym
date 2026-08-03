@@ -44,7 +44,7 @@ No incluira lotes, vencimientos operativos por lote, FEFO, dispositivos autoriza
 | `APPROVED` | La jornada fue aprobada y queda inmutable. |
 | `EXPORTED` | Se genero el archivo oficial para Bsale. |
 | `RECONCILED` | El inventario fue cargado en Bsale y validado contra el stock oficial. |
-| `CANCELLED` | La jornada fue cancelada por un usuario autorizado; nunca se elimina fisicamente. |
+| `CANCELLED` | La jornada fue cancelada por un usuario autorizado; nunca se elimina fisicamente. Se alcanza con `cancel_inventory_session` desde DRAFT, PREPARED, COUNTING o UNDER_REVIEW; nunca despues de APPROVED. Preserva snapshot, conteos e incidencias. |
 
 ### Snapshot operativo temprano (4G.1)
 
