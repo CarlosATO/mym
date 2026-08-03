@@ -231,8 +231,56 @@ export interface WarehouseOption {
   name: string
 }
 
+export interface OfficeOption {
+  bsale_id: number
+  name: string | null
+  code: string | null
+}
+
+export interface CatalogUserOption {
+  id: string
+  email: string
+  nombre: string
+  apellido: string
+}
+
 export interface InventorySessionCatalogResult {
   warehouses: WarehouseOption[]
+  offices: OfficeOption[]
+  users: CatalogUserOption[]
+}
+
+export interface VariantOption {
+  bsale_variant_id: number
+  sku: string
+  barcode: string | null
+  name: string
+}
+
+export interface VariantSearchResult {
+  total: number
+  page: number
+  page_size: number
+  has_more: boolean
+  variants: VariantOption[]
+}
+
+export interface CreateSessionInput {
+  name: string
+  inventory_type: string
+  warehouse_id: string
+  bsale_office_id: number
+  scope_mode: 'GENERAL' | 'PARTIAL'
+  responsible_user_id: string
+  notes?: string
+  idempotency_key: string
+}
+
+export interface CreateSessionResult {
+  session_id: string
+  session_number: number
+  snapshot_id: string
+  completion_status: string
 }
 
 export async function listInventorySessions(
@@ -283,6 +331,127 @@ export async function getInventorySessionWarehouses(
   } catch (err) {
     console.error('get_inventory_session_catalogs exception:', err)
     return { data: null, error: 'No se pudieron cargar las bodegas.' }
+  }
+}
+
+export async function getInventorySessionCatalogs(
+  companyId: string
+): Promise<{ data: InventorySessionCatalogResult | null; error: string | null }> {
+  try {
+    const db = inventariosAdmin()
+    const { data, error } = await db.rpc('get_inventory_session_catalogs', {
+      p_company_id: companyId,
+    })
+    if (error) {
+      console.error('get_inventory_session_catalogs error:', error.message)
+      return { data: null, error: 'No se pudieron cargar los catálogos.' }
+    }
+    return {
+      data: (data as InventorySessionCatalogResult) ?? {
+        warehouses: [],
+        offices: [],
+        users: [],
+      },
+      error: null,
+    }
+  } catch (err) {
+    console.error('get_inventory_session_catalogs exception:', err)
+    return { data: null, error: 'No se pudieron cargar los catálogos.' }
+  }
+}
+
+export async function createInventoryDraftSession(
+  companyId: string,
+  input: CreateSessionInput
+): Promise<{ data: CreateSessionResult | null; error: string | null }> {
+  try {
+    const db = inventariosAdmin()
+    const { data, error } = await db.rpc('create_inventory_session', {
+      p_company_id: companyId,
+      p_name: input.name,
+      p_inventory_type: input.inventory_type,
+      p_warehouse_id: input.warehouse_id,
+      p_bsale_office_id: input.bsale_office_id,
+      p_scope_mode: input.scope_mode,
+      p_responsible_user_id: input.responsible_user_id,
+      p_notes: input.notes || null,
+      p_idempotency_key: input.idempotency_key,
+    })
+    if (error) {
+      console.error('create_inventory_session error:', error.message)
+      return { data: null, error: 'No se pudo crear la jornada.' }
+    }
+    const result = data as unknown as {
+      entity_id?: string
+      session_number?: number
+      data?: { session_number?: number; snapshot_id?: string; completion_status?: string }
+    }
+    const sessionId = result?.entity_id
+    if (!sessionId) {
+      return { data: null, error: 'La jornada no se pudo crear correctamente.' }
+    }
+    return {
+      data: {
+        session_id: sessionId,
+        session_number: result?.data?.session_number ?? 0,
+        snapshot_id: result?.data?.snapshot_id ?? '',
+        completion_status: result?.data?.completion_status ?? 'PENDING',
+      },
+      error: null,
+    }
+  } catch (err) {
+    console.error('create_inventory_session exception:', err)
+    return { data: null, error: 'No se pudo crear la jornada.' }
+  }
+}
+
+export async function searchInventoryVariants(
+  companyId: string,
+  search: string,
+  page = 1,
+  pageSize = 25
+): Promise<{ data: VariantSearchResult | null; error: string | null }> {
+  try {
+    const db = inventariosAdmin()
+    const { data, error } = await db.rpc('search_inventory_variants', {
+      p_company_id: companyId,
+      p_search: search,
+      p_page: page,
+      p_page_size: pageSize,
+    })
+    if (error) {
+      console.error('search_inventory_variants error:', error.message)
+      return { data: null, error: 'No se pudieron buscar productos.' }
+    }
+    return { data: data as VariantSearchResult, error: null }
+  } catch (err) {
+    console.error('search_inventory_variants exception:', err)
+    return { data: null, error: 'No se pudieron buscar productos.' }
+  }
+}
+
+export async function setInventoryProductScope(
+  companyId: string,
+  sessionId: string,
+  bsaleVariantIds: number[],
+  idempotencyKey: string
+): Promise<{ data: { session_id: string } | null; error: string | null }> {
+  try {
+    const db = inventariosAdmin()
+    const { error } = await db.rpc('set_inventory_session_product_scope', {
+      p_company_id: companyId,
+      p_session_id: sessionId,
+      p_bsale_variant_ids: bsaleVariantIds,
+      p_idempotency_key: idempotencyKey,
+    })
+    if (error) {
+      console.error('set_inventory_session_product_scope error:', error.message)
+      return { data: null, error: 'No se pudo guardar el alcance de productos.' }
+    }
+    return { data: { session_id: sessionId }, error: null }
+  } catch (err) {
+    console.error('set_inventory_session_product_scope exception:', err)
+    return { data: null, error: 'No se pudo guardar el alcance de productos.' }
   }
 }
 
