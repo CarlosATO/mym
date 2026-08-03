@@ -40,7 +40,7 @@ No incluira lotes, vencimientos operativos por lote, FEFO, dispositivos autoriza
 | `DRAFT` | Jornada creada; aun puede configurarse. Posee desde su creacion un snapshot operativo temprano en estado `PENDING`, que actua como contenedor configurable y se congelara al pasar a PREPARED. |
 | `PREPARED` | Tiene bodega, alcance, snapshot, zonas, usuarios y asignaciones; esta lista para iniciar. El snapshot queda inmutable al alcanzar este estado (transicion aun no implementada). |
 | `COUNTING` | El conteo fisico esta en ejecucion. Se alcanza con `start_inventory_session` (PREPARED → COUNTING), que abre la jornada sin iniciar ninguna tarea individual. |
-| `UNDER_REVIEW` | Finalizaron las tareas principales y el supervisor revisa diferencias, incidencias, reconteos, costos y resultado final. |
+| `UNDER_REVIEW` | Finalizaron las tareas principales y el supervisor revisa diferencias, incidencias, reconteos, costos y resultado final. Se alcanza con `close_inventory_session` (COUNTING → UNDER_REVIEW), que solo cierra la ejecución física: no valida tareas ni aprueba resultados. |
 | `APPROVED` | La jornada fue aprobada y queda inmutable. |
 | `EXPORTED` | Se genero el archivo oficial para Bsale. |
 | `RECONCILED` | El inventario fue cargado en Bsale y validado contra el stock oficial. |

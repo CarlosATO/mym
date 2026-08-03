@@ -35,7 +35,10 @@ Queda reservado para una futura RPC de inicio de jornada.
 - PREPARED → COUNTING: implementada desde 4G.3 (`start_inventory_session`); usa el permiso
   `inventarios.sessions.start` (asignado a BODEGA y SUPER_USUARIO), rol ADMINISTRATOR activo,
   y registra `started_at`. No inicia tareas.
-- COUNTING → UNDER_REVIEW: NO implementada.
+- COUNTING → UNDER_REVIEW: implementada desde 4G.4 (`close_inventory_session`); usa el
+  permiso `inventarios.sessions.close` (BODEGA y SUPER_USUARIO), rol ADMINISTRATOR activo,
+  exige todas las tareas COMPLETED con contribución efectiva y sin incidencias bloqueantes,
+  y registra `reviewed_at`.
 - UNDER_REVIEW → APPROVED: implementada (`approve_inventory_session`).
 - Cancelación de jornada: NO implementada.
 

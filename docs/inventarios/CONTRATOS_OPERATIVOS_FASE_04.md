@@ -694,3 +694,74 @@ Las operaciones de revision y recuento (`correct`, `invalidate`, `report`,
 | --- | --- |
 | COUNTING → UNDER_REVIEW | NO implementada |
 | Cancelacion de jornada | NO implementada |
+
+---
+
+## Fase 4G.4 — Cierre de conteo (COUNTING → UNDER_REVIEW)
+
+### RPC: `close_inventory_session`
+
+Firma: `close_inventory_session(p_company_id uuid, p_session_id uuid,
+p_idempotency_key uuid) RETURNS jsonb`
+
+Permiso: `inventarios.sessions.close` (nuevo en 4G.4a, asignado a BODEGA y
+SUPER_USUARIO). Rol contextual: participante `ADMINISTRATOR` activo de la jornada.
+
+### Validaciones
+
+1. Sesion `COUNTING` (estados posteriores → `INV_SESSION_ALREADY_PREPARED`); 2. snapshot
+`COMPLETED` con `content_hash`; 3. actor `ADMINISTRATOR` activo; 4. todas las tareas
+operativas en `COMPLETED` (`INV_SESSION_TASKS_NOT_COMPLETED`); 5. ninguna asignacion
+vigente con participante revocado (`INV_SESSION_SETUP_INCOMPLETE`); 6. cobertura de
+conteo coherente; 7. sin incidencias bloqueantes (`is_blocking = true AND status IN
+('OPEN','UNDER_REVIEW')` → `INV_SESSION_BLOCKING_INCIDENTS`); 8. coherencia
+empresa/sesion/snapshot por claves compuestas.
+
+### Regla de cobertura utilizada
+
+El modelo **no define una matriz producto × ubicacion**. El criterio minimo contractual
+sustentable es: toda tarea operativa `COMPLETED` debe tener **al menos una contribucion
+efectiva**, evaluada con `get_effective_task_contributions` (reutiliza el criterio de
+`validate_inventory_task`). Un `count_entry` contribuye si no esta invalidado
+(`invalidated_at/by/reason IS NULL`) y su `physical_quantity` = suma de sus partes.
+Cumplimiento → `INV_SESSION_TASKS_WITHOUT_CONTRIBUTION`. No se crean datos ficticios.
+
+### Diferencia entre cerrar, validar y aprobar
+
+- **Cerrar** (`close_inventory_session`): termina la ejecucion fisica y habilita
+  revision. No valida tareas, no crea recuentos, no aprueba, no crea
+  `official_version` ni `official_version_items`.
+- **Validar** (`validate_inventory_task`): operacion individual de supervisor sobre
+  una tarea `COMPLETED` en `UNDER_REVIEW`, exige contribucion efectiva y sin
+  incidentes bloqueantes.
+- **Aprobar** (`approve_inventory_session`): consolida `UNDER_REVIEW → APPROVED` con
+  creacion de `official_versions`.
+
+### Transicion
+
+En una transaccion con advisory lock por jornada y `sessions`/`operational_snapshots`
+`FOR UPDATE`: `status = 'UNDER_REVIEW'`, se completa `reviewed_at` y `updated_by`
+(actor). El modelo no tiene columna `reviewed_by`; el actor queda en `updated_by` y en
+`operation_idempotency.actor_id`. Snapshot, tareas y conteos no se modifican.
+
+### Operaciones disponibles durante UNDER_REVIEW
+
+| RPC | Guarda previa | Correccion 4G.4 |
+| --- | --- | --- |
+| `validate_inventory_task` | ya validaba UNDER_REVIEW | sin cambio |
+| `invalidate_inventory_task` | solo tarea COMPLETED | **agrega require_session_review** |
+| `reopen_inventory_task` | solo tarea COMPLETED | **agrega require_session_review** |
+| `request_inventory_recount` | COUNTING (IN_PROGRESS) / UNDER_REVIEW (COMPLETED) | sin cambio |
+| recount assign/start/record/complete/decide | ya validaban UNDER_REVIEW | sin cambio |
+| `cancel_inventory_recount` | admite COUNTING y UNDER_REVIEW | sin cambio |
+| `approve_inventory_session` | ya validaba UNDER_REVIEW | sin cambio |
+
+Se creo el helper `inventarios.require_session_review` (rechaza con
+`INV_SESSION_INVALID_STATE` si la jornada no esta en `UNDER_REVIEW`).
+
+### Transiciones todavia pendientes
+
+| Transicion | Estado |
+| --- | --- |
+| UNDER_REVIEW → APPROVED | implementada (`approve_inventory_session`) |
+| Cancelacion de jornada | NO implementada |
