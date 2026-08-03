@@ -1,15 +1,10 @@
 'use server'
 
-import { createClient as createSupabaseClient } from '@supabase/supabase-js'
+import { createInventariosClient } from '@/lib/supabase/inventarios'
 import { getActiveCompanyId } from '@/app/actions/companies'
 
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
-
-function inventariosAdmin() {
-  return createSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey, {
-    db: { schema: 'inventarios' },
-    auth: { autoRefreshToken: false, persistSession: false },
-  })
+async function inventariosAdmin() {
+  return createInventariosClient()
 }
 
 export interface InventorySessionSummary {
@@ -317,7 +312,7 @@ export async function listInventorySessions(
   filters: InventorySessionFilters = {}
 ): Promise<{ data: InventorySessionListResult | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { data, error } = await db.rpc('list_inventory_sessions', {
       p_company_id: companyId,
       p_status: filters.status || null,
@@ -345,7 +340,7 @@ export async function getInventorySessionWarehouses(
   companyId: string
 ): Promise<{ data: WarehouseOption[] | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { data, error } = await db.rpc('get_inventory_session_catalogs', {
       p_company_id: companyId,
     })
@@ -367,7 +362,7 @@ export async function getInventorySessionCatalogs(
   companyId: string
 ): Promise<{ data: InventorySessionCatalogResult | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { data, error } = await db.rpc('get_inventory_session_catalogs', {
       p_company_id: companyId,
     })
@@ -395,7 +390,7 @@ export async function createInventoryDraftSession(
   input: CreateSessionInput
 ): Promise<{ data: CreateSessionResult | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { data, error } = await db.rpc('create_inventory_session', {
       p_company_id: companyId,
       p_name: input.name,
@@ -442,7 +437,7 @@ export async function searchInventoryVariants(
   pageSize = 25
 ): Promise<{ data: VariantSearchResult | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { data, error } = await db.rpc('search_inventory_variants', {
       p_company_id: companyId,
       p_search: search,
@@ -467,7 +462,7 @@ export async function setInventoryProductScope(
   idempotencyKey: string
 ): Promise<{ data: { session_id: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('set_inventory_session_product_scope', {
       p_company_id: companyId,
       p_session_id: sessionId,
@@ -544,7 +539,7 @@ export async function getInventorySessionDetail(
   sessionId: string
 ): Promise<{ data: InventorySessionDetail | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { data, error } = await db.rpc('get_inventory_session_detail', {
       p_company_id: companyId,
       p_session_id: sessionId,
@@ -565,7 +560,7 @@ export async function getInventorySessionReview(
   sessionId: string
 ): Promise<{ data: InventorySessionReview | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { data, error } = await db.rpc('get_inventory_session_review', {
       p_company_id: companyId,
       p_session_id: sessionId,
@@ -610,7 +605,7 @@ export async function getActiveCompanySessionSetup(
     return { data: null, error: 'No tienes una empresa activa seleccionada.', companyId: null }
   }
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { data, error } = await db.rpc('get_inventory_session_setup', {
       p_company_id: companyId,
       p_session_id: sessionId,
@@ -634,7 +629,7 @@ export async function addInventorySessionParticipant(
   idempotencyKey: string
 ): Promise<{ data: { session_id: string; user_id: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('add_inventory_session_participant', {
       p_company_id: companyId,
       p_session_id: sessionId,
@@ -661,7 +656,7 @@ export async function revokeInventorySessionParticipant(
   idempotencyKey: string
 ): Promise<{ data: { session_id: string; user_id: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('revoke_inventory_session_participant', {
       p_company_id: companyId,
       p_session_id: sessionId,
@@ -686,7 +681,7 @@ export async function prepareInventorySession(
   idempotencyKey: string
 ): Promise<{ data: { session_id: string; state: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('prepare_inventory_session', {
       p_company_id: companyId,
       p_session_id: sessionId,

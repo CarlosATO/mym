@@ -1,16 +1,11 @@
 'use server'
 
-import { createClient as createSupabaseClient } from '@supabase/supabase-js'
+import { createInventariosClient } from '@/lib/supabase/inventarios'
 import { getActiveCompanyId } from '@/app/actions/companies'
 import type { InventoryParticipant, InventorySessionSetupResult, InventorySessionTask, InventorySessionZone } from '@/app/actions/inventarios/sessions'
 
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
-
-function inventariosAdmin() {
-  return createSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey, {
-    db: { schema: 'inventarios' },
-    auth: { autoRefreshToken: false, persistSession: false },
-  })
+async function inventariosAdmin() {
+  return createInventariosClient()
 }
 
 function makeKey(): string {
@@ -34,7 +29,7 @@ export async function getActiveCompanyZonesSetup(
     return { data: null, error: 'No tienes una empresa activa seleccionada.', companyId: null }
   }
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { data, error } = await db.rpc('get_inventory_session_setup', {
       p_company_id: companyId,
       p_session_id: sessionId,
@@ -67,7 +62,7 @@ export async function createSessionZone(
   input: { zone_code: string; scan_code: string; display_name: string; priority: number }
 ): Promise<{ data: { session_zone_id: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('create_inventory_session_zone', {
       p_company_id: companyId,
       p_session_id: sessionId,
@@ -95,7 +90,7 @@ export async function addZoneLocation(
   locationId: string
 ): Promise<{ data: { session_zone_id: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('add_inventory_zone_location', {
       p_company_id: companyId,
       p_session_id: sessionId,
@@ -121,7 +116,7 @@ export async function removeZoneLocation(
   locationId: string
 ): Promise<{ data: { session_zone_id: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('remove_inventory_zone_location', {
       p_company_id: companyId,
       p_session_id: sessionId,
@@ -146,7 +141,7 @@ export async function deleteSessionZone(
   sessionZoneId: string
 ): Promise<{ data: { session_zone_id: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('delete_inventory_session_zone', {
       p_company_id: companyId,
       p_session_id: sessionId,

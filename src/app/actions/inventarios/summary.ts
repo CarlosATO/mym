@@ -1,15 +1,10 @@
 'use server'
 
-import { createClient as createSupabaseClient } from '@supabase/supabase-js'
+import { createInventariosClient } from '@/lib/supabase/inventarios'
 import { getActiveCompanyId } from '@/app/actions/companies'
 
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
-
-function inventariosAdmin() {
-  return createSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey, {
-    db: { schema: 'inventarios' },
-    auth: { autoRefreshToken: false, persistSession: false },
-  })
+async function inventariosAdmin() {
+  return createInventariosClient()
 }
 
 export interface InventoryDashboardSummary {
@@ -60,7 +55,7 @@ export async function getActiveCompanyDashboardSummary(): Promise<{
     return { data: null, error: 'No tienes una empresa activa seleccionada.', companyId: null }
   }
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { data, error } = await db.rpc('get_inventory_dashboard_summary', {
       p_company_id: companyId,
     })

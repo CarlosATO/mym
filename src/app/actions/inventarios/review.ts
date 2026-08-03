@@ -1,15 +1,10 @@
 'use server'
 
-import { createClient as createSupabaseClient } from '@supabase/supabase-js'
+import { createInventariosClient } from '@/lib/supabase/inventarios'
 import { getActiveCompanyId } from '@/app/actions/companies'
 
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
-
-function inventariosAdmin() {
-  return createSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey, {
-    db: { schema: 'inventarios' },
-    auth: { autoRefreshToken: false, persistSession: false },
-  })
+async function inventariosAdmin() {
+  return createInventariosClient()
 }
 
 function makeKey(): string {
@@ -24,7 +19,7 @@ export async function validateInventoryTask(
   expectedCycle: number
 ): Promise<{ data: { task_id: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('validate_inventory_task', {
       p_company_id: companyId,
       p_task_id: taskId,
@@ -51,7 +46,7 @@ export async function invalidateInventoryTask(
   reason: string
 ): Promise<{ data: { task_id: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('invalidate_inventory_task', {
       p_company_id: companyId,
       p_task_id: taskId,
@@ -79,7 +74,7 @@ export async function reopenInventoryTask(
   reason: string
 ): Promise<{ data: { task_id: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('reopen_inventory_task', {
       p_company_id: companyId,
       p_task_id: taskId,
@@ -107,7 +102,7 @@ export async function getActiveCompanyReviewFor(
     return { data: null, error: 'No tienes una empresa activa seleccionada.', companyId: null }
   }
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { data, error } = await db.rpc('get_inventory_session_review', {
       p_company_id: companyId,
       p_session_id: sessionId,
@@ -133,7 +128,7 @@ export async function resolveInventoryIncident(
   description: string
 ): Promise<{ data: { incident_id: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('resolve_inventory_incident', {
       p_company_id: companyId,
       p_incident_id: incidentId,
@@ -164,7 +159,7 @@ export async function requestInventoryRecount(
   reason: string
 ): Promise<{ data: { recount_id: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('request_inventory_recount', {
       p_company_id: companyId,
       p_task_id: taskId,
@@ -192,7 +187,7 @@ export async function assignInventoryRecount(
   counterUserId: string
 ): Promise<{ data: { recount_id: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('assign_inventory_recount', {
       p_company_id: companyId,
       p_recount_request_id: recountRequestId,
@@ -218,7 +213,7 @@ export async function cancelInventoryRecount(
   reason: string
 ): Promise<{ data: { recount_id: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('cancel_inventory_recount', {
       p_company_id: companyId,
       p_recount_request_id: recountRequestId,
@@ -246,7 +241,7 @@ export async function decideInventoryRecount(
   expectedCurrentDecisionId: string | null
 ): Promise<{ data: { recount_id: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('decide_inventory_recount', {
       p_company_id: companyId,
       p_recount_request_id: recountRequestId,
@@ -274,7 +269,7 @@ export async function approveInventorySession(
   idempotencyKey: string
 ): Promise<{ data: { session_id: string; state: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('approve_inventory_session', {
       p_company_id: companyId,
       p_session_id: sessionId,
@@ -298,7 +293,7 @@ export async function cancelInventorySession(
   idempotencyKey: string
 ): Promise<{ data: { session_id: string; state: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('cancel_inventory_session', {
       p_company_id: companyId,
       p_session_id: sessionId,

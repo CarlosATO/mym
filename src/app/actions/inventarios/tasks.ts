@@ -1,6 +1,6 @@
 'use server'
 
-import { createClient as createSupabaseClient } from '@supabase/supabase-js'
+import { createInventariosClient } from '@/lib/supabase/inventarios'
 import { getActiveCompanyId } from '@/app/actions/companies'
 import type { InventoryParticipant, InventorySessionSetupResult, InventorySessionTask, InventorySessionZone } from '@/app/actions/inventarios/sessions'
 
@@ -11,13 +11,8 @@ export interface TasksSetup {
   indicators: InventorySessionSetupResult['indicators']
 }
 
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
-
-function inventariosAdmin() {
-  return createSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey, {
-    db: { schema: 'inventarios' },
-    auth: { autoRefreshToken: false, persistSession: false },
-  })
+async function inventariosAdmin() {
+  return createInventariosClient()
 }
 
 function makeKey(): string {
@@ -32,7 +27,7 @@ export async function createInventoryTask(
   counterUserId: string
 ): Promise<{ data: { task_id: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('create_inventory_task', {
       p_company_id: companyId,
       p_session_id: sessionId,
@@ -60,7 +55,7 @@ export async function reassignInventoryTask(
   reason: string
 ): Promise<{ data: { task_id: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('reassign_inventory_task', {
       p_company_id: companyId,
       p_task_id: taskId,
@@ -89,7 +84,7 @@ export async function cancelInventoryTask(
   reason: string
 ): Promise<{ data: { task_id: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('cancel_inventory_task', {
       p_company_id: companyId,
       p_task_id: taskId,
@@ -117,7 +112,7 @@ export async function getActiveCompanyTasksSetup(
     return { data: null, error: 'No tienes una empresa activa seleccionada.', companyId: null }
   }
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { data, error } = await db.rpc('get_inventory_session_setup', {
       p_company_id: companyId,
       p_session_id: sessionId,

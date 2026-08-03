@@ -1,15 +1,10 @@
 'use server'
 
-import { createClient as createSupabaseClient } from '@supabase/supabase-js'
+import { createInventariosClient } from '@/lib/supabase/inventarios'
 import { getActiveCompanyId } from '@/app/actions/companies'
 
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
-
-function inventariosAdmin() {
-  return createSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey, {
-    db: { schema: 'inventarios' },
-    auth: { autoRefreshToken: false, persistSession: false },
-  })
+async function inventariosAdmin() {
+  return createInventariosClient()
 }
 
 export async function startInventorySession(
@@ -18,7 +13,7 @@ export async function startInventorySession(
   idempotencyKey: string
 ): Promise<{ data: { session_id: string; state: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('start_inventory_session', {
       p_company_id: companyId,
       p_session_id: sessionId,
@@ -41,7 +36,7 @@ export async function closeInventorySession(
   idempotencyKey: string
 ): Promise<{ data: { session_id: string; state: string } | null; error: string | null }> {
   try {
-    const db = inventariosAdmin()
+    const db = await inventariosAdmin()
     const { error } = await db.rpc('close_inventory_session', {
       p_company_id: companyId,
       p_session_id: sessionId,
