@@ -632,3 +632,65 @@ configuracion de 4G.1 solo aceptan sesiones `DRAFT` (`INV_SESSION_INVALID_STATE`
 
 `inventarios.sessions.configure` se creo en 4G.1 y se reutiliza en 4G.2 sin
 cambios de matriz.
+
+---
+
+## Fase 4G.3 — Apertura de jornada (PREPARED → COUNTING)
+
+### RPC: `start_inventory_session`
+
+Firma: `start_inventory_session(p_company_id uuid, p_session_id uuid,
+p_idempotency_key uuid) RETURNS jsonb`
+
+Permiso: `inventarios.sessions.start` (asignado a BODEGA y SUPER_USUARIO en 4G.3a).
+Rol contextual: participante `ADMINISTRATOR` activo de la jornada.
+
+### Validaciones
+
+1. Sesion `PREPARED`; 2. snapshot `COMPLETED` con `content_hash` presente; 3. actor
+`ADMINISTRATOR` activo; 4. al menos un `COUNTER` activo; 5. al menos una zona
+habilitada; 6. al menos una tarea activa; 7. todas las tareas en `ASSIGNED`; 8. toda
+tarea con asignacion vigente; 9. ninguna captura de conteo previa. La coherencia
+empresa/jornada/snapshot se garantiza por las claves compuestas de las tablas.
+
+Cualquier incumplimiento produce `INV_SESSION_SETUP_INCOMPLETE` o
+`INV_SNAPSHOT_INCOMPLETE`; jornadas ya abiertas o posteriores producen
+`INV_SESSION_ALREADY_PREPARED`.
+
+### Transicion
+
+En una transaccion con advisory lock por jornada y `sessions`/`operational_snapshots`
+`FOR UPDATE`: `sessions.status` pasa a `COUNTING`, se completa `started_at` y
+`updated_by` (actor). El modelo fisico no tiene columna `started_by`; el responsable
+de la apertura queda registrado en `updated_by` y en `operation_idempotency.actor_id`.
+No se modifican tareas, no se crean `task_events`, no se inician tareas ni se crean
+conteos. Iniciar la jornada es distinto de iniciar una tarea: el inicio de tarea
+individual sigue siendo `start_inventory_task`.
+
+### Guardas operativas de sesion COUNTING
+
+Auditoria 4G.3: las siguientes RPCs validaban estado de tarea y participante pero no
+el estado de la jornada. Se agrego el helper `require_session_counting` (rechaza con
+`INV_SESSION_INVALID_STATE` si la jornada no esta en `COUNTING`):
+
+| RPC | Guarda previa | Correccion 4G.3 |
+| --- | --- | --- |
+| `start_inventory_task` | solo tarea ASSIGNED | requiere COUNTING |
+| `pause_inventory_task` | solo tarea IN_PROGRESS | requiere COUNTING |
+| `resume_inventory_task` | solo tarea PAUSED | requiere COUNTING |
+| `complete_inventory_task` | solo tarea IN_PROGRESS | requiere COUNTING |
+| `record_inventory_count` | solo tarea IN_PROGRESS | requiere COUNTING |
+| `correct_inventory_count` | ya validaba session (COUNTING/UNDER_REVIEW) | sin cambio |
+| `invalidate_inventory_count`, `report_incident`, `request_recount` | ya validaban session | sin cambio |
+| `resolve_incident` | valida estados de incidencia | sin cambio |
+
+Las operaciones de revision y recuento (`correct`, `invalidate`, `report`,
+`request_recount`) conservan su logica de `UNDER_REVIEW`; no fueron trasladadas a
+`COUNTING` porque su contrato contempla revision posterior.
+
+### Transiciones todavia pendientes
+
+| Transicion | Estado |
+| --- | --- |
+| COUNTING → UNDER_REVIEW | NO implementada |
+| Cancelacion de jornada | NO implementada |

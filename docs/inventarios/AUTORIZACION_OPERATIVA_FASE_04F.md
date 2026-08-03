@@ -32,7 +32,9 @@ Queda reservado para una futura RPC de inicio de jornada.
 - Configuración DRAFT (participantes, zonas, ubicaciones, tareas): implementada desde 4G.1.
 - DRAFT → PREPARED: implementada desde 4G.2 (`prepare_inventory_session`); valida configuración,
   construye snapshot_products desde Bsale y congela el snapshot (COMPLETED + content_hash).
-- PREPARED → COUNTING: NO implementada.
+- PREPARED → COUNTING: implementada desde 4G.3 (`start_inventory_session`); usa el permiso
+  `inventarios.sessions.start` (asignado a BODEGA y SUPER_USUARIO), rol ADMINISTRATOR activo,
+  y registra `started_at`. No inicia tareas.
 - COUNTING → UNDER_REVIEW: NO implementada.
 - UNDER_REVIEW → APPROVED: implementada (`approve_inventory_session`).
 - Cancelación de jornada: NO implementada.
