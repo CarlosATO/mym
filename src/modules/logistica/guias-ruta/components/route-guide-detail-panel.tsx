@@ -82,7 +82,9 @@ export function RouteGuideDetailPanel({
 
       {editModalOpen && (
         <RouteGuideEditModal
+          key={guide.id}
           guide={guide}
+          catalogOptions={catalogOptions}
           onClose={() => setEditModalOpen(false)}
           onSaved={() => { setEditModalOpen(false); onEdit?.(); }}
         />
