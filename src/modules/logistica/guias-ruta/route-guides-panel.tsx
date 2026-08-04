@@ -8,7 +8,7 @@ import { RouteGuideForm } from './components/route-guide-form';
 import { RouteGuideDetailPanel } from './components/route-guide-detail-panel';
 import { useRouteGuideDetailCache } from './hooks/use-route-guide-detail-cache';
 import { Plus } from 'lucide-react';
-import { CatalogOptions } from './types';
+import { CatalogOptions, RouteGuide } from './types';
 import { toast } from 'sonner';
 
 // Shapes passed back to the form via re-throw (success path with warnings)
@@ -78,6 +78,27 @@ export function RouteGuidesPanel() {
     setActiveView('TRAY');
     setSelectedGuideId(null);
   };
+
+  const handleGuideEdited = useCallback(async (guideId: string) => {
+    // Recargar el detalle canónico desde la BD y actualizar la fila del listado.
+    let updated: RouteGuide | null = null;
+    try {
+      updated = await fetchDetail(guideId, true);
+    } catch (e) {
+      toast.error('Los cambios fueron guardados, pero no pudimos actualizar la vista. Intenta recargar el detalle.');
+      throw e;
+    }
+    if (updated) {
+      // Actualizar la fila en el listado sin perder filtros/página/scroll
+      setGuides(prev => prev.map(g => g.id === guideId ? { ...g, ...updated } : g));
+    }
+    // Respaldo: re-sincronizar la bandeja con el servidor
+    try {
+      await loadTray();
+    } catch {
+      // La fila local ya quedó actualizada; el respaldo es opcional
+    }
+  }, [fetchDetail, loadTray]);
 
   const handleEdit = () => {
     setActiveView('EDIT');
@@ -256,6 +277,7 @@ export function RouteGuidesPanel() {
                   catalogOptions={catalogs}
                   onClose={handleCloseDetail}
                   onEdit={handleEdit}
+                  onGuideEdited={handleGuideEdited}
                   onSaveDraft={handleSaveDraft}
                   onDispatch={handleDispatch}
                   isSaving={isSaving}

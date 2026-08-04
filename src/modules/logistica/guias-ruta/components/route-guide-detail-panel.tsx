@@ -17,6 +17,7 @@ interface RouteGuideDetailPanelProps {
   onEdit?: () => void;
   onSaveDraft: (guideData: any, itemsData: any[]) => Promise<SaveRouteGuideDraftResult>;
   onDispatch: (guideId: string) => Promise<void>;
+  onGuideEdited?: (guideId: string) => Promise<void> | void;
   isSaving: boolean;
   isDispatching: boolean;
 }
@@ -28,11 +29,13 @@ export function RouteGuideDetailPanel({
   onEdit,
   onSaveDraft,
   onDispatch,
+  onGuideEdited,
   isSaving,
   isDispatching
 }: RouteGuideDetailPanelProps) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [editModalOpen, setEditModalOpen] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
 
 
@@ -43,6 +46,24 @@ export function RouteGuideDetailPanel({
       setPreviewUrl(url);
     } catch (e: any) {
       console.error(e);
+    }
+  };
+
+  const handleGuideSaved = async () => {
+    // Cerrar el modal y recargar la guía canónica antes de mostrar nada.
+    setEditModalOpen(false);
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(null);
+    }
+    if (!onGuideEdited) return;
+    setIsRefreshing(true);
+    try {
+      await onGuideEdited(guide.id);
+    } catch (e) {
+      console.warn('No se pudo actualizar el detalle tras guardar:', e);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -86,7 +107,7 @@ export function RouteGuideDetailPanel({
           guide={guide}
           catalogOptions={catalogOptions}
           onClose={() => setEditModalOpen(false)}
-          onSaved={() => { setEditModalOpen(false); onEdit?.(); }}
+          onSaved={handleGuideSaved}
         />
       )}
 
@@ -95,6 +116,11 @@ export function RouteGuideDetailPanel({
         <div className="flex items-center gap-4">
           <h2 className="text-xl font-bold text-theme-text">Guía {guide.guide_number}</h2>
           <RouteGuideStatusBadge status={guide.status} />
+          {isRefreshing && (
+            <span className="px-2 py-1 rounded-lg bg-theme-accent/10 text-theme-accent border border-theme-accent/20 text-[10px] font-bold uppercase tracking-wider animate-pulse">
+              Actualizando guía…
+            </span>
+          )}
         </div>
         <div className="flex gap-3">
           <button

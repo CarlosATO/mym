@@ -103,7 +103,8 @@ export async function getRouteGuideById(id: string): Promise<RouteGuide | null> 
       total_invoices, total_amount,
       total_cash_expected, total_check_expected,
       total_credit, total_transfer, total_unknown_payment,
-      error_count, duplicate_count
+      error_count, duplicate_count,
+      version_number
     `)
     .eq('id', id)
     .maybeSingle();
