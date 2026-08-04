@@ -4,6 +4,7 @@ import { RouteGuide, CatalogOptions } from '../types';
 import { RouteGuideStatusBadge } from './route-guide-badges';
 import { formatCurrency, formatDate, formatPaymentMethodLabel } from '../utils/route-guide-formatters';
 import { RouteGuideForm } from './route-guide-form';
+import { RouteGuideEditModal } from './route-guide-edit-modal';
 import { Printer, Edit, Download } from 'lucide-react';
 import { generateRouteGuidePdfBlob, downloadRouteGuidePdf } from '@/lib/pdf/generate-route-guide-pdf';
 
@@ -31,6 +32,7 @@ export function RouteGuideDetailPanel({
   isDispatching
 }: RouteGuideDetailPanelProps) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [editModalOpen, setEditModalOpen] = useState(false);
 
 
 
@@ -78,6 +80,14 @@ export function RouteGuideDetailPanel({
       
       {renderPreviewModal()}
 
+      {editModalOpen && (
+        <RouteGuideEditModal
+          guide={guide}
+          onClose={() => setEditModalOpen(false)}
+          onSaved={() => { setEditModalOpen(false); onEdit?.(); }}
+        />
+      )}
+
       {/* Header Actions */}
       <div className="flex justify-between items-center px-6 py-4 border-b border-theme-border print:hidden">
         <div className="flex items-center gap-4">
@@ -105,6 +115,16 @@ export function RouteGuideDetailPanel({
               className="px-4 py-2 bg-theme-accent text-white rounded-lg hover:bg-theme-accent-hover flex items-center gap-2 text-sm font-bold shadow-sm transition-colors"
             >
               <Edit className="w-4 h-4" /> Editar / Despachar
+            </button>
+          )}
+
+          {(guide.status === 'DRAFT' || guide.status === 'DISPATCHED') && (
+            <button
+              onClick={() => setEditModalOpen(true)}
+              title="Editar guía no rendida"
+              className="px-4 py-2 border border-theme-border rounded-lg text-theme-text hover:bg-theme-text/5 flex items-center gap-2 text-sm font-semibold transition-colors"
+            >
+              <Edit className="w-4 h-4" /> Editar guía
             </button>
           )}
         </div>

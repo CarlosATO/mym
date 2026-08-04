@@ -307,3 +307,53 @@ export async function deleteRouteGuideDraftAction(guideId: string) {
   if (error) throw error;
   return true;
 }
+
+export interface EditRouteGuideResult {
+  version_number: number;
+  totals: Record<string, number>;
+  items_added: unknown[];
+  items_modified: unknown[];
+  items_deleted: unknown[];
+  replayed: boolean;
+}
+
+export async function editRouteGuideUnsettled(
+  guideId: string,
+  header: Record<string, unknown>,
+  items: Array<Record<string, unknown>>,
+  reason: string,
+  expectedVersion: number
+): Promise<EditRouteGuideResult> {
+  const supabase = await createLogisticaClient();
+  const companyId = await getActiveCompanyId();
+  if (!companyId) throw new Error('No se encontró empresa activa para el usuario.');
+
+  const idempotencyKey = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+  const { data, error } = await supabase.rpc('edit_route_guide_unsettled', {
+    p_company_id: companyId,
+    p_route_guide_id: guideId,
+    p_expected_version: expectedVersion,
+    p_header: header,
+    p_items: items,
+    p_reason: reason,
+    p_idempotency_key: idempotencyKey,
+  });
+
+  if (error) {
+    const err = new Error(error.message || 'No se pudo editar la guía de ruta.') as Error & { code?: string };
+    err.code = error.code;
+    throw err;
+  }
+
+  return {
+    version_number: data?.version_number ?? expectedVersion,
+    totals: data?.totals ?? {},
+    items_added: data?.items_added ?? [],
+    items_modified: data?.items_modified ?? [],
+    items_deleted: data?.items_deleted ?? [],
+    replayed: data?.replayed ?? false,
+  };
+}

@@ -83,7 +83,9 @@ export interface RouteGuide {
   
   error_count: number;
   duplicate_count: number;
-  
+
+  version_number?: number;
+
   items?: RouteGuideItem[]; // Cargado asíncronamente
 }
 
