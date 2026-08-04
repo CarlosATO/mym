@@ -37,6 +37,20 @@ const STATUS_LABELS: Record<string, string> = {
   CANCELLED: 'Cancelada',
 };
 
+function normalizeLine(line: RouteGuideItem) {
+  const amount = typeof line.amount === 'number' ? line.amount : parseFloat(String(line.amount ?? '').replace(/[^\d.-]/g, '')) || 0;
+  return {
+    id: line.id && line.id.trim() ? line.id.trim() : null,
+    invoice_number: (line.invoice_number ?? '').trim(),
+    customer_name: (line.customer_name ?? '').trim(),
+    customer_address: (line.customer_address ?? '').trim(),
+    commune: (line.commune ?? '').trim(),
+    amount,
+    payment_method_original: (line.payment_method_original ?? '').trim(),
+    notes: (line.notes ?? '').trim(),
+  };
+}
+
 function translateError(err: Error & { code?: string }): string {
   switch (err.code) {
     case 'ROUTE_GUIDE_CONCURRENT_MODIFICATION':
@@ -74,12 +88,99 @@ export function RouteGuideEditModal({ guide, catalogOptions, onClose, onSaved }:
 
   const bodyRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
+  const reasonRef = useRef<HTMLTextAreaElement>(null);
 
   // Reiniciar scroll interno y enfocar titulo al abrir
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = 0;
     titleRef.current?.focus({ preventScroll: true });
   }, []);
+
+  // ---- Estado inicial normalizado (valores persistibles, no etiquetas) ----
+  const normalizeId = (value: string | null | undefined): string | null =>
+    value && value.trim() ? value.trim() : null;
+
+  const initialHeader = useMemo(
+    () => ({
+      guide_date: (guide.guide_date || '').slice(0, 10),
+      route_id: normalizeId(guide.route_id),
+      vehicle_id: normalizeId(guide.vehicle_id),
+      driver_id: normalizeId(guide.driver_id),
+      seller_id: normalizeId(guide.seller_id),
+      dispatcher_id: normalizeId(guide.dispatcher_id),
+      notes: (guide.notes ?? '').trim(),
+    }),
+    [guide]
+  );
+
+  const currentHeader = {
+    guide_date: (guideDate || '').slice(0, 10),
+    route_id: normalizeId(routeId),
+    vehicle_id: normalizeId(vehicleId),
+    driver_id: normalizeId(driverId),
+    seller_id: normalizeId(sellerId),
+    dispatcher_id: normalizeId(dispatcherId),
+    notes: (notes ?? '').trim(),
+  };
+
+  const hasHeaderChanges = useMemo(() => {
+    return (
+      currentHeader.guide_date !== initialHeader.guide_date
+      || currentHeader.route_id !== initialHeader.route_id
+      || currentHeader.vehicle_id !== initialHeader.vehicle_id
+      || currentHeader.driver_id !== initialHeader.driver_id
+      || currentHeader.seller_id !== initialHeader.seller_id
+      || currentHeader.dispatcher_id !== initialHeader.dispatcher_id
+      || currentHeader.notes !== initialHeader.notes
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [guideDate, routeId, vehicleId, driverId, sellerId, dispatcherId, notes, initialHeader]);
+
+  // ---- Normalizacion de lineas para comparacion persistible ----
+  const initialLines = useMemo(
+    () => (guide.items || []).map(normalizeLine),
+    [guide]
+  );
+
+  const lineChanges = useMemo(() => {
+    const current = items
+      .filter(i => i.invoice_number || i.customer_name || i.amount || i.payment_method_original)
+      .map(normalizeLine);
+
+    const byId = new Map<string, typeof current[number]>();
+    current.forEach(l => { if (l.id) byId.set(l.id, l); });
+
+    const added = current.filter(l => !l.id);
+    const modified: string[] = [];
+    const deleted: string[] = [];
+
+    initialLines.forEach(orig => {
+      const cur = orig.id ? byId.get(orig.id) : undefined;
+      if (!cur) {
+        deleted.push(orig.invoice_number || orig.id || '');
+      } else {
+        const same =
+          cur.invoice_number === orig.invoice_number
+          && cur.customer_name === orig.customer_name
+          && cur.customer_address === orig.customer_address
+          && cur.commune === orig.commune
+          && cur.amount === orig.amount
+          && cur.payment_method_original === orig.payment_method_original
+          && cur.notes === orig.notes;
+        if (!same) modified.push(cur.invoice_number || cur.id || '');
+      }
+    });
+
+    // Lineas nuevas con id pero que no existian (no deberia pasar, pero defensivo)
+    current.forEach(l => {
+      if (l.id && !initialLines.some(o => o.id === l.id)) added.push(l);
+    });
+
+    return { added, modified, deleted, hasChanges: added.length > 0 || modified.length > 0 || deleted.length > 0 };
+  }, [items, initialLines]);
+
+  const hasChanges = hasHeaderChanges || lineChanges.hasChanges;
+
 
   const routeOptions = useMemo(() => dedupOptions(catalogOptions.routes), [catalogOptions.routes]);
   const vehicleOptions = useMemo(() => dedupOptions(catalogOptions.vehicles), [catalogOptions.vehicles]);
@@ -92,32 +193,39 @@ export function RouteGuideEditModal({ guide, catalogOptions, onClose, onSaved }:
 
   const headerChanges = useMemo(() => {
     const changes: string[] = [];
-    if (routeId !== guide.route_id) {
-      changes.push(`Ruta: ${optionLabel(routeOptions, guide.route_id)} → ${optionLabel(routeOptions, routeId)}`);
+    if (currentHeader.route_id !== initialHeader.route_id) {
+      changes.push(`Ruta: ${optionLabel(routeOptions, initialHeader.route_id || '')} → ${optionLabel(routeOptions, currentHeader.route_id || '')}`);
     }
-    if (vehicleId !== guide.vehicle_id) {
-      changes.push(`Vehículo: ${optionLabel(vehicleOptions, guide.vehicle_id)} → ${optionLabel(vehicleOptions, vehicleId)}`);
+    if (currentHeader.vehicle_id !== initialHeader.vehicle_id) {
+      changes.push(`Vehículo: ${optionLabel(vehicleOptions, initialHeader.vehicle_id || '')} → ${optionLabel(vehicleOptions, currentHeader.vehicle_id || '')}`);
     }
-    if (driverId !== guide.driver_id) {
-      changes.push(`Conductor: ${optionLabel(driverOptions, guide.driver_id)} → ${optionLabel(driverOptions, driverId)}`);
+    if (currentHeader.driver_id !== initialHeader.driver_id) {
+      changes.push(`Conductor: ${optionLabel(driverOptions, initialHeader.driver_id || '')} → ${optionLabel(driverOptions, currentHeader.driver_id || '')}`);
     }
-    if ((sellerId || '') !== (guide.seller_id || '')) {
-      changes.push(`Vendedor: ${optionLabel(sellerOptions, guide.seller_id || '')} → ${optionLabel(sellerOptions, sellerId)}`);
+    if (currentHeader.seller_id !== initialHeader.seller_id) {
+      changes.push(`Vendedor: ${optionLabel(sellerOptions, initialHeader.seller_id || '')} → ${optionLabel(sellerOptions, currentHeader.seller_id || '')}`);
     }
-    if (dispatcherId !== guide.dispatcher_id) {
-      changes.push(`Despachador: ${optionLabel(dispatcherOptions, guide.dispatcher_id)} → ${optionLabel(dispatcherOptions, dispatcherId)}`);
+    if (currentHeader.dispatcher_id !== initialHeader.dispatcher_id) {
+      changes.push(`Despachador: ${optionLabel(dispatcherOptions, initialHeader.dispatcher_id || '')} → ${optionLabel(dispatcherOptions, currentHeader.dispatcher_id || '')}`);
     }
-    if (guideDate !== guide.guide_date) {
-      changes.push(`Fecha: ${guide.guide_date} → ${guideDate}`);
+    if (currentHeader.guide_date !== initialHeader.guide_date) {
+      changes.push(`Fecha: ${initialHeader.guide_date} → ${currentHeader.guide_date}`);
     }
-    if (notes !== (guide.notes || '')) {
-      changes.push('Observaciones: modificadas');
+    if (currentHeader.notes !== initialHeader.notes) {
+      changes.push(`Observaciones: ${initialHeader.notes || 'Sin observación'} → ${currentHeader.notes || 'Sin observación'}`);
     }
     return changes;
-  }, [routeId, vehicleId, driverId, sellerId, dispatcherId, guideDate, notes, guide, routeOptions, vehicleOptions, driverOptions, sellerOptions, dispatcherOptions]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [guideDate, routeId, vehicleId, driverId, sellerId, dispatcherId, notes, initialHeader, currentHeader, routeOptions, vehicleOptions, driverOptions, sellerOptions, dispatcherOptions]);
 
   const handleSave = async () => {
-    if (busy || reason.trim().length < 5) return;
+    if (busy || !hasChanges) return;
+    const trimmedReason = reason.trim();
+    if (trimmedReason.length < 5 || trimmedReason.length > 1000) {
+      setError('El motivo de la edición es obligatorio (mínimo 5 caracteres).');
+      reasonRef.current?.focus();
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -369,6 +477,21 @@ export function RouteGuideEditModal({ guide, catalogOptions, onClose, onSaved }:
                 {headerChanges.map((c, i) => <li key={i}>{c}</li>)}
               </ul>
             )}
+            {lineChanges.added.length > 0 && (
+              <p className="mt-1 text-xs text-emerald-700 dark:text-emerald-300">
+                {lineChanges.added.length} línea(s) agregada(s)
+              </p>
+            )}
+            {lineChanges.modified.length > 0 && (
+              <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                {lineChanges.modified.length} línea(s) modificada(s)
+              </p>
+            )}
+            {lineChanges.deleted.length > 0 && (
+              <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                {lineChanges.deleted.length} línea(s) eliminada(s)
+              </p>
+            )}
             {totals.total_amount !== guide.total_amount && (
               <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
                 Los totales se recalcularán automáticamente según las líneas.
@@ -383,6 +506,7 @@ export function RouteGuideEditModal({ guide, catalogOptions, onClose, onSaved }:
         <footer className="shrink-0 border-t border-theme-border bg-theme-surface/95 px-4 py-3 backdrop-blur sm:px-5">
           <label className="block text-[10px] font-bold uppercase tracking-wider text-theme-text-muted">Motivo de la edición (obligatorio)</label>
           <textarea
+            ref={reasonRef}
             value={reason}
             onChange={e => setReason(e.target.value)}
             rows={2}
@@ -396,7 +520,7 @@ export function RouteGuideEditModal({ guide, catalogOptions, onClose, onSaved }:
             <button
               type="button"
               onClick={handleSave}
-              disabled={busy || reason.trim().length < 5}
+              disabled={busy || !hasChanges}
               className="rounded-lg bg-theme-accent px-4 py-2 text-sm font-semibold text-white hover:bg-theme-accent-hover disabled:opacity-40"
             >
               {busy ? 'Guardando…' : 'Guardar cambios'}
