@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
-import { RouteGuide, CatalogOptions, DeliveryRoute, RouteGuideItem, RoutePersonnel, RouteVehicle } from '../types';
+import { RouteGuide, CatalogOptions, RouteGuideItem } from '../types';
 import { editRouteGuideUnsettled } from '@/app/actions/logistica/guias-ruta';
 import { useRouteGuideGrid } from '../hooks/use-route-guide-grid';
 import { RouteGuideCombobox, ComboboxOption } from './route-guide-combobox';
@@ -16,20 +16,7 @@ interface RouteGuideEditModalProps {
   onSaved: () => void;
 }
 
-type CatalogEntry = DeliveryRoute | RouteVehicle | RoutePersonnel;
-
-function dedupOptions(items: CatalogEntry[], type?: string): ComboboxOption[] {
-  const map = new Map<string, ComboboxOption>();
-  items.forEach(item => {
-    if (type && (item as RoutePersonnel).person_type !== type) return;
-    const label = (item as RoutePersonnel).person_name || (item as DeliveryRoute).route_name || (item as RouteVehicle).vehicle_name || '';
-    const normalized = label.trim().toUpperCase();
-    if (normalized && !map.has(normalized)) {
-      map.set(normalized, { value: item.id, label });
-    }
-  });
-  return Array.from(map.values());
-}
+import { dedupOptions, injectCurrentOption } from '../utils/route-guide-catalogs';
 
 const STATUS_LABELS: Record<string, string> = {
   DRAFT: 'Borrador',
@@ -181,12 +168,37 @@ export function RouteGuideEditModal({ guide, catalogOptions, onClose, onSaved }:
 
   const hasChanges = hasHeaderChanges || lineChanges.hasChanges;
 
+  const catalogsValid = Boolean(
+    catalogOptions &&
+    Array.isArray(catalogOptions.routes) &&
+    Array.isArray(catalogOptions.vehicles) &&
+    Array.isArray(catalogOptions.personnel)
+  );
 
-  const routeOptions = useMemo(() => dedupOptions(catalogOptions.routes), [catalogOptions.routes]);
-  const vehicleOptions = useMemo(() => dedupOptions(catalogOptions.vehicles), [catalogOptions.vehicles]);
-  const driverOptions = useMemo(() => dedupOptions(catalogOptions.personnel, 'DRIVER'), [catalogOptions.personnel]);
-  const sellerOptions = useMemo(() => dedupOptions(catalogOptions.personnel, 'SELLER'), [catalogOptions.personnel]);
-  const dispatcherOptions = useMemo(() => dedupOptions(catalogOptions.personnel, 'DISPATCHER'), [catalogOptions.personnel]);
+  const routeOptions = useMemo(() => {
+    const base = dedupOptions(catalogOptions?.routes || []);
+    return injectCurrentOption(base, guide.route_id, guide.route_name_snapshot, '(Inactiva)');
+  }, [catalogOptions?.routes, guide.route_id, guide.route_name_snapshot]);
+
+  const vehicleOptions = useMemo(() => {
+    const base = dedupOptions(catalogOptions?.vehicles || []);
+    return injectCurrentOption(base, guide.vehicle_id, guide.vehicle_name_snapshot, '(Inactivo)');
+  }, [catalogOptions?.vehicles, guide.vehicle_id, guide.vehicle_name_snapshot]);
+
+  const driverOptions = useMemo(() => {
+    const base = dedupOptions(catalogOptions?.personnel || [], 'DRIVER');
+    return injectCurrentOption(base, guide.driver_id, guide.driver_name_snapshot, '(Inactivo)');
+  }, [catalogOptions?.personnel, guide.driver_id, guide.driver_name_snapshot]);
+
+  const sellerOptions = useMemo(() => {
+    const base = dedupOptions(catalogOptions?.personnel || [], 'SELLER');
+    return injectCurrentOption(base, guide.seller_id, guide.seller_name_snapshot, '(Inactivo)');
+  }, [catalogOptions?.personnel, guide.seller_id, guide.seller_name_snapshot]);
+
+  const dispatcherOptions = useMemo(() => {
+    const base = dedupOptions(catalogOptions?.personnel || [], 'DISPATCHER');
+    return injectCurrentOption(base, guide.dispatcher_id, guide.dispatcher_name_snapshot, '(Inactivo)');
+  }, [catalogOptions?.personnel, guide.dispatcher_id, guide.dispatcher_name_snapshot]);
 
   const optionLabel = (options: ComboboxOption[], value: string): string =>
     options.find(o => o.value === value)?.label || '—';
@@ -300,6 +312,12 @@ export function RouteGuideEditModal({ guide, catalogOptions, onClose, onSaved }:
 
         {/* Cuerpo con scroll */}
         <div ref={bodyRef} className="flex-1 overflow-y-auto px-4 py-4 sm:px-5">
+          {!catalogsValid && (
+            <div className="mb-4 rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
+              No pudimos cargar las opciones de Ruta, Vehículo o Personal. Cierra e intenta abrir nuevamente la edición.
+            </div>
+          )}
+
           {/* Cabecera editable */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1">
@@ -308,7 +326,7 @@ export function RouteGuideEditModal({ guide, catalogOptions, onClose, onSaved }:
                 options={routeOptions}
                 value={routeId}
                 onChange={setRouteId}
-                placeholder="Seleccionar ruta…"
+                placeholder={routeOptions.length > 0 ? "Seleccionar ruta…" : "No existen rutas disponibles."}
                 entityName="ruta"
               />
             </div>
@@ -327,7 +345,7 @@ export function RouteGuideEditModal({ guide, catalogOptions, onClose, onSaved }:
                 options={vehicleOptions}
                 value={vehicleId}
                 onChange={setVehicleId}
-                placeholder="Seleccionar vehículo…"
+                placeholder={vehicleOptions.length > 0 ? "Seleccionar vehículo…" : "No existen vehículos disponibles."}
                 entityName="vehículo"
               />
             </div>
@@ -337,7 +355,7 @@ export function RouteGuideEditModal({ guide, catalogOptions, onClose, onSaved }:
                 options={driverOptions}
                 value={driverId}
                 onChange={setDriverId}
-                placeholder="Seleccionar conductor…"
+                placeholder={driverOptions.length > 0 ? "Seleccionar conductor…" : "No existen conductores disponibles."}
                 entityName="conductor"
               />
             </div>
@@ -347,7 +365,7 @@ export function RouteGuideEditModal({ guide, catalogOptions, onClose, onSaved }:
                 options={sellerOptions}
                 value={sellerId}
                 onChange={setSellerId}
-                placeholder="Sin asignar"
+                placeholder={sellerOptions.length > 0 ? "Sin asignar" : "No existen vendedores disponibles."}
                 entityName="vendedor"
               />
             </div>
@@ -357,7 +375,7 @@ export function RouteGuideEditModal({ guide, catalogOptions, onClose, onSaved }:
                 options={dispatcherOptions}
                 value={dispatcherId}
                 onChange={setDispatcherId}
-                placeholder="Seleccionar despachador…"
+                placeholder={dispatcherOptions.length > 0 ? "Seleccionar despachador…" : "No existen despachadores disponibles."}
                 entityName="despachador"
               />
             </div>

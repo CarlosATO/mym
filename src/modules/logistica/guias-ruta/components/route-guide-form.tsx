@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
 import React, { useState, useEffect, useRef } from 'react';
 import { CatalogOptions, RouteGuide } from '../types';
 import { RouteGuideGrid, type SaleConditionOption } from './route-guide-grid';
@@ -8,6 +9,7 @@ import { createDeliveryRouteInline, createRouteVehicleInline, createRoutePersonI
 import type { RouteSaveDuplicateWarning, RouteDuplicateInvoice, SaveRouteGuideDraftResult } from '@/app/actions/logistica/guias-ruta';
 import { generateRouteGuidePdfBlob, downloadRouteGuidePdf } from '@/lib/pdf/generate-route-guide-pdf';
 import { parseChileanMoney, isEmptyRouteGuideRow } from '../utils/route-guide-validation';
+import { dedupOptions, injectCurrentOption } from '../utils/route-guide-catalogs';
 import { getSaleConditions } from '@/app/actions/integraciones/sale-conditions';
 
 function formatStatus(status: string) {
@@ -63,24 +65,35 @@ export function RouteGuideForm({
     getSaleConditions().then(setSaleConditions).catch(() => {});
   }, []);
 
-  // Deduplicate options by normalized name (case-insensitive visual dedup)
-  const dedupOptions = (items: any[], type?: string) => {
-    const map = new Map<string, any>();
-    items.forEach(item => {
-      if (type && item.person_type !== type) return;
-      const normalized = (item.person_name || item.route_name || item.vehicle_name || '').trim().toUpperCase();
-      if (!map.has(normalized)) {
-        map.set(normalized, { value: item.id, label: item.person_name || item.route_name || item.vehicle_name });
-      }
-    });
-    return Array.from(map.values());
-  };
-
-  const routeOptions = dedupOptions(catalogs.routes);
-  const vehicleOptions = dedupOptions(catalogs.vehicles);
-  const driverOptions = dedupOptions(catalogs.personnel, 'DRIVER');
-  const sellerOptions = dedupOptions(catalogs.personnel, 'SELLER');
-  const dispatcherOptions = dedupOptions(catalogs.personnel, 'DISPATCHER');
+  const routeOptions = injectCurrentOption(
+    dedupOptions(catalogs.routes),
+    initialData?.route_id,
+    initialData?.route_name_snapshot
+  );
+  
+  const vehicleOptions = injectCurrentOption(
+    dedupOptions(catalogs.vehicles),
+    initialData?.vehicle_id,
+    initialData?.vehicle_name_snapshot
+  );
+  
+  const driverOptions = injectCurrentOption(
+    dedupOptions(catalogs.personnel, 'DRIVER'),
+    initialData?.driver_id,
+    initialData?.driver_name_snapshot
+  );
+  
+  const sellerOptions = injectCurrentOption(
+    dedupOptions(catalogs.personnel, 'SELLER'),
+    initialData?.seller_id,
+    initialData?.seller_name_snapshot
+  );
+  
+  const dispatcherOptions = injectCurrentOption(
+    dedupOptions(catalogs.personnel, 'DISPATCHER'),
+    initialData?.dispatcher_id,
+    initialData?.dispatcher_name_snapshot
+  );
 
   // Inline creations
   const handleCreateRoute = async (name: string) => {
