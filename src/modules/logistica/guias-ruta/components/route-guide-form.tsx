@@ -66,31 +66,31 @@ export function RouteGuideForm({
   }, []);
 
   const routeOptions = injectCurrentOption(
-    dedupOptions(catalogs.routes),
+    dedupOptions(catalogs?.routes || []),
     initialData?.route_id,
     initialData?.route_name_snapshot
   );
   
   const vehicleOptions = injectCurrentOption(
-    dedupOptions(catalogs.vehicles),
+    dedupOptions(catalogs?.vehicles || []),
     initialData?.vehicle_id,
     initialData?.vehicle_name_snapshot
   );
   
   const driverOptions = injectCurrentOption(
-    dedupOptions(catalogs.personnel, 'DRIVER'),
+    dedupOptions(catalogs?.personnel || [], 'DRIVER'),
     initialData?.driver_id,
     initialData?.driver_name_snapshot
   );
   
   const sellerOptions = injectCurrentOption(
-    dedupOptions(catalogs.personnel, 'SELLER'),
+    dedupOptions(catalogs?.personnel || [], 'SELLER'),
     initialData?.seller_id,
     initialData?.seller_name_snapshot
   );
   
   const dispatcherOptions = injectCurrentOption(
-    dedupOptions(catalogs.personnel, 'DISPATCHER'),
+    dedupOptions(catalogs?.personnel || [], 'DISPATCHER'),
     initialData?.dispatcher_id,
     initialData?.dispatcher_name_snapshot
   );
