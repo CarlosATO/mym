@@ -1,4 +1,5 @@
-import { Layers } from 'lucide-react'
+import Link from 'next/link'
+import { ArrowRight, Layers } from 'lucide-react'
 import { getActiveCompanyCampaigns } from '@/app/actions/inventarios/campaigns'
 import { InventoryPageHeader } from '@/modules/inventarios/components/inventory-page-header'
 import { InventoryStatusBadge } from '@/modules/inventarios/components/inventory-status-badge'
@@ -48,7 +49,11 @@ export default async function InventariosCampanasPage() {
       ) : (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {campaigns.map(campaign => (
-            <div key={campaign.id} className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
+            <Link
+              key={campaign.id}
+              href={`/dashboard/inventarios/campanas/${campaign.id}`}
+              className="group rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm transition-colors hover:border-theme-accent/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-theme-accent"
+            >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold text-theme-text">{campaign.name}</p>
@@ -65,7 +70,11 @@ export default async function InventariosCampanasPage() {
                 <span>{campaign.session_count} sesión(es)</span>
                 <span>{formatDateChile(campaign.created_at)}</span>
               </div>
-            </div>
+              <div className="mt-3 flex items-center gap-1 text-sm font-semibold text-theme-accent">
+                Ver campaña
+                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+              </div>
+            </Link>
           ))}
         </div>
       )}

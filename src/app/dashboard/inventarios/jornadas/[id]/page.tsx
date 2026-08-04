@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation'
-import { ClipboardList, FileCheck2, Settings2 } from 'lucide-react'
+import Link from 'next/link'
+import { ArrowLeft, ClipboardList, FileCheck2, Settings2 } from 'lucide-react'
 import { getActiveCompanySessionDetail, getActiveCompanySessionReview, getInventorySessionCatalogs, getInventorySessionImportContext, type CatalogUserOption } from '@/app/actions/inventarios/sessions'
 import { getActiveCompanyResults } from '@/app/actions/inventarios/results'
 import { InventorySessionHeader } from '@/modules/inventarios/components/inventory-session-header'
@@ -117,6 +118,30 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
 
   return (
     <div className="space-y-5">
+      {importContext?.campaign_id && (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-theme-border bg-theme-surface px-3 py-2 text-xs text-theme-text-muted">
+          <Link
+            href={`/dashboard/inventarios/campanas/${importContext.campaign_id}`}
+            className="inline-flex items-center gap-1 font-semibold text-theme-accent hover:underline"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            Volver a la campaña
+          </Link>
+          {importContext.campaign_name && (
+            <>
+              <span aria-hidden className="text-theme-text-muted/50">·</span>
+              <span>
+                Campaña: <span className="font-medium text-theme-text">{importContext.campaign_name}</span>
+              </span>
+            </>
+          )}
+          <span aria-hidden className="text-theme-text-muted/50">·</span>
+          <span>
+            Unidad: <span className="font-medium text-theme-text">{importContext.site_name ?? '—'}</span>
+          </span>
+        </div>
+      )}
+
       <InventorySessionHeader detail={detail} />
 
       <InventorySessionTabs tabs={tabs} />
