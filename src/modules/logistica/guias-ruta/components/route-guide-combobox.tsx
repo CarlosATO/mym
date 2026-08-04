@@ -167,11 +167,11 @@ export function RouteGuideCombobox({
       {open && !disabled && createPortal(
         <>
           {/* Backgrop invisible para cerrar al hacer click afuera en el portal */}
-          <div className="fixed inset-0 z-[9998]" onClick={() => { setOpen(false); setSearch(''); }} />
+          <div className="fixed inset-0 z-[999998]" onClick={() => { setOpen(false); setSearch(''); }} />
           
           <div
             className={cn(
-              "fixed z-[9999] flex flex-col bg-theme-surface text-theme-text border border-theme-border rounded-xl shadow-2xl shadow-black/10 overflow-hidden",
+              "fixed z-[999999] flex flex-col bg-theme-surface text-theme-text border border-theme-border rounded-xl shadow-2xl shadow-black/10 overflow-hidden",
               "animate-in fade-in-0 zoom-in-95 duration-200"
             )}
             onMouseDown={e => e.stopPropagation()}
