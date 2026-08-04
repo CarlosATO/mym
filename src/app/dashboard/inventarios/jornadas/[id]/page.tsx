@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation'
 import { ClipboardList, FileCheck2, Settings2 } from 'lucide-react'
-import { getActiveCompanySessionDetail, getActiveCompanySessionReview, getInventorySessionCatalogs, type CatalogUserOption } from '@/app/actions/inventarios/sessions'
+import { getActiveCompanySessionDetail, getActiveCompanySessionReview, getInventorySessionCatalogs, getInventorySessionImportContext, type CatalogUserOption } from '@/app/actions/inventarios/sessions'
 import { getActiveCompanyResults } from '@/app/actions/inventarios/results'
 import { InventorySessionHeader } from '@/modules/inventarios/components/inventory-session-header'
 import { InventorySessionTabs, type InventoryTab } from '@/modules/inventarios/components/inventory-session-tabs'
@@ -10,6 +10,7 @@ import { InventoryParticipantsStep } from '@/modules/inventarios/components/inve
 import { InventoryZonesStep } from '@/modules/inventarios/components/inventory-zones-step'
 import { InventoryTasksStep } from '@/modules/inventarios/components/inventory-tasks-step'
 import { InventoryReviewStep } from '@/modules/inventarios/components/inventory-review-step'
+import { InventoryImportReviewStep } from '@/modules/inventarios/components/inventory-import-review-step'
 import { InventoryOperationPanel } from '@/modules/inventarios/components/inventory-operation-panel'
 import { InventoryZonesPanel } from '@/modules/inventarios/components/inventory-zones-panel'
 import { InventoryTasksPanel } from '@/modules/inventarios/components/inventory-tasks-panel'
@@ -108,6 +109,10 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
     catalogLocations = catalogs.data?.locations ?? []
   }
 
+  const importContextResult = await getInventorySessionImportContext(id)
+  const importContext = importContextResult.data
+  const isExcelImport = importContext?.stock_source === 'EXCEL_IMPORT'
+
   const isCancelled = status === 'CANCELLED'
 
   return (
@@ -148,13 +153,57 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
         </div>
       )}
 
-      {safeTab === 'configuracion' && (
+          {safeTab === 'configuracion' && (
         <div className="space-y-4">
           <div className="flex items-center gap-2 text-sm text-theme-text-muted">
             <Settings2 className="h-4 w-4" />
             {status === 'DRAFT' ? 'Configuración en edición.' : 'Configuración congelada.'}
           </div>
-          {status === 'DRAFT' && activeStep === 3 ? (
+          {isExcelImport ? (
+            status === 'DRAFT' ? (
+              <InventoryImportReviewStep
+                companyId={companyId}
+                sessionId={id}
+                setup={{
+                  session: {
+                    name: detail.session.name,
+                    site_name: importContext?.site_name ?? null,
+                    site_type: importContext?.site_type ?? null,
+                    stock_source: importContext?.stock_source ?? null,
+                    stock_import_id: importContext?.stock_import_id ?? null,
+                    scope_mode: detail.session.scope_mode,
+                  },
+                }}
+              />
+            ) : (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
+                  <h3 className="mb-2 text-sm font-semibold text-theme-text">Importación asociada (solo lectura)</h3>
+                  <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+                    <div>
+                      <p className="text-[11px] text-theme-text-muted/60 uppercase tracking-wider">Archivo</p>
+                      <p className="truncate font-medium text-theme-text">{importContext?.import_filename ?? '—'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] text-theme-text-muted/60 uppercase tracking-wider">Modalidad</p>
+                      <p className="font-medium text-theme-text">{importContext?.import_modality ?? '—'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] text-theme-text-muted/60 uppercase tracking-wider">Corte</p>
+                      <p className="font-medium text-theme-text">{importContext?.import_cutoff_at ? formatDateChile(importContext.import_cutoff_at) : '—'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] text-theme-text-muted/60 uppercase tracking-wider">Estado importación</p>
+                      <p className="font-medium text-theme-text">{importContext?.import_status ?? '—'}</p>
+                    </div>
+                  </div>
+                </div>
+                <InventoryParticipantsPanel detail={detail} />
+                <InventoryZonesPanel detail={detail} />
+                <InventoryTasksPanel detail={detail} />
+              </div>
+            )
+          ) : status === 'DRAFT' && activeStep === 3 ? (
             <InventoryParticipantsStep
               companyId={companyId}
               sessionId={id}

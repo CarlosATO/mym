@@ -703,3 +703,242 @@ export async function getActiveCompanyPrepareSetup(
 ): Promise<{ data: InventorySessionSetupResult | null; error: string | null; companyId: string | null }> {
   return getActiveCompanySessionSetup(sessionId)
 }
+
+// ============================================================
+// FLUJO EXCEL_IMPORT: importaciones validadas para una sesion
+// ============================================================
+
+export interface ValidatedStockImportOption {
+  id: string
+  original_filename: string
+  modality: 'GENERAL' | 'POR_UBICACION'
+  cutoff_at: string
+  row_count: number
+  error_count: number
+  warning_count: number
+  validated_at: string
+  created_at: string
+  created_by_name: string | null
+  status: string
+  cost_coverage: number
+  products_with_cost: number
+  products_without_cost: number
+}
+
+export async function getValidatedStockImportsForSession(
+  sessionId: string
+): Promise<{ data: ValidatedStockImportOption[] | null; error: string | null; companyId: string | null }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) {
+    return { data: null, error: 'No tienes una empresa activa seleccionada.', companyId: null }
+  }
+  try {
+    const db = await inventariosAdmin()
+    const { data, error } = await db.rpc('list_validated_stock_imports_for_session', {
+      p_company_id: companyId,
+      p_session_id: sessionId,
+    })
+    if (error) {
+      console.error('list_validated_stock_imports_for_session error:', error.message)
+      return { data: null, error: 'No se pudieron cargar las importaciones disponibles.', companyId }
+    }
+    const imports = (data as { imports?: ValidatedStockImportOption[] } | null)?.imports ?? []
+    return { data: imports, error: null, companyId }
+  } catch (err) {
+    console.error('getValidatedStockImportsForSession exception:', err)
+    return { data: null, error: 'No se pudieron cargar las importaciones disponibles.', companyId }
+  }
+}
+
+export async function attachStockImportToSession(
+  companyId: string,
+  sessionId: string,
+  stockImportId: string,
+  idempotencyKey: string
+): Promise<{ data: { session_id: string; stock_import_id: string } | null; error: string | null }> {
+  try {
+    const db = await inventariosAdmin()
+    const { error } = await db.rpc('attach_stock_import_to_session', {
+      p_company_id: companyId,
+      p_session_id: sessionId,
+      p_stock_import_id: stockImportId,
+      p_idempotency_key: idempotencyKey,
+    })
+    if (error) {
+      console.error('attach_stock_import_to_session error:', error.message)
+      return { data: null, error: safeImportError(error.message) }
+    }
+    return { data: { session_id: sessionId, stock_import_id: stockImportId }, error: null }
+  } catch (err) {
+    console.error('attachStockImportToSession exception:', err)
+    return { data: null, error: 'No se pudo asociar la importación a la jornada.' }
+  }
+}
+
+export async function prepareInventorySessionFromImport(
+  companyId: string,
+  sessionId: string,
+  idempotencyKey: string
+): Promise<{ data: { session_id: string; state: string } | null; error: string | null }> {
+  try {
+    const db = await inventariosAdmin()
+    const { error } = await db.rpc('prepare_inventory_session_from_import', {
+      p_company_id: companyId,
+      p_session_id: sessionId,
+      p_idempotency_key: idempotencyKey,
+    })
+    if (error) {
+      console.error('prepare_inventory_session_from_import error:', error.message)
+      return { data: null, error: safeImportError(error.message) }
+    }
+    return { data: { session_id: sessionId, state: 'PREPARED' }, error: null }
+  } catch (err) {
+    console.error('prepareInventorySessionFromImport exception:', err)
+    return { data: null, error: 'No se pudo preparar la jornada desde la importación.' }
+  }
+}
+
+export interface SessionSnapshotContent {
+  products: Array<{ product_id: string; sku: string; barcode: string | null; name: string }>
+  locations: Array<{
+    snapshot_location_id: string
+    inventory_site_location_id: string
+    code: string
+    name: string | null
+    is_active: boolean
+  }>
+  theoretical: Array<{
+    product_id: string
+    sku: string
+    scope_level: string
+    location_code: string | null
+    theoretical_quantity: number
+  }>
+  costs: Array<{
+    product_id: string
+    sku: string
+    unit_cost: number | null
+    currency: string
+    source: string
+    has_cost: boolean
+    valuation_status: string
+  }>
+}
+
+export async function getInventorySessionSnapshotContent(
+  sessionId: string
+): Promise<{ data: SessionSnapshotContent | null; error: string | null }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { data: null, error: 'No tienes una empresa activa seleccionada.' }
+  try {
+    const db = await inventariosAdmin()
+    const { data, error } = await db.rpc('get_inventory_session_snapshot', {
+      p_company_id: companyId,
+      p_session_id: sessionId,
+    })
+    if (error) {
+      console.error('get_inventory_session_snapshot error:', error.message)
+      return { data: null, error: 'No se pudo cargar el snapshot de la jornada.' }
+    }
+    return { data: data as SessionSnapshotContent, error: null }
+  } catch (err) {
+    console.error('getInventorySessionSnapshotContent exception:', err)
+    return { data: null, error: 'No se pudo cargar el snapshot de la jornada.' }
+  }
+}
+
+export interface SessionImportBinding {
+  import: {
+    id: string
+    original_filename: string
+    modality: string
+    cutoff_at: string
+    status: string
+    row_count: number
+    error_count: number
+    warning_count: number
+    validated_at: string | null
+    consumed_session_id: string | null
+    created_by_name: string | null
+  } | null
+}
+
+export async function getInventorySessionImportBinding(
+  sessionId: string
+): Promise<{ data: SessionImportBinding | null; error: string | null }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { data: null, error: 'No tienes una empresa activa seleccionada.' }
+  try {
+    const db = await inventariosAdmin()
+    const { data, error } = await db.rpc('get_inventory_session_import', {
+      p_company_id: companyId,
+      p_session_id: sessionId,
+    })
+    if (error) {
+      console.error('get_inventory_session_import error:', error.message)
+      return { data: null, error: 'No se pudo cargar la importación asociada.' }
+    }
+    return { data: data as SessionImportBinding, error: null }
+  } catch (err) {
+    console.error('getInventorySessionImportBinding exception:', err)
+    return { data: null, error: 'No se pudo cargar la importación asociada.' }
+  }
+}
+
+function safeImportError(message: string): string {
+  const idx = message.indexOf('DETAIL:')
+  if (idx >= 0) {
+    const raw = message.slice(idx + 'DETAIL:'.length).trim()
+    if (raw.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(raw)
+        if (parsed?.message) return parsed.message
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return message
+}
+
+export interface InventorySessionImportContext {
+  session_id: string
+  status: string
+  stock_source: string | null
+  stock_import_id: string | null
+  inventory_site_id: string | null
+  site_name: string | null
+  site_code: string | null
+  site_type: string | null
+  campaign_id: string | null
+  campaign_name: string | null
+  campaign_product_scope: string | null
+  session_location_scope: string | null
+  import_filename: string | null
+  import_modality: string | null
+  import_cutoff_at: string | null
+  import_status: string | null
+}
+
+export async function getInventorySessionImportContext(
+  sessionId: string
+): Promise<{ data: InventorySessionImportContext | null; error: string | null }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { data: null, error: 'No tienes una empresa activa seleccionada.' }
+  try {
+    const db = await inventariosAdmin()
+    const { data, error } = await db.rpc('get_inventory_session_import_context', {
+      p_company_id: companyId,
+      p_session_id: sessionId,
+    })
+    if (error) {
+      console.error('get_inventory_session_import_context error:', error.message)
+      return { data: null, error: 'No se pudo cargar el contexto de la jornada.' }
+    }
+    const ctx = (data as { context?: InventorySessionImportContext } | null)?.context ?? null
+    return { data: ctx, error: null }
+  } catch (err) {
+    console.error('getInventorySessionImportContext exception:', err)
+    return { data: null, error: 'No se pudo cargar el contexto de la jornada.' }
+  }
+}
