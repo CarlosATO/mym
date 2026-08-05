@@ -91,6 +91,70 @@ export interface StockImportIssueItem {
   message: string
 }
 
+export interface CampaignStockImportIssueItem {
+  row_index: number | null
+  severity: string
+  code: string
+  field: string | null
+  message: string
+  metadata: Record<string, unknown>
+  product_id: string | null
+  resolved_inventory_site_id: string | null
+  inventory_site_location_id: string | null
+  entered_site_code: string | null
+  entered_location_code: string | null
+}
+
+export interface CampaignStockImportRowItem {
+  row_index: number
+  sku: string
+  barcode: string | null
+  entered_name: string | null
+  product_id: string | null
+  entered_site_code: string | null
+  resolved_inventory_site_id: string | null
+  entered_location_code: string | null
+  inventory_site_location_id: string | null
+  quantity: number | null
+  cost: number | null
+  row_status: string
+  issues: { severity: string; code: string; field: string | null; message: string; metadata: Record<string, unknown> }[]
+}
+
+export interface CampaignStockImportDetail {
+  import: {
+    id: string
+    company_id: string
+    campaign_id: string
+    theoretical_scope: 'TOTAL_CAMPAIGN' | 'BY_SITE' | 'BY_LOCATION'
+    status: string
+    row_count: number
+    error_count: number
+    warning_count: number
+    original_filename: string
+    file_issues: { level: string; code: string; field?: string | null; message: string; metadata?: Record<string, unknown> }[]
+    validated_at: string | null
+    created_at: string
+    updated_at: string
+  }
+  campaign: {
+    id: string
+    name: string
+    product_scope: 'ALL' | 'SELECTED'
+    status: string
+  }
+  summary: {
+    total_rows: number
+    valid_rows: number
+    warning_rows: number
+    error_rows: number
+    issue_warning_count: number
+    issue_error_count: number
+  }
+  rows: CampaignStockImportRowItem[]
+  issues: CampaignStockImportIssueItem[]
+}
+
 export interface SiteOption {
   id: string
   company_id: string
@@ -558,6 +622,66 @@ export async function getStockImportIssues(importId: string): Promise<{
   } catch (err) {
     console.error('getStockImportIssues exception:', err)
     return { data: null, error: 'No se pudieron cargar las incidencias.' }
+  }
+}
+
+export async function getCampaignStockImport(importId: string): Promise<{
+  data: CampaignStockImportDetail | null
+  error: string | null
+}> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { data: null, error: 'No tienes una empresa activa seleccionada.' }
+  try {
+    const db = await inventariosDb()
+    const { data, error } = await db.rpc('get_campaign_stock_import', {
+      p_company_id: companyId,
+      p_import_id: importId,
+    })
+    if (error) {
+      console.error('get_campaign_stock_import error:', error.message)
+      return { data: null, error: 'No se pudo cargar la importación de campaña.' }
+    }
+    const detail = data as CampaignStockImportDetail | null
+    return { data: detail, error: null }
+  } catch (err) {
+    console.error('getCampaignStockImport exception:', err)
+    return { data: null, error: 'No se pudo cargar la importación de campaña.' }
+  }
+}
+
+export async function validateCampaignStockImport(params: {
+  importId: string
+  fileIssues: Record<string, unknown>[]
+  rows: Record<string, unknown>[]
+  idempotencyKey: string
+}): Promise<{ data: { import_id: string; status: string; replayed: boolean } | null; error: string | null }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { data: null, error: 'No tienes una empresa activa seleccionada.' }
+  try {
+    const db = await inventariosDb()
+    const { data, error } = await db.rpc('validate_campaign_stock_import', {
+      p_company_id: companyId,
+      p_import_id: params.importId,
+      p_file_issues: params.fileIssues,
+      p_rows: params.rows,
+      p_idempotency_key: params.idempotencyKey,
+    })
+    if (error) {
+      console.error('validate_campaign_stock_import error:', error.message)
+      return { data: null, error: safeRpcError(error.message) }
+    }
+    const result = data as { data?: { import_id?: string; status?: string }; replayed?: boolean } | null
+    return {
+      data: {
+        import_id: result?.data?.import_id ?? params.importId,
+        status: result?.data?.status ?? 'REJECTED',
+        replayed: Boolean(result?.replayed),
+      },
+      error: null,
+    }
+  } catch (err) {
+    console.error('validateCampaignStockImport exception:', err)
+    return { data: null, error: 'No se pudo validar la importación de campaña.' }
   }
 }
 
