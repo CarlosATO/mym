@@ -1,5 +1,6 @@
 'use server'
 
+import crypto from 'crypto'
 import { createInventariosClient } from '@/lib/supabase/inventarios'
 import { getActiveCompanyId } from '@/app/actions/companies'
 
@@ -151,6 +152,68 @@ export async function createInventorySessionFromCampaignSite(
   }
 }
 
+export interface InventoryCampaignSessionGenerationSummary {
+  campaign_id: string
+  stock_import_id: string
+  total_units: number
+  sessions_created: number
+  sessions_existing: number
+  sessions_pending: number
+  session_ids: string[]
+}
+
+export async function generateInventoryCampaignSessions(params: {
+  campaignId: string
+  stockImportId: string
+  idempotencyKey?: string
+}): Promise<{ data: InventoryCampaignSessionGenerationSummary | null; error: string | null }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) {
+    return { data: null, error: 'No tienes una empresa activa seleccionada.' }
+  }
+  try {
+    const db = await inventariosAdmin()
+    const { data: userData } = await db.auth.getUser()
+    const userId = userData.user?.id
+    if (!userId) {
+      return { data: null, error: 'Debes iniciar sesión para realizar esta operación.' }
+    }
+
+    const { data, error } = await db.rpc('generate_inventory_campaign_sessions', {
+      p_company_id: companyId,
+      p_campaign_id: params.campaignId,
+      p_stock_import_id: params.stockImportId,
+      p_idempotency_key: params.idempotencyKey ?? crypto.randomUUID(),
+    })
+    if (error) {
+      console.error('generate_inventory_campaign_sessions error:', error.message)
+      return { data: null, error: safeCampaignGenerationError(error.message) }
+    }
+
+    const envelope = data as unknown as { data?: InventoryCampaignSessionGenerationSummary } & Partial<InventoryCampaignSessionGenerationSummary>
+    const payload = envelope.data ?? envelope
+    if (!payload?.campaign_id || !payload.stock_import_id) {
+      return { data: null, error: 'No se pudieron generar las jornadas.' }
+    }
+
+    return {
+      data: {
+        campaign_id: payload.campaign_id,
+        stock_import_id: payload.stock_import_id,
+        total_units: Number(payload.total_units ?? 0),
+        sessions_created: Number(payload.sessions_created ?? 0),
+        sessions_existing: Number(payload.sessions_existing ?? 0),
+        sessions_pending: Number(payload.sessions_pending ?? 0),
+        session_ids: Array.isArray(payload.session_ids) ? payload.session_ids : [],
+      },
+      error: null,
+    }
+  } catch (err) {
+    console.error('generateInventoryCampaignSessions exception:', err)
+    return { data: null, error: 'No se pudieron generar las jornadas de la campaña.' }
+  }
+}
+
 export async function getCampaignSessionCreatePermission(): Promise<{
   canCreate: boolean
   companyId: string | null
@@ -197,6 +260,29 @@ function safeCampaignError(message: string): string {
     }
   }
   return 'No se pudo crear la jornada para esta unidad.'
+}
+
+function safeCampaignGenerationError(message: string): string {
+  const normalized = message.toLowerCase()
+  if (normalized.includes('no esta en draft') || normalized.includes('campana no editable')) {
+    return 'La campaña no está disponible para generar jornadas.'
+  }
+  if (normalized.includes('no pertenece a la campana')) {
+    return 'La importación no pertenece a esta campaña.'
+  }
+  if (normalized.includes('no esta validada')) {
+    return 'La importación no está validada.'
+  }
+  if (normalized.includes('ya fue consumida')) {
+    return 'La importación ya fue consumida.'
+  }
+  if (normalized.includes('no existe') || normalized.includes('not found')) {
+    return 'La campaña no se pudo encontrar.'
+  }
+  if (normalized.includes('permission') || normalized.includes('autoriz')) {
+    return 'No tienes permisos para generar jornadas.'
+  }
+  return 'No se pudieron generar las jornadas de la campaña.'
 }
 
 export async function createInventoryCampaign(input: {

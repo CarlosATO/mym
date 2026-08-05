@@ -1,8 +1,10 @@
 'use client'
 
 import { useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { Check, ChevronRight, Download, FileSpreadsheet, Grid2x2, Loader2, MapPin, Plus, Trash2, Warehouse } from 'lucide-react'
 import { createCampaignStockImport, finalizeCampaignStockImport, getCampaignStockImport, registerCampaignStockImportFile, type CampaignStockImportDetail, type CampaignStockImportRowItem } from '@/app/actions/inventarios/imports'
+import { generateInventoryCampaignSessions, type InventoryCampaignSessionGenerationSummary } from '@/app/actions/inventarios/campaigns'
 import { createClient as createBrowserSupabaseClient } from '@/lib/supabase/client'
 import { buildCampaignImportTemplate } from '@/modules/inventarios/lib/campaign-excel-template'
 import type { CampaignImportScope } from '@/modules/inventarios/lib/campaign-excel'
@@ -11,8 +13,13 @@ import { IMPORT_BUCKET, IMPORT_MAX_SIZE } from '@/modules/inventarios/lib/excel-
 interface InventoryCampaignStockTheoreticalSelectorProps {
   canRead: boolean
   canManage: boolean
+  canGenerateSessions: boolean
   campaignId: string
+  campaignStatus: string
   cutoffAt: string
+  sessionCount: number
+  sessionsPending: number
+  siteCount: number
 }
 
 interface TheoreticalStockOption {
@@ -65,7 +72,18 @@ const PROCESS_STAGE_LABELS = {
 
 const PREVIEW_ROW_LIMIT = 20
 
-export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage, campaignId, cutoffAt }: InventoryCampaignStockTheoreticalSelectorProps) {
+export function InventoryCampaignStockTheoreticalSelector({
+  canRead,
+  canManage,
+  canGenerateSessions,
+  campaignId,
+  campaignStatus,
+  cutoffAt,
+  sessionCount,
+  sessionsPending,
+  siteCount,
+}: InventoryCampaignStockTheoreticalSelectorProps) {
+  const router = useRouter()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState<CampaignImportScope | null>(null)
@@ -75,6 +93,10 @@ export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage, 
   const [processStage, setProcessStage] = useState<keyof typeof PROCESS_STAGE_LABELS | null>(null)
   const [processError, setProcessError] = useState<string | null>(null)
   const [result, setResult] = useState<CampaignStockImportDetail | null>(null)
+  const [generationOpen, setGenerationOpen] = useState(false)
+  const [generationStage, setGenerationStage] = useState<'GENERATING' | null>(null)
+  const [generationError, setGenerationError] = useState<string | null>(null)
+  const [generationSummary, setGenerationSummary] = useState<InventoryCampaignSessionGenerationSummary | null>(null)
 
   if (!canRead && !canManage) return null
 
@@ -99,6 +121,11 @@ export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage, 
   const previewScope = result?.import.theoretical_scope ?? selected
   const showUnitColumn = previewScope === 'BY_SITE' || previewScope === 'BY_LOCATION'
   const showLocationColumn = previewScope === 'BY_LOCATION'
+  const canShowGenerateSessions =
+    canGenerateSessions &&
+    campaignStatus === 'DRAFT' &&
+    isValidated &&
+    !result?.import.consumed_campaign_id
 
   const openDialog = () => {
     if (!canEditFormat) return
@@ -171,6 +198,40 @@ export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage, 
   const openFilePicker = () => {
     if (!canManage || isProcessing || isValidated) return
     fileInputRef.current?.click()
+  }
+
+  const openGenerateDialog = () => {
+    if (!canShowGenerateSessions) return
+    setGenerationError(null)
+    setGenerationOpen(true)
+  }
+
+  const closeGenerateDialog = () => {
+    if (generationStage) return
+    setGenerationOpen(false)
+  }
+
+  const handleGenerateSessions = async () => {
+    if (!canShowGenerateSessions || !result) return
+    setGenerationError(null)
+    setGenerationStage('GENERATING')
+    try {
+      const generated = await generateInventoryCampaignSessions({
+        campaignId,
+        stockImportId: result.import.id,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      if (generated.error || !generated.data) {
+        throw new Error(generated.error ?? 'No se pudieron generar las jornadas.')
+      }
+      setGenerationSummary(generated.data)
+      setGenerationOpen(false)
+      router.refresh()
+    } catch (err) {
+      setGenerationError(err instanceof Error ? err.message : 'No se pudieron generar las jornadas.')
+    } finally {
+      setGenerationStage(null)
+    }
   }
 
   const handleUpload = async () => {
@@ -437,6 +498,51 @@ export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage, 
                       Mostrando {PREVIEW_ROW_LIMIT} de {preview.totalRows} productos/filas validadas.
                     </p>
                   )}
+
+                  {canShowGenerateSessions && (
+                    <div className="mt-5 rounded-xl border border-theme-accent/20 bg-theme-accent/5 p-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="space-y-1">
+                          <p className="text-sm font-semibold text-theme-text">Generar jornadas</p>
+                          <p className="text-sm text-theme-text-muted">
+                            PetGroup creará una jornada en borrador por cada unidad incluida en la campaña.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={openGenerateDialog}
+                          disabled={Boolean(generationStage)}
+                          className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <Plus className="h-4 w-4" />
+                          Generar jornadas
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {generationError && (
+                    <p className="mt-4 rounded-lg border border-red-500/25 bg-red-500/5 px-3 py-2 text-sm text-red-600 dark:text-red-400">
+                      {generationError}
+                    </p>
+                  )}
+
+                  {generationSummary && (
+                    <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                      <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Jornadas generadas</p>
+                      <p className="mt-1 text-sm text-theme-text-muted">
+                        {generationSummary.sessions_created === 0
+                          ? 'Todas las jornadas ya existían. No se duplicó nada.'
+                          : 'Las jornadas quedaron creadas y la campaña se actualizó.'}
+                      </p>
+                      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                        <InfoCard label="Unidades totales" value={String(generationSummary.total_units)} />
+                        <InfoCard label="Jornadas creadas" value={String(generationSummary.sessions_created)} />
+                        <InfoCard label="Jornadas existentes" value={String(generationSummary.sessions_existing)} />
+                        <InfoCard label="Jornadas pendientes" value={String(generationSummary.sessions_pending)} />
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -487,9 +593,76 @@ export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage, 
             <p className="mt-4 text-xs text-theme-text-muted">La selección quedó bloqueada hasta preparar la campaña.</p>
           )}
 
-          {isRejected && (
-            <p className="mt-4 text-xs text-theme-text-muted">Puedes quitar el archivo, elegir otro y volver a cargarlo.</p>
-          )}
+      {isRejected && (
+        <p className="mt-4 text-xs text-theme-text-muted">Puedes quitar el archivo, elegir otro y volver a cargarlo.</p>
+      )}
+    </div>
+  )}
+
+      {generationOpen && canShowGenerateSessions && result && (
+        <div className="fixed inset-0 z-[1250] flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-theme-border bg-theme-surface shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-theme-border/60 px-5 py-4">
+              <div className="space-y-1">
+                <h3 className="text-base font-bold text-theme-text">Generar jornadas</h3>
+                <p className="text-sm text-theme-text-muted">No se iniciará el conteo.</p>
+              </div>
+              <button
+                type="button"
+                onClick={closeGenerateDialog}
+                disabled={Boolean(generationStage)}
+                className="rounded-lg px-2 py-1 text-sm text-theme-text-muted transition-colors hover:bg-theme-text/5 hover:text-theme-text disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <div className="space-y-4 px-5 py-4">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <InfoCard label="Unidades" value={String(siteCount)} />
+                <InfoCard label="Existentes" value={String(sessionCount)} />
+                <InfoCard label="Pendientes" value={String(sessionsPending)} />
+                <InfoCard label="Importación" value={result.import.original_filename} />
+              </div>
+              <p className="text-sm text-theme-text-muted">
+                PetGroup creará una jornada en borrador por cada unidad incluida en la campaña.
+              </p>
+              <div className="rounded-xl border border-theme-border/70 bg-theme-bg p-4 text-sm text-theme-text-muted">
+                {generationStage ? (
+                  <span className="inline-flex items-center gap-2 font-medium text-theme-text">
+                    <Loader2 className="h-4 w-4 animate-spin text-theme-accent" />
+                    Generando jornadas…
+                  </span>
+                ) : (
+                  <p>No se iniciará el conteo.</p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-theme-border/60 px-5 py-4 sm:flex-row sm:items-center sm:justify-end">
+              <button
+                type="button"
+                onClick={closeGenerateDialog}
+                disabled={Boolean(generationStage)}
+                className="inline-flex h-9 items-center rounded-lg border border-theme-border bg-theme-surface px-3 text-sm font-medium text-theme-text-muted transition-colors hover:bg-theme-text/5 hover:text-theme-text disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleGenerateSessions}
+                disabled={Boolean(generationStage)}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {generationStage ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Plus className="h-4 w-4" />
+                )}
+                {generationStage ? 'Generando jornadas…' : 'Generar jornadas'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

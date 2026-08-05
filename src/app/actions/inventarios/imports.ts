@@ -133,6 +133,7 @@ export interface CampaignStockImportDetail {
     id: string
     company_id: string
     campaign_id: string
+    consumed_campaign_id: string | null
     theoretical_scope: 'TOTAL_CAMPAIGN' | 'BY_SITE' | 'BY_LOCATION'
     status: string
     row_count: number
@@ -731,6 +732,17 @@ export async function getCampaignStockImport(importId: string): Promise<{
           rows: (raw.rows ?? []).map(mapCampaignStockImportRow),
         }
       : null
+    if (detail) {
+      const { data: importState } = await db
+        .from('stock_imports')
+        .select('consumed_campaign_id')
+        .eq('company_id', companyId)
+        .eq('id', importId)
+        .maybeSingle()
+      if (importState) {
+        detail.import.consumed_campaign_id = (importState as { consumed_campaign_id?: string | null }).consumed_campaign_id ?? null
+      }
+    }
     return { data: detail, error: null }
   } catch (err) {
     console.error('getCampaignStockImport exception:', err)
