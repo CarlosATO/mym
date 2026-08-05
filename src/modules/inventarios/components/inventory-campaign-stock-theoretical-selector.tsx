@@ -2,7 +2,7 @@
 
 import { useRef, useState } from 'react'
 import { Check, ChevronRight, Download, FileSpreadsheet, Grid2x2, Loader2, MapPin, Plus, Trash2, Warehouse } from 'lucide-react'
-import { createCampaignStockImport, finalizeCampaignStockImport, getCampaignStockImport, registerCampaignStockImportFile, type CampaignStockImportDetail } from '@/app/actions/inventarios/imports'
+import { createCampaignStockImport, finalizeCampaignStockImport, getCampaignStockImport, registerCampaignStockImportFile, type CampaignStockImportDetail, type CampaignStockImportRowItem } from '@/app/actions/inventarios/imports'
 import { createClient as createBrowserSupabaseClient } from '@/lib/supabase/client'
 import { buildCampaignImportTemplate } from '@/modules/inventarios/lib/campaign-excel-template'
 import type { CampaignImportScope } from '@/modules/inventarios/lib/campaign-excel'
@@ -63,6 +63,8 @@ const PROCESS_STAGE_LABELS = {
   VALIDATING: 'Validando contenido',
 } as const
 
+const PREVIEW_ROW_LIMIT = 20
+
 export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage, campaignId, cutoffAt }: InventoryCampaignStockTheoreticalSelectorProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [open, setOpen] = useState(false)
@@ -93,6 +95,10 @@ export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage, 
           : 'Archivo pendiente'
 
   const selectedOptionLabel = selected ? FORMAT_LABELS[selected] : '—'
+  const preview = buildValidatedCampaignPreview(result)
+  const previewScope = result?.import.theoretical_scope ?? selected
+  const showUnitColumn = previewScope === 'BY_SITE' || previewScope === 'BY_LOCATION'
+  const showLocationColumn = previewScope === 'BY_LOCATION'
 
   const openDialog = () => {
     if (!canEditFormat) return
@@ -365,6 +371,74 @@ export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage, 
                 <InfoCard label="Advertencias" value={String(summary.issue_warning_count)} />
                 <InfoCard label="Errores" value="0" />
               </div>
+
+              {preview.rows.length > 0 && (
+                <div className="mt-5 rounded-xl border border-emerald-500/15 bg-theme-surface p-4">
+                  <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-theme-text">Productos reconocidos</p>
+                      <p className="text-xs text-theme-text-muted">
+                        La descripción oficial del catálogo es la referencia principal.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 overflow-x-auto rounded-lg border border-theme-border/60">
+                    <table className="w-full border-collapse text-sm">
+                      <thead>
+                        <tr className="border-b border-theme-border/60 bg-theme-bg text-left text-[11px] font-semibold uppercase tracking-wider text-theme-text-muted/60">
+                          <th className="px-3 py-2">SKU</th>
+                          <th className="px-3 py-2">Producto</th>
+                          <th className="px-3 py-2">Descripción del archivo</th>
+                          {showUnitColumn && <th className="px-3 py-2">Unidad</th>}
+                          {showLocationColumn && <th className="px-3 py-2">Ubicación</th>}
+                          <th className="px-3 py-2 text-right">Cantidad teórica</th>
+                          <th className="px-3 py-2 text-right">Costo unitario</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {preview.rows.map(row => (
+                          <tr key={`${row.row_index}-${row.sku}`} className="border-b border-theme-border/40 last:border-0 hover:bg-theme-text/2">
+                            <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-theme-text">{row.sku}</td>
+                            <td className="max-w-[260px] px-3 py-2 text-theme-text-muted">
+                              <p className="truncate font-medium text-theme-text">{row.canonicalProductDescription ?? '—'}</p>
+                            </td>
+                            <td className="max-w-[240px] px-3 py-2 text-theme-text-muted">
+                              {row.enteredDescription ? (
+                                <span className="block break-words text-sm text-theme-text-muted">{row.enteredDescription}</span>
+                              ) : (
+                                <span className="text-theme-text-muted/60">—</span>
+                              )}
+                            </td>
+                            {showUnitColumn && (
+                              <td className="max-w-[140px] truncate px-3 py-2 text-theme-text-muted">
+                                {row.entered_site_code ?? '—'}
+                              </td>
+                            )}
+                            {showLocationColumn && (
+                              <td className="max-w-[160px] truncate px-3 py-2 text-theme-text-muted">
+                                {row.entered_location_code ?? '—'}
+                              </td>
+                            )}
+                            <td className="whitespace-nowrap px-3 py-2 text-right text-theme-text">
+                              {row.quantity == null ? '—' : Number(row.quantity).toLocaleString('es-CL')}
+                            </td>
+                            <td className="whitespace-nowrap px-3 py-2 text-right text-theme-text">
+                              {row.cost == null ? '—' : `$${Number(row.cost).toLocaleString('es-CL')}`}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {preview.showLimitNotice && (
+                    <p className="mt-3 text-xs text-theme-text-muted">
+                      Mostrando {PREVIEW_ROW_LIMIT} de {preview.totalRows} productos/filas validadas.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -498,6 +572,20 @@ export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage, 
       )}
     </section>
   )
+}
+
+export function buildValidatedCampaignPreview(detail: CampaignStockImportDetail | null): {
+  rows: CampaignStockImportRowItem[]
+  totalRows: number
+  showLimitNotice: boolean
+} {
+  const rows = detail?.import.status === 'VALIDATED' ? detail.rows : []
+  const totalRows = rows.length
+  return {
+    rows: rows.slice(0, PREVIEW_ROW_LIMIT),
+    totalRows,
+    showLimitNotice: totalRows > PREVIEW_ROW_LIMIT,
+  }
 }
 
 function InfoCard({ label, value }: { label: string; value: string }) {
