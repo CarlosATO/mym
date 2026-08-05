@@ -13,6 +13,7 @@ export interface CampaignImportRawRow {
 export interface CampaignImportNormalizedRow {
   rowNumber: number
   sku: string
+  enteredDescription: string | null
   enteredSiteCode: string | null
   enteredLocationCode: string | null
   theoreticalQuantity: number | null
@@ -49,6 +50,8 @@ const CAMPAIGN_HEADER_MAP: Record<string, string> = {
   costo: 'cost',
   'costo unitario clp': 'cost',
   'precio costo': 'cost',
+  descripcion: 'description',
+  description: 'description',
   'codigo unidad': 'site_code',
   codigo_unidad: 'site_code',
   'codigo ubicacion': 'location_code',
@@ -196,15 +199,18 @@ function parseCampaignSheet(ws: XLSX.WorkSheet, scope: CampaignImportScope): Cam
     }
 
     const rawValues: Record<string, string> = {}
+    const descriptionEntry = colMap.description
     for (let c = range.s.c; c <= range.e.c; c++) {
       const addr = XLSX.utils.encode_cell({ r, c })
       const cell = ws[addr]
       const raw = cell && cell.t === 's' ? String(cell.v ?? '') : cell && cell.v != null ? String(cell.v) : ''
       const header = XLSX.utils.encode_col(c)
       if (raw.trim() !== '') rawValues[header] = raw
+      if (descriptionEntry && descriptionEntry.col === c && raw.trim() !== '') rawValues.DESCRIPCION = raw.trim()
     }
 
     const skuCell = get('sku')
+    const descriptionCell = get('description')
     const siteCell = get('site_code')
     const locationCell = get('location_code')
     const qtyCell = get('quantity')
@@ -223,6 +229,7 @@ function parseCampaignSheet(ws: XLSX.WorkSheet, scope: CampaignImportScope): Cam
 
     const rowNumber = r + 1
     const sku = skuCell.value
+    const enteredDescription = descriptionCell.value ? descriptionCell.value.trim() || null : null
     const enteredSiteCode = siteCell.value || null
     const enteredLocationCode = locationCell.value || null
 
@@ -348,6 +355,7 @@ function parseCampaignSheet(ws: XLSX.WorkSheet, scope: CampaignImportScope): Cam
     const normalizedRow: CampaignImportNormalizedRow = {
       rowNumber,
       sku,
+      enteredDescription,
       enteredSiteCode,
       enteredLocationCode,
       theoreticalQuantity,

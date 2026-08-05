@@ -6,22 +6,22 @@ export interface CampaignImportTemplateContext {
 }
 
 const SCOPE_COLUMNS: Record<CampaignImportScope, string[]> = {
-  TOTAL_CAMPAIGN: ['SKU', 'CANTIDAD_TEORICA', 'COSTO_UNITARIO'],
-  BY_SITE: ['SKU', 'CODIGO_UNIDAD', 'CANTIDAD_TEORICA', 'COSTO_UNITARIO'],
-  BY_LOCATION: ['SKU', 'CODIGO_UNIDAD', 'CODIGO_UBICACION', 'CANTIDAD_TEORICA', 'COSTO_UNITARIO'],
+  TOTAL_CAMPAIGN: ['SKU', 'DESCRIPCION', 'CANTIDAD_TEORICA', 'COSTO_UNITARIO'],
+  BY_SITE: ['SKU', 'DESCRIPCION', 'CODIGO_UNIDAD', 'CANTIDAD_TEORICA', 'COSTO_UNITARIO'],
+  BY_LOCATION: ['SKU', 'DESCRIPCION', 'CODIGO_UNIDAD', 'CODIGO_UBICACION', 'CANTIDAD_TEORICA', 'COSTO_UNITARIO'],
 }
 
 const SCOPE_RULES: Record<CampaignImportScope, string[]> = {
   TOTAL_CAMPAIGN: [
-    'Una fila por producto: SKU, cantidad teorica global y costo unitario.',
+    'Una fila por producto: SKU, descripcion opcional, cantidad teorica global y costo unitario.',
     'No se indica unidad ni ubicacion: la cantidad corresponde al total de todas las unidades incluidas en la campana.',
   ],
   BY_SITE: [
-    'Una fila por producto y unidad: SKU, codigo de unidad, cantidad teorica y costo unitario.',
+    'Una fila por producto y unidad: SKU, descripcion opcional, codigo de unidad, cantidad teorica y costo unitario.',
     'El codigo de unidad debe coincidir con el codigo de una unidad inventariable de la campana.',
   ],
   BY_LOCATION: [
-    'Una fila por producto, unidad y ubicacion: SKU, codigo de unidad, codigo de ubicacion, cantidad teorica y costo unitario.',
+    'Una fila por producto, unidad y ubicacion: SKU, descripcion opcional, codigo de unidad, codigo de ubicacion, cantidad teorica y costo unitario.',
     'El codigo de unidad es obligatorio: dos unidades pueden tener ubicaciones con el mismo codigo.',
   ],
 }
@@ -50,6 +50,10 @@ export function buildCampaignImportTemplate(ctx: CampaignImportTemplateContext):
     instructions.push([rule])
   }
   instructions.push(
+    [''],
+    ['Descripcion: sirve como referencia humana y no identifica ni crea productos.'],
+    ['PetGroup utilizara la descripcion oficial del catalogo despues de validar.'],
+    ['El SKU sigue siendo obligatorio.'],
     [''],
     ['Cantidad teorica: valor numerico mayor o igual a cero, maximo 3 decimales.'],
     ['Costo unitario: valor numerico en CLP, mayor o igual a cero, maximo 2 decimales.'],
