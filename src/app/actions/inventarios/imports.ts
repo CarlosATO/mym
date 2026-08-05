@@ -12,6 +12,8 @@ import {
   safeFileName,
   FileParseError,
 } from '@/modules/inventarios/lib/excel-import'
+import { buildCampaignImportStoragePath, isCampaignImportStoragePath } from '@/modules/inventarios/lib/campaign-import-storage'
+import { parseCampaignImportBuffer, type CampaignImportScope } from '@/modules/inventarios/lib/campaign-excel'
 import { buildImportTemplate, type TemplateLocation } from '@/modules/inventarios/lib/excel-template'
 
 async function inventariosDb() {
@@ -132,6 +134,13 @@ export interface CampaignStockImportDetail {
     error_count: number
     warning_count: number
     original_filename: string
+    mime_type: string | null
+    file_size: number | null
+    file_sha256: string | null
+    storage_path: string | null
+    previous_storage_path: string | null
+    previous_file_sha256: string | null
+    metadata: Record<string, unknown>
     file_issues: { level: string; code: string; field?: string | null; message: string; metadata?: Record<string, unknown> }[]
     validated_at: string | null
     created_at: string
@@ -153,6 +162,33 @@ export interface CampaignStockImportDetail {
   }
   rows: CampaignStockImportRowItem[]
   issues: CampaignStockImportIssueItem[]
+}
+
+export interface CampaignStockImportCreateResult {
+  import_id: string
+  campaign_id: string
+  theoretical_scope: 'TOTAL_CAMPAIGN' | 'BY_SITE' | 'BY_LOCATION'
+  cutoff_at: string
+  currency: string
+  storage_prefix: string
+  storage_path: string
+  signed_upload_url: string
+  upload_token: string
+}
+
+export interface CampaignStockImportRegisterResult {
+  import_id: string
+  storage_path: string
+  original_filename: string
+  mime_type: string | null
+  file_size: number
+}
+
+export interface CampaignStockImportFinalizeResult {
+  import_id: string
+  status: string
+  replayed: boolean
+  summary: CampaignStockImportDetail['summary']
 }
 
 export interface SiteOption {
@@ -649,6 +685,120 @@ export async function getCampaignStockImport(importId: string): Promise<{
   }
 }
 
+export async function createCampaignStockImport(params: {
+  campaignId: string
+  theoreticalScope: CampaignImportScope
+  cutoffAt: string
+  currency: string
+  originalFilename: string
+  mimeType: string
+  fileSize: number
+  idempotencyKey: string
+}): Promise<{ data: CampaignStockImportCreateResult | null; error: string | null }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { data: null, error: 'No tienes una empresa activa seleccionada.' }
+  try {
+    const db = await inventariosDb()
+    const { data, error } = await db.rpc('create_campaign_stock_import', {
+      p_company_id: companyId,
+      p_campaign_id: params.campaignId,
+      p_theoretical_scope: params.theoreticalScope,
+      p_cutoff_at: params.cutoffAt,
+      p_currency: params.currency,
+      p_original_filename: params.originalFilename,
+      p_mime_type: params.mimeType,
+      p_file_size: params.fileSize,
+      p_idempotency_key: params.idempotencyKey,
+    })
+    if (error) {
+      console.error('create_campaign_stock_import error:', error.message)
+      return { data: null, error: safeRpcError(error.message) }
+    }
+    const envelope = data as { entity_id?: string; data?: { import_id?: string; campaign_id?: string; theoretical_scope?: string; cutoff_at?: string; currency?: string; storage_prefix?: string } } | null
+    const importId = envelope?.entity_id ?? envelope?.data?.import_id
+    const storagePrefix = envelope?.data?.storage_prefix
+    if (!importId || !storagePrefix || !envelope?.data?.campaign_id || !envelope?.data?.theoretical_scope || !envelope?.data?.cutoff_at || !envelope?.data?.currency) {
+      return { data: null, error: 'No se pudo crear la importación de campaña.' }
+    }
+
+    const storagePath = buildCampaignImportStoragePath({
+      companyId,
+      campaignId: params.campaignId,
+      importId,
+      filename: params.originalFilename,
+    })
+    const { data: signedData, error: signedError } = await db.storage.from(IMPORT_BUCKET).createSignedUploadUrl(storagePath)
+    if (signedError || !signedData?.signedUrl || !signedData?.token) {
+      console.error('createCampaignStockImport signed upload error:', signedError)
+      return { data: null, error: 'No se pudo generar la ruta de carga segura.' }
+    }
+
+    return {
+      data: {
+        import_id: importId,
+        campaign_id: envelope.data.campaign_id,
+        theoretical_scope: envelope.data.theoretical_scope as CampaignImportScope,
+        cutoff_at: envelope.data.cutoff_at,
+        currency: envelope.data.currency,
+        storage_prefix: storagePrefix,
+        storage_path: storagePath,
+        signed_upload_url: signedData.signedUrl,
+        upload_token: signedData.token,
+      },
+      error: null,
+    }
+  } catch (err) {
+    console.error('createCampaignStockImport exception:', err)
+    return { data: null, error: 'No se pudo crear la importación de campaña.' }
+  }
+}
+
+export async function registerCampaignStockImportFile(params: {
+  importId: string
+  storagePath: string
+  filename: string
+  mimeType: string
+  fileSize: number
+  idempotencyKey: string
+}): Promise<{ data: CampaignStockImportRegisterResult | null; error: string | null }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { data: null, error: 'No tienes una empresa activa seleccionada.' }
+  try {
+    const db = await inventariosDb()
+    const { data, error } = await db.rpc('register_campaign_stock_import_file', {
+      p_company_id: companyId,
+      p_import_id: params.importId,
+      p_storage_path: params.storagePath,
+      p_original_filename: params.filename,
+      p_mime_type: params.mimeType,
+      p_file_size: params.fileSize,
+      p_idempotency_key: params.idempotencyKey,
+    })
+    if (error) {
+      console.error('register_campaign_stock_import_file error:', error.message)
+      return { data: null, error: safeRpcError(error.message) }
+    }
+    const envelope = data as { data?: { import_id?: string; storage_path?: string; original_filename?: string; mime_type?: string | null; file_size?: number } } | null
+    const payload = envelope?.data
+    if (!payload?.import_id || !payload.storage_path || !payload.original_filename || typeof payload.file_size !== 'number') {
+      return { data: null, error: 'No se pudo registrar el archivo de campaña.' }
+    }
+    return {
+      data: {
+        import_id: payload.import_id,
+        storage_path: payload.storage_path,
+        original_filename: payload.original_filename,
+        mime_type: payload.mime_type ?? null,
+        file_size: payload.file_size,
+      },
+      error: null,
+    }
+  } catch (err) {
+    console.error('registerCampaignStockImportFile exception:', err)
+    return { data: null, error: 'No se pudo registrar el archivo de campaña.' }
+  }
+}
+
 export async function validateCampaignStockImport(params: {
   importId: string
   fileIssues: Record<string, unknown>[]
@@ -682,6 +832,176 @@ export async function validateCampaignStockImport(params: {
   } catch (err) {
     console.error('validateCampaignStockImport exception:', err)
     return { data: null, error: 'No se pudo validar la importación de campaña.' }
+  }
+}
+
+export async function finalizeCampaignStockImport(params: {
+  importId: string
+  idempotencyKey: string
+}): Promise<{ data: CampaignStockImportFinalizeResult | null; error: string | null }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { data: null, error: 'No tienes una empresa activa seleccionada.' }
+
+  try {
+    const db = await inventariosDb()
+    const { data: detailData, error: detailErr } = await db.rpc('get_campaign_stock_import', {
+      p_company_id: companyId,
+      p_import_id: params.importId,
+    })
+    if (detailErr || !detailData) {
+      return { data: null, error: 'La importación de campaña no existe o no tienes acceso.' }
+    }
+
+    const detail = detailData as { import: CampaignStockImportDetail['import']; campaign: CampaignStockImportDetail['campaign'] }
+    const campaignImport = detail.import
+    if (campaignImport.status !== 'DRAFT') {
+      return { data: null, error: 'La importación de campaña no admite finalización en su estado actual.' }
+    }
+    if (detail.campaign.status !== 'DRAFT') {
+      return { data: null, error: 'La campaña no admite nuevas importaciones.' }
+    }
+    if (!campaignImport.storage_path) {
+      return { data: null, error: 'La importación no tiene un archivo registrado.' }
+    }
+
+    if (!isCampaignImportStoragePath({
+      companyId,
+      campaignId: campaignImport.campaign_id,
+      importId: campaignImport.id,
+      storagePath: campaignImport.storage_path,
+    })) {
+      return { data: null, error: 'La ruta del archivo no corresponde a la importación.' }
+    }
+
+    const { data: infoData, error: infoError } = await db.storage.from(IMPORT_BUCKET).info(campaignImport.storage_path)
+    if (infoError || !infoData) {
+      return { data: null, error: 'No se encontró el archivo cargado.' }
+    }
+
+    const actualSize = Number((infoData as { size?: number }).size ?? (infoData as { metadata?: { size?: number } }).metadata?.size ?? 0)
+    const actualMime = (infoData as { contentType?: string; content_type?: string; metadata?: { mimetype?: string } }).contentType
+      ?? (infoData as { content_type?: string }).content_type
+      ?? (infoData as { metadata?: { mimetype?: string } }).metadata?.mimetype
+      ?? null
+
+    if (actualSize <= 0 || actualSize > IMPORT_MAX_SIZE) {
+      return { data: null, error: 'El archivo supera el límite permitido.' }
+    }
+    if (campaignImport.file_size != null && actualSize !== Number(campaignImport.file_size)) {
+      return { data: null, error: 'El tamaño real del archivo no coincide con el registrado.' }
+    }
+    if (campaignImport.mime_type && actualMime && campaignImport.mime_type !== actualMime) {
+      return { data: null, error: 'El tipo MIME real del archivo no coincide con el registrado.' }
+    }
+    if (!isAllowedMime(actualMime, campaignImport.original_filename)) {
+      return { data: null, error: 'El tipo de archivo no es válido. Solo XLSX, XLS o CSV.' }
+    }
+
+    const { data: blob, error: downloadError } = await db.storage.from(IMPORT_BUCKET).download(campaignImport.storage_path)
+    if (downloadError || !blob) {
+      return { data: null, error: 'No se pudo descargar el archivo de campaña.' }
+    }
+
+    const arrayBuffer = await blob.arrayBuffer()
+    const bytes = new Uint8Array(arrayBuffer)
+    const sha256 = computeSha256(bytes)
+
+    let parsed: ReturnType<typeof parseCampaignImportBuffer>
+    try {
+      parsed = parseCampaignImportBuffer(arrayBuffer, campaignImport.theoretical_scope as CampaignImportScope)
+    } catch (err) {
+      if (err instanceof FileParseError) {
+        parsed = {
+          scope: campaignImport.theoretical_scope as CampaignImportScope,
+          rows: [],
+          issues: [{ level: 'ERROR', code: err.code, message: err.message }],
+        }
+      } else {
+        throw err
+      }
+    }
+    const fileIssues = parsed.issues.map(issue => ({
+      level: issue.level,
+      code: issue.code,
+      message: issue.message,
+      row_index: issue.rowNumber ?? (issue.rowNumbers?.[0] ?? null),
+      metadata: issue.rowNumbers ? { row_numbers: issue.rowNumbers } : {},
+    }))
+    const rows = parsed.rows.map(row => ({
+      row_index: row.rowNumber,
+      sku: row.sku,
+      entered_site_code: row.enteredSiteCode,
+      entered_location_code: row.enteredLocationCode,
+      quantity: row.theoreticalQuantity,
+      cost: row.unitCost,
+    }))
+
+    const { data: validationData, error: validationError } = await db.rpc('validate_campaign_stock_import', {
+      p_company_id: companyId,
+      p_import_id: params.importId,
+      p_file_sha256: sha256,
+      p_file_issues: fileIssues,
+      p_rows: rows,
+      p_idempotency_key: params.idempotencyKey,
+    })
+    if (validationError || !validationData) {
+      console.error('validate_campaign_stock_import (campaign) error:', validationError?.message)
+      return { data: null, error: safeRpcError(validationError?.message ?? 'No se pudo validar la importación de campaña.') }
+    }
+
+    const validation = validationData as { replayed?: boolean; data?: { import_id?: string; status?: string; storage_path_to_remove?: string | null } } | null
+    if (validation?.replayed && validation.data?.storage_path_to_remove) {
+      try {
+        await db.storage.from(IMPORT_BUCKET).remove([validation.data.storage_path_to_remove])
+      } catch {
+        // limpieza best-effort
+      }
+    }
+
+    const resolvedImportId = validation?.data?.import_id ?? params.importId
+    const { data: finalDetail, error: finalDetailErr } = await db.rpc('get_campaign_stock_import', {
+      p_company_id: companyId,
+      p_import_id: resolvedImportId,
+    })
+    if (finalDetailErr || !finalDetail) {
+      return {
+        data: {
+          import_id: resolvedImportId,
+          status: validation?.data?.status ?? 'REJECTED',
+          replayed: Boolean(validation?.replayed),
+          summary: {
+            total_rows: parsed.rows.length,
+            valid_rows: 0,
+            warning_rows: 0,
+            error_rows: parsed.issues.filter(issue => issue.level === 'ERROR').length,
+            issue_warning_count: parsed.issues.filter(issue => issue.level === 'WARNING').length,
+            issue_error_count: parsed.issues.filter(issue => issue.level === 'ERROR').length,
+          },
+        },
+        error: null,
+      }
+    }
+
+    const finalImport = (finalDetail as { summary?: CampaignStockImportDetail['summary']; import?: { status?: string } })
+    return {
+      data: {
+        import_id: resolvedImportId,
+        status: finalImport.import?.status ?? validation?.data?.status ?? 'REJECTED',
+        replayed: Boolean(validation?.replayed),
+        summary: finalImport.summary ?? {
+          total_rows: 0,
+          valid_rows: 0,
+          warning_rows: 0,
+          error_rows: 0,
+          issue_warning_count: 0,
+          issue_error_count: 0,
+        },
+      },
+      error: null,
+    }
+  } catch (err) {
+    console.error('finalizeCampaignStockImport exception:', err)
+    return { data: null, error: err instanceof Error ? err.message : 'No se pudo finalizar la importación de campaña.' }
   }
 }
 
