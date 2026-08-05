@@ -1,24 +1,27 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { Check, ChevronRight, Download, FileSpreadsheet, Grid2x2, MapPin, Plus, Trash2, Warehouse } from 'lucide-react'
+import { Check, ChevronRight, Download, FileSpreadsheet, Grid2x2, Loader2, MapPin, Plus, Trash2, Warehouse } from 'lucide-react'
+import { createCampaignStockImport, finalizeCampaignStockImport, getCampaignStockImport, registerCampaignStockImportFile, type CampaignStockImportDetail } from '@/app/actions/inventarios/imports'
+import { createClient as createBrowserSupabaseClient } from '@/lib/supabase/client'
 import { buildCampaignImportTemplate } from '@/modules/inventarios/lib/campaign-excel-template'
-import { IMPORT_MAX_SIZE } from '@/modules/inventarios/lib/excel-import'
-
-type TheoreticalStockFormat = 'TOTAL_CAMPAIGN' | 'BY_SITE' | 'BY_LOCATION'
-
-interface TheoreticalStockOption {
-  value: TheoreticalStockFormat
-  label: string
-  description: string
-  columns: string[]
-  icon: React.ReactNode
-  filename: string
-}
+import type { CampaignImportScope } from '@/modules/inventarios/lib/campaign-excel'
+import { IMPORT_BUCKET, IMPORT_MAX_SIZE } from '@/modules/inventarios/lib/excel-import'
 
 interface InventoryCampaignStockTheoreticalSelectorProps {
   canRead: boolean
   canManage: boolean
+  campaignId: string
+  cutoffAt: string
+}
+
+interface TheoreticalStockOption {
+  value: CampaignImportScope
+  label: string
+  description: string
+  columns: string[]
+  filename: string
+  icon: React.ReactNode
 }
 
 const OPTIONS: TheoreticalStockOption[] = [
@@ -48,29 +51,51 @@ const OPTIONS: TheoreticalStockOption[] = [
   },
 ]
 
-const FORMAT_LABELS: Record<TheoreticalStockFormat, string> = {
+const FORMAT_LABELS: Record<CampaignImportScope, string> = {
   TOTAL_CAMPAIGN: 'Total de la campaña',
   BY_SITE: 'Desglosado por bodega',
   BY_LOCATION: 'Desglosado por ubicación',
 }
 
-export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage }: InventoryCampaignStockTheoreticalSelectorProps) {
+const PROCESS_STAGE_LABELS = {
+  CREATING: 'Creando importación',
+  UPLOADING: 'Subiendo archivo',
+  VALIDATING: 'Validando contenido',
+} as const
+
+export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage, campaignId, cutoffAt }: InventoryCampaignStockTheoreticalSelectorProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [open, setOpen] = useState(false)
-  const [selected, setSelected] = useState<TheoreticalStockFormat | null>(null)
-  const [draft, setDraft] = useState<TheoreticalStockFormat | null>(null)
+  const [selected, setSelected] = useState<CampaignImportScope | null>(null)
+  const [draft, setDraft] = useState<CampaignImportScope | null>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
+  const [processStage, setProcessStage] = useState<keyof typeof PROCESS_STAGE_LABELS | null>(null)
+  const [processError, setProcessError] = useState<string | null>(null)
+  const [result, setResult] = useState<CampaignStockImportDetail | null>(null)
 
   if (!canRead && !canManage) return null
 
   const committed = selected ? OPTIONS.find(option => option.value === selected) ?? null : null
-  const fileState: 'pending' | 'ready' | 'invalid' = fileError ? 'invalid' : selectedFile ? 'ready' : 'pending'
-  const fileExt = selectedFile ? getFileExtension(selectedFile.name) : ''
-  const fileSize = selectedFile ? formatFileSize(selectedFile.size) : ''
-  const currentOption = committed ?? null
+  const isProcessing = processStage !== null
+  const isValidated = result?.import.status === 'VALIDATED'
+  const isRejected = result?.import.status === 'REJECTED'
+  const canEditFormat = canManage && !isProcessing && !isValidated
+
+  const currentStateLabel = isProcessing
+    ? PROCESS_STAGE_LABELS[processStage]
+    : isValidated
+      ? 'Archivo validado'
+      : isRejected
+        ? 'Archivo rechazado'
+        : selectedFile
+          ? 'Archivo seleccionado'
+          : 'Archivo pendiente'
+
+  const selectedOptionLabel = selected ? FORMAT_LABELS[selected] : '—'
 
   const openDialog = () => {
+    if (!canEditFormat) return
     setDraft(selected)
     setOpen(true)
   }
@@ -82,16 +107,22 @@ export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage }
 
   const confirmSelection = () => {
     if (!draft) return
+    if (draft !== selected) {
+      setSelectedFile(null)
+      setFileError(null)
+      setProcessError(null)
+      setResult(null)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
     setSelected(draft)
     setOpen(false)
   }
 
   const handleDownloadTemplate = () => {
-    if (!selected) return
+    if (!selected || isProcessing || isValidated) return
     const option = OPTIONS.find(entry => entry.value === selected)
     if (!option) return
-    const buffer = buildCampaignImportTemplate({ scope: selected })
-    downloadBuffer(buffer, option.filename)
+    downloadBuffer(buildCampaignImportTemplate({ scope: selected }), option.filename)
   }
 
   const validateFile = (file: File): string | null => {
@@ -103,39 +134,97 @@ export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage }
   }
 
   const handleFileSelected = (file: File | null) => {
+    if (!canManage || isProcessing || isValidated) return
+    setProcessError(null)
+    setFileError(null)
     if (!file) {
       setSelectedFile(null)
-      setFileError(null)
+      setResult(null)
       return
     }
     const error = validateFile(file)
     if (error) {
       setSelectedFile(null)
+      setResult(null)
       setFileError(error)
       return
     }
     setSelectedFile(file)
-    setFileError(null)
+    setResult(null)
   }
 
   const clearFile = () => {
+    if (isProcessing || isValidated) return
     setSelectedFile(null)
     setFileError(null)
+    setProcessError(null)
+    setResult(null)
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   const openFilePicker = () => {
+    if (!canManage || isProcessing || isValidated) return
     fileInputRef.current?.click()
   }
 
-  const fileSummary = selectedFile
+  const handleUpload = async () => {
+    if (!canManage || isProcessing || isValidated || !selected || !selectedFile) return
+    setProcessError(null)
+    try {
+      setProcessStage('CREATING')
+      const created = await createCampaignStockImport({
+        campaignId,
+        theoreticalScope: selected,
+        cutoffAt,
+        currency: 'CLP',
+        originalFilename: selectedFile.name,
+        mimeType: selectedFile.type || guessMimeType(selectedFile.name),
+        fileSize: selectedFile.size,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      if (created.error || !created.data) throw new Error(created.error ?? 'No se pudo crear la importación.')
+
+      setProcessStage('UPLOADING')
+      await uploadCampaignFile(created.data.storage_path, created.data.upload_token, created.data.signed_upload_url, selectedFile)
+
+      setProcessStage('VALIDATING')
+      const registered = await registerCampaignStockImportFile({
+        importId: created.data.import_id,
+        storagePath: created.data.storage_path,
+        filename: selectedFile.name,
+        mimeType: selectedFile.type || guessMimeType(selectedFile.name),
+        fileSize: selectedFile.size,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      if (registered.error || !registered.data) throw new Error(registered.error ?? 'No se pudo registrar el archivo.')
+
+      const finalized = await finalizeCampaignStockImport({
+        importId: registered.data.import_id,
+        idempotencyKey: crypto.randomUUID(),
+      })
+      if (finalized.error || !finalized.data) throw new Error(finalized.error ?? 'No se pudo validar la importación.')
+
+      const detailed = await getCampaignStockImport(finalized.data.import_id)
+      if (detailed.error || !detailed.data) throw new Error(detailed.error ?? 'No se pudo consultar el resultado de la validación.')
+
+      setResult(detailed.data)
+      setProcessError(null)
+    } catch (err) {
+      setProcessError(err instanceof Error ? err.message : 'No se pudo completar la carga y validación.')
+    } finally {
+      setProcessStage(null)
+    }
+  }
+
+  const selectedFileInfo = selectedFile
     ? {
         name: selectedFile.name,
-        ext: fileExt.toUpperCase(),
-        size: fileSize,
-        format: currentOption ? currentOption.label : '—',
+        ext: getFileExtension(selectedFile.name).toUpperCase() || '—',
+        size: formatFileSize(selectedFile.size),
       }
     : null
+
+  const summary = result?.summary ?? null
 
   return (
     <section className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
@@ -144,11 +233,11 @@ export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage }
           <h2 className="text-base font-bold text-theme-text">Stock teórico de la campaña</h2>
           <p className="text-sm text-theme-text-muted">El stock teórico se carga mediante un único Excel para toda la campaña.</p>
         </div>
-        {canManage && (
+        {canEditFormat && (
           <button
             type="button"
             onClick={openDialog}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:opacity-50"
           >
             <FileSpreadsheet className="h-4 w-4" />
             Configurar stock teórico
@@ -163,8 +252,8 @@ export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage }
               <p className="text-xs font-semibold uppercase tracking-wider text-theme-text-muted">Formato seleccionado</p>
               <p className="mt-1 text-sm font-semibold text-theme-text">{FORMAT_LABELS[committed.value]}</p>
             </div>
-            <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
-              Archivo pendiente
+            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${statusBadgeClass(result?.import.status ?? null, isProcessing)}`}>
+              {currentStateLabel}
             </span>
           </div>
           <p className="mt-3 text-sm text-theme-text-muted">{committed.description}</p>
@@ -175,13 +264,14 @@ export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage }
               </span>
             ))}
           </div>
-          {canManage && (
+          {canEditFormat && (
             <>
               <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
                 <button
                   type="button"
                   onClick={handleDownloadTemplate}
-                  className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-3 text-sm font-semibold text-theme-text transition-colors hover:bg-theme-text/5"
+                  disabled={isProcessing || isValidated}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-3 text-sm font-semibold text-theme-text transition-colors hover:bg-theme-text/5 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Download className="h-4 w-4" />
                   Descargar plantilla
@@ -189,7 +279,8 @@ export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage }
                 <button
                   type="button"
                   onClick={openFilePicker}
-                  className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-3 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover"
+                  disabled={isProcessing || isValidated}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-3 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Plus className="h-4 w-4" />
                   Seleccionar archivo
@@ -212,59 +303,123 @@ export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage }
         </div>
       )}
 
-      {committed && canManage && (
+      {selected && canManage && (
         <div className="mt-4 rounded-xl border border-theme-border bg-theme-bg p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="space-y-1">
               <p className="text-xs font-semibold uppercase tracking-wider text-theme-text-muted">Archivo local</p>
-              <p className="text-sm font-semibold text-theme-text">
-                {fileState === 'ready' ? 'Listo para cargar' : fileState === 'invalid' ? 'Archivo no válido' : 'Archivo pendiente'}
+              <p className="text-sm font-semibold text-theme-text">{currentStateLabel}</p>
+              <p className="text-sm text-theme-text-muted">
+                {isValidated
+                  ? 'La validación ya terminó. El siguiente paso será preparar la campaña.'
+                  : 'La estructura y los datos se validarán al cargar el archivo.'}
               </p>
-              {fileError ? (
-                <p className="text-sm text-red-600 dark:text-red-400">{fileError}</p>
-              ) : (
-                <p className="text-sm text-theme-text-muted">
-                  {selectedFile ? 'Revisa los datos básicos antes de cargarlo.' : 'Selecciona un archivo local para continuar.'}
-                </p>
-              )}
             </div>
-            <div className="flex items-center gap-2">
-              {selectedFile && (
-                <button
-                  type="button"
-                  onClick={clearFile}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs font-semibold text-theme-text-muted transition-colors hover:bg-theme-text/5 hover:text-theme-text"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  Quitar archivo
-                </button>
-              )}
-            </div>
+            {selectedFile && !isProcessing && !isValidated && (
+              <button
+                type="button"
+                onClick={clearFile}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs font-semibold text-theme-text-muted transition-colors hover:bg-theme-text/5 hover:text-theme-text"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Quitar archivo
+              </button>
+            )}
           </div>
 
-          {fileSummary && (
+          {selectedFileInfo && (
             <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <InfoCard label="Nombre" value={fileSummary.name} />
-              <InfoCard label="Extensión" value={fileSummary.ext || '—'} />
-              <InfoCard label="Tamaño" value={fileSummary.size} />
-              <InfoCard label="Formato" value={fileSummary.format} />
+              <InfoCard label="Nombre" value={selectedFileInfo.name} />
+              <InfoCard label="Extensión" value={selectedFileInfo.ext} />
+              <InfoCard label="Tamaño" value={selectedFileInfo.size} />
+              <InfoCard label="Formato" value={selectedOptionLabel} />
             </div>
           )}
 
-          <div className="mt-4 flex flex-col gap-2 rounded-lg border border-theme-border/70 bg-theme-surface p-3 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-xs text-theme-text-muted">La carga se habilitará en el siguiente paso.</p>
-            <button
-              type="button"
-              disabled
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-3 text-sm font-semibold text-white opacity-50"
-            >
-              Cargar y validar
-            </button>
-          </div>
+          {fileError && (
+            <p className="mt-4 rounded-lg border border-red-500/25 bg-red-500/5 px-3 py-2 text-sm text-red-600 dark:text-red-400">{fileError}</p>
+          )}
+
+          {processError && (
+            <p className="mt-4 rounded-lg border border-red-500/25 bg-red-500/5 px-3 py-2 text-sm text-red-600 dark:text-red-400">{processError}</p>
+          )}
+
+          {isProcessing && (
+            <div className="mt-4 rounded-lg border border-theme-border/70 bg-theme-surface p-3 text-sm text-theme-text-muted">
+              <span className="inline-flex items-center gap-2 font-medium text-theme-text">
+                <Loader2 className="h-4 w-4 animate-spin text-theme-accent" />
+                {PROCESS_STAGE_LABELS[processStage ?? 'CREATING']}
+              </span>
+            </div>
+          )}
+
+          {isValidated && summary && (
+            <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+              <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Archivo validado</p>
+              <p className="mt-1 text-sm text-theme-text-muted">El stock teórico fue validado correctamente. Aún no se han generado las jornadas.</p>
+              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <InfoCard label="Archivo" value={result?.import.original_filename ?? selectedFile?.name ?? '—'} />
+                <InfoCard label="Formato" value={selectedOptionLabel} />
+                <InfoCard label="Filas totales" value={String(summary.total_rows)} />
+                <InfoCard label="Filas válidas" value={String(summary.valid_rows)} />
+                <InfoCard label="Advertencias" value={String(summary.issue_warning_count)} />
+                <InfoCard label="Errores" value="0" />
+              </div>
+            </div>
+          )}
+
+          {isRejected && summary && (
+            <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/5 p-4">
+              <p className="text-sm font-semibold text-red-700 dark:text-red-300">Archivo rechazado</p>
+              <p className="mt-1 text-sm text-theme-text-muted">Revisa las incidencias y corrige el archivo antes de volver a cargarlo.</p>
+              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <InfoCard label="Archivo" value={result?.import.original_filename ?? selectedFile?.name ?? '—'} />
+                <InfoCard label="Formato" value={selectedOptionLabel} />
+                <InfoCard label="Advertencias" value={String(summary.issue_warning_count)} />
+                <InfoCard label="Errores" value={String(summary.issue_error_count)} />
+              </div>
+
+              <div className="mt-4 space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-theme-text-muted">Incidencias</p>
+                <div className="space-y-2">
+                  {(result?.issues ?? []).map((issue, index) => (
+                    <div key={`${issue.row_index ?? 'x'}-${issue.field ?? 'field'}-${index}`} className="rounded-lg border border-red-500/15 bg-theme-surface p-3 text-sm">
+                      <p className="font-medium text-theme-text">
+                        {issue.row_index ? `Fila ${issue.row_index}` : 'Archivo'}{issue.field ? ` · ${issueFieldLabel(issue.field)}` : ''}
+                      </p>
+                      <p className="text-theme-text-muted">{issue.message}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {!isProcessing && !isValidated && (
+            <div className="mt-4 flex flex-col gap-2 rounded-lg border border-theme-border/70 bg-theme-surface p-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs text-theme-text-muted">La carga se habilitará en el siguiente paso.</p>
+              <button
+                type="button"
+                onClick={handleUpload}
+                disabled={!selectedFile || Boolean(fileError)}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-3 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cargar y validar
+              </button>
+            </div>
+          )}
+
+          {isValidated && (
+            <p className="mt-4 text-xs text-theme-text-muted">La selección quedó bloqueada hasta preparar la campaña.</p>
+          )}
+
+          {isRejected && (
+            <p className="mt-4 text-xs text-theme-text-muted">Puedes quitar el archivo, elegir otro y volver a cargarlo.</p>
+          )}
         </div>
       )}
 
-      {open && (
+      {open && canEditFormat && (
         <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-4xl rounded-2xl border border-theme-border bg-theme-surface shadow-2xl">
             <div className="flex items-start justify-between gap-3 border-b border-theme-border/60 px-5 py-4">
@@ -290,11 +445,12 @@ export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage }
                       key={option.value}
                       type="button"
                       onClick={() => setDraft(option.value)}
+                      disabled={isProcessing}
                       className={`flex h-full flex-col rounded-xl border p-4 text-left transition-colors ${
                         active
                           ? 'border-theme-accent bg-theme-accent/10 ring-1 ring-theme-accent'
                           : 'border-theme-border bg-theme-bg hover:border-theme-accent/40 hover:bg-theme-text/5'
-                      }`}
+                      } disabled:cursor-not-allowed disabled:opacity-50`}
                     >
                       <div className="flex items-center gap-2">
                         <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${active ? 'bg-theme-accent text-white' : 'bg-theme-text/5 text-theme-text-muted'}`}>
@@ -328,7 +484,7 @@ export function InventoryCampaignStockTheoreticalSelector({ canRead, canManage }
                   <button
                     type="button"
                     onClick={confirmSelection}
-                    disabled={!draft}
+                    disabled={!draft || isProcessing}
                     className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Confirmar formato
@@ -353,15 +509,73 @@ function InfoCard({ label, value }: { label: string; value: string }) {
   )
 }
 
+function issueFieldLabel(field: string): string {
+  if (field === 'sku') return 'SKU'
+  if (field === 'entered_site_code') return 'Código de unidad'
+  if (field === 'entered_location_code') return 'Código de ubicación'
+  if (field === 'quantity') return 'Cantidad teórica'
+  if (field === 'cost') return 'Costo unitario'
+  return field
+}
+
+function statusBadgeClass(status: string | null, isProcessing: boolean): string {
+  if (isProcessing) return 'border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+  if (status === 'VALIDATED') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+  if (status === 'REJECTED') return 'border-red-500/20 bg-red-500/10 text-red-700 dark:text-red-300'
+  return 'border-theme-border bg-theme-text/5 text-theme-text-muted'
+}
+
 function getFileExtension(filename: string): string {
   const match = /\.([a-zA-Z0-9]+)$/.exec(filename.trim())
   return match ? match[1].toLowerCase() : ''
+}
+
+function guessMimeType(filename: string): string {
+  const ext = getFileExtension(filename)
+  if (ext === 'xls') return 'application/vnd.ms-excel'
+  if (ext === 'csv') return 'text/csv'
+  return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 }
 
 function formatFileSize(size: number): string {
   if (size < 1024) return `${size} B`
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+
+async function uploadCampaignFile(storagePath: string, uploadToken: string, signedUploadUrl: string, file: File) {
+  const client = createBrowserSupabaseClient()
+  const storage = client.storage as unknown as SignedStorageClient
+  const bucket = storage.from(IMPORT_BUCKET)
+  if (typeof bucket.uploadToSignedUrl === 'function') {
+    const { error } = await bucket.uploadToSignedUrl(storagePath, uploadToken, file, {
+      contentType: file.type || guessMimeType(file.name),
+    })
+    if (error) throw new Error('No se pudo subir el archivo seleccionado.')
+    return
+  }
+
+  const response = await fetch(signedUploadUrl, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': file.type || guessMimeType(file.name),
+    },
+    body: file,
+  })
+  if (!response.ok) throw new Error('No se pudo subir el archivo seleccionado.')
+}
+
+interface SignedUploadBucket {
+  uploadToSignedUrl?: (
+    storagePath: string,
+    token: string,
+    file: File,
+    options?: { contentType?: string }
+  ) => Promise<{ error: { message?: string } | null }>
+}
+
+interface SignedStorageClient {
+  from(bucket: string): SignedUploadBucket
 }
 
 function downloadBuffer(buffer: Uint8Array, filename: string) {

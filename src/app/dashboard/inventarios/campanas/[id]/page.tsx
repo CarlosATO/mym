@@ -117,6 +117,8 @@ export default async function InventariosCampanaDetallePage({ params }: PageProp
       <InventoryCampaignStockTheoreticalSelector
         canRead={importPermissions.canRead}
         canManage={importPermissions.canManage}
+        campaignId={campaign.id}
+        cutoffAt={plannedOrCreated}
       />
 
       {noneHaveSessions && (
