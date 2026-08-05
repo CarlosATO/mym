@@ -1,0 +1,43 @@
+-- Migration: 20260805150000_inventarios_campaign_import_validation_fix.sql
+-- Description: Fix de iteracion de cobertura en validate_campaign_stock_import.
+--              Reemplaza el target jsonb por record en los bucles de cobertura
+--              SELECTED para evitar errores al procesar filas faltantes.
+-- Author: Assistant
+
+DO $$
+DECLARE
+    v_def text;
+BEGIN
+    SELECT pg_catalog.pg_get_functiondef('inventarios.validate_campaign_stock_import(uuid, uuid, jsonb, jsonb, uuid)'::pg_catalog.regprocedure)
+    INTO v_def;
+
+    v_def := pg_catalog.regexp_replace(
+        v_def,
+        'v_row_issues[[:space:]]+jsonb;',
+        'v_row_issues jsonb;' || E'\n    v_coverage record;'
+    );
+
+    v_def := pg_catalog.regexp_replace(
+        v_def,
+        'FOR[[:space:]]+v_issue[[:space:]]+IN[[:space:]]+SELECT[[:space:]]+cp\.product_id,[[:space:]]+cp\.sku[[:space:]]+FROM[[:space:]]+inventarios\.inventory_campaign_products[[:space:]]+cp[[:space:]]+WHERE[[:space:]]+cp\.company_id[[:space:]]*=[[:space:]]*p_company_id[[:space:]]+AND[[:space:]]+cp\.campaign_id[[:space:]]*=[[:space:]]*v_import_campaign_id[[:space:]]+AND[[:space:]]+NOT[[:space:]]+EXISTS[[:space:]]*\([[:space:]]*SELECT[[:space:]]+1[[:space:]]+FROM[[:space:]]+inventarios\.stock_import_rows[[:space:]]+r[[:space:]]+WHERE[[:space:]]+r\.company_id[[:space:]]*=[[:space:]]*p_company_id[[:space:]]+AND[[:space:]]+r\.import_id[[:space:]]*=[[:space:]]*p_import_id[[:space:]]+AND[[:space:]]+r\.row_status[[:space:]]*<>[[:space:]]*''ERROR''[[:space:]]+AND[[:space:]]+r\.product_id[[:space:]]*=[[:space:]]*cp\.product_id[[:space:]]*\)[[:space:]]+LOOP',
+        'FOR v_coverage IN SELECT cp.product_id, cp.sku FROM inventarios.inventory_campaign_products cp WHERE cp.company_id = p_company_id AND cp.campaign_id = v_import_campaign_id AND NOT EXISTS (SELECT 1 FROM inventarios.stock_import_rows r WHERE r.company_id = p_company_id AND r.import_id = p_import_id AND r.row_status <> ''ERROR'' AND r.product_id = cp.product_id) LOOP'
+    );
+
+    v_def := pg_catalog.regexp_replace(
+        v_def,
+        'FOR[[:space:]]+v_issue[[:space:]]+IN[[:space:]]+SELECT[[:space:]]+cp\.product_id,[[:space:]]+cp\.sku,[[:space:]]+ics\.inventory_site_id,[[:space:]]+s\.code[[:space:]]+AS[[:space:]]+site_code[[:space:]]+FROM[[:space:]]+inventarios\.inventory_campaign_products[[:space:]]+cp[[:space:]]+JOIN[[:space:]]+inventarios\.inventory_campaign_sites[[:space:]]+ics[[:space:]]+ON[[:space:]]+ics\.company_id[[:space:]]*=[[:space:]]*cp\.company_id[[:space:]]+AND[[:space:]]+ics\.campaign_id[[:space:]]*=[[:space:]]*cp\.campaign_id[[:space:]]+JOIN[[:space:]]+inventarios\.inventory_sites[[:space:]]+s[[:space:]]+ON[[:space:]]+s\.company_id[[:space:]]*=[[:space:]]*ics\.company_id[[:space:]]+AND[[:space:]]+s\.id[[:space:]]*=[[:space:]]*ics\.inventory_site_id[[:space:]]+WHERE[[:space:]]+cp\.company_id[[:space:]]*=[[:space:]]*p_company_id[[:space:]]+AND[[:space:]]+cp\.campaign_id[[:space:]]*=[[:space:]]*v_import_campaign_id[[:space:]]+AND[[:space:]]+NOT[[:space:]]+EXISTS[[:space:]]*\([[:space:]]*SELECT[[:space:]]+1[[:space:]]+FROM[[:space:]]+inventarios\.stock_import_rows[[:space:]]+r[[:space:]]+WHERE[[:space:]]+r\.company_id[[:space:]]*=[[:space:]]*p_company_id[[:space:]]+AND[[:space:]]+r\.import_id[[:space:]]*=[[:space:]]*p_import_id[[:space:]]+AND[[:space:]]+r\.row_status[[:space:]]*<>[[:space:]]*''ERROR''[[:space:]]+AND[[:space:]]+r\.product_id[[:space:]]*=[[:space:]]*cp\.product_id[[:space:]]+AND[[:space:]]+r\.resolved_inventory_site_id[[:space:]]*=[[:space:]]*ics\.inventory_site_id[[:space:]]*\)[[:space:]]+LOOP',
+        'FOR v_coverage IN SELECT cp.product_id, cp.sku, ics.inventory_site_id, s.code AS site_code FROM inventarios.inventory_campaign_products cp JOIN inventarios.inventory_campaign_sites ics ON ics.company_id = cp.company_id AND ics.campaign_id = cp.campaign_id JOIN inventarios.inventory_sites s ON s.company_id = ics.company_id AND s.id = ics.inventory_site_id WHERE cp.company_id = p_company_id AND cp.campaign_id = v_import_campaign_id AND NOT EXISTS (SELECT 1 FROM inventarios.stock_import_rows r WHERE r.company_id = p_company_id AND r.import_id = p_import_id AND r.row_status <> ''ERROR'' AND r.product_id = cp.product_id AND r.resolved_inventory_site_id = ics.inventory_site_id) LOOP'
+    );
+
+    v_def := pg_catalog.regexp_replace(
+        v_def,
+        'FOR[[:space:]]+v_issue[[:space:]]+IN[[:space:]]+SELECT[[:space:]]+cp\.product_id,[[:space:]]+cp\.sku,[[:space:]]+ics\.inventory_site_id,[[:space:]]+s\.code[[:space:]]+AS[[:space:]]+site_code,[[:space:]]+loc\.id[[:space:]]+AS[[:space:]]+inventory_site_location_id,[[:space:]]+loc\.code[[:space:]]+AS[[:space:]]+location_code[[:space:]]+FROM[[:space:]]+inventarios\.inventory_campaign_products[[:space:]]+cp[[:space:]]+JOIN[[:space:]]+inventarios\.inventory_campaign_sites[[:space:]]+ics[[:space:]]+ON[[:space:]]+ics\.company_id[[:space:]]*=[[:space:]]*cp\.company_id[[:space:]]+AND[[:space:]]+ics\.campaign_id[[:space:]]*=[[:space:]]*cp\.campaign_id[[:space:]]+JOIN[[:space:]]+inventarios\.inventory_sites[[:space:]]+s[[:space:]]+ON[[:space:]]+s\.company_id[[:space:]]*=[[:space:]]*ics\.company_id[[:space:]]+AND[[:space:]]+s\.id[[:space:]]*=[[:space:]]*ics\.inventory_site_id[[:space:]]+JOIN[[:space:]]+inventarios\.inventory_site_locations[[:space:]]+loc[[:space:]]+ON[[:space:]]+loc\.company_id[[:space:]]*=[[:space:]]*ics\.company_id[[:space:]]+AND[[:space:]]+loc\.inventory_site_id[[:space:]]*=[[:space:]]*ics\.inventory_site_id[[:space:]]+LEFT[[:space:]]+JOIN[[:space:]]+inventarios\.inventory_campaign_site_locations[[:space:]]+icl[[:space:]]+ON[[:space:]]+icl\.company_id[[:space:]]*=[[:space:]]*ics\.company_id[[:space:]]+AND[[:space:]]+icl\.campaign_site_id[[:space:]]*=[[:space:]]*ics\.id[[:space:]]+AND[[:space:]]+icl\.inventory_site_location_id[[:space:]]*=[[:space:]]*loc\.id[[:space:]]+WHERE[[:space:]]+cp\.company_id[[:space:]]*=[[:space:]]*p_company_id[[:space:]]+AND[[:space:]]+cp\.campaign_id[[:space:]]*=[[:space:]]*v_import_campaign_id[[:space:]]+AND[[:space:]]+\(\(ics\.location_scope[[:space:]]*=[[:space:]]*''ALL''[[:space:]]+AND[[:space:]]+loc\.is_active[[:space:]]*=[[:space:]]*true\)[[:space:]]+OR[[:space:]]+\(ics\.location_scope[[:space:]]*=[[:space:]]*''SELECTED''[[:space:]]+AND[[:space:]]+icl\.inventory_site_location_id[[:space:]]+IS[[:space:]]+NOT[[:space:]]+NULL\)\)[[:space:]]+AND[[:space:]]+NOT[[:space:]]+EXISTS[[:space:]]*\([[:space:]]*SELECT[[:space:]]+1[[:space:]]+FROM[[:space:]]+inventarios\.stock_import_rows[[:space:]]+r[[:space:]]+WHERE[[:space:]]+r\.company_id[[:space:]]*=[[:space:]]*p_company_id[[:space:]]+AND[[:space:]]+r\.import_id[[:space:]]*=[[:space:]]*p_import_id[[:space:]]+AND[[:space:]]+r\.row_status[[:space:]]*<>[[:space:]]*''ERROR''[[:space:]]+AND[[:space:]]+r\.product_id[[:space:]]*=[[:space:]]*cp\.product_id[[:space:]]+AND[[:space:]]+r\.resolved_inventory_site_id[[:space:]]*=[[:space:]]*ics\.inventory_site_id[[:space:]]+AND[[:space:]]+r\.inventory_site_location_id[[:space:]]*=[[:space:]]*loc\.id[[:space:]]*\)[[:space:]]+LOOP',
+        'FOR v_coverage IN SELECT cp.product_id, cp.sku, ics.inventory_site_id, s.code AS site_code, loc.id AS inventory_site_location_id, loc.code AS location_code FROM inventarios.inventory_campaign_products cp JOIN inventarios.inventory_campaign_sites ics ON ics.company_id = cp.company_id AND ics.campaign_id = cp.campaign_id JOIN inventarios.inventory_sites s ON s.company_id = ics.company_id AND s.id = ics.inventory_site_id JOIN inventarios.inventory_site_locations loc ON loc.company_id = ics.company_id AND loc.inventory_site_id = ics.inventory_site_id LEFT JOIN inventarios.inventory_campaign_site_locations icl ON icl.company_id = ics.company_id AND icl.campaign_site_id = ics.id AND icl.inventory_site_location_id = loc.id WHERE cp.company_id = p_company_id AND cp.campaign_id = v_import_campaign_id AND ((ics.location_scope = ''ALL'' AND loc.is_active = true) OR (ics.location_scope = ''SELECTED'' AND icl.inventory_site_location_id IS NOT NULL)) AND NOT EXISTS (SELECT 1 FROM inventarios.stock_import_rows r WHERE r.company_id = p_company_id AND r.import_id = p_import_id AND r.row_status <> ''ERROR'' AND r.product_id = cp.product_id AND r.resolved_inventory_site_id = ics.inventory_site_id AND r.inventory_site_location_id = loc.id) LOOP'
+    );
+
+    EXECUTE v_def;
+END $$;
+
+ALTER FUNCTION inventarios.validate_campaign_stock_import(uuid, uuid, jsonb, jsonb, uuid) OWNER TO postgres;
+REVOKE ALL ON FUNCTION inventarios.validate_campaign_stock_import(uuid, uuid, jsonb, jsonb, uuid) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION inventarios.validate_campaign_stock_import(uuid, uuid, jsonb, jsonb, uuid) TO authenticated;
