@@ -1073,5 +1073,8 @@ function safeRpcError(message: string): string {
       }
     }
   }
+  if (message.includes('INV_INVALID_STORAGE_PATH')) {
+    return 'No pudimos registrar el archivo cargado. Vuelve a seleccionarlo e inténtalo nuevamente.'
+  }
   return message
 }

@@ -1,6 +1,10 @@
-import { safeFileName } from './excel-import'
-
 export const CAMPAIGN_IMPORT_STORAGE_PREFIX = 'campaign-stock-imports'
+
+export function sanitizeCampaignImportFileName(name: string): string {
+  return name
+    .trim()
+    .replace(/[^A-Za-z0-9._-]/g, '_')
+}
 
 export function buildCampaignImportStoragePrefix(
   companyId: string,
@@ -16,7 +20,7 @@ export function buildCampaignImportStoragePath(params: {
   importId: string
   filename: string
 }): string {
-  return `${buildCampaignImportStoragePrefix(params.companyId, params.campaignId, params.importId)}${params.importId}-${safeFileName(params.filename)}`
+  return `${buildCampaignImportStoragePrefix(params.companyId, params.campaignId, params.importId)}${params.importId}-${sanitizeCampaignImportFileName(params.filename)}`
 }
 
 export function isCampaignImportStoragePath(params: {
