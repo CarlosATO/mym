@@ -109,10 +109,15 @@ export interface CampaignStockImportIssueItem {
 
 export interface CampaignStockImportRowItem {
   row_index: number
+  row_number: number
   sku: string
   barcode: string | null
   entered_name: string | null
+  entered_description: string | null
+  enteredDescription: string | null
   product_id: string | null
+  canonical_product_description: string | null
+  canonicalProductDescription: string | null
   entered_site_code: string | null
   resolved_inventory_site_id: string | null
   entered_location_code: string | null
@@ -231,6 +236,48 @@ export async function getCompanyImportPermissions(): Promise<{
   } catch (err) {
     console.error('getCompanyImportPermissions exception:', err)
     return { canRead: false, canManage: false, companyId, error: 'No se pudieron cargar los permisos.' }
+  }
+}
+
+interface CampaignStockImportRowRpc {
+  row_index: number
+  row_number?: number
+  sku: string
+  barcode: string | null
+  entered_name: string | null
+  entered_description?: string | null
+  product_id: string | null
+  canonical_product_description?: string | null
+  entered_site_code: string | null
+  resolved_inventory_site_id: string | null
+  entered_location_code: string | null
+  inventory_site_location_id: string | null
+  quantity: number | null
+  cost: number | null
+  row_status: string
+  issues: CampaignStockImportRowItem['issues']
+}
+
+function mapCampaignStockImportRow(row: CampaignStockImportRowRpc): CampaignStockImportRowItem {
+  return {
+    row_index: row.row_index,
+    row_number: row.row_number ?? row.row_index,
+    sku: row.sku,
+    barcode: row.barcode,
+    entered_name: row.entered_name,
+    entered_description: row.entered_description ?? null,
+    enteredDescription: row.entered_description ?? null,
+    product_id: row.product_id,
+    canonical_product_description: row.canonical_product_description ?? null,
+    canonicalProductDescription: row.canonical_product_description ?? null,
+    entered_site_code: row.entered_site_code,
+    resolved_inventory_site_id: row.resolved_inventory_site_id,
+    entered_location_code: row.entered_location_code,
+    inventory_site_location_id: row.inventory_site_location_id,
+    quantity: row.quantity,
+    cost: row.cost,
+    row_status: row.row_status,
+    issues: row.issues,
   }
 }
 
@@ -677,7 +724,13 @@ export async function getCampaignStockImport(importId: string): Promise<{
       console.error('get_campaign_stock_import error:', error.message)
       return { data: null, error: 'No se pudo cargar la importación de campaña.' }
     }
-    const detail = data as CampaignStockImportDetail | null
+    const raw = data as (Omit<CampaignStockImportDetail, 'rows'> & { rows?: CampaignStockImportRowRpc[] | null }) | null
+    const detail: CampaignStockImportDetail | null = raw
+      ? {
+          ...raw,
+          rows: (raw.rows ?? []).map(mapCampaignStockImportRow),
+        }
+      : null
     return { data: detail, error: null }
   } catch (err) {
     console.error('getCampaignStockImport exception:', err)
@@ -930,6 +983,7 @@ export async function finalizeCampaignStockImport(params: {
     const rows = parsed.rows.map(row => ({
       row_index: row.rowNumber,
       sku: row.sku,
+      entered_description: row.enteredDescription,
       entered_site_code: row.enteredSiteCode,
       entered_location_code: row.enteredLocationCode,
       quantity: row.theoreticalQuantity,
