@@ -1,8 +1,10 @@
 import { Layers, MapPin } from 'lucide-react'
 import { getActiveCompanyCampaignDetail, getCampaignSessionCreatePermission } from '@/app/actions/inventarios/campaigns'
+import { getCompanyImportPermissions } from '@/app/actions/inventarios/imports'
 import { InventoryPageHeader } from '@/modules/inventarios/components/inventory-page-header'
 import { InventoryStatusBadge } from '@/modules/inventarios/components/inventory-status-badge'
 import { InventoryCampaignSiteCard } from '@/modules/inventarios/components/inventory-campaign-site-card'
+import { InventoryCampaignStockTheoreticalSelector } from '@/modules/inventarios/components/inventory-campaign-stock-theoretical-selector'
 import { InventoryEmptyState } from '@/modules/inventarios/components/inventory-empty-state'
 import { InventoryErrorState } from '@/modules/inventarios/components/inventory-error-state'
 import { formatDateChile } from '@/modules/inventarios/lib/format'
@@ -19,7 +21,11 @@ interface PageProps {
 
 export default async function InventariosCampanaDetallePage({ params }: PageProps) {
   const { id } = await params
-  const { data: detail, error, companyId } = await getActiveCompanyCampaignDetail(id)
+  const [{ data: detail, error, companyId }, importPermissions, permission] = await Promise.all([
+    getActiveCompanyCampaignDetail(id),
+    getCompanyImportPermissions(),
+    getCampaignSessionCreatePermission(),
+  ])
 
   if (!companyId) {
     return (
@@ -50,7 +56,6 @@ export default async function InventariosCampanaDetallePage({ params }: PageProp
   }
 
   const campaign = detail.campaign
-  const permission = await getCampaignSessionCreatePermission()
   const canCreate = permission.canCreate && campaign.status === 'DRAFT'
   const allHaveSessions = detail.site_count > 0 && detail.sessions_pending === 0
   const noneHaveSessions = detail.site_count > 0 && detail.session_count === 0
@@ -108,6 +113,11 @@ export default async function InventariosCampanaDetallePage({ params }: PageProp
           </div>
         </div>
       </div>
+
+      <InventoryCampaignStockTheoreticalSelector
+        canRead={importPermissions.canRead}
+        canManage={importPermissions.canManage}
+      />
 
       {noneHaveSessions && (
         <div className="rounded-xl border border-theme-border bg-theme-surface p-3 text-sm text-theme-text-muted">
