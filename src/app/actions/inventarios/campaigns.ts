@@ -3,6 +3,7 @@
 import crypto from 'crypto'
 import { createInventariosClient } from '@/lib/supabase/inventarios'
 import { getActiveCompanyId } from '@/app/actions/companies'
+import { getActiveCompanySites, type InventorySite } from '@/app/actions/inventarios/sites'
 
 async function inventariosAdmin() {
   return createInventariosClient()
@@ -246,6 +247,126 @@ export async function getCampaignSessionCreatePermission(): Promise<{
   }
 }
 
+export async function getCampaignManagePermission(): Promise<{
+  canManage: boolean
+  companyId: string | null
+  error: string | null
+}> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) {
+    return { canManage: false, companyId: null, error: 'No tienes una empresa activa seleccionada.' }
+  }
+  try {
+    const db = await inventariosAdmin()
+    const { data: userData } = await db.auth.getUser()
+    const userId = userData.user?.id
+    if (!userId) {
+      return { canManage: false, companyId, error: 'Debes iniciar sesión para realizar esta operación.' }
+    }
+    const { data, error } = await db.rpc('get_company_permissions', {
+      p_user_id: userId,
+      p_company_id: companyId,
+    })
+    if (error) {
+      console.error('get_company_permissions error:', error.message)
+      return { canManage: false, companyId, error: 'No se pudieron cargar los permisos.' }
+    }
+    const codes: string[] = (data ?? []).map((p: { permission_code: string }) => p.permission_code)
+    return { canManage: codes.includes('inventarios.campaigns.manage'), companyId, error: null }
+  } catch (err) {
+    console.error('getCampaignManagePermission exception:', err)
+    return { canManage: false, companyId, error: 'No se pudieron cargar los permisos.' }
+  }
+}
+
+export interface InventoryCampaignCreationResult {
+  campaign_id: string
+  units_materialized: number
+}
+
+export async function setInventoryCampaignSites(params: {
+  campaignId: string
+  siteIds: string[]
+}): Promise<{ data: { campaign_id: string; units_materialized: number } | null; error: string | null }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) {
+    return { data: null, error: 'No tienes una empresa activa seleccionada.' }
+  }
+  try {
+    const db = await inventariosAdmin()
+    const { error } = await db.rpc('set_inventory_campaign_sites', {
+      p_company_id: companyId,
+      p_campaign_id: params.campaignId,
+      p_site_ids: params.siteIds,
+      p_location_scopes: [],
+    })
+    if (error) {
+      console.error('set_inventory_campaign_sites error:', error.message)
+      return { data: null, error: safeCampaignScopeError(error.message) }
+    }
+    return {
+      data: {
+        campaign_id: params.campaignId,
+        units_materialized: params.siteIds.length,
+      },
+      error: null,
+    }
+  } catch (err) {
+    console.error('setInventoryCampaignSites exception:', err)
+    return { data: null, error: 'No se pudieron materializar las unidades de la campaña.' }
+  }
+}
+
+export async function createGeneralInventoryCampaign(input: {
+  name: string
+  plannedAt: string
+}): Promise<{ data: InventoryCampaignCreationResult | null; error: string | null }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) {
+    return { data: null, error: 'No tienes una empresa activa seleccionada.' }
+  }
+
+  const sitesResult = await getActiveCompanySites()
+  if (sitesResult.error) {
+    return { data: null, error: sitesResult.error }
+  }
+
+  const eligibleSites = filterGeneralCampaignSites(sitesResult.data ?? [])
+  if (eligibleSites.length === 0) {
+    return { data: null, error: 'No hay bodegas internas habilitadas para crear la campaña.' }
+  }
+
+  const created = await createInventoryCampaign({
+    name: input.name,
+    campaign_type: 'GENERAL',
+    planned_at: input.plannedAt,
+    site_scope: 'ALL_INTERNAL',
+    product_scope: 'ALL',
+  })
+  if (created.error || !created.data) {
+    return { data: null, error: created.error ?? 'No se pudo crear la campaña.' }
+  }
+
+  const materialized = await setInventoryCampaignSites({
+    campaignId: created.data.campaign_id,
+    siteIds: eligibleSites.map(site => site.id),
+  })
+  if (materialized.error || !materialized.data) {
+    return {
+      data: null,
+      error: 'No se pudo completar la materialización de las unidades. La campaña puede haber quedado en borrador; inténtalo nuevamente.',
+    }
+  }
+
+  return {
+    data: {
+      campaign_id: created.data.campaign_id,
+      units_materialized: materialized.data.units_materialized,
+    },
+    error: null,
+  }
+}
+
 function safeCampaignError(message: string): string {
   const idx = message.indexOf('DETAIL:')
   if (idx >= 0) {
@@ -283,6 +404,24 @@ function safeCampaignGenerationError(message: string): string {
     return 'No tienes permisos para generar jornadas.'
   }
   return 'No se pudieron generar las jornadas de la campaña.'
+}
+
+function safeCampaignScopeError(message: string): string {
+  const normalized = message.toLowerCase()
+  if (normalized.includes('no hay bodegas internas')) {
+    return 'No hay bodegas internas habilitadas para crear la campaña.'
+  }
+  if (normalized.includes('no existe') || normalized.includes('not found')) {
+    return 'No se pudo materializar una de las bodegas seleccionadas.'
+  }
+  if (normalized.includes('permission') || normalized.includes('autoriz')) {
+    return 'No tienes permisos para configurar la campaña.'
+  }
+  return 'No se pudieron materializar las unidades de la campaña.'
+}
+
+function filterGeneralCampaignSites(sites: InventorySite[]): InventorySite[] {
+  return sites.filter(site => site.site_type === 'INTERNAL_WAREHOUSE' && site.is_active && site.inventory_enabled)
 }
 
 export async function createInventoryCampaign(input: {

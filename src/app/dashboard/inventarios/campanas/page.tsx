@@ -30,6 +30,15 @@ export default async function InventariosCampanasPage() {
         title="Campañas"
         description="Agrupa sesiones de inventario por unidad. Una campaña puede ser general, selectiva o externa."
         breadcrumb={['Inventarios', 'Campañas']}
+        action={
+          <Link
+            href="/dashboard/inventarios/campanas/nueva"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-theme-accent px-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-theme-accent-hover"
+          >
+            <Layers className="h-4 w-4" />
+            Nueva campaña
+          </Link>
+        }
       />
 
       {error ? (
