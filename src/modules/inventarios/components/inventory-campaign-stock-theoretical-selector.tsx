@@ -128,6 +128,11 @@ export function InventoryCampaignStockTheoreticalSelector({
   const sessionsComplete = hasUnits && sessionsPending === 0
   const sessionsPartial = hasUnits && sessionsPending > 0 && sessionCount > 0
   const generationButtonLabel = sessionsPartial ? 'Generar jornadas faltantes' : 'Generar jornadas'
+  const validatedMessage = sessionsComplete
+    ? 'El stock teórico fue validado correctamente. Todas las unidades ya tienen una jornada en borrador.'
+    : sessionsPartial
+      ? 'El stock teórico fue validado correctamente. Aún quedan jornadas pendientes por generar.'
+      : 'El stock teórico fue validado correctamente. Aún no se han generado las jornadas.'
   const canShowGenerateSessions =
     canGenerateSessions &&
     campaignStatus === 'DRAFT' &&
@@ -429,7 +434,7 @@ export function InventoryCampaignStockTheoreticalSelector({
           {isValidated && summary && (
             <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
               <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Archivo validado</p>
-              <p className="mt-1 text-sm text-theme-text-muted">El stock teórico fue validado correctamente. Aún no se han generado las jornadas.</p>
+              <p className="mt-1 text-sm text-theme-text-muted">{validatedMessage}</p>
               <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <InfoCard label="Archivo" value={result?.import.original_filename ?? selectedFile?.name ?? '—'} />
                 <InfoCard label="Formato" value={selectedOptionLabel} />
