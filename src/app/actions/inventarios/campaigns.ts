@@ -459,3 +459,218 @@ export async function createInventoryCampaign(input: {
     return { data: null, error: 'No se pudo crear la campaña.' }
   }
 }
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export type InventoryCampaignParticipantRole = 'COUNTER' | 'SUPERVISOR' | 'ADMINISTRATOR' | 'MANAGER'
+
+export type InventoryCampaignParticipantState = 'ACTIVE' | 'REVOKED'
+
+export interface InventoryCampaignParticipant {
+  participantId: string
+  userId: string
+  userName: string | null
+  email: string | null
+  userIsActive: boolean
+  participantRole: InventoryCampaignParticipantRole
+  state: InventoryCampaignParticipantState
+  activeFrom: string
+  revokedAt: string | null
+  revocationReason: string | null
+  createdBy: string
+}
+
+export interface InventoryCampaignParticipantCounts {
+  counter: number
+  supervisor: number
+  administrator: number
+  manager: number
+}
+
+export interface InventoryCampaignParticipantsResult {
+  participants: InventoryCampaignParticipant[]
+  counts: InventoryCampaignParticipantCounts
+}
+
+export interface InventoryCampaignParticipantOperationEnvelope {
+  operation: string
+  entity_id: string
+  state: InventoryCampaignParticipantState
+  version: number | null
+  cycle_number: number | null
+  assignment_id: string | null
+  event_id: string | null
+  replayed: boolean
+  occurred_at: string
+  data: Record<string, unknown>
+}
+
+const CAMPAIGN_PARTICIPANT_ROLES: InventoryCampaignParticipantRole[] = [
+  'COUNTER',
+  'SUPERVISOR',
+  'ADMINISTRATOR',
+  'MANAGER',
+]
+
+function safeCampaignParticipantError(message: string, fallback: string): string {
+  const idx = message.indexOf('DETAIL:')
+  if (idx >= 0) {
+    const raw = message.slice(idx + 'DETAIL:'.length).trim()
+    if (raw.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(raw)
+        if (parsed?.message) return parsed.message
+      } catch {
+        // ignore
+      }
+    }
+  }
+  const normalized = message.toLowerCase()
+  if (normalized.includes('inv_participant_duplicate') || normalized.includes('ya tiene un rol activo')) {
+    return 'El usuario ya tiene un rol activo en esta campaña.'
+  }
+  if (normalized.includes('inv_campaign_prepared') || normalized.includes('no esta en draft')) {
+    return 'La campaña ya fue preparada y no admite cambios de equipo.'
+  }
+  if (normalized.includes('inv_participant_last_administrator')) {
+    return 'La campaña necesita al menos un administrador.'
+  }
+  if (normalized.includes('inv_participant_has_active_tasks')) {
+    return 'El participante tiene tareas activas y no puede ser removido.'
+  }
+  if (normalized.includes('inv_participant_not_found') || normalized.includes('inv_not_found')) {
+    return 'El participante no existe en esta campaña.'
+  }
+  if (normalized.includes('inv_idempotency_conflict')) {
+    return 'La solicitud ya fue procesada con un resultado distinto.'
+  }
+  if (normalized.includes('permission') || normalized.includes('autoriz')) {
+    return 'No tienes permisos para gestionar el equipo de la campaña.'
+  }
+  return fallback
+}
+
+function mapParticipantRow(row: Record<string, unknown>): InventoryCampaignParticipant {
+  return {
+    participantId: String(row.participant_id ?? ''),
+    userId: String(row.user_id ?? ''),
+    userName: row.user_name == null ? null : String(row.user_name),
+    email: row.email == null ? null : String(row.email),
+    userIsActive: Boolean(row.user_is_active),
+    participantRole: (row.participant_role as InventoryCampaignParticipantRole) ?? 'COUNTER',
+    state: (row.state as InventoryCampaignParticipantState) ?? 'ACTIVE',
+    activeFrom: String(row.active_from ?? ''),
+    revokedAt: row.revoked_at == null ? null : String(row.revoked_at),
+    revocationReason: row.revocation_reason == null ? null : String(row.revocation_reason),
+    createdBy: String(row.created_by ?? ''),
+  }
+}
+
+export async function listInventoryCampaignParticipants(
+  companyId: string,
+  campaignId: string
+): Promise<{ data: InventoryCampaignParticipantsResult | null; error: string | null }> {
+  if (!UUID_PATTERN.test(companyId) || !UUID_PATTERN.test(campaignId)) {
+    return { data: null, error: 'Los identificadores de la campaña no son válidos.' }
+  }
+  try {
+    const db = await inventariosAdmin()
+    const { data, error } = await db.rpc('list_inventory_campaign_participants', {
+      p_company_id: companyId,
+      p_campaign_id: campaignId,
+    })
+    if (error) {
+      console.error('list_inventory_campaign_participants error:', error.message)
+      return { data: null, error: safeCampaignParticipantError(error.message, 'No se pudo cargar el equipo de la campaña.') }
+    }
+    const payload = data as { participants?: Record<string, unknown>[]; counts?: Record<string, number> } | null
+    const participants = (payload?.participants ?? []).map(mapParticipantRow)
+    const counts = {
+      counter: Number(payload?.counts?.COUNTER ?? 0),
+      supervisor: Number(payload?.counts?.SUPERVISOR ?? 0),
+      administrator: Number(payload?.counts?.ADMINISTRATOR ?? 0),
+      manager: Number(payload?.counts?.MANAGER ?? 0),
+    }
+    return { data: { participants, counts }, error: null }
+  } catch (err) {
+    console.error('listInventoryCampaignParticipants exception:', err)
+    return { data: null, error: 'No se pudo cargar el equipo de la campaña.' }
+  }
+}
+
+export async function addInventoryCampaignParticipant(input: {
+  companyId: string
+  campaignId: string
+  userId: string
+  participantRole: InventoryCampaignParticipantRole
+  idempotencyKey: string
+}): Promise<{ data: InventoryCampaignParticipantOperationEnvelope | null; error: string | null }> {
+  const fallback = 'No se pudo agregar al participante.'
+  if (!UUID_PATTERN.test(input.companyId) || !UUID_PATTERN.test(input.campaignId) || !UUID_PATTERN.test(input.userId)) {
+    return { data: null, error: 'Los identificadores de la campaña o el usuario no son válidos.' }
+  }
+  if (!CAMPAIGN_PARTICIPANT_ROLES.includes(input.participantRole)) {
+    return { data: null, error: 'El rol seleccionado no es válido.' }
+  }
+  const idempotencyKey = input.idempotencyKey.trim()
+  if (!UUID_PATTERN.test(idempotencyKey)) {
+    return { data: null, error: 'La clave de idempotencia no es válida.' }
+  }
+  try {
+    const db = await inventariosAdmin()
+    const { data, error } = await db.rpc('add_inventory_campaign_participant', {
+      p_company_id: input.companyId,
+      p_campaign_id: input.campaignId,
+      p_user_id: input.userId,
+      p_participant_role: input.participantRole,
+      p_idempotency_key: idempotencyKey,
+    })
+    if (error) {
+      console.error('add_inventory_campaign_participant error:', error.message)
+      return { data: null, error: safeCampaignParticipantError(error.message, fallback) }
+    }
+    return { data: data as InventoryCampaignParticipantOperationEnvelope | null, error: null }
+  } catch (err) {
+    console.error('addInventoryCampaignParticipant exception:', err)
+    return { data: null, error: fallback }
+  }
+}
+
+export async function revokeInventoryCampaignParticipant(input: {
+  companyId: string
+  campaignId: string
+  participantId: string
+  reason: string
+  idempotencyKey: string
+}): Promise<{ data: InventoryCampaignParticipantOperationEnvelope | null; error: string | null }> {
+  const fallback = 'No se pudo revocar al participante.'
+  if (!UUID_PATTERN.test(input.companyId) || !UUID_PATTERN.test(input.campaignId) || !UUID_PATTERN.test(input.participantId)) {
+    return { data: null, error: 'Los identificadores de la campaña o el participante no son válidos.' }
+  }
+  const reason = input.reason.trim()
+  if (reason.length < 5 || reason.length > 500) {
+    return { data: null, error: 'El motivo de la revocación debe tener entre 5 y 500 caracteres.' }
+  }
+  const idempotencyKey = input.idempotencyKey.trim()
+  if (!UUID_PATTERN.test(idempotencyKey)) {
+    return { data: null, error: 'La clave de idempotencia no es válida.' }
+  }
+  try {
+    const db = await inventariosAdmin()
+    const { data, error } = await db.rpc('revoke_inventory_campaign_participant', {
+      p_company_id: input.companyId,
+      p_campaign_id: input.campaignId,
+      p_participant_id: input.participantId,
+      p_reason: reason,
+      p_idempotency_key: idempotencyKey,
+    })
+    if (error) {
+      console.error('revoke_inventory_campaign_participant error:', error.message)
+      return { data: null, error: safeCampaignParticipantError(error.message, fallback) }
+    }
+    return { data: data as InventoryCampaignParticipantOperationEnvelope | null, error: null }
+  } catch (err) {
+    console.error('revokeInventoryCampaignParticipant exception:', err)
+    return { data: null, error: fallback }
+  }
+}
