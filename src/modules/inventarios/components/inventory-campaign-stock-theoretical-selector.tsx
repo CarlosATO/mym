@@ -17,6 +17,7 @@ interface InventoryCampaignStockTheoreticalSelectorProps {
   campaignId: string
   campaignStatus: string
   cutoffAt: string
+  initialImport: CampaignStockImportDetail | null
   sessionCount: number
   sessionsPending: number
   siteCount: number
@@ -79,6 +80,7 @@ export function InventoryCampaignStockTheoreticalSelector({
   campaignId,
   campaignStatus,
   cutoffAt,
+  initialImport,
   sessionCount,
   sessionsPending,
   siteCount,
@@ -86,13 +88,13 @@ export function InventoryCampaignStockTheoreticalSelector({
   const router = useRouter()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [open, setOpen] = useState(false)
-  const [selected, setSelected] = useState<CampaignImportScope | null>(null)
-  const [draft, setDraft] = useState<CampaignImportScope | null>(null)
+  const [selected, setSelected] = useState<CampaignImportScope | null>(() => initialImport?.import.theoretical_scope ?? null)
+  const [draft, setDraft] = useState<CampaignImportScope | null>(() => initialImport?.import.theoretical_scope ?? null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
   const [processStage, setProcessStage] = useState<keyof typeof PROCESS_STAGE_LABELS | null>(null)
   const [processError, setProcessError] = useState<string | null>(null)
-  const [result, setResult] = useState<CampaignStockImportDetail | null>(null)
+  const [result, setResult] = useState<CampaignStockImportDetail | null>(() => initialImport)
   const [generationOpen, setGenerationOpen] = useState(false)
   const [generationStage, setGenerationStage] = useState<'GENERATING' | null>(null)
   const [generationError, setGenerationError] = useState<string | null>(null)
@@ -100,7 +102,8 @@ export function InventoryCampaignStockTheoreticalSelector({
 
   if (!canRead && !canManage) return null
 
-  const committed = selected ? OPTIONS.find(option => option.value === selected) ?? null : null
+  const effectiveScope = selected ?? result?.import.theoretical_scope ?? null
+  const committed = effectiveScope ? OPTIONS.find(option => option.value === effectiveScope) ?? null : null
   const isProcessing = processStage !== null
   const isValidated = result?.import.status === 'VALIDATED'
   const isRejected = result?.import.status === 'REJECTED'
@@ -116,11 +119,15 @@ export function InventoryCampaignStockTheoreticalSelector({
           ? 'Archivo seleccionado'
           : 'Archivo pendiente'
 
-  const selectedOptionLabel = selected ? FORMAT_LABELS[selected] : '—'
+  const selectedOptionLabel = effectiveScope ? FORMAT_LABELS[effectiveScope] : '—'
   const preview = buildValidatedCampaignPreview(result)
   const previewScope = result?.import.theoretical_scope ?? selected
   const showUnitColumn = previewScope === 'BY_SITE' || previewScope === 'BY_LOCATION'
   const showLocationColumn = previewScope === 'BY_LOCATION'
+  const hasUnits = siteCount > 0
+  const sessionsComplete = hasUnits && sessionsPending === 0
+  const sessionsPartial = hasUnits && sessionsPending > 0 && sessionCount > 0
+  const generationButtonLabel = sessionsPartial ? 'Generar jornadas faltantes' : 'Generar jornadas'
   const canShowGenerateSessions =
     canGenerateSessions &&
     campaignStatus === 'DRAFT' &&
@@ -499,11 +506,11 @@ export function InventoryCampaignStockTheoreticalSelector({
                     </p>
                   )}
 
-                  {canShowGenerateSessions && (
+                  {canShowGenerateSessions && !sessionsComplete && (
                     <div className="mt-5 rounded-xl border border-theme-accent/20 bg-theme-accent/5 p-4">
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div className="space-y-1">
-                          <p className="text-sm font-semibold text-theme-text">Generar jornadas</p>
+                          <p className="text-sm font-semibold text-theme-text">{generationButtonLabel}</p>
                           <p className="text-sm text-theme-text-muted">
                             PetGroup creará una jornada en borrador por cada unidad incluida en la campaña.
                           </p>
@@ -515,8 +522,23 @@ export function InventoryCampaignStockTheoreticalSelector({
                           className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           <Plus className="h-4 w-4" />
-                          Generar jornadas
+                          {generationButtonLabel}
                         </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {canShowGenerateSessions && sessionsComplete && (
+                    <div className="mt-5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="space-y-1">
+                          <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Jornadas generadas</p>
+                          <p className="text-sm text-theme-text-muted">Todas las unidades ya tienen una jornada en borrador.</p>
+                        </div>
+                        <div className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-white/60 px-3 py-2 text-sm font-medium text-theme-text dark:bg-theme-surface/40">
+                          <Check className="h-4 w-4 text-emerald-600" />
+                          {sessionCount} de {siteCount} unidades listas
+                        </div>
                       </div>
                     </div>
                   )}

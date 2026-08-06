@@ -8,6 +8,7 @@ import { InventoryCampaignStockTheoreticalSelector } from '@/modules/inventarios
 import { InventoryEmptyState } from '@/modules/inventarios/components/inventory-empty-state'
 import { InventoryErrorState } from '@/modules/inventarios/components/inventory-error-state'
 import { formatDateChile } from '@/modules/inventarios/lib/format'
+import { getLatestCampaignStockImport, type CampaignStockImportDetail } from '@/app/actions/inventarios/imports'
 
 const CAMPAIGN_TYPE_LABELS: Record<string, string> = {
   GENERAL: 'General',
@@ -56,6 +57,9 @@ export default async function InventariosCampanaDetallePage({ params }: PageProp
   }
 
   const campaign = detail.campaign
+  const importFetch = await getLatestCampaignStockImport(campaign.id)
+  const initialImport: CampaignStockImportDetail | null = importFetch.data
+  const importError: string | null = importFetch.error
   const canCreate = permission.canCreate && campaign.status === 'DRAFT'
   const allHaveSessions = detail.site_count > 0 && detail.sessions_pending === 0
   const noneHaveSessions = detail.site_count > 0 && detail.session_count === 0
@@ -114,13 +118,21 @@ export default async function InventariosCampanaDetallePage({ params }: PageProp
         </div>
       </div>
 
+      {importError && (
+        <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-3 text-sm text-amber-700 dark:text-amber-300">
+          No fue posible recuperar el archivo de stock de esta campaña.
+        </div>
+      )}
+
       <InventoryCampaignStockTheoreticalSelector
+        key={initialImport?.import.id ?? 'no-campaign-import'}
         canRead={importPermissions.canRead}
         canManage={importPermissions.canManage}
         canGenerateSessions={canCreate}
         campaignId={campaign.id}
         campaignStatus={campaign.status}
         cutoffAt={plannedOrCreated}
+        initialImport={initialImport}
         sessionCount={detail.session_count}
         sessionsPending={detail.sessions_pending}
         siteCount={detail.site_count}

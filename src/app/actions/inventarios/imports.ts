@@ -729,24 +729,45 @@ export async function getCampaignStockImport(importId: string): Promise<{
     const detail: CampaignStockImportDetail | null = raw
       ? {
           ...raw,
+          import: {
+            ...raw.import,
+            consumed_campaign_id: (raw.import as { consumed_campaign_id?: string | null }).consumed_campaign_id ?? null,
+          },
           rows: (raw.rows ?? []).map(mapCampaignStockImportRow),
         }
       : null
-    if (detail) {
-      const { data: importState } = await db
-        .from('stock_imports')
-        .select('consumed_campaign_id')
-        .eq('company_id', companyId)
-        .eq('id', importId)
-        .maybeSingle()
-      if (importState) {
-        detail.import.consumed_campaign_id = (importState as { consumed_campaign_id?: string | null }).consumed_campaign_id ?? null
-      }
-    }
     return { data: detail, error: null }
   } catch (err) {
     console.error('getCampaignStockImport exception:', err)
     return { data: null, error: 'No se pudo cargar la importación de campaña.' }
+  }
+}
+
+export async function getLatestCampaignStockImport(campaignId: string): Promise<{
+  data: CampaignStockImportDetail | null
+  error: string | null
+}> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { data: null, error: 'No tienes una empresa activa seleccionada.' }
+  try {
+    const db = await inventariosDb()
+    const { data, error } = await db.rpc('get_latest_campaign_stock_import_ref', {
+      p_company_id: companyId,
+      p_campaign_id: campaignId,
+    })
+    if (error) {
+      console.error('get_latest_campaign_stock_import_ref error:', error.message)
+      return { data: null, error: 'No fue posible recuperar el archivo de stock de esta campaña.' }
+    }
+    const envelope = data as { state?: string | null; entity_id?: string | null; data?: { import_id?: string | null } | null } | null
+    const importId = envelope?.entity_id ?? envelope?.data?.import_id ?? null
+    if (!importId || envelope?.state === 'NOT_FOUND') {
+      return { data: null, error: null }
+    }
+    return getCampaignStockImport(importId)
+  } catch (err) {
+    console.error('getLatestCampaignStockImport exception:', err)
+    return { data: null, error: 'No fue posible recuperar el archivo de stock de esta campaña.' }
   }
 }
 
