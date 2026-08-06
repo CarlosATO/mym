@@ -1,10 +1,26 @@
 import type { InventorySessionDetail } from '@/app/actions/inventarios/sessions'
+import { getInventorySessionImportContext } from '@/app/actions/inventarios/sessions'
+import { InventoryOperationalSetup } from '@/modules/inventarios/components/inventory-operational-setup'
 
 interface InventoryZonesPanelProps {
   detail: InventorySessionDetail
 }
 
-export function InventoryZonesPanel({ detail }: InventoryZonesPanelProps) {
+export async function InventoryZonesPanel({ detail }: InventoryZonesPanelProps) {
+  const importContextResult = await getInventorySessionImportContext(detail.session.id)
+  const campaignId = importContextResult.data?.campaign_id
+
+  if (campaignId) {
+    return (
+      <InventoryOperationalSetup
+        companyId={detail.session.company_id}
+        sessionId={detail.session.id}
+        campaignId={campaignId}
+        readOnly={detail.session.status !== 'DRAFT'}
+      />
+    )
+  }
+
   const zones = detail.zones
 
   if (!zones || zones.length === 0) {
