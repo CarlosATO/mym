@@ -674,3 +674,39 @@ export async function revokeInventoryCampaignParticipant(input: {
     return { data: null, error: fallback }
   }
 }
+
+export interface InventoryCampaignUserOption {
+  userId: string
+  nombre: string
+  apellido: string | null
+  email: string
+}
+
+export async function listInventoryCampaignUserCatalog(
+  companyId: string
+): Promise<{ data: InventoryCampaignUserOption[] | null; error: string | null }> {
+  if (!UUID_PATTERN.test(companyId)) {
+    return { data: null, error: 'El identificador de la empresa no es válido.' }
+  }
+  try {
+    const db = await inventariosAdmin()
+    const { data, error } = await db.rpc('list_inventory_campaign_user_catalog', {
+      p_company_id: companyId,
+    })
+    if (error) {
+      console.error('list_inventory_campaign_user_catalog error:', error.message)
+      return { data: null, error: 'No se pudieron cargar los usuarios de la campaña.' }
+    }
+    const payload = data as { users?: Record<string, unknown>[] } | null
+    const users = (payload?.users ?? []).map(row => ({
+      userId: String(row.user_id ?? ''),
+      nombre: String(row.nombre ?? ''),
+      apellido: row.apellido == null ? null : String(row.apellido),
+      email: String(row.email ?? ''),
+    }))
+    return { data: users, error: null }
+  } catch (err) {
+    console.error('listInventoryCampaignUserCatalog exception:', err)
+    return { data: null, error: 'No se pudieron cargar los usuarios de la campaña.' }
+  }
+}

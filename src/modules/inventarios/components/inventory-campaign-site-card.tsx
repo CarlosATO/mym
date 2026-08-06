@@ -3,15 +3,9 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ArrowRight, Boxes, Loader2, MapPin, Plus } from 'lucide-react'
+import { ArrowRight, Loader2, MapPin, Plus } from 'lucide-react'
 import { createInventorySessionFromCampaignSite, type InventoryCampaignSiteDetail } from '@/app/actions/inventarios/campaigns'
 import { InventoryStatusBadge } from '@/modules/inventarios/components/inventory-status-badge'
-
-const SITE_TYPE_LABELS: Record<string, string> = {
-  INTERNAL_WAREHOUSE: 'Bodega interna',
-  OWN_STORE: 'Tienda propia',
-  EXTERNAL_SITE: 'Sitio externo',
-}
 
 interface InventoryCampaignSiteCardProps {
   site: InventoryCampaignSiteDetail
@@ -41,84 +35,62 @@ export function InventoryCampaignSiteCard({ site, canCreate }: InventoryCampaign
   }
 
   return (
-    <div className="flex flex-col rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
+    <div className="flex flex-col rounded-lg border border-theme-border bg-theme-surface p-3 shadow-sm">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold text-theme-text">{site.site_name}</p>
-          <p className="mt-0.5 text-xs text-theme-text-muted">
-            {SITE_TYPE_LABELS[site.site_type] ?? site.site_type} · {site.is_required ? 'Requerida' : 'Opcional'}
+          <p className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-theme-text-muted">
+            <MapPin className="h-3 w-3 shrink-0" />
+            {site.site_code} · {site.location_count} ubicación(es) · {site.location_scope === 'SELECTED' ? 'Seleccionadas' : 'Todas'}
           </p>
         </div>
         {hasSession ? (
           <InventoryStatusBadge status={site.session_status} />
         ) : (
-          <span className="inline-flex items-center rounded-full border border-theme-border bg-theme-text/5 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-theme-text-muted">
+          <span className="inline-flex shrink-0 items-center rounded-full border border-theme-border bg-theme-text/5 px-2 py-0.5 text-[11px] font-medium whitespace-nowrap text-theme-text-muted">
             Sin sesión
           </span>
         )}
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-theme-border/60 pt-3 text-xs text-theme-text-muted">
-        <span className="inline-flex items-center gap-1">
-          <MapPin className="h-3.5 w-3.5" />
-          {site.location_count} ubicación(es)
-        </span>
-        <span>Alcance: {site.location_scope === 'SELECTED' ? 'Seleccionadas' : 'Todas'}</span>
-        <span className="inline-flex items-center gap-1">
-          <Boxes className="h-3.5 w-3.5" />
-          {site.site_code}
-        </span>
-      </div>
-
       {hasSession && site.session_number && (
-        <div className="mt-2 text-xs text-theme-text-muted">
-          Jornada #{site.session_number}
-          {site.import_filename && (
-            <span className="block truncate">
-              Importación: {site.import_filename} ({site.import_status ?? '—'})
-            </span>
-          )}
-        </div>
+        <p className="mt-1.5 truncate text-[11px] text-theme-text-muted">Jornada #{site.session_number}</p>
       )}
 
       {error && (
-        <div className="mt-3 rounded-lg border border-red-500/20 bg-red-500/5 p-2.5 text-xs text-red-700 dark:text-red-400">
+        <div className="mt-2 rounded-lg border border-red-500/20 bg-red-500/5 p-2 text-[11px] text-red-700 dark:text-red-400">
           {error}
         </div>
       )}
 
-      <div className="mt-4 flex items-center justify-between gap-2 border-t border-theme-border/60 pt-3">
+      <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-theme-border/60 pt-2.5">
         {hasSession ? (
           <Link
             href={`/dashboard/inventarios/jornadas/${site.session_id}`}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover"
+            className="inline-flex h-7 items-center gap-1 rounded-lg bg-theme-accent px-3 text-xs font-semibold text-white transition-colors hover:bg-theme-accent-hover"
           >
-            Abrir sesión
-            <ArrowRight className="h-4 w-4" />
+            Abrir
+            <ArrowRight className="h-3.5 w-3.5" />
           </Link>
         ) : canCreate ? (
           <button
             type="button"
             onClick={handleCreate}
             disabled={creating}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:opacity-50"
+            className="inline-flex h-7 items-center gap-1 rounded-lg bg-theme-accent px-3 text-xs font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:opacity-50"
           >
-            {creating ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Plus className="h-4 w-4" />
-            )}
+            {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
             {creating ? 'Creando…' : 'Crear sesión'}
           </button>
         ) : (
           <span
             title="Solo los usuarios con permiso de creación de jornadas pueden crear una sesión."
-            className="inline-flex h-9 items-center rounded-lg border border-theme-border bg-theme-text/5 px-4 text-sm font-medium text-theme-text-muted"
+            className="inline-flex h-7 items-center rounded-lg border border-theme-border bg-theme-text/5 px-3 text-xs font-medium text-theme-text-muted"
           >
             Crear sesión
           </span>
         )}
-        <span className="text-xs text-theme-text-muted">{site.is_required ? 'Requerida' : 'Opcional'}</span>
+        {site.is_required && <span className="text-[11px] text-theme-text-muted">Requerida</span>}
       </div>
     </div>
   )

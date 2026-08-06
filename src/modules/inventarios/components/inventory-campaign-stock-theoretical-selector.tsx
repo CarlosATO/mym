@@ -88,6 +88,7 @@ export function InventoryCampaignStockTheoreticalSelector({
   const router = useRouter()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [open, setOpen] = useState(false)
+  const [detailOpen, setDetailOpen] = useState(false)
   const [selected, setSelected] = useState<CampaignImportScope | null>(() => initialImport?.import.theoretical_scope ?? null)
   const [draft, setDraft] = useState<CampaignImportScope | null>(() => initialImport?.import.theoretical_scope ?? null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -303,327 +304,363 @@ export function InventoryCampaignStockTheoreticalSelector({
     : null
 
   const summary = result?.summary ?? null
+  const filename = result?.import.original_filename ?? selectedFile?.name ?? null
 
   return (
-    <section className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="space-y-1">
-          <h2 className="text-base font-bold text-theme-text">Stock teórico de la campaña</h2>
-          <p className="text-sm text-theme-text-muted">El stock teórico se carga mediante un único Excel para toda la campaña.</p>
-        </div>
-        {canEditFormat && (
-          <button
-            type="button"
-            onClick={openDialog}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:opacity-50"
-          >
-            <FileSpreadsheet className="h-4 w-4" />
-            Configurar stock teórico
-          </button>
-        )}
-      </div>
-
-      {committed ? (
-        <div className="mt-4 rounded-xl border border-theme-border/80 bg-theme-bg p-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-theme-text-muted">Formato seleccionado</p>
-              <p className="mt-1 text-sm font-semibold text-theme-text">{FORMAT_LABELS[committed.value]}</p>
-            </div>
-            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${statusBadgeClass(result?.import.status ?? null, isProcessing)}`}>
-              {currentStateLabel}
-            </span>
+    <>
+      <section className="flex h-full flex-col rounded-xl border border-theme-border bg-theme-surface p-3 shadow-sm">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-bold text-theme-text">Stock teórico</h2>
+            <p className="mt-0.5 text-xs text-theme-text-muted">{committed ? FORMAT_LABELS[committed.value] : 'Sin formato definido'}</p>
           </div>
-          <p className="mt-3 text-sm text-theme-text-muted">{committed.description}</p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {committed.columns.map(column => (
-              <span key={column} className="inline-flex rounded-full border border-theme-border bg-theme-surface px-2.5 py-1 text-xs font-medium text-theme-text-muted">
-                {column}
-              </span>
-            ))}
-          </div>
-          {canEditFormat && (
-            <>
-              <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
-                <button
-                  type="button"
-                  onClick={handleDownloadTemplate}
-                  disabled={isProcessing || isValidated}
-                  className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-3 text-sm font-semibold text-theme-text transition-colors hover:bg-theme-text/5 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Download className="h-4 w-4" />
-                  Descargar plantilla
-                </button>
-                <button
-                  type="button"
-                  onClick={openFilePicker}
-                  disabled={isProcessing || isValidated}
-                  className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-3 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Plus className="h-4 w-4" />
-                  Seleccionar archivo
-                </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".xlsx,.xls,.csv"
-                  className="hidden"
-                  onChange={e => handleFileSelected(e.target.files?.[0] ?? null)}
-                />
-              </div>
-              <p className="mt-4 text-xs text-theme-text-muted">La selección se guardará al cargar el archivo.</p>
-            </>
-          )}
+          <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${statusBadgeClass(result?.import.status ?? null, isProcessing)}`}>
+            {currentStateLabel}
+          </span>
         </div>
-      ) : (
-        <div className="mt-4 rounded-xl border border-dashed border-theme-border bg-theme-bg p-4 text-sm text-theme-text-muted">
-          Aún no has elegido el formato del Excel maestro.
-        </div>
-      )}
 
-      {selected && canManage && (
-        <div className="mt-4 rounded-xl border border-theme-border bg-theme-bg p-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="space-y-1">
-              <p className="text-xs font-semibold uppercase tracking-wider text-theme-text-muted">Archivo local</p>
-              <p className="text-sm font-semibold text-theme-text">{currentStateLabel}</p>
-              <p className="text-sm text-theme-text-muted">
-                {isValidated
-                  ? 'La validación ya terminó. El siguiente paso será preparar la campaña.'
-                  : 'La estructura y los datos se validarán al cargar el archivo.'}
-              </p>
-            </div>
-            {selectedFile && !isProcessing && !isValidated && (
-              <button
-                type="button"
-                onClick={clearFile}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs font-semibold text-theme-text-muted transition-colors hover:bg-theme-text/5 hover:text-theme-text"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                Quitar archivo
-              </button>
+        {committed ? (
+          <div className="mt-2 flex-1 space-y-1 text-xs">
+            {filename && <p className="truncate font-medium text-theme-text">{filename}</p>}
+            {isValidated && summary ? (
+              <>
+                <p className="text-theme-text-muted">{summary.valid_rows} filas válidas · {preview.totalRows} productos reconocidos</p>
+                <p className="text-theme-text-muted">{summary.issue_error_count} errores · {summary.issue_warning_count} advertencias</p>
+                <p className="font-medium text-theme-text">{sessionCount} de {siteCount} unidades listas</p>
+              </>
+            ) : isRejected && summary ? (
+              <>
+                <p className="text-red-600 dark:text-red-400">{summary.issue_error_count} errores · {summary.issue_warning_count} advertencias</p>
+                <p className="text-theme-text-muted">Corrige el archivo y vuelve a cargarlo.</p>
+              </>
+            ) : (
+              <p className="text-theme-text-muted">Formato seleccionado. Falta cargar y validar el archivo.</p>
             )}
           </div>
+        ) : (
+          <p className="mt-2 flex-1 text-xs text-theme-text-muted">Aún no has elegido el formato del Excel maestro.</p>
+        )}
 
-          {selectedFileInfo && (
-            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <InfoCard label="Nombre" value={selectedFileInfo.name} />
-              <InfoCard label="Extensión" value={selectedFileInfo.ext} />
-              <InfoCard label="Tamaño" value={selectedFileInfo.size} />
-              <InfoCard label="Formato" value={selectedOptionLabel} />
+        <div className="mt-2 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => (committed ? setDetailOpen(true) : openDialog())}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs font-semibold text-theme-text transition-colors hover:bg-theme-text/5"
+          >
+            <FileSpreadsheet className="h-3.5 w-3.5" />
+            {committed ? 'Ver detalle' : 'Configurar'}
+          </button>
+          {canShowGenerateSessions && !sessionsComplete && (
+            <button
+              type="button"
+              onClick={openGenerateDialog}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-theme-accent px-3 text-xs font-semibold text-white transition-colors hover:bg-theme-accent-hover"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {generationButtonLabel}
+            </button>
+          )}
+        </div>
+      </section>
+
+      {detailOpen && committed && (
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40 p-4">
+          <div className="flex max-h-[88vh] w-full max-w-5xl flex-col rounded-2xl border border-theme-border bg-theme-surface shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-theme-border/60 px-5 py-3">
+              <div className="space-y-1">
+                <h3 className="text-base font-bold text-theme-text">Stock teórico de la campaña</h3>
+                <p className="text-sm text-theme-text-muted">Detalle de la carga y validación del Excel maestro.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDetailOpen(false)}
+                className="rounded-lg px-2 py-1 text-sm text-theme-text-muted transition-colors hover:bg-theme-text/5 hover:text-theme-text"
+              >
+                Cerrar
+              </button>
             </div>
-          )}
 
-          {fileError && (
-            <p className="mt-4 rounded-lg border border-red-500/25 bg-red-500/5 px-3 py-2 text-sm text-red-600 dark:text-red-400">{fileError}</p>
-          )}
-
-          {processError && (
-            <p className="mt-4 rounded-lg border border-red-500/25 bg-red-500/5 px-3 py-2 text-sm text-red-600 dark:text-red-400">{processError}</p>
-          )}
-
-          {isProcessing && (
-            <div className="mt-4 rounded-lg border border-theme-border/70 bg-theme-surface p-3 text-sm text-theme-text-muted">
-              <span className="inline-flex items-center gap-2 font-medium text-theme-text">
-                <Loader2 className="h-4 w-4 animate-spin text-theme-accent" />
-                {PROCESS_STAGE_LABELS[processStage ?? 'CREATING']}
-              </span>
-            </div>
-          )}
-
-          {isValidated && summary && (
-            <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-              <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Archivo validado</p>
-              <p className="mt-1 text-sm text-theme-text-muted">{validatedMessage}</p>
-              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <InfoCard label="Archivo" value={result?.import.original_filename ?? selectedFile?.name ?? '—'} />
-                <InfoCard label="Formato" value={selectedOptionLabel} />
-                <InfoCard label="Filas totales" value={String(summary.total_rows)} />
-                <InfoCard label="Filas válidas" value={String(summary.valid_rows)} />
-                <InfoCard label="Advertencias" value={String(summary.issue_warning_count)} />
-                <InfoCard label="Errores" value="0" />
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="space-y-1">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-theme-text-muted">Formato seleccionado</p>
+                  <p className="text-sm font-semibold text-theme-text">{FORMAT_LABELS[committed.value]}</p>
+                  <p className="text-sm text-theme-text-muted">{committed.description}</p>
+                </div>
+                {canEditFormat && (
+                  <button
+                    type="button"
+                    onClick={openDialog}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:opacity-50"
+                  >
+                    <FileSpreadsheet className="h-4 w-4" />
+                    Configurar stock teórico
+                  </button>
+                )}
               </div>
 
-              {preview.rows.length > 0 && (
-                <div className="mt-5 rounded-xl border border-emerald-500/15 bg-theme-surface p-4">
-                  <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-theme-text">Productos reconocidos</p>
-                      <p className="text-xs text-theme-text-muted">
-                        La descripción oficial del catálogo es la referencia principal.
-                      </p>
-                    </div>
+              <div className="flex flex-wrap gap-2">
+                {committed.columns.map(column => (
+                  <span key={column} className="inline-flex rounded-full border border-theme-border bg-theme-bg px-2.5 py-1 text-xs font-medium text-theme-text-muted">
+                    {column}
+                  </span>
+                ))}
+              </div>
+
+              {canEditFormat && (
+                <>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <button
+                      type="button"
+                      onClick={handleDownloadTemplate}
+                      disabled={isProcessing || isValidated}
+                      className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-3 text-sm font-semibold text-theme-text transition-colors hover:bg-theme-text/5 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Download className="h-4 w-4" />
+                      Descargar plantilla
+                    </button>
+                    <button
+                      type="button"
+                      onClick={openFilePicker}
+                      disabled={isProcessing || isValidated}
+                      className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-3 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Plus className="h-4 w-4" />
+                      Seleccionar archivo
+                    </button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".xlsx,.xls,.csv"
+                      className="hidden"
+                      onChange={e => handleFileSelected(e.target.files?.[0] ?? null)}
+                    />
+                  </div>
+                  <p className="text-xs text-theme-text-muted">La selección se guardará al cargar el archivo.</p>
+                </>
+              )}
+
+              {selectedFileInfo && (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <InfoCard label="Nombre" value={selectedFileInfo.name} />
+                  <InfoCard label="Extensión" value={selectedFileInfo.ext} />
+                  <InfoCard label="Tamaño" value={selectedFileInfo.size} />
+                  <InfoCard label="Formato" value={selectedOptionLabel} />
+                </div>
+              )}
+
+              {fileError && (
+                <p className="rounded-lg border border-red-500/25 bg-red-500/5 px-3 py-2 text-sm text-red-600 dark:text-red-400">{fileError}</p>
+              )}
+
+              {processError && (
+                <p className="rounded-lg border border-red-500/25 bg-red-500/5 px-3 py-2 text-sm text-red-600 dark:text-red-400">{processError}</p>
+              )}
+
+              {isProcessing && (
+                <div className="rounded-lg border border-theme-border/70 bg-theme-bg p-3 text-sm text-theme-text-muted">
+                  <span className="inline-flex items-center gap-2 font-medium text-theme-text">
+                    <Loader2 className="h-4 w-4 animate-spin text-theme-accent" />
+                    {PROCESS_STAGE_LABELS[processStage ?? 'CREATING']}
+                  </span>
+                </div>
+              )}
+
+              {isValidated && summary && (
+                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                  <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Archivo validado</p>
+                  <p className="mt-1 text-sm text-theme-text-muted">{validatedMessage}</p>
+                  <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <InfoCard label="Archivo" value={result?.import.original_filename ?? selectedFile?.name ?? '—'} />
+                    <InfoCard label="Formato" value={selectedOptionLabel} />
+                    <InfoCard label="Filas totales" value={String(summary.total_rows)} />
+                    <InfoCard label="Filas válidas" value={String(summary.valid_rows)} />
+                    <InfoCard label="Advertencias" value={String(summary.issue_warning_count)} />
+                    <InfoCard label="Errores" value={String(summary.issue_error_count)} />
                   </div>
 
-                  <div className="mt-4 overflow-x-auto rounded-lg border border-theme-border/60">
-                    <table className="w-full border-collapse text-sm">
-                      <thead>
-                        <tr className="border-b border-theme-border/60 bg-theme-bg text-left text-[11px] font-semibold uppercase tracking-wider text-theme-text-muted/60">
-                          <th className="px-3 py-2">SKU</th>
-                          <th className="px-3 py-2">Producto</th>
-                          <th className="px-3 py-2">Descripción del archivo</th>
-                          {showUnitColumn && <th className="px-3 py-2">Unidad</th>}
-                          {showLocationColumn && <th className="px-3 py-2">Ubicación</th>}
-                          <th className="px-3 py-2 text-right">Cantidad teórica</th>
-                          <th className="px-3 py-2 text-right">Costo unitario</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {preview.rows.map(row => (
-                          <tr key={`${row.row_index}-${row.sku}`} className="border-b border-theme-border/40 last:border-0 hover:bg-theme-text/2">
-                            <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-theme-text">{row.sku}</td>
-                            <td className="max-w-[260px] px-3 py-2 text-theme-text-muted">
-                              <p className="truncate font-medium text-theme-text">{row.canonicalProductDescription ?? '—'}</p>
-                            </td>
-                            <td className="max-w-[240px] px-3 py-2 text-theme-text-muted">
-                              {row.enteredDescription ? (
-                                <span className="block break-words text-sm text-theme-text-muted">{row.enteredDescription}</span>
-                              ) : (
-                                <span className="text-theme-text-muted/60">—</span>
-                              )}
-                            </td>
-                            {showUnitColumn && (
-                              <td className="max-w-[140px] truncate px-3 py-2 text-theme-text-muted">
-                                {row.entered_site_code ?? '—'}
-                              </td>
-                            )}
-                            {showLocationColumn && (
-                              <td className="max-w-[160px] truncate px-3 py-2 text-theme-text-muted">
-                                {row.entered_location_code ?? '—'}
-                              </td>
-                            )}
-                            <td className="whitespace-nowrap px-3 py-2 text-right text-theme-text">
-                              {row.quantity == null ? '—' : Number(row.quantity).toLocaleString('es-CL')}
-                            </td>
-                            <td className="whitespace-nowrap px-3 py-2 text-right text-theme-text">
-                              {row.cost == null ? '—' : `$${Number(row.cost).toLocaleString('es-CL')}`}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {preview.showLimitNotice && (
-                    <p className="mt-3 text-xs text-theme-text-muted">
-                      Mostrando {PREVIEW_ROW_LIMIT} de {preview.totalRows} productos/filas validadas.
-                    </p>
-                  )}
-
-                  {canShowGenerateSessions && !sessionsComplete && (
-                    <div className="mt-5 rounded-xl border border-theme-accent/20 bg-theme-accent/5 p-4">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="space-y-1">
-                          <p className="text-sm font-semibold text-theme-text">{generationButtonLabel}</p>
-                          <p className="text-sm text-theme-text-muted">
-                            PetGroup creará una jornada en borrador por cada unidad incluida en la campaña.
+                  {preview.rows.length > 0 && (
+                    <div className="mt-5 rounded-xl border border-emerald-500/15 bg-theme-surface p-4">
+                      <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                        <div>
+                          <p className="text-sm font-semibold text-theme-text">Productos reconocidos</p>
+                          <p className="text-xs text-theme-text-muted">
+                            La descripción oficial del catálogo es la referencia principal.
                           </p>
                         </div>
-                        <button
-                          type="button"
-                          onClick={openGenerateDialog}
-                          disabled={Boolean(generationStage)}
-                          className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          <Plus className="h-4 w-4" />
-                          {generationButtonLabel}
-                        </button>
                       </div>
-                    </div>
-                  )}
 
-                  {canShowGenerateSessions && sessionsComplete && (
-                    <div className="mt-5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="space-y-1">
+                      <div className="mt-4 overflow-x-auto rounded-lg border border-theme-border/60">
+                        <table className="w-full border-collapse text-sm">
+                          <thead>
+                            <tr className="border-b border-theme-border/60 bg-theme-bg text-left text-[11px] font-semibold uppercase tracking-wider text-theme-text-muted/60">
+                              <th className="px-3 py-2">SKU</th>
+                              <th className="px-3 py-2">Producto</th>
+                              <th className="px-3 py-2">Descripción del archivo</th>
+                              {showUnitColumn && <th className="px-3 py-2">Unidad</th>}
+                              {showLocationColumn && <th className="px-3 py-2">Ubicación</th>}
+                              <th className="px-3 py-2 text-right">Cantidad teórica</th>
+                              <th className="px-3 py-2 text-right">Costo unitario</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {preview.rows.map(row => (
+                              <tr key={`${row.row_index}-${row.sku}`} className="border-b border-theme-border/40 last:border-0 hover:bg-theme-text/2">
+                                <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-theme-text">{row.sku}</td>
+                                <td className="max-w-[260px] px-3 py-2 text-theme-text-muted">
+                                  <p className="truncate font-medium text-theme-text">{row.canonicalProductDescription ?? '—'}</p>
+                                </td>
+                                <td className="max-w-[240px] px-3 py-2 text-theme-text-muted">
+                                  {row.enteredDescription ? (
+                                    <span className="block break-words text-sm text-theme-text-muted">{row.enteredDescription}</span>
+                                  ) : (
+                                    <span className="text-theme-text-muted/60">—</span>
+                                  )}
+                                </td>
+                                {showUnitColumn && (
+                                  <td className="max-w-[140px] truncate px-3 py-2 text-theme-text-muted">
+                                    {row.entered_site_code ?? '—'}
+                                  </td>
+                                )}
+                                {showLocationColumn && (
+                                  <td className="max-w-[160px] truncate px-3 py-2 text-theme-text-muted">
+                                    {row.entered_location_code ?? '—'}
+                                  </td>
+                                )}
+                                <td className="whitespace-nowrap px-3 py-2 text-right text-theme-text">
+                                  {row.quantity == null ? '—' : Number(row.quantity).toLocaleString('es-CL')}
+                                </td>
+                                <td className="whitespace-nowrap px-3 py-2 text-right text-theme-text">
+                                  {row.cost == null ? '—' : `$${Number(row.cost).toLocaleString('es-CL')}`}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {preview.showLimitNotice && (
+                        <p className="mt-3 text-xs text-theme-text-muted">
+                          Mostrando {PREVIEW_ROW_LIMIT} de {preview.totalRows} productos/filas validadas.
+                        </p>
+                      )}
+
+                      {canShowGenerateSessions && !sessionsComplete && (
+                        <div className="mt-5 rounded-xl border border-theme-accent/20 bg-theme-accent/5 p-4">
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="space-y-1">
+                              <p className="text-sm font-semibold text-theme-text">{generationButtonLabel}</p>
+                              <p className="text-sm text-theme-text-muted">
+                                PetGroup creará una jornada en borrador por cada unidad incluida en la campaña.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={openGenerateDialog}
+                              disabled={Boolean(generationStage)}
+                              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <Plus className="h-4 w-4" />
+                              {generationButtonLabel}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {canShowGenerateSessions && sessionsComplete && (
+                        <div className="mt-5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="space-y-1">
+                              <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Jornadas generadas</p>
+                              <p className="text-sm text-theme-text-muted">Todas las unidades ya tienen una jornada en borrador.</p>
+                            </div>
+                            <div className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-white/60 px-3 py-2 text-sm font-medium text-theme-text dark:bg-theme-surface/40">
+                              <Check className="h-4 w-4 text-emerald-600" />
+                              {sessionCount} de {siteCount} unidades listas
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {generationError && (
+                        <p className="mt-4 rounded-lg border border-red-500/25 bg-red-500/5 px-3 py-2 text-sm text-red-600 dark:text-red-400">
+                          {generationError}
+                        </p>
+                      )}
+
+                      {generationSummary && (
+                        <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
                           <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Jornadas generadas</p>
-                          <p className="text-sm text-theme-text-muted">Todas las unidades ya tienen una jornada en borrador.</p>
+                          <p className="mt-1 text-sm text-theme-text-muted">
+                            {generationSummary.sessions_created === 0
+                              ? 'Todas las jornadas ya existían. No se duplicó nada.'
+                              : 'Las jornadas quedaron creadas y la campaña se actualizó.'}
+                          </p>
+                          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                            <InfoCard label="Unidades totales" value={String(generationSummary.total_units)} />
+                            <InfoCard label="Jornadas creadas" value={String(generationSummary.sessions_created)} />
+                            <InfoCard label="Jornadas existentes" value={String(generationSummary.sessions_existing)} />
+                            <InfoCard label="Jornadas pendientes" value={String(generationSummary.sessions_pending)} />
+                          </div>
                         </div>
-                        <div className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-white/60 px-3 py-2 text-sm font-medium text-theme-text dark:bg-theme-surface/40">
-                          <Check className="h-4 w-4 text-emerald-600" />
-                          {sessionCount} de {siteCount} unidades listas
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {generationError && (
-                    <p className="mt-4 rounded-lg border border-red-500/25 bg-red-500/5 px-3 py-2 text-sm text-red-600 dark:text-red-400">
-                      {generationError}
-                    </p>
-                  )}
-
-                  {generationSummary && (
-                    <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-                      <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Jornadas generadas</p>
-                      <p className="mt-1 text-sm text-theme-text-muted">
-                        {generationSummary.sessions_created === 0
-                          ? 'Todas las jornadas ya existían. No se duplicó nada.'
-                          : 'Las jornadas quedaron creadas y la campaña se actualizó.'}
-                      </p>
-                      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                        <InfoCard label="Unidades totales" value={String(generationSummary.total_units)} />
-                        <InfoCard label="Jornadas creadas" value={String(generationSummary.sessions_created)} />
-                        <InfoCard label="Jornadas existentes" value={String(generationSummary.sessions_existing)} />
-                        <InfoCard label="Jornadas pendientes" value={String(generationSummary.sessions_pending)} />
-                      </div>
+                      )}
                     </div>
                   )}
                 </div>
               )}
-            </div>
-          )}
 
-          {isRejected && summary && (
-            <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/5 p-4">
-              <p className="text-sm font-semibold text-red-700 dark:text-red-300">Archivo rechazado</p>
-              <p className="mt-1 text-sm text-theme-text-muted">Revisa las incidencias y corrige el archivo antes de volver a cargarlo.</p>
-              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <InfoCard label="Archivo" value={result?.import.original_filename ?? selectedFile?.name ?? '—'} />
-                <InfoCard label="Formato" value={selectedOptionLabel} />
-                <InfoCard label="Advertencias" value={String(summary.issue_warning_count)} />
-                <InfoCard label="Errores" value={String(summary.issue_error_count)} />
-              </div>
+              {isRejected && summary && (
+                <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4">
+                  <p className="text-sm font-semibold text-red-700 dark:text-red-300">Archivo rechazado</p>
+                  <p className="mt-1 text-sm text-theme-text-muted">Revisa las incidencias y corrige el archivo antes de volver a cargarlo.</p>
+                  <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <InfoCard label="Archivo" value={result?.import.original_filename ?? selectedFile?.name ?? '—'} />
+                    <InfoCard label="Formato" value={selectedOptionLabel} />
+                    <InfoCard label="Advertencias" value={String(summary.issue_warning_count)} />
+                    <InfoCard label="Errores" value={String(summary.issue_error_count)} />
+                  </div>
 
-              <div className="mt-4 space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-wider text-theme-text-muted">Incidencias</p>
-                <div className="space-y-2">
-                  {(result?.issues ?? []).map((issue, index) => (
-                    <div key={`${issue.row_index ?? 'x'}-${issue.field ?? 'field'}-${index}`} className="rounded-lg border border-red-500/15 bg-theme-surface p-3 text-sm">
-                      <p className="font-medium text-theme-text">
-                        {issue.row_index ? `Fila ${issue.row_index}` : 'Archivo'}{issue.field ? ` · ${issueFieldLabel(issue.field)}` : ''}
-                      </p>
-                      <p className="text-theme-text-muted">{issue.message}</p>
+                  <div className="mt-4 space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-theme-text-muted">Incidencias</p>
+                    <div className="space-y-2">
+                      {(result?.issues ?? []).map((issue, index) => (
+                        <div key={`${issue.row_index ?? 'x'}-${issue.field ?? 'field'}-${index}`} className="rounded-lg border border-red-500/15 bg-theme-surface p-3 text-sm">
+                          <p className="font-medium text-theme-text">
+                            {issue.row_index ? `Fila ${issue.row_index}` : 'Archivo'}{issue.field ? ` · ${issueFieldLabel(issue.field)}` : ''}
+                          </p>
+                          <p className="text-theme-text-muted">{issue.message}</p>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {!isProcessing && !isValidated && (
+                <div className="flex flex-col gap-2 rounded-lg border border-theme-border/70 bg-theme-bg p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-xs text-theme-text-muted">La carga se habilitará en el siguiente paso.</p>
+                  <button
+                    type="button"
+                    onClick={handleUpload}
+                    disabled={!selectedFile || Boolean(fileError)}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-3 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Cargar y validar
+                  </button>
+                </div>
+              )}
+
+              {isValidated && (
+                <p className="text-xs text-theme-text-muted">La selección quedó bloqueada hasta preparar la campaña.</p>
+              )}
+
+              {isRejected && (
+                <p className="text-xs text-theme-text-muted">Puedes quitar el archivo, elegir otro y volver a cargarlo.</p>
+              )}
             </div>
-          )}
-
-          {!isProcessing && !isValidated && (
-            <div className="mt-4 flex flex-col gap-2 rounded-lg border border-theme-border/70 bg-theme-surface p-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-xs text-theme-text-muted">La carga se habilitará en el siguiente paso.</p>
-              <button
-                type="button"
-                onClick={handleUpload}
-                disabled={!selectedFile || Boolean(fileError)}
-                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-3 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Cargar y validar
-              </button>
-            </div>
-          )}
-
-          {isValidated && (
-            <p className="mt-4 text-xs text-theme-text-muted">La selección quedó bloqueada hasta preparar la campaña.</p>
-          )}
-
-      {isRejected && (
-        <p className="mt-4 text-xs text-theme-text-muted">Puedes quitar el archivo, elegir otro y volver a cargarlo.</p>
+          </div>
+        </div>
       )}
-    </div>
-  )}
 
       {generationOpen && canShowGenerateSessions && result && (
         <div className="fixed inset-0 z-[1250] flex items-center justify-center bg-black/40 p-4">
@@ -735,7 +772,7 @@ export function InventoryCampaignStockTheoreticalSelector({
                         {active && <Check className="h-4 w-4 text-theme-accent" />}
                       </div>
                       <p className="mt-3 text-sm text-theme-text-muted">{option.description}</p>
-                      <div className="mt-4 rounded-lg border border-theme-border/70 bg-theme-surface p-3">
+                      <div className="mt-4 rounded-lg border border-theme-border/70 bg-theme-bg p-3">
                         <p className="text-[11px] font-semibold uppercase tracking-wider text-theme-text-muted">Columnas esperadas</p>
                         <p className="mt-1 text-sm font-medium text-theme-text">{option.columns.join(' | ')}</p>
                       </div>
@@ -769,7 +806,7 @@ export function InventoryCampaignStockTheoreticalSelector({
           </div>
         </div>
       )}
-    </section>
+    </>
   )
 }
 
