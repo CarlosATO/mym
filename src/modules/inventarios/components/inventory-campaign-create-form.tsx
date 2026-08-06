@@ -41,14 +41,14 @@ export function InventoryCampaignCreateForm({ eligibleSites }: InventoryCampaign
         })
 
         if (result.error || !result.data) {
-          setError(result.error ?? 'No se pudo crear la campaña.')
+          setError(result.error ?? 'No se pudo crear el inventario.')
           setIsSubmitting(false)
           return
         }
 
         router.push(`/dashboard/inventarios/campanas/${result.data.campaign_id}`)
       } catch {
-        setError('No se pudo crear la campaña.')
+        setError('No se pudo crear el inventario.')
         setIsSubmitting(false)
       }
     })()
@@ -58,13 +58,13 @@ export function InventoryCampaignCreateForm({ eligibleSites }: InventoryCampaign
     <form onSubmit={handleSubmit} className="space-y-5 rounded-xl border border-theme-border bg-theme-surface p-5 shadow-sm">
       <div className="space-y-1">
         <p className="text-xs font-semibold uppercase tracking-wider text-theme-text-muted">Tipo</p>
-        <h2 className="text-lg font-bold text-theme-text">Campaña general</h2>
+        <h2 className="text-lg font-bold text-theme-text">Inventario general</h2>
         <p className="text-sm text-theme-text-muted">Todas las bodegas internas habilitadas. Todos los productos.</p>
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <label className="space-y-1.5">
-          <span className="text-sm font-medium text-theme-text">Nombre de campaña</span>
+          <span className="text-sm font-medium text-theme-text">Nombre del inventario</span>
           <input
             type="text"
             value={name}
@@ -113,12 +113,12 @@ export function InventoryCampaignCreateForm({ eligibleSites }: InventoryCampaign
             )}
           </div>
         ) : (
-          <p className="mt-3 text-sm text-red-600 dark:text-red-400">No hay bodegas internas habilitadas para crear la campaña.</p>
+          <p className="mt-3 text-sm text-red-600 dark:text-red-400">No hay bodegas internas habilitadas para crear el inventario.</p>
         )}
       </div>
 
       <div className="rounded-xl border border-theme-border/70 bg-theme-surface p-4 text-sm text-theme-text-muted">
-        <p>La campaña se creará en estado Borrador.</p>
+        <p>El inventario se creará en estado Borrador.</p>
         <p>No se iniciará ningún conteo en este paso.</p>
       </div>
 
@@ -144,7 +144,7 @@ export function InventoryCampaignCreateForm({ eligibleSites }: InventoryCampaign
           className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-          {isSubmitting ? 'Creando campaña…' : 'Crear campaña'}
+          {isSubmitting ? 'Creando inventario…' : 'Crear inventario'}
         </button>
       </div>
     </form>

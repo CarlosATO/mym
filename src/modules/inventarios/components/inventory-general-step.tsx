@@ -12,7 +12,7 @@ const INVENTORY_TYPES = [
 
 const SCOPE_MODES = [
   { value: 'GENERAL', label: 'General', description: 'Incluye todas las variantes activas del catálogo.' },
-  { value: 'PARTIAL', label: 'Parcial', description: 'Selecciona los productos que formarán parte de la jornada.' },
+  { value: 'PARTIAL', label: 'Parcial', description: 'Selecciona los productos que formarán parte de la sección de conteo.' },
 ]
 
 interface GeneralStepProps {
@@ -30,7 +30,7 @@ export function InventoryGeneralStep({ data, catalogs, onChange }: GeneralStepPr
     <div className="space-y-4">
       <div className="space-y-1.5">
         <label htmlFor="session-name" className="block text-sm font-medium text-theme-text">
-          Nombre de la jornada <span className="text-red-500">*</span>
+          Nombre de la sección de conteo <span className="text-red-500">*</span>
         </label>
         <input
           id="session-name"

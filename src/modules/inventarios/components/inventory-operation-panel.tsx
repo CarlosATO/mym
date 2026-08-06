@@ -29,7 +29,7 @@ export function InventoryOperationPanel({ companyId, sessionId, initialDetail }:
     const result = await getActiveCompanySessionDetail(sessionId)
     setRefreshing(false)
     if (result.error || !result.data) {
-      setError(result.error ?? 'No se pudo cargar la jornada.')
+      setError(result.error ?? 'No se pudo cargar la sección de conteo.')
       return
     }
     setDetail(result.data)
@@ -50,7 +50,7 @@ export function InventoryOperationPanel({ companyId, sessionId, initialDetail }:
     return <InventoryErrorState description={error} onRetry={load} />
   }
   if (!detail) {
-    return <InventoryLoadingState label="Cargando operación de la jornada…" />
+    return <InventoryLoadingState label="Cargando operación de la sección de conteo…" />
   }
 
   const status = detail.session.status
@@ -74,7 +74,7 @@ export function InventoryOperationPanel({ companyId, sessionId, initialDetail }:
         <div>
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-semibold text-theme-text">
-              {status === 'PREPARED' ? 'Jornada preparada' : 'Jornada en conteo'}
+              {status === 'PREPARED' ? 'Sección preparada' : 'Sección en conteo'}
             </h3>
             <InventoryStatusBadge status={status} />
           </div>

@@ -56,23 +56,21 @@ export default async function InventariosJornadasPage({ searchParams }: PageProp
   return (
     <div className="space-y-5">
       <InventoryPageHeader
-        title="Jornadas de inventario"
-        description="Consulta y gestiona las jornadas de inventario de la empresa."
-        breadcrumb={['Inventarios', 'Jornadas']}
+        title="Secciones de conteo"
+        description="Consulta y gestiona las secciones de conteo de la empresa."
+        breadcrumb={['Inventarios', 'Secciones de conteo']}
         action={
           <Link
             href="/dashboard/inventarios/jornadas/nueva"
             className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-theme-accent px-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-theme-accent-hover"
           >
             <Plus className="h-4 w-4" />
-            Nueva jornada
+            Nueva sección de conteo
           </Link>
         }
       />
 
-      <div className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
-        <InventorySessionFilters warehouses={warehouses ?? []} />
-      </div>
+      <InventorySessionFilters warehouses={warehouses ?? []} />
 
       <div className="rounded-xl border border-theme-border bg-theme-surface shadow-sm">
         {error ? (
@@ -90,11 +88,11 @@ export default async function InventariosJornadasPage({ searchParams }: PageProp
         ) : !data || data.sessions.length === 0 ? (
           <div className="p-4">
             <InventoryEmptyState
-              title="No se encontraron jornadas"
+              title="No se encontraron secciones de conteo"
               description={
                 search || status || warehouse || dateFrom || dateTo
-                  ? 'Ninguna jornada coincide con los filtros aplicados.'
-                  : 'Aún no hay jornadas de inventario para esta empresa.'
+                  ? 'Ninguna sección coincide con los filtros aplicados.'
+                  : 'Aún no hay secciones de conteo para esta empresa.'
               }
               icon={<ClipboardList className="h-5 w-5" />}
             />
@@ -107,7 +105,7 @@ export default async function InventariosJornadasPage({ searchParams }: PageProp
             <div className="lg:hidden">
               <InventorySessionMobileList sessions={data.sessions} />
             </div>
-            <div className="px-4 py-3">
+            <div className="px-2 py-2">
               <InventoryPagination
                 page={data.page}
                 pageSize={data.page_size}

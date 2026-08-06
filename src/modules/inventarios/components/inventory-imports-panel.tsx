@@ -114,61 +114,61 @@ export function InventoryImportsPanel({
         <div className="rounded-xl border border-theme-border bg-theme-surface p-6 shadow-sm">
           <InventoryEmptyState
             title="Sin importaciones"
-            description="Carga stock teórico y costos desde una plantilla Excel para preparar futuras jornadas."
+            description="Carga stock teórico y costos desde una plantilla Excel para preparar futuras secciones de conteo."
             icon={<Upload className="h-5 w-5" />}
           />
         </div>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-theme-border bg-theme-surface shadow-sm">
-          <table className="w-full border-collapse text-sm">
+          <table className="w-full border-collapse text-xs">
             <thead>
               <tr className="border-b border-theme-border/60 text-left text-[11px] font-semibold uppercase tracking-wider text-theme-text-muted/60">
-                <th className="px-3 py-2.5">Archivo</th>
-                <th className="px-3 py-2.5">Unidad inventariable</th>
-                <th className="px-3 py-2.5">Tipo de unidad</th>
-                <th className="px-3 py-2.5">Modalidad</th>
-                <th className="px-3 py-2.5">Corte</th>
-                <th className="px-3 py-2.5">Estado</th>
-                <th className="px-3 py-2.5 text-right">Filas</th>
-                <th className="px-3 py-2.5 text-right">Errores</th>
-                <th className="px-3 py-2.5 text-right">Advertencias</th>
-                <th className="px-3 py-2.5">Usuario</th>
-                <th className="px-3 py-2.5">Carga</th>
-                <th className="px-3 py-2.5 text-right">Acción</th>
+                <th className="px-3 py-2">Archivo</th>
+                <th className="px-3 py-2">Bodega inventariable</th>
+                <th className="px-3 py-2">Tipo de bodega</th>
+                <th className="px-3 py-2">Modalidad</th>
+                <th className="px-3 py-2">Corte</th>
+                <th className="px-3 py-2">Estado</th>
+                <th className="px-3 py-1.5 text-right">Filas</th>
+                <th className="px-3 py-2 text-right">Errores</th>
+                <th className="px-3 py-2 text-right">Advertencias</th>
+                <th className="px-3 py-2">Usuario</th>
+                <th className="px-3 py-2">Carga</th>
+                <th className="px-3 py-2 text-right">Acción</th>
               </tr>
             </thead>
             <tbody>
               {imports.map(item => (
                 <tr key={item.id} className="border-b border-theme-border/40 last:border-0 hover:bg-theme-text/2">
-                  <td className="max-w-[180px] truncate px-3 py-2.5 font-medium text-theme-text" title={item.original_filename}>
+                  <td className="max-w-[180px] truncate px-3 py-1.5 font-medium text-theme-text" title={item.original_filename}>
                     {item.original_filename}
                   </td>
-                  <td className="max-w-[160px] truncate px-3 py-2.5 text-theme-text-muted">
+                  <td className="max-w-[160px] truncate px-3 py-1.5 text-theme-text-muted">
                     {item.site_name}
                     <span className="ml-1 font-mono text-xs text-theme-text-muted/60">{item.site_code}</span>
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-xs text-theme-text-muted">
+                  <td className="whitespace-nowrap px-3 py-1.5 text-xs text-theme-text-muted">
                     {item.site_type === 'INTERNAL_WAREHOUSE' ? 'Bodega interna' : item.site_type === 'OWN_STORE' ? 'Tienda propia' : 'Sitio externo'}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-theme-text-muted">
+                  <td className="whitespace-nowrap px-3 py-1.5 text-theme-text-muted">
                     {MODALITY_LABELS[item.modality] ?? item.modality}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-theme-text-muted">{formatDateTimeChile(item.cutoff_at)}</td>
-                  <td className="px-3 py-2.5">
+                  <td className="whitespace-nowrap px-3 py-1.5 text-theme-text-muted">{formatDateTimeChile(item.cutoff_at)}</td>
+                  <td className="px-3 py-1.5">
                     <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[item.status] ?? STATUS_STYLES.DRAFT}`}>
                       {STATUS_LABELS[item.status] ?? item.status}
                     </span>
                   </td>
-                  <td className="px-3 py-2.5 text-right text-theme-text">{item.row_count}</td>
-                  <td className={`px-3 py-2.5 text-right font-semibold ${item.error_count > 0 ? 'text-red-500' : 'text-theme-text-muted/50'}`}>
+                  <td className="px-3 py-1.5 text-right text-theme-text">{item.row_count}</td>
+                  <td className={`px-3 py-1.5 text-right font-semibold ${item.error_count > 0 ? 'text-red-500' : 'text-theme-text-muted/50'}`}>
                     {item.error_count}
                   </td>
-                  <td className={`px-3 py-2.5 text-right font-semibold ${item.warning_count > 0 ? 'text-amber-500' : 'text-theme-text-muted/50'}`}>
+                  <td className={`px-3 py-1.5 text-right font-semibold ${item.warning_count > 0 ? 'text-amber-500' : 'text-theme-text-muted/50'}`}>
                     {item.warning_count}
                   </td>
-                  <td className="max-w-[120px] truncate px-3 py-2.5 text-theme-text-muted">{item.created_by_name ?? '—'}</td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-theme-text-muted">{formatDateTimeChile(item.created_at)}</td>
-                  <td className="px-3 py-2.5 text-right">
+                  <td className="max-w-[120px] truncate px-3 py-1.5 text-theme-text-muted">{item.created_by_name ?? '—'}</td>
+                  <td className="whitespace-nowrap px-3 py-1.5 text-theme-text-muted">{formatDateTimeChile(item.created_at)}</td>
+                  <td className="px-3 py-1.5 text-right">
                     <button
                       type="button"
                       onClick={() => setDetailId(item.id)}

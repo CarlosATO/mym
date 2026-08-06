@@ -51,7 +51,7 @@ export default async function InventariosCampanaDetallePage({ params }: PageProp
   if (!detail) {
     return (
       <div className="space-y-5">
-        <InventoryErrorState description="La campaña solicitada no existe." />
+        <InventoryErrorState description="El inventario solicitado no existe." />
       </div>
     )
   }
@@ -71,9 +71,7 @@ export default async function InventariosCampanaDetallePage({ params }: PageProp
       <nav className="flex items-center gap-1.5 text-xs text-theme-text-muted">
         <span>Inventarios</span>
         <span>/</span>
-        <span>Campañas</span>
-        <span>/</span>
-        <span className="font-medium text-theme-text">Detalle</span>
+        <span className="font-medium text-theme-text">Resumen del inventario</span>
       </nav>
 
       <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-sm">
@@ -91,9 +89,9 @@ export default async function InventariosCampanaDetallePage({ params }: PageProp
           {formatDateChile(plannedOrCreated)}
         </p>
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium text-theme-text">
-          <span>{detail.site_count} unidades</span>
+          <span>{detail.site_count} bodegas</span>
           <span className="text-theme-border">·</span>
-          <span>{detail.session_count} sesiones</span>
+          <span>{detail.session_count} secciones de conteo</span>
           <span className="text-theme-border">·</span>
           <span>{detail.sessions_pending} pendientes</span>
         </div>
@@ -101,7 +99,7 @@ export default async function InventariosCampanaDetallePage({ params }: PageProp
 
       {importError && (
         <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-          No fue posible recuperar el archivo de stock de esta campaña.
+          No fue posible recuperar el archivo de stock de este inventario.
         </div>
       )}
 
@@ -133,7 +131,7 @@ export default async function InventariosCampanaDetallePage({ params }: PageProp
 
       <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-bold text-theme-text">Unidades de la campaña</h2>
+          <h2 className="text-sm font-bold text-theme-text">Bodegas del inventario</h2>
           {detail.site_count > 0 ? (
             allHaveSessions ? (
               <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
@@ -141,7 +139,7 @@ export default async function InventariosCampanaDetallePage({ params }: PageProp
               </span>
             ) : noneHaveSessions ? (
               <span className="inline-flex items-center rounded-full border border-theme-border bg-theme-text/5 px-2 py-0.5 text-xs font-medium text-theme-text-muted">
-                Sin sesiones creadas
+                Sin secciones de conteo creadas
               </span>
             ) : (
               <span className="inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
@@ -150,7 +148,7 @@ export default async function InventariosCampanaDetallePage({ params }: PageProp
             )
           ) : (
             <span className="inline-flex items-center rounded-full border border-theme-border bg-theme-text/5 px-2 py-0.5 text-xs font-medium text-theme-text-muted">
-              Sin unidades
+              Sin bodegas
             </span>
           )}
         </div>
@@ -158,8 +156,8 @@ export default async function InventariosCampanaDetallePage({ params }: PageProp
         {detail.sites.length === 0 ? (
           <InventoryEmptyState
             className="mt-3"
-            title="Sin unidades"
-            description="Esta campaña todavía no tiene unidades configuradas."
+            title="Sin bodegas"
+            description="Este inventario todavía no tiene bodegas configuradas."
             icon={<MapPin className="h-5 w-5" />}
           />
         ) : (
@@ -171,7 +169,7 @@ export default async function InventariosCampanaDetallePage({ params }: PageProp
             </div>
             {noneHaveSessions && (
               <p className="mt-2.5 text-[11px] text-theme-text-muted">
-                Crea una sesión para la unidad que deseas preparar.
+                Crea una sección de conteo para la bodega que deseas preparar.
               </p>
             )}
           </>

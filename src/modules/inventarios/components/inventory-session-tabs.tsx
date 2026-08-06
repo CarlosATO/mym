@@ -26,7 +26,7 @@ export function InventorySessionTabs({ tabs }: InventorySessionTabsProps) {
   }, [router, pathname, searchParams])
 
   return (
-    <div role="tablist" aria-label="Secciones de la jornada" className="flex gap-1 overflow-x-auto border-b border-theme-border">
+    <div role="tablist" aria-label="Secciones de conteo" className="flex gap-1 overflow-x-auto border-b border-theme-border">
       {tabs.map(tab => (
         <button
           key={tab.id}

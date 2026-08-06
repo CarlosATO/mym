@@ -55,7 +55,7 @@ export function InventoryReviewStep({ companyId, sessionId }: ReviewStepProps) {
   }, [sessionId])
 
   if (loading || !setup || !setup.session) {
-    return <InventoryLoadingState label="Cargando revisión de la jornada…" />
+    return <InventoryLoadingState label="Cargando revisión de la sección de conteo…" />
   }
 
   const { session, participants, zones, tasks, product_scope, indicators } = setup
@@ -117,7 +117,7 @@ export function InventoryReviewStep({ companyId, sessionId }: ReviewStepProps) {
           <Lock className="h-4 w-4" /> Configuración a punto de bloquearse
         </p>
         <p className="mt-1 text-xs text-amber-700 dark:text-amber-300/80">
-          Al preparar la jornada, la configuración quedará congelada y no podrás editarla.
+          Al preparar la sección de conteo, la configuración quedará congelada y no podrás editarla.
         </p>
       </div>
 
@@ -135,7 +135,7 @@ export function InventoryReviewStep({ companyId, sessionId }: ReviewStepProps) {
         </div>
         <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
           <div>
-            <p className="text-[11px] text-theme-text-muted/60 uppercase tracking-wider">Jornada</p>
+            <p className="text-[11px] text-theme-text-muted/60 uppercase tracking-wider">Sección de conteo</p>
             <p className="truncate font-medium text-theme-text">{session.name}</p>
           </div>
           <div>
@@ -230,7 +230,7 @@ export function InventoryReviewStep({ companyId, sessionId }: ReviewStepProps) {
           </p>
           <p className="text-xs text-theme-text-muted">
             {ready
-              ? 'La jornada está lista para prepararse.'
+              ? 'La sección de conteo está lista para prepararse.'
               : `Faltan ${unmet.length} requisito(s) antes de preparar.`}
           </p>
         </div>
@@ -241,7 +241,7 @@ export function InventoryReviewStep({ companyId, sessionId }: ReviewStepProps) {
           className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:opacity-40"
         >
           {preparing ? <InventoryLoadingState compact label="Preparando…" /> : <ClipboardList className="h-4 w-4" />}
-          {!preparing && 'Preparar jornada'}
+          {!preparing && 'Preparar sección de conteo'}
         </button>
       </div>
 
@@ -249,10 +249,10 @@ export function InventoryReviewStep({ companyId, sessionId }: ReviewStepProps) {
       {showConfirm && (
         <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-xl border border-theme-border bg-theme-surface p-5 shadow-2xl">
-            <h3 className="text-base font-bold text-theme-text">Preparar jornada</h3>
+            <h3 className="text-base font-bold text-theme-text">Preparar sección de conteo</h3>
             <p className="mt-2 text-sm text-theme-text-muted">
-              Al preparar la jornada, la configuración quedará <strong>bloqueada</strong> y no podrás
-              modificarla. La jornada quedará en estado <strong>Preparada</strong> y podrás abrirla después.
+              Al preparar la sección de conteo, la configuración quedará <strong>bloqueada</strong> y no podrás
+              modificarla. La sección de conteo quedará en estado <strong>Preparada</strong> y podrás abrirla después.
             </p>
             <div className="mt-4 flex justify-end gap-2">
               <button

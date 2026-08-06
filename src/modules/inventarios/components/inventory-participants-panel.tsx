@@ -10,42 +10,57 @@ export function InventoryParticipantsPanel({ detail }: InventoryParticipantsPane
 
   if (!participants || participants.length === 0) {
     return (
-      <div className="rounded-xl border border-dashed border-theme-border bg-theme-surface/60 p-8 text-center">
-        <p className="text-sm text-theme-text-muted">Sin participantes registrados.</p>
+      <div className="rounded-lg border border-dashed border-theme-border bg-theme-surface/60 px-3 py-4 text-center text-xs text-theme-text-muted">
+        Sin participantes registrados.
       </div>
     )
   }
 
+  const active = participants.filter(participant => !participant.revoked_at)
+  const revoked = participants.filter(participant => participant.revoked_at)
+  const counters = active.filter(participant => participant.functional_role === 'COUNTER').length
+
   return (
-    <div className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-sm">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-theme-border/60 text-left text-[11px] font-semibold uppercase tracking-wider text-theme-text-muted/60">
-            <th className="px-3 py-2.5">Participante</th>
-            <th className="px-3 py-2.5">Rol</th>
-            <th className="px-3 py-2.5">Estado</th>
-          </tr>
-        </thead>
-        <tbody>
-          {participants.map(participant => (
-            <tr key={participant.id} className="border-b border-theme-border/40 last:border-0">
-              <td className="px-3 py-2.5 text-theme-text">{participant.user_name ?? '—'}</td>
-              <td className="px-3 py-2.5 text-theme-text-muted">{inventoryRoleLabel(participant.functional_role)}</td>
-              <td className="px-3 py-2.5">
-                {participant.revoked_at ? (
-                  <span className="inline-flex rounded-full border border-red-500/25 bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-700 dark:text-red-300">
-                    Revocado
-                  </span>
-                ) : (
-                  <span className="inline-flex rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
-                    Activo
-                  </span>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="rounded-xl border border-theme-border bg-theme-surface px-3 py-2.5 shadow-sm">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+        <span className="font-semibold text-theme-text">Equipo participante</span>
+        <span className="text-theme-text-muted">
+          {active.length} activo{active.length === 1 ? '' : 's'}
+          {counters > 0 && ` · ${counters} contador${counters === 1 ? '' : 'es'} disponible${counters === 1 ? '' : 's'}`}
+        </span>
+        {revoked.length > 0 && (
+          <span className="text-red-600/80 dark:text-red-400/80">
+            · {revoked.length} revocado{revoked.length === 1 ? '' : 's'}
+          </span>
+        )}
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {participants.map(participant => {
+          const isRevoked = Boolean(participant.revoked_at)
+          return (
+            <span
+              key={participant.id}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] ${
+                isRevoked
+                  ? 'border-red-500/25 bg-red-500/10 text-red-700/80 dark:text-red-300/80'
+                  : 'border-theme-border/60 bg-theme-text/[0.03] text-theme-text'
+              }`}
+              title={isRevoked ? 'Participante revocado' : 'Participante activo'}
+            >
+              <span
+                aria-hidden
+                className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                  isRevoked ? 'bg-red-500' : 'bg-emerald-500'
+                }`}
+              />
+              <span className="font-semibold">{participant.user_name ?? '—'}</span>
+              <span className={`font-normal ${isRevoked ? 'opacity-70' : 'text-theme-text-muted'}`}>
+                {inventoryRoleLabel(participant.functional_role)}
+              </span>
+            </span>
+          )
+        })}
+      </div>
     </div>
   )
 }

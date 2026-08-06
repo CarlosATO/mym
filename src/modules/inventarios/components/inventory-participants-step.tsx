@@ -134,7 +134,7 @@ export function InventoryParticipantsStep({ companyId, sessionId, users, onReady
   return (
     <div className="space-y-4">
       <p className="text-sm text-theme-text-muted">
-        Agrega los participantes de la jornada. El responsable ya participa como administrador.
+        Agrega los participantes de la sección de conteo. El responsable ya participa como administrador.
       </p>
 
       {/* Requisitos mínimos */}

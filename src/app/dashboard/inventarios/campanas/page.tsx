@@ -27,16 +27,16 @@ export default async function InventariosCampanasPage() {
   return (
     <div className="space-y-5">
       <InventoryPageHeader
-        title="Campañas"
-        description="Agrupa sesiones de inventario por unidad. Una campaña puede ser general, selectiva o externa."
-        breadcrumb={['Inventarios', 'Campañas']}
+        title="Inventarios"
+        description="Agrupa secciones de conteo por bodega. Un inventario puede ser general, selectivo o externo."
+        breadcrumb={['Inventarios']}
         action={
           <Link
             href="/dashboard/inventarios/campanas/nueva"
             className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-theme-accent px-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-theme-accent-hover"
           >
             <Layers className="h-4 w-4" />
-            Nueva campaña
+            Nuevo inventario
           </Link>
         }
       />
@@ -51,8 +51,8 @@ export default async function InventariosCampanasPage() {
         />
       ) : campaigns.length === 0 ? (
         <InventoryEmptyState
-          title="Sin campañas"
-          description="Las campañas de inventario aparecerán aquí."
+          title="Sin inventarios"
+          description="Los inventarios aparecerán aquí."
           icon={<Layers className="h-5 w-5" />}
         />
       ) : (
@@ -61,7 +61,7 @@ export default async function InventariosCampanasPage() {
             <Link
               key={campaign.id}
               href={`/dashboard/inventarios/campanas/${campaign.id}`}
-              className="group rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm transition-colors hover:border-theme-accent/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-theme-accent"
+              className="group rounded-xl border border-theme-border bg-theme-surface p-3 shadow-sm transition-colors hover:border-theme-accent/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-theme-accent"
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -73,14 +73,14 @@ export default async function InventariosCampanasPage() {
                 </div>
                 <InventoryStatusBadge status={campaign.status} />
               </div>
-              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-theme-border/60 pt-3 text-xs text-theme-text-muted">
-                <span>{campaign.site_count} unidad(es)</span>
+              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-theme-border/60 pt-2 text-xs text-theme-text-muted">
+                <span>{campaign.site_count} bodega(s)</span>
                 <span>{campaign.product_count} producto(s)</span>
-                <span>{campaign.session_count} sesión(es)</span>
+                <span>{campaign.session_count} sección(es) de conteo</span>
                 <span>{formatDateChile(campaign.created_at)}</span>
               </div>
-              <div className="mt-3 flex items-center gap-1 text-sm font-semibold text-theme-accent">
-                Ver campaña
+              <div className="mt-2 flex items-center gap-1 text-sm font-semibold text-theme-accent">
+                Ver inventario
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
               </div>
             </Link>

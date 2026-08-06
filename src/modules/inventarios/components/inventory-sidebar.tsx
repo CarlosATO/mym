@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from 'react'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { Boxes, Menu, PanelLeftClose, Plus, X } from 'lucide-react'
 import { INVENTORY_NAV_ITEMS } from '@/modules/inventarios/lib/states'
@@ -35,6 +35,15 @@ function SidebarContent({
   onNavigate?: () => void
 }) {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const inventoryId = searchParams.get('inventoryId')
+
+  const navHref = (href: string) => {
+    if (!inventoryId || inventoryId === 'all') return href
+    const params = new URLSearchParams()
+    params.set('inventoryId', inventoryId)
+    return `${href}?${params.toString()}`
+  }
 
   return (
     <nav className="flex h-full w-full flex-col" aria-label="Navegación de Inventarios">
@@ -73,9 +82,9 @@ function SidebarContent({
       {/* Acción destacada */}
       <div className={cn('shrink-0 py-2.5', collapsed ? 'px-2' : 'px-3')}>
         <Link
-          href="/dashboard/inventarios/jornadas/nueva"
-          title={collapsed ? 'Nueva jornada' : undefined}
-          aria-label="Nueva jornada"
+          href={navHref('/dashboard/inventarios/jornadas/nueva')}
+          title={collapsed ? 'Nueva sección de conteo' : undefined}
+          aria-label="Nueva sección de conteo"
           onClick={onNavigate}
           className={cn(
             'flex items-center justify-center gap-1.5 rounded-lg bg-theme-accent px-2 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-theme-accent-hover',
@@ -83,7 +92,7 @@ function SidebarContent({
           )}
         >
           <Plus className="h-4 w-4 shrink-0" />
-          {!collapsed && <span>Nueva jornada</span>}
+          {!collapsed && <span>Nueva sección de conteo</span>}
         </Link>
       </div>
 
@@ -94,7 +103,7 @@ function SidebarContent({
           return (
             <Link
               key={item.id}
-              href={item.href}
+              href={navHref(item.href)}
               onClick={onNavigate}
               title={collapsed ? item.label : undefined}
               aria-label={item.label}

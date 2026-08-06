@@ -12,7 +12,7 @@ export function InventoryCancellationPanel({ detail }: InventoryCancellationPane
   if (!cancelled) {
     return (
       <div className="rounded-xl border border-dashed border-theme-border bg-theme-surface/60 p-8 text-center">
-        <p className="text-sm text-theme-text-muted">Esta jornada no fue cancelada.</p>
+        <p className="text-sm text-theme-text-muted">Esta sección de conteo no fue cancelada.</p>
       </div>
     )
   }
@@ -35,7 +35,7 @@ export function InventoryCancellationPanel({ detail }: InventoryCancellationPane
         </div>
       </div>
       <p className="mt-4 text-xs text-theme-text-muted/70">
-        La evidencia de la jornada (snapshot, conteos e incidencias) se conserva en modo consulta.
+        La evidencia de la sección de conteo (snapshot, conteos e incidencias) se conserva en modo consulta.
       </p>
     </div>
   )

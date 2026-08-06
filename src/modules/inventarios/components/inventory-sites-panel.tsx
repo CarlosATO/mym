@@ -61,7 +61,7 @@ function SiteCard({ site }: { site: InventorySite }) {
   }
 
   return (
-    <div className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
+    <div className="rounded-xl border border-theme-border bg-theme-surface p-3 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold text-theme-text">
@@ -89,11 +89,11 @@ function SiteCard({ site }: { site: InventorySite }) {
 
       {error && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
 
-      <div className="mt-3 space-y-2 border-t border-theme-border/60 pt-3">
+      <div className="mt-2 space-y-2 border-t border-theme-border/60 pt-2">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-sm text-theme-text">Disponible para inventarios</p>
-            <p className="text-xs text-theme-text-muted/70">Puede participar en nuevas campañas.</p>
+            <p className="text-xs text-theme-text-muted/70">Puede participar en nuevos inventarios.</p>
           </div>
           <Toggle
             checked={site.inventory_enabled}
@@ -105,11 +105,11 @@ function SiteCard({ site }: { site: InventorySite }) {
 
         {isInternal ? (
           <p className="rounded-lg border border-theme-border/50 bg-theme-text/2 px-2 py-1.5 text-xs text-theme-text-muted">
-            Todas las bodegas internas activas y habilitadas participan automáticamente en futuras campañas generales.
+            Todas las bodegas internas activas y habilitadas participan automáticamente en futuros inventarios generales.
           </p>
         ) : (
           <p className="rounded-lg border border-theme-border/50 bg-theme-text/2 px-2 py-1.5 text-xs text-theme-text-muted">
-            Solo campañas selectivas o externas.
+            Solo inventarios selectivos o externos.
           </p>
         )}
       </div>

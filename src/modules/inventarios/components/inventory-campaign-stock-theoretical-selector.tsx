@@ -35,8 +35,8 @@ interface TheoreticalStockOption {
 const OPTIONS: TheoreticalStockOption[] = [
   {
     value: 'TOTAL_CAMPAIGN',
-    label: 'Total de la campaña',
-    description: 'Una cantidad total por producto, considerando todas las unidades incluidas. No requiere bodega ni ubicación.',
+    label: 'Total del inventario',
+    description: 'Una cantidad total por producto, considerando todas las bodegas incluidas. No requiere bodega ni ubicación.',
     columns: ['SKU', 'CANTIDAD_TEORICA', 'COSTO_UNITARIO'],
     filename: 'plantilla-stock-total-campana.xlsx',
     icon: <Grid2x2 className="h-4 w-4" />,
@@ -44,7 +44,7 @@ const OPTIONS: TheoreticalStockOption[] = [
   {
     value: 'BY_SITE',
     label: 'Desglosado por bodega',
-    description: 'El mismo archivo indica cuánto corresponde a cada bodega o unidad.',
+    description: 'El mismo archivo indica cuánto corresponde a cada bodega.',
     columns: ['SKU', 'CODIGO_UNIDAD', 'CANTIDAD_TEORICA', 'COSTO_UNITARIO'],
     filename: 'plantilla-stock-por-bodega.xlsx',
     icon: <Warehouse className="h-4 w-4" />,
@@ -60,7 +60,7 @@ const OPTIONS: TheoreticalStockOption[] = [
 ]
 
 const FORMAT_LABELS: Record<CampaignImportScope, string> = {
-  TOTAL_CAMPAIGN: 'Total de la campaña',
+  TOTAL_CAMPAIGN: 'Total del inventario',
   BY_SITE: 'Desglosado por bodega',
   BY_LOCATION: 'Desglosado por ubicación',
 }
@@ -128,12 +128,12 @@ export function InventoryCampaignStockTheoreticalSelector({
   const hasUnits = siteCount > 0
   const sessionsComplete = hasUnits && sessionsPending === 0
   const sessionsPartial = hasUnits && sessionsPending > 0 && sessionCount > 0
-  const generationButtonLabel = sessionsPartial ? 'Generar jornadas faltantes' : 'Generar jornadas'
+  const generationButtonLabel = sessionsPartial ? 'Generar secciones faltantes' : 'Generar secciones de conteo'
   const validatedMessage = sessionsComplete
-    ? 'El stock teórico fue validado correctamente. Todas las unidades ya tienen una jornada en borrador.'
+    ? 'El stock teórico fue validado correctamente. Todas las bodegas ya tienen una sección de conteo en borrador.'
     : sessionsPartial
-      ? 'El stock teórico fue validado correctamente. Aún quedan jornadas pendientes por generar.'
-      : 'El stock teórico fue validado correctamente. Aún no se han generado las jornadas.'
+      ? 'El stock teórico fue validado correctamente. Aún quedan secciones de conteo pendientes por generar.'
+      : 'El stock teórico fue validado correctamente. Aún no se han generado las secciones de conteo.'
   const canShowGenerateSessions =
     canGenerateSessions &&
     campaignStatus === 'DRAFT' &&
@@ -234,13 +234,13 @@ export function InventoryCampaignStockTheoreticalSelector({
         idempotencyKey: crypto.randomUUID(),
       })
       if (generated.error || !generated.data) {
-        throw new Error(generated.error ?? 'No se pudieron generar las jornadas.')
+        throw new Error(generated.error ?? 'No se pudieron generar las secciones de conteo.')
       }
       setGenerationSummary(generated.data)
       setGenerationOpen(false)
       router.refresh()
     } catch (err) {
-      setGenerationError(err instanceof Error ? err.message : 'No se pudieron generar las jornadas.')
+      setGenerationError(err instanceof Error ? err.message : 'No se pudieron generar las secciones de conteo.')
     } finally {
       setGenerationStage(null)
     }
@@ -326,7 +326,7 @@ export function InventoryCampaignStockTheoreticalSelector({
               <>
                 <p className="text-theme-text-muted">{summary.valid_rows} filas válidas · {preview.totalRows} productos reconocidos</p>
                 <p className="text-theme-text-muted">{summary.issue_error_count} errores · {summary.issue_warning_count} advertencias</p>
-                <p className="font-medium text-theme-text">{sessionCount} de {siteCount} unidades listas</p>
+                <p className="font-medium text-theme-text">{sessionCount} de {siteCount} bodegas listas</p>
               </>
             ) : isRejected && summary ? (
               <>
@@ -368,7 +368,7 @@ export function InventoryCampaignStockTheoreticalSelector({
           <div className="flex max-h-[88vh] w-full max-w-5xl flex-col rounded-2xl border border-theme-border bg-theme-surface shadow-2xl">
             <div className="flex items-start justify-between gap-3 border-b border-theme-border/60 px-5 py-3">
               <div className="space-y-1">
-                <h3 className="text-base font-bold text-theme-text">Stock teórico de la campaña</h3>
+                <h3 className="text-base font-bold text-theme-text">Stock teórico del inventario</h3>
                 <p className="text-sm text-theme-text-muted">Detalle de la carga y validación del Excel maestro.</p>
               </div>
               <button
@@ -497,7 +497,7 @@ export function InventoryCampaignStockTheoreticalSelector({
                               <th className="px-3 py-2">SKU</th>
                               <th className="px-3 py-2">Producto</th>
                               <th className="px-3 py-2">Descripción del archivo</th>
-                              {showUnitColumn && <th className="px-3 py-2">Unidad</th>}
+                              {showUnitColumn && <th className="px-3 py-2">Bodega</th>}
                               {showLocationColumn && <th className="px-3 py-2">Ubicación</th>}
                               <th className="px-3 py-2 text-right">Cantidad teórica</th>
                               <th className="px-3 py-2 text-right">Costo unitario</th>
@@ -551,7 +551,7 @@ export function InventoryCampaignStockTheoreticalSelector({
                             <div className="space-y-1">
                               <p className="text-sm font-semibold text-theme-text">{generationButtonLabel}</p>
                               <p className="text-sm text-theme-text-muted">
-                                PetGroup creará una jornada en borrador por cada unidad incluida en la campaña.
+                                PetGroup creará una sección de conteo en borrador por cada bodega incluida en el inventario.
                               </p>
                             </div>
                             <button
@@ -571,12 +571,12 @@ export function InventoryCampaignStockTheoreticalSelector({
                         <div className="mt-5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
                           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                             <div className="space-y-1">
-                              <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Jornadas generadas</p>
-                              <p className="text-sm text-theme-text-muted">Todas las unidades ya tienen una jornada en borrador.</p>
+                              <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Secciones generadas</p>
+                              <p className="text-sm text-theme-text-muted">Todas las bodegas ya tienen una sección de conteo en borrador.</p>
                             </div>
                             <div className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-white/60 px-3 py-2 text-sm font-medium text-theme-text dark:bg-theme-surface/40">
                               <Check className="h-4 w-4 text-emerald-600" />
-                              {sessionCount} de {siteCount} unidades listas
+                              {sessionCount} de {siteCount} bodegas listas
                             </div>
                           </div>
                         </div>
@@ -590,17 +590,17 @@ export function InventoryCampaignStockTheoreticalSelector({
 
                       {generationSummary && (
                         <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-                          <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Jornadas generadas</p>
+                          <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Secciones generadas</p>
                           <p className="mt-1 text-sm text-theme-text-muted">
                             {generationSummary.sessions_created === 0
-                              ? 'Todas las jornadas ya existían. No se duplicó nada.'
-                              : 'Las jornadas quedaron creadas y la campaña se actualizó.'}
+                              ? 'Todas las secciones ya existían. No se duplicó nada.'
+                              : 'Las secciones de conteo quedaron creadas y el inventario se actualizó.'}
                           </p>
                           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                            <InfoCard label="Unidades totales" value={String(generationSummary.total_units)} />
-                            <InfoCard label="Jornadas creadas" value={String(generationSummary.sessions_created)} />
-                            <InfoCard label="Jornadas existentes" value={String(generationSummary.sessions_existing)} />
-                            <InfoCard label="Jornadas pendientes" value={String(generationSummary.sessions_pending)} />
+                            <InfoCard label="Bodegas totales" value={String(generationSummary.total_units)} />
+                            <InfoCard label="Secciones creadas" value={String(generationSummary.sessions_created)} />
+                            <InfoCard label="Secciones existentes" value={String(generationSummary.sessions_existing)} />
+                            <InfoCard label="Secciones pendientes" value={String(generationSummary.sessions_pending)} />
                           </div>
                         </div>
                       )}
@@ -651,7 +651,7 @@ export function InventoryCampaignStockTheoreticalSelector({
               )}
 
               {isValidated && (
-                <p className="text-xs text-theme-text-muted">La selección quedó bloqueada hasta preparar la campaña.</p>
+                <p className="text-xs text-theme-text-muted">La selección quedó bloqueada hasta preparar el inventario.</p>
               )}
 
               {isRejected && (
@@ -667,7 +667,7 @@ export function InventoryCampaignStockTheoreticalSelector({
           <div className="w-full max-w-2xl rounded-2xl border border-theme-border bg-theme-surface shadow-2xl">
             <div className="flex items-start justify-between gap-3 border-b border-theme-border/60 px-5 py-4">
               <div className="space-y-1">
-                <h3 className="text-base font-bold text-theme-text">Generar jornadas</h3>
+                <h3 className="text-base font-bold text-theme-text">Generar secciones de conteo</h3>
                 <p className="text-sm text-theme-text-muted">No se iniciará el conteo.</p>
               </div>
               <button
@@ -682,19 +682,19 @@ export function InventoryCampaignStockTheoreticalSelector({
 
             <div className="space-y-4 px-5 py-4">
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <InfoCard label="Unidades" value={String(siteCount)} />
+                <InfoCard label="Bodegas" value={String(siteCount)} />
                 <InfoCard label="Existentes" value={String(sessionCount)} />
                 <InfoCard label="Pendientes" value={String(sessionsPending)} />
                 <InfoCard label="Importación" value={result.import.original_filename} />
               </div>
               <p className="text-sm text-theme-text-muted">
-                PetGroup creará una jornada en borrador por cada unidad incluida en la campaña.
+                PetGroup creará una sección de conteo en borrador por cada bodega incluida en el inventario.
               </p>
               <div className="rounded-xl border border-theme-border/70 bg-theme-bg p-4 text-sm text-theme-text-muted">
                 {generationStage ? (
                   <span className="inline-flex items-center gap-2 font-medium text-theme-text">
                     <Loader2 className="h-4 w-4 animate-spin text-theme-accent" />
-                    Generando jornadas…
+                    Generando secciones de conteo…
                   </span>
                 ) : (
                   <p>No se iniciará el conteo.</p>
@@ -722,7 +722,7 @@ export function InventoryCampaignStockTheoreticalSelector({
                 ) : (
                   <Plus className="h-4 w-4" />
                 )}
-                {generationStage ? 'Generando jornadas…' : 'Generar jornadas'}
+                {generationStage ? 'Generando secciones de conteo…' : 'Generar secciones de conteo'}
               </button>
             </div>
           </div>
@@ -835,7 +835,7 @@ function InfoCard({ label, value }: { label: string; value: string }) {
 
 function issueFieldLabel(field: string): string {
   if (field === 'sku') return 'SKU'
-  if (field === 'entered_site_code') return 'Código de unidad'
+  if (field === 'entered_site_code') return 'Código de bodega'
   if (field === 'entered_location_code') return 'Código de ubicación'
   if (field === 'quantity') return 'Cantidad teórica'
   if (field === 'cost') return 'Costo unitario'

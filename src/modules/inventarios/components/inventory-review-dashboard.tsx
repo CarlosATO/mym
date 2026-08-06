@@ -59,7 +59,7 @@ export function InventoryReviewDashboard({ companyId, sessionId, initialReview }
   }, [sessionId])
 
   if (loading && !review) {
-    return <InventoryLoadingState label="Cargando revisión de la jornada…" />
+    return <InventoryLoadingState label="Cargando revisión de la sección de conteo…" />
   }
   if (error && !review) {
     return <InventoryErrorState description={error} onRetry={load} />
@@ -68,7 +68,7 @@ export function InventoryReviewDashboard({ companyId, sessionId, initialReview }
     return (
       <InventoryEmptyState
         title="Revisión no disponible"
-        description="No se pudo cargar la revisión de esta jornada."
+        description="No se pudo cargar la revisión de esta sección de conteo."
         icon={<Eye className="h-5 w-5" />}
       />
     )

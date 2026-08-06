@@ -132,7 +132,7 @@ export function InventoryZonesStep({ companyId, sessionId, sessionWarehouseId, c
   return (
     <div className="space-y-4">
       <p className="text-sm text-theme-text-muted">
-        Organiza la jornada en zonas y asigna las ubicaciones de la bodega. Cada ubicación puede pertenecer a una sola zona.
+        Organiza la sección de conteo en zonas y asigna las ubicaciones de la bodega. Cada ubicación puede pertenecer a una sola zona.
       </p>
       <div className="rounded-lg border border-theme-border bg-theme-text/2 p-3">
         <p className="mb-2 text-xs font-semibold text-theme-text-muted uppercase tracking-wider">Requisitos para continuar</p>

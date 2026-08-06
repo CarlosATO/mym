@@ -33,7 +33,7 @@ export default async function InventariosNuevaCampanaPage() {
   }
 
   if (!permission.canManage) {
-    return <InventoryErrorState description="No tienes permisos para crear campañas de inventario." />
+    return <InventoryErrorState description="No tienes permisos para crear inventarios." />
   }
 
   const eligibleSites = (sitesResult.data ?? []).filter(
@@ -44,7 +44,7 @@ export default async function InventariosNuevaCampanaPage() {
     return (
       <InventoryEmptyState
         title="Sin bodegas elegibles"
-        description="No hay bodegas internas habilitadas para crear una campaña general."
+        description="No hay bodegas internas habilitadas para crear un inventario general."
         icon={<Layers className="h-5 w-5" />}
       />
     )
@@ -53,9 +53,9 @@ export default async function InventariosNuevaCampanaPage() {
   return (
     <div className="space-y-5">
       <InventoryPageHeader
-        title="Nueva campaña"
-        description="Crea una campaña general con todas las bodegas internas habilitadas y todos los productos."
-        breadcrumb={['Inventarios', 'Campañas', 'Nueva campaña']}
+        title="Nuevo inventario"
+        description="Crea un inventario general con todas las bodegas internas habilitadas y todos los productos."
+        breadcrumb={['Inventarios', 'Nuevo inventario']}
       />
 
       <InventoryCampaignCreateForm eligibleSites={eligibleSites} />

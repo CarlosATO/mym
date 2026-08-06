@@ -21,10 +21,10 @@ export default async function InventariosResumenPage() {
   const alerts = data?.recent_alerts ?? []
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <InventoryPageHeader
         title="Inventarios"
-        description="Gestiona jornadas de inventario: creación, conteo, revisión y resultados."
+        description="Gestiona secciones de conteo: creación, conteo, revisión y resultados."
         breadcrumb={['Inventarios', 'Resumen']}
         action={
           <Link
@@ -32,7 +32,7 @@ export default async function InventariosResumenPage() {
             className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-theme-accent px-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-theme-accent-hover"
           >
             <Plus className="h-4 w-4" />
-            Nueva jornada
+            Nueva sección de conteo
           </Link>
         }
       />
@@ -41,30 +41,30 @@ export default async function InventariosResumenPage() {
       <section aria-label="Indicadores">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <InventoryKpiCard
-            label="Jornadas activas"
+            label="Secciones activas"
             value={kpis?.active_count ?? null}
-            hint="Jornadas en preparación o en conteo."
+            hint="Secciones en preparación o en conteo."
             href="/dashboard/inventarios/operacion"
             icon={<Boxes className="h-4 w-4" />}
           />
           <InventoryKpiCard
             label="Avance de conteo"
             value={kpis ? kpiPercent(kpis.average_progress) : null}
-            hint="Tareas completadas en jornadas en conteo."
+            hint="Tareas completadas en secciones en conteo."
             href="/dashboard/inventarios/operacion"
             icon={<ListChecks className="h-4 w-4" />}
           />
           <InventoryKpiCard
             label="Pendientes de revisión"
             value={kpis?.review_count ?? null}
-            hint="Jornadas cerradas que esperan validación y aprobación."
+            hint="Secciones cerradas que esperan validación y aprobación."
             href="/dashboard/inventarios/revision"
             icon={<Eye className="h-4 w-4" />}
           />
           <InventoryKpiCard
             label="Incidencias bloqueantes"
             value={kpis?.blocking_count ?? null}
-            hint="Incidencias activas que impiden continuar una jornada."
+            hint="Incidencias activas que impiden continuar una sección de conteo."
             href="/dashboard/inventarios/jornadas"
             icon={<Bell className="h-4 w-4" />}
           />
@@ -76,13 +76,13 @@ export default async function InventariosResumenPage() {
         <h2 className="mb-2.5 text-sm font-semibold text-theme-text-muted uppercase tracking-wider">Accesos rápidos</h2>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <InventoryQuickAction
-            label="Nueva jornada"
-            description="Crea y configura una jornada"
+            label="Nueva sección de conteo"
+            description="Crea y configura una sección de conteo"
             href="/dashboard/inventarios/jornadas/nueva"
             icon={<Plus className="h-4 w-4" />}
           />
           <InventoryQuickAction
-            label="Continuar jornada"
+            label="Continuar sección"
             description="Operación y avance de conteo"
             href="/dashboard/inventarios/operacion"
             icon={<PlayCircle className="h-4 w-4" />}
@@ -95,7 +95,7 @@ export default async function InventariosResumenPage() {
           />
           <InventoryQuickAction
             label="Consultar historial"
-            description="Jornadas anteriores y resultados"
+            description="Secciones anteriores y resultados"
             href="/dashboard/inventarios/resultados"
             icon={<History className="h-4 w-4" />}
           />
@@ -103,21 +103,21 @@ export default async function InventariosResumenPage() {
       </section>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* Jornadas que requieren atención */}
-        <section aria-label="Jornadas que requieren atención">
+        {/* Secciones que requieren atención */}
+        <section aria-label="Secciones que requieren atención">
           <div className="mb-2.5 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-theme-text-muted uppercase tracking-wider">Requieren atención</h2>
             <Link href="/dashboard/inventarios/jornadas" className="flex items-center gap-1 text-xs font-medium text-theme-accent hover:underline">
               Ver todas <ArrowRight className="h-3 w-3" />
             </Link>
           </div>
-          <div className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
+          <div className="rounded-xl border border-theme-border bg-theme-surface p-3 shadow-sm">
             {error && !companyId ? (
               <InventoryErrorState description={error} />
             ) : attention.length === 0 ? (
               <InventoryEmptyState
-                title="Sin jornadas pendientes"
-                description="Las jornadas que necesiten tu atención aparecerán aquí."
+                title="Sin secciones pendientes"
+                description="Las secciones que necesiten tu atención aparecerán aquí."
                 icon={<Bell className="h-5 w-5" />}
               />
             ) : (
@@ -158,7 +158,7 @@ export default async function InventariosResumenPage() {
         {/* Alertas y actividad reciente */}
         <section aria-label="Alertas y actividad reciente">
           <h2 className="mb-2.5 text-sm font-semibold text-theme-text-muted uppercase tracking-wider">Alertas recientes</h2>
-          <div className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
+          <div className="rounded-xl border border-theme-border bg-theme-surface p-3 shadow-sm">
             {error && !companyId ? (
               <InventoryErrorState description={error} />
             ) : alerts.length === 0 ? (
@@ -168,7 +168,7 @@ export default async function InventariosResumenPage() {
                   <span className="text-sm text-theme-text-muted">Sin alertas activas.</span>
                 </div>
                 <p className="text-xs text-theme-text-muted/70">
-                  Las incidencias abiertas de tus jornadas aparecerán aquí.
+                  Las incidencias abiertas de tus secciones aparecerán aquí.
                 </p>
               </div>
             ) : (

@@ -46,7 +46,7 @@ export function InventoryImportWizard({ sites, onClose, onCreated }: InventoryIm
 
   const handleDownloadTemplate = async () => {
     if (!selectedSite) {
-      toast.error('Selecciona una unidad inventariable.')
+      toast.error('Selecciona una bodega inventariable.')
       return
     }
     if (!cutoffAt) {
@@ -107,7 +107,7 @@ export function InventoryImportWizard({ sites, onClose, onCreated }: InventoryIm
 
   const handleUpload = async () => {
     if (!selectedSite || !file || !cutoffAt) {
-      setError('Completa la unidad, la fecha de corte y el archivo.')
+      setError('Completa la bodega, la fecha de corte y el archivo.')
       return
     }
     setUploading(true)
@@ -204,13 +204,13 @@ export function InventoryImportWizard({ sites, onClose, onCreated }: InventoryIm
           {step === 'CONFIG' && (
             <div className="space-y-4">
               <div>
-                <label className="mb-1 block text-xs font-semibold text-theme-text-muted">Unidad inventariable</label>
+                <label className="mb-1 block text-xs font-semibold text-theme-text-muted">Bodega inventariable</label>
                 <select
                   value={siteId}
                   onChange={e => setSiteId(e.target.value)}
                   className="h-9 w-full rounded-lg border border-theme-border bg-theme-bg px-2 text-sm text-theme-text outline-none focus:border-theme-border-accent"
                 >
-                  <option value="">Selecciona una unidad…</option>
+                  <option value="">Selecciona una bodega…</option>
                   {sites.map(s => (
                     <option key={s.id} value={s.id}>
                       {s.name} ({s.code})
@@ -279,7 +279,7 @@ export function InventoryImportWizard({ sites, onClose, onCreated }: InventoryIm
           {step === 'FILE' && (
             <div className="space-y-4">
               <p className="rounded-lg border border-theme-border/60 bg-theme-bg px-3 py-2 text-xs text-theme-text-muted">
-                Unidad: <span className="font-semibold text-theme-text">{selectedSite?.name}</span> · Modalidad:{' '}
+                SEÑOR_Bodega: <span className="font-semibold text-theme-text">{selectedSite?.name}</span> · Modalidad:{' '}
                 <span className="font-semibold text-theme-text">{MODALITY_LABELS[modality]}</span> · Corte:{' '}
                 <span className="font-semibold text-theme-text">{cutoffAt.replace('T', ' ')}</span>
               </p>

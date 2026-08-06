@@ -15,7 +15,7 @@ interface InventoryKpiCardProps {
 
 export function InventoryKpiCard({ label, value, hint, href, icon, loading }: InventoryKpiCardProps) {
   const content = (
-    <div className="group relative flex flex-col gap-2 rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm transition-all duration-200 hover:border-theme-border-accent hover:shadow-md">
+    <div className="group relative flex flex-col gap-2 rounded-xl border border-theme-border bg-theme-surface p-3 shadow-sm transition-all duration-200 hover:border-theme-border-accent hover:shadow-md">
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-medium text-theme-text-muted">{label}</span>
         {icon && <span className="text-theme-text-muted/60">{icon}</span>}

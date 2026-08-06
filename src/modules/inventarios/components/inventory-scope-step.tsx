@@ -53,7 +53,7 @@ export function InventoryScopeStep({ companyId, scopeMode, data, onChange }: Sco
       <div className="rounded-lg border border-theme-border bg-theme-text/2 p-5">
         <p className="text-sm font-semibold text-theme-text">Alcance general</p>
         <p className="mt-1 text-sm text-theme-text-muted">
-          La jornada incluirá todas las variantes activas del catálogo Bsale de la empresa. No es necesario seleccionar productos.
+          La sección de conteo incluirá todas las variantes activas del catálogo Bsale de la empresa. No es necesario seleccionar productos.
         </p>
       </div>
     )
@@ -62,7 +62,7 @@ export function InventoryScopeStep({ companyId, scopeMode, data, onChange }: Sco
   return (
     <div className="space-y-4">
       <p className="text-sm text-theme-text-muted">
-        Selecciona los productos que formarán parte de esta jornada parcial. Busca por SKU, nombre o código de barras.
+        Selecciona los productos que formarán parte de esta sección de conteo parcial. Busca por SKU, nombre o código de barras.
       </p>
 
       <div className="relative">

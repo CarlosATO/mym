@@ -63,7 +63,7 @@ export function InventoryOperationActions({ companyId, sessionId, detail }: Inve
           className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:opacity-40"
         >
           <Play className="h-4 w-4" />
-          Abrir jornada
+          Abrir sección de conteo
         </button>
         <p className="text-xs text-theme-text-muted">
           Al abrir, la configuración queda cerrada. Las tareas no se inician automáticamente.
@@ -73,11 +73,11 @@ export function InventoryOperationActions({ companyId, sessionId, detail }: Inve
           <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40 p-4">
             <div className="w-full max-w-md rounded-xl border border-theme-border bg-theme-surface p-5 shadow-2xl">
               <h3 className="flex items-center gap-2 text-base font-bold text-theme-text">
-                <DoorOpen className="h-5 w-5 text-theme-accent" /> Abrir jornada
+                <DoorOpen className="h-5 w-5 text-theme-accent" /> Abrir sección de conteo
               </h3>
               <p className="mt-2 text-sm text-theme-text-muted">
-                La configuración quedará cerrada y la jornada pasará a estado <strong>En conteo</strong>.
-                Abrir la jornada <strong>no inicia automáticamente las tareas</strong>.
+                La configuración quedará cerrada y la sección de conteo pasará a estado <strong>En conteo</strong>.
+                Abrir la sección de conteo <strong>no inicia automáticamente las tareas</strong>.
               </p>
               <div className="mt-4 flex justify-end gap-2">
                 <button
@@ -136,7 +136,7 @@ export function InventoryOperationActions({ companyId, sessionId, detail }: Inve
                 <RotateCcw className="h-5 w-5 text-emerald-600" /> Cerrar conteo
               </h3>
               <p className="mt-2 text-sm text-theme-text-muted">
-                La jornada pasará a estado <strong>En revisión</strong>. Esto <strong>no aprueba resultados</strong>:
+                La sección de conteo pasará a estado <strong>En revisión</strong>. Esto <strong>no aprueba resultados</strong>:
                 la revisión y aprobación se harán después.
               </p>
               <div className="mt-4 flex justify-end gap-2">

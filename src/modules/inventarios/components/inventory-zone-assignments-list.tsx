@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { Loader2, MapPin, Trash2, X } from 'lucide-react'
+import { ChevronDown, Loader2, MapPin, Trash2, X } from 'lucide-react'
 import type { InventorySessionTask, InventorySessionZone } from '@/app/actions/inventarios/sessions'
 
 interface InventoryZoneAssignmentsListProps {
@@ -41,77 +41,92 @@ export function InventoryZoneAssignmentsList({
   onCancelZone,
 }: InventoryZoneAssignmentsListProps) {
   const [cancellingZone, setCancellingZone] = useState<InventorySessionZone | null>(null)
+  const [expandedZoneId, setExpandedZoneId] = useState<string | null>(null)
 
   if (zones.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-theme-border bg-theme-surface/60 px-4 py-6 text-center text-xs text-theme-text-muted">
-        Aún no hay zonas configuradas en esta jornada.
+      <div className="rounded-lg border border-dashed border-theme-border bg-theme-surface/60 px-4 py-4 text-center text-xs text-theme-text-muted">
+        Aún no hay zonas configuradas en esta sección de conteo.
       </div>
     )
   }
 
   return (
-    <div className="space-y-3">
-      {zones.map(zone => {
-        const task = tasks.find(candidate => candidate.session_zone_id === zone.id)
-        const counterName = task?.assignment?.user_name ?? null
-        return (
-          <div key={zone.id} className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <p className="truncate text-sm font-semibold text-theme-text">{zone.display_name}</p>
-                  <span className="shrink-0 rounded bg-theme-text/5 px-1.5 py-0.5 font-mono text-[10px] font-medium text-theme-text-muted">
-                    {zone.zone_code}
+    <div className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-sm">
+      <div className="flex items-center justify-between gap-2 border-b border-theme-border/60 bg-theme-text/[0.02] px-3 py-1.5">
+        <p className="text-xs font-semibold text-theme-text">
+          Zonas configuradas <span className="font-normal text-theme-text-muted">· {zones.length}</span>
+        </p>
+      </div>
+      <ul className="divide-y divide-theme-border/40">
+        {zones.map(zone => {
+          const task = tasks.find(candidate => candidate.session_zone_id === zone.id)
+          const counterName = task?.assignment?.user_name ?? null
+          const locationCount = zone.locations?.length ?? 0
+          const isExpanded = expandedZoneId === zone.id
+          return (
+            <li key={zone.id}>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-1.5">
+                <button
+                  type="button"
+                  onClick={() => setExpandedZoneId(isExpanded ? null : zone.id)}
+                  className="flex items-center gap-1 rounded p-0.5 text-theme-text-muted transition-colors hover:text-theme-text"
+                  title={isExpanded ? 'Ocultar ubicaciones' : 'Ver ubicaciones'}
+                >
+                  <ChevronDown
+                    className={`h-3.5 w-3.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                  />
+                </button>
+                <span className="truncate text-sm font-semibold text-theme-text">{zone.display_name}</span>
+                <span className="shrink-0 rounded bg-theme-text/5 px-1.5 py-0.5 font-mono text-[10px] font-medium text-theme-text-muted">
+                  {zone.zone_code}
+                </span>
+                <span className="min-w-0 truncate text-xs text-theme-text-muted">
+                  {counterName ? `Contador: ${counterName}` : 'Sin responsable asignado'}
+                </span>
+                {task && (
+                  <span className="shrink-0 rounded-full border border-theme-border/60 bg-theme-text/[0.03] px-2 py-0.5 text-[10px] font-medium text-theme-text-muted">
+                    {taskStatusLabel(task.status)}
                   </span>
-                </div>
-                <p className="mt-0.5 text-xs text-theme-text-muted">
-                  {counterName
-                    ? `Responsable: ${counterName}`
-                    : 'Sin responsable asignado'}
-                  {task ? ` · ${taskStatusLabel(task.status)}` : ''}
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <span className="text-[10px] font-medium text-theme-text-muted/60 uppercase tracking-wider">
-                  {zone.locations?.length ?? 0} ubicaciones
+                )}
+                <span className="ml-auto shrink-0 text-[11px] text-theme-text-muted">
+                  {locationCount} ubicacion{locationCount === 1 ? '' : 'es'}
                 </span>
                 {canCancel && task && task.status === 'ASSIGNED' && (
                   <button
                     type="button"
                     onClick={() => setCancellingZone(zone)}
-                    className="inline-flex h-7 items-center gap-1 rounded-lg border border-theme-border bg-theme-surface px-2 text-[11px] font-medium text-red-600 hover:bg-red-600/5 dark:text-red-400"
+                    className="inline-flex h-7 items-center gap-1 rounded-lg border border-red-500/25 bg-red-500/5 px-2 text-[11px] font-medium text-red-600 hover:bg-red-500/15 dark:text-red-400"
                   >
                     <Trash2 className="h-3 w-3" />
                     Cancelar zona
                   </button>
                 )}
               </div>
-            </div>
 
-            {zone.locations && zone.locations.length > 0 ? (
-              <ul className="space-y-1">
-                {zone.locations.slice(0, 4).map(location => (
-                  <li key={location.location_id} className="flex items-center gap-2 text-xs">
-                    <MapPin className="h-3 w-3 shrink-0 text-theme-text-muted/50" />
-                    <span className="truncate font-mono text-theme-text">{location.code}</span>
-                    <span className="min-w-0 flex-1 truncate text-theme-text-muted">
-                      {location.name}
-                    </span>
-                  </li>
-                ))}
-                {zone.locations.length > 4 && (
-                  <li className="pl-5 text-[11px] text-theme-text-muted/60">
-                    +{zone.locations.length - 4} ubicaciones más
-                  </li>
-                )}
-              </ul>
-            ) : (
-              <p className="text-xs text-theme-text-muted/60">Sin ubicaciones asignadas.</p>
-            )}
-          </div>
-        )
-      })}
+              {isExpanded && (
+                <div className="border-t border-theme-border/40 bg-theme-text/[0.015] px-3 py-1.5">
+                  {locationCount > 0 ? (
+                    <ul className="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
+                      {zone.locations!.map(location => (
+                        <li key={location.location_id} className="flex items-center gap-2 text-xs">
+                          <MapPin className="h-3 w-3 shrink-0 text-theme-text-muted/50" />
+                          <span className="truncate font-mono text-theme-text">{location.code}</span>
+                          <span className="min-w-0 flex-1 truncate text-theme-text-muted">
+                            {location.name}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-theme-text-muted/60">Sin ubicaciones asignadas.</p>
+                  )}
+                </div>
+              )}
+            </li>
+          )
+        })}
+      </ul>
 
       {cancellingZone && (
         <CancelZoneDialog

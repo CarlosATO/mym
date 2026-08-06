@@ -64,7 +64,7 @@ export function InventoryOperationalSetup({
       getActiveCompanySessionSetup(sessionId),
     ])
     if (scopesResult.error || !scopesResult.data) {
-      setLoadError(scopesResult.error ?? 'No se pudo cargar el alcance de la jornada.')
+      setLoadError(scopesResult.error ?? 'No se pudo cargar el alcance de la sección de conteo.')
       return
     }
     setScopes(scopesResult.data)
@@ -81,7 +81,7 @@ export function InventoryOperationalSetup({
       ])
       if (!mounted) return
       if (scopesResult.error || !scopesResult.data) {
-        setLoadError(scopesResult.error ?? 'No se pudo cargar el alcance de la jornada.')
+        setLoadError(scopesResult.error ?? 'No se pudo cargar el alcance de la sección de conteo.')
         setLoading(false)
         return
       }
@@ -206,13 +206,14 @@ export function InventoryOperationalSetup({
   const percent = percentOf(assigned, total)
   const fullyCovered = total > 0 && pending === 0
   const zones = (setup?.zones ?? []).filter(zone => zone.is_enabled)
+  const canShowForm = editable && total > 0 && !fullyCovered
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm text-theme-text-muted">
           <Settings2 className="h-4 w-4" />
-          Configuración operacional
+          <span className="font-semibold text-theme-text">Configuración operacional</span>
           {readOnly && (
             <span className="rounded bg-theme-text/5 px-1.5 py-0.5 text-[10px] font-medium text-theme-text-muted">
               Solo lectura
@@ -224,40 +225,74 @@ export function InventoryOperationalSetup({
           className="inline-flex items-center gap-1 text-xs font-medium text-theme-accent hover:underline"
         >
           <UserCog className="h-3.5 w-3.5" />
-          Gestionar equipo de campaña
+          Gestionar equipo
         </Link>
       </div>
 
-      <div className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs">
-          <span className="font-medium text-theme-text">Cobertura de la jornada</span>
-          <span className="text-theme-text-muted">
-            <span className="font-semibold text-theme-text">{percent.toFixed(1)}%</span> · {assigned} asignadas · {pending} pendientes · {total} totales
-          </span>
+      <div className="rounded-xl border border-theme-border bg-theme-surface px-3 py-2 shadow-sm">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+          <span className="text-base font-bold text-theme-text">{percent.toFixed(1)}%</span>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-theme-text-muted">
+            <span>
+              <span className="font-semibold text-theme-text">{assigned}</span> asignadas
+            </span>
+            <span aria-hidden className="text-theme-text-muted/40">·</span>
+            <span>
+              <span className="font-semibold text-theme-text">{pending}</span> pendientes
+            </span>
+            <span aria-hidden className="text-theme-text-muted/40">·</span>
+            <span>
+              <span className="font-semibold text-theme-text">{total}</span> totales
+            </span>
+            <span aria-hidden className="text-theme-text-muted/40">·</span>
+            <span>
+              <span className="font-semibold text-theme-text">{zones.length}</span>{' '}
+              zona{zones.length === 1 ? '' : 's'} creada{zones.length === 1 ? '' : 's'}
+            </span>
+          </div>
+          <div className="h-1.5 min-w-[120px] flex-1 basis-40 overflow-hidden rounded-full bg-theme-text/10">
+            <div
+              className={`h-full rounded-full transition-all ${fullyCovered ? 'bg-emerald-500' : 'bg-theme-accent'}`}
+              style={{ width: `${percent}%` }}
+            />
+          </div>
         </div>
-        <div className="h-2 w-full overflow-hidden rounded-full bg-theme-text/10">
-          <div
-            className={`h-full rounded-full transition-all ${fullyCovered ? 'bg-emerald-500' : 'bg-theme-accent'}`}
-            style={{ width: `${percent}%` }}
-          />
-        </div>
-        {fullyCovered && (
-          <p className="mt-2 text-xs font-medium text-emerald-600 dark:text-emerald-400">
-            Cobertura completa. Todas las ubicaciones de la jornada pertenecen a una zona.
+        {fullyCovered ? (
+          <p className="mt-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+            Cobertura completa. Todas las ubicaciones de la sección pertenecen a una zona.
           </p>
-        )}
-        {total === 0 && (
-          <p className="mt-2 text-xs text-theme-text-muted">
-            La jornada no tiene ubicaciones en alcance para asignar.
+        ) : total === 0 ? (
+          <p className="mt-1 text-[11px] text-theme-text-muted">
+            La sección de conteo no tiene ubicaciones en alcance para asignar.
           </p>
-        )}
+        ) : null}
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <div className="space-y-4">
-          {editable && total > 0 && !fullyCovered && (
-            <div className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
-              <h3 className="mb-3 text-sm font-semibold text-theme-text">Crear zona y asignar</h3>
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-5">
+        <div className={canShowForm ? 'lg:col-span-3' : 'lg:col-span-5'}>
+          <div className="rounded-xl border border-theme-border bg-theme-surface p-2.5 shadow-sm">
+            <InventoryZoneLocationPicker
+              locations={scopes.locations}
+              selectedIds={selectedLocationIds}
+              onToggle={handleToggle}
+              onToggleAll={handleToggleAll}
+              onClear={handleClear}
+              disabled={!editable}
+            />
+          </div>
+        </div>
+
+        {canShowForm && (
+          <div className="lg:col-span-2">
+            <div className="rounded-xl border border-theme-border bg-theme-surface p-2.5 shadow-sm">
+              <h3 className="mb-2.5 text-sm font-semibold text-theme-text">Crear zona y asignar</h3>
+
+              {counters.length === 0 && (
+                <p className="mb-3 rounded-lg border border-amber-500/15 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+                  El inventario no tiene contadores activos. Agrega un contador en &ldquo;Gestionar equipo&rdquo;
+                  para poder crear zonas.
+                </p>
+              )}
 
               <label className="mb-1 block text-[11px] font-medium text-theme-text-muted/60 uppercase tracking-wider">
                 Responsable de la zona (contador)
@@ -268,7 +303,7 @@ export function InventoryOperationalSetup({
                 disabled={counters.length === 0}
                 className="w-full rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-sm text-theme-text outline-none focus:border-theme-border-accent disabled:opacity-40"
               >
-                {counters.length === 0 && <option value="">No hay contadores activos en la campaña</option>}
+                {counters.length === 0 && <option value="">No hay contadores activos en el inventario</option>}
                 {counters.map(counter => (
                   <option key={counter.participantId} value={counter.participantId}>
                     {counter.userName ?? counter.email ?? 'Usuario'}
@@ -286,14 +321,21 @@ export function InventoryOperationalSetup({
                 className="w-full rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-sm text-theme-text outline-none placeholder:text-theme-text-muted/70 focus:border-theme-border-accent"
               />
 
-              <div className="mt-3">
-                <InventoryZoneLocationPicker
-                  locations={scopes.locations}
-                  selectedIds={selectedLocationIds}
-                  onToggle={handleToggle}
-                  onToggleAll={handleToggleAll}
-                  onClear={handleClear}
-                />
+              <div className="mt-3 flex items-center justify-between gap-2 rounded-lg border border-theme-border/60 bg-theme-text/[0.02] px-3 py-2">
+                <span className="text-xs text-theme-text-muted">
+                  <span className="font-semibold text-theme-text">{selectedLocationIds.length}</span>{' '}
+                  ubicacion{selectedLocationIds.length === 1 ? '' : 'es'} seleccionada
+                  {selectedLocationIds.length === 1 ? '' : 's'}
+                </span>
+                {selectedLocationIds.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleClear}
+                    className="text-[11px] font-medium text-theme-text-muted hover:underline"
+                  >
+                    Limpiar
+                  </button>
+                )}
               </div>
 
               {createError && (
@@ -312,29 +354,22 @@ export function InventoryOperationalSetup({
                   : `Crear zona y asignar (${selectedLocationIds.length} ubicaciones)`}
               </button>
             </div>
-          )}
-
-          {editable && total > 0 && fullyCovered && (
-            <p className="text-xs text-theme-text-muted">
-              Para nuevas zonas, las ubicaciones deben estar pendientes de asignación.
-            </p>
-          )}
-
-          {editable && counters.length === 0 && total > 0 && !fullyCovered && (
-            <p className="rounded-lg border border-amber-500/15 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-              La campaña no tiene contadores activos. Agrega un contador en &ldquo;Gestionar equipo de campaña&rdquo;
-              para poder crear zonas.
-            </p>
-          )}
-        </div>
-
-        <InventoryZoneAssignmentsList
-          zones={zones}
-          tasks={setup?.tasks ?? []}
-          canCancel={editable}
-          onCancelZone={handleCancelZone}
-        />
+          </div>
+        )}
       </div>
+
+      {editable && fullyCovered && total > 0 && (
+        <p className="text-xs text-theme-text-muted">
+          Para nuevas zonas, las ubicaciones deben estar pendientes de asignación.
+        </p>
+      )}
+
+      <InventoryZoneAssignmentsList
+        zones={zones}
+        tasks={setup?.tasks ?? []}
+        canCancel={editable}
+        onCancelZone={handleCancelZone}
+      />
     </div>
   )
 }

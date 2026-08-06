@@ -77,7 +77,7 @@ export function InventorySessionWizard({ companyId, catalogs }: InventorySession
 
     if (created.error || !created.data) {
       setSaving(false)
-      setError(created.error ?? 'No se pudo crear la jornada.')
+      setError(created.error ?? 'No se pudo crear la sección de conteo.')
       return
     }
 
@@ -89,7 +89,7 @@ export function InventorySessionWizard({ companyId, catalogs }: InventorySession
       const scope = await setInventoryProductScope(companyId, sessionId, data.scope.variant_ids, key)
       if (scope.error) {
         setSaving(false)
-        setError(`${scope.error} La jornada fue creada en borrador; podrás reintentar guardar el alcance.`)
+        setError(`${scope.error} La sección de conteo fue creada en borrador; podrás reintentar guardar el alcance.`)
         return
       }
     }
@@ -117,7 +117,7 @@ export function InventorySessionWizard({ companyId, catalogs }: InventorySession
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3">
-        <h1 className="text-xl font-bold text-theme-text">Nueva jornada de inventario</h1>
+        <h1 className="text-xl font-bold text-theme-text">Nueva sección de conteo</h1>
         <button
           type="button"
           onClick={handleExit}
@@ -178,7 +178,7 @@ export function InventorySessionWizard({ companyId, catalogs }: InventorySession
                   disabled={!canContinue || saving}
                   className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:opacity-40"
                 >
-                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : step === 2 ? 'Crear jornada' : 'Continuar'}
+                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : step === 2 ? 'Crear sección de conteo' : 'Continuar'}
                   {!saving && <ArrowRight className="h-4 w-4" />}
                 </button>
               )}

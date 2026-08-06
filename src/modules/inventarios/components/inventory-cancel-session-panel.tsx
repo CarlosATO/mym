@@ -58,15 +58,15 @@ export function InventoryCancelSessionPanel({ companyId, sessionId }: InventoryC
         className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-500/25 bg-red-500/10 px-3 text-sm font-medium text-red-700 transition-colors hover:bg-red-500/20 dark:text-red-300"
       >
         <XCircle className="h-4 w-4" />
-        Cancelar jornada
+        Cancelar sección de conteo
       </button>
 
       {confirming && (
         <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-xl border border-theme-border bg-theme-surface p-5 shadow-2xl">
-            <h3 className="text-base font-bold text-theme-text">Cancelar jornada</h3>
+            <h3 className="text-base font-bold text-theme-text">Cancelar sección de conteo</h3>
             <div className="mt-2 rounded-lg border border-red-500/25 bg-red-500/5 p-3 text-sm text-theme-text-muted">
-              Se cancelará esta jornada de forma definitiva. Se preservan el snapshot,
+              Se cancelará esta sección de conteo de forma definitiva. Se preservan el snapshot,
               los conteos, las incidencias y la evidencia registrada. Esta acción no se puede deshacer.
             </div>
             <textarea
@@ -93,7 +93,7 @@ export function InventoryCancelSessionPanel({ companyId, sessionId }: InventoryC
                 className="inline-flex h-8 items-center gap-1 rounded-lg bg-red-600 px-3 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-40"
               >
                 <XCircle className="h-4 w-4" />
-                {busy ? 'Cancelando…' : 'Cancelar jornada'}
+                {busy ? 'Cancelando…' : 'Cancelar sección de conteo'}
               </button>
             </div>
           </div>

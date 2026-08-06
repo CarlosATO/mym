@@ -48,13 +48,13 @@ export function InventoryCampaignSiteCard({ site, canCreate }: InventoryCampaign
           <InventoryStatusBadge status={site.session_status} />
         ) : (
           <span className="inline-flex shrink-0 items-center rounded-full border border-theme-border bg-theme-text/5 px-2 py-0.5 text-[11px] font-medium whitespace-nowrap text-theme-text-muted">
-            Sin sesión
+            Sin sección de conteo
           </span>
         )}
       </div>
 
       {hasSession && site.session_number && (
-        <p className="mt-1.5 truncate text-[11px] text-theme-text-muted">Jornada #{site.session_number}</p>
+        <p className="mt-1.5 truncate text-[11px] text-theme-text-muted">Sección #{site.session_number}</p>
       )}
 
       {error && (
@@ -80,14 +80,14 @@ export function InventoryCampaignSiteCard({ site, canCreate }: InventoryCampaign
             className="inline-flex h-7 items-center gap-1 rounded-lg bg-theme-accent px-3 text-xs font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:opacity-50"
           >
             {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-            {creating ? 'Creando…' : 'Crear sesión'}
+            {creating ? 'Creando…' : 'Crear sección de conteo'}
           </button>
         ) : (
           <span
-            title="Solo los usuarios con permiso de creación de jornadas pueden crear una sesión."
+            title="Solo los usuarios con permiso de creación de secciones de conteo pueden crear una."
             className="inline-flex h-7 items-center rounded-lg border border-theme-border bg-theme-text/5 px-3 text-xs font-medium text-theme-text-muted"
           >
-            Crear sesión
+            Crear sección de conteo
           </span>
         )}
         {site.is_required && <span className="text-[11px] text-theme-text-muted">Requerida</span>}

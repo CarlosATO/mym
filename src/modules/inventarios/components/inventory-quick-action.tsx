@@ -15,7 +15,7 @@ export function InventoryQuickAction({ label, description, href, icon }: Invento
     <Link
       href={href}
       className={cn(
-        'group flex items-center gap-3 rounded-xl border border-theme-border bg-theme-surface p-3.5 shadow-sm transition-all duration-200',
+        'group flex items-center gap-3 rounded-xl border border-theme-border bg-theme-surface p-3 shadow-sm transition-all duration-200',
         'hover:border-theme-border-accent hover:shadow-md'
       )}
     >

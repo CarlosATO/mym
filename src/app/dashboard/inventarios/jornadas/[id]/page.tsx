@@ -1,6 +1,5 @@
 import { notFound } from 'next/navigation'
-import Link from 'next/link'
-import { ArrowLeft, ClipboardList, FileCheck2, Settings2 } from 'lucide-react'
+import { ClipboardList, FileCheck2, Settings2 } from 'lucide-react'
 import { getActiveCompanySessionDetail, getActiveCompanySessionReview, getInventorySessionCatalogs, getInventorySessionImportContext, type CatalogUserOption } from '@/app/actions/inventarios/sessions'
 import { getActiveCompanyResults } from '@/app/actions/inventarios/results'
 import { InventorySessionHeader } from '@/modules/inventarios/components/inventory-session-header'
@@ -21,7 +20,6 @@ import { InventoryCancellationPanel } from '@/modules/inventarios/components/inv
 import { InventoryCancelSessionPanel } from '@/modules/inventarios/components/inventory-cancel-session-panel'
 import { InventoryEmptyState } from '@/modules/inventarios/components/inventory-empty-state'
 import { InventoryErrorState } from '@/modules/inventarios/components/inventory-error-state'
-import { inventoryStatusLabel } from '@/modules/inventarios/lib/states'
 import { formatDateChile } from '@/modules/inventarios/lib/format'
 
 interface PageProps {
@@ -117,62 +115,29 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
   const isCancelled = status === 'CANCELLED'
 
   return (
-    <div className="space-y-5">
-      {importContext?.campaign_id && (
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-theme-border bg-theme-surface px-3 py-2 text-xs text-theme-text-muted">
-          <Link
-            href={`/dashboard/inventarios/campanas/${importContext.campaign_id}`}
-            className="inline-flex items-center gap-1 font-semibold text-theme-accent hover:underline"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            Volver a la campaña
-          </Link>
-          {importContext.campaign_name && (
-            <>
-              <span aria-hidden className="text-theme-text-muted/50">·</span>
-              <span>
-                Campaña: <span className="font-medium text-theme-text">{importContext.campaign_name}</span>
-              </span>
-            </>
-          )}
-          <span aria-hidden className="text-theme-text-muted/50">·</span>
-          <span>
-            Unidad: <span className="font-medium text-theme-text">{importContext.site_name ?? '—'}</span>
-          </span>
-        </div>
-      )}
-
-      <InventorySessionHeader detail={detail} />
+    <div className="space-y-4">
+      <InventorySessionHeader
+        detail={detail}
+        campaign={
+          importContext?.campaign_id
+            ? {
+                id: importContext.campaign_id,
+                name: importContext.campaign_name,
+                siteName: importContext.site_name,
+              }
+            : undefined
+        }
+        action={
+          ['DRAFT', 'PREPARED', 'COUNTING', 'UNDER_REVIEW'].includes(status) ? (
+            <InventoryCancelSessionPanel companyId={companyId} sessionId={id} />
+          ) : undefined
+        }
+      />
 
       <InventorySessionTabs tabs={tabs} />
 
-      {['DRAFT', 'PREPARED', 'COUNTING', 'UNDER_REVIEW'].includes(status) && (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-red-500/15 bg-red-500/5 p-3">
-          <p className="text-xs text-theme-text-muted">
-            ¿Necesitas detener esta jornada antes de su aprobación? Puedes cancelarla; se preserva toda la evidencia registrada.
-          </p>
-          <InventoryCancelSessionPanel companyId={companyId} sessionId={id} />
-        </div>
-      )}
-
       {safeTab === 'resumen' && (
         <div className="space-y-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-theme-text-muted">
-              Estado: <span className="font-semibold text-theme-text">{inventoryStatusLabel(status)}</span>
-            </p>
-            {isCancelled ? (
-              <span className="text-sm text-theme-text-muted">
-                Cancelada el {formatDateChile(detail.session.cancelled_at)}
-              </span>
-            ) : status === 'UNDER_REVIEW' ? (
-              <span className="text-sm text-theme-text-muted">En revisión por el supervisor.</span>
-            ) : status === 'APPROVED' ? (
-              <span className="text-sm text-theme-text-muted">
-                Aprobada el {formatDateChile(detail.session.approved_at)}
-              </span>
-            ) : null}
-          </div>
           <InventorySessionOverview detail={detail} />
           {isCancelled && <InventoryCancellationPanel detail={detail} />}
         </div>
@@ -294,7 +259,7 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
           ) : (
             <InventoryEmptyState
               title="Resultados oficiales"
-              description="Los resultados oficiales se publican una vez aprobada la jornada."
+              description="Los resultados oficiales se publican una vez aprobada la sección de conteo."
               icon={<FileCheck2 className="h-5 w-5" />}
             />
           )}

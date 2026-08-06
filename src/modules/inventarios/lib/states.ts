@@ -42,9 +42,9 @@ export function inventoryStatusTone(status: string | null | undefined): Inventor
 
 export const INVENTORY_NAV_ITEMS = [
   { id: 'resumen', label: 'Resumen', href: '/dashboard/inventarios', icon: 'LayoutDashboard' },
-  { id: 'campanas', label: 'Campañas', href: '/dashboard/inventarios/campanas', icon: 'Layers' },
-  { id: 'jornadas', label: 'Jornadas', href: '/dashboard/inventarios/jornadas', icon: 'ClipboardList' },
-  { id: 'unidades', label: 'Unidades', href: '/dashboard/inventarios/unidades', icon: 'Boxes' },
+  { id: 'campanas', label: 'Inventarios', href: '/dashboard/inventarios/campanas', icon: 'Layers' },
+  { id: 'jornadas', label: 'Secciones de conteo', href: '/dashboard/inventarios/jornadas', icon: 'ClipboardList' },
+  { id: 'unidades', label: 'Bodegas', href: '/dashboard/inventarios/unidades', icon: 'Boxes' },
   { id: 'importaciones', label: 'Importaciones', href: '/dashboard/inventarios/importaciones', icon: 'Upload' },
   { id: 'operacion', label: 'Operación', href: '/dashboard/inventarios/operacion', icon: 'PlayCircle' },
   { id: 'revision', label: 'Revisión', href: '/dashboard/inventarios/revision', icon: 'Eye' },

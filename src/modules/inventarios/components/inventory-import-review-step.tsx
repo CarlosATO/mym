@@ -111,10 +111,10 @@ export function InventoryImportReviewStep({
     <div className="space-y-4">
       <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
         <p className="flex items-center gap-1.5 font-semibold">
-          <Lock className="h-4 w-4" /> Al preparar la jornada, el stock y los costos quedarán congelados
+          <Lock className="h-4 w-4" /> Al preparar la sección de conteo, el stock y los costos quedarán congelados
         </p>
         <p className="mt-1 text-xs text-amber-700 dark:text-amber-300/80">
-          Al preparar la jornada, el stock y los costos quedarán congelados y esta importación no podrá
+          Al preparar la sección de conteo, el stock y los costos quedarán congelados y esta importación no podrá
           reutilizarse.
         </p>
       </div>
@@ -125,20 +125,20 @@ export function InventoryImportReviewStep({
         </div>
       )}
 
-      {/* Unidad inventariable heredada */}
+      {/* Bodega inventariable heredada */}
       <div className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
-        <h3 className="mb-2 text-sm font-semibold text-theme-text">Unidad inventariable</h3>
+        <h3 className="mb-2 text-sm font-semibold text-theme-text">Bodega inventariable</h3>
         <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
           <div>
-            <p className="text-[11px] text-theme-text-muted/60 uppercase tracking-wider">Jornada</p>
+            <p className="text-[11px] text-theme-text-muted/60 uppercase tracking-wider">Sección de conteo</p>
             <p className="truncate font-medium text-theme-text">{session.name}</p>
           </div>
           <div>
-            <p className="text-[11px] text-theme-text-muted/60 uppercase tracking-wider">Unidad</p>
+            <p className="text-[11px] text-theme-text-muted/60 uppercase tracking-wider">Bodega</p>
             <p className="truncate font-medium text-theme-text">{session.site_name ?? '—'}</p>
           </div>
           <div>
-            <p className="text-[11px] text-theme-text-muted/60 uppercase tracking-wider">Tipo de unidad</p>
+            <p className="text-[11px] text-theme-text-muted/60 uppercase tracking-wider">Tipo de bodega</p>
             <p className="font-medium text-theme-text">{TYPE_LABELS[session.site_type as string] ?? session.site_type ?? '—'}</p>
           </div>
           <div>
@@ -155,7 +155,7 @@ export function InventoryImportReviewStep({
           <InventoryLoadingState compact label="Cargando importaciones…" />
         ) : imports.length === 0 ? (
           <p className="rounded-lg border border-theme-border/60 bg-theme-bg px-3 py-2 text-xs text-theme-text-muted">
-            No hay importaciones VALIDATED disponibles para esta unidad. Sube y valida un archivo desde{' '}
+            No hay importaciones VALIDATED disponibles para esta bodega. Sube y valida un archivo desde{' '}
             <a href="/dashboard/inventarios/importaciones" className="text-theme-accent underline">
               Importaciones
             </a>
@@ -222,8 +222,8 @@ export function InventoryImportReviewStep({
           </p>
           <p className="text-xs text-theme-text-muted">
             {ready
-              ? 'La jornada está lista para prepararse con el stock y costos congelados.'
-              : 'Debes seleccionar una importación VALIDATED para poder preparar la jornada.'}
+              ? 'La sección de conteo está lista para prepararse con el stock y costos congelados.'
+              : 'Debes seleccionar una importación VALIDATED para poder preparar la sección de conteo.'}
           </p>
         </div>
         <button
@@ -237,7 +237,7 @@ export function InventoryImportReviewStep({
           ) : (
             <ClipboardList className="h-4 w-4" />
           )}
-          {!preparing && 'Preparar jornada'}
+          {!preparing && 'Preparar sección de conteo'}
         </button>
       </div>
 
@@ -245,10 +245,10 @@ export function InventoryImportReviewStep({
       {showConfirm && (
         <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-xl border border-theme-border bg-theme-surface p-5 shadow-2xl">
-            <h3 className="text-base font-bold text-theme-text">Preparar jornada desde importación</h3>
+            <h3 className="text-base font-bold text-theme-text">Preparar sección de conteo desde importación</h3>
             <p className="mt-2 text-sm text-theme-text-muted">
-              Al preparar la jornada, el stock y los costos quedarán <strong>congelados</strong> y esta
-              importación <strong>no podrá reutilizarse</strong>. La jornada quedará en estado{' '}
+              Al preparar la sección de conteo, el stock y los costos quedarán <strong>congelados</strong> y esta
+              importación <strong>no podrá reutilizarse</strong>. La sección de conteo quedará en estado{' '}
               <strong>Preparada</strong>.
             </p>
             <div className="mt-4 flex justify-end gap-2">

@@ -355,7 +355,7 @@ export function InventoryCampaignParticipantTeam({
             <div className="flex items-start justify-between gap-3 border-b border-theme-border/60 px-5 py-3">
               <div className="space-y-1">
                 <h3 className="text-base font-bold text-theme-text">Equipo participante</h3>
-                <p className="text-sm text-theme-text-muted">Administradores, supervisores y contadores de la campaña.</p>
+                <p className="text-sm text-theme-text-muted">Administradores, supervisores y contadores del inventario.</p>
               </div>
               <button
                 type="button"
@@ -398,10 +398,10 @@ export function InventoryCampaignParticipantTeam({
                   ) : (
                     <div className="rounded-lg border border-theme-border bg-theme-surface/60 px-3 py-2 text-xs text-theme-text-muted">
                       {blockedByPreparation
-                        ? 'El equipo ya no puede modificarse porque la campaña fue preparada.'
+                        ? 'El equipo ya no puede modificarse porque el inventario fue preparado.'
                         : canManage
-                          ? 'El equipo solo puede modificarse mientras la campaña esté en estado DRAFT.'
-                          : 'No tienes permisos para modificar el equipo de esta campaña.'}
+                          ? 'El equipo solo puede modificarse mientras el inventario esté en estado DRAFT.'
+                          : 'No tienes permisos para modificar el equipo de este inventario.'}
                     </div>
                   )}
 
@@ -409,7 +409,7 @@ export function InventoryCampaignParticipantTeam({
 
                   {groupedByUser.length === 0 ? (
                     <p className="rounded-lg border border-dashed border-theme-border px-3 py-4 text-center text-xs text-theme-text-muted">
-                      Aún no hay integrantes en el equipo de esta campaña.
+                      Aún no hay integrantes en el equipo de este inventario.
                     </p>
                   ) : (
                     <div className="overflow-hidden rounded-lg border border-theme-border bg-theme-surface/40">
