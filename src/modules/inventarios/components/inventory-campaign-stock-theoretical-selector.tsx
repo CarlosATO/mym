@@ -131,8 +131,7 @@ export function InventoryCampaignStockTheoreticalSelector({
   const canShowGenerateSessions =
     canGenerateSessions &&
     campaignStatus === 'DRAFT' &&
-    isValidated &&
-    !result?.import.consumed_campaign_id
+    isValidated
 
   const openDialog = () => {
     if (!canEditFormat) return

@@ -133,7 +133,6 @@ export interface CampaignStockImportDetail {
     id: string
     company_id: string
     campaign_id: string
-    consumed_campaign_id: string | null
     theoretical_scope: 'TOTAL_CAMPAIGN' | 'BY_SITE' | 'BY_LOCATION'
     status: string
     row_count: number
@@ -729,10 +728,6 @@ export async function getCampaignStockImport(importId: string): Promise<{
     const detail: CampaignStockImportDetail | null = raw
       ? {
           ...raw,
-          import: {
-            ...raw.import,
-            consumed_campaign_id: (raw.import as { consumed_campaign_id?: string | null }).consumed_campaign_id ?? null,
-          },
           rows: (raw.rows ?? []).map(mapCampaignStockImportRow),
         }
       : null
