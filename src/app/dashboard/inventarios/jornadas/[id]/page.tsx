@@ -10,6 +10,7 @@ import { InventoryParticipantsStep } from '@/modules/inventarios/components/inve
 import { InventoryZonesStep } from '@/modules/inventarios/components/inventory-zones-step'
 import { InventoryTasksStep } from '@/modules/inventarios/components/inventory-tasks-step'
 import { InventoryReviewStep } from '@/modules/inventarios/components/inventory-review-step'
+import { InventoryPrepareSection } from '@/modules/inventarios/components/inventory-prepare-section'
 import { InventoryImportReviewStep } from '@/modules/inventarios/components/inventory-import-review-step'
 import { InventoryOperationPanel } from '@/modules/inventarios/components/inventory-operation-panel'
 import { InventoryZonesPanel } from '@/modules/inventarios/components/inventory-zones-panel'
@@ -226,11 +227,20 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
               <InventoryTasksPanel detail={detail} />
             </>
           )}
+
+          {status === 'DRAFT' && !isExcelImport && activeStep !== 6 && (
+            <InventoryPrepareSection companyId={companyId} sessionId={id} />
+          )}
         </div>
       )}
 
       {safeTab === 'operacion' && (
-        <InventoryOperationPanel companyId={companyId} sessionId={id} initialDetail={detail} />
+        <InventoryOperationPanel
+          key={`op-${status}-${detail.session.updated_at}`}
+          companyId={companyId}
+          sessionId={id}
+          initialDetail={detail}
+        />
       )}
 
       {safeTab === 'revision' && (

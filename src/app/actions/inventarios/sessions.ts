@@ -1,5 +1,6 @@
 'use server'
 
+import { revalidatePath } from 'next/cache'
 import { createInventariosClient } from '@/lib/supabase/inventarios'
 import { getActiveCompanyId } from '@/app/actions/companies'
 
@@ -680,22 +681,74 @@ export async function prepareInventorySession(
   sessionId: string,
   idempotencyKey: string
 ): Promise<{ data: { session_id: string; state: string } | null; error: string | null }> {
+  if (!companyId || !sessionId || !idempotencyKey) {
+    return { data: null, error: 'La solicitud no tiene el formato requerido.' }
+  }
   try {
     const db = await inventariosAdmin()
-    const { error } = await db.rpc('prepare_inventory_session', {
+    const { data, error } = await db.rpc('prepare_inventory_session', {
       p_company_id: companyId,
       p_session_id: sessionId,
       p_idempotency_key: idempotencyKey,
     })
     if (error) {
       console.error('prepare_inventory_session error:', error.message)
-      return { data: null, error: 'No se pudo preparar la jornada. Verifica que la configuración esté completa.' }
+      return { data: null, error: prepareSessionError(error.message) }
     }
-    return { data: { session_id: sessionId, state: 'PREPARED' }, error: null }
+    const envelope = data as {
+      entity_id?: string
+      state?: string
+      replayed?: boolean
+      data?: { snapshot_id?: string; prepared_at?: string; content_hash?: string | null }
+    } | null
+    const state = envelope?.state ?? 'PREPARED'
+    revalidatePath(`/dashboard/inventarios/jornadas/${sessionId}`)
+    revalidatePath('/dashboard/inventarios/jornadas')
+    revalidatePath('/dashboard/inventarios/operacion')
+    revalidatePath('/dashboard/inventarios')
+    return { data: { session_id: sessionId, state }, error: null }
   } catch (err) {
     console.error('prepare_inventory_session exception:', err)
-    return { data: null, error: 'No se pudo preparar la jornada.' }
+    return { data: null, error: 'No se pudo preparar la sección de conteo.' }
   }
+}
+
+function prepareSessionError(message: string): string {
+  // Los errores RPC llegan con formato "SIGNAL_NAME ... DETAIL: {...}"
+  const detailIdx = message.indexOf('DETAIL:')
+  if (detailIdx >= 0) {
+    const raw = message.slice(detailIdx + 'DETAIL:'.length).trim()
+    if (raw.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(raw) as { message?: string }
+        if (parsed?.message) return parsed.message
+      } catch {
+        // ignorar payload no parseable
+      }
+    }
+  }
+  if (message.includes('INV_NOT_FOUND')) {
+    return 'La sección de conteo no existe o no pertenece a la empresa activa.'
+  }
+  if (message.includes('INV_SESSION_ALREADY_PREPARED')) {
+    return 'La sección de conteo ya fue preparada o está en una etapa posterior.'
+  }
+  if (message.includes('INV_SESSION_INVALID_STATE')) {
+    return 'La sección de conteo no permite esta operación en su estado actual.'
+  }
+  if (message.includes('INV_SNAPSHOT_INCOMPLETE')) {
+    return 'El snapshot de la sección aún no está disponible para prepararla.'
+  }
+  if (message.includes('INV_SESSION_SETUP_INCOMPLETE')) {
+    return 'La configuración de la sección está incompleta. Revisa participantes, zonas, ubicaciones y tareas.'
+  }
+  if (message.includes('INV_CONCURRENT_MODIFICATION')) {
+    return 'Se detectó una modificación concurrente. Intenta nuevamente.'
+  }
+  if (message.includes('INV_INVALID_REQUEST_PAYLOAD')) {
+    return 'La solicitud no tiene el formato requerido.'
+  }
+  return 'No se pudo preparar la sección de conteo.'
 }
 
 export async function getActiveCompanyPrepareSetup(

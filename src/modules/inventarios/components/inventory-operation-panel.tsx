@@ -24,6 +24,10 @@ export function InventoryOperationPanel({ companyId, sessionId, initialDetail }:
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
 
+  useEffect(() => {
+    setDetail(initialDetail)
+  }, [initialDetail])
+
   const load = async () => {
     setRefreshing(true)
     const result = await getActiveCompanySessionDetail(sessionId)

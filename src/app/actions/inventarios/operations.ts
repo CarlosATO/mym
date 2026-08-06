@@ -1,5 +1,6 @@
 'use server'
 
+import { revalidatePath } from 'next/cache'
 import { createInventariosClient } from '@/lib/supabase/inventarios'
 import { getActiveCompanyId } from '@/app/actions/companies'
 
@@ -23,6 +24,10 @@ export async function startInventorySession(
       console.error('start_inventory_session error:', error.message)
       return { data: null, error: 'No se pudo abrir la jornada.' }
     }
+    revalidatePath(`/dashboard/inventarios/jornadas/${sessionId}`)
+    revalidatePath('/dashboard/inventarios/jornadas')
+    revalidatePath('/dashboard/inventarios/operacion')
+    revalidatePath('/dashboard/inventarios')
     return { data: { session_id: sessionId, state: 'COUNTING' }, error: null }
   } catch (err) {
     console.error('start_inventory_session exception:', err)

@@ -1,105 +1,53 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { Check, ClipboardList, Lock, X } from 'lucide-react'
-import type { InventoryParticipant, InventorySessionSetupResult } from '@/app/actions/inventarios/sessions'
-import { getActiveCompanyPrepareSetup, prepareInventorySession } from '@/app/actions/inventarios/sessions'
-import { clearWizardDraft } from '@/modules/inventarios/lib/wizard'
+import { useEffect, useState } from 'react'
+import { Check, Info, Lock, X } from 'lucide-react'
+import type { InventorySessionSetupResult } from '@/app/actions/inventarios/sessions'
+import { getActiveCompanyPrepareSetup } from '@/app/actions/inventarios/sessions'
 import { inventoryTypeLabel } from '@/modules/inventarios/lib/states'
 import { InventoryLoadingState } from '@/modules/inventarios/components/inventory-loading-state'
+import {
+  InventoryPrepareSection,
+  activeParticipantCount,
+  buildPrepareRequirements,
+} from '@/modules/inventarios/components/inventory-prepare-section'
 
 interface ReviewStepProps {
   companyId: string
   sessionId: string
 }
 
-interface Requirement {
-  key: string
-  label: string
-  met: boolean
-  step?: number
-}
-
-function makeKey(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`
-}
-
-function useIdempotencyKey(): () => string {
-  const ref = useRef<string | null>(null)
-  return () => {
-    if (!ref.current) ref.current = makeKey()
-    return ref.current
-  }
-}
-
-function participantCount(participants: InventoryParticipant[], role: string): number {
-  return participants.filter(p => !p.revoked_at && p.functional_role === role).length
-}
+const ROLES = [
+  { role: 'ADMINISTRATOR', label: 'Administrador' },
+  { role: 'COUNTER', label: 'Tomador' },
+  { role: 'SUPERVISOR', label: 'Supervisor' },
+  { role: 'MANAGER', label: 'Encargado' },
+]
 
 export function InventoryReviewStep({ companyId, sessionId }: ReviewStepProps) {
-  const router = useRouter()
   const [setup, setSetup] = useState<InventorySessionSetupResult | null>(null)
   const [loading, setLoading] = useState(true)
-  const [preparing, setPreparing] = useState(false)
-  const [showConfirm, setShowConfirm] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const idempotencyRef = useIdempotencyKey()
 
   useEffect(() => {
+    let mounted = true
     getActiveCompanyPrepareSetup(sessionId).then(result => {
+      if (!mounted) return
       if (result.data) setSetup(result.data)
       setLoading(false)
     })
+    return () => {
+      mounted = false
+    }
   }, [sessionId])
 
   if (loading || !setup || !setup.session) {
     return <InventoryLoadingState label="Cargando revisión de la sección de conteo…" />
   }
 
-  const { session, participants, zones, tasks, product_scope, indicators } = setup
-  const activeZones = (zones ?? []).filter(z => z.is_enabled)
-  const activeTasks = (tasks ?? []).filter(t => !t.cancelled_at)
-
-  const requirements: Requirement[] = [
-    { key: 'admin', label: 'Al menos 1 Administrador', met: participantCount(participants, 'ADMINISTRATOR') > 0, step: 3 },
-    { key: 'counter', label: 'Al menos 1 Tomador', met: participantCount(participants, 'COUNTER') > 0, step: 3 },
-    { key: 'supervisor', label: 'Al menos 1 Supervisor', met: participantCount(participants, 'SUPERVISOR') > 0, step: 3 },
-    { key: 'manager', label: 'Al menos 1 Encargado', met: participantCount(participants, 'MANAGER') > 0, step: 3 },
-    { key: 'zones', label: 'Al menos 1 zona activa', met: activeZones.length > 0, step: 4 },
-    { key: 'zone_locations', label: 'Cada zona con al menos 1 ubicación', met: activeZones.every(z => (z.locations?.length ?? 0) > 0), step: 4 },
-    { key: 'zone_tasks', label: 'Cada zona con al menos 1 tarea', met: activeZones.every(z => activeTasks.some(t => t.session_zone_id === z.id)), step: 5 },
-    { key: 'tasks_assigned', label: 'Todas las tareas en estado Asignada', met: activeTasks.every(t => t.status === 'ASSIGNED'), step: 5 },
-    { key: 'tasks_assignment', label: 'Toda tarea con asignación vigente', met: activeTasks.every(t => Boolean(t.assignment?.user_id)), step: 5 },
-    { key: 'partial_products', label: 'Alcance parcial con al menos 1 producto', met: session.scope_mode !== 'PARTIAL' || (product_scope?.length ?? 0) > 0, step: 2 },
-  ]
-
-  const unmet = requirements.filter(r => !r.met)
-  const ready = unmet.length === 0 && indicators.ready_to_prepare === true
-
-  const handlePrepare = async () => {
-    if (preparing) return
-    setPreparing(true)
-    setError(null)
-    const key = idempotencyRef()
-    const result = await prepareInventorySession(companyId, sessionId, key)
-    setPreparing(false)
-    setShowConfirm(false)
-    if (result.error) {
-      setError(result.error)
-      return
-    }
-    clearWizardDraft()
-    router.push(`/dashboard/inventarios/jornadas/${sessionId}?tab=operacion`)
-  }
-
-  const roles = [
-    { role: 'ADMINISTRATOR', label: 'Administrador' },
-    { role: 'COUNTER', label: 'Tomador' },
-    { role: 'SUPERVISOR', label: 'Supervisor' },
-    { role: 'MANAGER', label: 'Encargado' },
-  ]
+  const { session, snapshot, participants, zones, tasks, product_scope } = setup
+  const activeZones = (zones ?? []).filter(zone => zone.is_enabled)
+  const activeTasks = (tasks ?? []).filter(task => !task.cancelled_at)
+  const requirements = buildPrepareRequirements({ session, snapshot, participants, zones, tasks, product_scope })
 
   const section = (title: string, step: number) => (
     <a
@@ -120,12 +68,6 @@ export function InventoryReviewStep({ companyId, sessionId }: ReviewStepProps) {
           Al preparar la sección de conteo, la configuración quedará congelada y no podrás editarla.
         </p>
       </div>
-
-      {error && (
-        <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-700 dark:text-red-400">
-          {error}
-        </div>
-      )}
 
       {/* Datos generales */}
       <div className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
@@ -161,10 +103,10 @@ export function InventoryReviewStep({ companyId, sessionId }: ReviewStepProps) {
           {section('Editar', 3)}
         </div>
         <div className="flex flex-wrap gap-2">
-          {roles.map(role => (
+          {ROLES.map(role => (
             <span key={role.role} className="inline-flex items-center gap-1.5 rounded-full border border-theme-border bg-theme-text/5 px-2.5 py-1 text-xs text-theme-text">
               {role.label}
-              <span className="font-semibold">{participantCount(participants, role.role)}</span>
+              <span className="font-semibold">{activeParticipantCount(participants, role.role)}</span>
             </span>
           ))}
         </div>
@@ -189,7 +131,7 @@ export function InventoryReviewStep({ companyId, sessionId }: ReviewStepProps) {
                 <span className="truncate text-theme-text">{zone.display_name}</span>
                 <span className="text-theme-text-muted">
                   {zone.locations?.length ?? 0} ubicación(es) ·{' '}
-                  {activeTasks.some(t => t.session_zone_id === zone.id) ? 'tarea' : 'sin tarea'}
+                  {activeTasks.some(task => task.session_zone_id === zone.id) ? 'tarea' : 'sin tarea'}
                 </span>
               </li>
             ))}
@@ -201,80 +143,56 @@ export function InventoryReviewStep({ companyId, sessionId }: ReviewStepProps) {
       <div className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
         <h3 className="mb-2 text-sm font-semibold text-theme-text">Requisitos de preparación</h3>
         <ul className="space-y-1.5">
-          {requirements.map(req => (
-            <li key={req.key} className={`flex items-center justify-between gap-2 text-sm ${req.met ? 'text-emerald-700 dark:text-emerald-300' : 'text-red-700 dark:text-red-400'}`}>
+          {requirements.map(requirement => (
+            <li
+              key={requirement.key}
+              className={`flex items-center justify-between gap-2 text-sm ${
+                requirement.status === 'ok'
+                  ? 'text-emerald-700 dark:text-emerald-300'
+                  : requirement.status === 'missing'
+                    ? 'text-red-700 dark:text-red-400'
+                    : 'text-theme-text-muted'
+              }`}
+            >
               <span className="flex items-center gap-2">
-                <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${req.met ? 'border-emerald-500/40 bg-emerald-500/10' : 'border-red-500/30 bg-red-500/10'}`}>
-                  {req.met ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
+                <span
+                  className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
+                    requirement.status === 'ok'
+                      ? 'border-emerald-500/40 bg-emerald-500/10'
+                      : requirement.status === 'missing'
+                        ? 'border-red-500/30 bg-red-500/10'
+                        : 'border-theme-border bg-theme-text/5'
+                  }`}
+                >
+                  {requirement.status === 'ok' ? (
+                    <Check className="h-3 w-3" />
+                  ) : requirement.status === 'missing' ? (
+                    <X className="h-3 w-3" />
+                  ) : (
+                    <Info className="h-3 w-3" />
+                  )}
                 </span>
-                {req.label}
+                {requirement.label}
               </span>
-              {!req.met && req.step && (
+              {requirement.status === 'missing' && requirement.step && (
                 <a
-                  href={`/dashboard/inventarios/jornadas/${sessionId}?tab=configuracion&step=${req.step}`}
+                  href={`/dashboard/inventarios/jornadas/${sessionId}?tab=configuracion&step=${requirement.step}`}
                   className="shrink-0 text-[10px] font-medium text-theme-accent underline"
                 >
-                  Ir al paso {req.step}
+                  Ir al paso {requirement.step}
                 </a>
+              )}
+              {requirement.status === 'deferred' && (
+                <span className="shrink-0 text-[10px] text-theme-text-muted/70">
+                  Validación final al preparar
+                </span>
               )}
             </li>
           ))}
         </ul>
       </div>
 
-      {/* Preparar */}
-      <div className="flex flex-col items-start gap-3 rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="text-sm font-semibold text-theme-text">
-            {ready ? 'Configuración completa' : 'Configuración incompleta'}
-          </p>
-          <p className="text-xs text-theme-text-muted">
-            {ready
-              ? 'La sección de conteo está lista para prepararse.'
-              : `Faltan ${unmet.length} requisito(s) antes de preparar.`}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setShowConfirm(true)}
-          disabled={!ready || preparing}
-          className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:opacity-40"
-        >
-          {preparing ? <InventoryLoadingState compact label="Preparando…" /> : <ClipboardList className="h-4 w-4" />}
-          {!preparing && 'Preparar sección de conteo'}
-        </button>
-      </div>
-
-      {/* Diálogo de confirmación */}
-      {showConfirm && (
-        <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-xl border border-theme-border bg-theme-surface p-5 shadow-2xl">
-            <h3 className="text-base font-bold text-theme-text">Preparar sección de conteo</h3>
-            <p className="mt-2 text-sm text-theme-text-muted">
-              Al preparar la sección de conteo, la configuración quedará <strong>bloqueada</strong> y no podrás
-              modificarla. La sección de conteo quedará en estado <strong>Preparada</strong> y podrás abrirla después.
-            </p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setShowConfirm(false)}
-                disabled={preparing}
-                className="inline-flex h-8 items-center rounded-lg border border-theme-border bg-theme-surface px-3 text-sm font-medium text-theme-text-muted transition-colors hover:bg-theme-text/5"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={handlePrepare}
-                disabled={preparing}
-                className="inline-flex h-8 items-center rounded-lg bg-theme-accent px-3 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:opacity-40"
-              >
-                {preparing ? 'Preparando…' : 'Confirmar preparación'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <InventoryPrepareSection companyId={companyId} sessionId={sessionId} />
     </div>
   )
 }
