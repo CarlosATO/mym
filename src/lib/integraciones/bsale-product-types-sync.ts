@@ -66,6 +66,7 @@ export async function syncBsaleProductTypes(options: SyncBsaleProductTypesOption
     updatedCount: 0,
     skippedCount: 0,
     errorCount: 0,
+    unchangedCount: 0,
     pseudoNew: 0,
     pseudoUpdated: 0,
     pseudoPreservedParent: 0,
@@ -139,7 +140,7 @@ export async function syncBsaleProductTypes(options: SyncBsaleProductTypesOption
     const bsaleIdToUuidMap = new Map((existingIntegraciones || []).map(e => [e.bsale_id, e.id]))
 
     const { data: existingSuppliers, error: fetchErr } = await admin.schema('adquisiciones').from('suppliers')
-      .select('id, bsale_product_type_id, parent_supplier_id')
+      .select('id, bsale_product_type_id, parent_supplier_id, bsale_product_type_name, business_name, is_active')
       .eq('company_id', companyId)
       .eq('supplier_kind', 'BSALE_OPERATIVE')
     if (fetchErr) throw fetchErr
@@ -174,18 +175,24 @@ export async function syncBsaleProductTypes(options: SyncBsaleProductTypesOption
       }
     }
 
-    if (isDryRun) {
-      if (runId) await finishSyncRun({ runId, status: 'SUCCESS', message: 'Dry-run completado', readCount: stats.bsaleFetched })
-      return { status: 'SUCCESS', stats, isDryRun: true }
-    }
-
     const chunkSize = 100
     for (let i = 0; i < integracionesRecords.length; i += chunkSize) {
       const chunk = integracionesRecords.slice(i, i + chunkSize)
-      const { error, data: insertedInts } = await admin.schema('integraciones').from('bsale_product_types').upsert(chunk, {
-        onConflict: 'company_id, bsale_id',
-        ignoreDuplicates: false
-      }).select('id, bsale_id')
+      
+      let insertedInts = null
+      let error = null
+      
+      if (!isDryRun) {
+        const result = await admin.schema('integraciones').from('bsale_product_types').upsert(chunk, {
+          onConflict: 'company_id, bsale_id',
+          ignoreDuplicates: false
+        }).select('id, bsale_id')
+        error = result.error
+        insertedInts = result.data
+      } else {
+        // En dry run, usamos los existentes si los hay para mapear UUIDs, o generamos falsos temporalmente
+        insertedInts = chunk.map(c => ({ bsale_id: c.bsale_id, id: bsaleIdToUuidMap.get(c.bsale_id) || 'dry-run-uuid' }))
+      }
 
       if (error) {
         stats.errorCount++
@@ -214,6 +221,24 @@ export async function syncBsaleProductTypes(options: SyncBsaleProductTypesOption
       }
     })
 
+    if (isDryRun) {
+      // Para simular, iterar y calcular contadores, sin insert en BD
+      let simInsert = 0
+      let simUpdate = 0
+      for (const record of suppliersRecordsFixed) {
+        const ext = existingSupplierByBsaleId.get(record._temp_bsale_id)
+        if (ext) {
+          const isUnchanged = (ext.bsale_product_type_id || null) === (record.bsale_product_type_id || null) && (ext.bsale_product_type_name || '') === (record.bsale_product_type_name || '') && (ext.business_name || '') === (record.business_name || '') && ext.is_active === record.is_active
+          if (isUnchanged) stats.unchangedCount++
+          else simUpdate++
+        } else simInsert++
+      }
+      stats.updatedCount = simUpdate
+      stats.insertedCount = simInsert
+      if (runId) await finishSyncRun({ runId, status: 'SUCCESS', message: `Dry-run. Insert: ${simInsert}, Update: ${simUpdate}, Unchanged: ${stats.unchangedCount}`, readCount: stats.bsaleFetched })
+      return { status: 'SUCCESS', stats, isDryRun: true }
+    }
+
     for (let i = 0; i < suppliersRecordsFixed.length; i += chunkSize) {
       const chunk = suppliersRecordsFixed.slice(i, i + chunkSize)
       const toInsert = []
@@ -225,13 +250,23 @@ export async function syncBsaleProductTypes(options: SyncBsaleProductTypesOption
         
         const ext = existingSupplierByBsaleId.get(bsaleId)
         if (ext) {
-          toUpdate.push({
-            id: ext.id,
-            bsale_product_type_id: record.bsale_product_type_id,
-            bsale_product_type_name: record.bsale_product_type_name,
-            business_name: record.business_name,
-            is_active: record.is_active,
-          })
+          const isUnchanged =
+            (ext.bsale_product_type_id || null) === (record.bsale_product_type_id || null) &&
+            (ext.bsale_product_type_name || '') === (record.bsale_product_type_name || '') &&
+            (ext.business_name || '') === (record.business_name || '') &&
+            ext.is_active === record.is_active
+
+          if (isUnchanged) {
+            stats.unchangedCount = (stats.unchangedCount || 0) + 1
+          } else {
+            toUpdate.push({
+              id: ext.id,
+              bsale_product_type_id: record.bsale_product_type_id,
+              bsale_product_type_name: record.bsale_product_type_name,
+              business_name: record.business_name,
+              is_active: record.is_active,
+            })
+          }
         } else {
           toInsert.push(record)
         }
@@ -256,7 +291,8 @@ export async function syncBsaleProductTypes(options: SyncBsaleProductTypesOption
     if (runId) {
       await finishSyncRun({ 
         runId, status: 'SUCCESS', readCount: stats.bsaleFetched,
-        insertedCount: stats.insertedCount, updatedCount: stats.updatedCount, errorCount: stats.errorCount
+        insertedCount: stats.insertedCount, updatedCount: stats.updatedCount, errorCount: stats.errorCount,
+        message: `Completado. Unchanged: ${stats.unchangedCount}`
       })
     }
 

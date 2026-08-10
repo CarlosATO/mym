@@ -1,4 +1,26 @@
+
+export interface BsaleSyncStats {
+  bsaleTotal: number
+  bsaleFetched: number
+  insertedCount: number
+  updatedCount: number
+  skippedCount: number
+  errorCount: number
+  newProducts: number
+  updatedProducts: number
+  unchangedCount: number
+  conflictCount: number
+  cycleCount: number
+  reassignmentCount: number
+  withVariantId: number
+  withBarcode: number
+  withProductType: number
+  newMappings: number
+  withoutMapping: number
+  durationMs: number
+}
 import { createClient } from '@supabase/supabase-js'
+import { planUniqueSafeProductUpdates } from './bsale-planner'
 import crypto from 'crypto'
 import {
   createSyncRun,
@@ -57,7 +79,7 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
     await admin.schema('integraciones').from('sync_locks').update({ sync_run_id: runId }).eq('company_id', companyId).eq('provider', provider).eq('entity', entity)
   }
 
-  const stats = {
+  const stats: BsaleSyncStats = {
     bsaleTotal: 0,
     bsaleFetched: 0,
     insertedCount: 0,
@@ -66,11 +88,16 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
     errorCount: 0,
     newProducts: 0,
     updatedProducts: 0,
+    unchangedCount: 0,
+    conflictCount: 0,
+    cycleCount: 0,
+    reassignmentCount: 0,
     withVariantId: 0,
     withBarcode: 0,
     withProductType: 0,
     newMappings: 0,
-    withoutMapping: 0
+    withoutMapping: 0,
+    durationMs: 0
   }
 
   try {
@@ -174,7 +201,7 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
     let pOffset = 0
     while (true) {
       const { data: page, error: fetchErr } = await admin.schema('adquisiciones').from('products')
-        .select('id, sku, bsale_variant_id')
+        .select('id, sku, bsale_variant_id, description, barcode, bsale_product_state, bsale_variant_state, bsale_product_type_id, bsale_product_type_name, product_type, is_active')
         .eq('company_id', companyId)
         .range(pOffset, pOffset + 999)
         
@@ -201,12 +228,7 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
       }
     }
 
-    if (isDryRun) {
-      if (runId) await finishSyncRun({ runId, status: 'SUCCESS', message: 'Dry-run completado', readCount: stats.bsaleFetched })
-      return { status: 'SUCCESS', stats, isDryRun: true }
-    }
-
-    // 4. Apply mode
+    // 4. Clasificación de operaciones
     const chunkSize = 200
 
     const toInsertProducts = []
@@ -219,43 +241,112 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
       if (!ext && rec.sku) ext = existingMapBySku.get(String(rec.sku).trim().toUpperCase())
 
       if (ext) {
-        toUpdateProducts.push({
-          id: ext.id,
-          sku: rec.sku,
-          description: rec.description,
-          barcode: rec.barcode,
-          bsale_product_state: rec.bsale_product_state,
-          bsale_variant_state: rec.bsale_variant_state,
-          bsale_product_type_id: rec.bsale_product_type_id,
-          bsale_product_type_name: rec.bsale_product_type_name,
-          product_type: rec.product_type,
-          is_active: rec.is_active,
-          last_bsale_sync_at: rec.last_bsale_sync_at,
-          company_id: companyId
-        })
+        const isUnchanged =
+          (ext.sku || '') === (rec.sku || '') &&
+          (ext.description || '') === (rec.description || '') &&
+          (ext.barcode || '') === (rec.barcode || '') &&
+          ext.bsale_product_state === rec.bsale_product_state &&
+          ext.bsale_variant_state === rec.bsale_variant_state &&
+          String(ext.bsale_product_type_id || '') === String(rec.bsale_product_type_id || '') &&
+          (ext.bsale_product_type_name || null) === (rec.bsale_product_type_name || null) &&
+          (ext.product_type || null) === (rec.product_type || null) &&
+          ext.is_active === rec.is_active
+
+        if (isUnchanged) {
+          stats.unchangedCount++
+        } else {
+          toUpdateProducts.push({
+            id: ext.id,
+            sku: rec.sku,
+            description: rec.description,
+            barcode: rec.barcode,
+            bsale_product_state: rec.bsale_product_state,
+            bsale_variant_state: rec.bsale_variant_state,
+            bsale_product_type_id: rec.bsale_product_type_id,
+            bsale_product_type_name: rec.bsale_product_type_name,
+            product_type: rec.product_type,
+            is_active: rec.is_active,
+            last_bsale_sync_at: rec.last_bsale_sync_at,
+            company_id: companyId
+          })
+        }
       } else {
         toInsertProducts.push(rec)
       }
     }
 
-    for (let i = 0; i < toUpdateProducts.length; i += chunkSize) {
-      const chunk = toUpdateProducts.slice(i, i + chunkSize)
-      const { error: err } = await admin.schema('adquisiciones').from('products').upsert(chunk, { onConflict: 'id' })
-      if (err) throw err
-      stats.updatedCount += chunk.length
+    const plannerResult = planUniqueSafeProductUpdates(toUpdateProducts, existingProducts)
+
+    if (isDryRun) {
+      stats.updatedCount = toUpdateProducts.length
+      stats.insertedCount = toInsertProducts.length
+      if (runId) await finishSyncRun({ runId, status: 'SUCCESS', message: `Dry-run. Insert: ${stats.insertedCount}, Update: ${stats.updatedCount}, Unchanged: ${stats.unchangedCount}`, readCount: stats.bsaleFetched })
+      return { status: 'SUCCESS', stats, isDryRun: true, toUpdatePreview: toUpdateProducts, toInsertPreview: toInsertProducts, plannerResult }
     }
 
+    if (plannerResult.conflicts.length > 0) {
+      stats.conflictCount += plannerResult.conflicts.length
+      stats.errorCount += plannerResult.conflicts.length
+      if (runId) await recordSyncError({ runId, companyId, provider, entity, errorMessage: `Se detectaron ${plannerResult.conflicts.length} conflictos UNIQUE. Abortando actualizaciones.`, safePayload: plannerResult.conflicts })
+      return { status: 'ERROR', stats, error: new Error('UNIQUE_CONFLICT_DETECTED') }
+    }
+
+    if (plannerResult.cycles.length > 0) {
+      stats.cycleCount += plannerResult.cycles.length
+      stats.errorCount += plannerResult.cycles.length
+      if (runId) await recordSyncError({ runId, companyId, provider, entity, errorMessage: `Se detectaron ${plannerResult.cycles.length} ciclos UNIQUE. Abortando actualizaciones.`, safePayload: plannerResult.cycles })
+      return { status: 'ERROR', stats, error: new Error('UNIQUE_CYCLE_DETECTED') }
+    }
+
+    // 5. Aplicar Updates mediante RPC Transaccional
+    if (plannerResult.orderedUpdates.length > 0) {
+      const payload = plannerResult.orderedUpdates.map(u => ({
+        id: u.id,
+        expected_sku: existingProducts.find(p => p.id === u.id)?.sku || null,
+        new_sku: u.sku,
+        expected_barcode: existingProducts.find(p => p.id === u.id)?.barcode || null,
+        new_barcode: u.barcode,
+        description: u.description,
+        bsale_product_state: u.bsale_product_state,
+        bsale_variant_state: u.bsale_variant_state,
+        bsale_product_type_id: u.bsale_product_type_id,
+        bsale_product_type_name: u.bsale_product_type_name,
+        product_type: u.product_type,
+        is_active: u.is_active,
+        last_bsale_sync_at: u.last_bsale_sync_at
+      }))
+    
+      const { error: rpcErr } = await admin.schema('adquisiciones').rpc('apply_bsale_product_updates', {
+        p_updates: payload,
+        p_company_id: companyId
+      })
+    
+      if (rpcErr) {
+        stats.errorCount++
+        if (runId) await recordSyncError({ runId, companyId, provider, entity, errorMessage: rpcErr.message, safePayload: rpcErr })
+        return { status: 'ERROR', stats, error: rpcErr }
+      }
+      stats.updatedCount = plannerResult.orderedUpdates.length
+      stats.reassignmentCount = payload.filter(u => u.expected_sku !== u.new_sku || u.expected_barcode !== u.new_barcode).length
+    }
+
+    // 6. Aplicar Inserts
     for (let i = 0; i < toInsertProducts.length; i += chunkSize) {
       const chunk = toInsertProducts.slice(i, i + chunkSize)
       const { error: err } = await admin.schema('adquisiciones').from('products').insert(chunk)
-      if (err) throw err
-      stats.insertedCount += chunk.length
+      if (err) {
+        stats.errorCount++
+        if (runId) await recordSyncError({ runId, companyId, provider, entity, errorMessage: err.message, safePayload: err })
+      } else {
+        stats.insertedCount += chunk.length
+      }
     }
 
     if (runId) {
       await finishSyncRun({ 
         runId, status: 'SUCCESS', readCount: stats.bsaleFetched,
-        insertedCount: stats.insertedCount, updatedCount: stats.updatedCount, errorCount: stats.errorCount
+        insertedCount: stats.insertedCount, updatedCount: stats.updatedCount, errorCount: stats.errorCount,
+        message: `Completado. Unchanged: ${stats.unchangedCount}`
       })
     }
 
