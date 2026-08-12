@@ -82,7 +82,7 @@ export function InventoryZoneAssignmentsList({
                   {zone.zone_code}
                 </span>
                 <span className="min-w-0 truncate text-xs text-theme-text-muted">
-                  {counterName ? `Contador: ${counterName}` : 'Sin responsable asignado'}
+                  {counterName ? `Responsable: ${counterName}` : 'Sin responsable asignado'}
                 </span>
                 {task && (
                   <span className="shrink-0 rounded-full border border-theme-border/60 bg-theme-text/[0.03] px-2 py-0.5 text-[10px] font-medium text-theme-text-muted">

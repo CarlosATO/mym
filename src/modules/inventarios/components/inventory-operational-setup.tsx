@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { Loader2, Settings2, UserCog } from 'lucide-react'
 import {
   assignInventoryCountingZone,
@@ -19,12 +20,61 @@ import {
 } from '@/app/actions/inventarios/sessions'
 import { InventoryZoneLocationPicker } from '@/modules/inventarios/components/inventory-zone-location-picker'
 import { InventoryZoneAssignmentsList } from '@/modules/inventarios/components/inventory-zone-assignments-list'
+import type { InventoryCampaignParticipantRole } from '@/app/actions/inventarios/campaigns'
 
 interface InventoryOperationalSetupProps {
   companyId: string
   sessionId: string
   campaignId: string
   readOnly?: boolean
+}
+
+interface ZoneAssigneeOption {
+  participantId: string
+  userId: string
+  label: string
+}
+
+const ROLE_PRIORITY: Record<InventoryCampaignParticipantRole, number> = {
+  ADMINISTRATOR: 1,
+  SUPERVISOR: 2,
+  MANAGER: 3,
+  COUNTER: 4,
+}
+
+const ROLE_LABEL: Record<InventoryCampaignParticipantRole, string> = {
+  ADMINISTRATOR: 'Administrador',
+  SUPERVISOR: 'Supervisor',
+  MANAGER: 'Gerencia',
+  COUNTER: 'Contador',
+}
+
+function buildZoneAssigneeOptions(participants: InventoryCampaignParticipant[]): ZoneAssigneeOption[] {
+  const byUser = new Map<string, InventoryCampaignParticipant[]>()
+
+  for (const participant of participants) {
+    const current = byUser.get(participant.userId) ?? []
+    current.push(participant)
+    byUser.set(participant.userId, current)
+  }
+
+  return Array.from(byUser.values())
+    .map(group => {
+      const sorted = [...group].sort(
+        (a, b) =>
+          ROLE_PRIORITY[a.participantRole] - ROLE_PRIORITY[b.participantRole] ||
+          (a.userName ?? a.email ?? '').localeCompare(b.userName ?? b.email ?? '')
+      )
+      const primary = sorted[0]
+      const roles = Array.from(new Set(sorted.map(item => ROLE_LABEL[item.participantRole]))).join(' / ')
+      const name = primary.userName ?? primary.email ?? 'Usuario'
+      return {
+        participantId: primary.participantId,
+        userId: primary.userId,
+        label: `${name} · ${roles}`,
+      }
+    })
+    .sort((a, b) => a.label.localeCompare(b.label))
 }
 
 function newOperationKey(): string {
@@ -44,10 +94,11 @@ export function InventoryOperationalSetup({
   campaignId,
   readOnly,
 }: InventoryOperationalSetupProps) {
+  const router = useRouter()
   const [scopes, setScopes] = useState<InventorySessionScopesResult | null>(null)
   const [setup, setSetup] = useState<InventorySessionSetupResult | null>(null)
-  const [counters, setCounters] = useState<InventoryCampaignParticipant[]>([])
-  const [selectedCounterId, setSelectedCounterId] = useState<string | null>(null)
+  const [assignees, setAssignees] = useState<ZoneAssigneeOption[]>([])
+  const [selectedAssigneeId, setSelectedAssigneeId] = useState<string | null>(null)
   const [zoneName, setZoneName] = useState('')
   const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
@@ -87,20 +138,20 @@ export function InventoryOperationalSetup({
       }
       setScopes(scopesResult.data)
       setSetup(setupResult.data ?? null)
-      const activeCounters = (countersResult.data?.participants ?? []).filter(
+      const activeAssignees = (countersResult.data?.participants ?? []).filter(
         participant =>
-          participant.participantRole === 'COUNTER' &&
           participant.state === 'ACTIVE' &&
           participant.userIsActive
       )
-      setCounters(activeCounters)
-      const sessionCounterUserIds = new Set(
+      const assigneeOptions = buildZoneAssigneeOptions(activeAssignees)
+      setAssignees(assigneeOptions)
+      const sessionEligibleUserIds = new Set(
         (setupResult.data?.participants ?? [])
-          .filter(participant => participant.functional_role === 'COUNTER')
+          .filter(participant => ['COUNTER', 'SUPERVISOR', 'ADMINISTRATOR', 'MANAGER'].includes(participant.functional_role))
           .map(participant => participant.user_id)
       )
-      const matching = activeCounters.find(participant => sessionCounterUserIds.has(participant.userId))
-      setSelectedCounterId(matching?.participantId ?? activeCounters[0]?.participantId ?? null)
+      const matching = assigneeOptions.find(participant => sessionEligibleUserIds.has(participant.userId))
+      setSelectedAssigneeId(matching?.participantId ?? assigneeOptions[0]?.participantId ?? null)
       setZoneName(prev => (prev === '' ? `Zona ${(setupResult.data?.zones ?? []).filter(zone => zone.is_enabled).length + 1}` : prev))
       setLoading(false)
     })()
@@ -137,7 +188,7 @@ export function InventoryOperationalSetup({
   }, [])
 
   const handleCreateZone = async () => {
-    if (creating || !selectedCounterId || selectedLocationIds.length === 0) return
+    if (creating || !selectedAssigneeId || selectedLocationIds.length === 0) return
     const trimmed = zoneName.trim()
     if (trimmed.length === 0) {
       setCreateError('Escribe un nombre para la zona.')
@@ -150,7 +201,7 @@ export function InventoryOperationalSetup({
       companyId,
       campaignId,
       sessionId,
-      campaignParticipantId: selectedCounterId,
+      campaignParticipantId: selectedAssigneeId,
       zoneName: trimmed,
       locationIds: selectedLocationIds,
       idempotencyKey: createKeyRef.current,
@@ -163,6 +214,7 @@ export function InventoryOperationalSetup({
     createKeyRef.current = null
     setSelectedLocationIds([])
     await refresh()
+    router.refresh()
   }
 
   const handleCancelZone = useCallback(
@@ -178,9 +230,10 @@ export function InventoryOperationalSetup({
       })
       if (result.error) return { error: result.error }
       await refresh()
+      router.refresh()
       return { error: null }
     },
-    [companyId, campaignId, sessionId, refresh]
+    [companyId, campaignId, sessionId, refresh, router]
   )
 
   if (loading) {
@@ -287,26 +340,26 @@ export function InventoryOperationalSetup({
             <div className="rounded-xl border border-theme-border bg-theme-surface p-2.5 shadow-sm">
               <h3 className="mb-2.5 text-sm font-semibold text-theme-text">Crear zona y asignar</h3>
 
-              {counters.length === 0 && (
+              {assignees.length === 0 && (
                 <p className="mb-3 rounded-lg border border-amber-500/15 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-                  El inventario no tiene contadores activos. Agrega un contador en &ldquo;Gestionar equipo&rdquo;
+                  El inventario no tiene participantes activos asignables. Agrega participantes en &ldquo;Gestionar equipo&rdquo;
                   para poder crear zonas.
                 </p>
               )}
 
               <label className="mb-1 block text-[11px] font-medium text-theme-text-muted/60 uppercase tracking-wider">
-                Responsable de la zona (contador)
+                Responsable de la zona
               </label>
               <select
-                value={selectedCounterId ?? ''}
-                onChange={event => setSelectedCounterId(event.target.value || null)}
-                disabled={counters.length === 0}
+                value={selectedAssigneeId ?? ''}
+                onChange={event => setSelectedAssigneeId(event.target.value || null)}
+                disabled={assignees.length === 0}
                 className="w-full rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-sm text-theme-text outline-none focus:border-theme-border-accent disabled:opacity-40"
               >
-                {counters.length === 0 && <option value="">No hay contadores activos en el inventario</option>}
-                {counters.map(counter => (
-                  <option key={counter.participantId} value={counter.participantId}>
-                    {counter.userName ?? counter.email ?? 'Usuario'}
+                {assignees.length === 0 && <option value="">No hay participantes activos asignables</option>}
+                {assignees.map(assignee => (
+                  <option key={assignee.participantId} value={assignee.participantId}>
+                    {assignee.label}
                   </option>
                 ))}
               </select>
@@ -345,7 +398,7 @@ export function InventoryOperationalSetup({
               <button
                 type="button"
                 onClick={handleCreateZone}
-                disabled={creating || counters.length === 0 || selectedLocationIds.length === 0}
+                disabled={creating || assignees.length === 0 || selectedLocationIds.length === 0}
                 className="mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-40"
               >
                 {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : null}

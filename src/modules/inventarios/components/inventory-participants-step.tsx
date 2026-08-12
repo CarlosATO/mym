@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { Check, Search, UserPlus, UserX } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 import type { CatalogUserOption, InventoryParticipant } from '@/app/actions/inventarios/sessions'
 import {
   addInventorySessionParticipant,
@@ -39,6 +40,7 @@ function makeKey(): string {
 }
 
 export function InventoryParticipantsStep({ companyId, sessionId, users, onReadyChange }: ParticipantsStepProps) {
+  const router = useRouter()
   const [participants, setParticipants] = useState<InventoryParticipant[]>([])
   const [responsibleUserId, setResponsibleUserId] = useState('')
   const [loading, setLoading] = useState(true)
@@ -104,6 +106,7 @@ export function InventoryParticipantsStep({ companyId, sessionId, users, onReady
     setSelectedRole('')
     setSearch('')
     await refresh()
+    router.refresh()
   }
 
   const revokeParticipant = async (participant: InventoryParticipant) => {
@@ -123,6 +126,7 @@ export function InventoryParticipantsStep({ companyId, sessionId, users, onReady
       return
     }
     await refresh()
+    router.refresh()
   }
 
   const pendingRequirements = REQUIREMENTS.filter(req => !activeRoles.has(req.role))

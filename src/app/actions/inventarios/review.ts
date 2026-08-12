@@ -1,5 +1,6 @@
 'use server'
 
+import { revalidatePath } from 'next/cache'
 import { createInventariosClient } from '@/lib/supabase/inventarios'
 import { getActiveCompanyId } from '@/app/actions/companies'
 
@@ -286,12 +287,23 @@ export async function approveInventorySession(
   }
 }
 
+export interface CancelSessionTechnicalError {
+  code: string | null
+  message: string | null
+  details: string | null
+  hint: string | null
+}
+
 export async function cancelInventorySession(
   companyId: string,
   sessionId: string,
   reason: string,
   idempotencyKey: string
-): Promise<{ data: { session_id: string; state: string } | null; error: string | null }> {
+): Promise<{
+  data: { session_id: string; state: string } | null
+  error: string | null
+  errorTechnical?: CancelSessionTechnicalError | null
+}> {
   try {
     const db = await inventariosAdmin()
     const { error } = await db.rpc('cancel_inventory_session', {
@@ -301,12 +313,27 @@ export async function cancelInventorySession(
       p_idempotency_key: idempotencyKey,
     })
     if (error) {
-      console.error('cancel_inventory_session error:', error.message)
-      return { data: null, error: 'No se pudo cancelar la jornada.' }
+      const technical: CancelSessionTechnicalError = {
+        code: typeof error.code === 'string' && error.code ? error.code : null,
+        message: typeof error.message === 'string' && error.message ? error.message : null,
+        details: typeof error.details === 'string' && error.details ? error.details : null,
+        hint: typeof error.hint === 'string' && error.hint ? error.hint : null,
+      }
+      console.error('cancel_inventory_session error', {
+        session_id: sessionId,
+        company_id: companyId,
+        code: technical.code,
+        message: technical.message,
+        details: technical.details,
+        hint: technical.hint,
+      })
+      return { data: null, error: 'No se pudo cancelar la sección de conteo.', errorTechnical: technical }
     }
+    revalidatePath('/dashboard/inventarios/jornadas')
+    revalidatePath(`/dashboard/inventarios/jornadas/${sessionId}`)
     return { data: { session_id: sessionId, state: 'CANCELLED' }, error: null }
   } catch (err) {
     console.error('cancel_inventory_session exception:', err)
-    return { data: null, error: 'No se pudo cancelar la jornada.' }
+    return { data: null, error: 'No se pudo cancelar la sección de conteo.' }
   }
 }

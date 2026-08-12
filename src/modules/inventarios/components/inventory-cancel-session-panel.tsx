@@ -2,8 +2,8 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { XCircle } from 'lucide-react'
-import { cancelInventorySession } from '@/app/actions/inventarios/review'
+import { ChevronDown, XCircle } from 'lucide-react'
+import { cancelInventorySession, type CancelSessionTechnicalError } from '@/app/actions/inventarios/review'
 
 interface InventoryCancelSessionPanelProps {
   companyId: string
@@ -26,27 +26,31 @@ export function InventoryCancelSessionPanel({ companyId, sessionId }: InventoryC
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [errorTechnical, setErrorTechnical] = useState<CancelSessionTechnicalError | null>(null)
 
   const openDialog = () => {
     setConfirming(true)
     setReason('')
     setError(null)
+    setErrorTechnical(null)
   }
 
   const handleCancel = async () => {
     if (busy || reason.trim().length < 5) return
     setBusy(true)
     setError(null)
+    setErrorTechnical(null)
     const key = cancelIdempotencyKey(sessionId)
     const result = await cancelInventorySession(companyId, sessionId, reason, key)
     setBusy(false)
     if (result.error) {
       setError(result.error)
+      setErrorTechnical(result.errorTechnical ?? null)
       return
     }
     if (typeof window !== 'undefined') window.sessionStorage.removeItem(`inventarios:cancel:${sessionId}`)
     setConfirming(false)
-    router.push(`/dashboard/inventarios/jornadas/${sessionId}`)
+    router.push(`/dashboard/inventarios/jornadas/${sessionId}?tab=resumen`)
     router.refresh()
   }
 
@@ -77,6 +81,28 @@ export function InventoryCancelSessionPanel({ companyId, sessionId }: InventoryC
               className="mt-3 w-full rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-sm text-theme-text outline-none focus:border-theme-border-accent"
             />
             {error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>}
+            {errorTechnical && (
+              <details className="mt-2 rounded-lg border border-theme-border/60 bg-theme-text/[0.02] px-3 py-2 text-xs text-theme-text-muted">
+                <summary className="flex cursor-pointer items-center gap-1 font-medium text-theme-text-muted select-none">
+                  <ChevronDown className="h-3.5 w-3.5" />
+                  Detalle técnico para administración
+                </summary>
+                <div className="mt-2 space-y-1">
+                  {errorTechnical.code && (
+                    <p><span className="font-semibold text-theme-text-muted">Código:</span> {errorTechnical.code}</p>
+                  )}
+                  {errorTechnical.message && (
+                    <p><span className="font-semibold text-theme-text-muted">Mensaje:</span> {errorTechnical.message}</p>
+                  )}
+                  {errorTechnical.details && (
+                    <p><span className="font-semibold text-theme-text-muted">Detalle:</span> {errorTechnical.details}</p>
+                  )}
+                  {errorTechnical.hint && (
+                    <p><span className="font-semibold text-theme-text-muted">Sugerencia:</span> {errorTechnical.hint}</p>
+                  )}
+                </div>
+              </details>
+            )}
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"

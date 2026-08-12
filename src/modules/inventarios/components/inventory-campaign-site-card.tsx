@@ -12,12 +12,31 @@ interface InventoryCampaignSiteCardProps {
   canCreate: boolean
 }
 
+function sessionActionLabel(status: string | null | undefined): string {
+  switch (status) {
+    case 'COUNTING':
+      return 'En ejecución'
+    case 'UNDER_REVIEW':
+      return 'Contada'
+    case 'APPROVED':
+    case 'EXPORTED':
+    case 'RECONCILED':
+      return 'Finalizada'
+    case 'CANCELLED':
+      return 'Cancelada'
+    case 'PREPARED':
+    default:
+      return 'Abrir'
+  }
+}
+
 export function InventoryCampaignSiteCard({ site, canCreate }: InventoryCampaignSiteCardProps) {
   const router = useRouter()
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const hasSession = Boolean(site.session_id)
+  const actionLabel = sessionActionLabel(site.session_status)
 
   const handleCreate = async () => {
     if (creating || hasSession) return
@@ -38,8 +57,10 @@ export function InventoryCampaignSiteCard({ site, canCreate }: InventoryCampaign
     <div className="flex flex-col rounded-lg border border-theme-border bg-theme-surface p-3 shadow-sm">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-theme-text">{site.site_name}</p>
-          <p className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-theme-text-muted">
+          <p title={site.site_name} className="text-sm font-semibold leading-snug text-theme-text break-words">
+            {site.site_name}
+          </p>
+          <p title={`${site.site_code} · ${site.location_count} ubicación(es) · ${site.location_scope === 'SELECTED' ? 'Seleccionadas' : 'Todas'}`} className="mt-0.5 flex items-center gap-1 text-[11px] text-theme-text-muted break-words">
             <MapPin className="h-3 w-3 shrink-0" />
             {site.site_code} · {site.location_count} ubicación(es) · {site.location_scope === 'SELECTED' ? 'Seleccionadas' : 'Todas'}
           </p>
@@ -54,7 +75,7 @@ export function InventoryCampaignSiteCard({ site, canCreate }: InventoryCampaign
       </div>
 
       {hasSession && site.session_number && (
-        <p className="mt-1.5 truncate text-[11px] text-theme-text-muted">Sección #{site.session_number}</p>
+        <p className="mt-1.5 text-[11px] text-theme-text-muted">Sección #{site.session_number}</p>
       )}
 
       {error && (
@@ -69,7 +90,7 @@ export function InventoryCampaignSiteCard({ site, canCreate }: InventoryCampaign
             href={`/dashboard/inventarios/jornadas/${site.session_id}`}
             className="inline-flex h-7 items-center gap-1 rounded-lg bg-theme-accent px-3 text-xs font-semibold text-white transition-colors hover:bg-theme-accent-hover"
           >
-            Abrir
+            {actionLabel}
             <ArrowRight className="h-3.5 w-3.5" />
           </Link>
         ) : canCreate ? (

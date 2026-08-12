@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation'
 import { ClipboardList, FileCheck2, Settings2 } from 'lucide-react'
+import { listInventoryCampaignParticipants } from '@/app/actions/inventarios/campaigns'
 import { getActiveCompanySessionDetail, getActiveCompanySessionReview, getInventorySessionCatalogs, getInventorySessionImportContext, type CatalogUserOption } from '@/app/actions/inventarios/sessions'
 import { getActiveCompanyResults } from '@/app/actions/inventarios/results'
 import { InventorySessionHeader } from '@/modules/inventarios/components/inventory-session-header'
@@ -111,6 +112,10 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
 
   const importContextResult = await getInventorySessionImportContext(id)
   const importContext = importContextResult.data
+  const campaignParticipantsResult = companyId && importContext?.campaign_id
+    ? await listInventoryCampaignParticipants(companyId, importContext.campaign_id)
+    : { data: null }
+  const campaignParticipants = campaignParticipantsResult.data?.participants ?? []
   const isExcelImport = importContext?.stock_source === 'EXCEL_IMPORT'
 
   const isCancelled = status === 'CANCELLED'
@@ -189,7 +194,7 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
                     </div>
                   </div>
                 </div>
-                <InventoryParticipantsPanel detail={detail} />
+                <InventoryParticipantsPanel detail={detail} campaignParticipants={campaignParticipants} />
                 <InventoryZonesPanel detail={detail} />
                 <InventoryTasksPanel detail={detail} />
               </div>
@@ -222,7 +227,7 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
             <InventoryReviewStep companyId={companyId} sessionId={id} />
           ) : (
             <>
-              <InventoryParticipantsPanel detail={detail} />
+                <InventoryParticipantsPanel detail={detail} campaignParticipants={campaignParticipants} />
               <InventoryZonesPanel detail={detail} />
               <InventoryTasksPanel detail={detail} />
             </>

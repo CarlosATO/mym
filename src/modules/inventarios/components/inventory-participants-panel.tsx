@@ -1,12 +1,65 @@
+import type { InventoryCampaignParticipant } from '@/app/actions/inventarios/campaigns'
 import type { InventorySessionDetail } from '@/app/actions/inventarios/sessions'
 import { inventoryRoleLabel } from '@/modules/inventarios/lib/states'
 
 interface InventoryParticipantsPanelProps {
   detail: InventorySessionDetail
+  campaignParticipants?: InventoryCampaignParticipant[]
 }
 
-export function InventoryParticipantsPanel({ detail }: InventoryParticipantsPanelProps) {
-  const participants = detail.participants
+interface ParticipantBadge {
+  key: string
+  userName: string
+  isRevoked: boolean
+  roles: string[]
+}
+
+function buildSessionParticipantBadges(participants: InventorySessionDetail['participants']): ParticipantBadge[] {
+  const grouped = new Map<string, InventorySessionDetail['participants']>()
+
+  for (const participant of participants) {
+    const current = grouped.get(participant.user_id) ?? []
+    current.push(participant)
+    grouped.set(participant.user_id, current)
+  }
+
+  return Array.from(grouped.entries()).map(([userId, entries]) => {
+    const activeEntries = entries.filter(entry => !entry.revoked_at)
+    const source = activeEntries[0] ?? entries[0]
+    return {
+      key: userId,
+      userName: source.user_name ?? '—',
+      isRevoked: activeEntries.length === 0,
+      roles: Array.from(new Set(activeEntries.map(entry => inventoryRoleLabel(entry.functional_role)).filter(Boolean))),
+    }
+  })
+}
+
+function buildCampaignParticipantBadges(participants: InventoryCampaignParticipant[]): ParticipantBadge[] {
+  const grouped = new Map<string, InventoryCampaignParticipant[]>()
+
+  for (const participant of participants) {
+    const current = grouped.get(participant.userId) ?? []
+    current.push(participant)
+    grouped.set(participant.userId, current)
+  }
+
+  return Array.from(grouped.entries()).map(([userId, entries]) => {
+    const activeEntries = entries.filter(entry => entry.state === 'ACTIVE' && entry.userIsActive)
+    const source = activeEntries[0] ?? entries[0]
+    return {
+      key: userId,
+      userName: source.userName ?? source.email ?? '—',
+      isRevoked: activeEntries.length === 0,
+      roles: Array.from(new Set(activeEntries.map(entry => inventoryRoleLabel(entry.participantRole)).filter(Boolean))),
+    }
+  })
+}
+
+export function InventoryParticipantsPanel({ detail, campaignParticipants }: InventoryParticipantsPanelProps) {
+  const participants = campaignParticipants?.length
+    ? buildCampaignParticipantBadges(campaignParticipants)
+    : buildSessionParticipantBadges(detail.participants)
 
   if (!participants || participants.length === 0) {
     return (
@@ -16,9 +69,9 @@ export function InventoryParticipantsPanel({ detail }: InventoryParticipantsPane
     )
   }
 
-  const active = participants.filter(participant => !participant.revoked_at)
-  const revoked = participants.filter(participant => participant.revoked_at)
-  const counters = active.filter(participant => participant.functional_role === 'COUNTER').length
+  const active = participants.filter(participant => !participant.isRevoked)
+  const revoked = participants.filter(participant => participant.isRevoked)
+  const counters = active.filter(participant => participant.roles.includes('Contador')).length
 
   return (
     <div className="rounded-xl border border-theme-border bg-theme-surface px-3 py-2.5 shadow-sm">
@@ -36,10 +89,10 @@ export function InventoryParticipantsPanel({ detail }: InventoryParticipantsPane
       </div>
       <div className="mt-2 flex flex-wrap gap-1.5">
         {participants.map(participant => {
-          const isRevoked = Boolean(participant.revoked_at)
+          const isRevoked = participant.isRevoked
           return (
             <span
-              key={participant.id}
+              key={participant.key}
               className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] ${
                 isRevoked
                   ? 'border-red-500/25 bg-red-500/10 text-red-700/80 dark:text-red-300/80'
@@ -53,9 +106,9 @@ export function InventoryParticipantsPanel({ detail }: InventoryParticipantsPane
                   isRevoked ? 'bg-red-500' : 'bg-emerald-500'
                 }`}
               />
-              <span className="font-semibold">{participant.user_name ?? '—'}</span>
+              <span className="font-semibold">{participant.userName}</span>
               <span className={`font-normal ${isRevoked ? 'opacity-70' : 'text-theme-text-muted'}`}>
-                {inventoryRoleLabel(participant.functional_role)}
+                {participant.roles.join(' / ')}
               </span>
             </span>
           )

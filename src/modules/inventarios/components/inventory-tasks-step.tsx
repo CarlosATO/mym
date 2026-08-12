@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { Check, MapPin, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 import type { CatalogUserOption, InventorySessionTask } from '@/app/actions/inventarios/sessions'
 import type { TasksSetup } from '@/app/actions/inventarios/tasks'
 import {
@@ -21,6 +22,7 @@ interface TasksStepProps {
 }
 
 export function InventoryTasksStep({ companyId, sessionId, users, onReadyChange }: TasksStepProps) {
+  const router = useRouter()
   const [setup, setSetup] = useState<TasksSetup | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -82,6 +84,7 @@ export function InventoryTasksStep({ companyId, sessionId, users, onReadyChange 
       return
     }
     await loadSetup()
+    router.refresh()
   }
 
   const reassignTask = async (task: InventorySessionTask, counterUserId: string) => {
@@ -103,6 +106,7 @@ export function InventoryTasksStep({ companyId, sessionId, users, onReadyChange 
       return
     }
     await loadSetup()
+    router.refresh()
   }
 
   const cancelTask = async (task: InventorySessionTask) => {
@@ -123,6 +127,7 @@ export function InventoryTasksStep({ companyId, sessionId, users, onReadyChange 
       return
     }
     await loadSetup()
+    router.refresh()
   }
 
   if (loading) {
