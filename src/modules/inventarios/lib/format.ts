@@ -26,3 +26,28 @@ export function computeProgress(taskCount: number, taskCompletedCount: number): 
   if (!taskCount || taskCount <= 0) return null
   return Math.round((taskCompletedCount / taskCount) * 100)
 }
+
+const clpFormatter = new Intl.NumberFormat('es-CL', {
+  style: 'currency',
+  currency: 'CLP',
+  maximumFractionDigits: 0,
+})
+
+export function formatCLP(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—'
+  return clpFormatter.format(value)
+}
+
+export function formatQuantity(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—'
+  const withDecimals = Math.abs(value % 1) > 0
+  return value.toLocaleString('es-CL', { maximumFractionDigits: withDecimals ? 3 : 0 })
+}
+
+export function formatSignedQuantity(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—'
+  const base = formatQuantity(value)
+  if (value > 0) return `+${base}`
+  if (value < 0) return `−${formatQuantity(Math.abs(value))}`
+  return base
+}

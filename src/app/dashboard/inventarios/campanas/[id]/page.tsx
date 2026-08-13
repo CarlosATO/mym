@@ -5,6 +5,9 @@ import { InventoryStatusBadge } from '@/modules/inventarios/components/inventory
 import { InventoryCampaignSiteCard } from '@/modules/inventarios/components/inventory-campaign-site-card'
 import { InventoryCampaignStockTheoreticalSelector } from '@/modules/inventarios/components/inventory-campaign-stock-theoretical-selector'
 import { InventoryCampaignParticipantTeam } from '@/modules/inventarios/components/inventory-campaign-participant-team'
+import { InventoryCampaignReport } from '@/modules/inventarios/components/inventory-campaign-report'
+import { InventoryCampaignReportPrefetch } from '@/modules/inventarios/components/inventory-campaign-report-prefetch'
+import { InventorySessionTabs, type InventoryTab } from '@/modules/inventarios/components/inventory-session-tabs'
 import { InventoryEmptyState } from '@/modules/inventarios/components/inventory-empty-state'
 import { InventoryErrorState } from '@/modules/inventarios/components/inventory-error-state'
 import { formatDateChile } from '@/modules/inventarios/lib/format'
@@ -18,10 +21,13 @@ const CAMPAIGN_TYPE_LABELS: Record<string, string> = {
 
 interface PageProps {
   params: Promise<{ id: string }>
+  searchParams: Promise<Record<string, string | string[] | undefined>>
 }
 
-export default async function InventariosCampanaDetallePage({ params }: PageProps) {
+export default async function InventariosCampanaDetallePage({ params, searchParams }: PageProps) {
   const { id } = await params
+  const sp = await searchParams
+  const activeTab = typeof sp.tab === 'string' ? sp.tab : 'resumen'
   const [{ data: detail, error, companyId }, importPermissions, permission, managePermission] = await Promise.all([
     getActiveCompanyCampaignDetail(id),
     getCompanyImportPermissions(),
@@ -66,6 +72,12 @@ export default async function InventariosCampanaDetallePage({ params }: PageProp
   const plannedOrCreated = campaign.planned_at ?? campaign.created_at
   const sitesReadyCount = allHaveSessions ? detail.site_count : detail.session_count
 
+  const tabs: InventoryTab[] = [
+    { id: 'resumen', label: 'Resumen' },
+    { id: 'informe', label: 'Informe' },
+  ]
+  const safeTab = tabs.some(t => t.id === activeTab) ? activeTab : 'resumen'
+
   return (
     <div className="space-y-3">
       <nav className="flex items-center gap-1.5 text-xs text-theme-text-muted">
@@ -97,84 +109,94 @@ export default async function InventariosCampanaDetallePage({ params }: PageProp
         </div>
       </section>
 
-      {importError && (
-        <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-          No fue posible recuperar el archivo de stock de este inventario.
+      <InventorySessionTabs tabs={tabs} />
+
+      <InventoryCampaignReportPrefetch campaignId={campaign.id} active={safeTab !== 'informe'} />
+
+      {safeTab === 'informe' ? (
+        <InventoryCampaignReport campaignId={campaign.id} campaignName={campaign.name} />
+      ) : (
+        <div className="space-y-3">
+          {importError && (
+            <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+              No fue posible recuperar el archivo de stock de este inventario.
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 items-stretch gap-3 lg:grid-cols-5">
+            <div className="lg:col-span-3">
+              <InventoryCampaignStockTheoreticalSelector
+                key={initialImport?.import.id ?? 'no-campaign-import'}
+                canRead={importPermissions.canRead}
+                canManage={importPermissions.canManage}
+                canGenerateSessions={canCreate}
+                campaignId={campaign.id}
+                campaignStatus={campaign.status}
+                cutoffAt={plannedOrCreated}
+                initialImport={initialImport}
+                sessionCount={detail.session_count}
+                sessionsPending={detail.sessions_pending}
+                siteCount={detail.site_count}
+              />
+            </div>
+            <div className="lg:col-span-2">
+              <InventoryCampaignParticipantTeam
+                companyId={companyId}
+                campaignId={campaign.id}
+                campaignStatus={campaign.status}
+                canManage={managePermission.canManage}
+              />
+            </div>
+          </div>
+
+          <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-bold text-theme-text">Bodegas del inventario</h2>
+              {detail.site_count > 0 ? (
+                allHaveSessions ? (
+                  <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                    {detail.site_count} de {detail.site_count} listas
+                  </span>
+                ) : noneHaveSessions ? (
+                  <span className="inline-flex items-center rounded-full border border-theme-border bg-theme-text/5 px-2 py-0.5 text-xs font-medium text-theme-text-muted">
+                    Sin secciones de conteo creadas
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
+                    {sitesReadyCount} de {detail.site_count} listas
+                  </span>
+                )
+              ) : (
+                <span className="inline-flex items-center rounded-full border border-theme-border bg-theme-text/5 px-2 py-0.5 text-xs font-medium text-theme-text-muted">
+                  Sin bodegas
+                </span>
+              )}
+            </div>
+
+            {detail.sites.length === 0 ? (
+              <InventoryEmptyState
+                className="mt-3"
+                title="Sin bodegas"
+                description="Este inventario todavía no tiene bodegas configuradas."
+                icon={<MapPin className="h-5 w-5" />}
+              />
+            ) : (
+              <>
+                <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
+                  {detail.sites.map(site => (
+                    <InventoryCampaignSiteCard key={site.campaign_site_id} site={site} canCreate={canCreate} />
+                  ))}
+                </div>
+                {noneHaveSessions && (
+                  <p className="mt-2.5 text-[11px] text-theme-text-muted">
+                    Crea una sección de conteo para la bodega que deseas preparar.
+                  </p>
+                )}
+              </>
+            )}
+          </section>
         </div>
       )}
-
-      <div className="grid grid-cols-1 items-stretch gap-3 lg:grid-cols-5">
-        <div className="lg:col-span-3">
-          <InventoryCampaignStockTheoreticalSelector
-            key={initialImport?.import.id ?? 'no-campaign-import'}
-            canRead={importPermissions.canRead}
-            canManage={importPermissions.canManage}
-            canGenerateSessions={canCreate}
-            campaignId={campaign.id}
-            campaignStatus={campaign.status}
-            cutoffAt={plannedOrCreated}
-            initialImport={initialImport}
-            sessionCount={detail.session_count}
-            sessionsPending={detail.sessions_pending}
-            siteCount={detail.site_count}
-          />
-        </div>
-        <div className="lg:col-span-2">
-          <InventoryCampaignParticipantTeam
-            companyId={companyId}
-            campaignId={campaign.id}
-            campaignStatus={campaign.status}
-            canManage={managePermission.canManage}
-          />
-        </div>
-      </div>
-
-      <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-bold text-theme-text">Bodegas del inventario</h2>
-          {detail.site_count > 0 ? (
-            allHaveSessions ? (
-              <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
-                {detail.site_count} de {detail.site_count} listas
-              </span>
-            ) : noneHaveSessions ? (
-              <span className="inline-flex items-center rounded-full border border-theme-border bg-theme-text/5 px-2 py-0.5 text-xs font-medium text-theme-text-muted">
-                Sin secciones de conteo creadas
-              </span>
-            ) : (
-              <span className="inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
-                {sitesReadyCount} de {detail.site_count} listas
-              </span>
-            )
-          ) : (
-            <span className="inline-flex items-center rounded-full border border-theme-border bg-theme-text/5 px-2 py-0.5 text-xs font-medium text-theme-text-muted">
-              Sin bodegas
-            </span>
-          )}
-        </div>
-
-        {detail.sites.length === 0 ? (
-          <InventoryEmptyState
-            className="mt-3"
-            title="Sin bodegas"
-            description="Este inventario todavía no tiene bodegas configuradas."
-            icon={<MapPin className="h-5 w-5" />}
-          />
-        ) : (
-          <>
-            <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
-              {detail.sites.map(site => (
-                <InventoryCampaignSiteCard key={site.campaign_site_id} site={site} canCreate={canCreate} />
-              ))}
-            </div>
-            {noneHaveSessions && (
-              <p className="mt-2.5 text-[11px] text-theme-text-muted">
-                Crea una sección de conteo para la bodega que deseas preparar.
-              </p>
-            )}
-          </>
-        )}
-      </section>
     </div>
   )
 }
