@@ -116,9 +116,9 @@ BEGIN
           ORDER BY (ov.superseded_at IS NULL) DESC, ov.version_number DESC LIMIT 1)
       AND (v_search = '' OR sp.sku ILIKE '%' || v_search || '%' OR sp.name ILIKE '%' || v_search || '%')
       AND (v_diff_type = '' OR
-           (v_diff_type = 'FALTANTE' AND coalesce(ss.theoretical_quantity,0) - ovi.physical_quantity > 0)
-           OR (v_diff_type = 'SOBRANTE' AND coalesce(ss.theoretical_quantity,0) - ovi.physical_quantity < 0)
-           OR (v_diff_type = 'SIN_DIFERENCIA' AND coalesce(ss.theoretical_quantity,0) - ovi.physical_quantity = 0));
+           (v_diff_type = 'FALTANTE' AND ovi.physical_quantity - coalesce(ss.theoretical_quantity,0) < 0)
+           OR (v_diff_type = 'SOBRANTE' AND ovi.physical_quantity - coalesce(ss.theoretical_quantity,0) > 0)
+           OR (v_diff_type = 'SIN_DIFERENCIA' AND ovi.physical_quantity - coalesce(ss.theoretical_quantity,0) = 0));
 
     SELECT CASE
         WHEN pg_catalog.count(*) = 0 THEN '[]'::jsonb
@@ -129,10 +129,10 @@ BEGIN
                 'barcode', x.barcode,
                 'theoretical', coalesce(x.theoretical, 0),
                 'physical', x.physical_quantity,
-                'difference', coalesce(x.theoretical,0) - x.physical_quantity,
+                 'difference', x.physical_quantity - coalesce(x.theoretical,0),
                 'difference_type', CASE
-                    WHEN coalesce(x.theoretical,0) - x.physical_quantity > 0 THEN 'FALTANTE'
-                    WHEN coalesce(x.theoretical,0) - x.physical_quantity < 0 THEN 'SOBRANTE'
+                     WHEN x.physical_quantity - coalesce(x.theoretical,0) < 0 THEN 'FALTANTE'
+                     WHEN x.physical_quantity - coalesce(x.theoretical,0) > 0 THEN 'SOBRANTE'
                     ELSE 'SIN_DIFERENCIA'
                 END,
                 'provenance', CASE WHEN x.recount_contribution_count > 0 THEN 'RECUENTO' ELSE 'NORMAL' END
@@ -158,9 +158,9 @@ BEGIN
     ) x
     WHERE (v_search = '' OR x.sku ILIKE '%' || v_search || '%' OR x.name ILIKE '%' || v_search || '%')
       AND (v_diff_type = '' OR
-           (v_diff_type = 'FALTANTE' AND coalesce(x.theoretical,0) - x.physical_quantity > 0)
-           OR (v_diff_type = 'SOBRANTE' AND coalesce(x.theoretical,0) - x.physical_quantity < 0)
-           OR (v_diff_type = 'SIN_DIFERENCIA' AND coalesce(x.theoretical,0) - x.physical_quantity = 0))
+           (v_diff_type = 'FALTANTE' AND x.physical_quantity - coalesce(x.theoretical,0) < 0)
+           OR (v_diff_type = 'SOBRANTE' AND x.physical_quantity - coalesce(x.theoretical,0) > 0)
+           OR (v_diff_type = 'SIN_DIFERENCIA' AND x.physical_quantity - coalesce(x.theoretical,0) = 0))
     LIMIT v_page_size OFFSET v_offset;
 
     RETURN pg_catalog.jsonb_build_object(

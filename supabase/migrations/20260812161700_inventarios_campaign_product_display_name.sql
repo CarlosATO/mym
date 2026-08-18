@@ -431,7 +431,12 @@ BEGIN
                 'unit_cost', c.unit_cost,
                 'difference_value', coalesce(c.difference_quantity, 0::numeric) * coalesce(c.unit_cost, 0::numeric),
                 'variance_status', c.variance_status,
-                'coverage_status', c.coverage_status
+                'coverage_status', c.coverage_status,
+                'barcode', bc.info ->> 'barcode',
+                'barcode_source', bc.info ->> 'source',
+                'approved_barcodes', ab.codes,
+                'has_evidence', ev.has_evidence,
+                'evidence_id', ev.evidence_id
             ) ORDER BY
                 CASE
                     WHEN v_sort_dir = 'ASC' AND v_sort_by = 'SKU' THEN c.sku
@@ -464,6 +469,38 @@ BEGIN
     END
     INTO v_items
     FROM computed c
+    CROSS JOIN LATERAL (
+        SELECT inventarios.inventory_campaign_product_original_barcode(
+            p_company_id, p_campaign_id, c.bsale_variant_id) AS info
+    ) bc
+    CROSS JOIN LATERAL (
+        SELECT CASE WHEN pg_catalog.count(*) = 0 THEN '[]'::jsonb
+                    ELSE pg_catalog.jsonb_agg(pba.barcode ORDER BY pba.barcode) END AS codes
+        FROM inventarios.product_barcode_aliases pba
+        WHERE pba.company_id = p_company_id
+          AND pba.bsale_variant_id = c.bsale_variant_id
+          AND pba.is_active = true
+    ) ab
+    CROSS JOIN LATERAL (
+        SELECT pg_catalog.count(*) > 0 AS has_evidence,
+               pg_catalog.min(ef.id::text) AS evidence_id
+        FROM inventarios.evidence_files ef
+        WHERE ef.company_id = p_company_id
+          AND ef.invalidated_at IS NULL AND ef.invalidated_by IS NULL AND ef.invalidation_reason IS NULL
+          AND (
+              ef.proposal_id IN (
+                  SELECT pbp.id FROM inventarios.product_barcode_proposals pbp
+                  JOIN inventarios.count_entries ce ON ce.id = pbp.count_entry_id
+                  JOIN inventarios.sessions s ON s.id = ce.session_id
+                  WHERE s.campaign_id = p_campaign_id AND ce.bsale_variant_id = c.bsale_variant_id
+              )
+              OR (ef.proposal_id IS NULL AND ef.count_entry_id IN (
+                  SELECT ce.id FROM inventarios.count_entries ce
+                  JOIN inventarios.sessions s ON s.id = ce.session_id
+                  WHERE s.campaign_id = p_campaign_id AND ce.bsale_variant_id = c.bsale_variant_id
+              ))
+          )
+    ) ev
     WHERE (v_search = '' OR c.sku ILIKE '%' || v_search || '%' OR c.name ILIKE '%' || v_search || '%')
       AND (v_var_status = '' OR c.variance_status = v_var_status)
       AND (v_cov_status = '' OR c.coverage_status = v_cov_status)

@@ -5,6 +5,7 @@ import { useCallback, useState } from 'react'
 import { Search, SlidersHorizontal, X } from 'lucide-react'
 import type { WarehouseOption } from '@/app/actions/inventarios/sessions'
 import { InventoryCombobox, type InventoryComboboxOption } from '@/modules/inventarios/components/inventory-combobox'
+import { notifyInventoryNavigation } from '@/modules/inventarios/components/inventory-navigation-feedback'
 
 const STATUS_OPTIONS: InventoryComboboxOption[] = [
   { value: '', label: 'Todos los estados' },
@@ -42,6 +43,7 @@ export function InventorySessionFilters({ warehouses }: InventorySessionFiltersP
     if (dateTo) params.set('to', dateTo)
     params.set('page', '1')
     const qs = params.toString()
+    notifyInventoryNavigation()
     router.push(qs ? `${pathname}?${qs}` : pathname)
   }, [text, status, warehouse, dateFrom, dateTo, router, pathname])
 
@@ -51,6 +53,7 @@ export function InventorySessionFilters({ warehouses }: InventorySessionFiltersP
     setWarehouse('')
     setDateFrom('')
     setDateTo('')
+    notifyInventoryNavigation()
     router.push(pathname)
   }, [router, pathname])
 

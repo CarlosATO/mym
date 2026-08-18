@@ -34,6 +34,7 @@ AS $$
 DECLARE
     v_actor_id uuid; v_operation jsonb; v_operation_id uuid;
     v_session_status text; v_snapshot_status text; v_content_hash char(64);
+    v_campaign_id uuid;
     v_counter_count bigint; v_zone_count bigint; v_task_count bigint;
     v_task_not_assigned bigint; v_prior_count bigint;
     v_occurred_at timestamptz; v_response jsonb; v_payload jsonb;
@@ -55,8 +56,8 @@ BEGIN
     IF v_operation ->> 'mode' = 'REPLAY' THEN RETURN v_operation -> 'response_payload'; END IF;
     v_operation_id := (v_operation ->> 'operation_id')::uuid;
 
-    SELECT s.status, os.completion_status, os.content_hash
-    INTO v_session_status, v_snapshot_status, v_content_hash
+    SELECT s.status, os.completion_status, os.content_hash, s.campaign_id
+    INTO v_session_status, v_snapshot_status, v_content_hash, v_campaign_id
     FROM inventarios.sessions s
     JOIN inventarios.operational_snapshots os
       ON os.company_id = s.company_id AND os.session_id = s.id
@@ -154,6 +155,22 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='P0001', MESSAGE='INV_CONCURRENT_MODIFICATION',
             DETAIL=pg_catalog.jsonb_build_object('message','Se detecto una modificacion concurrente.','retryable',true)::text;
     END IF;
+
+    -- Transicion de campana DRAFT -> IN_PROGRESS al iniciar la primera sesion de conteo.
+    -- Idempotente: solo afecta campanas en DRAFT (no retrocede estados posteriores y
+    -- nunca toca APPROVED/CANCELLED). started_at solo se fija si aun es NULL y no
+    -- vulnera chk_inventarios_campaigns_dates (started_at >= planned_at).
+    UPDATE inventarios.inventory_campaigns
+    SET status = 'IN_PROGRESS',
+        started_at = CASE
+            WHEN started_at IS NULL AND planned_at IS NOT NULL
+                 AND v_occurred_at >= planned_at THEN v_occurred_at
+            ELSE started_at
+        END,
+        updated_at = v_occurred_at,
+        updated_by = v_actor_id
+    WHERE company_id = p_company_id AND id = v_campaign_id
+      AND status = 'DRAFT';
 
     v_response := pg_catalog.jsonb_build_object(
         'operation','inventarios.session.start','entity_id',p_session_id,

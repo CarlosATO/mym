@@ -74,6 +74,9 @@ export async function createSessionZone(
     })
     if (error) {
       console.error('create_inventory_session_zone error:', error.message)
+      if (error.message.toLowerCase().includes('inv_zone_name_already_exists')) {
+        return { data: null, error: 'Ya existe una zona con este nombre en esta sección del inventario.' }
+      }
       return { data: null, error: 'No se pudo crear la zona.' }
     }
     return { data: { session_zone_id: '' }, error: null }

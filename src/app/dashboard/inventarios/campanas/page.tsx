@@ -20,6 +20,10 @@ function scopeLabel(scope: string | null): string {
   return '—'
 }
 
+function isOperationalInventory(status: string): boolean {
+  return status === 'DRAFT' || status === 'IN_PROGRESS' || status === 'UNDER_REVIEW'
+}
+
 export default async function InventariosCampanasPage() {
   const { data, error, companyId } = await getActiveCompanyCampaigns()
   const campaigns = data ?? []
@@ -57,12 +61,16 @@ export default async function InventariosCampanasPage() {
         />
       ) : (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          {campaigns.map(campaign => (
-            <Link
-              key={campaign.id}
-              href={`/dashboard/inventarios/campanas/${campaign.id}`}
-              className="group rounded-xl border border-theme-border bg-theme-surface p-3 shadow-sm transition-colors hover:border-theme-accent/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-theme-accent"
-            >
+           {campaigns.map(campaign => (
+             <Link
+               key={campaign.id}
+               href={`/dashboard/inventarios/campanas/${campaign.id}`}
+               className={`group rounded-xl border p-3 shadow-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-theme-accent ${
+                 isOperationalInventory(campaign.status)
+                   ? 'border-sky-500/45 bg-sky-500/5 shadow-sky-500/10 hover:border-sky-500/70 hover:bg-sky-500/10'
+                   : 'border-theme-border bg-theme-surface hover:border-theme-accent/50'
+               }`}
+             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold text-theme-text">{campaign.name}</p>

@@ -3,6 +3,7 @@
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { Boxes, X } from 'lucide-react'
 import { InventoryCombobox, type InventoryComboboxOption } from '@/modules/inventarios/components/inventory-combobox'
+import { notifyInventoryNavigation } from '@/modules/inventarios/components/inventory-navigation-feedback'
 
 export interface InventorySelectorOption {
   id: string
@@ -24,6 +25,7 @@ export function InventorySelector({ inventories, value }: InventorySelectorProps
     if (!next) params.delete('inventoryId')
     else params.set('inventoryId', next)
     const qs = params.toString()
+    notifyInventoryNavigation()
     router.push(qs ? `${pathname}?${qs}` : pathname)
   }
 

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { BadgeCheck, ShieldCheck } from 'lucide-react'
 import type { InventorySessionReview } from '@/app/actions/inventarios/sessions'
 import { approveInventorySession } from '@/app/actions/inventarios/review'
+import { notifyInventoryNavigation } from '@/modules/inventarios/components/inventory-navigation-feedback'
 
 interface InventoryApprovalPanelProps {
   companyId: string
@@ -42,6 +43,7 @@ export function InventoryApprovalPanel({ companyId, sessionId, review }: Invento
       return
     }
     if (typeof window !== 'undefined') window.sessionStorage.removeItem(`inventarios:approve:${sessionId}`)
+    notifyInventoryNavigation()
     router.push(`/dashboard/inventarios/jornadas/${sessionId}?tab=resultados`)
   }
 

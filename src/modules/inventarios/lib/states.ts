@@ -1,5 +1,6 @@
 export const INVENTORY_STATUS_LABELS: Record<string, string> = {
   DRAFT: 'Borrador',
+  ZONES_ASSIGNED: 'Zonas asignadas',
   IN_PROGRESS: 'En curso',
   PREPARED: 'Preparada',
   COUNTING: 'En conteo',
@@ -20,6 +21,7 @@ export type InventoryStatusTone =
 
 export const INVENTORY_STATUS_TONES: Record<string, InventoryStatusTone> = {
   DRAFT: 'neutral',
+  ZONES_ASSIGNED: 'warning',
   IN_PROGRESS: 'info',
   PREPARED: 'info',
   COUNTING: 'warning',

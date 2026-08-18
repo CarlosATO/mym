@@ -6,6 +6,7 @@ import { DoorOpen, Lock, Play, RotateCcw } from 'lucide-react'
 import { clearOperationIdempotencyKey, operationIdempotencyKey } from '@/modules/inventarios/lib/operation-keys'
 import { closeInventorySession, startInventorySession } from '@/app/actions/inventarios/operations'
 import type { InventorySessionDetail } from '@/app/actions/inventarios/sessions'
+import { notifyInventoryNavigation } from '@/modules/inventarios/components/inventory-navigation-feedback'
 
 interface InventoryOperationActionsProps {
   companyId: string
@@ -49,6 +50,7 @@ export function InventoryOperationActions({ companyId, sessionId, detail }: Inve
       return
     }
     clearOperationIdempotencyKey(sessionId, 'close')
+    notifyInventoryNavigation()
     router.push(`/dashboard/inventarios/jornadas/${sessionId}?tab=revision`)
   }, [busy, companyId, sessionId, router])
 
@@ -66,7 +68,7 @@ export function InventoryOperationActions({ companyId, sessionId, detail }: Inve
           Abrir sección de conteo
         </button>
         <p className="text-xs text-theme-text-muted">
-          Al abrir, la configuración queda cerrada. Las tareas no se inician automáticamente.
+          Al abrir, las zonas configuradas quedan disponibles para operar. Las tareas no se inician automáticamente.
         </p>
 
         {confirm === 'start' && (
@@ -75,10 +77,11 @@ export function InventoryOperationActions({ companyId, sessionId, detail }: Inve
               <h3 className="flex items-center gap-2 text-base font-bold text-theme-text">
                 <DoorOpen className="h-5 w-5 text-theme-accent" /> Abrir sección de conteo
               </h3>
-              <p className="mt-2 text-sm text-theme-text-muted">
-                La configuración quedará cerrada y la sección de conteo pasará a estado <strong>En conteo</strong>.
-                Abrir la sección de conteo <strong>no inicia automáticamente las tareas</strong>.
-              </p>
+               <p className="mt-2 text-sm text-theme-text-muted">
+                 La sección pasará a estado <strong>En conteo</strong>. Abrirla <strong>no inicia automáticamente las tareas</strong>.
+                 Las zonas ya configuradas quedarán disponibles para operar. Mientras haya ubicaciones pendientes, podrás
+                 agregar nuevas zonas desde <strong>Asignación de zonas</strong>. Al cerrar la sección ya no podrás agregar zonas.
+               </p>
               <div className="mt-4 flex justify-end gap-2">
                 <button
                   type="button"

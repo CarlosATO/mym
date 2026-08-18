@@ -1,13 +1,19 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react'
-import { FileSpreadsheet, Loader2, RefreshCw, ShieldAlert, X } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { Barcode, ClipboardCheck, FileSpreadsheet, Loader2, RefreshCw, ShieldAlert, ShieldCheck, X } from 'lucide-react'
+import { notifyInventoryNavigation } from '@/modules/inventarios/components/inventory-navigation-feedback'
 import {
+  getActiveCompanyBarcodeSummary,
+  getActiveCompanyCampaignApprovedBarcodes,
   getActiveCompanyCampaignReadiness,
   getActiveCompanyCampaignSummary,
+  getCampaignAllProducts,
   getAllCampaignVariances,
   getCampaignExport,
   getCampaignVariances,
+  type BarcodeIncidentSummaryResult,
   type CampaignCloseReadiness,
   type CampaignReviewSummary,
   type CampaignSortBy,
@@ -17,6 +23,8 @@ import {
 import { downloadCampaignReportExcel, type CampaignReportExcelContribRow } from '@/modules/inventarios/lib/campaign-report-excel'
 import { InventoryCampaignReportTable } from '@/modules/inventarios/components/inventory-campaign-report-table'
 import { InventoryCampaignReportDetail } from '@/modules/inventarios/components/inventory-campaign-report-detail'
+import { InventoryCampaignCloseDialog } from '@/modules/inventarios/components/inventory-campaign-close-dialog'
+import { InventoryKpiDetailDialog } from '@/modules/inventarios/components/inventory-kpi-detail-dialog'
 import { formatCLP, formatDateTimeChile, formatQuantity } from '@/modules/inventarios/lib/format'
 
 // TTL del cache de consultas del Informe (ms). El Inventario sigue en captura y
@@ -77,6 +85,7 @@ export function InventoryCampaignReportClient({
   initialSummary,
   initialReadiness,
 }: InventoryCampaignReportClientProps) {
+  const router = useRouter()
   const [search, setSearch] = useState('')
   const [variance, setVariance] = useState('')
   const [coverage, setCoverage] = useState('')
@@ -93,6 +102,9 @@ export function InventoryCampaignReportClient({
   const [debouncedSearch, setDebouncedSearch] = useState('')
 
   const [selectedVariant, setSelectedVariant] = useState<number | null>(null)
+  const [kpiDialog, setKpiDialog] = useState<'stock' | 'operation' | null>(null)
+  const [closeOpen, setCloseOpen] = useState(false)
+  const [barcodeSummary, setBarcodeSummary] = useState<BarcodeIncidentSummaryResult | null>(null)
   const [exporting, setExporting] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   // Se incrementa para forzar revalidación (ignorando cache): focus, refresh
@@ -114,12 +126,14 @@ export function InventoryCampaignReportClient({
   // Revalidación de summary + readiness (silenciosa, sin cache).
   const revalidateMeta = useCallback(async () => {
     if (!companyId) return
-    const [summaryResult, readinessResult] = await Promise.all([
+    const [summaryResult, readinessResult, barcodeResult] = await Promise.all([
       getActiveCompanyCampaignSummary(campaignId),
       getActiveCompanyCampaignReadiness(campaignId),
+      getActiveCompanyBarcodeSummary(campaignId),
     ])
     if (summaryResult.data) setSummary(summaryResult.data)
     if (readinessResult.data) setReadiness(readinessResult.data)
+    if (barcodeResult.data) setBarcodeSummary(barcodeResult.data)
   }, [companyId, campaignId])
 
   // Fetch de variances con cache TTL. `force` ignora el cache vigente.
@@ -167,6 +181,14 @@ export function InventoryCampaignReportClient({
     fetchVariances({ force: revision > 0 })
   }, [fetchVariances, revision])
 
+  // Resumen de incidencias al montar (silencioso, sin cache).
+  useEffect(() => {
+    if (!companyId) return
+    getActiveCompanyBarcodeSummary(campaignId).then(result => {
+      if (result.data) setBarcodeSummary(result.data)
+    })
+  }, [companyId, campaignId])
+
   // Revalidación al recuperar foco / visibilidad (ignora cache stale).
   useEffect(() => {
     const onVisible = () => {
@@ -202,6 +224,7 @@ export function InventoryCampaignReportClient({
   }, [hasCriterion, revalidateMeta])
 
   const isFinal = Boolean(variances?.is_final ?? summary?.is_final)
+  const isCampaignApproved = readiness?.campaign_status === 'APPROVED'
   const stock = summary?.stock
   const op = summary?.operation
   const readinessWarnings = readiness?.warnings
@@ -217,6 +240,14 @@ export function InventoryCampaignReportClient({
       readinessWarnings.zones_incomplete > 0 ||
       readinessWarnings.blocking_incident_count > 0 ||
       readinessWarnings.pending_recount_count > 0)
+
+  // Resumen agregado de incidencias de códigos (card).
+  const barcodeIncidentCounts = {
+    products: barcodeSummary?.total ?? 0,
+    barcodes: (barcodeSummary?.items ?? []).reduce((a, i) => a + i.pending_barcode_count, 0),
+    locations: (barcodeSummary?.items ?? []).reduce((a, i) => a + i.location_count, 0),
+  }
+  const hasBarcodeIncidents = barcodeIncidentCounts.products > 0
 
   const handleSort = useCallback(
     (key: CampaignSortBy) => {
@@ -271,6 +302,13 @@ export function InventoryCampaignReportClient({
     void revalidateMeta()
   }, [revalidateMeta])
 
+  const handleClosed = useCallback(() => {
+    setCloseOpen(false)
+    cacheRef.current.clear()
+    setRevision(r => r + 1)
+    void revalidateMeta()
+  }, [revalidateMeta])
+
   const handlePage = useCallback((target: number) => {
     setPage(target)
   }, [])
@@ -279,12 +317,20 @@ export function InventoryCampaignReportClient({
     if (exporting) return
     setExporting(true)
     try {
-      const [exportResult, variancesResult] = await Promise.all([
+      const [exportResult, variancesResult, allProductsResult, catalogResult] = await Promise.all([
         getCampaignExport(companyId, campaignId),
         getAllCampaignVariances(companyId, campaignId),
+        getCampaignAllProducts(companyId, campaignId),
+        getActiveCompanyCampaignApprovedBarcodes(campaignId),
       ])
-      if (exportResult.error || variancesResult.error) {
-        setError(exportResult.error ?? variancesResult.error ?? 'No fue posible generar el Excel.')
+      if (exportResult.error || variancesResult.error || allProductsResult.error || catalogResult.error) {
+        setError(
+          exportResult.error ??
+            variancesResult.error ??
+            allProductsResult.error ??
+            catalogResult.error ??
+            'No fue posible generar el Excel.'
+        )
         return
       }
       if (!exportResult.data) {
@@ -318,8 +364,10 @@ export function InventoryCampaignReportClient({
         generatedAt: formatDateTimeChile(new Date().toISOString()),
         summary,
         allVariances: variancesResult.items,
+        allProducts: allProductsResult.items,
         contributions,
         operationalRows,
+        approvedBarcodes: catalogResult.data?.items ?? [],
       })
     } catch (err) {
       console.error('export excel exception:', err)
@@ -329,7 +377,7 @@ export function InventoryCampaignReportClient({
     }
   }, [exporting, companyId, campaignId, campaignName, isFinal, summary])
 
-  const totalPages = Math.max(1, Math.ceil((variances?.total ?? 0) / 50))
+  const totalPages = Math.max(1, Math.ceil((variances?.total ?? 0) / (variances?.page_size ?? 50)))
   const hasActiveFilters = Boolean(search.trim() || variance || coverage || sortBy || showAll)
   const showEmptyState = !hasCriterion
 
@@ -345,9 +393,9 @@ export function InventoryCampaignReportClient({
           {!isFinal ? (
             <span
               title="Los resultados continuarán variando mientras existan secciones de conteo pendientes."
-              className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/20 bg-amber-500/5 px-2.5 py-1 text-[11px] font-medium text-amber-700 dark:text-amber-300"
+              className="inline-flex items-center gap-1.5 rounded-full border border-sky-500/25 bg-sky-500/10 px-2.5 py-1 text-[11px] font-medium text-sky-700 dark:text-sky-300"
             >
-              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+              <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
               Resultado provisorio
             </span>
           ) : (
@@ -355,7 +403,7 @@ export function InventoryCampaignReportClient({
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
               Resultado final
             </span>
-          )}
+           )}
           <button
             type="button"
             onClick={handleRefresh}
@@ -379,17 +427,31 @@ export function InventoryCampaignReportClient({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="flex items-center gap-1.5 text-xs font-bold text-theme-text">
               <ShieldAlert className="h-3.5 w-3.5 text-theme-text-muted/60" />
-              Preparación para cierre
+              {isCampaignApproved ? 'Cierre realizado con pendientes' : 'Preparación para cierre'}
             </h3>
-            {readinessHasPending ? (
-              <span className="inline-flex items-center rounded-full border border-amber-500/20 bg-amber-500/5 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
-                Requiere revisión
-              </span>
-            ) : (
-              <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/5 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
-                Listo para revisión final
-              </span>
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+              {!isCampaignApproved && readinessHasPending ? (
+                <span className="inline-flex items-center rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:text-sky-300">
+                  Requiere revisión
+                </span>
+              ) : !isCampaignApproved ? (
+                <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/5 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                  Listo para revisión final
+                 </span>
+               ) : null}
+              {readiness?.can_close_authorized && readiness?.campaign_status !== 'APPROVED' && (
+                <button
+                  type="button"
+                  onClick={() => setCloseOpen(true)}
+                  disabled={(readiness?.blocker_count ?? 0) > 0}
+                  title={(readiness?.blocker_count ?? 0) > 0 ? 'Existen bloqueadores que impiden el cierre' : 'Cerrar inventario'}
+                  className="inline-flex h-7 items-center gap-1 rounded-lg bg-red-600 px-2.5 text-xs font-semibold text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  Cerrar inventario
+                </button>
+              )}
+            </div>
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-muted">
             {readinessWarnings.sessions_draft > 0 && (
@@ -460,7 +522,7 @@ export function InventoryCampaignReportClient({
             )}
             {readinessWarnings.products_out_of_snapshot > 0 && (
               <span>
-                <strong className="text-amber-600 dark:text-amber-400">{readinessWarnings.products_out_of_snapshot}</strong> no
+                <strong className="text-sky-600 dark:text-sky-400">{readinessWarnings.products_out_of_snapshot}</strong> no
                 incluidos para conteo
               </span>
             )}
@@ -468,10 +530,95 @@ export function InventoryCampaignReportClient({
         </section>
       )}
 
+      {/* Auditoría de diferencias */}
+      <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-2.5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="flex items-center gap-1.5 text-xs font-bold text-theme-text">
+            <ClipboardCheck className="h-3.5 w-3.5 text-theme-text-muted/60" />
+            Auditoría de diferencias
+          </h3>
+          {stock && (stock.faltantes > 0 || stock.sobrantes > 0) ? (
+            <span className="inline-flex items-center rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+              Requiere revisión
+            </span>
+          ) : (
+            <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/5 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+              Sin diferencias
+            </span>
+          )}
+        </div>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-theme-text-muted">
+          <span>
+            Faltantes <strong className="text-red-600 dark:text-red-400">{formatQuantity(stock?.faltantes ?? 0)}</strong>
+          </span>
+          <span>
+            Sobrantes{' '}
+            <strong className="text-emerald-600 dark:text-emerald-400">{formatQuantity(stock?.sobrantes ?? 0)}</strong>
+          </span>
+          <span>
+            Con diferencia <strong className="text-theme-text">{formatQuantity((stock?.faltantes ?? 0) + (stock?.sobrantes ?? 0))}</strong>
+          </span>
+        </div>
+        <div className="mt-2 flex justify-end">
+          <button
+            type="button"
+            onClick={() => { notifyInventoryNavigation(); router.push(`/dashboard/inventarios/campanas/${campaignId}/revision-diferencias`) }}
+            className="inline-flex h-7 items-center gap-1 rounded-lg bg-theme-accent px-2.5 text-xs font-semibold text-white transition-colors hover:bg-theme-accent-hover"
+          >
+            <ClipboardCheck className="h-3.5 w-3.5" />
+            Revisar diferencias
+          </button>
+        </div>
+      </section>
+
+      {/* Incidencias de códigos */}
+      <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-2.5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="flex items-center gap-1.5 text-xs font-bold text-theme-text">
+            <Barcode className="h-3.5 w-3.5 text-theme-text-muted/60" />
+            Incidencias de códigos
+          </h3>
+          {hasBarcodeIncidents ? (
+            <span className="inline-flex items-center rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:text-sky-300">
+              Requiere revisión
+            </span>
+          ) : (
+            <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/5 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+              Sin códigos pendientes
+            </span>
+          )}
+        </div>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-theme-text-muted">
+          <span>
+            Productos con incidencias <strong className="text-theme-text">{barcodeIncidentCounts.products}</strong>
+          </span>
+          <span>
+            Códigos pendientes <strong className="text-theme-text">{barcodeIncidentCounts.barcodes}</strong>
+          </span>
+          <span>
+            Ubicaciones involucradas <strong className="text-theme-text">{barcodeIncidentCounts.locations}</strong>
+          </span>
+        </div>
+        <div className="mt-2 flex justify-end">
+          <button
+            type="button"
+            onClick={() => { notifyInventoryNavigation(); router.push(`/dashboard/inventarios/campanas/${campaignId}/incidencias-codigos`) }}
+            className="inline-flex h-7 items-center gap-1 rounded-lg bg-theme-accent px-2.5 text-xs font-semibold text-white transition-colors hover:bg-theme-accent-hover"
+          >
+            <Barcode className="h-3.5 w-3.5" />
+            Revisar incidencias
+          </button>
+        </div>
+      </section>
+
       {/* Resumen compacto: KPIs + valorización + operación en un contenedor */}
       {summary && stock && (
         <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-2.5 shadow-sm">
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
+          <div
+            className="grid cursor-pointer grid-cols-2 gap-x-4 gap-y-1.5 rounded-lg sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8"
+            onDoubleClick={() => setKpiDialog('stock')}
+            title="Doble clic para ver el detalle"
+          >
             <div className="flex flex-col gap-0.5">
               <p className="text-[10px] text-theme-text-muted/60 uppercase tracking-wider">Productos teóricos</p>
               <p className="text-base font-bold text-theme-text">{formatQuantity(stock.products_theoretical)}</p>
@@ -505,7 +652,11 @@ export function InventoryCampaignReportClient({
               <p className="text-base font-bold text-theme-text">{formatCLP(stock.net_valuation)}</p>
             </div>
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-theme-border/40 pt-2 text-xs text-theme-text-muted">
+          <div
+            className="mt-2 flex cursor-pointer flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border-t border-theme-border/40 pt-2 text-xs text-theme-text-muted"
+            onDoubleClick={() => setKpiDialog('operation')}
+            title="Doble clic para ver el detalle"
+          >
             <span>
               Secciones <strong className="text-theme-text">{op?.total_sessions ?? 0}</strong>
             </span>
@@ -514,13 +665,13 @@ export function InventoryCampaignReportClient({
             </span>
             <span>
               En curso{' '}
-              <strong className="text-amber-600 dark:text-amber-400">
+              <strong className="text-sky-600 dark:text-sky-400">
                 {(op?.sessions_by_status.COUNTING ?? 0) + (op?.sessions_by_status.UNDER_REVIEW ?? 0)}
               </strong>
             </span>
             <span>
               Pendientes{' '}
-              <strong className="text-amber-600 dark:text-amber-400">
+              <strong className="text-sky-600 dark:text-sky-400">
                 {(op?.sessions_by_status.DRAFT ?? 0) + (op?.sessions_by_status.PREPARED ?? 0)}
               </strong>
             </span>
@@ -531,13 +682,13 @@ export function InventoryCampaignReportClient({
               Visitadas <strong className="text-theme-text">{op?.locations_visited ?? 0}</strong>
             </span>
             <span>
-              Abiertas <strong className="text-amber-600 dark:text-amber-400">{op?.locations_open ?? 0}</strong>
+              Abiertas <strong className="text-sky-600 dark:text-sky-400">{op?.locations_open ?? 0}</strong>
             </span>
             <span>
-              No visitadas <strong className="text-amber-600 dark:text-amber-400">{op?.locations_never_visited ?? 0}</strong>
+              No visitadas <strong className="text-sky-600 dark:text-sky-400">{op?.locations_never_visited ?? 0}</strong>
             </span>
             <span>
-              No incluidos <strong className="text-amber-600 dark:text-amber-400">{stock.out_of_snapshot}</strong>
+              No incluidos <strong className="text-sky-600 dark:text-sky-400">{stock.out_of_snapshot}</strong>
             </span>
             <span>
               Valorización absoluta <strong className="text-theme-text">{formatCLP(stock.absolute_valuation)}</strong>
@@ -656,6 +807,7 @@ export function InventoryCampaignReportClient({
             variances && (
               <InventoryCampaignReportTable
                 items={variances.items}
+                campaignId={campaignId}
                 onSelect={setSelectedVariant}
                 sortBy={sortBy}
                 sortDirection={sortDir}
@@ -697,6 +849,20 @@ export function InventoryCampaignReportClient({
 
       {selectedVariant !== null && (
         <InventoryCampaignReportDetail campaignId={campaignId} bsaleVariantId={selectedVariant} onClose={() => setSelectedVariant(null)} />
+      )}
+
+      {closeOpen && readiness && (
+        <InventoryCampaignCloseDialog
+          campaignId={campaignId}
+          campaignName={campaignName}
+          readiness={readiness}
+          onClose={() => setCloseOpen(false)}
+          onClosed={handleClosed}
+        />
+      )}
+
+      {kpiDialog && summary && (
+        <InventoryKpiDetailDialog group={kpiDialog} summary={summary} onClose={() => setKpiDialog(null)} />
       )}
     </div>
   )

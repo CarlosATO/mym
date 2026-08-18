@@ -11,6 +11,7 @@ import {
 } from '@/app/actions/inventarios/sessions'
 import { InventoryLoadingState } from '@/modules/inventarios/components/inventory-loading-state'
 import { formatDateTimeChile } from '@/modules/inventarios/lib/format'
+import { notifyInventoryNavigation } from '@/modules/inventarios/components/inventory-navigation-feedback'
 
 interface InventoryImportReviewStepProps {
   companyId: string
@@ -104,6 +105,7 @@ export function InventoryImportReviewStep({
       setError(result.error)
       return
     }
+    notifyInventoryNavigation()
     router.push(`/dashboard/inventarios/jornadas/${sessionId}?tab=operacion`)
   }
 

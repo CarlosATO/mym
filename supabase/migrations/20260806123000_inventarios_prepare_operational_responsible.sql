@@ -314,14 +314,14 @@ BEGIN
     INSERT INTO inventarios.snapshot_stocks (company_id, snapshot_id, snapshot_product_id,
         office_id, theoretical_quantity, source_sync_run_id, source_synced_at, created_at, created_by)
     SELECT sp.company_id, sp.snapshot_id, sp.id, v_bsale_office_id,
-           bsc.quantity_available, bsc.bsale_sync_run_id, bsc.synced_at,
+           bsc.quantity, bsc.bsale_sync_run_id, bsc.synced_at,
            v_occurred_at, v_actor_id
     FROM inventarios.snapshot_products sp
     JOIN integraciones.bsale_stock_current bsc
       ON bsc.company_id = sp.company_id AND bsc.variant_id = sp.bsale_variant_id
      AND bsc.office_id = v_bsale_office_id
     WHERE sp.company_id = p_company_id AND sp.snapshot_id = v_snapshot_id
-      AND bsc.quantity_available >= 0
+      AND bsc.quantity >= 0
     ON CONFLICT (company_id, snapshot_id, snapshot_product_id, office_id) DO NOTHING;
 
     -- content_hash determinista: sha256 de ids ordenados del snapshot

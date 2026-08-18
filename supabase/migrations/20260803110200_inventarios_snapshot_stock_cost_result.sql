@@ -109,6 +109,11 @@ CREATE TABLE inventarios.official_version_location_items (
     snapshot_product_id uuid NOT NULL,
     snapshot_location_id uuid NOT NULL,
     theoretical_quantity numeric(14,3),
+    available_quantity numeric(14,3) NOT NULL,
+    damaged_quantity numeric(14,3) NOT NULL,
+    expired_quantity numeric(14,3) NOT NULL,
+    blocked_quantity numeric(14,3) NOT NULL,
+    other_unavailable_quantity numeric(14,3) NOT NULL,
     physical_quantity numeric(14,3) NOT NULL,
     difference_quantity numeric(14,3),
     unit_cost numeric(14,2),
@@ -126,6 +131,14 @@ CREATE TABLE inventarios.official_version_location_items (
         CHECK (valuation_status IN ('COMPLETE', 'INCOMPLETE_NO_COST', 'NOT_APPLICABLE')),
     CONSTRAINT chk_inventarios_ovli_has_cost
         CHECK (has_cost = (unit_cost IS NOT NULL AND unit_cost > 0)),
+    CONSTRAINT chk_inventarios_ovli_quantities
+        CHECK (
+            available_quantity >= 0 AND damaged_quantity >= 0 AND expired_quantity >= 0
+            AND blocked_quantity >= 0 AND other_unavailable_quantity >= 0
+            AND physical_quantity >= 0
+            AND physical_quantity = available_quantity + damaged_quantity + expired_quantity
+                + blocked_quantity + other_unavailable_quantity
+        ),
     CONSTRAINT fk_inventarios_ovli_version
         FOREIGN KEY (company_id, official_version_id)
         REFERENCES inventarios.official_versions(company_id, id)

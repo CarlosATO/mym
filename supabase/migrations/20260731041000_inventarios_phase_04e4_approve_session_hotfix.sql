@@ -34,6 +34,7 @@ CREATE TABLE inventarios.official_version_items (
     normal_contribution_count integer NOT NULL,
     recount_contribution_count integer NOT NULL,
     contribution_manifest jsonb NOT NULL,
+    location_resolution_status text NOT NULL DEFAULT 'RESOLVED',
     created_at timestamptz NOT NULL,
     created_by uuid NOT NULL REFERENCES portal.users(id) ON DELETE RESTRICT,
     CONSTRAINT fk_official_items_version FOREIGN KEY (official_version_id) REFERENCES inventarios.official_versions(id) ON DELETE RESTRICT,
@@ -43,8 +44,9 @@ CREATE TABLE inventarios.official_version_items (
     CONSTRAINT uq_official_items_version_product UNIQUE (company_id, official_version_id, snapshot_product_id),
     CONSTRAINT chk_official_items_qty CHECK (available_quantity >= 0 AND damaged_quantity >= 0 AND expired_quantity >= 0 AND blocked_quantity >= 0 AND other_unavailable_quantity >= 0 AND physical_quantity >= 0 AND physical_quantity = available_quantity + damaged_quantity + expired_quantity + blocked_quantity + other_unavailable_quantity),
     CONSTRAINT chk_official_items_cnt CHECK (contribution_count >= 1 AND normal_contribution_count >= 0 AND recount_contribution_count >= 0 AND normal_contribution_count + recount_contribution_count = contribution_count),
-    CONSTRAINT chk_official_items_manifest CHECK (jsonb_typeof(contribution_manifest) = 'array')
-);
+     CONSTRAINT chk_official_items_manifest CHECK (jsonb_typeof(contribution_manifest) = 'array'),
+     CONSTRAINT chk_official_items_location_resolution CHECK (location_resolution_status IN ('RESOLVED', 'UNRESOLVED_RECOUNT'))
+ );
 
 ALTER TABLE inventarios.official_version_items ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON inventarios.official_version_items FROM PUBLIC, anon, authenticated, service_role;

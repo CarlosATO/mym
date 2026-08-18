@@ -178,6 +178,57 @@ export async function assignInventoryCountingZone(input: {
   }
 }
 
+export async function addInventoryCountingZoneProgressive(input: {
+  companyId: string
+  campaignId: string
+  sessionId: string
+  campaignParticipantId: string
+  zoneName: string
+  locationIds: string[]
+  idempotencyKey: string
+}): Promise<{ data: InventoryCountingZoneAssignEnvelope | null; error: string | null }> {
+  const fallback = 'No se pudo crear la zona progresiva y asignarla.'
+  if (
+    !UUID_PATTERN.test(input.companyId) ||
+    !UUID_PATTERN.test(input.campaignId) ||
+    !UUID_PATTERN.test(input.sessionId) ||
+    !UUID_PATTERN.test(input.campaignParticipantId) ||
+    !UUID_PATTERN.test(input.idempotencyKey)
+  ) {
+    return { data: null, error: 'Los identificadores de la solicitud no son válidos.' }
+  }
+  const zoneName = input.zoneName.trim()
+  if (zoneName.length === 0 || zoneName.length > 200) {
+    return { data: null, error: 'El nombre de la zona debe tener entre 1 y 200 caracteres.' }
+  }
+  const locationIds = Array.from(new Set(input.locationIds.filter(id => UUID_PATTERN.test(id))))
+  if (locationIds.length === 0) {
+    return { data: null, error: 'Selecciona al menos una ubicación para la zona.' }
+  }
+  try {
+    const db = await inventariosAdmin()
+    const { data, error } = await db.rpc('add_inventory_counting_zone_progressive', {
+      p_company_id: input.companyId,
+      p_campaign_id: input.campaignId,
+      p_session_id: input.sessionId,
+      p_campaign_participant_id: input.campaignParticipantId,
+      p_zone_name: zoneName,
+      p_location_ids: locationIds,
+      p_idempotency_key: input.idempotencyKey,
+    })
+    if (error) {
+      console.error('add_inventory_counting_zone_progressive error:', error.message)
+      return { data: null, error: safeZoneError(error.message, fallback) }
+    }
+    const envelope = data as InventoryCountingZoneAssignEnvelope | null
+    if (!envelope?.entity_id) return { data: null, error: 'La zona no se pudo crear correctamente.' }
+    return { data: envelope, error: null }
+  } catch (err) {
+    console.error('add_inventory_counting_zone_progressive exception:', err)
+    return { data: null, error: fallback }
+  }
+}
+
 export async function cancelInventoryCountingZone(input: {
   companyId: string
   campaignId: string
@@ -239,14 +290,23 @@ function safeZoneError(message: string, fallback: string): string {
     }
   }
   const normalized = message.toLowerCase()
+  if (normalized.includes('inv_zone_name_already_exists')) {
+    return 'Ya existe una zona con este nombre en esta sección del inventario.'
+  }
   if (normalized.includes('inv_campaign_not_draft') || normalized.includes('inv_campaign_already_prepared')) {
     return 'La campaña ya fue preparada y no admite cambios de zonas.'
+  }
+  if (normalized.includes('inv_campaign_not_open')) {
+    return 'El inventario ya no admite nuevas zonas.'
   }
   if (normalized.includes('inv_session_not_draft')) {
     return 'La jornada ya no está en borrador y no admite cambios de zonas.'
   }
   if (normalized.includes('inv_counter_not_found')) {
     return 'El contador seleccionado ya no está activo en la campaña. Actualiza el equipo e inténtalo de nuevo.'
+  }
+  if (normalized.includes('inv_participant_not_found')) {
+    return 'El responsable seleccionado no tiene un rol de Contador activo en esta campaña. Actualiza el equipo e inténtalo de nuevo.'
   }
   if (normalized.includes('inv_location_already_assigned')) {
     return 'Una de las ubicaciones seleccionadas ya pertenece a una zona de la jornada.'

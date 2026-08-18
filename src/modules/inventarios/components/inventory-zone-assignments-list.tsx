@@ -7,6 +7,7 @@ import type { InventorySessionTask, InventorySessionZone } from '@/app/actions/i
 interface InventoryZoneAssignmentsListProps {
   zones: InventorySessionZone[]
   tasks: InventorySessionTask[]
+  assigneeNames?: Record<string, string>
   canCancel: boolean
   onCancelZone: (zoneId: string, reason: string) => Promise<{ error: string | null }>
 }
@@ -37,6 +38,7 @@ function taskStatusLabel(status: string | undefined): string {
 export function InventoryZoneAssignmentsList({
   zones,
   tasks,
+  assigneeNames = {},
   canCancel,
   onCancelZone,
 }: InventoryZoneAssignmentsListProps) {
@@ -61,7 +63,9 @@ export function InventoryZoneAssignmentsList({
       <ul className="divide-y divide-theme-border/40">
         {zones.map(zone => {
           const task = tasks.find(candidate => candidate.session_zone_id === zone.id)
-          const counterName = task?.assignment?.user_name ?? null
+          const counterName = task?.assignment
+            ? task.assignment.user_name ?? assigneeNames[task.assignment.user_id] ?? null
+            : null
           const locationCount = zone.locations?.length ?? 0
           const isExpanded = expandedZoneId === zone.id
           return (

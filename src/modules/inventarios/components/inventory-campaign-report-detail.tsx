@@ -164,7 +164,7 @@ export function InventoryCampaignReportDetail({ campaignId, bsaleVariantId, onCl
                 </div>
 
                 {isOutOfSnapshot && (
-                  <p className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                  <p className="mt-3 flex items-start gap-2 rounded-lg border border-violet-500/25 bg-violet-500/5 px-3 py-2 text-xs text-violet-700 dark:text-violet-300">
                     <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     <span>
                       Este producto forma parte del stock teórico del Inventario, pero no estuvo disponible en las secciones habilitadas

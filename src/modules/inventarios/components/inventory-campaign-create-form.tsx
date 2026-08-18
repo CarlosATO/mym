@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { ArrowLeft, Loader2, Plus } from 'lucide-react'
 import type { InventorySite } from '@/app/actions/inventarios/sites'
 import { createGeneralInventoryCampaign } from '@/app/actions/inventarios/campaigns'
+import { notifyInventoryNavigation } from '@/modules/inventarios/components/inventory-navigation-feedback'
 
 interface InventoryCampaignCreateFormProps {
   eligibleSites: InventorySite[]
@@ -46,6 +47,7 @@ export function InventoryCampaignCreateForm({ eligibleSites }: InventoryCampaign
           return
         }
 
+        notifyInventoryNavigation()
         router.push(`/dashboard/inventarios/campanas/${result.data.campaign_id}`)
       } catch {
         setError('No se pudo crear el inventario.')
@@ -131,7 +133,7 @@ export function InventoryCampaignCreateForm({ eligibleSites }: InventoryCampaign
       <div className="flex items-center justify-between border-t border-theme-border/60 pt-4">
         <button
           type="button"
-          onClick={() => router.push('/dashboard/inventarios/campanas')}
+          onClick={() => { notifyInventoryNavigation(); router.push('/dashboard/inventarios/campanas') }}
           className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-3 text-sm font-medium text-theme-text-muted transition-colors hover:bg-theme-text/5 hover:text-theme-text"
         >
           <ArrowLeft className="h-4 w-4" />

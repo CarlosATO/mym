@@ -7,6 +7,7 @@ import { InventorySidebar } from '@/modules/inventarios/components/inventory-sid
 import { getActiveCompany, type Company } from '@/app/actions/companies'
 import type { Profile } from '@/lib/types'
 import { AlertTriangle, LayoutDashboard, Loader2 } from 'lucide-react'
+import { InventoryNavigationFeedback } from '@/modules/inventarios/components/inventory-navigation-feedback'
 
 interface InventoryModuleShellProps {
   children: React.ReactNode
@@ -117,6 +118,7 @@ export function InventoryModuleShell({ children, profile, permissions }: Invento
         permissions={permissions}
         moduleName="Inventarios"
       />
+      <InventoryNavigationFeedback />
 
       <div className="flex flex-1 pt-12">
         <InventorySidebar mobileOpen={mobileOpen} onMobileOpen={openMobile} onMobileClose={closeMobile} />

@@ -1,11 +1,12 @@
 'use client'
 
 import { useState } from 'react'
-import Link from 'next/link'
+import { useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowRight, Loader2, MapPin, Plus } from 'lucide-react'
 import { createInventorySessionFromCampaignSite, type InventoryCampaignSiteDetail } from '@/app/actions/inventarios/campaigns'
 import { InventoryStatusBadge } from '@/modules/inventarios/components/inventory-status-badge'
+import { notifyInventoryNavigation } from '@/modules/inventarios/components/inventory-navigation-feedback'
 
 interface InventoryCampaignSiteCardProps {
   site: InventoryCampaignSiteDetail
@@ -33,10 +34,24 @@ function sessionActionLabel(status: string | null | undefined): string {
 export function InventoryCampaignSiteCard({ site, canCreate }: InventoryCampaignSiteCardProps) {
   const router = useRouter()
   const [creating, setCreating] = useState(false)
+  const [opening, startOpening] = useTransition()
   const [error, setError] = useState<string | null>(null)
 
   const hasSession = Boolean(site.session_id)
+  const isCounting = site.session_status === 'COUNTING'
+  const hasAssignedZones = site.session_status === 'DRAFT' && (site.active_zone_count ?? 0) > 0
+  const isPrepared = site.session_status === 'PREPARED'
+  const isAmber = hasAssignedZones || isPrepared
+  const isNotStarted = !hasSession
   const actionLabel = sessionActionLabel(site.session_status)
+
+  const handleOpen = () => {
+    if (opening || !site.session_id) return
+    startOpening(() => {
+      notifyInventoryNavigation()
+      router.push(`/dashboard/inventarios/jornadas/${site.session_id}`)
+    })
+  }
 
   const handleCreate = async () => {
     if (creating || hasSession) return
@@ -49,12 +64,13 @@ export function InventoryCampaignSiteCard({ site, canCreate }: InventoryCampaign
       return
     }
     if (result.data?.session_id) {
+      notifyInventoryNavigation()
       router.push(`/dashboard/inventarios/jornadas/${result.data.session_id}`)
     }
   }
 
   return (
-    <div className="flex flex-col rounded-lg border border-theme-border bg-theme-surface p-3 shadow-sm">
+    <div className={`flex h-full flex-col rounded-lg border p-3 shadow-sm ${isCounting ? 'border-emerald-500/35 bg-emerald-500/5' : isAmber ? 'border-amber-500/35 bg-amber-500/5' : isNotStarted ? 'border-sky-500/35 bg-sky-500/5' : 'border-theme-border bg-theme-surface'}`}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p title={site.site_name} className="text-sm font-semibold leading-snug text-theme-text break-words">
@@ -66,7 +82,10 @@ export function InventoryCampaignSiteCard({ site, canCreate }: InventoryCampaign
           </p>
         </div>
         {hasSession ? (
-          <InventoryStatusBadge status={site.session_status} />
+          <InventoryStatusBadge
+            status={hasAssignedZones ? 'ZONES_ASSIGNED' : site.session_status}
+            className={isCounting ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-300' : isAmber ? 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-300' : undefined}
+          />
         ) : (
           <span className="inline-flex shrink-0 items-center rounded-full border border-theme-border bg-theme-text/5 px-2 py-0.5 text-[11px] font-medium whitespace-nowrap text-theme-text-muted">
             Sin sección de conteo
@@ -84,15 +103,17 @@ export function InventoryCampaignSiteCard({ site, canCreate }: InventoryCampaign
         </div>
       )}
 
-      <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-theme-border/60 pt-2.5">
+      <div className="mt-auto flex items-center justify-between gap-2 border-t border-theme-border/60 pt-2.5">
         {hasSession ? (
-          <Link
-            href={`/dashboard/inventarios/jornadas/${site.session_id}`}
-            className="inline-flex h-7 items-center gap-1 rounded-lg bg-theme-accent px-3 text-xs font-semibold text-white transition-colors hover:bg-theme-accent-hover"
+          <button
+            type="button"
+            onClick={handleOpen}
+            disabled={opening}
+            className={`inline-flex h-7 items-center gap-1 rounded-lg px-3 text-xs font-semibold text-white transition-colors disabled:cursor-wait disabled:opacity-70 ${isCounting ? 'bg-emerald-600 hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-400' : 'bg-theme-accent hover:bg-theme-accent-hover'}`}
           >
-            {actionLabel}
-            <ArrowRight className="h-3.5 w-3.5" />
-          </Link>
+            {opening ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="h-3.5 w-3.5" />}
+            {opening ? 'Abriendo…' : actionLabel}
+          </button>
         ) : canCreate ? (
           <button
             type="button"

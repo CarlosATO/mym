@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ChevronDown, XCircle } from 'lucide-react'
 import { cancelInventorySession, type CancelSessionTechnicalError } from '@/app/actions/inventarios/review'
+import { notifyInventoryNavigation } from '@/modules/inventarios/components/inventory-navigation-feedback'
 
 interface InventoryCancelSessionPanelProps {
   companyId: string
@@ -50,6 +51,7 @@ export function InventoryCancelSessionPanel({ companyId, sessionId }: InventoryC
     }
     if (typeof window !== 'undefined') window.sessionStorage.removeItem(`inventarios:cancel:${sessionId}`)
     setConfirming(false)
+    notifyInventoryNavigation()
     router.push(`/dashboard/inventarios/jornadas/${sessionId}?tab=resumen`)
     router.refresh()
   }

@@ -10,8 +10,10 @@ import { InventoryCampaignReportPrefetch } from '@/modules/inventarios/component
 import { InventorySessionTabs, type InventoryTab } from '@/modules/inventarios/components/inventory-session-tabs'
 import { InventoryEmptyState } from '@/modules/inventarios/components/inventory-empty-state'
 import { InventoryErrorState } from '@/modules/inventarios/components/inventory-error-state'
+import { InventoryLogisticsReconciliation } from '@/modules/inventarios/components/inventory-logistics-reconciliation'
 import { formatDateChile } from '@/modules/inventarios/lib/format'
 import { getLatestCampaignStockImport, type CampaignStockImportDetail } from '@/app/actions/inventarios/imports'
+import { getActiveCompanyCampaignLogisticsReconciliation } from '@/app/actions/inventarios/logistics-reconciliation'
 
 const CAMPAIGN_TYPE_LABELS: Record<string, string> = {
   GENERAL: 'General',
@@ -72,10 +74,15 @@ export default async function InventariosCampanaDetallePage({ params, searchPara
   const plannedOrCreated = campaign.planned_at ?? campaign.created_at
   const sitesReadyCount = allHaveSessions ? detail.site_count : detail.session_count
 
+  const reconciliationFetch = campaign.status === 'APPROVED'
+    ? await getActiveCompanyCampaignLogisticsReconciliation(campaign.id)
+    : { data: null, error: null }
+
   const tabs: InventoryTab[] = [
     { id: 'resumen', label: 'Resumen' },
     { id: 'informe', label: 'Informe' },
   ]
+  if (campaign.status === 'APPROVED') tabs.push({ id: 'conciliacion', label: 'Conciliación logística' })
   const safeTab = tabs.some(t => t.id === activeTab) ? activeTab : 'resumen'
 
   return (
@@ -113,7 +120,13 @@ export default async function InventariosCampanaDetallePage({ params, searchPara
 
       <InventoryCampaignReportPrefetch campaignId={campaign.id} active={safeTab !== 'informe'} />
 
-      {safeTab === 'informe' ? (
+       {safeTab === 'conciliacion' ? (
+         reconciliationFetch.data ? (
+           <InventoryLogisticsReconciliation campaignId={campaign.id} initialData={reconciliationFetch.data} />
+         ) : (
+           <InventoryErrorState description={reconciliationFetch.error ?? 'La conciliación logística aún no está disponible.'} />
+         )
+       ) : safeTab === 'informe' ? (
         <InventoryCampaignReport campaignId={campaign.id} campaignName={campaign.name} />
       ) : (
         <div className="space-y-3">
@@ -182,7 +195,7 @@ export default async function InventariosCampanaDetallePage({ params, searchPara
               />
             ) : (
               <>
-                <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
+                <div className="mt-3 grid grid-cols-1 items-stretch gap-2.5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
                   {detail.sites.map(site => (
                     <InventoryCampaignSiteCard key={site.campaign_site_id} site={site} canCreate={canCreate} />
                   ))}

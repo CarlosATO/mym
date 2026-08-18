@@ -19,6 +19,7 @@ import { InventoryWizardStepper, type WizardStep } from '@/modules/inventarios/c
 import { InventoryGeneralStep } from '@/modules/inventarios/components/inventory-general-step'
 import { InventoryScopeStep } from '@/modules/inventarios/components/inventory-scope-step'
 import { InventoryLoadingState } from '@/modules/inventarios/components/inventory-loading-state'
+import { notifyInventoryNavigation } from '@/modules/inventarios/components/inventory-navigation-feedback'
 
 const STEPS: WizardStep[] = [
   { id: 1, label: 'Datos generales' },
@@ -96,6 +97,7 @@ export function InventorySessionWizard({ companyId, catalogs }: InventorySession
 
     setSaving(false)
     clearWizardDraft()
+    notifyInventoryNavigation()
     router.push(`/dashboard/inventarios/jornadas/${sessionId}?tab=configuracion&step=3`)
   }, [companyId, data, router])
 
@@ -109,6 +111,7 @@ export function InventorySessionWizard({ companyId, catalogs }: InventorySession
 
   const handleExit = useCallback(() => {
     if (dirty && !window.confirm('Tienes cambios sin guardar. ¿Deseas salir del asistente?')) return
+    notifyInventoryNavigation()
     router.push('/dashboard/inventarios/jornadas')
   }, [dirty, router])
 

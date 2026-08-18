@@ -1,5 +1,10 @@
 import * as XLSX from 'xlsx'
-import type { CampaignReviewSummary, CampaignVarianceItem } from '@/app/actions/inventarios/campaign-report'
+import type {
+  CampaignAllProductItem,
+  CampaignApprovedBarcode,
+  CampaignReviewSummary,
+  CampaignVarianceItem,
+} from '@/app/actions/inventarios/campaign-report'
 
 export const VARIANCE_LABELS: Record<string, string> = {
   FALTANTE: 'Faltante',
@@ -33,8 +38,10 @@ export interface CampaignReportExcelData {
   generatedAt: string
   summary: CampaignReviewSummary | null
   allVariances: CampaignVarianceItem[]
+  allProducts: CampaignAllProductItem[]
   contributions: CampaignReportExcelContribRow[]
   operationalRows: string[][]
+  approvedBarcodes?: CampaignApprovedBarcode[]
 }
 
 const METHOD_LABELS: Record<string, string> = {
@@ -50,6 +57,11 @@ function sanitizeFileName(name: string): string {
 
 export function buildCampaignReportWorkbook(data: CampaignReportExcelData): XLSX.WorkBook {
   const wb = XLSX.utils.book_new()
+  const theoreticalProducts = data.allProducts.length
+  const countedTheoreticalProducts = data.allProducts.filter(item => item.coverage_status === 'COUNTED').length
+  const uncountedTheoreticalProducts = theoreticalProducts - countedTheoreticalProducts
+  const theoreticalProductKeys = new Set(data.allProducts.map(item => item.product_key))
+  const outOfStockProducts = data.allVariances.filter(item => !theoreticalProductKeys.has(item.product_key))
 
   // ---------- Hoja Resumen ----------
   const summary: (string | number)[][] = [['Informe del Inventario', data.campaignName]]
@@ -58,10 +70,14 @@ export function buildCampaignReportWorkbook(data: CampaignReportExcelData): XLSX
   summary.push(['Estado', data.isFinal ? 'Resultado final' : 'Resultado provisorio'])
   summary.push(['Fecha/hora de generación', data.generatedAt])
   summary.push([])
+  summary.push(['Productos del stock teórico', theoreticalProducts])
+  summary.push(['Productos del stock teórico contados', countedTheoreticalProducts])
+  summary.push(['Productos sin conteo', uncountedTheoreticalProducts])
+  summary.push(['Productos encontrados fuera del stock teórico', outOfStockProducts.length])
+  summary.push(['Total de productos con resultado', data.allVariances.length])
+  summary.push([])
   const stock = data.summary?.stock
   if (stock) {
-    summary.push(['Productos teóricos', stock.products_theoretical])
-    summary.push(['Productos contados', stock.products_counted])
     summary.push(['Faltantes', stock.faltantes])
     summary.push(['Sobrantes', stock.sobrantes])
     summary.push(['Sin diferencia', stock.sin_diferencia])
@@ -102,9 +118,12 @@ export function buildCampaignReportWorkbook(data: CampaignReportExcelData): XLSX
     'Situación del conteo',
     'Costo unitario',
     'Impacto valorizado',
+    'Código Bsale al Inventario',
+    'Códigos adicionales autorizados',
   ]
   const rows: (string | number | null)[][] = [header]
   for (const item of data.allVariances) {
+    const approved = (item.approved_barcodes ?? []).filter(Boolean)
     rows.push([
       item.sku ?? '—',
       item.name ?? '—',
@@ -115,16 +134,84 @@ export function buildCampaignReportWorkbook(data: CampaignReportExcelData): XLSX
       COVERAGE_LABELS[item.coverage_status] ?? item.coverage_status,
       item.unit_cost,
       item.difference_value,
+      item.barcode ?? 'Sin código registrado',
+      approved.length > 0 ? approved.join(', ') : '—',
     ])
   }
   const resultWs = XLSX.utils.aoa_to_sheet(rows)
   resultWs['!cols'] = [
     { wch: 14 }, { wch: 36 }, { wch: 14 }, { wch: 14 }, { wch: 12 },
     { wch: 14 }, { wch: 20 }, { wch: 16 }, { wch: 18 },
+    { wch: 24 }, { wch: 28 },
   ]
-  resultWs['!autofilter'] = { ref: `A1:I${rows.length}` }
+  resultWs['!autofilter'] = { ref: `A1:K${rows.length}` }
   resultWs['!freeze'] = { xSplit: 0, ySplit: 1 }
   XLSX.utils.book_append_sheet(wb, resultWs, 'Resultado completo')
+
+  // ---------- Hoja Todos los productos ----------
+  const allProductRows: (string | number | null)[][] = [header]
+  for (const item of data.allProducts) {
+    const approved = (item.approved_barcodes ?? []).filter(Boolean)
+    const counted = item.coverage_status === 'COUNTED'
+    allProductRows.push([
+      item.sku ?? '—',
+      item.name ?? '—',
+      item.theoretical_quantity,
+      item.physical_quantity,
+      item.difference_quantity,
+      item.variance_status === 'SIN_CONTEO'
+        ? 'Sin conteo'
+        : VARIANCE_LABELS[item.variance_status] ?? item.variance_status,
+      counted ? COVERAGE_LABELS.COUNTED : COVERAGE_LABELS.NOT_COUNTED,
+      item.unit_cost,
+      item.difference_value,
+      item.barcode ?? 'Sin código registrado',
+      approved.length > 0 ? approved.join(', ') : '—',
+    ])
+  }
+  const allProductsWs = XLSX.utils.aoa_to_sheet(allProductRows)
+  allProductsWs['!cols'] = [
+    { wch: 14 }, { wch: 36 }, { wch: 14 }, { wch: 14 }, { wch: 12 },
+    { wch: 14 }, { wch: 20 }, { wch: 16 }, { wch: 18 },
+    { wch: 24 }, { wch: 28 },
+  ]
+  allProductsWs['!autofilter'] = { ref: `A1:K${allProductRows.length}` }
+  allProductsWs['!freeze'] = { xSplit: 0, ySplit: 1 }
+  XLSX.utils.book_append_sheet(wb, allProductsWs, 'Todos los productos')
+
+  // ---------- Hoja Fuera del stock teórico ----------
+  const outHeader = [
+    'SKU',
+    'Producto',
+    'Cantidad contada',
+    'Resultado',
+    'Situación',
+    'Código Bsale al Inventario',
+    'Códigos adicionales autorizados',
+    'ID variante Bsale',
+  ]
+  const outRows: (string | number | null)[][] = [outHeader]
+  for (const item of outOfStockProducts) {
+    const approved = (item.approved_barcodes ?? []).filter(Boolean)
+    outRows.push([
+      item.sku ?? '—',
+      item.name ?? '—',
+      item.physical_quantity,
+      'Encontrado fuera del stock teórico',
+      'No incluido para conteo',
+      item.barcode ?? 'Sin código registrado',
+      approved.length > 0 ? approved.join(', ') : '—',
+      item.bsale_variant_id,
+    ])
+  }
+  const outWs = XLSX.utils.aoa_to_sheet(outRows)
+  outWs['!cols'] = [
+    { wch: 14 }, { wch: 36 }, { wch: 16 }, { wch: 34 },
+    { wch: 24 }, { wch: 24 }, { wch: 28 }, { wch: 16 },
+  ]
+  outWs['!autofilter'] = { ref: `A1:H${outRows.length}` }
+  outWs['!freeze'] = { xSplit: 0, ySplit: 1 }
+  XLSX.utils.book_append_sheet(wb, outWs, 'Fuera del stock teórico')
 
   // ---------- Hoja Detalle de conteos ----------
   const detHeader = [
@@ -171,6 +258,44 @@ export function buildCampaignReportWorkbook(data: CampaignReportExcelData): XLSX
   opWs['!autofilter'] = { ref: `A1:F${opRows.length}` }
   opWs['!freeze'] = { xSplit: 0, ySplit: 1 }
   XLSX.utils.book_append_sheet(wb, opWs, 'Estado operacional')
+
+  // ---------- Hoja Actualización de códigos ----------
+  const bcHeader = [
+    'SKU',
+    'Producto',
+    'Código Bsale anterior',
+    'Código nuevo autorizado',
+    'Veces detectado',
+    'Ubicaciones',
+    'Primera detección',
+    'Última detección',
+    'Estado',
+    'Acción sugerida',
+  ]
+  const bcRows: (string | number | null)[][] = [bcHeader]
+  for (const b of data.approvedBarcodes ?? []) {
+    bcRows.push([
+      b.sku ?? '—',
+      b.product_name ?? '—',
+      b.original_barcode ?? 'Sin código registrado',
+      b.approved_barcode,
+      b.occurrence_count,
+      b.location_count,
+      b.first_detected_at ?? '—',
+      b.latest_detected_at ?? '—',
+      b.status === 'Autorizado' ? 'Autorizado' : b.status,
+      'Revisar / actualizar en Bsale',
+    ])
+  }
+  const bcWs = XLSX.utils.aoa_to_sheet(bcRows)
+  bcWs['!cols'] = [
+    { wch: 14 }, { wch: 36 }, { wch: 24 }, { wch: 24 },
+    { wch: 14 }, { wch: 12 }, { wch: 20 }, { wch: 20 },
+    { wch: 14 }, { wch: 26 },
+  ]
+  bcWs['!autofilter'] = { ref: `A1:J${bcRows.length}` }
+  bcWs['!freeze'] = { xSplit: 0, ySplit: 1 }
+  XLSX.utils.book_append_sheet(wb, bcWs, 'Actualización de códigos')
 
   return wb
 }

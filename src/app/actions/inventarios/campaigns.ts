@@ -66,6 +66,7 @@ export interface InventoryCampaignSiteDetail {
   session_id: string | null
   session_number: number | null
   session_status: string | null
+  active_zone_count: number | null
   stock_source: string | null
   stock_import_id: string | null
   import_status: string | null
@@ -107,7 +108,21 @@ export async function getActiveCompanyCampaignDetail(
       console.error('get_inventory_campaign_detail error:', error.message)
       return { data: null, error: 'No se pudo cargar el detalle de la campaña.', companyId }
     }
-    return { data: data as InventoryCampaignDetail, error: null, companyId }
+    const detail = data as InventoryCampaignDetail
+    const sites = await Promise.all(detail.sites.map(async site => {
+      if (!site.session_id) return { ...site, active_zone_count: 0 }
+      const setupResult = await db.rpc('get_inventory_session_setup', {
+        p_company_id: companyId,
+        p_session_id: site.session_id,
+      })
+      if (setupResult.error) {
+        console.error('get_inventory_session_setup for campaign site error:', setupResult.error.message)
+        return { ...site, active_zone_count: null }
+      }
+      const setup = setupResult.data as { indicators?: { zone_count?: number } } | null
+      return { ...site, active_zone_count: Number(setup?.indicators?.zone_count ?? 0) }
+    }))
+    return { data: { ...detail, sites }, error: null, companyId }
   } catch (err) {
     console.error('get_inventory_campaign_detail exception:', err)
     return { data: null, error: 'No se pudo cargar el detalle de la campaña.', companyId }

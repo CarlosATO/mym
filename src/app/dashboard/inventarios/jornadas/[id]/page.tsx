@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation'
 import { ClipboardList, FileCheck2, Settings2 } from 'lucide-react'
 import { listInventoryCampaignParticipants } from '@/app/actions/inventarios/campaigns'
+import { listInventorySessionScopes } from '@/app/actions/inventarios/counting-zones'
 import { getActiveCompanySessionDetail, getActiveCompanySessionReview, getInventorySessionCatalogs, getInventorySessionImportContext, type CatalogUserOption } from '@/app/actions/inventarios/sessions'
 import { getActiveCompanyResults } from '@/app/actions/inventarios/results'
 import { InventorySessionHeader } from '@/modules/inventarios/components/inventory-session-header'
@@ -15,6 +16,7 @@ import { InventoryPrepareSection } from '@/modules/inventarios/components/invent
 import { InventoryImportReviewStep } from '@/modules/inventarios/components/inventory-import-review-step'
 import { InventoryOperationPanel } from '@/modules/inventarios/components/inventory-operation-panel'
 import { InventoryZonesPanel } from '@/modules/inventarios/components/inventory-zones-panel'
+import { InventoryOperationalSetup } from '@/modules/inventarios/components/inventory-operational-setup'
 import { InventoryTasksPanel } from '@/modules/inventarios/components/inventory-tasks-panel'
 import { InventoryReviewDashboard } from '@/modules/inventarios/components/inventory-review-dashboard'
 import { InventoryResultsPanel } from '@/modules/inventarios/components/inventory-results-panel'
@@ -29,10 +31,10 @@ interface PageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }
 
-function getTabsForStatus(status: string): InventoryTab[] {
+function getTabsForStatus(status: string, hasPendingLocations: boolean): InventoryTab[] {
   const tabs: InventoryTab[] = [{ id: 'resumen', label: 'Resumen' }]
-  if (status === 'DRAFT' || status === 'PREPARED') {
-    tabs.push({ id: 'configuracion', label: 'Configuración' })
+  if (status === 'DRAFT' || ((status === 'PREPARED' || status === 'COUNTING') && hasPendingLocations)) {
+    tabs.push({ id: 'configuracion', label: 'Asignación de zonas' })
   }
   if (status === 'PREPARED' || status === 'COUNTING') {
     tabs.push({ id: 'operacion', label: 'Operación' })
@@ -79,7 +81,12 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
   }
 
   const status = detail.session.status
-  const tabs = getTabsForStatus(status)
+  const importContextResult = await getInventorySessionImportContext(id)
+  const importContext = importContextResult.data
+  const scopesResult = status === 'PREPARED' || status === 'COUNTING'
+    ? await listInventorySessionScopes(companyId, id)
+    : null
+  const tabs = getTabsForStatus(status, (scopesResult?.data?.pending_locations ?? 0) > 0)
   const safeTab = tabs.some(t => t.id === activeTab) ? activeTab : tabs[0].id
 
   let review = null
@@ -110,8 +117,6 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
     catalogLocations = catalogs.data?.locations ?? []
   }
 
-  const importContextResult = await getInventorySessionImportContext(id)
-  const importContext = importContextResult.data
   const campaignParticipantsResult = companyId && importContext?.campaign_id
     ? await listInventoryCampaignParticipants(companyId, importContext.campaign_id)
     : { data: null }
@@ -171,8 +176,10 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
                   },
                 }}
               />
-            ) : (
-              <div className="space-y-4">
+             ) : (status === 'PREPARED' || status === 'COUNTING') && importContext?.campaign_id ? (
+               <InventoryOperationalSetup companyId={companyId} sessionId={id} campaignId={importContext.campaign_id} />
+             ) : (
+               <div className="space-y-4">
                 <div className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
                   <h3 className="mb-2 text-sm font-semibold text-theme-text">Importación asociada (solo lectura)</h3>
                   <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
@@ -199,7 +206,7 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
                 <InventoryTasksPanel detail={detail} />
               </div>
             )
-          ) : status === 'DRAFT' && activeStep === 3 ? (
+           ) : status === 'DRAFT' && activeStep === 3 ? (
             <InventoryParticipantsStep
               companyId={companyId}
               sessionId={id}
@@ -223,9 +230,11 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
               sessionId={id}
               users={eligibleUsers}
             />
-          ) : status === 'DRAFT' && activeStep === 6 ? (
-            <InventoryReviewStep companyId={companyId} sessionId={id} />
-          ) : (
+           ) : status === 'DRAFT' && activeStep === 6 ? (
+             <InventoryReviewStep companyId={companyId} sessionId={id} />
+           ) : (status === 'PREPARED' || status === 'COUNTING') && importContext?.campaign_id ? (
+             <InventoryOperationalSetup companyId={companyId} sessionId={id} campaignId={importContext.campaign_id} />
+           ) : (
             <>
                 <InventoryParticipantsPanel detail={detail} campaignParticipants={campaignParticipants} />
               <InventoryZonesPanel detail={detail} />
@@ -258,12 +267,14 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
             <InventoryCancellationPanel detail={detail} />
           ) : status === 'APPROVED' || status === 'EXPORTED' || status === 'RECONCILED' ? (
             results ? (
-              <InventoryResultsPanel
-                sessionId={id}
-                results={results}
-                search={typeof sp.q === 'string' ? sp.q : ''}
-                differenceType={typeof sp.dif === 'string' ? sp.dif : ''}
-              />
+              <>
+                <InventoryResultsPanel
+                  sessionId={id}
+                  results={results}
+                  search={typeof sp.q === 'string' ? sp.q : ''}
+                  differenceType={typeof sp.dif === 'string' ? sp.dif : ''}
+                />
+              </>
             ) : resultsError ? (
               <InventoryErrorState description={resultsError} />
             ) : (

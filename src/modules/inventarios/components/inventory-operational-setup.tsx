@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { Loader2, Settings2, UserCog } from 'lucide-react'
 import {
   assignInventoryCountingZone,
+  addInventoryCountingZoneProgressive,
   cancelInventoryCountingZone,
   listInventorySessionScopes,
   type InventorySessionScopesResult,
@@ -32,6 +33,7 @@ interface InventoryOperationalSetupProps {
 interface ZoneAssigneeOption {
   participantId: string
   userId: string
+  userName: string
   label: string
 }
 
@@ -65,12 +67,15 @@ function buildZoneAssigneeOptions(participants: InventoryCampaignParticipant[]):
           ROLE_PRIORITY[a.participantRole] - ROLE_PRIORITY[b.participantRole] ||
           (a.userName ?? a.email ?? '').localeCompare(b.userName ?? b.email ?? '')
       )
-      const primary = sorted[0]
+      // The operation contract accepts the campaign participant registered as COUNTER,
+      // even when the label includes the user's other informative roles.
+      const primary = group.find(item => item.participantRole === 'COUNTER') ?? sorted[0]
       const roles = Array.from(new Set(sorted.map(item => ROLE_LABEL[item.participantRole]))).join(' / ')
       const name = primary.userName ?? primary.email ?? 'Usuario'
       return {
         participantId: primary.participantId,
         userId: primary.userId,
+        userName: name,
         label: `${name} · ${roles}`,
       }
     })
@@ -120,6 +125,9 @@ export function InventoryOperationalSetup({
     }
     setScopes(scopesResult.data)
     setSetup(setupResult.data ?? null)
+    if (setupResult.data) {
+      setZoneName(`Zona ${setupResult.data.zones.filter(zone => zone.is_enabled).length + 1}`)
+    }
   }, [companyId, sessionId])
 
   useEffect(() => {
@@ -139,9 +147,7 @@ export function InventoryOperationalSetup({
       setScopes(scopesResult.data)
       setSetup(setupResult.data ?? null)
       const activeAssignees = (countersResult.data?.participants ?? []).filter(
-        participant =>
-          participant.state === 'ACTIVE' &&
-          participant.userIsActive
+        participant => participant.state === 'ACTIVE' && participant.userIsActive && participant.participantRole === 'COUNTER'
       )
       const assigneeOptions = buildZoneAssigneeOptions(activeAssignees)
       setAssignees(assigneeOptions)
@@ -197,7 +203,7 @@ export function InventoryOperationalSetup({
     if (!createKeyRef.current) createKeyRef.current = newOperationKey()
     setCreating(true)
     setCreateError(null)
-    const result = await assignInventoryCountingZone({
+    const input = {
       companyId,
       campaignId,
       sessionId,
@@ -205,7 +211,10 @@ export function InventoryOperationalSetup({
       zoneName: trimmed,
       locationIds: selectedLocationIds,
       idempotencyKey: createKeyRef.current,
-    })
+    }
+    const result = setup?.session?.status === 'PREPARED' || setup?.session?.status === 'COUNTING'
+      ? await addInventoryCountingZoneProgressive(input)
+      : await assignInventoryCountingZone(input)
     setCreating(false)
     if (result.error) {
       setCreateError(result.error)
@@ -213,6 +222,7 @@ export function InventoryOperationalSetup({
     }
     createKeyRef.current = null
     setSelectedLocationIds([])
+    window.dispatchEvent(new Event('inventarios:setup-updated'))
     await refresh()
     router.refresh()
   }
@@ -229,6 +239,7 @@ export function InventoryOperationalSetup({
         idempotencyKey: key,
       })
       if (result.error) return { error: result.error }
+      window.dispatchEvent(new Event('inventarios:setup-updated'))
       await refresh()
       router.refresh()
       return { error: null }
@@ -338,7 +349,7 @@ export function InventoryOperationalSetup({
         {canShowForm && (
           <div className="lg:col-span-2">
             <div className="rounded-xl border border-theme-border bg-theme-surface p-2.5 shadow-sm">
-              <h3 className="mb-2.5 text-sm font-semibold text-theme-text">Crear zona y asignar</h3>
+              <h3 className="mb-2.5 text-sm font-semibold text-theme-text">Crear zona y asignar responsable</h3>
 
               {assignees.length === 0 && (
                 <p className="mb-3 rounded-lg border border-amber-500/15 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
@@ -420,6 +431,7 @@ export function InventoryOperationalSetup({
       <InventoryZoneAssignmentsList
         zones={zones}
         tasks={setup?.tasks ?? []}
+        assigneeNames={Object.fromEntries(assignees.map(assignee => [assignee.userId, assignee.userName]))}
         canCancel={editable}
         onCancelZone={handleCancelZone}
       />

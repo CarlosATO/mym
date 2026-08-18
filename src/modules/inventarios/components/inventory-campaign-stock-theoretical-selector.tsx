@@ -2,7 +2,7 @@
 
 import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Check, ChevronRight, Download, FileSpreadsheet, Grid2x2, Loader2, MapPin, Plus, Trash2, Warehouse } from 'lucide-react'
+import { Check, ChevronRight, Download, FileSpreadsheet, Grid2x2, Loader2, MapPin, Plus, Warehouse } from 'lucide-react'
 import { createCampaignStockImport, finalizeCampaignStockImport, getCampaignStockImport, registerCampaignStockImportFile, type CampaignStockImportDetail, type CampaignStockImportRowItem } from '@/app/actions/inventarios/imports'
 import { generateInventoryCampaignSessions, type InventoryCampaignSessionGenerationSummary } from '@/app/actions/inventarios/campaigns'
 import { createClient as createBrowserSupabaseClient } from '@/lib/supabase/client'
@@ -29,6 +29,7 @@ interface TheoreticalStockOption {
   description: string
   columns: string[]
   filename: string
+  available: boolean
   icon: React.ReactNode
 }
 
@@ -39,6 +40,7 @@ const OPTIONS: TheoreticalStockOption[] = [
     description: 'Una cantidad total por producto, considerando todas las bodegas incluidas. No requiere bodega ni ubicación.',
     columns: ['SKU', 'CANTIDAD_TEORICA', 'COSTO_UNITARIO'],
     filename: 'plantilla-stock-total-campana.xlsx',
+    available: true,
     icon: <Grid2x2 className="h-4 w-4" />,
   },
   {
@@ -47,6 +49,7 @@ const OPTIONS: TheoreticalStockOption[] = [
     description: 'El mismo archivo indica cuánto corresponde a cada bodega.',
     columns: ['SKU', 'CODIGO_UNIDAD', 'CANTIDAD_TEORICA', 'COSTO_UNITARIO'],
     filename: 'plantilla-stock-por-bodega.xlsx',
+    available: false,
     icon: <Warehouse className="h-4 w-4" />,
   },
   {
@@ -55,6 +58,7 @@ const OPTIONS: TheoreticalStockOption[] = [
     description: 'El mismo archivo indica la bodega y ubicación correspondiente a cada cantidad.',
     columns: ['SKU', 'CODIGO_UNIDAD', 'CODIGO_UBICACION', 'CANTIDAD_TEORICA', 'COSTO_UNITARIO'],
     filename: 'plantilla-stock-por-ubicacion.xlsx',
+    available: false,
     icon: <MapPin className="h-4 w-4" />,
   },
 ]
@@ -151,7 +155,8 @@ export function InventoryCampaignStockTheoreticalSelector({
   }
 
   const confirmSelection = () => {
-    if (!draft) return
+    const selectedOption = draft ? OPTIONS.find(option => option.value === draft) : null
+    if (!selectedOption?.available) return
     if (draft !== selected) {
       setSelectedFile(null)
       setFileError(null)
@@ -161,6 +166,7 @@ export function InventoryCampaignStockTheoreticalSelector({
     }
     setSelected(draft)
     setOpen(false)
+    setDetailOpen(true)
   }
 
   const handleDownloadTemplate = () => {
@@ -196,15 +202,6 @@ export function InventoryCampaignStockTheoreticalSelector({
     }
     setSelectedFile(file)
     setResult(null)
-  }
-
-  const clearFile = () => {
-    if (isProcessing || isValidated) return
-    setSelectedFile(null)
-    setFileError(null)
-    setProcessError(null)
-    setResult(null)
-    if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   const openFilePicker = () => {
@@ -754,20 +751,25 @@ export function InventoryCampaignStockTheoreticalSelector({
                     <button
                       key={option.value}
                       type="button"
-                      onClick={() => setDraft(option.value)}
-                      disabled={isProcessing}
+                      onClick={() => option.available && setDraft(option.value)}
+                      disabled={isProcessing || !option.available}
                       className={`flex h-full flex-col rounded-xl border p-4 text-left transition-colors ${
                         active
                           ? 'border-theme-accent bg-theme-accent/10 ring-1 ring-theme-accent'
-                          : 'border-theme-border bg-theme-bg hover:border-theme-accent/40 hover:bg-theme-text/5'
+                          : option.available
+                            ? 'border-theme-border bg-theme-bg hover:border-theme-accent/40 hover:bg-theme-text/5'
+                            : 'border-theme-border/60 bg-theme-bg/60'
                       } disabled:cursor-not-allowed disabled:opacity-50`}
                     >
                       <div className="flex items-center gap-2">
-                        <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${active ? 'bg-theme-accent text-white' : 'bg-theme-text/5 text-theme-text-muted'}`}>
+                        <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${active ? 'bg-theme-accent text-white' : option.available ? 'bg-theme-text/5 text-theme-text-muted' : 'bg-theme-text/5 text-theme-text-muted/60'}`}>
                           {option.icon}
                         </span>
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-semibold text-theme-text">{option.label}</p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className={`text-sm font-semibold ${option.available ? 'text-theme-text' : 'text-theme-text-muted'}`}>{option.label}</p>
+                            {!option.available && <span className="inline-flex rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">Próximamente</span>}
+                          </div>
                         </div>
                         {active && <Check className="h-4 w-4 text-theme-accent" />}
                       </div>
@@ -794,7 +796,7 @@ export function InventoryCampaignStockTheoreticalSelector({
                   <button
                     type="button"
                     onClick={confirmSelection}
-                    disabled={!draft || isProcessing}
+                    disabled={!draft || !OPTIONS.some(option => option.value === draft && option.available) || isProcessing}
                     className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Confirmar formato

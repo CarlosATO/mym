@@ -65,6 +65,7 @@ CREATE TABLE inventarios.official_version_items (
     normal_contribution_count integer NOT NULL,
     recount_contribution_count integer NOT NULL,
     contribution_manifest jsonb NOT NULL,
+    location_resolution_status text NOT NULL DEFAULT 'RESOLVED',
     created_at timestamptz NOT NULL,
     created_by uuid NOT NULL REFERENCES portal.users(id) ON DELETE RESTRICT,
     CONSTRAINT fk_official_items_version
@@ -89,7 +90,10 @@ CREATE TABLE inventarios.official_version_items (
         contribution_count >= 1 AND normal_contribution_count >= 0 AND recount_contribution_count >= 0
         AND normal_contribution_count + recount_contribution_count = contribution_count
     ),
-    CONSTRAINT chk_official_items_manifest CHECK (jsonb_typeof(contribution_manifest) = 'array')
+    CONSTRAINT chk_official_items_manifest CHECK (jsonb_typeof(contribution_manifest) = 'array'),
+    CONSTRAINT chk_official_items_location_resolution CHECK (
+        location_resolution_status IN ('RESOLVED', 'UNRESOLVED_RECOUNT')
+    )
 );
 
 ALTER TABLE inventarios.official_versions ENABLE ROW LEVEL SECURITY;
