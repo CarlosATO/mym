@@ -15,6 +15,7 @@
     "test:route-settlement-start-ui": "node --test scripts/test-route-settlement-start-ui.mjs",
     "test:bsale-brand": "node --experimental-strip-types --test scripts/test-bsale-brand.mjs",
     "test:bsale-brand-supplier-links": "node --experimental-strip-types --test scripts/test-bsale-brand-supplier-links.mjs",
+    "test:bsale-brand-supplier-ui": "node --experimental-strip-types --test scripts/test-bsale-brand-supplier-ui.mjs",
     "test:bsale-product-batches": "node --experimental-strip-types --test scripts/test-bsale-product-batches.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"

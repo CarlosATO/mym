@@ -5,9 +5,10 @@ import { getSuppliers, createSupplier, updateSupplier, deactivateSupplier, impor
 import * as XLSX from 'xlsx'
 import { Search, Plus, FileSpreadsheet, Upload, Download, MoreHorizontal, Filter, X, ArrowLeft, Check, AlertCircle } from 'lucide-react'
 import { PseudoSupplierBsaleSyncStatus } from '@/components/integraciones/bsale-sync-status'
+import { BsaleBrandSupplierPanel } from './bsale-brand-supplier-panel'
 
-export function SuppliersPanel() {
-  const [activeTab, setActiveTab] = useState<'REAL' | 'BSALE'>('REAL')
+export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: boolean }) {
+  const [activeTab, setActiveTab] = useState<'REAL' | 'BSALE' | 'BSALE_BRANDS'>('REAL')
 
   // REAL
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
@@ -42,7 +43,7 @@ export function SuppliersPanel() {
     if (activeTab === 'REAL') {
       const data = await getSuppliers(search || undefined, 'REAL')
       setSuppliers(data)
-    } else {
+    } else if (activeTab === 'BSALE') {
       const data = await getBsalePseudoStats()
       // local search
       const term = search.toLowerCase()
@@ -508,16 +509,19 @@ export function SuppliersPanel() {
       )}
 
       {/* TABS */}
-      <div className="shrink-0 flex items-center border-b border-theme-border bg-theme-text/[0.02] px-4 pt-1.5">
+      <div className="shrink-0 flex items-center overflow-x-auto border-b border-theme-border bg-theme-text/[0.02] px-4 pt-1.5">
         <button onClick={() => { setActiveTab('REAL'); setSearch('') }} className={`px-3 py-1.5 text-sm font-bold border-b-2 transition-all ${activeTab === 'REAL' ? 'border-theme-accent text-theme-accent' : 'border-transparent text-theme-text-muted hover:text-theme-text'}`}>
           Proveedores Reales
         </button>
         <button onClick={() => { setActiveTab('BSALE'); setSearch('') }} className={`px-3 py-1.5 text-sm font-bold border-b-2 transition-all ${activeTab === 'BSALE' ? 'border-theme-accent text-theme-accent' : 'border-transparent text-theme-text-muted hover:text-theme-text'}`}>
           Pseudoproveedores Bsale
         </button>
+        <button onClick={() => { setActiveTab('BSALE_BRANDS'); setSearch('') }} className={`px-3 py-1.5 text-sm font-bold border-b-2 transition-all ${activeTab === 'BSALE_BRANDS' ? 'border-theme-accent text-theme-accent' : 'border-transparent text-theme-text-muted hover:text-theme-text'}`}>
+          Proveedor en Bsale
+        </button>
       </div>
 
-      <div className="shrink-0 flex flex-col gap-2.5 p-3 border-b border-theme-border/60 bg-theme-text/[0.01]">
+      <div className={`shrink-0 flex flex-col gap-2.5 p-3 border-b border-theme-border/60 bg-theme-text/[0.01] ${activeTab === 'BSALE_BRANDS' ? 'hidden' : ''}`}>
         
         {activeTab === 'BSALE' && (
           <div className="flex w-full">
@@ -616,7 +620,7 @@ export function SuppliersPanel() {
         </div>
       )}
 
-      {loading ? (
+      {activeTab === 'BSALE_BRANDS' ? <BsaleBrandSupplierPanel canWrite={canManageBsale} /> : loading ? (
         <div className="flex-1 flex items-center justify-center">
           <p className="text-theme-text-muted/50 text-sm font-medium">Cargando...</p>
         </div>
