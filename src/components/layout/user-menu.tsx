@@ -45,20 +45,22 @@ export function UserMenu({ profile, activeCompany, permissions }: UserMenuProps)
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(!open)}
-         className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl border border-theme-border bg-theme-surface/60 hover:bg-theme-text/5 text-theme-text transition-all duration-200 shadow-sm text-left max-w-[240px]"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className="group flex h-9 max-w-[240px] items-center gap-2 rounded-xl border border-theme-accent/20 bg-theme-accent/8 px-2.5 text-left text-theme-text shadow-sm transition-all duration-200 hover:border-theme-accent/40 hover:bg-theme-accent/12"
       >
-        <div className="w-6 h-6 rounded bg-gradient-to-br from-theme-accent-hover to-theme-accent flex items-center justify-center text-xs font-bold text-white shrink-0 shadow-sm uppercase">
+        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-theme-accent/25 bg-theme-accent/15 text-xs font-bold uppercase text-theme-text-accent transition-colors group-hover:bg-theme-accent/20">
           {profile.nombre?.[0] ?? 'U'}
         </div>
         <div className="truncate leading-tight">
-          <p className="text-xs font-bold text-theme-text truncate max-w-[120px]">
+          <p className="max-w-[120px] truncate text-[11px] font-bold text-theme-text">
             {profile.nombre} {profile.apellido}
           </p>
-          <p className="text-[10px] text-theme-text-muted/60 truncate max-w-[120px] capitalize">
+          <p className="max-w-[120px] truncate text-[9px] font-medium capitalize text-theme-text-muted/70">
             {profile.roles?.name?.toLowerCase()?.replace('_', ' ') ?? ''}
           </p>
         </div>
-        <LucideIcons.ChevronDown className={cn('h-3.5 w-3.5 text-theme-accent transition-transform shrink-0', open && 'rotate-180')} />
+        <LucideIcons.ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-theme-text-accent transition-transform', open && 'rotate-180')} />
       </button>
 
       {open && (
