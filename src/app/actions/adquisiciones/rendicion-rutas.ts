@@ -38,6 +38,16 @@ export interface RouteSettlementsDashboardRow {
   action_type: 'CREATE' | 'VIEW'
 }
 
+export interface CreateRouteSettlementResult {
+  success: true
+  settlement_id: string
+  route_guide_id: string
+  settlement_number: string
+  status: string
+  created: boolean
+  replayed: boolean
+}
+
 function toOperationalStatus(status: string | null, hasWorkedItems: boolean): RouteSettlementsDashboardRow['operational_status'] {
   if (!status) return 'PENDING_SETTLEMENT'
   if (status === 'IN_REVIEW') return hasWorkedItems ? 'IN_REVIEW' : 'PENDING_SETTLEMENT'
@@ -396,6 +406,40 @@ export async function getRouteSettlements() {
   }
 }
 
+async function findExistingRouteSettlement(
+  db: Awaited<ReturnType<typeof createAdquisicionesClient>>,
+  companyId: string,
+  routeGuideId: string
+): Promise<CreateRouteSettlementResult | null> {
+  const { data, error } = await db
+    .from('route_settlements')
+    .select('id, route_guide_id, settlement_number, status')
+    .eq('company_id', companyId)
+    .eq('route_guide_id', routeGuideId)
+    .maybeSingle()
+
+  if (error) throw error
+  if (!data) return null
+
+  if (data.status === 'CANCELLED') {
+    throw new Error('La guía ya tiene una rendición anulada y no puede reutilizarse.')
+  }
+
+  return {
+    success: true,
+    settlement_id: data.id,
+    route_guide_id: data.route_guide_id,
+    settlement_number: data.settlement_number,
+    status: data.status,
+    created: false,
+    replayed: true,
+  }
+}
+
+function isUniqueViolation(error: { code?: string; message?: string } | null) {
+  return error?.code === '23505' || /unique|duplicate key|duplicate record/i.test(error?.message ?? '')
+}
+
 // 3. createRouteSettlementFromGuide
 export async function createRouteSettlementFromGuide(routeGuideId: string) {
   const adquisicionesDb = await createAdquisicionesClient()
@@ -408,16 +452,39 @@ export async function createRouteSettlementFromGuide(routeGuideId: string) {
     if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
     await requirePermission(adquisicionesDb, userData.user.id, 'adquisiciones.route_settlements.create')
 
+    const existing = await findExistingRouteSettlement(adquisicionesDb, companyId, routeGuideId)
+    if (existing) return { data: existing, error: null }
+
     const { data, error } = await adquisicionesDb.rpc('create_route_settlement_from_guide', {
       p_route_guide_id: routeGuideId,
       p_user_id: userData.user.id
     })
 
     if (error) {
-      if (process.env.NODE_ENV === 'development') console.error('DB Error:', error)
+      if (isUniqueViolation(error)) {
+        const racedSettlement = await findExistingRouteSettlement(adquisicionesDb, companyId, routeGuideId)
+        if (racedSettlement) return { data: racedSettlement, error: null }
+        throw new Error('No se pudo iniciar la rendición porque la guía fue procesada simultáneamente.')
+      }
       throw new Error(error.message || 'No se pudo crear la rendición.')
     }
-    return { data, error: null }
+
+    if (!data?.success || !data.id || !data.settlement_number) {
+      throw new Error(data?.error || 'No se pudo iniciar la rendición.')
+    }
+
+    return {
+      data: {
+        success: true,
+        settlement_id: data.id,
+        route_guide_id: data.route_guide_id ?? routeGuideId,
+        settlement_number: data.settlement_number,
+        status: data.status ?? 'IN_REVIEW',
+        created: data.created ?? true,
+        replayed: data.replayed ?? false,
+      } satisfies CreateRouteSettlementResult,
+      error: null,
+    }
   } catch (err: any) {
     console.error('createRouteSettlementFromGuide error:', err)
     return { data: null, error: err.message }
@@ -633,8 +700,8 @@ export async function saveRouteSettlementChanges(
 
     if (existingErr) throw existingErr
 
-    let settlementId: string
-    let settlementNumber: string
+    let settlementId = ''
+    let settlementNumber = ''
 
     if (!existing) {
       // 2a. No existe RR → crear
@@ -643,11 +710,25 @@ export async function saveRouteSettlementChanges(
         'create_route_settlement_from_guide',
         { p_route_guide_id: routeGuideId, p_user_id: userData.user.id }
       )
-      if (createErr) throw new Error(`Error creando rendición: ${createErr.message}`)
-      if (!created?.success) throw new Error(created?.error || 'No se pudo crear la rendición')
+      if (createErr) {
+        if (isUniqueViolation(createErr)) {
+          const racedSettlement = await findExistingRouteSettlement(adquisicionesDb, companyId, routeGuideId)
+          if (racedSettlement) {
+            settlementId = racedSettlement.settlement_id
+            settlementNumber = racedSettlement.settlement_number
+          } else {
+            throw new Error('No se pudo crear la rendición porque la guía fue procesada simultáneamente.')
+          }
+        } else {
+          throw new Error(`Error creando rendición: ${createErr.message}`)
+        }
+      }
+      if (!createErr && !created?.success) throw new Error(created?.error || 'No se pudo crear la rendición')
 
-      settlementId = created.id as string
-      settlementNumber = created.settlement_number as string
+      if (!settlementId) {
+        settlementId = (created.settlement_id ?? created.id) as string
+        settlementNumber = created.settlement_number as string
+      }
     } else {
       // 2b. Ya existe RR
       settlementId = existing.id
