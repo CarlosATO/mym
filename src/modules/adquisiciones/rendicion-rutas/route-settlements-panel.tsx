@@ -9,6 +9,7 @@ import {
   type RouteSettlementsDashboardRow,
   type RouteGuideWorkspaceData,
   type SaveRouteSettlementResult,
+  type CreateRouteSettlementResult,
 } from '@/app/actions/adquisiciones/rendicion-rutas'
 import { UnifiedRouteSettlementsTable } from './components/unified-route-settlements-table'
 import { RouteSettlementDetailPanel } from './components/route-settlement-detail-panel'
@@ -71,7 +72,11 @@ type PanelView =
       dashboardRow: RouteSettlementsDashboardRow
     }
 
-export function RouteSettlementsPanel() {
+interface RouteSettlementsPanelProps {
+  canCreateSettlement: boolean
+}
+
+export function RouteSettlementsPanel({ canCreateSettlement }: RouteSettlementsPanelProps) {
   const [rows, setRows] = useState<RouteSettlementsDashboardRow[]>([])
   const [kpis, setKpis] = useState<RouteSettlementsDashboardKpis>(EMPTY_KPIS)
   const [isLoading, setIsLoading] = useState(true)
@@ -182,6 +187,20 @@ export function RouteSettlementsPanel() {
     }
   }
 
+  const updateRowAfterStart = (guideId: string, result: CreateRouteSettlementResult) => {
+    const update = (currentRows: RouteSettlementsDashboardRow[]) =>
+      currentRows.map(row => row.route_guide_id !== guideId ? row : {
+        ...row,
+        settlement_id: result.settlement_id,
+        settlement_number: result.settlement_number,
+        settlement_status: result.status,
+        operational_status: result.status === 'IN_REVIEW' ? 'PENDING_SETTLEMENT' : row.operational_status,
+        action_type: 'VIEW' as const,
+      })
+    setRows(update)
+    if (dashboardCache) dashboardCache = { ...dashboardCache, rows: update(dashboardCache.rows) }
+  }
+
   // ── Manejador de doble clic ──────────────────────────────────────────────
   /**
    * REGLA: No crea RR. Solo navega al workspace correcto.
@@ -286,6 +305,8 @@ export function RouteSettlementsPanel() {
         guideData={view.guideData}
         settlement={null}
         settlementItems={null}
+        canCreateSettlement={canCreateSettlement}
+        onSettlementStarted={(result) => updateRowAfterStart(view.dashboardRow.route_guide_id, result)}
         onClose={handleCloseWorkspace}
       />
     )
@@ -298,6 +319,7 @@ export function RouteSettlementsPanel() {
         guideData={view.guideData}
         settlement={view.settlement}
         settlementItems={view.settlementItems}
+        canCreateSettlement={canCreateSettlement}
         onClose={handleCloseWorkspace}
       />
     )
@@ -312,7 +334,7 @@ export function RouteSettlementsPanel() {
   ]
 
   return (
-    <div className="h-full min-h-0 flex flex-col p-3 lg:p-4 animate-in fade-in duration-300">
+    <div className="h-[calc(100dvh-9.75rem)] min-h-0 min-w-0 flex flex-col p-3 lg:h-[calc(100dvh-7.25rem)] lg:p-4 animate-in fade-in duration-300">
 
       {/* Main Tab Switcher */}
       <div className="shrink-0 flex items-center gap-2 mb-3">
@@ -398,7 +420,7 @@ export function RouteSettlementsPanel() {
       )}
 
       {/* Tabla (Scrollable) */}
-      <div className="flex-1 min-h-0 mt-3">
+      <div className="flex-1 min-h-0 min-w-0 mt-3">
         <UnifiedRouteSettlementsTable
           data={rows}
           isLoading={isLoading}
@@ -407,6 +429,8 @@ export function RouteSettlementsPanel() {
           setFilterStatus={setFilterStatus}
           paymentFilter={paymentFilter}
           setPaymentFilter={setPaymentFilter}
+          canCreateSettlement={canCreateSettlement}
+          onStartSettlement={handleRowDoubleClick}
         />
       </div>
       

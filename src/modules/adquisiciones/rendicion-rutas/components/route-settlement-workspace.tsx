@@ -17,6 +17,9 @@ import {
   RouteGuideWorkspaceItem,
   SettlementItemUpdate,
   SaveRouteSettlementResult,
+  CreateRouteSettlementResult,
+  createRouteSettlementFromGuide,
+  getRouteSettlementById,
   saveRouteSettlementChanges,
 } from '@/app/actions/adquisiciones/rendicion-rutas'
 import { generateRouteGuidePdfBlob, downloadRouteGuidePdf } from '@/lib/pdf/generate-route-guide-pdf'
@@ -72,6 +75,8 @@ interface RouteSettlementWorkspaceProps {
   guideData: RouteGuideWorkspaceData
   settlement?: RouteSettlement | null
   settlementItems?: RouteSettlementItem[] | null
+  canCreateSettlement: boolean
+  onSettlementStarted?: (result: CreateRouteSettlementResult) => void
   onClose: (savedResult?: SaveRouteSettlementResult) => void
 }
 
@@ -161,6 +166,13 @@ function getItemStatusStyle(status: string): string {
   }
 }
 
+function formatStartError(error: string) {
+  if (/duplicate key|unique violation|constraint|sqlstate/i.test(error)) {
+    return 'No se pudo iniciar la rendición porque la guía fue procesada simultáneamente. Actualiza la bandeja e inténtalo nuevamente.'
+  }
+  return error
+}
+
 // ─── Componente Principal ─────────────────────────────────────────────────────
 
 export function RouteSettlementWorkspace({
@@ -168,6 +180,8 @@ export function RouteSettlementWorkspace({
   guideData,
   settlement: initialSettlement,
   settlementItems,
+  canCreateSettlement,
+  onSettlementStarted,
   onClose,
 }: RouteSettlementWorkspaceProps) {
   const [rows, setRows] = useState<WorkspaceRow[]>(() =>
@@ -180,6 +194,9 @@ export function RouteSettlementWorkspace({
   const [invoiceFilter, setInvoiceFilter] = useState<'CASH_ONLY' | 'ALL'>('CASH_ONLY')
   const [isSaving, setIsSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [startError, setStartError] = useState<string | null>(null)
+  const [startNotice, setStartNotice] = useState<string | null>(null)
+  const [isStartingSettlement, setIsStartingSettlement] = useState(false)
   const [attachmentLoadError, setAttachmentLoadError] = useState<string | null>(null)
   const [lastSavedResult, setLastSavedResult] = useState<SaveRouteSettlementResult | null>(null)
   const [notes, setNotes] = useState(initialSettlement?.notes ?? '')
@@ -188,6 +205,9 @@ export function RouteSettlementWorkspace({
   // settlement_id real — se actualiza tras el primer guardado si mode era 'no-rr'
   const [persistedSettlementId, setPersistedSettlementId] = useState<string | null>(
     initialSettlement?.id ?? null
+  )
+  const [persistedSettlementNumber, setPersistedSettlementNumber] = useState<string | null>(
+    initialSettlement?.settlement_number ?? null
   )
   const [persistedStatus, setPersistedStatus] = useState<RouteSettlement['status'] | 'PENDING_SETTLEMENT'>(
     initialSettlement?.status ?? 'PENDING_SETTLEMENT'
@@ -199,6 +219,42 @@ export function RouteSettlementWorkspace({
   const [attachmentsByItemId, setAttachmentsByItemId] = useState<Record<string, SettlementItemAttachment[]>>({})
 
   const guide = guideData.guide
+
+  const handleStartSettlement = async () => {
+    if (!canCreateSettlement || isStartingSettlement || persistedSettlementId) return
+    if (!window.confirm(`Comenzar rendición\n\nSe creará una rendición para la guía ${guide.guide_number}.\nPodrás registrar efectivo, cheques, transferencias y diferencias.`)) return
+
+    setIsStartingSettlement(true)
+    setStartError(null)
+    setStartNotice(null)
+
+    const { data, error } = await createRouteSettlementFromGuide(guide.id)
+    if (error || !data) {
+      setStartError(formatStartError(error ?? 'No se pudo iniciar la rendición.'))
+      setIsStartingSettlement(false)
+      return
+    }
+
+    const settlementResult = data as CreateRouteSettlementResult
+    const settlementRes = await getRouteSettlementById(settlementResult.settlement_id)
+    if (settlementRes.error || !settlementRes.data) {
+      setStartError(formatStartError(settlementRes.error ?? 'La rendición fue iniciada, pero no se pudo cargar su detalle.'))
+      setIsStartingSettlement(false)
+      return
+    }
+
+    const loadedSettlement = settlementRes.data
+    setRows(buildInitialRows(guideData.items, loadedSettlement.items))
+    setSettlementItemIdMap(new Map(loadedSettlement.items.map((item: RouteSettlementItem) => [item.route_guide_item_id, item.id])))
+    setPersistedSettlementId(settlementResult.settlement_id)
+    setPersistedSettlementNumber(settlementResult.settlement_number)
+    setPersistedStatus(settlementResult.status as RouteSettlement['status'])
+    setNotes(loadedSettlement.notes ?? '')
+    setSavedNotes(loadedSettlement.notes ?? '')
+    setStartNotice(settlementResult.replayed ? 'La rendición ya había sido iniciada. Se abrió la existente.' : 'Rendición iniciada correctamente.')
+    setIsStartingSettlement(false)
+    onSettlementStarted?.(settlementResult)
+  }
 
   // ── Estado derivado ──────────────────────────────────────────────────────
   const dirtyRows = useMemo(() => rows.filter(r => r.isDirty), [rows])
@@ -677,8 +733,8 @@ export function RouteSettlementWorkspace({
               <h2 className="text-sm font-bold text-theme-text leading-tight">
               <span>Guía {guide.guide_number}</span>
               </h2>
-              {persistedSettlementId && initialSettlement && (
-                <span className="text-[11px] font-mono text-theme-text-muted">{initialSettlement.settlement_number}</span>
+              {persistedSettlementNumber && (
+                <span className="text-[11px] font-mono text-theme-text-muted">{persistedSettlementNumber}</span>
               )}
               <SettlementStatusBadge status={currentStatus} />
             </div>
@@ -727,13 +783,40 @@ export function RouteSettlementWorkspace({
         </div>
       </div>
 
-      {/* ── Aviso sin RR ── */}
+      {/* ── Estado previo al inicio ── */}
       {mode === 'no-rr' && !persistedSettlementId && (
-        <div className="shrink-0 flex items-start gap-2 px-3 py-2 rounded-lg border border-amber-400/30 bg-amber-50/50 dark:bg-amber-900/10">
-          <Info className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-          <p className="text-xs text-amber-800 dark:text-amber-300">
-            Esta guía aún no tiene rendición creada. La rendición se generará automáticamente al guardar cambios reales.
-          </p>
+        <div className="shrink-0 flex flex-col gap-3 px-3 py-3 rounded-lg border border-amber-400/30 bg-amber-50/50 dark:bg-amber-900/10 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-2">
+            <Info className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-xs font-bold text-amber-800 dark:text-amber-300">Guía lista para rendición</p>
+              <p className="text-xs text-amber-800/80 dark:text-amber-300/80">Aún no se ha iniciado una rendición para esta guía.</p>
+            </div>
+          </div>
+          {canCreateSettlement && (
+            <button
+              type="button"
+              onClick={handleStartSettlement}
+              disabled={isStartingSettlement}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-theme-accent px-3 py-1.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isStartingSettlement && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {isStartingSettlement ? 'Iniciando...' : 'Comenzar rendición'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {startNotice && (
+        <div className="shrink-0 rounded-lg border border-blue-400/25 bg-blue-50/50 px-3 py-2 text-xs text-blue-800 dark:bg-blue-900/10 dark:text-blue-300">
+          {startNotice}
+        </div>
+      )}
+
+      {startError && (
+        <div className="shrink-0 flex items-start gap-2 px-3 py-2 rounded-lg border border-red-400/30 bg-red-50/50 dark:bg-red-900/10">
+          <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+          <p className="text-xs text-red-800 dark:text-red-200">{startError}</p>
         </div>
       )}
 

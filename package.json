@@ -12,6 +12,7 @@
     "test:bsale-client-metrics-refresh": "node --experimental-strip-types --test scripts/test-bsale-client-metrics-refresh.mjs",
     "test:datetime": "node --experimental-strip-types --test scripts/test-datetime.mjs",
     "test:route-settlement-start": "node --test scripts/test-route-settlement-start-contract.mjs",
+    "test:route-settlement-start-ui": "node --test scripts/test-route-settlement-start-ui.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },
