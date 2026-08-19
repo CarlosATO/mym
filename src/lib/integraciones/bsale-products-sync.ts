@@ -12,6 +12,9 @@ export interface BsaleSyncStats {
   conflictCount: number
   cycleCount: number
   reassignmentCount: number
+  brandRecordsDetected: number
+  productsWithBrand: number
+  productsWithoutBrand: number
   withVariantId: number
   withBarcode: number
   withProductType: number
@@ -21,6 +24,7 @@ export interface BsaleSyncStats {
 }
 import { createClient } from '@supabase/supabase-js'
 import { planUniqueSafeProductUpdates } from './bsale-planner'
+import { collectBsaleBrandRecords, extractBsaleBrand } from './bsale-brand'
 import crypto from 'crypto'
 import {
   createSyncRun,
@@ -92,6 +96,9 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
     conflictCount: 0,
     cycleCount: 0,
     reassignmentCount: 0,
+    brandRecordsDetected: 0,
+    productsWithBrand: 0,
+    productsWithoutBrand: 0,
     withVariantId: 0,
     withBarcode: 0,
     withProductType: 0,
@@ -144,6 +151,9 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
 
     const integracionesRecords = []
     const productsRecords = []
+    const observedAt = new Date().toISOString()
+    const brandRecords = collectBsaleBrandRecords(allVariants, companyId, observedAt)
+    stats.brandRecordsDetected = brandRecords.length
 
     for (const v of allVariants) {
       const bsaleVariantId = v.id
@@ -156,6 +166,10 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
       const bsaleVariantState = v.state ?? 0
       const bsaleTypeId = v.product?.product_type?.id
       const bsaleTypeName = v.product?.product_type?.name
+      const bsaleBrand = extractBsaleBrand(v.product)
+
+      if (bsaleBrand.id === null) stats.productsWithoutBrand++
+      else stats.productsWithBrand++
 
       let description = v.product?.name || ''
       if (v.description && v.description.trim() !== '') {
@@ -191,8 +205,10 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
         bsale_product_type_id: bsaleTypeId ? String(bsaleTypeId) : null,
         bsale_product_type_name: bsaleTypeName || null,
         product_type: bsaleTypeName || null,
+        bsale_brand_id: bsaleBrand.id,
+        bsale_brand_href: bsaleBrand.href,
         is_active: bsaleProductState === 0 && bsaleVariantState === 0,
-        last_bsale_sync_at: new Date().toISOString()
+        last_bsale_sync_at: observedAt
       })
     }
 
@@ -201,7 +217,7 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
     let pOffset = 0
     while (true) {
       const { data: page, error: fetchErr } = await admin.schema('adquisiciones').from('products')
-        .select('id, sku, bsale_variant_id, description, barcode, bsale_product_state, bsale_variant_state, bsale_product_type_id, bsale_product_type_name, product_type, is_active')
+        .select('id, sku, bsale_variant_id, description, barcode, bsale_product_state, bsale_variant_state, bsale_product_type_id, bsale_product_type_name, product_type, bsale_brand_id, bsale_brand_href, is_active')
         .eq('company_id', companyId)
         .range(pOffset, pOffset + 999)
         
@@ -250,6 +266,8 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
           String(ext.bsale_product_type_id || '') === String(rec.bsale_product_type_id || '') &&
           (ext.bsale_product_type_name || null) === (rec.bsale_product_type_name || null) &&
           (ext.product_type || null) === (rec.product_type || null) &&
+          (ext.bsale_brand_id ?? null) === (rec.bsale_brand_id ?? null) &&
+          (ext.bsale_brand_href || null) === (rec.bsale_brand_href || null) &&
           ext.is_active === rec.is_active
 
         if (isUnchanged) {
@@ -265,6 +283,8 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
             bsale_product_type_id: rec.bsale_product_type_id,
             bsale_product_type_name: rec.bsale_product_type_name,
             product_type: rec.product_type,
+            bsale_brand_id: rec.bsale_brand_id,
+            bsale_brand_href: rec.bsale_brand_href,
             is_active: rec.is_active,
             last_bsale_sync_at: rec.last_bsale_sync_at,
             company_id: companyId
@@ -312,6 +332,8 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
         bsale_product_type_id: u.bsale_product_type_id,
         bsale_product_type_name: u.bsale_product_type_name,
         product_type: u.product_type,
+        bsale_brand_id: u.bsale_brand_id,
+        bsale_brand_href: u.bsale_brand_href,
         is_active: u.is_active,
         last_bsale_sync_at: u.last_bsale_sync_at
       }))
@@ -341,6 +363,20 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
         stats.insertedCount += chunk.length
       }
     }
+
+    if (brandRecords.length > 0) {
+      const { error: brandError } = await admin.schema('integraciones').from('bsale_brands').upsert(brandRecords, {
+        onConflict: 'company_id,bsale_brand_id',
+        ignoreDuplicates: false
+      })
+      if (brandError) {
+        stats.errorCount++
+        if (runId) await recordSyncError({ runId, companyId, provider, entity, errorMessage: brandError.message })
+        throw brandError
+      }
+    }
+
+    console.log(`[bsale-products-sync] brands detected=${stats.brandRecordsDetected} withBrand=${stats.productsWithBrand} withoutBrand=${stats.productsWithoutBrand}`)
 
     if (runId) {
       await finishSyncRun({ 
