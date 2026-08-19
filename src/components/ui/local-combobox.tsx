@@ -91,7 +91,7 @@ export function LocalCombobox({ value, onChange, options, placeholder = "Selecci
         <>
           <div className="fixed inset-0 z-40" onClick={() => { setOpen(false); setSearch(''); }} />
           <div
-            className="fixed overflow-y-auto bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl ring-1 ring-black/5 dark:ring-white/10 z-[9999] p-1.5 space-y-0.5 text-left"
+            className="fixed z-[9999] overflow-y-auto rounded-xl border border-theme-border bg-theme-surface p-1.5 text-left text-theme-text shadow-2xl ring-1 ring-theme-border/20 space-y-0.5"
             onMouseDown={e => e.stopPropagation()}
             style={{
               top: dropdownRect?.top ?? 0,
@@ -101,7 +101,7 @@ export function LocalCombobox({ value, onChange, options, placeholder = "Selecci
             }}
           >
             {filtered.length === 0 && (
-              <div className="px-3 py-2 text-[11px] font-medium text-slate-500 dark:text-slate-400 flex justify-between items-center">
+              <div className="flex items-center justify-between px-3 py-2 text-[11px] font-medium text-theme-text-muted">
                 <span>Sin resultados</span>
                 {onCreateNew && search.trim() && (
                   <button
@@ -114,7 +114,7 @@ export function LocalCombobox({ value, onChange, options, placeholder = "Selecci
                     }}
                     className="text-theme-accent hover:underline ml-2"
                   >
-                    Crear "{search.trim()}"
+                     Crear &quot;{search.trim()}&quot;
                   </button>
                 )}
               </div>
@@ -133,7 +133,7 @@ export function LocalCombobox({ value, onChange, options, placeholder = "Selecci
                   'w-full text-left px-2.5 py-2 text-[11px] rounded-lg transition-colors truncate',
                   opt.value === value
                     ? 'bg-theme-accent text-white font-bold shadow-sm'
-                    : 'text-slate-800 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-100 dark:hover:bg-slate-800 dark:hover:text-white font-semibold'
+                     : 'font-semibold text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text'
                 )}
                 title={opt.label}
               >

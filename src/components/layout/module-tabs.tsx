@@ -30,7 +30,7 @@ export function ModuleTabs({ tabs, activeTab, onTabChange }: ModuleTabsProps) {
                 className={cn(
                   "h-full px-4 text-xs font-semibold border-b-2 transition-all shrink-0 flex items-center justify-center gap-1.5 relative",
                   isActive
-                    ? "border-theme-accent text-theme-text bg-theme-accent/12 shadow-[inset_0_-1px_0_rgba(255,255,255,0.08)]"
+                     ? "border-theme-accent text-theme-text bg-theme-accent/12 shadow-sm"
                     : "border-transparent text-theme-text-muted hover:text-theme-text hover:border-theme-border/60 hover:bg-theme-text/5 font-medium"
                 )}
               >
@@ -44,7 +44,7 @@ export function ModuleTabs({ tabs, activeTab, onTabChange }: ModuleTabsProps) {
         {/* Retorno al Portal */}
         <Link
           href="/dashboard"
-          className="flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-bold text-theme-text hover:text-theme-text hover:bg-white/5 transition-all shrink-0 border border-white/10 hover:border-white/20 bg-theme-surface/50"
+          className="flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-bold text-theme-text hover:text-theme-text hover:bg-theme-text/5 transition-all shrink-0 border border-theme-border hover:border-theme-border-accent/50 bg-theme-surface/50"
         >
           <LucideIcons.ArrowLeft className="h-3 w-3 text-theme-accent" />
           <span>Portal</span>

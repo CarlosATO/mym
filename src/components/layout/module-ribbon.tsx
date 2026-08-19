@@ -1,6 +1,7 @@
 'use client'
 
 import * as LucideIcons from 'lucide-react'
+import type { ComponentType } from 'react'
 import { cn } from '@/lib/utils'
 
 export interface RibbonAction {
@@ -19,7 +20,7 @@ interface ModuleRibbonProps {
 
 function getIcon(iconName?: string) {
   if (!iconName) return LucideIcons.Box
-  const Icon = (LucideIcons as Record<string, any>)[iconName]
+  const Icon = (LucideIcons as unknown as Record<string, ComponentType<{ className?: string }>>)[iconName]
   return Icon ?? LucideIcons.Box
 }
 
@@ -50,7 +51,7 @@ export function ModuleRibbon({ actions, activeActionId }: ModuleRibbonProps) {
                   isSelected
                     ? "bg-theme-accent/18 border-theme-accent/60 text-theme-text shadow-sm ring-1 ring-theme-accent/25"
                     : "bg-theme-text/5 border-theme-border/60 text-theme-text-muted hover:text-theme-text hover:border-theme-border-accent/50 hover:bg-theme-text/10",
-                  isDisabled && "opacity-65 cursor-not-allowed hover:bg-white/5 hover:border-white/10 text-theme-text-muted"
+                   isDisabled && "opacity-65 cursor-not-allowed hover:bg-theme-text/5 hover:border-theme-border text-theme-text-muted"
                 )}
               >
                 {isSelected && <span className="absolute left-1 top-1 bottom-1 w-0.5 rounded-full bg-theme-accent" />}

@@ -101,17 +101,17 @@ export function WmsShell({ children, profile, pageTitle, breadcrumb, compactSurf
     <div className="min-h-screen bg-theme-bg text-foreground">
       <AppTopbar profile={profile as never} activeCompany={activeCompany} permissions={permissions} showPortalLink variant="wms" sidebarMode={effectiveCollapsed ? 'compact' : 'expanded'} />
 
-      {mobileOpen && <button aria-label="Cerrar navegación" className="fixed inset-0 z-30 bg-slate-950/50 md:hidden" onClick={() => setMobileOpen(false)} />}
+      {mobileOpen && <button aria-label="Cerrar navegación" className="fixed inset-0 z-30 bg-theme-sidebar-bg/70 md:hidden" onClick={() => setMobileOpen(false)} />}
 
       <aside className={cn(
-        'fixed left-3 top-3 bottom-3 z-40 flex flex-col overflow-hidden rounded-[20px] border border-white/10 bg-[#102b4a] text-white shadow-[0_14px_35px_rgba(15,39,68,0.14)] transition-[width,transform] duration-200',
+        'fixed left-3 top-3 bottom-3 z-40 flex flex-col overflow-hidden rounded-[20px] border border-theme-sidebar-border bg-theme-sidebar-bg text-theme-sidebar-text shadow-lg transition-[width,transform] duration-200',
         sidebarWidth,
         mobileOpen ? 'translate-x-0 w-[244px]' : '-translate-x-[calc(100%+0.75rem)] md:translate-x-0'
       )}>
-        <div className={cn('flex h-[76px] shrink-0 items-center border-b border-white/10 bg-white/[0.025] px-4', effectiveCollapsed && !mobileOpen && 'md:justify-center md:px-2')}>
+        <div className={cn('flex h-[76px] shrink-0 items-center border-b border-theme-sidebar-border bg-theme-sidebar-surface px-4', effectiveCollapsed && !mobileOpen && 'md:justify-center md:px-2')}>
           <div className="min-w-0">
-            <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-sky-300">WMS</p>
-            {(!effectiveCollapsed || mobileOpen) && <p className="mt-1 truncate text-sm font-medium text-white/75">Gestión de Bodega</p>}
+            <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-theme-sidebar-accent">WMS</p>
+            {(!effectiveCollapsed || mobileOpen) && <p className="mt-1 truncate text-sm font-medium text-theme-sidebar-text">Gestión de Bodega</p>}
           </div>
         </div>
 
@@ -121,7 +121,7 @@ export function WmsShell({ children, profile, pageTitle, breadcrumb, compactSurf
             const groupActive = group.ids.includes(activeItem.id)
             return (
               <div key={group.label} className="mt-5">
-                {(!effectiveCollapsed || mobileOpen) && <p className={cn('mb-1 px-3 text-[10px] font-bold uppercase tracking-[0.16em]', groupActive ? 'text-sky-300' : 'text-white/40')}>{group.label}</p>}
+                {(!effectiveCollapsed || mobileOpen) && <p className={cn('mb-1 px-3 text-[10px] font-bold uppercase tracking-[0.16em]', groupActive ? 'text-theme-sidebar-accent' : 'text-theme-sidebar-muted')}>{group.label}</p>}
                 {group.ids.map(id => {
                   const item = navItems.find(navItem => navItem.id === id)!
                   return <NavButton key={item.id} item={item} active={activeItem.id === item.id} collapsed={effectiveCollapsed && !mobileOpen} onClick={navigate} />
@@ -131,8 +131,8 @@ export function WmsShell({ children, profile, pageTitle, breadcrumb, compactSurf
           })}
         </nav>
 
-        <div className={cn('border-t border-white/10 bg-black/5 p-3', effectiveCollapsed && !mobileOpen && 'md:px-2')}>
-          <button title={collapsed ? 'Expandir navegación' : responsiveCollapsed ? 'Navegación compacta en este ancho' : 'Contraer navegación'} onClick={toggleCollapsed} className="hidden w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold text-white/60 hover:bg-white/10 hover:text-white md:flex">
+        <div className={cn('border-t border-theme-sidebar-border bg-theme-sidebar-surface p-3', effectiveCollapsed && !mobileOpen && 'md:px-2')}>
+          <button title={collapsed ? 'Expandir navegación' : responsiveCollapsed ? 'Navegación compacta en este ancho' : 'Contraer navegación'} onClick={toggleCollapsed} className="hidden w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold text-theme-sidebar-muted hover:bg-theme-sidebar-hover hover:text-theme-sidebar-text md:flex">
             {effectiveCollapsed ? <LucideIcons.PanelLeftOpen className="h-4 w-4" /> : <LucideIcons.PanelLeftClose className="h-4 w-4" />}
             {!effectiveCollapsed && 'Contraer menú'}
           </button>
@@ -148,7 +148,7 @@ export function WmsShell({ children, profile, pageTitle, breadcrumb, compactSurf
           <div className="mb-3 flex min-w-0 items-center gap-2 px-1 text-[11px] text-theme-text-muted">
             {breadcrumb.map((part, index) => <span key={`${part}-${index}`} className={cn(index === breadcrumb.length - 1 ? 'font-semibold text-theme-text' : 'text-theme-text-muted/70')}>{index > 0 && <span className="mr-2 text-theme-border">/</span>}{part}</span>)}
           </div>
-          <section className={cn('overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-[0_5px_18px_rgba(31,52,77,0.045)]', compactSurface ? 'min-h-0' : 'min-h-[calc(100vh-7.5rem)]')}>
+          <section className={cn('overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm', compactSurface ? 'min-h-0' : 'min-h-[calc(100vh-7.5rem)]')}>
             {children}
           </section>
         </main>
@@ -159,10 +159,10 @@ export function WmsShell({ children, profile, pageTitle, breadcrumb, compactSurf
 
 function NavButton({ item, active, collapsed, onClick }: { item: NavItem; active: boolean; collapsed: boolean; onClick: (item: NavItem) => void }) {
   return (
-    <button title={collapsed ? item.label : undefined} onClick={() => onClick(item)} className={cn('group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[13px] transition-colors', collapsed && 'md:justify-center md:px-2', active ? 'bg-sky-400/15 font-semibold text-white ring-1 ring-inset ring-sky-300/25' : 'text-white/65 hover:bg-white/10 hover:text-white')}>
-      <NavIcon name={item.icon} className={cn('h-[17px] w-[17px] shrink-0', active ? 'text-sky-300' : 'text-white/45 group-hover:text-white/75')} />
+    <button title={collapsed ? item.label : undefined} onClick={() => onClick(item)} className={cn('group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[13px] transition-colors', collapsed && 'md:justify-center md:px-2', active ? 'bg-theme-sidebar-active/20 font-semibold text-theme-sidebar-active-text ring-1 ring-inset ring-theme-sidebar-accent/30' : 'text-theme-sidebar-muted hover:bg-theme-sidebar-hover hover:text-theme-sidebar-text')}>
+      <NavIcon name={item.icon} className={cn('h-[17px] w-[17px] shrink-0', active ? 'text-theme-sidebar-accent' : 'text-theme-sidebar-muted group-hover:text-theme-sidebar-text')} />
       {!collapsed && <span className="truncate">{item.label}</span>}
-      {active && !collapsed && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-sky-300" />}
+      {active && !collapsed && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-theme-sidebar-accent" />}
     </button>
   )
 }

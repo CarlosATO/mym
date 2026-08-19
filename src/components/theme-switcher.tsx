@@ -9,6 +9,7 @@ export function ThemeSwitcher() {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const { theme, setTheme } = useTheme()
+  const effectiveTheme = theme === 'dark' ? 'dark' : 'light'
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -35,57 +36,31 @@ export function ThemeSwitcher() {
             <p className="px-2 text-[10px] font-semibold text-theme-text-muted/70 mb-1.5 uppercase tracking-wider">Tema Visual</p>
             <div className="flex flex-col gap-0.5">
               <button
-                onClick={() => { setTheme('blue'); setOpen(false); }}
+                onClick={() => { setTheme('light'); setOpen(false); }}
                 className={cn(
                   "flex items-center justify-between w-full px-2 py-1.5 text-xs rounded-md transition-colors",
-                  theme === 'blue' ? "bg-theme-text/10 text-theme-text" : "text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text"
+                  effectiveTheme === 'light' ? "bg-theme-text/10 text-theme-text" : "text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text"
                 )}
               >
                 <span className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-slate-700 border border-slate-400" />
-                  Azul Corporativo
+                  <div className="w-2.5 h-2.5 rounded-full bg-white border border-slate-300" />
+                  Modo Claro
                 </span>
-                {theme === 'blue' && <LucideIcons.Check className="w-3 h-3 text-theme-accent" />}
+                {effectiveTheme === 'light' && <LucideIcons.Check className="w-3 h-3 text-theme-accent" />}
               </button>
               <button
                 onClick={() => { setTheme('dark'); setOpen(false); }}
                 className={cn(
                   "flex items-center justify-between w-full px-2 py-1.5 text-xs rounded-md transition-colors",
-                  theme === 'dark' ? "bg-theme-text/10 text-theme-text" : "text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text"
+                  effectiveTheme === 'dark' ? "bg-theme-text/10 text-theme-text" : "text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text"
                 )}
               >
                 <span className="flex items-center gap-2">
                   <div className="w-2.5 h-2.5 rounded-full bg-neutral-900 border border-neutral-600" />
                   Modo Oscuro
                 </span>
-                {theme === 'dark' && <LucideIcons.Check className="w-3 h-3 text-theme-accent" />}
+                {effectiveTheme === 'dark' && <LucideIcons.Check className="w-3 h-3 text-theme-accent" />}
               </button>
-                <button
-                  onClick={() => { setTheme('purple'); setOpen(false); }}
-                  className={cn(
-                    "flex items-center justify-between w-full px-2 py-1.5 text-xs rounded-md transition-colors",
-                    theme === 'purple' ? "bg-theme-text/10 text-theme-text" : "text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text"
-                  )}
-                >
-                  <span className="flex items-center gap-2">
-                    <div className="w-2.5 h-2.5 rounded-full bg-purple-900 border border-purple-400" />
-                    Datix Purple
-                  </span>
-                  {theme === 'purple' && <LucideIcons.Check className="w-3 h-3 text-theme-accent" />}
-                </button>
-                <button
-                  onClick={() => { setTheme('light'); setOpen(false); }}
-                  className={cn(
-                    "flex items-center justify-between w-full px-2 py-1.5 text-xs rounded-md transition-colors",
-                    theme === 'light' ? "bg-theme-text/10 text-theme-text" : "text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text"
-                  )}
-                >
-                  <span className="flex items-center gap-2">
-                    <div className="w-2.5 h-2.5 rounded-full bg-white border border-slate-300" />
-                    Modo Claro
-                  </span>
-                  {theme === 'light' && <LucideIcons.Check className="w-3 h-3 text-theme-accent" />}
-                </button>
             </div>
           </div>
         </>

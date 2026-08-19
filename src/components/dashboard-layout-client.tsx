@@ -38,7 +38,7 @@ export function DashboardLayoutClient({ children, profile, permissions, activeCo
   // Si no hay empresa activa, bloquear interacción y pedir selección
   if (!activeCompany) {
     return (
-      <div className="min-h-screen relative dark text-foreground flex items-center justify-center p-4">
+      <div className="min-h-screen relative text-foreground flex items-center justify-center p-4">
         <div className="fixed inset-0 bg-gradient-to-br from-theme-bg-gradient-start via-theme-bg-gradient-mid to-theme-bg-gradient-end -z-10" />
         <div className="w-full max-w-md bg-theme-surface/90 border border-white/10 backdrop-blur-md rounded-2xl p-6 shadow-2xl text-center space-y-6">
           <div className="w-16 h-16 mx-auto rounded-2xl bg-theme-accent/20 flex items-center justify-center text-theme-accent shadow-lg shadow-theme-accent/10">
@@ -66,7 +66,7 @@ export function DashboardLayoutClient({ children, profile, permissions, activeCo
 
   if (isModulePage) {
     return (
-      <div className="min-h-screen relative dark text-foreground">
+      <div className="min-h-screen relative text-foreground">
         <div className="fixed inset-0 bg-gradient-to-br from-theme-bg-gradient-start via-theme-bg-gradient-mid to-theme-bg-gradient-end -z-10" />
         <div className="fixed inset-0 opacity-[0.025] -z-10" style={{
           backgroundImage: `radial-gradient(circle at 25% 25%, white 1px, transparent 1px), radial-gradient(circle at 75% 75%, white 1px, transparent 1px)`,
@@ -80,7 +80,7 @@ export function DashboardLayoutClient({ children, profile, permissions, activeCo
   }
 
   return (
-    <div className="min-h-screen relative dark text-foreground">
+    <div className="min-h-screen relative text-foreground">
       <div className="fixed inset-0 bg-gradient-to-br from-theme-bg-gradient-start via-theme-bg-gradient-mid to-theme-bg-gradient-end -z-10" />
       <div className="fixed inset-0 opacity-[0.025] -z-10" style={{
         backgroundImage: `radial-gradient(circle at 25% 25%, white 1px, transparent 1px), radial-gradient(circle at 75% 75%, white 1px, transparent 1px)`,

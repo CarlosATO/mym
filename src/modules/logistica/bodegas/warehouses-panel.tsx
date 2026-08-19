@@ -174,11 +174,11 @@ export function WarehousesPanel() {
           </div>
           <div className="p-6 lg:p-8">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-5">
-              <div className="space-y-1"><label className="text-xs text-theme-text-muted/60">Código *</label><input name="code" defaultValue={form.code} disabled={!!editId} className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text disabled:text-gray-400 dark:disabled:text-theme-text-muted/50 focus:outline-none focus:ring-1 focus:ring-theme-accent/30" /></div>
+              <div className="space-y-1"><label className="text-xs text-theme-text-muted/60">Código *</label><input name="code" defaultValue={form.code} disabled={!!editId} className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text disabled:text-theme-text-muted/50 focus:outline-none focus:ring-1 focus:ring-theme-accent/30" /></div>
               <div className="space-y-1"><label className="text-xs text-theme-text-muted/60">Nombre *</label><input name="name" defaultValue={form.name} className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" /></div>
               <div className="space-y-1"><label className="text-xs text-theme-text-muted/60">Tipo *</label>
                 <select name="warehouse_type" defaultValue={form.warehouse_type} className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30">
-                  {typeOpts.map(t => <option key={t} value={t} className="bg-white dark:bg-theme-surface">{t}</option>)}
+                  {typeOpts.map(t => <option key={t} value={t} className="bg-theme-surface text-theme-text">{t}</option>)}
                 </select>
               </div>
               <div className="space-y-1"><label className="text-xs text-theme-text-muted/60">Encargado</label><input name="manager_name" defaultValue={form.manager_name} className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" /></div>
@@ -187,22 +187,22 @@ export function WarehousesPanel() {
               <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4 space-y-1"><label className="text-xs text-theme-text-muted/60">Dirección</label><input name="address" defaultValue={form.address} className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" /></div>
               <div className="space-y-1"><label className="text-xs text-theme-text-muted/60">Región</label>
                 <select value={form.region} onChange={e => handleRegionChange(e.target.value)} className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30">
-                  <option value="" className="bg-white dark:bg-theme-surface">Seleccionar región</option>
-                  {regions.map(r => <option key={r.id} value={r.id} className="bg-white dark:bg-theme-surface">{r.name}</option>)}
+                  <option value="" className="bg-theme-surface text-theme-text">Seleccionar región</option>
+                  {regions.map(r => <option key={r.id} value={r.id} className="bg-theme-surface text-theme-text">{r.name}</option>)}
                 </select>
                 <input name="region" type="hidden" value={form.region_name || form.region} />
               </div>
               <div className="space-y-1"><label className="text-xs text-theme-text-muted/60">Comuna</label>
                 <select name="commune" value={form.commune} onChange={e => setForm(p => ({ ...p, commune: e.target.value }))} disabled={!form.region} className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text disabled:text-theme-text-muted/50 focus:outline-none focus:ring-1 focus:ring-theme-accent/30">
-                  <option value="" className="bg-white dark:bg-theme-surface">Seleccionar comuna</option>
-                  {communes.map(c => <option key={c.id} value={c.name} className="bg-white dark:bg-theme-surface">{c.name}</option>)}
+                  <option value="" className="bg-theme-surface text-theme-text">Seleccionar comuna</option>
+                  {communes.map(c => <option key={c.id} value={c.name} className="bg-theme-surface text-theme-text">{c.name}</option>)}
                 </select>
               </div>
               <div className="space-y-1"><label className="text-xs text-theme-text-muted/60">Ciudad</label><input name="city" defaultValue={form.city} className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" /></div>
               <div className="space-y-1"><label className="text-xs text-theme-text-muted/60">Capacidad m²</label><input name="capacity_m2" type="number" step="0.01" defaultValue={form.capacity_m2} className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" /></div>
               <div className="space-y-1"><label className="text-xs text-theme-text-muted/60">Capacidad pallets</label><input name="capacity_pallets" type="number" defaultValue={form.capacity_pallets} className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" /></div>
-              <div className="space-y-1"><label className="text-xs text-theme-text-muted/60">Predeterminada</label><select name="is_default" defaultValue={form.is_default} className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30"><option value="false" className="bg-white dark:bg-theme-surface">NO</option><option value="true" className="bg-white dark:bg-theme-surface">SI</option></select></div>
-              <div className="space-y-1"><label className="text-xs text-theme-text-muted/60">Estado</label><select name="status" defaultValue={form.status} className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30"><option value="ACTIVE" className="bg-white dark:bg-theme-surface">ACTIVA</option><option value="INACTIVE" className="bg-white dark:bg-theme-surface">INACTIVA</option><option value="BLOCKED" className="bg-white dark:bg-theme-surface">BLOQUEADA</option></select></div>
+              <div className="space-y-1"><label className="text-xs text-theme-text-muted/60">Predeterminada</label><select name="is_default" defaultValue={form.is_default} className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30"><option value="false" className="bg-theme-surface text-theme-text">NO</option><option value="true" className="bg-theme-surface text-theme-text">SI</option></select></div>
+              <div className="space-y-1"><label className="text-xs text-theme-text-muted/60">Estado</label><select name="status" defaultValue={form.status} className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30"><option value="ACTIVE" className="bg-theme-surface text-theme-text">ACTIVA</option><option value="INACTIVE" className="bg-theme-surface text-theme-text">INACTIVA</option><option value="BLOCKED" className="bg-theme-surface text-theme-text">BLOQUEADA</option></select></div>
               <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4 space-y-1"><label className="text-xs text-theme-text-muted/60">Observaciones</label><textarea name="notes" defaultValue={form.notes} rows={2} className="w-full rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30 resize-none" /></div>
             </div>
           </div>
@@ -249,15 +249,15 @@ export function WarehousesPanel() {
               {showFilters && (
                 <div className="flex flex-wrap items-center gap-3 border-t border-theme-border/40 pt-3 animate-in fade-in slide-in-from-top-2 duration-200">
                 <span className="mr-1 text-[10px] font-bold uppercase tracking-[0.12em] text-theme-text-muted/60">Filtrar por</span>
-                <select value={filters.warehouse_type ?? ''} onChange={e => setFilter('warehouse_type', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30">
-                  <option value="" className="bg-white dark:bg-theme-surface">Todos los tipos</option>
-                  {typeOpts.map(t => <option key={t} value={t} className="bg-white dark:bg-theme-surface">{t}</option>)}
+                 <select value={filters.warehouse_type ?? ''} onChange={e => setFilter('warehouse_type', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30">
+                   <option value="" className="bg-theme-surface text-theme-text">Todos los tipos</option>
+                   {typeOpts.map(t => <option key={t} value={t} className="bg-theme-surface text-theme-text">{t}</option>)}
                 </select>
                 <select value={filters.status ?? ''} onChange={e => setFilter('status', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30">
-                  <option value="" className="bg-white dark:bg-theme-surface">Todos los estados</option>
-                  <option value="ACTIVE" className="bg-white dark:bg-theme-surface">ACTIVA</option>
-                  <option value="INACTIVE" className="bg-white dark:bg-theme-surface">INACTIVA</option>
-                  <option value="BLOCKED" className="bg-white dark:bg-theme-surface">BLOQUEADA</option>
+                   <option value="" className="bg-theme-surface text-theme-text">Todos los estados</option>
+                   <option value="ACTIVE" className="bg-theme-surface text-theme-text">ACTIVA</option>
+                   <option value="INACTIVE" className="bg-theme-surface text-theme-text">INACTIVA</option>
+                   <option value="BLOCKED" className="bg-theme-surface text-theme-text">BLOQUEADA</option>
                 </select>
                 <button onClick={() => { setFilters({ page: 1, pageSize: 50 }); setSelected(new Set()) }} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-theme-border px-3 text-xs text-theme-text-muted/70 transition-colors hover:bg-theme-text/5 hover:text-theme-text"><X className="h-3.5 w-3.5" /> Limpiar filtros</button>
                 </div>
@@ -269,7 +269,7 @@ export function WarehousesPanel() {
         </>
       )}
 
-      {preview && (<div className="rounded-2xl border border-theme-border bg-theme-surface p-5 space-y-4"><div className="flex items-center justify-between"><h3 className="text-sm font-semibold text-theme-text">Vista previa - {preview.rows.length} filas</h3><div className="flex gap-2"><button onClick={() => setPreview(null)} className="px-3 py-1.5 rounded-lg border border-theme-border text-xs text-theme-text-muted/70 hover:text-theme-text">Cancelar</button>{preview.errors.length === 0 && preview.rows.length > 0 && <button onClick={handleImportConfirm} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-xs text-white font-semibold hover:bg-emerald-500">Confirmar</button>}</div></div>{preview.errors.length > 0 && <div className="bg-red-100 dark:bg-red-500/10 border border-red-300 dark:border-red-500/20 rounded-lg p-3 space-y-1">{preview.errors.map((e, i) => <p key={i} className="text-xs text-red-500 dark:text-red-400">{e}</p>)}</div>}</div>)}
+       {preview && (<div className="rounded-2xl border border-theme-border bg-theme-surface p-5 space-y-4"><div className="flex items-center justify-between"><h3 className="text-sm font-semibold text-theme-text">Vista previa - {preview.rows.length} filas</h3><div className="flex gap-2"><button onClick={() => setPreview(null)} className="px-3 py-1.5 rounded-lg border border-theme-border text-xs text-theme-text-muted/70 hover:text-theme-text">Cancelar</button>{preview.errors.length === 0 && preview.rows.length > 0 && <button onClick={handleImportConfirm} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-xs text-white font-semibold hover:bg-emerald-500">Confirmar</button>}</div></div>{preview.errors.length > 0 && <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 space-y-1">{preview.errors.map((e, i) => <p key={i} className="text-xs text-red-600 dark:text-red-400">{e}</p>)}</div>}</div>)}
 
       {loading ? (<div className="rounded-2xl border border-theme-border bg-theme-surface p-10 text-center"><p className="text-theme-text-muted/50 text-sm">Cargando...</p></div>)
       : data.length === 0 ? (<div className="rounded-2xl border border-theme-border bg-theme-surface p-10 text-center"><p className="text-theme-text-muted/50 text-sm">No hay bodegas registradas.</p></div>)
@@ -335,9 +335,9 @@ export function WarehousesPanel() {
           <div className="flex items-center gap-2">
             <span className="text-theme-text-muted/50">Mostrar</span>
             <select value={filters.pageSize} onChange={e => setFilter('pageSize', e.target.value)} className="h-8 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30">
-              <option value={25} className="bg-white dark:bg-theme-surface">25</option>
-              <option value={50} className="bg-white dark:bg-theme-surface">50</option>
-              <option value={100} className="bg-white dark:bg-theme-surface">100</option>
+               <option value={25} className="bg-theme-surface text-theme-text">25</option>
+               <option value={50} className="bg-theme-surface text-theme-text">50</option>
+               <option value={100} className="bg-theme-surface text-theme-text">100</option>
             </select>
             <span className="text-theme-text-muted/60">de <strong className="font-semibold text-theme-text">{total.toLocaleString('es-CL')}</strong> registros</span>
           </div>

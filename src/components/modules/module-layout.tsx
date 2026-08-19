@@ -52,7 +52,7 @@ export function ModuleLayout({
 
   if (loading) {
     return (
-      <div className="min-h-screen relative dark text-foreground flex items-center justify-center">
+      <div className="min-h-screen relative text-foreground flex items-center justify-center">
         <div className="fixed inset-0 bg-gradient-to-br from-theme-bg-gradient-start via-theme-bg-gradient-mid to-theme-bg-gradient-end -z-10" />
         <div className="text-center space-y-4">
           <LucideIcons.Loader2 className="h-8 w-8 animate-spin text-theme-accent mx-auto" />
@@ -64,7 +64,7 @@ export function ModuleLayout({
 
   if (!activeCompany) {
     return (
-      <div className="min-h-screen relative dark text-foreground flex items-center justify-center p-4">
+      <div className="min-h-screen relative text-foreground flex items-center justify-center p-4">
         <div className="fixed inset-0 bg-gradient-to-br from-theme-bg-gradient-start via-theme-bg-gradient-mid to-theme-bg-gradient-end -z-10" />
         <div className="w-full max-w-md bg-theme-surface/90 border border-white/10 backdrop-blur-md rounded-2xl p-6 shadow-2xl text-center space-y-6">
           <div className="w-16 h-16 mx-auto rounded-2xl bg-theme-accent/20 flex items-center justify-center text-theme-accent shadow-lg shadow-theme-accent/10">
