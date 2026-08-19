@@ -40,17 +40,17 @@ export function WarehousesPanel() {
   const typeOpts = ['CENTRAL','SUCURSAL','TRANSITO','DEVOLUCIONES','CONSIGNACION','OTRO']
 
   return (
-    <div className="flex flex-col h-full bg-theme-surface overflow-hidden">
+    <div className="flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
       {msg && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2 text-sm text-theme-text-accent">{msg}</div>}
 
-      <div className="shrink-0 flex flex-col gap-4 p-5 border-b border-theme-border/60 bg-theme-text/[0.01]">
-        <div className="flex flex-wrap items-center gap-3">
+      <div className="shrink-0 flex flex-col gap-2.5 p-3 border-b border-theme-border/60 bg-theme-text/[0.01]">
+        <div className="flex flex-wrap items-center gap-2">
           <input type="text" value={filters.search ?? ''} onChange={e => setFilter('search', e.target.value)}
             placeholder="Buscar por código, nombre, ciudad, comuna..."
-            className="flex-1 min-w-[200px] h-10 rounded-xl border border-theme-border bg-theme-surface px-3 text-sm text-theme-text placeholder:text-gray-400 dark:placeholder:text-theme-text-muted/50 focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+            className="flex-1 min-w-[200px] h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-sm text-theme-text placeholder:text-gray-400 dark:placeholder:text-theme-text-muted/50 focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
         </div>
 
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap gap-2">
           <select value={filters.warehouse_type ?? ''} onChange={e => setFilter('warehouse_type', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30">
             <option value="" className="bg-white dark:bg-theme-surface">Todos los tipos</option>
             {typeOpts.map(t => <option key={t} value={t} className="bg-white dark:bg-theme-surface">{t}</option>)}
@@ -74,35 +74,35 @@ export function WarehousesPanel() {
           <table className="w-full text-sm border-collapse">
             <thead className="sticky top-0 z-10 bg-theme-surface">
               <tr className="border-b border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider">
-                <th className="text-left py-3 px-4 font-medium">Código</th>
-                <th className="text-left py-3 px-4 font-medium">Nombre</th>
-                <th className="text-left py-3 px-4 font-medium">Tipo</th>
-                <th className="text-left py-3 px-4 font-medium">Ubicación</th>
-                <th className="text-left py-3 px-4 font-medium">Encargado</th>
-                <th className="text-center py-3 px-4 font-medium">Capacidad</th>
-                <th className="text-center py-3 px-4 font-medium">Estado</th>
+                <th className="text-left py-2.5 px-4 font-medium">Código</th>
+                <th className="text-left py-2.5 px-4 font-medium">Nombre</th>
+                <th className="text-left py-2.5 px-4 font-medium">Tipo</th>
+                <th className="text-left py-2.5 px-4 font-medium">Ubicación</th>
+                <th className="text-left py-2.5 px-4 font-medium">Encargado</th>
+                <th className="text-center py-2.5 px-4 font-medium">Capacidad</th>
+                <th className="text-center py-2.5 px-4 font-medium">Estado</th>
               </tr>
             </thead>
             <tbody>
               {data.map(w => (
                 <tr key={w.id} className="border-b border-theme-border transition-colors hover:bg-theme-text/5">
-                  <td className="py-3 px-4 font-mono font-semibold text-theme-accent text-xs">{w.code}</td>
-                  <td className="py-3 px-4 font-medium text-theme-text flex items-center gap-2">
+                  <td className="py-2.5 px-4 font-mono font-semibold text-theme-accent text-xs">{w.code}</td>
+                  <td className="py-2.5 px-4 font-medium text-theme-text flex items-center gap-2">
                     {w.name} {w.is_default && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-theme-accent/10 text-theme-accent border border-theme-accent/20 uppercase">Default</span>}
                   </td>
-                  <td className="py-3 px-4 text-theme-text-muted/70 text-xs">{w.warehouse_type}</td>
-                  <td className="py-3 px-4 text-xs">
+                  <td className="py-2.5 px-4 text-theme-text-muted/70 text-xs">{w.warehouse_type}</td>
+                  <td className="py-2.5 px-4 text-xs">
                     <p className="text-theme-text">{w.commune || '—'}</p>
                     <p className="text-theme-text-muted/50">{w.address || ''}</p>
                   </td>
-                  <td className="py-3 px-4 text-xs">
+                  <td className="py-2.5 px-4 text-xs">
                     <p className="text-theme-text">{w.manager_name || '—'}</p>
                     {w.manager_phone && <p className="text-theme-text-muted/50">{w.manager_phone}</p>}
                   </td>
-                  <td className="py-3 px-4 text-center text-xs text-theme-text-muted/70">
+                  <td className="py-2.5 px-4 text-center text-xs text-theme-text-muted/70">
                     {w.capacity_pallets ? `${w.capacity_pallets} plts` : '—'}
                   </td>
-                  <td className="py-3 px-4 text-center">
+                  <td className="py-2.5 px-4 text-center">
                     <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-semibold border ${w.is_active ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-red-500/10 text-red-500 border-red-500/20'}`}>
                       {w.status}
                     </span>
@@ -115,7 +115,7 @@ export function WarehousesPanel() {
       )}
 
       {tp > 1 && (
-        <div className="shrink-0 flex items-center justify-between text-xs p-4 border-t border-theme-border/60 bg-theme-text/[0.01]">
+        <div className="shrink-0 flex items-center justify-between text-xs p-3 border-t border-theme-border/60 bg-theme-text/[0.01]">
           <div className="flex items-center gap-2">
             <span className="text-theme-text-muted/50">Mostrar</span>
             <select value={filters.pageSize} onChange={e => setFilter('pageSize', e.target.value)} className="h-8 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30">

@@ -390,10 +390,10 @@ export function CatalogPanel() {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-theme-surface">
+    <div className="flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
       {message && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
 
-      <div className="shrink-0 flex flex-col gap-4 p-5 border-b border-theme-border/60 bg-theme-text/[0.01]">
+      <div className="shrink-0 flex flex-col gap-2.5 p-3 border-b border-theme-border/60 bg-theme-text/[0.01]">
         
         {/* Sync Status */}
         <div className="flex w-full">
@@ -401,23 +401,23 @@ export function CatalogPanel() {
         </div>
 
         {/* Barra superior de herramientas */}
-        <div className="flex flex-col md:flex-row items-center gap-3 w-full">
+        <div className="flex flex-col md:flex-row items-center gap-2 w-full">
           {/* Búsqueda */}
           <div className="relative flex-1 w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted/50" />
             <input type="text" value={filters.search ?? ''} onChange={e => setFilter('search', e.target.value)}
               placeholder="Buscar por SKU, descripción, marca o categoría..."
-              className="w-full h-11 pl-10 pr-4 rounded-xl border border-theme-border bg-theme-surface hover:bg-theme-text/5 focus:bg-theme-surface focus:ring-2 focus:ring-theme-accent/20 focus:border-theme-accent transition-all text-sm text-theme-text placeholder:text-theme-text-muted/40" />
+              className="w-full h-9 pl-10 pr-4 rounded-lg border border-theme-border bg-theme-surface hover:bg-theme-text/5 focus:bg-theme-surface focus:ring-2 focus:ring-theme-accent/20 focus:border-theme-accent transition-all text-sm text-theme-text placeholder:text-theme-text-muted/40" />
           </div>
 
           <div className="flex items-center gap-2 w-full md:w-auto">
             {/* Toggle Tabla/Tarjetas */}
-            <div className="flex items-center p-1 bg-theme-text/5 border border-theme-border rounded-xl">
-              <button onClick={() => setViewMode('table')} className={`flex items-center justify-center w-10 h-8 md:w-auto md:px-3 text-xs font-semibold rounded-lg transition-all ${viewMode === 'table' ? 'bg-theme-surface shadow-sm text-theme-text' : 'text-theme-text-muted/60 hover:text-theme-text'}`}>
+            <div className="flex items-center p-0.5 bg-theme-text/5 border border-theme-border rounded-lg">
+              <button onClick={() => setViewMode('table')} className={`flex items-center justify-center w-9 h-7 md:w-auto md:px-2.5 text-xs font-semibold rounded-md transition-all ${viewMode === 'table' ? 'bg-theme-surface shadow-sm text-theme-text' : 'text-theme-text-muted/60 hover:text-theme-text'}`}>
                 <List className="w-4 h-4" />
                 <span className="hidden md:inline ml-2">Tabla</span>
               </button>
-              <button onClick={() => setViewMode('cards')} className={`flex items-center justify-center w-10 h-8 md:w-auto md:px-3 text-xs font-semibold rounded-lg transition-all ${viewMode === 'cards' ? 'bg-theme-surface shadow-sm text-theme-text' : 'text-theme-text-muted/60 hover:text-theme-text'}`}>
+              <button onClick={() => setViewMode('cards')} className={`flex items-center justify-center w-9 h-7 md:w-auto md:px-2.5 text-xs font-semibold rounded-md transition-all ${viewMode === 'cards' ? 'bg-theme-surface shadow-sm text-theme-text' : 'text-theme-text-muted/60 hover:text-theme-text'}`}>
                 <Grid className="w-4 h-4" />
                 <span className="hidden md:inline ml-2">Tarjetas</span>
               </button>
@@ -425,8 +425,8 @@ export function CatalogPanel() {
 
             {/* Opciones Importar/Exportar */}
             <div className="relative group z-10">
-              <button className="h-11 px-3 md:px-4 rounded-xl border border-theme-border bg-theme-surface hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text text-sm font-semibold transition-all flex items-center justify-center gap-2">
-                <MoreHorizontal className="w-5 h-5 md:w-4 md:h-4" />
+              <button className="h-9 px-2.5 md:px-3 rounded-lg border border-theme-border bg-theme-surface hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text text-sm font-semibold transition-all flex items-center justify-center gap-1.5">
+                <MoreHorizontal className="w-4 h-4" />
                 <span className="hidden md:inline">Opciones</span>
               </button>
               <div className="absolute right-0 top-full mt-2 w-56 bg-theme-surface backdrop-blur-xl border border-theme-border rounded-2xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 p-2">
@@ -448,13 +448,13 @@ export function CatalogPanel() {
             </div>
 
             {/* Filtros Toggle */}
-            <button onClick={() => setShowFilters(!showFilters)} className={`h-11 px-3 md:px-4 rounded-xl border transition-all flex items-center justify-center gap-2 text-sm font-semibold ${showFilters ? 'bg-theme-text/10 border-theme-border text-theme-text' : 'bg-theme-surface border-theme-border hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text'}`}>
+            <button onClick={() => setShowFilters(!showFilters)} className={`h-9 px-2.5 md:px-3 rounded-lg border transition-all flex items-center justify-center gap-1.5 text-sm font-semibold ${showFilters ? 'bg-theme-text/10 border-theme-border text-theme-text' : 'bg-theme-surface border-theme-border hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text'}`}>
               <Filter className="w-4 h-4" />
               <span className="hidden md:inline">Filtros</span>
             </button>
 
             {/* Nuevo */}
-            <button onClick={() => { resetForm(); setShowForm(true) }} className="h-11 px-4 md:px-5 rounded-xl bg-theme-accent hover:bg-theme-accent-hover text-white text-sm font-bold transition-all shadow-lg shadow-theme-accent/20 flex items-center justify-center gap-2 ml-auto md:ml-0">
+            <button onClick={() => { resetForm(); setShowForm(true) }} className="h-9 px-3.5 md:px-4 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-sm font-bold transition-all shadow-lg shadow-theme-accent/20 flex items-center justify-center gap-1.5 ml-auto md:ml-0">
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">Nuevo</span>
             </button>
@@ -463,14 +463,14 @@ export function CatalogPanel() {
 
         {/* Panel de Filtros Expandible */}
         {showFilters && (
-          <div className="p-5 rounded-2xl border border-theme-border bg-theme-text/5 animate-in slide-in-from-top-2 duration-200">
-            <div className="flex items-center justify-between mb-4">
+          <div className="p-3.5 rounded-xl border border-theme-border bg-theme-text/5 animate-in slide-in-from-top-2 duration-200">
+            <div className="flex items-center justify-between mb-3">
               <h4 className="text-xs font-bold text-theme-text-muted/80 uppercase tracking-wider">Filtros Avanzados</h4>
               <button onClick={() => { setFilters({ page: 1, pageSize: 50 }); setSelected(new Set()) }} className="text-xs font-semibold text-theme-text-accent hover:text-theme-text flex items-center gap-1 transition-colors">
                 <X className="w-3 h-3" /> Limpiar filtros
               </button>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-2">
               <select value={filters.brand ?? ''} onChange={e => setFilter('brand', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40 appearance-none">
                 <option value="">Todas las marcas</option>
                 {classifierOptions.BRAND?.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
@@ -565,13 +565,13 @@ export function CatalogPanel() {
         <div className="rounded-2xl border border-gray-200/80 dark:border-theme-border bg-black/5 dark:bg-theme-text/5 p-10 text-center"><p className="text-theme-text-muted/50 text-sm">No hay productos en el catálogo.</p></div>
       ) : viewMode === 'cards' ? (
         <div className="flex-1 overflow-auto p-4">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {(products.length > 0 ? products : filteredData).map(p => (
               <div key={p.id} onClick={() => toggleSelect(p.id)} className={`rounded-2xl border overflow-hidden hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200 group cursor-pointer ${selected.has(p.id) ? 'border-emerald-500/60 ring-1 ring-emerald-500/30' : 'border-gray-200/80 dark:border-theme-border'}`}>
                 <div className={`aspect-[4/3] flex items-center justify-center overflow-hidden ${selected.has(p.id) ? 'bg-white dark:bg-emerald-900/20' : 'bg-theme-text/5'}`}>
                   {p.image_url ? <img src={p.image_url} alt="" className="w-full h-full object-contain p-2" /> : <div className="text-theme-text-muted/50 text-3xl">📷</div>}
                 </div>
-                <div className="p-4 space-y-2 bg-black/5 dark:bg-theme-text/5">
+                <div className="p-3 space-y-1.5 bg-black/5 dark:bg-theme-text/5">
                   <div className="flex items-start justify-between gap-2">
                     <p className="text-xs font-mono font-semibold text-theme-text">{p.sku}</p>
                     {selected.has(p.id) && <span className="text-[10px] text-theme-text-accent font-semibold">✓</span>}
@@ -592,42 +592,42 @@ export function CatalogPanel() {
         </div>
       ) : (
         <div className="flex-1 overflow-auto">
-          <table className="w-full text-sm border-collapse">
+          <table className="min-w-[1500px] w-full whitespace-nowrap text-sm border-collapse">
             <thead className="sticky top-0 z-10 bg-theme-surface">
               <tr className="border-b border-gray-200/80 dark:border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider">
-                <th className="py-3 px-4 text-left w-10"><input type="checkbox" checked={products.length > 0 && products.every(p => selected.has(p.id))} onChange={toggleSelectAll} className="accent-emerald-600" /></th>
-                <th className="text-left py-3 px-4 font-medium w-14">Imagen</th>
-                <th className="text-left py-3 px-4 font-medium">SKU</th>
-                <th className="text-left py-3 px-4 font-medium">Código barra</th>
-                <th className="text-left py-3 px-4 font-medium">Descripción</th>
-                <th className="text-left py-3 px-4 font-medium">Proveedor real</th>
-                <th className="text-left py-3 px-4 font-medium">Origen prov.</th>
-                <th className="text-left py-3 px-4 font-medium">Marca</th>
-                <th className="text-left py-3 px-4 font-medium">Categoría</th>
-                <th className="text-left py-3 px-4 font-medium">Tipo Bsale</th>
-                <th className="text-left py-3 px-4 font-medium">Presentación</th>
-                <th className="text-left py-3 px-4 font-medium">U.Medida</th>
-                <th className="text-left py-3 px-4 font-medium">St.Min</th>
-                <th className="text-left py-3 px-4 font-medium">P.Repos</th>
-                <th className="text-left py-3 px-4 font-medium">Integ. Bsale</th>
-                <th className="text-left py-3 px-4 font-medium">Estado</th>
-                <th className="text-right py-3 px-4 font-medium">Acciones</th>
+                <th className="py-2.5 px-4 text-left w-10"><input type="checkbox" checked={products.length > 0 && products.every(p => selected.has(p.id))} onChange={toggleSelectAll} className="accent-emerald-600" /></th>
+                <th className="text-left py-2.5 px-4 font-medium w-14">Imagen</th>
+                <th className="text-left py-2.5 px-4 font-medium">SKU</th>
+                <th className="text-left py-2.5 px-4 font-medium">Código barra</th>
+                <th className="text-left py-2.5 px-4 font-medium">Descripción</th>
+                <th className="text-left py-2.5 px-4 font-medium">Proveedor real</th>
+                <th className="text-left py-2.5 px-4 font-medium">Origen prov.</th>
+                <th className="text-left py-2.5 px-4 font-medium">Marca</th>
+                <th className="text-left py-2.5 px-4 font-medium">Categoría</th>
+                <th className="text-left py-2.5 px-4 font-medium">Tipo Bsale</th>
+                <th className="text-left py-2.5 px-4 font-medium">Presentación</th>
+                <th className="text-left py-2.5 px-4 font-medium">U.Medida</th>
+                <th className="text-left py-2.5 px-4 font-medium">St.Min</th>
+                <th className="text-left py-2.5 px-4 font-medium">P.Repos</th>
+                <th className="text-left py-2.5 px-4 font-medium">Integ. Bsale</th>
+                <th className="text-left py-2.5 px-4 font-medium">Estado</th>
+                <th className="text-right py-2.5 px-4 font-medium">Acciones</th>
               </tr>
             </thead>
             <tbody>
               {filteredData.map(p => (
                 <tr key={p.id} className={`border-b border-theme-border hover:bg-theme-text/5 transition-colors ${selected.has(p.id) ? 'bg-white dark:bg-emerald-900/10' : ''}`}>
-                  <td className="py-3 px-4"><input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleSelect(p.id)} className="accent-emerald-600" /></td>
+                  <td className="py-2.5 px-4"><input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleSelect(p.id)} className="accent-emerald-600" /></td>
                   <td className="py-2 px-4">{p.image_url ? <img src={p.image_url} alt="" className="w-10 h-10 rounded-lg object-cover border border-gray-200 dark:border-theme-border" /> : <div className="w-10 h-10 rounded-lg bg-black/5 dark:bg-theme-text/5 border border-gray-200 dark:border-theme-border flex items-center justify-center text-theme-text-muted/50 text-xs">📷</div>}</td>
-                  <td className="py-3 px-4 text-theme-text text-xs font-mono font-medium">{p.sku}</td>
-                  <td className="py-3 px-4 text-theme-text-muted/60 text-xs font-mono">{p.barcode || '—'}</td>
-                  <td className="py-3 px-4 text-theme-text-muted/80 text-xs max-w-[200px] truncate" title={p.description}>{p.description}</td>
-                  <td className="py-3 px-4">
+                  <td className="py-2.5 px-4 text-theme-text text-xs font-mono font-medium">{p.sku}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/60 text-xs font-mono">{p.barcode || '—'}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs max-w-[200px] truncate" title={p.description}>{p.description}</td>
+                  <td className="py-2.5 px-4">
                     <span className={`text-xs font-semibold ${p.real_supplier_name ? 'text-emerald-600 dark:text-emerald-400' : 'text-theme-text-muted/40'}`}>
                       {p.real_supplier_name || '—'}
                     </span>
                   </td>
-                  <td className="py-3 px-4">
+                  <td className="py-2.5 px-4">
                     <div className="flex flex-col items-start gap-0.5">
                       <span className="text-xs text-theme-text-muted/80" title={p.supplier_origin_label}>{p.supplier_origin_label || '—'}</span>
                       <span className="text-[9px] uppercase tracking-wider font-bold text-theme-text-muted/50">
@@ -635,20 +635,20 @@ export function CatalogPanel() {
                       </span>
                     </div>
                   </td>
-                  <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.brand || '—'}</td>
-                  <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.category || '—'}</td>
-                  <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.bsale_product_type_name || p.product_type || '—'}</td>
-                  <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.presentation || '—'}</td>
-                  <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.unit_of_measure || '—'}</td>
-                  <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.min_stock}</td>
-                  <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.reorder_point}</td>
-                  <td className="py-3 px-4 flex flex-col gap-1 items-start">
+                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs">{p.brand || '—'}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs">{p.category || '—'}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs">{p.bsale_product_type_name || p.product_type || '—'}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs">{p.presentation || '—'}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs">{p.unit_of_measure || '—'}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs">{p.min_stock}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs">{p.reorder_point}</td>
+                  <td className="py-2.5 px-4 flex flex-col gap-1 items-start">
                     {p.source === 'BSALE' && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 border border-blue-500/20">BSALE</span>}
                     {p.requires_lot && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-600 border border-purple-500/20">LOTE</span>}
                     {p.bsale_status_conflict && <span title={p.bsale_status_conflict_reason || ''} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 border border-amber-500/20">! CONFLICTO</span>}
                   </td>
-                  <td className="py-3 px-4">{p.is_active ? <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-theme-accent-hover/10 text-theme-text-accent border-theme-accent/20">Activo</span> : <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-red-500/10 text-red-500 border-red-500/20">Inactivo</span>}</td>
-                  <td className="py-3 px-4 text-right">
+                  <td className="py-2.5 px-4">{p.is_active ? <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-theme-accent-hover/10 text-theme-text-accent border-theme-accent/20">Activo</span> : <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-red-500/10 text-red-500 border-red-500/20">Inactivo</span>}</td>
+                  <td className="py-2.5 px-4 text-right">
                     <button onClick={() => openEdit(p)} className="text-xs text-theme-text-muted/70 hover:text-theme-text-accent mr-3">Editar</button>
                     <button onClick={() => handleDeactivate(p)} className={`text-xs ${p.is_active ? 'text-red-500/80 hover:text-red-500' : 'text-theme-text-muted/70 hover:text-theme-text-accent'}`}>{p.is_active ? 'Desactivar' : 'Activar'}</button>
                   </td>

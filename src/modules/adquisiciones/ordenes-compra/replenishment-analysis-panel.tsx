@@ -753,7 +753,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   const hasResults = hasQuery && !error && !loading && filtered.length > 0
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-theme-bg text-theme-text animate-in fade-in duration-200">
+    <div className="flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface text-theme-text shadow-sm animate-in fade-in duration-200">
       <ReplenishmentHeader
         busy={loading}
         disabled={loading || initialLoading}

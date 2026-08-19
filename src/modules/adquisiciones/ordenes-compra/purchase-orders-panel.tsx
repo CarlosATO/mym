@@ -69,7 +69,7 @@ function Badge({ value, map }: { value: string | null; map: Record<string, { bg:
   if (!value) return <span className="text-[11px] text-theme-text-muted/40">—</span>
   const s = map[value]
   if (!s) return <span className="text-[11px] text-theme-text-muted/40">{value}</span>
-  return <span className={`text-[11px] font-semibold px-2 py-0.5 rounded border ${s.bg} ${s.text} ${s.border}`}>{statusLabel(value)}</span>
+  return <span className={`inline-flex whitespace-nowrap text-[11px] font-semibold px-2 py-0.5 rounded border ${s.bg} ${s.text} ${s.border}`}>{statusLabel(value)}</span>
 }
 
 const inputClass = "w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30"
@@ -1267,31 +1267,31 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-theme-surface">
+    <div className="flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
       <div className="flex flex-1 overflow-hidden">
         <div className={`flex flex-col h-full overflow-hidden transition-all duration-300 ${selectedPo ? "w-full md:w-1/3 lg:w-1/4 border-r border-theme-border" : "w-full"}`}>
       {message && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
 
-      <div className="shrink-0 flex flex-col gap-4 p-5 border-b border-theme-border/60 bg-theme-text/[0.01]">
-        <div className="flex flex-col md:flex-row items-center gap-3 w-full">
+      <div className="shrink-0 flex flex-col gap-2.5 p-3 border-b border-theme-border/60 bg-theme-text/[0.01]">
+        <div className="flex flex-col md:flex-row items-center gap-2 w-full">
           <div className="relative flex-1 w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted/50" />
             <input type="text" value={filters.search ?? ''} onChange={e => setFilters(p => ({ ...p, search: e.target.value || undefined, page: 1 }))}
               placeholder="Buscar por N° OC, proveedor..."
-              className="w-full h-11 pl-10 pr-4 rounded-xl border border-theme-border bg-theme-surface hover:bg-theme-text/5 focus:bg-theme-surface focus:ring-2 focus:ring-theme-accent/20 focus:border-theme-accent transition-all text-sm text-theme-text placeholder:text-theme-text-muted/40" />
+              className="w-full h-9 pl-10 pr-4 rounded-lg border border-theme-border bg-theme-surface hover:bg-theme-text/5 focus:bg-theme-surface focus:ring-2 focus:ring-theme-accent/20 focus:border-theme-accent transition-all text-sm text-theme-text placeholder:text-theme-text-muted/40" />
           </div>
 
-          <div className="flex items-center gap-2 w-full md:w-auto">
-            <button onClick={() => setShowFilters(!showFilters)} className={`h-11 px-3 md:px-4 rounded-xl border transition-all flex items-center justify-center gap-2 text-sm font-semibold ${showFilters ? 'bg-theme-text/10 border-theme-border text-theme-text' : 'bg-theme-surface border-theme-border hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text'}`}>
+          <div className="flex items-center gap-1.5 w-full md:w-auto">
+            <button onClick={() => setShowFilters(!showFilters)} className={`h-9 px-2.5 md:px-3 rounded-lg border transition-all flex items-center justify-center gap-1.5 text-sm font-semibold ${showFilters ? 'bg-theme-text/10 border-theme-border text-theme-text' : 'bg-theme-surface border-theme-border hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text'}`}>
               <Filter className="w-4 h-4" />
               <span className="hidden md:inline">Filtros</span>
             </button>
 
-            <button onClick={() => setView('analysis')} className="h-11 px-4 rounded-xl border border-theme-accent/30 text-theme-accent hover:bg-theme-accent/10 text-sm font-semibold transition-all flex items-center justify-center gap-2 shadow-sm">
+            <button onClick={() => setView('analysis')} className="h-9 px-3.5 rounded-lg border border-theme-accent/30 text-theme-accent hover:bg-theme-accent/10 text-sm font-semibold transition-all flex items-center justify-center gap-1.5 shadow-sm">
               <BarChart3 className="w-4 h-4" />
               <span className="hidden sm:inline">Realizar Análisis</span>
             </button>
-            <button onClick={() => { resetForm(); setView('form') }} className="h-11 px-4 md:px-5 rounded-xl bg-theme-accent hover:bg-theme-accent-hover text-white text-sm font-bold transition-all shadow-lg shadow-theme-accent/20 flex items-center justify-center gap-2 ml-auto md:ml-0">
+            <button onClick={() => { resetForm(); setView('form') }} className="h-9 px-3.5 md:px-4 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-sm font-bold transition-all shadow-lg shadow-theme-accent/20 flex items-center justify-center gap-1.5 ml-auto md:ml-0">
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">Crear OC</span>
             </button>
@@ -1299,14 +1299,14 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
         </div>
 
         {showFilters && (
-          <div className="p-5 rounded-2xl border border-theme-border bg-theme-text/5 animate-in slide-in-from-top-2 duration-200">
+          <div className="p-3.5 rounded-xl border border-theme-border bg-theme-text/5 animate-in slide-in-from-top-2 duration-200">
             <div className="flex items-center justify-between mb-4">
               <h4 className="text-xs font-bold text-theme-text-muted/80 uppercase tracking-wider">Filtros Avanzados</h4>
               <button onClick={() => { setFilters({ page: 1, pageSize: 50 }); setShowFilters(false) }} className="text-xs font-semibold text-theme-text-accent hover:text-theme-text flex items-center gap-1 transition-colors">
                 <X className="w-3 h-3" /> Limpiar filtros
               </button>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
               <select value={filters.supplier_id ?? ''} onChange={e => setFilters(p => ({ ...p, supplier_id: e.target.value || undefined, page: 1 }))} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40 appearance-none">
                 <option value="" className="bg-white dark:bg-emerald-900">Todos los proveedores</option>
                 {suppliers.filter(s => s.is_active).map(s => <option key={s.id} value={s.id} className="bg-white dark:bg-emerald-900">{s.business_name}</option>)}
@@ -1343,39 +1343,53 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
           <p className="text-theme-text-muted/50 text-sm">No hay órdenes de compra.</p>
         </div>
       ) : (
-        <div className="flex-1 overflow-auto">
-          <table className="w-full text-sm border-collapse">
+        <div className="min-w-0 flex-1 overflow-x-auto overflow-y-auto">
+          <table className="min-w-[1650px] w-full table-fixed border-collapse text-sm">
+            <colgroup>
+              <col className="w-[120px]" />
+              <col className="w-[105px]" />
+              <col className="w-[250px]" />
+              <col className="w-[95px]" />
+              <col className="w-[165px]" />
+              <col className="w-[150px]" />
+              <col className="w-[150px]" />
+              <col className="w-[125px]" />
+              <col className="w-[125px]" />
+              <col className="w-[125px]" />
+              <col className="w-[125px]" />
+              <col className="w-[115px]" />
+            </colgroup>
             <thead className="sticky top-0 z-10 bg-theme-surface">
               <tr className="border-b border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider">
-                <th className="text-left py-3 px-4 font-medium">N° OC</th>
-                <th className="text-left py-3 px-4 font-medium">Fecha</th>
-                <th className="text-left py-3 px-4 font-medium">Proveedor</th>
-                <th className="text-left py-3 px-4 font-medium">Tipo</th>
-                <th className="text-left py-3 px-4 font-medium">Bodega</th>
-                <th className="text-left py-3 px-4 font-medium">Solicitante</th>
-                <th className="text-left py-3 px-4 font-medium">Autoriza</th>
-                <th className="text-left py-3 px-4 font-medium">Estado</th>
-                <th className="text-right py-3 px-4 font-medium">Total</th>
-                <th className="text-left py-3 px-4 font-medium">Recepción</th>
-                <th className="text-left py-3 px-4 font-medium">Factura</th>
-                <th className={`text-right py-3 px-4 font-medium ${selectedPo ? "hidden" : ""}`}>Acciones</th>
+                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">N° OC</th>
+                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">Fecha</th>
+                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">Proveedor</th>
+                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">Tipo</th>
+                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">Bodega</th>
+                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">Solicitante</th>
+                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">Autoriza</th>
+                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">Estado</th>
+                <th className="whitespace-nowrap px-4 py-2.5 text-right font-medium">Total</th>
+                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">Recepción</th>
+                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">Factura</th>
+                <th className={`whitespace-nowrap px-4 py-2.5 text-right font-medium ${selectedPo ? "hidden" : ""}`}>Acciones</th>
               </tr>
             </thead>
             <tbody>
               {data.map(po => (
                 <tr key={po.id} className={`border-b border-theme-border hover:bg-theme-text/5 transition-colors cursor-pointer ${selectedPo?.id === po.id ? "bg-theme-accent/5 border-l-2 border-l-theme-accent" : ""}`} onClick={() => openDetail(po)} onMouseEnter={() => prefetchDetail(po.id)}>
-                  <td className="py-3 px-4 text-xs font-mono font-semibold text-theme-text-accent">{po.correlative}</td>
-                  <td className="py-3 px-4 text-xs text-theme-text">{formatDate(po.issue_date)}</td>
-                  <td className="py-3 px-4 text-xs text-theme-text">{po.supplier_name}</td>
-                  <td className="py-3 px-4 text-xs text-theme-text-muted/60">{po.po_type}</td>
-                  <td className="py-3 px-4 text-xs text-theme-text-muted/60">{po.warehouse_name || '—'}</td>
-                  <td className="py-3 px-4 text-xs text-theme-text-muted/60">{po.requester_name}</td>
-                  <td className="py-3 px-4 text-xs text-theme-text-muted/60">{po.authorized_name || '—'}</td>
-                  <td className="py-3 px-4"><Badge value={po.status} map={STATUS_BADGES} /></td>
-                  <td className="py-3 px-4 text-xs text-theme-text text-right font-medium">{formatCurrency(po.grand_total, po.currency)}</td>
-                  <td className="py-3 px-4"><Badge value={po.receipt_status} map={RECEIPT_BADGES} /></td>
-                  <td className="py-3 px-4"><Badge value={po.invoice_status} map={INVOICE_BADGES} /></td>
-                  <td className={`py-3 px-4 text-right ${selectedPo ? "hidden" : ""}`} onClick={e => e.stopPropagation()}>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-xs font-mono font-semibold text-theme-text-accent">{po.correlative}</td>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-xs text-theme-text">{formatDate(po.issue_date)}</td>
+                  <td className="px-4 py-2.5 text-xs text-theme-text"><div className="truncate" title={po.supplier_name}>{po.supplier_name}</div></td>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-xs text-theme-text-muted/60">{po.po_type}</td>
+                  <td className="px-4 py-2.5 text-xs text-theme-text-muted/60"><div className="truncate" title={po.warehouse_name || '—'}>{po.warehouse_name || '—'}</div></td>
+                  <td className="px-4 py-2.5 text-xs text-theme-text-muted/60"><div className="truncate" title={po.requester_name}>{po.requester_name}</div></td>
+                  <td className="px-4 py-2.5 text-xs text-theme-text-muted/60"><div className="truncate" title={po.authorized_name || '—'}>{po.authorized_name || '—'}</div></td>
+                  <td className="whitespace-nowrap px-4 py-2.5"><Badge value={po.status} map={STATUS_BADGES} /></td>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-right text-xs tabular-nums text-theme-text font-medium">{formatCurrency(po.grand_total, po.currency)}</td>
+                  <td className="whitespace-nowrap px-4 py-2.5"><Badge value={po.receipt_status} map={RECEIPT_BADGES} /></td>
+                  <td className="whitespace-nowrap px-4 py-2.5"><Badge value={po.invoice_status} map={INVOICE_BADGES} /></td>
+                  <td className={`whitespace-nowrap px-4 py-2.5 text-right ${selectedPo ? "hidden" : ""}`} onClick={e => e.stopPropagation()}>
                     <button onClick={() => openDetail(po)} className="p-1.5 rounded-lg hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text transition-colors" title="Ver detalle">
                       <Eye className="w-4 h-4" />
                     </button>
@@ -1398,7 +1412,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
       )}
 
       {totalPages > 1 && (
-        <div className="shrink-0 flex items-center justify-between text-xs p-4 border-t border-theme-border/60 bg-theme-text/[0.01]">
+        <div className="shrink-0 flex items-center justify-between text-xs p-3 border-t border-theme-border/60 bg-theme-text/[0.01]">
           <div className="flex items-center gap-2">
             <span className="text-theme-text-muted/50">Mostrar</span>
             <select value={filters.pageSize} onChange={e => setFilters(p => ({ ...p, pageSize: parseInt(e.target.value) as 25 | 50 | 100 }))} className="h-8 rounded-lg border border-theme-border bg-theme-text/5 px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40">

@@ -436,11 +436,11 @@ export function SuppliersPanel() {
                     <table className="w-full text-left text-xs">
                       <thead className="bg-theme-text/5 sticky top-0 z-10 shadow-sm">
                         <tr>
-                          <th className="py-3 px-4 font-semibold text-theme-text-muted w-10"></th>
-                          <th className="py-3 px-4 font-semibold text-theme-text-muted">Nombre Bsale</th>
-                          <th className="py-3 px-4 font-semibold text-theme-text-muted">Raíz</th>
-                          <th className="py-3 px-4 font-semibold text-theme-text-muted text-right">Productos</th>
-                          <th className="py-3 px-4 font-semibold text-theme-text-muted">Estado Actual</th>
+                          <th className="py-2.5 px-4 font-semibold text-theme-text-muted w-10"></th>
+                          <th className="py-2.5 px-4 font-semibold text-theme-text-muted">Nombre Bsale</th>
+                          <th className="py-2.5 px-4 font-semibold text-theme-text-muted">Raíz</th>
+                          <th className="py-2.5 px-4 font-semibold text-theme-text-muted text-right">Productos</th>
+                          <th className="py-2.5 px-4 font-semibold text-theme-text-muted">Estado Actual</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-theme-border/50">
@@ -452,18 +452,18 @@ export function SuppliersPanel() {
                           return (
                             <tr key={p.id} className={`hover:bg-theme-text/5 transition-colors cursor-pointer ${isSelected ? 'bg-theme-accent/5' : ''}`}
                                 onClick={() => togglePseudo(p)}>
-                              <td className="py-3 px-4 w-10">
+                              <td className="py-2.5 px-4 w-10">
                                 <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${isSelected ? 'bg-theme-accent border-theme-accent' : 'border-theme-border bg-theme-surface'}`}>
                                   {isSelected && <Check className="w-3 h-3 text-white" />}
                                 </div>
                               </td>
-                              <td className="py-3 px-4 font-medium text-theme-text">
+                              <td className="py-2.5 px-4 font-medium text-theme-text">
                                 {p.display_name}
                                 {isRemnant && <span className="ml-2 text-[10px] bg-theme-text/10 text-theme-text-muted px-1.5 py-0.5 rounded">Remanente</span>}
                               </td>
-                              <td className="py-3 px-4 text-theme-text-muted/80">{p.suggested_root}</td>
-                              <td className="py-3 px-4 text-right font-mono">{p.total_products}</td>
-                              <td className="py-3 px-4">
+                              <td className="py-2.5 px-4 text-theme-text-muted/80">{p.suggested_root}</td>
+                              <td className="py-2.5 px-4 text-right font-mono">{p.total_products}</td>
+                              <td className="py-2.5 px-4">
                                 {hasOtherParent ? (
                                   <span className="flex items-center gap-1 text-[11px] font-semibold text-orange-400 bg-orange-400/10 px-2 py-0.5 rounded w-fit">
                                     <AlertCircle className="w-3 h-3" /> Asociado a {p.parent_supplier_name}
@@ -502,22 +502,22 @@ export function SuppliersPanel() {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-theme-surface">
+    <div className="flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
       {message && (
         <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-muted">{message}</div>
       )}
 
       {/* TABS */}
-      <div className="shrink-0 flex items-center border-b border-theme-border bg-theme-text/[0.02] px-5 pt-3">
-        <button onClick={() => { setActiveTab('REAL'); setSearch('') }} className={`px-4 py-2 text-sm font-bold border-b-2 transition-all ${activeTab === 'REAL' ? 'border-theme-accent text-theme-accent' : 'border-transparent text-theme-text-muted hover:text-theme-text'}`}>
+      <div className="shrink-0 flex items-center border-b border-theme-border bg-theme-text/[0.02] px-4 pt-1.5">
+        <button onClick={() => { setActiveTab('REAL'); setSearch('') }} className={`px-3 py-1.5 text-sm font-bold border-b-2 transition-all ${activeTab === 'REAL' ? 'border-theme-accent text-theme-accent' : 'border-transparent text-theme-text-muted hover:text-theme-text'}`}>
           Proveedores Reales
         </button>
-        <button onClick={() => { setActiveTab('BSALE'); setSearch('') }} className={`px-4 py-2 text-sm font-bold border-b-2 transition-all ${activeTab === 'BSALE' ? 'border-theme-accent text-theme-accent' : 'border-transparent text-theme-text-muted hover:text-theme-text'}`}>
+        <button onClick={() => { setActiveTab('BSALE'); setSearch('') }} className={`px-3 py-1.5 text-sm font-bold border-b-2 transition-all ${activeTab === 'BSALE' ? 'border-theme-accent text-theme-accent' : 'border-transparent text-theme-text-muted hover:text-theme-text'}`}>
           Pseudoproveedores Bsale
         </button>
       </div>
 
-      <div className="shrink-0 flex flex-col gap-4 p-5 border-b border-theme-border/60 bg-theme-text/[0.01]">
+      <div className="shrink-0 flex flex-col gap-2.5 p-3 border-b border-theme-border/60 bg-theme-text/[0.01]">
         
         {activeTab === 'BSALE' && (
           <div className="flex w-full">
@@ -525,20 +525,20 @@ export function SuppliersPanel() {
           </div>
         )}
 
-        <div className="flex flex-col md:flex-row items-center gap-3 w-full">
+        <div className="flex flex-col md:flex-row items-center gap-2 w-full">
           <div className="relative flex-1 w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted/50" />
             <input type="text" value={search} onChange={e => setSearch(e.target.value)}
               placeholder={activeTab === 'REAL' ? "Buscar reales por RUT o razón social..." : "Buscar pseudos por nombre o raíz..."}
-              className="w-full h-11 pl-10 pr-4 rounded-xl border border-theme-border bg-theme-surface hover:bg-theme-text/5 focus:bg-theme-surface focus:ring-2 focus:ring-theme-accent/20 focus:border-theme-accent transition-all text-sm text-theme-text placeholder:text-theme-text-muted/40" />
+              className="w-full h-9 pl-10 pr-4 rounded-lg border border-theme-border bg-theme-surface hover:bg-theme-text/5 focus:bg-theme-surface focus:ring-2 focus:ring-theme-accent/20 focus:border-theme-accent transition-all text-sm text-theme-text placeholder:text-theme-text-muted/40" />
           </div>
 
-          <div className="flex items-center gap-2 w-full md:w-auto">
+          <div className="flex items-center gap-1.5 w-full md:w-auto">
             {activeTab === 'REAL' && (
               <>
                 <div className="relative group z-10">
-                  <button className="h-11 px-3 md:px-4 rounded-xl border border-theme-border bg-theme-surface hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text text-sm font-semibold transition-all flex items-center justify-center gap-2">
-                    <MoreHorizontal className="w-5 h-5 md:w-4 md:h-4" />
+                  <button className="h-9 px-2.5 md:px-3 rounded-lg border border-theme-border bg-theme-surface hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text text-sm font-semibold transition-all flex items-center justify-center gap-1.5">
+                    <MoreHorizontal className="w-4 h-4" />
                     <span className="hidden md:inline">Opciones</span>
                   </button>
                   <div className="absolute right-0 top-full mt-2 w-56 bg-theme-surface backdrop-blur-xl border border-theme-border rounded-2xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 p-2">
@@ -556,12 +556,12 @@ export function SuppliersPanel() {
                   </div>
                 </div>
 
-                <button onClick={() => setShowFilters(!showFilters)} className={`h-11 px-3 md:px-4 rounded-xl border transition-all flex items-center justify-center gap-2 text-sm font-semibold ${showFilters ? 'bg-theme-text/10 border-theme-border text-theme-text' : 'bg-theme-surface border-theme-border hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text'}`}>
+                <button onClick={() => setShowFilters(!showFilters)} className={`h-9 px-2.5 md:px-3 rounded-lg border transition-all flex items-center justify-center gap-1.5 text-sm font-semibold ${showFilters ? 'bg-theme-text/10 border-theme-border text-theme-text' : 'bg-theme-surface border-theme-border hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text'}`}>
                   <Filter className="w-4 h-4" />
                   <span className="hidden md:inline">Filtros</span>
                 </button>
 
-                <button onClick={openCreate} className="h-11 px-4 md:px-5 rounded-xl bg-theme-accent hover:bg-theme-accent-hover text-white text-sm font-bold transition-all shadow-lg shadow-theme-accent/20 flex items-center justify-center gap-2 ml-auto md:ml-0">
+                <button onClick={openCreate} className="h-9 px-3.5 md:px-4 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-sm font-bold transition-all shadow-lg shadow-theme-accent/20 flex items-center justify-center gap-1.5 ml-auto md:ml-0">
                   <Plus className="w-4 h-4" />
                   <span className="hidden sm:inline">Nuevo</span>
                 </button>
@@ -571,8 +571,8 @@ export function SuppliersPanel() {
         </div>
 
         {activeTab === 'REAL' && showFilters && (
-          <div className="p-5 rounded-2xl border border-theme-border bg-theme-text/5 animate-in slide-in-from-top-2 duration-200">
-            <div className="flex items-center justify-between mb-4">
+          <div className="p-3.5 rounded-xl border border-theme-border bg-theme-text/5 animate-in slide-in-from-top-2 duration-200">
+            <div className="flex items-center justify-between mb-3">
               <h4 className="text-xs font-bold text-theme-text-muted/80 uppercase tracking-wider">Filtros Avanzados</h4>
               <button onClick={() => setFilters({ region: '', city: '', is_active: '' })} className="text-xs font-semibold text-theme-text-accent hover:text-theme-text flex items-center gap-1 transition-colors">
                 <X className="w-3 h-3" /> Limpiar filtros
@@ -634,36 +634,36 @@ export function SuppliersPanel() {
           </div>
         ) : (
           <div className="flex-1 overflow-auto">
-            <table className="w-full text-sm border-collapse">
+            <table className="min-w-[1080px] w-full whitespace-nowrap text-sm border-collapse">
               <thead className="sticky top-0 z-10 bg-theme-surface">
                 <tr className="border-b border-theme-border text-xs text-theme-accent/60 uppercase tracking-wider">
-                  <th className="text-left py-3 px-4 font-medium">RUT</th>
-                  <th className="text-left py-3 px-4 font-medium">Razón social</th>
-                  <th className="text-left py-3 px-4 font-medium">Nombre fantasía</th>
-                  <th className="text-left py-3 px-4 font-medium">Contacto</th>
-                  <th className="text-left py-3 px-4 font-medium">Correo</th>
-                  <th className="text-left py-3 px-4 font-medium">Cond. pago</th>
-                  <th className="text-left py-3 px-4 font-medium">Estado</th>
-                  <th className="text-right py-3 px-4 font-medium">Acciones</th>
+                  <th className="text-left py-2.5 px-4 font-medium">RUT</th>
+                  <th className="text-left py-2.5 px-4 font-medium">Razón social</th>
+                  <th className="text-left py-2.5 px-4 font-medium">Nombre fantasía</th>
+                  <th className="text-left py-2.5 px-4 font-medium">Contacto</th>
+                  <th className="text-left py-2.5 px-4 font-medium">Correo</th>
+                  <th className="text-left py-2.5 px-4 font-medium">Cond. pago</th>
+                  <th className="text-left py-2.5 px-4 font-medium">Estado</th>
+                  <th className="text-right py-2.5 px-4 font-medium">Acciones</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredSuppliers.map(s => (
                   <tr key={s.id} className="border-b border-theme-border hover:bg-theme-text/5 transition-colors">
-                    <td className="py-3 px-4 text-theme-text-accent/80 text-xs font-mono">{s.rut || '—'}</td>
-                    <td className="py-3 px-4 text-theme-text text-xs font-medium">{s.business_name}</td>
-                    <td className="py-3 px-4 text-theme-text-accent/80 text-xs">{s.fantasy_name || '—'}</td>
-                    <td className="py-3 px-4 text-theme-text-accent/80 text-xs">{s.contact_name || '—'}</td>
-                    <td className="py-3 px-4 text-theme-text-muted/60 text-xs">{s.contact_email || '—'}</td>
-                    <td className="py-3 px-4 text-theme-text-accent/80 text-xs">{s.payment_terms || '—'}</td>
-                    <td className="py-3 px-4">
+                    <td className="py-2.5 px-4 text-theme-text-accent/80 text-xs font-mono">{s.rut || '—'}</td>
+                    <td className="py-2.5 px-4 text-theme-text text-xs font-medium">{s.business_name}</td>
+                    <td className="py-2.5 px-4 text-theme-text-accent/80 text-xs">{s.fantasy_name || '—'}</td>
+                    <td className="py-2.5 px-4 text-theme-text-accent/80 text-xs">{s.contact_name || '—'}</td>
+                    <td className="py-2.5 px-4 text-theme-text-muted/60 text-xs">{s.contact_email || '—'}</td>
+                    <td className="py-2.5 px-4 text-theme-text-accent/80 text-xs">{s.payment_terms || '—'}</td>
+                    <td className="py-2.5 px-4">
                       {s.is_active ? (
                         <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-theme-accent-hover/10 text-theme-accent border-theme-accent/20">Activo</span>
                       ) : (
                         <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-red-500/10 text-red-400 border-red-500/20">Inactivo</span>
                       )}
                     </td>
-                    <td className="py-3 px-4 text-right">
+                    <td className="py-2.5 px-4 text-right">
                       <button onClick={() => openEdit(s)} className="text-xs text-theme-accent/70 hover:text-theme-text-muted mr-3 font-semibold">Editar</button>
                       <button onClick={() => handleDeactivate(s)}
                         className={`text-xs font-semibold ${s.is_active ? 'text-red-400/70 hover:text-red-400' : 'text-theme-accent/70 hover:text-theme-text-muted'}`}>
@@ -681,13 +681,13 @@ export function SuppliersPanel() {
           <table className="w-full text-sm border-collapse">
             <thead className="sticky top-0 z-10 bg-theme-surface">
               <tr className="border-b border-theme-border text-[11px] text-theme-text-muted uppercase tracking-wider font-semibold">
-                <th className="text-left py-3 px-4">Pseudoproveedor Bsale</th>
-                <th className="text-left py-3 px-4">Raíz Sugerida</th>
-                <th className="text-left py-3 px-4">Proveedor Real Asociado</th>
-                <th className="text-right py-3 px-4">Productos Totales</th>
-                <th className="text-right py-3 px-4">Activos / Inactivos</th>
-                <th className="text-right py-3 px-4">Mappings C / S Costo</th>
-                <th className="text-left py-3 px-4">Estado</th>
+                <th className="text-left py-2.5 px-4">Pseudoproveedor Bsale</th>
+                <th className="text-left py-2.5 px-4">Raíz Sugerida</th>
+                <th className="text-left py-2.5 px-4">Proveedor Real Asociado</th>
+                <th className="text-right py-2.5 px-4">Productos Totales</th>
+                <th className="text-right py-2.5 px-4">Activos / Inactivos</th>
+                <th className="text-right py-2.5 px-4">Mappings C / S Costo</th>
+                <th className="text-left py-2.5 px-4">Estado</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-theme-border/50">
@@ -695,14 +695,14 @@ export function SuppliersPanel() {
                 const isRemnant = p.total_products === 0
                 return (
                   <tr key={p.id} className="hover:bg-theme-surface transition-colors">
-                    <td className="py-3 px-4 font-medium text-theme-text text-xs">
+                    <td className="py-2.5 px-4 font-medium text-theme-text text-xs">
                       {p.display_name}
                       {p.display_name !== p.business_name && (
                         <div className="text-[10px] text-theme-text-muted/60 font-mono mt-0.5">{p.business_name}</div>
                       )}
                     </td>
-                    <td className="py-3 px-4 text-theme-text-muted text-xs font-mono">{p.suggested_root}</td>
-                    <td className="py-3 px-4">
+                    <td className="py-2.5 px-4 text-theme-text-muted text-xs font-mono">{p.suggested_root}</td>
+                    <td className="py-2.5 px-4">
                       {p.parent_supplier_name ? (
                         <span className="text-xs font-semibold text-theme-text-accent bg-theme-accent/5 px-2 py-1 rounded border border-theme-accent/10">
                           {p.parent_supplier_name}
@@ -711,18 +711,18 @@ export function SuppliersPanel() {
                         <span className="text-xs text-theme-text-muted/50 italic">—</span>
                       )}
                     </td>
-                    <td className="py-3 px-4 text-right font-mono text-xs text-theme-text">{p.total_products}</td>
-                    <td className="py-3 px-4 text-right text-xs">
+                    <td className="py-2.5 px-4 text-right font-mono text-xs text-theme-text">{p.total_products}</td>
+                    <td className="py-2.5 px-4 text-right text-xs">
                       <span className="text-emerald-500/80 font-mono">{p.active_products}</span>
                       <span className="text-theme-text-muted/30 mx-1">/</span>
                       <span className="text-theme-text-muted/80 font-mono">{p.inactive_products}</span>
                     </td>
-                    <td className="py-3 px-4 text-right text-xs">
+                    <td className="py-2.5 px-4 text-right text-xs">
                       <span className="text-emerald-500/80 font-mono">{p.mappings_with_cost}</span>
                       <span className="text-theme-text-muted/30 mx-1">/</span>
                       <span className="text-theme-text-muted/80 font-mono">{p.mappings_without_cost}</span>
                     </td>
-                    <td className="py-3 px-4">
+                    <td className="py-2.5 px-4">
                       {p.parent_supplier_id ? (
                         <span className="text-[10px] font-semibold text-theme-accent bg-theme-accent/10 px-2 py-0.5 rounded border border-theme-accent/20">Asociado</span>
                       ) : isRemnant ? (
