@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { KpiCard } from '../components/kpi-card'
 import { getCommercialAnalysisOverview } from '@/app/actions/comercial/analysis'
-import { useDateRange } from '../hooks/use-date-range'
+import { setDateRange, useDateRange } from '../hooks/use-date-range'
 import * as LucideIcons from 'lucide-react'
 
 interface OverviewData {
@@ -76,6 +76,26 @@ export function VistaGeneral() {
           <p className="text-xs text-theme-text-muted/70">
             Resumen comercial consolidado · datos reales Bsale
           </p>
+        </div>
+        <div className="flex items-center gap-2 rounded-lg border border-theme-accent/15 bg-theme-accent/8 px-2 py-1.5">
+          <LucideIcons.CalendarDays className="h-3.5 w-3.5 text-theme-accent" />
+          <label className="sr-only" htmlFor="overview-date-from">Desde</label>
+          <input
+            id="overview-date-from"
+            type="date"
+            value={dateFrom}
+            onChange={event => setDateRange(event.target.value, dateTo)}
+            className="w-[116px] bg-transparent text-[11px] font-semibold text-theme-text outline-none"
+          />
+          <span className="text-[10px] text-theme-text-muted/60">→</span>
+          <label className="sr-only" htmlFor="overview-date-to">Hasta</label>
+          <input
+            id="overview-date-to"
+            type="date"
+            value={dateTo}
+            onChange={event => setDateRange(dateFrom, event.target.value)}
+            className="w-[116px] bg-transparent text-[11px] font-semibold text-theme-text outline-none"
+          />
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {meta && (
