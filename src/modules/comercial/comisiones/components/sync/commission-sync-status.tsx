@@ -1,31 +1,16 @@
-import { ArrowLeft, RefreshCw, Settings2, UsersRound } from "lucide-react";
+import { RefreshCw, UsersRound } from "lucide-react";
 import type { CommissionSyncHealth } from "@/app/actions/comercial/commissions";
 import { cn } from "@/lib/utils";
-import type { MainTab, View } from "../../commissions-panel-types";
-
-const mainTabs: Array<{ key: MainTab; label: string }> = [
-  { key: "simulate", label: "Simulación" },
-  { key: "drafts", label: "Borradores" },
-  { key: "issued", label: "Emitidas" },
-  { key: "annulled", label: "Anuladas" },
-];
+import type { View } from "../../commissions-panel-types";
 
 export function CommissionSyncStatusHeader({
   view,
-  onConfig,
-  onBack,
-  mainTab,
-  onMainTab,
   syncHealth,
   syncHealthLoading,
   syncBusy,
   onManualSync,
 }: {
   view: View;
-  onConfig: () => void;
-  onBack: () => void;
-  mainTab: MainTab;
-  onMainTab: (t: MainTab) => void;
   syncHealth?: CommissionSyncHealth | null;
   syncHealthLoading?: boolean;
   syncBusy?: boolean;
@@ -49,7 +34,7 @@ export function CommissionSyncStatusHeader({
           </div>
           <p className="mt-1 text-sm text-theme-text-muted">
             {view === "main"
-              ? "Simulación. No emite liquidación ni bloquea facturas."
+              ? "Gestiona simulaciones y liquidaciones de vendedores."
               : "Configuración de vendedores, comisión general, grupos y reglas."}
           </p>
         </div>
@@ -68,37 +53,8 @@ export function CommissionSyncStatusHeader({
               {syncBusy ? "Sincronizando..." : "Sincronizar ahora"}
             </button>
           )}
-          {view === "main" ? (
-            <button onClick={onConfig} className="btn-secondary">
-              <Settings2 className="h-3.5 w-3.5" />
-              Configuración
-            </button>
-          ) : (
-            <button onClick={onBack} className="btn-secondary">
-              <ArrowLeft className="h-3.5 w-3.5" />
-              Volver a comisiones
-            </button>
-          )}
         </div>
       </div>
-      {view === "main" && (
-        <div className="mt-2 flex gap-1">
-          {mainTabs.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => onMainTab(t.key)}
-              className={cn(
-                "rounded-t px-3 py-1.5 text-xs font-semibold",
-                mainTab === t.key
-                  ? "bg-theme-accent-muted text-theme-text"
-                  : "text-theme-text-muted hover:bg-theme-surface-hover",
-              )}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      )}
     </header>
   );
 }

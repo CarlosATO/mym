@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AlertCircle, RefreshCw, Settings2, UsersRound } from "lucide-react";
 import {
   getCommissionGroups,
@@ -47,6 +48,10 @@ import {
 import { CommissionConfiguration } from "./components/configuration/commission-configuration";
 
 export function CommissionsPanel({ isSuperUser }: { isSuperUser: boolean }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const viewParam = searchParams.get("view");
+  const configParam = searchParams.get("config");
   const [view, setView] = useState<View>("main");
   const [tab, setTab] = useState<ConfigTab>("sellers");
   const [mainTab, setMainTab] = useState<MainTab>("simulate");
@@ -142,6 +147,44 @@ export function CommissionsPanel({ isSuperUser }: { isSuperUser: boolean }) {
     }
   };
 
+  useEffect(() => {
+    const nextView: View = viewParam === "configuracion" ? "configuration" : "main";
+    const nextMainTab: MainTab =
+      viewParam === "borradores"
+        ? "drafts"
+        : viewParam === "emitidas"
+          ? "issued"
+          : viewParam === "anuladas"
+            ? "annulled"
+            : "simulate";
+    const nextConfigTab: ConfigTab =
+      configParam === "general"
+        ? "general"
+        : configParam === "grupos"
+          ? "groups"
+          : configParam === "reglas"
+            ? "rules"
+            : "sellers";
+
+    const handle = setTimeout(() => {
+      setView(nextView);
+      setMainTab(nextMainTab);
+      setTab(nextConfigTab);
+      if (nextView === "configuration") void loadConfig();
+    }, 0);
+    return () => clearTimeout(handle);
+  }, [viewParam, configParam]);
+
+  const handleConfigTabChange = (nextTab: ConfigTab) => {
+    const configValue = {
+      sellers: "vendedores",
+      general: "general",
+      groups: "grupos",
+      rules: "reglas",
+    }[nextTab];
+    router.push(`/dashboard/comercial/comisiones?view=configuracion&config=${configValue}`);
+  };
+
   const loadDraftList = async () => {
     setBusy(true);
     setError(null);
@@ -200,8 +243,7 @@ export function CommissionsPanel({ isSuperUser }: { isSuperUser: boolean }) {
   );
 
   const openConfig = () => {
-    setView("configuration");
-    void loadConfig();
+    router.push("/dashboard/comercial/comisiones?view=configuracion");
   };
 
   const simulate = async (id = sellerId) => {
@@ -254,7 +296,7 @@ export function CommissionsPanel({ isSuperUser }: { isSuperUser: boolean }) {
       });
       setPreview(null);
       await loadDraftList();
-      setMainTab("drafts");
+      router.push("/dashboard/comercial/comisiones?view=borradores");
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -293,7 +335,7 @@ export function CommissionsPanel({ isSuperUser }: { isSuperUser: boolean }) {
       await issueCommissionSettlement({ settlement_id: sid });
       setSettlementDetail(null);
       await loadIssuedList();
-      setMainTab("issued");
+      router.push("/dashboard/comercial/comisiones?view=emitidas");
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -314,7 +356,7 @@ export function CommissionsPanel({ isSuperUser }: { isSuperUser: boolean }) {
       setSettlementDetail(null);
       await loadIssuedList();
       await loadAnnulledList();
-      setMainTab("annulled");
+      router.push("/dashboard/comercial/comisiones?view=anuladas");
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -390,13 +432,9 @@ export function CommissionsPanel({ isSuperUser }: { isSuperUser: boolean }) {
   };
 
   return (
-    <div className="commission-panel flex h-full min-h-0 flex-col overflow-hidden bg-theme-surface text-theme-text">
+    <div className="commission-panel flex h-full min-h-0 flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface text-theme-text shadow-sm">
       <CommissionSyncStatusHeader
         view={view}
-        onConfig={openConfig}
-        onBack={() => setView("main")}
-        mainTab={mainTab}
-        onMainTab={setMainTab}
         syncHealth={syncHealth}
         syncHealthLoading={syncHealthLoading}
         syncBusy={syncBusy}
@@ -511,7 +549,7 @@ export function CommissionsPanel({ isSuperUser }: { isSuperUser: boolean }) {
       ) : (
         <CommissionConfiguration
           tab={tab}
-          setTab={setTab}
+          setTab={handleConfigTabChange}
           sellers={sellers}
           drafts={drafts}
           settings={settings}

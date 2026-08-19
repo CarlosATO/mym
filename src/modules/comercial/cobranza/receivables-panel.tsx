@@ -331,7 +331,7 @@ export function ReceivablesPanel() {
     rows.map(r => r.last_payment_date || r.last_invoice_date).filter(Boolean).sort().at(-1) ?? null
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-theme-surface">
+    <div className="flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
 
       {/* â”€â”€ Franja superior: panel compacto alineado a la derecha â”€â”€ */}
       <div className="shrink-0 px-5 pt-4 pb-3 border-b border-theme-border/40">

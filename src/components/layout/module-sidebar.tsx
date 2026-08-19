@@ -87,9 +87,9 @@ export function ModuleSidebar({ identity, navigation, collapsed, responsiveColla
   )
 }
 
-function SidebarItem({ item, location, collapsed, permissions, onNavigate }: { item: ModuleNavItem; location: { pathname: string; searchParams: Pick<URLSearchParams, 'get' | 'has'> }; collapsed: boolean; permissions: string[]; onNavigate: () => void }) {
+function SidebarItem({ item, location, collapsed, permissions, onNavigate, depth = 0 }: { item: ModuleNavItem; location: { pathname: string; searchParams: Pick<URLSearchParams, 'get' | 'has'> }; collapsed: boolean; permissions: string[]; onNavigate: () => void; depth?: number }) {
   const children = (item.children ?? []).filter(child => isVisible(child, permissions))
-  const active = isItemActive(item, location) || children.some(child => isItemActive(child, location))
+  const active = isItemActive(item, location) || children.some(child => isBranchActive(child, location))
   const Icon = item.icon
   const href = buildNavHref(item.target, location.searchParams)
   const itemContent = (
@@ -102,6 +102,8 @@ function SidebarItem({ item, location, collapsed, permissions, onNavigate }: { i
   const className = cn(
     'group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[13px] transition-colors',
     collapsed && 'md:justify-center md:px-2',
+    !collapsed && depth === 1 && 'pl-8',
+    !collapsed && depth >= 2 && 'pl-11',
     item.disabled
       ? 'cursor-not-allowed text-theme-sidebar-muted/50'
       : active
@@ -110,7 +112,7 @@ function SidebarItem({ item, location, collapsed, permissions, onNavigate }: { i
   )
 
   if (item.disabled) {
-    return <div title={collapsed ? item.label : undefined} className={className}>{itemContent}{children.map(child => <SidebarItem key={child.id} item={child} location={location} collapsed={collapsed} permissions={permissions} onNavigate={onNavigate} />)}</div>
+    return <div title={collapsed ? item.label : undefined} className={className}>{itemContent}{children.map(child => <SidebarItem key={child.id} item={child} location={location} collapsed={collapsed} permissions={permissions} onNavigate={onNavigate} depth={depth + 1} />)}</div>
   }
 
   return (
@@ -118,7 +120,7 @@ function SidebarItem({ item, location, collapsed, permissions, onNavigate }: { i
       <Link href={href} title={collapsed ? item.label : undefined} onClick={onNavigate} className={className}>
         {itemContent}
       </Link>
-      {children.map(child => <SidebarItem key={child.id} item={child} location={location} collapsed={collapsed} permissions={permissions} onNavigate={onNavigate} />)}
+      {children.map(child => <SidebarItem key={child.id} item={child} location={location} collapsed={collapsed} permissions={permissions} onNavigate={onNavigate} depth={depth + 1} />)}
     </>
   )
 }

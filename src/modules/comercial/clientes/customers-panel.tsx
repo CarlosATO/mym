@@ -340,7 +340,7 @@ export function CustomersPanel() {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-theme-surface">
+    <div className="flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
       <div className="shrink-0 flex flex-col gap-2.5 px-4 py-3 border-b border-theme-border/60 bg-theme-text/[0.01]">
         <div className="flex flex-col md:flex-row items-center gap-2 w-full">
           <div className="flex items-center gap-1 shrink-0">
