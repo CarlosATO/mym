@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import { bsaleFetchAll, normalizeSku, getBsaleHeaders } from '@/lib/bsale/client'
 import { syncBsaleClients } from '@/lib/integraciones/bsale-clients-sync'
 import { runCatalogAutoSyncStep } from '@/lib/integraciones/bsale-catalog-auto-sync'
+import { canRefreshClientMetricsSnapshot } from '@/lib/integraciones/client-metrics-refresh-policy'
 import crypto from 'crypto'
 
 const BSALE_API_BASE = process.env.BSALE_API_BASE_URL || 'https://api.bsale.cl/v1'
@@ -959,6 +960,7 @@ async function syncDocuments(
   options: { days?: number, dateFrom?: string, dateTo?: string }
 ): Promise<{
   docsCount: number
+  documentErrors: number
   detailsCount: number
   detailErrors: number
   sellerSync: { scanned: number; upserted: number; empty: number; errors: number }
@@ -983,6 +985,7 @@ async function syncDocuments(
 
   // Upsert documents in batches
   let docsCount = 0
+  let documentErrors = 0
   let detailsCount = 0
   let detailErrors = 0
 
@@ -1013,7 +1016,10 @@ async function syncDocuments(
       onConflict: 'company_id, bsale_id',
       ignoreDuplicates: false,
     })
-    if (error) console.error(`[syncSales] Document batch error:`, error.message)
+    if (error) {
+      documentErrors += records.length
+      console.error(`[syncSales] Document batch error:`, error.message)
+    }
     else docsCount += records.length
   }
 
@@ -1237,7 +1243,7 @@ async function syncDocuments(
 
   console.log(`[syncSales] FINAL: docs=${documents.length} OK=${finalOk} (${coverage}%) NoDet=${finalNoDet} Err=${finalErr} details=${detailsCount}`)
 
-  return { docsCount, detailsCount, detailErrors: finalErr, sellerSync, pages }
+  return { docsCount, documentErrors, detailsCount, detailErrors: finalErr, sellerSync, pages }
 }
 
 export async function syncBsalePaymentTypes(companyId: string): Promise<{ count: number; errors: number }> {
@@ -1558,6 +1564,7 @@ export async function syncBsaleSales(
 
     const counts: Record<string, number> = {
       documents: result.docsCount,
+      document_errors: result.documentErrors,
       details: result.detailsCount,
       detail_errors: result.detailErrors,
       document_sellers: result.sellerSync.upserted,
@@ -1565,9 +1572,10 @@ export async function syncBsaleSales(
       pages: result.pages,
     }
 
-    const syncStatus = result.detailErrors > 0 ? 'PARTIAL' : 'COMPLETED'
+    const syncStatus = result.documentErrors > 0 || result.detailErrors > 0 ? 'PARTIAL' : 'COMPLETED'
     await finishSyncRun(runId, syncStatus, {
       documents: result.docsCount,
+      document_errors: result.documentErrors,
       document_details_count: result.detailsCount,
       detail_errors: result.detailErrors,
     })
@@ -1719,6 +1727,23 @@ async function materializePreparationAfterSalesSync(companyId: string) {
   }
 }
 
+async function refreshClientMetricsSnapshot(companyId: string) {
+  const startedAt = Date.now()
+  console.log(`[runReplenishmentBsaleSync] Iniciando refresh client_metrics_snapshot para ${companyId}`)
+
+  const { data, error } = await comercialDb().rpc('refresh_client_metrics_snapshot', {
+    p_company_id: companyId,
+  })
+
+  if (error) {
+    console.error(`[runReplenishmentBsaleSync] Error en refresh client_metrics_snapshot para ${companyId}:`, error.message)
+    throw new Error(`Error refrescando métricas de clientes: ${error.message}`)
+  }
+
+  console.log(`[runReplenishmentBsaleSync] Refresh client_metrics_snapshot completado para ${companyId} en ${Date.now() - startedAt}ms`)
+  return data
+}
+
 export async function runReplenishmentBsaleSync(companyId: string, trigger: string = 'SCHEDULED'): Promise<{
   success: boolean;
   status: string;
@@ -1745,6 +1770,7 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
 
     let finalStatus: 'COMPLETED' | 'PARTIAL' | 'FAILED' = 'COMPLETED';
     let errorMessage = '';
+    let commercialSyncConsistent = true;
 
     // 0a-0c. Catalog auto-sync: product types → products → auto-mapping
     const catalogResult = await runCatalogAutoSyncStep(companyId, trigger, 'SCHEDULED');
@@ -1770,14 +1796,19 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       if (clientsRes.status === 'FAILED') {
         console.error('[runReplenishmentBsaleSync] syncBsaleClients failed:', clientsRes.message);
         finalStatus = 'PARTIAL';
+        commercialSyncConsistent = false;
         errorMessage += (errorMessage ? ' | ' : '') + 'Clients: ' + clientsRes.message;
       } else if (clientsRes.status === 'SKIPPED') {
         console.log('[runReplenishmentBsaleSync] syncBsaleClients skipped (lock):', clientsRes.message);
+        finalStatus = 'PARTIAL';
+        commercialSyncConsistent = false;
+        errorMessage += (errorMessage ? ' | ' : '') + 'Clients: ' + clientsRes.message;
       }
       console.log(`[runReplenishmentBsaleSync] Clients: fetched=${clientStats.bsaleFetched} ins=${clientStats.insertedCount} upd=${clientStats.updatedCount}`);
     } catch (clientsErr: any) {
       console.error('[runReplenishmentBsaleSync] Error en clients:', clientsErr);
       finalStatus = 'PARTIAL';
+      commercialSyncConsistent = false;
       errorMessage += (errorMessage ? ' | ' : '') + 'Error en clients: ' + clientsErr.message;
     }
 
@@ -1787,9 +1818,12 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
     
     if (!salesRes.success) {
       finalStatus = 'FAILED';
+      commercialSyncConsistent = false;
       errorMessage = salesRes.error || 'Error en ventas';
-    } else if (salesRes.counts?.detail_errors && salesRes.counts.detail_errors > 0) {
+    } else if ((salesRes.counts?.document_errors || 0) > 0 || (salesRes.counts?.detail_errors || 0) > 0) {
       finalStatus = 'PARTIAL';
+      commercialSyncConsistent = false;
+      errorMessage += (errorMessage ? ' | ' : '') + `Ventas: document_errors=${salesRes.counts?.document_errors || 0} detail_errors=${salesRes.counts?.detail_errors || 0}`;
     }
 
     // 3. Materialize eligible sales orders only after their documents are available locally.
@@ -1814,12 +1848,14 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
         paymentsResult = await syncBsalePayments(companyId, { mode: 'incremental', days: 14 });
         if (paymentTypesResult.errors > 0 || paymentsResult.errors > 0) {
           finalStatus = 'PARTIAL';
+          commercialSyncConsistent = false;
           errorMessage += (errorMessage ? ' | ' : '') + `Payments: type_errors=${paymentTypesResult.errors} payment_errors=${paymentsResult.errors}`;
         }
         console.log(`[runReplenishmentBsaleSync] Payments: types=${paymentTypesResult.count} payments=${paymentsResult.payments} allocations=${paymentsResult.documentPayments}`);
       } catch (paymentsErr: unknown) {
         console.error('[runReplenishmentBsaleSync] Error en payments:', paymentsErr);
         finalStatus = 'PARTIAL';
+        commercialSyncConsistent = false;
         errorMessage += (errorMessage ? ' | ' : '') + 'Error en payments: ' + (paymentsErr instanceof Error ? paymentsErr.message : String(paymentsErr));
       }
     }
@@ -1835,6 +1871,26 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
         }
       } catch (orphanErr: any) {
         console.error('[runReplenishmentBsaleSync] Error hydrating orphans:', orphanErr);
+        finalStatus = 'PARTIAL';
+        commercialSyncConsistent = false;
+        errorMessage += (errorMessage ? ' | ' : '') + 'Error hydrating orphans: ' + orphanErr.message;
+      }
+    }
+
+    // Client 360 reads only the commercial sources above. Keep the previous
+    // snapshot when any of those sources completed only partially.
+    if (orphanResult.errors > 0) {
+      finalStatus = 'PARTIAL';
+      commercialSyncConsistent = false;
+      errorMessage += (errorMessage ? ' | ' : '') + `Orphans: errors=${orphanResult.errors}`;
+    }
+
+    if (canRefreshClientMetricsSnapshot(commercialSyncConsistent) && finalStatus !== 'FAILED') {
+      try {
+        await refreshClientMetricsSnapshot(companyId);
+      } catch (refreshErr: unknown) {
+        finalStatus = 'FAILED';
+        errorMessage += (errorMessage ? ' | ' : '') + (refreshErr instanceof Error ? refreshErr.message : String(refreshErr));
       }
     }
 
@@ -1870,7 +1926,8 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
        clients_fetched: clientStats.bsaleFetched,
        clients_inserted: clientStats.insertedCount,
        clients_updated: clientStats.updatedCount,
-       documents: salesRes.counts?.documents || 0,
+        documents: salesRes.counts?.documents || 0,
+        document_errors: salesRes.counts?.document_errors || 0,
        document_details_count: salesRes.counts?.details || 0,
        detail_errors: salesRes.counts?.detail_errors || 0,
        orphans_hydrated: orphanResult.hydrated,

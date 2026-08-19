@@ -9,6 +9,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test:bsale-client-metrics-refresh": "node --experimental-strip-types --test scripts/test-bsale-client-metrics-refresh.mjs",
     "test:datetime": "node --experimental-strip-types --test scripts/test-datetime.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
