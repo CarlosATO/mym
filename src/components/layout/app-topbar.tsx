@@ -7,18 +7,26 @@ import { ThemeSwitcher } from '@/components/theme-switcher'
 import { UserMenu } from '@/components/layout/user-menu'
 import type { Profile } from '@/lib/types'
 import type { Company } from '@/app/actions/companies'
+import { cn } from '@/lib/utils'
 
 interface AppTopbarProps {
   profile: Profile & { roles: { name: string } }
   activeCompany: Company
   permissions: string[]
   moduleName?: string
+  showPortalLink?: boolean
+  variant?: 'default' | 'wms'
+  sidebarMode?: 'expanded' | 'compact'
 }
 
-export function AppTopbar({ profile, activeCompany, permissions, moduleName }: AppTopbarProps) {
+export function AppTopbar({ profile, activeCompany, permissions, moduleName, showPortalLink = false, variant = 'default', sidebarMode }: AppTopbarProps) {
   return (
-    <header className="fixed top-0 left-0 right-0 z-30 h-12 bg-theme-bg/60 backdrop-blur-md border-b border-theme-border/60">
-      <div className="h-full max-w-7xl mx-auto px-4 lg:px-6 flex items-center justify-between gap-4">
+    <header className={cn('fixed top-0 left-0 right-0 z-30 h-12 border-b border-theme-border/60 backdrop-blur-md', variant === 'wms' ? 'bg-theme-surface/80 shadow-[0_2px_12px_rgba(31,52,77,0.04)]' : 'bg-theme-bg/60')}>
+      <div className={cn(
+        'h-full max-w-7xl mx-auto px-4 lg:px-6 flex items-center justify-between gap-4',
+        sidebarMode === 'compact' && 'md:!pl-[92px]',
+        sidebarMode === 'expanded' && 'md:!pl-[268px]'
+      )}>
         {/* Identidad / Módulo */}
         <div className="flex items-center gap-4 overflow-hidden">
           <Link href="/dashboard" className="flex items-center gap-2 shrink-0 group">
@@ -47,6 +55,11 @@ export function AppTopbar({ profile, activeCompany, permissions, moduleName }: A
 
         {/* Controles de la derecha */}
         <div className="flex items-center gap-2 shrink-0">
+          {showPortalLink && (
+            <Link href="/dashboard" className="hidden items-center gap-1 rounded-md px-2 py-1.5 text-xs font-semibold text-theme-text-muted hover:bg-theme-text/10 hover:text-theme-text sm:flex">
+              <span>Portal</span>
+            </Link>
+          )}
           <CompanySwitcher />
           <div className="w-px h-4 bg-theme-border/60 shrink-0" />
           <ThemeSwitcher />

@@ -1,8 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { usePathname } from 'next/navigation'
-import { ModuleLayout } from '@/components/modules/module-layout'
+import { usePathname, useSearchParams } from 'next/navigation'
+import { WmsShell } from './wms-shell'
 import { RecepcionesPanel } from '@/modules/logistica/recepciones/recepciones-panel'
 import { LocationsPanel } from '@/modules/logistica/ubicaciones/locations-panel'
 import { KardexPanel } from '@/modules/logistica/kardex/kardex-panel'
@@ -14,16 +13,6 @@ import { AdjustmentsPanel } from '@/modules/logistica/ajustes/adjustments-panel'
 import { SalesOrderPreparationPanel } from '@/modules/logistica/preparacion-pedidos/sales-order-preparation-panel'
 import { RouteGuidesPanel } from '@/modules/logistica/guias-ruta/route-guides-panel'
 import { DispatchCalendarSettings } from '@/modules/logistica/parametros/dispatch-calendar-settings'
-import type { RibbonAction } from '@/components/layout/module-ribbon'
-
-const tabs = [
-  { id: 'inicio', label: 'Inicio' },
-  { id: 'catalogos', label: 'Parámetros' },
-  { id: 'preparacion_pedidos', label: 'Preparación de Pedidos' },
-  { id: 'movimientos', label: 'Movimientos' },
-  { id: 'consultas', label: 'Consultas' },
-  { id: 'reportes', label: 'Reportes' },
-]
 
 // pageHeaders are only used in 'contained' mode views (e.g. Inicio).
 // Workspace/operational panels do NOT render these headers — they manage their own title area.
@@ -48,6 +37,16 @@ const pageHeaders: Record<string, { title: string; breadcrumb: string[]; descrip
     breadcrumb: ['WMS', 'Parámetros', 'Productos'],
     description: 'Catálogo logístico de productos y atributos operacionales.',
   },
+  calendario_despacho: {
+    title: 'Calendario de Despacho',
+    breadcrumb: ['WMS', 'Parámetros', 'Calendario de Despacho'],
+    description: 'Configuración de calendarios de despacho.',
+  },
+  preparacion_pedidos: {
+    title: 'Preparación de Pedidos',
+    breadcrumb: ['WMS', 'Preparación de Pedidos'],
+    description: 'Preparación operativa de pedidos para despacho.',
+  },
   recepciones: {
     title: 'Recepciones',
     breadcrumb: ['WMS', 'Movimientos', 'Recepciones'],
@@ -57,6 +56,16 @@ const pageHeaders: Record<string, { title: string; breadcrumb: string[]; descrip
     title: 'Traspasos internos',
     breadcrumb: ['WMS', 'Movimientos', 'Traspasos'],
     description: 'Movimiento de stock entre bodegas y ubicaciones con trazabilidad por lote.',
+  },
+  ajustes: {
+    title: 'Ajustes',
+    breadcrumb: ['WMS', 'Movimientos', 'Ajustes'],
+    description: 'Ajustes operativos de inventario.',
+  },
+  guias_ruta: {
+    title: 'Guías de Ruta',
+    breadcrumb: ['WMS', 'Movimientos', 'Guías de Ruta'],
+    description: 'Gestión y control de despachos en ruta.',
   },
   stock: {
     title: 'Stock por ubicación',
@@ -87,59 +96,12 @@ interface LogisticaLayoutClientProps {
 
 export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClientProps) {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
   const isReceiptRoute = pathname.startsWith('/dashboard/logistica/recepciones/')
+  const isRouteGuidesRoute = pathname === '/dashboard/logistica/guias-ruta'
 
-  const [activeTab, setActiveTab] = useState('inicio')
-  const [activeActionId, setActiveActionId] = useState('resumen')
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search)
-      const tab = params.get('tab')
-      const action = params.get('action')
-      if (tab) setActiveTab(tab)
-      if (action) setActiveActionId(action)
-    }
-  }, [])
-
-  const handleTabChange = (tabId: string) => {
-    setActiveTab(tabId)
-    if (tabId === 'inicio') setActiveActionId('resumen')
-    else if (tabId === 'catalogos') setActiveActionId('bodegas')
-    else if (tabId === 'preparacion_pedidos') setActiveActionId('preparacion_pedidos')
-    else if (tabId === 'movimientos') setActiveActionId('recepciones')
-    else if (tabId === 'consultas') setActiveActionId('stock')
-    else if (tabId === 'reportes') setActiveActionId('reportes_log')
-  }
-
-  const ribbonActions: RibbonAction[] = []
-
-  if (activeTab === 'catalogos') {
-    ribbonActions.push(
-      { id: 'bodegas', label: 'Bodegas', icon: 'Home', onClick: () => setActiveActionId('bodegas') },
-      { id: 'productos', label: 'Productos', icon: 'Box', onClick: () => setActiveActionId('productos') },
-      { id: 'calendario_despacho', label: 'Calendario de Despacho', icon: 'Calendar', onClick: () => setActiveActionId('calendario_despacho') }
-    )
-  } else if (activeTab === 'movimientos') {
-    ribbonActions.push(
-      { id: 'recepciones', label: 'Recepciones', icon: 'PackageOpen', onClick: () => setActiveActionId('recepciones') },
-      { id: 'traspasos', label: 'Traspasos', icon: 'ArrowLeftRight', onClick: () => setActiveActionId('traspasos') },
-      { id: 'ajustes', label: 'Ajustes', icon: 'Sliders', onClick: () => setActiveActionId('ajustes') },
-      { id: 'guias_ruta', label: 'Guías de Ruta', icon: 'Map', onClick: () => setActiveActionId('guias_ruta') },
-      { id: 'egresos', label: 'Egresos', icon: 'LogOut', upcoming: true },
-      { id: 'devoluciones', label: 'Devoluciones', icon: 'RotateCcw', upcoming: true }
-    )
-  } else if (activeTab === 'consultas') {
-    ribbonActions.push(
-      { id: 'stock', label: 'Stock', icon: 'Layers', onClick: () => setActiveActionId('stock') },
-      { id: 'kardex', label: 'Kardex', icon: 'History', onClick: () => setActiveActionId('kardex') },
-      { id: 'trazabilidad', label: 'Trazabilidad', icon: 'GitMerge', upcoming: true }
-    )
-  } else if (activeTab === 'reportes') {
-    ribbonActions.push(
-      { id: 'reportes_log', label: 'Reportes de Almacén', icon: 'BarChart3', upcoming: true }
-    )
-  }
+  const activeTab = searchParams.get('tab') ?? 'inicio'
+  const activeActionId = searchParams.get('action') ?? 'resumen'
 
   let content = null
 
@@ -233,41 +195,23 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
     )
   }
 
-  if (isReceiptRoute) {
+  if (isReceiptRoute || isRouteGuidesRoute) {
     return (
-      <ModuleLayout
-        moduleName="WMS"
-        tabs={[]}
-        activeTab=""
-        onTabChange={() => {}}
-        ribbonActions={[]}
+      <WmsShell
+        pageTitle={isReceiptRoute ? 'Recepción' : 'Guías de Ruta'}
+        breadcrumb={isReceiptRoute ? ['WMS', 'Movimientos', 'Recepciones'] : ['WMS', 'Movimientos', 'Guías de Ruta']}
         profile={profile}
       >
         {children}
-      </ModuleLayout>
+      </WmsShell>
     )
   }
 
-  // Workspace mode for panels that need full-height, full-width layout.
-  // Extend this list when new operational panels are added.
-  const workspaceActionIds = ['recepciones', 'traspasos', 'stock', 'kardex', 'bodegas', 'productos', 'guias_ruta', 'ubicaciones', 'preparacion_pedidos', 'calendario_despacho', 'ajustes']
-  const layoutMode = workspaceActionIds.includes(activeActionId) ? 'workspace' : 'contained'
+  const currentPage = pageHeaders[activeActionId] ?? pageHeaders.resumen
 
   return (
-    <ModuleLayout
-      moduleName="WMS"
-      tabs={tabs}
-      activeTab={activeTab}
-      onTabChange={handleTabChange}
-      ribbonActions={ribbonActions}
-      activeActionId={activeActionId}
-      layoutMode={layoutMode}
-      // pageHeader is intentionally omitted in workspace mode (operational panels).
-      // Only pass it for contained mode views that benefit from breadcrumb/title.
-      pageHeader={layoutMode === 'workspace' ? undefined : (pageHeaders[activeActionId] ?? pageHeaders.resumen)}
-      profile={profile}
-    >
+    <WmsShell pageTitle={currentPage.title} breadcrumb={currentPage.breadcrumb} profile={profile}>
       {content}
-    </ModuleLayout>
+    </WmsShell>
   )
 }

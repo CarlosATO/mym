@@ -5,6 +5,7 @@ import { getPendingRouteFunds, createFundClosure, getFundClosures, getFundClosur
 import { PendingRouteFund, RouteFundClosure } from './fund-closures-types'
 import { RefreshCw, Plus, CheckCircle, AlertTriangle, FileText, DollarSign, Wallet, Eye, Download, Paperclip, Search, Filter } from 'lucide-react'
 import { toast } from 'sonner'
+import { formatCivilDate, formatInstantInSantiago, todayInSantiago } from '@/lib/datetime'
 
 export function FundClosuresWorkspace() {
   const [activeTab, setActiveTab] = useState<'PENDING' | 'HISTORY'>('PENDING')
@@ -239,7 +240,7 @@ export function FundClosuresWorkspace() {
                     return (
                     <tr key={closure.id} className="hover:bg-theme-text/5 transition-colors">
                       <td className="p-3 font-bold text-theme-text whitespace-nowrap">{closure.closure_number}</td>
-                      <td className="p-3 whitespace-nowrap text-theme-text-muted">{new Date(closure.created_at).toLocaleDateString('es-CL')}</td>
+                      <td className="p-3 whitespace-nowrap text-theme-text-muted">{formatInstantInSantiago(closure.created_at, { year: 'numeric', month: '2-digit', day: '2-digit' })}</td>
                       <td className="p-3 whitespace-nowrap">
                         <span className={`px-2 py-1 text-[11px] font-bold rounded ${closure.status === 'CLOSED' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : closure.status === 'WITH_DIFFERENCE' ? 'bg-orange-500/10 text-orange-600 dark:text-orange-400' : closure.status === 'CANCELLED' ? 'bg-red-500/10 text-red-600 dark:text-red-400' : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'}`}>{closure.status}</span>
                       </td>
@@ -489,7 +490,7 @@ function FundClosureDetail({ closureId, onBack }: { closureId: string; onBack: (
                 </div>
                 <div className="flex-1">
                   <label className="block text-xs font-bold text-theme-text-muted mb-1">Fecha</label>
-                  <input type="date" name="expense_date" required defaultValue={new Date().toISOString().split('T')[0]} className="w-full border border-theme-border rounded-lg px-3 py-2 text-sm bg-theme-surface text-theme-text" />
+                  <input type="date" name="expense_date" required defaultValue={todayInSantiago()} className="w-full border border-theme-border rounded-lg px-3 py-2 text-sm bg-theme-surface text-theme-text" />
                 </div>
               </div>
               <div>
@@ -533,7 +534,7 @@ function FundClosureDetail({ closureId, onBack }: { closureId: string; onBack: (
                 </div>
                 <div className="flex-1">
                   <label className="block text-xs font-bold text-theme-text-muted mb-1">Fecha</label>
-                  <input type="date" name="deposit_date" required defaultValue={new Date().toISOString().split('T')[0]} className="w-full border border-theme-border rounded-lg px-3 py-2 text-sm bg-theme-surface text-theme-text" />
+                  <input type="date" name="deposit_date" required defaultValue={todayInSantiago()} className="w-full border border-theme-border rounded-lg px-3 py-2 text-sm bg-theme-surface text-theme-text" />
                 </div>
               </div>
               <div>
@@ -615,7 +616,7 @@ function FundClosureDetail({ closureId, onBack }: { closureId: string; onBack: (
                     return (
                       <tr key={e.id} className="hover:bg-theme-text/5 transition-colors">
                         <td className="p-3 text-theme-text font-medium">{e.expense_type}</td>
-                        <td className="p-3 text-theme-text-muted whitespace-nowrap">{new Date(e.expense_date).toLocaleDateString('es-CL')}</td>
+                        <td className="p-3 text-theme-text-muted whitespace-nowrap">{formatCivilDate(e.expense_date)}</td>
                         <td className="p-3 text-right font-mono text-red-600 dark:text-red-400 font-bold">${Number(e.amount).toLocaleString('es-CL')}</td>
                         <td className="p-3 text-center">
                           {attach ? (
@@ -652,7 +653,7 @@ function FundClosureDetail({ closureId, onBack }: { closureId: string; onBack: (
                     return (
                       <tr key={d.id} className="hover:bg-theme-text/5 transition-colors">
                         <td className="p-3 text-theme-text font-medium">{d.deposit_method}</td>
-                        <td className="p-3 text-theme-text-muted whitespace-nowrap">{new Date(d.deposit_date).toLocaleDateString('es-CL')}</td>
+                        <td className="p-3 text-theme-text-muted whitespace-nowrap">{formatCivilDate(d.deposit_date)}</td>
                         <td className="p-3 text-right font-mono text-emerald-600 dark:text-emerald-400 font-bold">${Number(d.amount).toLocaleString('es-CL')}</td>
                         <td className="p-3 text-center">
                           {attach ? (

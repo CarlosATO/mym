@@ -5,7 +5,7 @@ import { getWarehouses, createWarehouse, updateWarehouse, deactivateWarehouse, i
 import { getWarehouseLocationStats, type WarehouseStats } from '@/app/actions/logistica/location-layouts'
 import { getRegions, getCommunes } from '@/app/actions/geography'
 import * as XLSX from 'xlsx'
-import { ArrowLeft, LayoutGrid, List } from 'lucide-react'
+import { ArrowLeft, Download, FileSpreadsheet, Filter, Grid2X2, List, MoreHorizontal, Plus, Search, Upload, X } from 'lucide-react'
 import { WarehouseVisualOverview } from '../components/warehouse-visual-overview'
 
 export function WarehousesPanel() {
@@ -212,39 +212,43 @@ export function WarehousesPanel() {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-transparent">
-      {msg && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-muted">{msg}</div>}
+    <div className="flex flex-col h-full overflow-hidden bg-theme-surface">
+      {msg && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-5 py-2.5 text-sm text-theme-text-accent">{msg}</div>}
 
       {!(viewMode === 'visual' && selectedWarehouseId) && (
         <>
-          <div className="shrink-0 flex flex-col gap-3 p-4 border-b border-theme-border/60 bg-theme-surface shadow-sm z-10 relative">
-            <div className="flex flex-wrap items-center gap-3 justify-between">
-              <div className="flex items-center gap-3 flex-1 min-w-0">
-                <input type="text" value={filters.search ?? ''} onChange={e => setFilter('search', e.target.value)}
-                  placeholder="Buscar por código, nombre..."
-                  className="w-full max-w-xs h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-sm text-theme-text placeholder:text-gray-400 dark:placeholder:text-theme-text-muted/50 focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
-                <button onClick={() => setShowFilters(!showFilters)} className={`h-9 px-3 rounded-lg border transition-colors text-sm font-medium ${showFilters ? 'bg-theme-text/10 border-theme-border text-theme-text' : 'border-theme-border text-theme-text-muted/70 hover:text-theme-text hover:bg-theme-text/5'}`}>
-                  Filtros {((filters.warehouse_type && filters.warehouse_type !== '') || (filters.status && filters.status !== '')) && ' (Activos)'}
-                </button>
+          <div className="shrink-0 border-b border-theme-border/60 bg-theme-text/[0.012]">
+            <div className="flex items-end justify-between gap-4 px-5 pt-4 pb-3">
+              <div className="min-w-0">
+                <h1 className="text-base font-semibold tracking-tight text-theme-text">Bodegas</h1>
+                <p className="mt-0.5 text-[11px] text-theme-text-muted/70">Centros operativos, capacidad y estructura de almacenamiento</p>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button onClick={() => { resetForm(); setShowForm(true) }} className="h-9 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold transition-colors">+ Nueva</button>
-                <button onClick={downloadTemplate} className="h-9 px-3 rounded-lg border border-theme-border text-theme-text-muted/70 hover:text-theme-text hover:bg-theme-text/5 text-sm font-medium transition-colors hidden md:block" title="Descargar plantilla">Plantilla</button>
-                <label className="h-9 px-3 rounded-lg border border-theme-border text-theme-text-muted/70 hover:text-theme-text hover:bg-theme-text/5 text-sm font-medium transition-colors cursor-pointer inline-flex items-center gap-2">Importar<input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={handleFile} className="hidden" /></label>
-                <div className="relative">
-                  <button onClick={() => setShowExport(!showExport)} className="h-9 px-3 rounded-lg border border-theme-border text-theme-text-muted/70 hover:text-theme-text hover:bg-theme-text/5 text-sm font-medium transition-colors">Exportar</button>
-                  {showExport && (<><div className="fixed inset-0 z-40" onClick={() => setShowExport(false)} /><div className="absolute right-0 top-full mt-2 w-56 bg-white dark:bg-theme-surface/95 backdrop-blur-md rounded-xl border border-theme-border shadow-lg z-50 py-2"><button onClick={handleExportAll} className="w-full text-left px-4 py-2 text-sm text-theme-text-muted hover:bg-theme-text/5">Exportar todas</button><button onClick={handleExportFiltered} className="w-full text-left px-4 py-2 text-sm text-theme-text-muted hover:bg-theme-text/5">Exportar filtradas</button><button onClick={handleExportSelected} disabled={selected.size === 0} className="w-full text-left px-4 py-2 text-sm text-theme-text-muted hover:bg-theme-text/5 disabled:text-gray-400 dark:disabled:text-theme-text-muted/50 disabled:cursor-not-allowed">Seleccionadas {selected.size > 0 && `(${selected.size})`}</button></div></>)}
-                </div>
-                <div className="w-px h-6 bg-theme-border mx-1" />
-                <div className="flex items-center bg-theme-text/5 border border-theme-border rounded-lg p-0.5">
-                  <button onClick={() => { setViewMode('table'); setSelectedWarehouseId(null); }} className={`p-1.5 rounded-md flex items-center justify-center transition-colors ${viewMode === 'table' ? 'bg-theme-surface shadow-sm text-theme-text' : 'text-theme-text-muted hover:text-theme-text'}`} title="Vista Tabla"><List className="w-4 h-4" /></button>
-                  <button onClick={() => setViewMode('visual')} className={`p-1.5 rounded-md flex items-center justify-center transition-colors ${viewMode === 'visual' ? 'bg-theme-surface shadow-sm text-theme-text' : 'text-theme-text-muted hover:text-theme-text'}`} title="Vista Operativa"><LayoutGrid className="w-4 h-4" /></button>
-                </div>
-              </div>
+              <span className="shrink-0 text-[11px] font-medium tabular-nums text-theme-text-muted/70">{total.toLocaleString('es-CL')} registros</span>
             </div>
 
-            {showFilters && (
-              <div className="flex flex-wrap gap-3 pt-3 border-t border-theme-border/40 animate-in fade-in slide-in-from-top-2 duration-200">
+            <div className="flex flex-col gap-3 px-5 pb-4">
+              <div className="flex flex-col gap-2 md:flex-row md:items-center">
+                <div className="relative min-w-0 flex-1">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-theme-text-muted/50" />
+                  <input type="text" value={filters.search ?? ''} onChange={e => setFilter('search', e.target.value)} placeholder="Buscar por código, nombre, ciudad o comuna..." className="h-10 w-full rounded-xl border border-theme-border bg-theme-surface pl-10 pr-4 text-sm text-theme-text placeholder:text-theme-text-muted/40 transition-all focus:border-theme-accent focus:bg-theme-surface focus:ring-2 focus:ring-theme-accent/20" />
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button onClick={() => setShowFilters(!showFilters)} className={`inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-3 text-sm font-semibold transition-all ${showFilters ? 'border-theme-border bg-theme-text/10 text-theme-text' : 'border-theme-border bg-theme-surface text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text'}`}><Filter className="h-4 w-4" /><span className="hidden sm:inline">Filtros</span>{((filters.warehouse_type && filters.warehouse_type !== '') || (filters.status && filters.status !== '')) && <span className="h-1.5 w-1.5 rounded-full bg-theme-accent" />}</button>
+                  <div className="flex items-center rounded-xl border border-theme-border bg-theme-text/5 p-0.5">
+                    <button onClick={() => { setViewMode('table'); setSelectedWarehouseId(null) }} className={`flex h-8 items-center justify-center rounded-lg px-2.5 text-xs font-semibold transition-all ${viewMode === 'table' ? 'bg-theme-surface text-theme-text shadow-sm ring-1 ring-theme-border/60' : 'text-theme-text-muted/80 hover:text-theme-text'}`} title="Vista tabla"><List className="h-4 w-4 sm:mr-1.5" /><span className="hidden sm:inline">Tabla</span></button>
+                    <button onClick={() => setViewMode('visual')} className={`flex h-8 items-center justify-center rounded-lg px-2.5 text-xs font-semibold transition-all ${viewMode === 'visual' ? 'bg-theme-surface text-theme-text shadow-sm ring-1 ring-theme-border/60' : 'text-theme-text-muted/80 hover:text-theme-text'}`} title="Vista operativa"><Grid2X2 className="h-4 w-4 sm:mr-1.5" /><span className="hidden sm:inline">Operativa</span></button>
+                  </div>
+                  <button onClick={() => { resetForm(); setShowForm(true) }} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-theme-accent px-3.5 text-sm font-semibold text-white shadow-sm shadow-theme-accent/20 transition-colors hover:bg-theme-accent-hover"><Plus className="h-4 w-4" /><span>Nueva</span></button>
+                  <div className="relative">
+                    <button onClick={() => setShowExport(!showExport)} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-theme-border bg-theme-surface px-3 text-sm font-semibold text-theme-text-muted transition-all hover:bg-theme-text/5 hover:text-theme-text"><MoreHorizontal className="h-4 w-4" /><span className="hidden lg:inline">Opciones</span></button>
+                    {showExport && (<><div className="fixed inset-0 z-40" onClick={() => setShowExport(false)} /><div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-2xl border border-theme-border bg-theme-surface p-2 shadow-xl"><button onClick={downloadTemplate} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-xs font-medium text-theme-text-muted transition-colors hover:bg-theme-text/5 hover:text-theme-text"><FileSpreadsheet className="h-4 w-4" /> Descargar plantilla</button><label className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-xs font-medium text-theme-text-muted transition-colors hover:bg-theme-text/5 hover:text-theme-text"><Upload className="h-4 w-4" /> Importar<input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={handleFile} className="hidden" /></label><div className="my-1 h-px bg-theme-border" /><button onClick={handleExportAll} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-xs font-medium text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text"><Download className="h-4 w-4" /> Exportar todas</button><button onClick={handleExportFiltered} className="w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text">Exportar filtradas</button><button onClick={handleExportSelected} disabled={selected.size === 0} className="w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text disabled:cursor-not-allowed disabled:opacity-40">Seleccionadas {selected.size > 0 && `(${selected.size})`}</button></div></>)}
+                  </div>
+                </div>
+              </div>
+
+              {showFilters && (
+                <div className="flex flex-wrap items-center gap-3 border-t border-theme-border/40 pt-3 animate-in fade-in slide-in-from-top-2 duration-200">
+                <span className="mr-1 text-[10px] font-bold uppercase tracking-[0.12em] text-theme-text-muted/60">Filtrar por</span>
                 <select value={filters.warehouse_type ?? ''} onChange={e => setFilter('warehouse_type', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30">
                   <option value="" className="bg-white dark:bg-theme-surface">Todos los tipos</option>
                   {typeOpts.map(t => <option key={t} value={t} className="bg-white dark:bg-theme-surface">{t}</option>)}
@@ -255,9 +259,10 @@ export function WarehousesPanel() {
                   <option value="INACTIVE" className="bg-white dark:bg-theme-surface">INACTIVA</option>
                   <option value="BLOCKED" className="bg-white dark:bg-theme-surface">BLOQUEADA</option>
                 </select>
-                <button onClick={() => { setFilters({ page: 1, pageSize: 50 }); setSelected(new Set()) }} className="h-9 px-3 rounded-lg border border-theme-border text-theme-text-muted/70 hover:text-theme-text hover:bg-theme-text/5 text-xs transition-colors">✕ Limpiar filtros</button>
-              </div>
-            )}
+                <button onClick={() => { setFilters({ page: 1, pageSize: 50 }); setSelected(new Set()) }} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-theme-border px-3 text-xs text-theme-text-muted/70 transition-colors hover:bg-theme-text/5 hover:text-theme-text"><X className="h-3.5 w-3.5" /> Limpiar filtros</button>
+                </div>
+              )}
+            </div>
           </div>
           {selected.size > 0 && viewMode === 'table' && <div className="text-xs text-theme-text-muted/70 px-4 py-2 border-b border-theme-border bg-theme-text/[0.02]">{selected.size} bodega(s) seleccionada(s)</div>}
         </>

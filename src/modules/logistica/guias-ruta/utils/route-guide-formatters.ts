@@ -12,17 +12,7 @@ export function formatCurrency(amount: number | string | undefined | null): stri
 }
 
 export function formatDate(dateStr: string | null | undefined): string {
-  if (!dateStr) return '';
-  try {
-    const date = new Date(dateStr);
-    return new Intl.DateTimeFormat('es-CL', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit'
-    }).format(date);
-  } catch {
-    return dateStr;
-  }
+  return formatCivilDate(dateStr)
 }
 
 export function formatRouteGuideLineAmount(amount: string | number | undefined | null): string {
@@ -54,3 +44,4 @@ export function formatPaymentMethodLabel(normalizedValue?: string, originalValue
   
   return originalValue || 'No reconocido';
 }
+import { formatCivilDate } from '@/lib/datetime'

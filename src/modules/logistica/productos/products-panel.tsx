@@ -292,25 +292,36 @@ export function ProductsPanel() {
     <div className="flex flex-col h-full overflow-hidden bg-theme-surface">
       {message && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
 
-      <div className="shrink-0 flex flex-col gap-4 p-5 border-b border-theme-border/60 bg-theme-text/[0.01]">
+      <div className="shrink-0 border-b border-theme-border/60 bg-theme-text/[0.012]">
+        <div className="flex items-end justify-between gap-4 px-5 pt-4 pb-3">
+          <div className="min-w-0">
+            <h1 className="text-base font-semibold tracking-tight text-theme-text">Productos</h1>
+            <p className="mt-0.5 text-[11px] text-theme-text-muted/70">Catálogo operativo y atributos logísticos</p>
+          </div>
+          <span className="shrink-0 text-[11px] font-medium tabular-nums text-theme-text-muted/70">
+            {total.toLocaleString('es-CL')} registros
+          </span>
+        </div>
+
+        <div className="flex flex-col gap-3 px-5 pb-4">
         {/* Barra superior de herramientas */}
         <div className="flex flex-col md:flex-row items-center gap-3 w-full">
           {/* Búsqueda */}
-          <div className="relative flex-1 w-full">
+          <div className="relative flex-1 w-full min-w-0">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted/50" />
             <input type="text" value={filters.search ?? ''} onChange={e => setFilter('search', e.target.value)}
               placeholder="Buscar por SKU, descripción, marca o categoría..."
-              className="w-full h-11 pl-10 pr-4 rounded-xl border border-theme-border bg-theme-surface hover:bg-theme-text/5 focus:bg-theme-surface focus:ring-2 focus:ring-theme-accent/20 focus:border-theme-accent transition-all text-sm text-theme-text placeholder:text-theme-text-muted/40" />
+              className="w-full h-10 pl-10 pr-4 rounded-xl border border-theme-border bg-theme-surface hover:bg-theme-text/5 focus:bg-theme-surface focus:ring-2 focus:ring-theme-accent/20 focus:border-theme-accent transition-all text-sm text-theme-text placeholder:text-theme-text-muted/40" />
           </div>
 
-          <div className="flex items-center gap-2 w-full md:w-auto">
+          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
             {/* Toggle Tabla/Tarjetas */}
-            <div className="flex items-center p-1 bg-theme-text/5 border border-theme-border rounded-xl">
-              <button onClick={() => setViewMode('table')} className={`flex items-center justify-center w-10 h-8 md:w-auto md:px-3 text-xs font-semibold rounded-lg transition-all ${viewMode === 'table' ? 'bg-theme-surface shadow-sm text-theme-text' : 'text-theme-text-muted/60 hover:text-theme-text'}`}>
+            <div className="flex items-center p-0.5 bg-theme-text/5 border border-theme-border rounded-xl">
+              <button onClick={() => setViewMode('table')} className={`flex items-center justify-center w-10 h-8 md:w-auto md:px-3 text-xs font-semibold rounded-lg transition-all ${viewMode === 'table' ? 'bg-theme-surface shadow-sm ring-1 ring-theme-border/60 text-theme-text' : 'text-theme-text-muted/80 hover:bg-theme-surface/60 hover:text-theme-text'}`}>
                 <List className="w-4 h-4" />
                 <span className="hidden md:inline ml-2">Tabla</span>
               </button>
-              <button onClick={() => setViewMode('cards')} className={`flex items-center justify-center w-10 h-8 md:w-auto md:px-3 text-xs font-semibold rounded-lg transition-all ${viewMode === 'cards' ? 'bg-theme-surface shadow-sm text-theme-text' : 'text-theme-text-muted/60 hover:text-theme-text'}`}>
+              <button onClick={() => setViewMode('cards')} className={`flex items-center justify-center w-10 h-8 md:w-auto md:px-3 text-xs font-semibold rounded-lg transition-all ${viewMode === 'cards' ? 'bg-theme-surface shadow-sm ring-1 ring-theme-border/60 text-theme-text' : 'text-theme-text-muted/80 hover:bg-theme-surface/60 hover:text-theme-text'}`}>
                 <Grid className="w-4 h-4" />
                 <span className="hidden md:inline ml-2">Tarjetas</span>
               </button>
@@ -318,7 +329,7 @@ export function ProductsPanel() {
 
             {/* Opciones Importar/Exportar */}
             <div className="relative group z-10">
-              <button className="h-11 px-3 md:px-4 rounded-xl border border-theme-border bg-theme-surface hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text text-sm font-semibold transition-all flex items-center justify-center gap-2">
+               <button className="h-10 px-3 md:px-4 rounded-xl border border-theme-border bg-theme-surface hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text text-sm font-semibold transition-all flex items-center justify-center gap-2">
                 <MoreHorizontal className="w-5 h-5 md:w-4 md:h-4" />
                 <span className="hidden md:inline">Opciones</span>
               </button>
@@ -338,7 +349,7 @@ export function ProductsPanel() {
             </div>
 
             {/* Filtros Toggle */}
-            <button onClick={() => setShowFilters(!showFilters)} className={`h-11 px-3 md:px-4 rounded-xl border transition-all flex items-center justify-center gap-2 text-sm font-semibold ${showFilters ? 'bg-theme-text/10 border-theme-border text-theme-text' : 'bg-theme-surface border-theme-border hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text'}`}>
+             <button onClick={() => setShowFilters(!showFilters)} className={`h-10 px-3 md:px-4 rounded-xl border transition-all flex items-center justify-center gap-2 text-sm font-semibold ${showFilters ? 'bg-theme-text/10 border-theme-border text-theme-text' : 'bg-theme-surface border-theme-border hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text'}`}>
               <Filter className="w-4 h-4" />
               <span className="hidden md:inline">Filtros</span>
             </button>
@@ -396,10 +407,11 @@ export function ProductsPanel() {
             </div>
           </div>
         )}
+        </div>
       </div>
 
       {selected.size > 0 && (
-        <div className="text-xs text-theme-text-muted/70 px-1">{selected.size} producto(s) seleccionado(s)</div>
+        <div className="shrink-0 border-b border-theme-accent/15 bg-theme-accent/5 px-5 py-2 text-xs font-medium text-theme-text-accent">{selected.size} producto(s) seleccionado(s)</div>
       )}
 
       {preview && (
@@ -453,43 +465,46 @@ export function ProductsPanel() {
           {products.length === 0 && <div className="text-center py-10 text-theme-text-muted/50 text-sm">No hay productos.</div>}
         </div>
       ) : (
-        <div className="flex-1 overflow-auto">
-          <table className="w-full text-sm border-collapse">
+        <div className="flex-1 min-h-0 overflow-auto">
+          <table className="w-full min-w-[1180px] text-sm border-collapse">
             <thead className="sticky top-0 z-10 bg-theme-surface">
-              <tr className="border-b border-gray-200/80 dark:border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider">
+              <tr className="border-b border-theme-border bg-theme-text/[0.025] text-[10px] text-theme-text-muted/80 uppercase tracking-[0.12em]">
                 <th className="py-3 px-4 text-left w-10"><input type="checkbox" checked={products.length > 0 && products.every(p => selected.has(p.id))} onChange={toggleSelectAll} className="accent-emerald-600" /></th>
-                <th className="text-left py-3 px-4 font-medium w-14">Imagen</th>
-                <th className="text-left py-3 px-4 font-medium">SKU</th>
-                <th className="text-left py-3 px-4 font-medium">Código barra</th>
-                <th className="text-left py-3 px-4 font-medium">Descripción</th>
-                <th className="text-left py-3 px-4 font-medium">Marca</th>
-                <th className="text-left py-3 px-4 font-medium">Categoría</th>
-                <th className="text-left py-3 px-4 font-medium">Presentación</th>
-                <th className="text-left py-3 px-4 font-medium">U.Medida</th>
-                <th className="text-left py-3 px-4 font-medium">St.Min</th>
-                <th className="text-left py-3 px-4 font-medium">P.Repos</th>
-                <th className="text-left py-3 px-4 font-medium">Estado</th>
+                <th className="text-left py-3 px-4 font-semibold w-14">Imagen</th>
+                <th className="text-left py-3 px-4 font-semibold w-28">SKU</th>
+                <th className="text-left py-3 px-4 font-semibold w-36">Código barra</th>
+                <th className="text-left py-3 px-4 font-semibold min-w-[230px]">Descripción</th>
+                <th className="text-left py-3 px-4 font-semibold">Marca</th>
+                <th className="text-left py-3 px-4 font-semibold">Categoría</th>
+                <th className="text-left py-3 px-4 font-semibold">Presentación</th>
+                <th className="text-left py-3 px-4 font-semibold">U.Medida</th>
+                <th className="text-right py-3 px-4 font-semibold">St.Min</th>
+                <th className="text-right py-3 px-4 font-semibold">P.Repos</th>
+                <th className="text-center py-3 px-4 font-semibold">Estado</th>
+                <th className="text-right py-3 pl-4 pr-6 md:pr-8 font-semibold min-w-[190px]">Acciones</th>
                 
               </tr>
             </thead>
             <tbody>
               {filteredData.map(p => (
-                <tr key={p.id} className={`border-b border-theme-border hover:bg-theme-text/5 transition-colors ${selected.has(p.id) ? 'bg-white dark:bg-emerald-900/10' : ''}`}>
-                  <td className="py-3 px-4"><input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleSelect(p.id)} className="accent-emerald-600" /></td>
-                  <td className="py-2 px-4">{p.image_url ? <img src={p.image_url} alt="" className="w-10 h-10 rounded-lg object-cover border border-gray-200 dark:border-theme-border" /> : <div className="w-10 h-10 rounded-lg bg-black/5 dark:bg-theme-text/5 border border-gray-200 dark:border-theme-border flex items-center justify-center text-theme-text-muted/50 text-xs">📷</div>}</td>
-                  <td className="py-3 px-4 text-theme-text text-xs font-mono font-medium">{p.sku}</td>
-                  <td className="py-3 px-4 text-theme-text-muted/60 text-xs font-mono">{p.barcode || '—'}</td>
-                  <td className="py-3 px-4 text-theme-text-muted/80 text-xs max-w-[200px] truncate" title={p.description}>{p.description}</td>
-                  <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.brand || '—'}</td>
-                  <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.category || '—'}</td>
-                  <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.presentation || '—'}</td>
-                  <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.unit_of_measure || '—'}</td>
-                  <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.min_stock}</td>
-                  <td className="py-3 px-4 text-theme-text-muted/80 text-xs">{p.reorder_point}</td>
-                  <td className="py-3 px-4">{p.is_active ? <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-theme-accent-hover/10 text-theme-text-accent border-theme-accent/20">Activo</span> : <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-red-500/10 text-red-500 border-red-500/20">Inactivo</span>}</td>
-                  <td className="py-3 px-4 text-right">
-                    <button onClick={() => openEdit(p)} className="text-xs text-theme-text-muted/70 hover:text-theme-text-accent mr-3">Editar</button>
-                    <button onClick={() => handleDeactivate(p)} className={`text-xs ${p.is_active ? 'text-red-500/80 hover:text-red-500' : 'text-theme-text-muted/70 hover:text-theme-text-accent'}`}>{p.is_active ? 'Desactivar' : 'Activar'}</button>
+                <tr key={p.id} className={`group border-b border-theme-border/70 hover:bg-theme-accent/5 transition-colors ${selected.has(p.id) ? 'bg-theme-accent/10' : ''}`}>
+                  <td className="py-2.5 px-4"><input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleSelect(p.id)} className="accent-emerald-600" /></td>
+                  <td className="py-2 px-4">{p.image_url ? <img src={p.image_url} alt="" className="w-9 h-9 rounded-lg object-cover border border-theme-border bg-theme-text/5" /> : <div className="w-9 h-9 rounded-lg bg-theme-text/5 border border-theme-border flex items-center justify-center text-theme-text-muted/50 text-xs">📷</div>}</td>
+                  <td className="py-2.5 px-4 text-theme-text text-xs font-mono font-semibold">{p.sku}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/65 text-xs font-mono tabular-nums">{p.barcode || '—'}</td>
+                  <td className="py-2.5 px-4 text-theme-text text-xs font-medium max-w-[260px] truncate" title={p.description}>{p.description}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/75 text-xs">{p.brand || '—'}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/75 text-xs">{p.category || '—'}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/75 text-xs">{p.presentation || '—'}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/75 text-xs">{p.unit_of_measure || '—'}</td>
+                  <td className="py-2.5 px-4 text-right text-theme-text-muted/80 text-xs tabular-nums">{p.min_stock}</td>
+                  <td className="py-2.5 px-4 text-right text-theme-text-muted/80 text-xs tabular-nums">{p.reorder_point}</td>
+                  <td className="py-2.5 px-4 text-center">{p.is_active ? <span className="inline-flex items-center rounded-md border border-theme-accent/25 bg-theme-accent/10 px-2 py-0.5 text-[10px] font-semibold text-theme-text-accent">Activo</span> : <span className="inline-flex items-center rounded-md border border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-500">Inactivo</span>}</td>
+                  <td className="py-2.5 pl-4 pr-6 md:pr-8 text-right whitespace-nowrap">
+                    <div className="inline-flex items-center gap-1 rounded-lg border border-theme-border/70 bg-theme-surface/80 px-1 py-0.5 shadow-[0_1px_2px_rgba(31,52,77,0.04)] transition-colors group-hover:border-theme-border group-hover:bg-theme-surface group-hover:shadow-sm">
+                      <button onClick={() => openEdit(p)} className="rounded-md px-2 py-1 text-xs font-medium text-theme-text-muted/80 hover:bg-theme-accent/10 hover:text-theme-text-accent">Editar</button>
+                      <button onClick={() => handleDeactivate(p)} className={`rounded-md px-2 py-1 text-xs font-medium ${p.is_active ? 'text-red-500/80 hover:bg-red-500/10 hover:text-red-500' : 'text-theme-text-muted/80 hover:bg-theme-accent/10 hover:text-theme-text-accent'}`}>{p.is_active ? 'Desactivar' : 'Activar'}</button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -499,19 +514,19 @@ export function ProductsPanel() {
       )}
 
       {totalPages > 1 && viewMode === 'table' && (
-        <div className="shrink-0 flex items-center justify-between text-xs p-4 border-t border-theme-border/60 bg-theme-text/[0.01]">
+        <div className="shrink-0 flex flex-col gap-3 border-t border-theme-border/60 bg-theme-text/[0.012] px-5 py-3 text-xs sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2">
-            <span className="text-theme-text-muted/50">Mostrar</span>
+            <span className="text-theme-text-muted/60">Mostrar</span>
             <select value={filters.pageSize} onChange={e => setFilter('pageSize', e.target.value)} className="h-8 rounded-lg border border-gray-200 dark:border-theme-border bg-black/5 dark:bg-theme-text/5 px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40">
               <option value={25} className="bg-white dark:bg-emerald-900">25</option>
               <option value={50} className="bg-white dark:bg-emerald-900">50</option>
               <option value={100} className="bg-white dark:bg-emerald-900">100</option>
             </select>
-            <span className="text-theme-text-muted/50">de {total} registros</span>
+            <span className="text-theme-text-muted/60">de <strong className="font-semibold text-theme-text">{total.toLocaleString('es-CL')}</strong> registros</span>
           </div>
           <div className="flex items-center gap-2">
             <button disabled={(filters.page ?? 1) <= 1} onClick={() => setFilters(p => ({ ...p, page: (p.page ?? 1) - 1 }))} className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-theme-border text-theme-text-muted/70 hover:text-theme-text disabled:opacity-30 disabled:cursor-not-allowed">Anterior</button>
-            <span className="text-theme-text-muted/50">Pág. {filters.page ?? 1} de {totalPages}</span>
+            <span className="min-w-[92px] text-center text-theme-text-muted/60">Pág. <strong className="font-semibold text-theme-text">{filters.page ?? 1}</strong> de {totalPages}</span>
             <button disabled={(filters.page ?? 1) >= totalPages} onClick={() => setFilters(p => ({ ...p, page: (p.page ?? 1) + 1 }))} className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-theme-border text-theme-text-muted/70 hover:text-theme-text disabled:opacity-30 disabled:cursor-not-allowed">Siguiente</button>
           </div>
         </div>

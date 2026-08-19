@@ -1,6 +1,7 @@
 import { RouteGuide } from '../types';
 import { formatCurrency, formatDate } from '../utils/route-guide-formatters';
 import { CompanyLogo } from '@/components/company-logo';
+import { formatInstantInSantiago } from '@/lib/datetime';
 
 interface RouteGuidePrintViewProps {
   guide: RouteGuide;
@@ -140,7 +141,7 @@ export function RouteGuidePrintView({ guide }: RouteGuidePrintViewProps) {
 
       {/* Footer Info */}
       <div className="mt-16 text-center text-[10px] text-gray-500 border-t pt-4">
-        Generado en MYM ERP • Guía N° {guide.guide_number || '---'} • Impreso: {new Date().toLocaleString('es-CL')}
+         Generado en MYM ERP • Guía N° {guide.guide_number || '---'} • Impreso: {formatInstantInSantiago(new Date().toISOString())}
       </div>
     </div>
   );

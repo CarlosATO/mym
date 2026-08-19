@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react'
 import { WarehouseMapView } from './warehouse-map-view'
-import { LayoutGrid, Map as MapIcon, ArrowLeft, Building2, MapPin, Package, AlertCircle, ArrowRight } from 'lucide-react'
+import { LayoutGrid, Map as MapIcon, ArrowLeft, Building2, AlertCircle, ArrowRight } from 'lucide-react'
 import { type Warehouse } from '@/app/actions/adquisiciones/warehouses'
 import { type WarehouseStats } from '@/app/actions/logistica/location-layouts'
 
@@ -58,35 +58,35 @@ export function WarehouseVisualOverview({ warehouses, stats = [], onWarehouseSel
   return (
     <div className="h-full overflow-y-auto flex flex-col bg-theme-text/[0.01]">
       {/* Global Summary Bar */}
-      <div className="shrink-0 bg-theme-surface border-b border-theme-border px-6 py-4 flex flex-wrap items-center gap-6 shadow-sm">
+      <div className="shrink-0 bg-theme-surface border-b border-theme-border px-5 py-3 flex flex-wrap items-center gap-x-6 gap-y-3">
         <div className="flex items-center gap-3">
-          <div className="p-2 bg-theme-accent/10 text-theme-accent rounded-lg">
+          <div className="p-1.5 bg-theme-accent/10 text-theme-accent rounded-lg">
             <Building2 className="w-5 h-5" />
           </div>
           <div>
-            <p className="text-[10px] uppercase font-bold text-theme-text-muted">Total Bodegas</p>
-            <p className="text-lg font-black leading-none text-theme-text">{totalBodegas}</p>
+            <p className="text-[10px] uppercase font-bold tracking-wide text-theme-text-muted">Total bodegas</p>
+            <p className="text-base font-bold leading-none text-theme-text">{totalBodegas}</p>
           </div>
         </div>
         <div className="w-px h-8 bg-theme-border hidden sm:block" />
         <div className="flex items-center gap-3">
           <div>
-            <p className="text-[10px] uppercase font-bold text-theme-text-muted">Activas</p>
-            <p className="text-lg font-black leading-none text-emerald-600 dark:text-emerald-400">{activas}</p>
+            <p className="text-[10px] uppercase font-bold tracking-wide text-theme-text-muted">Activas</p>
+            <p className="text-base font-bold leading-none text-emerald-600 dark:text-emerald-400">{activas}</p>
           </div>
         </div>
         <div className="w-px h-8 bg-theme-border hidden sm:block" />
         <div className="flex items-center gap-3">
           <div>
-            <p className="text-[10px] uppercase font-bold text-theme-text-muted">Ubicaciones</p>
-            <p className="text-lg font-black leading-none text-theme-text">{totalUbicaciones}</p>
+            <p className="text-[10px] uppercase font-bold tracking-wide text-theme-text-muted">Ubicaciones</p>
+            <p className="text-base font-bold leading-none text-theme-text">{totalUbicaciones}</p>
           </div>
         </div>
         <div className="w-px h-8 bg-theme-border hidden sm:block" />
         <div className="flex items-center gap-3">
           <div>
-            <p className="text-[10px] uppercase font-bold text-theme-text-muted">Con Stock</p>
-            <p className="text-lg font-black leading-none text-blue-600 dark:text-blue-400">{conStock}</p>
+            <p className="text-[10px] uppercase font-bold tracking-wide text-theme-text-muted">Con stock</p>
+            <p className="text-base font-bold leading-none text-blue-600 dark:text-blue-400">{conStock}</p>
           </div>
         </div>
         {sinUbicaciones > 0 && (
@@ -97,8 +97,8 @@ export function WarehouseVisualOverview({ warehouses, stats = [], onWarehouseSel
                 <AlertCircle className="w-4 h-4" />
               </div>
               <div>
-                <p className="text-[10px] uppercase font-bold text-theme-text-muted">Sin Ubicaciones</p>
-                <p className="text-sm font-black leading-none text-amber-600">{sinUbicaciones}</p>
+                <p className="text-[10px] uppercase font-bold tracking-wide text-theme-text-muted">Sin ubicaciones</p>
+                <p className="text-sm font-bold leading-none text-amber-600">{sinUbicaciones}</p>
               </div>
             </div>
           </>
@@ -106,10 +106,10 @@ export function WarehouseVisualOverview({ warehouses, stats = [], onWarehouseSel
       </div>
 
       {/* Warehouses Grid */}
-      <div className="flex-1 p-6 md:p-8">
+      <div className="flex-1 p-4 md:p-5">
         <div className="max-w-[1600px] mx-auto">
           {/* TODO: Preparar para futura tabla logistica.warehouse_layouts (Drag & Drop de bodegas) */}
-          <div className="grid grid-cols-1 sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-10 animate-in fade-in duration-300">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 animate-in fade-in duration-300">
             {sortedWarehouses.map(w => {
               const wStats = statsByWarehouseId.get(w.id)
               const totalLocs = wStats?.total_locations || 0
@@ -131,7 +131,7 @@ export function WarehouseVisualOverview({ warehouses, stats = [], onWarehouseSel
                   </div>
 
                   {/* Warehouse Body */}
-                  <div className="bg-theme-surface border-2 border-theme-border/80 rounded-lg shadow-sm group-hover:shadow-md group-hover:border-theme-accent/70 transition-all flex flex-col relative z-10 min-h-[220px] overflow-hidden">
+                  <div className="bg-theme-surface border border-theme-border rounded-xl shadow-sm group-hover:shadow-md group-hover:border-theme-accent/70 transition-all flex flex-col relative z-10 min-h-[190px] overflow-hidden">
                     
                     {/* Subtle Loading Dock Door Background */}
                     <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-24 h-16 border-t-2 border-x-2 border-theme-border/30 rounded-t-lg bg-theme-text/[0.01] flex flex-col justify-end pointer-events-none">
@@ -140,53 +140,53 @@ export function WarehouseVisualOverview({ warehouses, stats = [], onWarehouseSel
                       <div className="w-full h-1 border-b border-theme-border/20 mt-1"></div>
                     </div>
 
-                    <div className="p-5 flex-1 flex flex-col z-10">
+                    <div className="p-4 flex-1 flex flex-col z-10">
                       {/* Header */}
-                      <div className="flex items-start justify-between mb-4">
+                      <div className="flex items-start justify-between mb-3">
                         <div className="flex flex-col">
-                          <h3 className="text-base font-black text-theme-text uppercase tracking-tight group-hover:text-theme-accent transition-colors line-clamp-2 leading-tight">
+                          <h3 className="text-sm font-semibold text-theme-text uppercase tracking-tight group-hover:text-theme-accent transition-colors line-clamp-2 leading-tight">
                             {w.name}
                           </h3>
                           <div className="flex items-center gap-2 mt-1.5">
-                            <span className="text-[10px] font-bold text-theme-text-muted bg-theme-text/5 px-1.5 py-0.5 rounded">
+                            <span className="text-[10px] font-mono font-semibold text-theme-text-muted bg-theme-text/5 px-1.5 py-0.5 rounded">
                               {w.code}
                             </span>
-                            <span className="text-[10px] font-bold text-theme-text-muted bg-theme-text/5 px-1.5 py-0.5 rounded">
+                            <span className="text-[10px] font-semibold text-theme-text-muted bg-theme-text/5 px-1.5 py-0.5 rounded">
                               {w.warehouse_type}
                             </span>
                           </div>
                         </div>
                         <div className="shrink-0 ml-2">
                           {w.is_active ? (
-                            <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" title="Activa" />
+                            <span className="rounded-md border border-theme-accent/25 bg-theme-accent/10 px-2 py-0.5 text-[10px] font-semibold text-theme-text-accent">Activa</span>
                           ) : (
-                            <div className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]" title="Inactiva" />
+                            <span className="rounded-md border border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-500">Inactiva</span>
                           )}
                         </div>
                       </div>
 
                       {/* Stats Grid */}
-                      <div className="grid grid-cols-2 gap-3 mt-auto bg-theme-text/[0.02] p-3 rounded-lg border border-theme-border/50 backdrop-blur-sm">
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-2 mt-auto bg-theme-text/[0.02] p-2.5 rounded-lg border border-theme-border/50 backdrop-blur-sm">
                         <div className="flex flex-col">
                           <span className="text-[10px] font-bold uppercase text-theme-text-muted mb-0.5">Pasillos</span>
-                          <span className="text-sm font-black text-theme-text">{aisles}</span>
+                           <span className="text-sm font-bold text-theme-text">{aisles}</span>
                         </div>
                         <div className="flex flex-col">
                           <span className="text-[10px] font-bold uppercase text-theme-text-muted mb-0.5">Ubicaciones</span>
-                          <span className="text-sm font-black text-theme-text">{totalLocs}</span>
+                           <span className="text-sm font-bold text-theme-text">{totalLocs}</span>
                         </div>
                         <div className="flex flex-col">
                           <span className="text-[10px] font-bold uppercase text-emerald-600/70 mb-0.5">Con Stock</span>
-                          <span className="text-sm font-black text-emerald-600 dark:text-emerald-400">{withStock}</span>
+                           <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">{withStock}</span>
                         </div>
                         <div className="flex flex-col">
                           <span className="text-[10px] font-bold uppercase text-theme-text-muted mb-0.5">Vacías</span>
-                          <span className="text-sm font-black text-theme-text">{emptyLocs}</span>
+                           <span className="text-sm font-bold text-theme-text">{emptyLocs}</span>
                         </div>
                       </div>
 
                       {/* Action Button */}
-                      <div className="mt-4 pt-4 border-t border-theme-border/50">
+                      <div className="mt-3 pt-3 border-t border-theme-border/50">
                         <button 
                           className="w-full py-2 bg-theme-text/5 hover:bg-theme-accent hover:text-white text-theme-text text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-2"
                         >

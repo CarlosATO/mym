@@ -6,13 +6,10 @@ export function formatCurrency(amount: number): string {
 }
 
 export function formatDate(dateString: string): string {
-  if (!dateString) return '-'
-  return new Date(dateString).toLocaleDateString('es-CL', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric'
-  })
+  return formatCivilDate(dateString, 'short') || '-'
 }
+
+export { formatInstantInSantiago }
 
 export function formatExpectedPaymentMethod(method: string): string {
   switch (method) {
@@ -51,3 +48,4 @@ export function formatSettlementStatus(status: string): string {
     default: return status
   }
 }
+import { formatCivilDate, formatInstantInSantiago } from '@/lib/datetime'

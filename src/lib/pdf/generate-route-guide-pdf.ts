@@ -3,6 +3,7 @@ import autoTable from 'jspdf-autotable'
 import { RouteGuide } from '@/modules/logistica/guias-ruta/types'
 import { formatRouteGuideLineAmount, formatPaymentMethodLabel } from '@/modules/logistica/guias-ruta/utils/route-guide-formatters'
 import { isEmptyRouteGuideRow } from '@/modules/logistica/guias-ruta/utils/route-guide-validation'
+import { formatCivilDate, todayInSantiago } from '@/lib/datetime'
 
 const DARK_HEADER: [number, number, number] = [30, 58, 95]
 const EMERALD: [number, number, number] = [16, 185, 129]
@@ -17,12 +18,8 @@ function formatCurrency(amount: number): string {
 }
 
 function formatDate(dateStr: string): string {
-  if (!dateStr) return '-'
-  const d = new Date(dateStr)
-  const day = String(d.getDate() + 1).padStart(2, '0')
-  const month = String(d.getMonth() + 1).padStart(2, '0')
-  const year = d.getFullYear()
-  return `${day}/${month}/${year}`
+  const civilDate = formatCivilDate(dateStr)
+  return civilDate ? civilDate.replaceAll('-', '/') : '-'
 }
 
 function drawPageFooter(doc: jsPDF, pageNum: number, totalPages: number): void {
@@ -37,7 +34,7 @@ function drawPageFooter(doc: jsPDF, pageNum: number, totalPages: number): void {
   doc.line(margin, 282, pageWidth - margin, 282)
 
   doc.text(
-    `Documento generado el ${formatDate(new Date().toISOString())} | Página ${pageNum} de ${totalPages}`,
+    `Documento generado el ${formatDate(todayInSantiago())} | Página ${pageNum} de ${totalPages}`,
     pageWidth / 2,
     288.5,
     { align: 'center' },

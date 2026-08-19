@@ -11,6 +11,7 @@ import { generateRouteGuidePdfBlob, downloadRouteGuidePdf } from '@/lib/pdf/gene
 import { parseChileanMoney, isEmptyRouteGuideRow } from '../utils/route-guide-validation';
 import { dedupOptions, injectCurrentOption } from '../utils/route-guide-catalogs';
 import { getSaleConditions } from '@/app/actions/integraciones/sale-conditions';
+import { todayInSantiago } from '@/lib/datetime';
 
 function formatStatus(status: string) {
   if (status === 'DRAFT') return 'Borrador';
@@ -38,7 +39,7 @@ export function RouteGuideForm({
   isDispatching
 }: RouteGuideFormProps) {
   const [catalogs, setCatalogs] = useState(initialCatalog);
-  const [guideDate, setGuideDate] = useState(initialData?.guide_date || new Date().toISOString().split('T')[0]);
+  const [guideDate, setGuideDate] = useState(initialData?.guide_date || todayInSantiago());
   const [routeId, setRouteId] = useState(initialData?.route_id || '');
   const [vehicleId, setVehicleId] = useState(initialData?.vehicle_id || '');
   const [driverId, setDriverId] = useState(initialData?.driver_id || '');
