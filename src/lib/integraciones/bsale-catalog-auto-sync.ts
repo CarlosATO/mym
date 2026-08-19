@@ -1,6 +1,7 @@
 import { syncBsaleProducts } from './bsale-products-sync'
 import { syncBsaleProductTypes } from './bsale-product-types-sync'
 import { syncProductSupplierMappings, AutoMappingResult } from './bsale-auto-mapping'
+import { shouldRunProductSupplierMappings } from './bsale-update-batches'
 
 export interface CatalogAutoSyncResult {
   productTypesResult: any
@@ -64,17 +65,24 @@ export async function runCatalogAutoSyncStep(
       recordDryRun: true,
     })
     productsResult = prodRes as any
-    if (prodRes.status === 'FAILED') {
+    if (prodRes.status !== 'SUCCESS') {
       finalStatus = 'PARTIAL'
-      errorMessage += (errorMessage ? ' | ' : '') + 'Products: ' + (prodRes.message || '')
-    } else if (prodRes.status === 'SKIPPED') {
-      console.log(`${logTag} syncBsaleProducts skipped (lock)`)
+      const productError = prodRes.message || prodRes.error?.message || String(prodRes.error || '')
+      errorMessage += (errorMessage ? ' | ' : '') + 'Products: ' + productError
+      if (prodRes.status === 'SKIPPED') {
+        console.log(`${logTag} syncBsaleProducts skipped (lock)`)
+      }
     }
     console.log(`${logTag} Products: status=${prodRes.status} new=${(prodRes.stats as any)?.newProducts || 0} upd=${(prodRes.stats as any)?.updatedProducts || 0}`)
   } catch (prodErr: any) {
     console.error(`${logTag} Error en products:`, prodErr)
     finalStatus = 'PARTIAL'
     errorMessage += (errorMessage ? ' | ' : '') + 'Error en products: ' + prodErr.message
+  }
+
+  if (!shouldRunProductSupplierMappings(productsResult.status)) {
+    console.log(`${logTag} Mappings omitidos porque products terminó con status=${productsResult.status}`)
+    return { productTypesResult, productsResult, mappingResult, finalStatus, errorMessage }
   }
 
   // Step 0c: Auto-mapping producto → pseudoproveedor

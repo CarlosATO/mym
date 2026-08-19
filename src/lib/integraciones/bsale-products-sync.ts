@@ -25,6 +25,7 @@ export interface BsaleSyncStats {
 import { createClient } from '@supabase/supabase-js'
 import { planUniqueSafeProductUpdates } from './bsale-planner'
 import { collectBsaleBrandRecords, extractBsaleBrand } from './bsale-brand'
+import { executeSequentialBatches } from './bsale-update-batches'
 import crypto from 'crypto'
 import {
   createSyncRun,
@@ -307,14 +308,22 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
     if (plannerResult.conflicts.length > 0) {
       stats.conflictCount += plannerResult.conflicts.length
       stats.errorCount += plannerResult.conflicts.length
-      if (runId) await recordSyncError({ runId, companyId, provider, entity, errorMessage: `Se detectaron ${plannerResult.conflicts.length} conflictos UNIQUE. Abortando actualizaciones.`, safePayload: plannerResult.conflicts })
+      const message = `Se detectaron ${plannerResult.conflicts.length} conflictos UNIQUE. Abortando actualizaciones.`
+      if (runId) {
+        await recordSyncError({ runId, companyId, provider, entity, errorMessage: message, safePayload: plannerResult.conflicts })
+        await finishSyncRun({ runId, status: 'FAILED', readCount: stats.bsaleFetched, errorCount: stats.errorCount, message })
+      }
       return { status: 'ERROR', stats, error: new Error('UNIQUE_CONFLICT_DETECTED') }
     }
 
     if (plannerResult.cycles.length > 0) {
       stats.cycleCount += plannerResult.cycles.length
       stats.errorCount += plannerResult.cycles.length
-      if (runId) await recordSyncError({ runId, companyId, provider, entity, errorMessage: `Se detectaron ${plannerResult.cycles.length} ciclos UNIQUE. Abortando actualizaciones.`, safePayload: plannerResult.cycles })
+      const message = `Se detectaron ${plannerResult.cycles.length} ciclos UNIQUE. Abortando actualizaciones.`
+      if (runId) {
+        await recordSyncError({ runId, companyId, provider, entity, errorMessage: message, safePayload: plannerResult.cycles })
+        await finishSyncRun({ runId, status: 'FAILED', readCount: stats.bsaleFetched, errorCount: stats.errorCount, message })
+      }
       return { status: 'ERROR', stats, error: new Error('UNIQUE_CYCLE_DETECTED') }
     }
 
@@ -338,17 +347,15 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
         last_bsale_sync_at: u.last_bsale_sync_at
       }))
     
-      const { error: rpcErr } = await admin.schema('adquisiciones').rpc('apply_bsale_product_updates', {
-        p_updates: payload,
-        p_company_id: companyId
+      const batchSummary = await executeSequentialBatches(payload, async (batch, batchIndex, totalBatches) => {
+        console.log(`[bsale-products-sync] applying update batch ${batchIndex + 1}/${totalBatches} size=${batch.length}`)
+        const { error: rpcErr } = await admin.schema('adquisiciones').rpc('apply_bsale_product_updates', {
+          p_updates: batch,
+          p_company_id: companyId
+        })
+        if (rpcErr) throw new Error(`Brand/product update batch ${batchIndex + 1}/${totalBatches}: ${rpcErr.message}`)
       })
-    
-      if (rpcErr) {
-        stats.errorCount++
-        if (runId) await recordSyncError({ runId, companyId, provider, entity, errorMessage: rpcErr.message, safePayload: rpcErr })
-        return { status: 'ERROR', stats, error: rpcErr }
-      }
-      stats.updatedCount = plannerResult.orderedUpdates.length
+      stats.updatedCount = batchSummary.itemsProcessed
       stats.reassignmentCount = payload.filter(u => u.expected_sku !== u.new_sku || u.expected_barcode !== u.new_barcode).length
     }
 
@@ -357,8 +364,7 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
       const chunk = toInsertProducts.slice(i, i + chunkSize)
       const { error: err } = await admin.schema('adquisiciones').from('products').insert(chunk)
       if (err) {
-        stats.errorCount++
-        if (runId) await recordSyncError({ runId, companyId, provider, entity, errorMessage: err.message, safePayload: err })
+        throw err
       } else {
         stats.insertedCount += chunk.length
       }
@@ -370,8 +376,6 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
         ignoreDuplicates: false
       })
       if (brandError) {
-        stats.errorCount++
-        if (runId) await recordSyncError({ runId, companyId, provider, entity, errorMessage: brandError.message })
         throw brandError
       }
     }
@@ -391,7 +395,15 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
   } catch (error: any) {
     if (runId) {
       await recordSyncError({ runId, companyId, provider, entity, errorMessage: error.message })
-      await finishSyncRun({ runId, status: 'FAILED', message: error.message, errorCount: stats.errorCount + 1 })
+      await finishSyncRun({
+        runId,
+        status: 'FAILED',
+        message: error.message,
+        readCount: stats.bsaleFetched,
+        insertedCount: stats.insertedCount,
+        updatedCount: stats.updatedCount,
+        errorCount: stats.errorCount + 1
+      })
     }
     return { status: 'FAILED', message: error.message, stats }
   } finally {
