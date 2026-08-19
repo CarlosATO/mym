@@ -210,7 +210,7 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
   const currentPage = pageHeaders[activeActionId] ?? pageHeaders.resumen
 
   return (
-    <WmsShell pageTitle={currentPage.title} breadcrumb={currentPage.breadcrumb} profile={profile}>
+    <WmsShell pageTitle={currentPage.title} breadcrumb={currentPage.breadcrumb} profile={profile} compactSurface={activeActionId === 'calendario_despacho'}>
       {content}
     </WmsShell>
   )

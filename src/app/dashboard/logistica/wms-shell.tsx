@@ -12,6 +12,7 @@ interface WmsShellProps {
   profile: { nombre: string; apellido: string; email: string; roles: { name: string } }
   pageTitle: string
   breadcrumb: string[]
+  compactSurface?: boolean
 }
 
 type NavItem = {
@@ -49,7 +50,7 @@ const groups = [
 
 const WIDE_VIEWPORT_QUERY = '(min-width: 1180px)'
 
-export function WmsShell({ children, profile, pageTitle, breadcrumb }: WmsShellProps) {
+export function WmsShell({ children, profile, pageTitle, breadcrumb, compactSurface = false }: WmsShellProps) {
   const pathname = usePathname()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -147,7 +148,7 @@ export function WmsShell({ children, profile, pageTitle, breadcrumb }: WmsShellP
           <div className="mb-3 flex min-w-0 items-center gap-2 px-1 text-[11px] text-theme-text-muted">
             {breadcrumb.map((part, index) => <span key={`${part}-${index}`} className={cn(index === breadcrumb.length - 1 ? 'font-semibold text-theme-text' : 'text-theme-text-muted/70')}>{index > 0 && <span className="mr-2 text-theme-border">/</span>}{part}</span>)}
           </div>
-          <section className="min-h-[calc(100vh-7.5rem)] overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-[0_5px_18px_rgba(31,52,77,0.045)]">
+          <section className={cn('overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-[0_5px_18px_rgba(31,52,77,0.045)]', compactSurface ? 'min-h-0' : 'min-h-[calc(100vh-7.5rem)]')}>
             {children}
           </section>
         </main>

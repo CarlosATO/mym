@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react'
 import { WarehouseMapView } from './warehouse-map-view'
-import { LayoutGrid, Map as MapIcon, ArrowLeft, Building2, AlertCircle, ArrowRight } from 'lucide-react'
+import { LayoutGrid, Map as MapIcon, ArrowLeft, Building2, ArrowRight } from 'lucide-react'
 import { type Warehouse } from '@/app/actions/adquisiciones/warehouses'
 import { type WarehouseStats } from '@/app/actions/logistica/location-layouts'
 
@@ -10,6 +10,32 @@ interface WarehouseVisualOverviewProps {
   warehouses: Warehouse[]
   stats?: WarehouseStats[]
   onWarehouseSelect?: (id: string | null) => void
+}
+
+export function WarehouseSummary({ warehouses, stats = [] }: { warehouses: Warehouse[]; stats?: WarehouseStats[] }) {
+  const statsByWarehouseId = new Map(stats.map(s => [s.warehouse_id, s]))
+  const totalLocations = stats.reduce((total, item) => total + (item.total_locations || 0), 0)
+  const locationsWithStock = stats.reduce((total, item) => total + (item.locations_with_stock || 0), 0)
+  const withoutLocations = warehouses.filter(warehouse => (statsByWarehouseId.get(warehouse.id)?.total_locations || 0) === 0).length
+
+  return (
+    <div className="flex shrink-0 flex-wrap items-center gap-x-6 gap-y-2 border-b border-theme-border bg-theme-surface px-5 py-2.5">
+      <Metric label="Total bodegas" value={warehouses.length} />
+      <Metric label="Activas" value={warehouses.filter(warehouse => warehouse.is_active).length} valueClassName="text-emerald-600 dark:text-emerald-400" />
+      <Metric label="Ubicaciones" value={totalLocations} />
+      <Metric label="Con stock" value={locationsWithStock} valueClassName="text-theme-text-accent" />
+      {withoutLocations > 0 && <Metric label="Sin ubicaciones" value={withoutLocations} valueClassName="text-amber-600" />}
+    </div>
+  )
+}
+
+function Metric({ label, value, valueClassName = 'text-theme-text' }: { label: string; value: number; valueClassName?: string }) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-theme-text-muted/70">{label}</span>
+      <span className={`text-sm font-bold tabular-nums ${valueClassName}`}>{value}</span>
+    </div>
+  )
 }
 
 export function WarehouseVisualOverview({ warehouses, stats = [], onWarehouseSelect }: WarehouseVisualOverviewProps) {
@@ -43,73 +69,16 @@ export function WarehouseVisualOverview({ warehouses, stats = [], onWarehouseSel
     )
   }
 
-  // Global Stats
-  const totalBodegas = warehouses.length
-  const activas = warehouses.filter(w => w.is_active).length
-  const totalUbicaciones = stats.reduce((acc, s) => acc + (s.total_locations || 0), 0)
-  const conStock = stats.reduce((acc, s) => acc + (s.locations_with_stock || 0), 0)
-  const sinUbicaciones = warehouses.filter(w => (statsByWarehouseId.get(w.id)?.total_locations || 0) === 0).length
-
   // Sort logically by name
   const sortedWarehouses = [...warehouses].sort((a, b) => 
     new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }).compare(a.name, b.name)
   )
 
   return (
-    <div className="h-full overflow-y-auto flex flex-col bg-theme-text/[0.01]">
-      {/* Global Summary Bar */}
-      <div className="shrink-0 bg-theme-surface border-b border-theme-border px-5 py-3 flex flex-wrap items-center gap-x-6 gap-y-3">
-        <div className="flex items-center gap-3">
-          <div className="p-1.5 bg-theme-accent/10 text-theme-accent rounded-lg">
-            <Building2 className="w-5 h-5" />
-          </div>
-          <div>
-            <p className="text-[10px] uppercase font-bold tracking-wide text-theme-text-muted">Total bodegas</p>
-            <p className="text-base font-bold leading-none text-theme-text">{totalBodegas}</p>
-          </div>
-        </div>
-        <div className="w-px h-8 bg-theme-border hidden sm:block" />
-        <div className="flex items-center gap-3">
-          <div>
-            <p className="text-[10px] uppercase font-bold tracking-wide text-theme-text-muted">Activas</p>
-            <p className="text-base font-bold leading-none text-emerald-600 dark:text-emerald-400">{activas}</p>
-          </div>
-        </div>
-        <div className="w-px h-8 bg-theme-border hidden sm:block" />
-        <div className="flex items-center gap-3">
-          <div>
-            <p className="text-[10px] uppercase font-bold tracking-wide text-theme-text-muted">Ubicaciones</p>
-            <p className="text-base font-bold leading-none text-theme-text">{totalUbicaciones}</p>
-          </div>
-        </div>
-        <div className="w-px h-8 bg-theme-border hidden sm:block" />
-        <div className="flex items-center gap-3">
-          <div>
-            <p className="text-[10px] uppercase font-bold tracking-wide text-theme-text-muted">Con stock</p>
-            <p className="text-base font-bold leading-none text-blue-600 dark:text-blue-400">{conStock}</p>
-          </div>
-        </div>
-        {sinUbicaciones > 0 && (
-          <>
-            <div className="w-px h-8 bg-theme-border hidden sm:block" />
-            <div className="flex items-center gap-3">
-              <div className="p-1.5 bg-amber-500/10 text-amber-600 rounded-md">
-                <AlertCircle className="w-4 h-4" />
-              </div>
-              <div>
-                <p className="text-[10px] uppercase font-bold tracking-wide text-theme-text-muted">Sin ubicaciones</p>
-                <p className="text-sm font-bold leading-none text-amber-600">{sinUbicaciones}</p>
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* Warehouses Grid */}
-      <div className="flex-1 p-4 md:p-5">
-        <div className="max-w-[1600px] mx-auto">
+    <div className="h-full overflow-y-auto bg-theme-text/[0.01]">
+      <div className="max-w-[1600px]">
           {/* TODO: Preparar para futura tabla logistica.warehouse_layouts (Drag & Drop de bodegas) */}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 animate-in fade-in duration-300">
+            <div className="grid grid-cols-1 gap-3 animate-in fade-in duration-300 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {sortedWarehouses.map(w => {
               const wStats = statsByWarehouseId.get(w.id)
               const totalLocs = wStats?.total_locations || 0
@@ -118,85 +87,28 @@ export function WarehouseVisualOverview({ warehouses, stats = [], onWarehouseSel
               const aisles = wStats?.total_aisles || 0
 
               return (
-                <div key={w.id} className="group relative flex flex-col cursor-pointer" onClick={() => handleSelect(w)} onDoubleClick={() => handleSelect(w)}>
-                  
-                  {/* Warehouse Roof */}
-                  <div className="w-full flex justify-center">
-                    <div 
-                      className="w-[90%] h-8 bg-theme-surface border-t-2 border-x-2 border-theme-border/80 group-hover:border-theme-accent/70 transition-colors relative overflow-hidden"
-                      style={{ clipPath: 'polygon(15% 0%, 85% 0%, 100% 100%, 0% 100%)' }}
-                    >
-                      <div className="absolute inset-0 bg-gradient-to-b from-theme-text/[0.03] to-transparent"></div>
+                <div key={w.id} className="group flex cursor-pointer flex-col rounded-xl border border-theme-border bg-theme-surface p-3 shadow-sm transition-all hover:border-theme-accent/50 hover:shadow-md" onClick={() => handleSelect(w)} onDoubleClick={() => handleSelect(w)}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h3 className="truncate text-sm font-semibold uppercase tracking-tight text-theme-text transition-colors group-hover:text-theme-accent" title={w.name}>{w.name}</h3>
+                      <div className="mt-1.5 flex items-center gap-1.5">
+                        <span className="rounded-md bg-theme-text/5 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-theme-text-muted">{w.code}</span>
+                        <span className="rounded-md bg-theme-text/5 px-1.5 py-0.5 text-[10px] font-semibold text-theme-text-muted">{w.warehouse_type}</span>
+                      </div>
                     </div>
+                    {w.is_active ? <span className="shrink-0 rounded-md border border-theme-accent/25 bg-theme-accent/10 px-1.5 py-0.5 text-[10px] font-semibold text-theme-text-accent">Activa</span> : <span className="shrink-0 rounded-md border border-red-500/20 bg-red-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-red-500">Inactiva</span>}
                   </div>
 
-                  {/* Warehouse Body */}
-                  <div className="bg-theme-surface border border-theme-border rounded-xl shadow-sm group-hover:shadow-md group-hover:border-theme-accent/70 transition-all flex flex-col relative z-10 min-h-[190px] overflow-hidden">
-                    
-                    {/* Subtle Loading Dock Door Background */}
-                    <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-24 h-16 border-t-2 border-x-2 border-theme-border/30 rounded-t-lg bg-theme-text/[0.01] flex flex-col justify-end pointer-events-none">
-                      <div className="w-full h-1 border-b border-theme-border/20"></div>
-                      <div className="w-full h-1 border-b border-theme-border/20 mt-1"></div>
-                      <div className="w-full h-1 border-b border-theme-border/20 mt-1"></div>
-                    </div>
-
-                    <div className="p-4 flex-1 flex flex-col z-10">
-                      {/* Header */}
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="flex flex-col">
-                          <h3 className="text-sm font-semibold text-theme-text uppercase tracking-tight group-hover:text-theme-accent transition-colors line-clamp-2 leading-tight">
-                            {w.name}
-                          </h3>
-                          <div className="flex items-center gap-2 mt-1.5">
-                            <span className="text-[10px] font-mono font-semibold text-theme-text-muted bg-theme-text/5 px-1.5 py-0.5 rounded">
-                              {w.code}
-                            </span>
-                            <span className="text-[10px] font-semibold text-theme-text-muted bg-theme-text/5 px-1.5 py-0.5 rounded">
-                              {w.warehouse_type}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="shrink-0 ml-2">
-                          {w.is_active ? (
-                            <span className="rounded-md border border-theme-accent/25 bg-theme-accent/10 px-2 py-0.5 text-[10px] font-semibold text-theme-text-accent">Activa</span>
-                          ) : (
-                            <span className="rounded-md border border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-500">Inactiva</span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Stats Grid */}
-                      <div className="grid grid-cols-2 gap-x-3 gap-y-2 mt-auto bg-theme-text/[0.02] p-2.5 rounded-lg border border-theme-border/50 backdrop-blur-sm">
-                        <div className="flex flex-col">
-                          <span className="text-[10px] font-bold uppercase text-theme-text-muted mb-0.5">Pasillos</span>
-                           <span className="text-sm font-bold text-theme-text">{aisles}</span>
-                        </div>
-                        <div className="flex flex-col">
-                          <span className="text-[10px] font-bold uppercase text-theme-text-muted mb-0.5">Ubicaciones</span>
-                           <span className="text-sm font-bold text-theme-text">{totalLocs}</span>
-                        </div>
-                        <div className="flex flex-col">
-                          <span className="text-[10px] font-bold uppercase text-emerald-600/70 mb-0.5">Con Stock</span>
-                           <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">{withStock}</span>
-                        </div>
-                        <div className="flex flex-col">
-                          <span className="text-[10px] font-bold uppercase text-theme-text-muted mb-0.5">Vacías</span>
-                           <span className="text-sm font-bold text-theme-text">{emptyLocs}</span>
-                        </div>
-                      </div>
-
-                      {/* Action Button */}
-                      <div className="mt-3 pt-3 border-t border-theme-border/50">
-                        <button 
-                          className="w-full py-2 bg-theme-text/5 hover:bg-theme-accent hover:text-white text-theme-text text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-2"
-                        >
-                          <MapIcon className="w-4 h-4" />
-                          Abrir bodega
-                          <ArrowRight className="w-4 h-4 opacity-50" />
-                        </button>
-                      </div>
-                    </div>
+                  <div className="mt-3 grid grid-cols-4 gap-2 border-y border-theme-border/70 py-2">
+                    <CompactMetric label="Pasillos" value={aisles} />
+                    <CompactMetric label="Ubic." value={totalLocs} />
+                    <CompactMetric label="Stock" value={withStock} valueClassName="text-emerald-600 dark:text-emerald-400" />
+                    <CompactMetric label="Vacías" value={emptyLocs} />
                   </div>
+
+                  <button type="button" className="mt-2 inline-flex items-center justify-center gap-1 text-xs font-semibold text-theme-text-accent transition-colors hover:text-theme-accent-hover">
+                    <MapIcon className="h-3.5 w-3.5" /> Abrir bodega <ArrowRight className="h-3.5 w-3.5 opacity-60" />
+                  </button>
                 </div>
               )
             })}
@@ -209,8 +121,16 @@ export function WarehouseVisualOverview({ warehouses, stats = [], onWarehouseSel
               </div>
             )}
           </div>
-        </div>
       </div>
+    </div>
+  )
+}
+
+function CompactMetric({ label, value, valueClassName = 'text-theme-text' }: { label: string; value: number; valueClassName?: string }) {
+  return (
+    <div className="min-w-0">
+      <span className="block truncate text-[9px] font-semibold uppercase tracking-wide text-theme-text-muted/70">{label}</span>
+      <span className={`mt-0.5 block text-sm font-bold tabular-nums ${valueClassName}`}>{value}</span>
     </div>
   )
 }

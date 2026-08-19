@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
 import { 
   getDispatchCalendars,
   getDispatchCities,
@@ -10,14 +9,12 @@ import {
   saveDispatchCalendarConfig,
   updateDispatchCalendarCutoffTime,
   DispatchCalendar,
-  DispatchCalendarCity,
   DispatchCity
 } from '@/app/actions/logistica/dispatch-calendar'
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { LocalCombobox } from '@/components/ui/local-combobox'
 import { toast } from 'sonner'
-import { Loader2, Plus, Trash2, Calendar, Check, X, ArrowLeft, Edit2, Play, Square } from 'lucide-react'
+import { Loader2, Plus, CalendarDays, Check, X, ArrowLeft, Edit2, Square, Clock3, MapPin, Save } from 'lucide-react'
 
 const WEEKDAYS = [
   { id: 1, label: 'Lunes' },
@@ -30,10 +27,16 @@ const WEEKDAYS = [
 ]
 
 type ViewState = 'LIST' | 'EDIT'
+type DraftCity = {
+  id?: string
+  weekday: number
+  city_id: string
+  normalized_city: string
+  route_label?: string | null
+  priority?: number
+}
 
 export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean }) {
-  const router = useRouter()
-  
   const [loading, setLoading] = useState(true)
   const [view, setView] = useState<ViewState>('LIST')
   
@@ -45,21 +48,14 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
   const [draftName, setDraftName] = useState('')
   const [draftActive, setDraftActive] = useState(false)
   const [draftCutoffTime, setDraftCutoffTime] = useState('12:00')
-  const [draftCities, setDraftCities] = useState<Array<{
-    id?: string
-    weekday: number
-    city_id: string
-    normalized_city: string
-    route_label?: string | null
-    priority?: number
-  }>>([])
+  const [draftCities, setDraftCities] = useState<DraftCity[]>([])
   
   const [newCityId, setNewCityId] = useState<Record<number, string>>({})
   
   // New Calendar Modal/Inline State
   const [showCreate, setShowCreate] = useState(false)
   const [newCalendarName, setNewCalendarName] = useState('')
-  const [originalDraftState, setOriginalDraftState] = useState<{name: string, active: boolean, cutoffTime: string, cities: any[]} | null>(null)
+  const [originalDraftState, setOriginalDraftState] = useState<{name: string, active: boolean, cutoffTime: string, cities: DraftCity[]} | null>(null)
 
   useEffect(() => {
     loadInitialData()
@@ -258,75 +254,89 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
   }
 
   return (
-    <div className="flex flex-col min-h-0 overflow-y-auto h-full bg-transparent gap-4 pb-4">
-      <div className="shrink-0 flex justify-between items-center px-5 py-3 border border-theme-border bg-theme-surface rounded-xl shadow-sm">
-        <div>
-          <h2 className="text-xl font-bold text-theme-text">Calendario de Despacho</h2>
-          <p className="text-sm text-theme-text-muted/70 mt-1">
-            Administra las comunas y rutas para cada día de la semana.
-          </p>
+    <div className="flex min-h-0 flex-col overflow-y-auto bg-theme-surface">
+      <header className="shrink-0 border-b border-theme-border/60 bg-theme-text/[0.012]">
+        <div className="flex items-end justify-between gap-4 px-5 pb-3 pt-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <CalendarDays className="h-4 w-4 shrink-0 text-theme-accent" />
+              <h1 className="text-base font-semibold tracking-tight text-theme-text">Calendario de Despacho</h1>
+            </div>
+            <p className="mt-0.5 text-[11px] text-theme-text-muted/70">Comunas y rutas organizadas por día de la semana</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="hidden text-[11px] font-medium tabular-nums text-theme-text-muted/70 sm:inline">{calendars.length} {calendars.length === 1 ? 'calendario' : 'calendarios'}</span>
+            {!isSuperUser && <span className="rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400">Solo lectura</span>}
+          </div>
         </div>
-        {!isSuperUser && (
-          <p className="text-xs font-medium text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 px-3 py-1.5 rounded">Modo solo lectura</p>
-        )}
-      </div>
+      </header>
 
       {view === 'LIST' && (
-        <div className="flex-1 flex flex-col gap-6">
-          <div className="flex justify-between items-center">
-            <h3 className="text-lg font-semibold text-theme-text">Calendarios Existentes</h3>
+        <div className="flex flex-col gap-3 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-theme-text">Calendarios configurados</h2>
+              <p className="mt-0.5 text-[11px] text-theme-text-muted/65">Selecciona un calendario para revisar su programación semanal.</p>
+            </div>
             {isSuperUser && !showCreate && (
-              <Button onClick={() => setShowCreate(true)} className="gap-2">
-                <Plus className="h-4 w-4" /> Nuevo Calendario
+              <Button onClick={() => setShowCreate(true)} className="h-9 gap-2 rounded-xl bg-theme-accent px-3.5 text-xs font-semibold text-white shadow-sm shadow-theme-accent/20 hover:bg-theme-accent-hover">
+                <Plus className="h-4 w-4" /> Nuevo calendario
               </Button>
             )}
           </div>
 
           {showCreate && (
-            <div className="bg-theme-surface border border-theme-border p-6 rounded-2xl shadow-sm animate-in fade-in slide-in-from-top-4 relative">
-              <div className="flex justify-between items-center mb-4">
-                <h4 className="font-medium text-theme-text">Crear nuevo calendario</h4>
-                <Button variant="ghost" size="sm" className="h-8 text-theme-text-muted hover:text-theme-text gap-1" onClick={() => {setShowCreate(false); setNewCalendarName('')}}>
+            <div className="relative rounded-2xl border border-theme-border bg-theme-text/[0.018] p-4 shadow-sm animate-in fade-in slide-in-from-top-2">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-theme-text">Crear nuevo calendario</h3>
+                  <p className="mt-0.5 text-[11px] text-theme-text-muted/65">El primer calendario creado queda activo por defecto.</p>
+                </div>
+                <Button variant="ghost" size="sm" className="h-8 gap-1 rounded-lg text-xs text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text" onClick={() => {setShowCreate(false); setNewCalendarName('')}}>
                   <X className="h-4 w-4" /> Cerrar
                 </Button>
               </div>
-              <form onSubmit={handleCreateSubmit} className="flex gap-4">
+              <form onSubmit={handleCreateSubmit} className="flex flex-col gap-2 sm:flex-row">
                 <input 
                   autoFocus
                   type="text" 
                   value={newCalendarName}
                   onChange={e => setNewCalendarName(e.target.value)}
                   placeholder="Nombre del calendario (Ej: Despacho Invierno)"
-                  className="flex-1 rounded-xl border border-theme-border bg-transparent px-4 py-2 text-sm text-theme-text outline-none focus:ring-2 focus:ring-blue-500/50"
+                  className="h-10 min-w-0 flex-1 rounded-xl border border-theme-border bg-theme-surface px-3 text-sm text-theme-text outline-none transition-colors placeholder:text-theme-text-muted/45 focus:border-theme-accent focus:ring-2 focus:ring-theme-accent/20"
                 />
-                <Button type="submit" disabled={!newCalendarName.trim() || loading}>Crear calendario</Button>
+                <Button type="submit" disabled={!newCalendarName.trim() || loading} className="h-10 rounded-xl bg-theme-accent px-4 text-xs font-semibold text-white hover:bg-theme-accent-hover">Crear calendario</Button>
               </form>
             </div>
           )}
 
           {calendars.length === 0 ? (
-            <div className="bg-theme-surface border border-theme-border p-12 rounded-2xl text-center text-theme-text-muted/70 shadow-sm flex flex-col items-center justify-center min-h-[300px]">
-              <Calendar className="h-12 w-12 text-theme-border mb-4" />
-              <p className="mb-2">No hay calendarios creados.</p>
-              {!isSuperUser && <p className="text-xs">Solicita a un SUPER_USUARIO que cree uno.</p>}
+            <div className="flex min-h-[260px] flex-col items-center justify-center rounded-2xl border border-dashed border-theme-border bg-theme-text/[0.012] p-8 text-center text-theme-text-muted/70">
+              <div className="mb-3 rounded-xl border border-theme-border bg-theme-surface p-3 text-theme-text-muted/60"><CalendarDays className="h-7 w-7" /></div>
+              <p className="text-sm font-semibold text-theme-text">No hay calendarios creados</p>
+              {!isSuperUser && <p className="mt-1 text-xs">Solicita a un SUPER_USUARIO que cree uno.</p>}
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
               {calendars.map(cal => (
-                <div key={cal.id} className="bg-theme-surface border border-theme-border rounded-2xl p-6 shadow-sm flex flex-col gap-4 hover:border-theme-border-hover transition-colors">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <h4 className="font-semibold text-theme-text text-lg">{cal.name}</h4>
-                      <div className="flex items-center gap-2 mt-2">
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${cal.active ? 'bg-green-500/10 text-green-600 dark:text-green-400 border border-green-500/20' : 'bg-theme-border text-theme-text-muted border border-theme-border-hover'}`}>
+                <div key={cal.id} className="group flex min-h-[154px] flex-col gap-4 rounded-2xl border border-theme-border bg-theme-surface p-4 shadow-sm transition-all hover:border-theme-accent/40 hover:shadow-md">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="truncate text-sm font-semibold text-theme-text">{cal.name}</h3>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[10px] font-semibold ${cal.active ? 'border-theme-accent/25 bg-theme-accent/10 text-theme-text-accent' : 'border-theme-border bg-theme-text/5 text-theme-text-muted'}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${cal.active ? 'bg-theme-accent' : 'bg-theme-text-muted/45'}`} />
                           {cal.active ? 'Activo' : 'Inactivo'}
                         </span>
+                        <span className="inline-flex items-center gap-1 text-[10px] font-medium text-theme-text-muted/70"><Clock3 className="h-3 w-3" /> Corte {cal.default_cutoff_time?.substring(0, 5) || '--:--'}</span>
                       </div>
                     </div>
+                    <CalendarDays className="h-4 w-4 shrink-0 text-theme-text-muted/35 transition-colors group-hover:text-theme-accent/70" />
                   </div>
-                  
-                  <div className="flex justify-end pt-4 border-t border-theme-border mt-auto gap-2">
-                    <Button variant="outline" size="sm" onClick={() => startEdit(cal)} className="gap-2">
+
+                  <div className="mt-auto flex items-center justify-between border-t border-theme-border/70 pt-3">
+                    <span className="text-[10px] text-theme-text-muted/55">Programación semanal</span>
+                    <Button variant="outline" size="sm" onClick={() => startEdit(cal)} className="h-8 gap-1.5 rounded-lg border-theme-border px-2.5 text-xs font-semibold text-theme-text-muted hover:border-theme-accent/40 hover:bg-theme-accent/5 hover:text-theme-text">
                       <Edit2 className="h-3.5 w-3.5" /> Editar
                     </Button>
                   </div>
@@ -338,11 +348,11 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
       )}
 
       {view === 'EDIT' && (
-        <div className="flex-1 flex flex-col gap-6 animate-in fade-in">
+        <div className="flex min-h-0 flex-col gap-4 p-5 animate-in fade-in">
           {/* Action Bar */}
-          <div className="flex flex-wrap gap-3 justify-between items-center bg-theme-surface border border-theme-border p-3 rounded-xl shadow-sm">
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" size="sm" onClick={handleBackClick} disabled={loading} className="gap-2 text-theme-text-muted hover:text-theme-text">
+          <div className="flex flex-col gap-3 rounded-2xl border border-theme-border bg-theme-text/[0.018] p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={handleBackClick} disabled={loading} className="h-8 shrink-0 gap-1.5 rounded-lg px-2 text-xs text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text">
                 <ArrowLeft className="h-4 w-4" /> <span className="hidden sm:inline">Volver a lista</span>
               </Button>
               {isSuperUser ? (
@@ -350,25 +360,25 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
                   type="text" 
                   value={draftName}
                   onChange={e => setDraftName(e.target.value)}
-                  className="font-bold text-lg bg-transparent border-b border-transparent focus:border-blue-500 outline-none px-1 py-0.5 min-w-[250px]"
+                  className="min-w-0 flex-1 border-b border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold text-theme-text outline-none transition-colors focus:border-theme-accent sm:min-w-[220px]"
                 />
               ) : (
-                <h3 className="font-bold text-lg">{draftName}</h3>
+                <h2 className="truncate text-sm font-semibold text-theme-text">{draftName}</h2>
               )}
             </div>
             
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center gap-2 sm:justify-end">
               {isSuperUser && (
                 <button 
                   onClick={() => setDraftActive(!draftActive)}
-                  className={`flex items-center gap-2 text-sm font-medium px-3 py-1.5 rounded-lg border transition-colors ${draftActive ? 'bg-green-500/10 text-green-600 border-green-500/30' : 'bg-theme-border/50 text-theme-text-muted border-theme-border'}`}
+                  className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-semibold transition-colors ${draftActive ? 'border-theme-accent/25 bg-theme-accent/10 text-theme-text-accent' : 'border-theme-border bg-theme-text/5 text-theme-text-muted'}`}
                 >
                   {draftActive ? <><Check className="h-4 w-4" /> Activo</> : <><Square className="h-4 w-4" /> Inactivo</>}
                 </button>
               )}
               
               {isSuperUser && (
-                <Button onClick={handleSaveChanges} disabled={loading} className="gap-2 bg-blue-600 hover:bg-blue-700 text-white">
+                <Button onClick={handleSaveChanges} disabled={loading} className="h-8 gap-1.5 rounded-lg bg-theme-accent px-3 text-xs font-semibold text-white shadow-sm shadow-theme-accent/20 hover:bg-theme-accent-hover">
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                   Guardar cambios
                 </Button>
@@ -377,60 +387,74 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
           </div>
 
           {/* General Config Block */}
-          <div className="bg-theme-surface border border-theme-border p-5 rounded-xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-            <div>
-              <h3 className="font-semibold text-theme-text text-lg">Hora de corte por defecto</h3>
-              <p className="text-sm text-theme-text-muted mt-1">
+          <div className="flex flex-col items-start justify-between gap-4 rounded-2xl border border-theme-border bg-theme-surface p-4 shadow-sm md:flex-row md:items-center">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <Clock3 className="h-4 w-4 text-theme-accent" />
+                <h3 className="text-sm font-semibold text-theme-text">Hora de corte por defecto</h3>
+              </div>
+              <p className="mt-1 max-w-3xl text-xs leading-relaxed text-theme-text-muted">
                 Las notas de venta generadas después de esta hora, el día anterior a la ruta, quedarán fuera de corte y requerirán autorización.
               </p>
-              <p className="text-xs font-medium text-blue-600 dark:text-blue-400 mt-2">
-                Corte actual guardado: {originalDraftState?.cutoffTime}
+              <p className="mt-2 text-[11px] font-semibold text-theme-text-accent">
+                Corte guardado: {originalDraftState?.cutoffTime}
               </p>
             </div>
             
-            <div className="flex items-center gap-3 shrink-0">
+            <div className="flex w-full shrink-0 flex-wrap items-center gap-2 md:w-auto">
               <input 
                 type="time" 
                 value={draftCutoffTime}
                 onChange={e => setDraftCutoffTime(e.target.value)}
                 disabled={!isSuperUser || loading}
-                className="rounded-lg border border-theme-border bg-transparent px-3 py-1.5 text-theme-text outline-none focus:ring-2 focus:ring-blue-500/50 disabled:opacity-50"
+                className="h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-sm text-theme-text outline-none transition-colors focus:border-theme-accent focus:ring-2 focus:ring-theme-accent/20 disabled:opacity-50"
               />
               {isSuperUser ? (
-                <Button onClick={handleSaveCutoffTime} disabled={loading || draftCutoffTime === originalDraftState?.cutoffTime} size="sm" variant="outline">
-                  Actualizar hora
+                <Button onClick={handleSaveCutoffTime} disabled={loading || draftCutoffTime === originalDraftState?.cutoffTime} size="sm" variant="outline" className="h-9 rounded-lg border-theme-border px-3 text-xs font-semibold hover:border-theme-accent/40 hover:bg-theme-accent/5">
+                  <Save className="mr-1.5 h-3.5 w-3.5" /> Actualizar hora
                 </Button>
               ) : (
-                <p className="text-xs text-amber-600 bg-amber-500/10 px-2 py-1 rounded">Solo Super Usuario</p>
+                <p className="rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400">Solo Super Usuario</p>
               )}
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+          <div className="flex items-center justify-between gap-3 border-b border-theme-border/70 pb-2">
+            <div>
+              <h3 className="text-sm font-semibold text-theme-text">Programación semanal</h3>
+              <p className="mt-0.5 text-[11px] text-theme-text-muted/65">Cada comuna puede asignarse una vez por día.</p>
+            </div>
+            <span className="hidden items-center gap-1.5 text-[10px] font-medium text-theme-text-muted/65 sm:flex"><MapPin className="h-3.5 w-3.5" /> {draftCities.length} asignaciones</span>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {WEEKDAYS.map(day => {
               const dayCities = draftCities.filter(c => c.weekday === day.id)
               
               return (
-                <div key={day.id} className="rounded-xl bg-theme-surface shadow-sm border border-theme-border overflow-hidden flex flex-col">
-                  <div className="py-2 px-4 border-b border-theme-border bg-theme-text/5 shrink-0 flex justify-between items-center">
-                    <h3 className="font-semibold text-theme-text">{day.label}</h3>
-                    <span className="text-xs font-medium bg-theme-border px-2 py-0.5 rounded-full text-theme-text-muted">
+                <div key={day.id} className="flex min-h-[205px] flex-col overflow-hidden rounded-2xl border border-theme-border bg-theme-surface shadow-sm">
+                  <div className={`flex shrink-0 items-center justify-between border-b px-3.5 py-2.5 ${dayCities.length > 0 ? 'border-theme-accent/20 bg-theme-accent/[0.055]' : 'border-theme-border bg-theme-text/[0.025]'}`}>
+                    <div className="flex items-center gap-2">
+                      <span className={`h-2 w-2 rounded-full ${dayCities.length > 0 ? 'bg-theme-accent' : 'bg-theme-text-muted/30'}`} />
+                      <h3 className="text-xs font-semibold text-theme-text">{day.label}</h3>
+                    </div>
+                    <span className={`rounded-md border px-1.5 py-0.5 text-[10px] font-semibold ${dayCities.length > 0 ? 'border-theme-accent/20 bg-theme-accent/10 text-theme-text-accent' : 'border-theme-border bg-theme-surface text-theme-text-muted/65'}`}>
                       {dayCities.length}
                     </span>
                   </div>
                   
                   <div className="p-3 flex-1 flex flex-col gap-3">
                     {dayCities.length === 0 ? (
-                      <div className="flex-1 flex items-center justify-center border-2 border-dashed border-theme-border/50 rounded-xl bg-theme-surface/50 p-6">
-                         <p className="text-sm text-theme-text-muted/60 text-center">No hay comunas asignadas a este día.</p>
+                      <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-theme-border/70 bg-theme-text/[0.012] p-5">
+                         <p className="text-[11px] leading-relaxed text-theme-text-muted/60 text-center">Sin programación para este día</p>
                       </div>
                     ) : (
-                      <ul className="space-y-2 flex-1">
+                      <ul className="flex-1 space-y-1.5">
                         {dayCities.map(c => (
-                          <li key={`${c.weekday}-${c.city_id}`} className="flex justify-between items-center text-sm bg-theme-surface p-3 rounded-xl border border-theme-border/70 hover:border-theme-border transition-colors group shadow-sm">
-                            <span className="font-medium text-theme-text">{c.normalized_city}</span>
+                          <li key={`${c.weekday}-${c.city_id}`} className="group flex items-center justify-between gap-2 rounded-lg border border-theme-border/70 bg-theme-text/[0.018] px-2.5 py-2 text-sm transition-colors hover:border-theme-accent/35 hover:bg-theme-accent/[0.035]">
+                            <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-theme-text"><MapPin className="h-3.5 w-3.5 shrink-0 text-theme-text-muted/50" /><span className="truncate">{c.normalized_city}</span></span>
                             {isSuperUser && (
-                              <Button variant="ghost" size="icon" className="h-7 w-7 text-theme-text-muted opacity-0 group-hover:opacity-100 hover:text-red-500 hover:bg-red-500/10 transition-all -mr-1" onClick={() => handleDraftRemoveCity(c.weekday, c.city_id)}>
+                              <Button variant="ghost" size="icon" className="-mr-1 h-7 w-7 shrink-0 text-theme-text-muted opacity-60 transition-all hover:bg-red-500/10 hover:text-red-500 group-hover:opacity-100" onClick={() => handleDraftRemoveCity(c.weekday, c.city_id)} aria-label={`Quitar ${c.normalized_city}`}>
                                 <X className="h-4 w-4" />
                               </Button>
                             )}
@@ -440,7 +464,7 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
                     )}
                     
                     {isSuperUser && (
-                      <div className="flex space-x-2 pt-4 border-t border-theme-border/50 shrink-0 mt-auto">
+                      <div className="mt-auto flex shrink-0 gap-2 border-t border-theme-border/50 pt-3">
                         <LocalCombobox 
                           options={cities.map(c => ({ value: c.id, label: c.name }))}
                           value={newCityId[day.id] || ''}
@@ -448,7 +472,7 @@ export function DispatchCalendarSettings({ isSuperUser }: { isSuperUser: boolean
                           placeholder="Agregar comuna..."
                           className="flex-1"
                         />
-                        <Button size="icon" variant="outline" className="shrink-0 text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-900/20" onClick={() => handleDraftAddCity(day.id)}>
+                        <Button size="icon" variant="outline" className="h-9 w-9 shrink-0 rounded-lg border-theme-border text-theme-text-accent hover:border-theme-accent/40 hover:bg-theme-accent/5" onClick={() => handleDraftAddCity(day.id)} aria-label={`Agregar comuna a ${day.label}`}>
                           <Plus className="h-4 w-4" />
                         </Button>
                       </div>

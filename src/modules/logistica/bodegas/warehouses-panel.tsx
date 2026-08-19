@@ -6,7 +6,7 @@ import { getWarehouseLocationStats, type WarehouseStats } from '@/app/actions/lo
 import { getRegions, getCommunes } from '@/app/actions/geography'
 import * as XLSX from 'xlsx'
 import { ArrowLeft, Download, FileSpreadsheet, Filter, Grid2X2, List, MoreHorizontal, Plus, Search, Upload, X } from 'lucide-react'
-import { WarehouseVisualOverview } from '../components/warehouse-visual-overview'
+import { WarehouseSummary, WarehouseVisualOverview } from '../components/warehouse-visual-overview'
 
 export function WarehousesPanel() {
   const [data, setData] = useState<Warehouse[]>([])
@@ -264,6 +264,7 @@ export function WarehousesPanel() {
               )}
             </div>
           </div>
+          <WarehouseSummary warehouses={data} stats={stats} />
           {selected.size > 0 && viewMode === 'table' && <div className="text-xs text-theme-text-muted/70 px-4 py-2 border-b border-theme-border bg-theme-text/[0.02]">{selected.size} bodega(s) seleccionada(s)</div>}
         </>
       )}
@@ -273,52 +274,64 @@ export function WarehousesPanel() {
       {loading ? (<div className="rounded-2xl border border-theme-border bg-theme-surface p-10 text-center"><p className="text-theme-text-muted/50 text-sm">Cargando...</p></div>)
       : data.length === 0 ? (<div className="rounded-2xl border border-theme-border bg-theme-surface p-10 text-center"><p className="text-theme-text-muted/50 text-sm">No hay bodegas registradas.</p></div>)
       : viewMode === 'visual' ? (
-          <div className={`flex-1 overflow-hidden flex ${selectedWarehouseId ? '' : 'p-6'}`}>
+          <div className={`flex-1 overflow-hidden flex ${selectedWarehouseId ? '' : 'p-4 md:p-5'}`}>
             <WarehouseVisualOverview warehouses={data} stats={stats} onWarehouseSelect={setSelectedWarehouseId} />
           </div>
         )
-      : (<div className="flex-1 overflow-auto p-6">
-          <div className="bg-theme-surface border border-theme-border rounded-xl shadow-sm overflow-hidden">
-            <table className="w-full text-sm border-collapse">
-            <thead className="sticky top-0 z-10 bg-theme-text/5"><tr className="border-b border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider">
-              <th className="py-3 px-4 text-left w-10"><input type="checkbox" checked={data.length > 0 && data.every(d => selected.has(d.id))} onChange={toggleAll} className="accent-emerald-600" /></th>
-              <th className="text-left py-3 px-4 font-medium">Código</th>
-              <th className="text-left py-3 px-4 font-medium">Nombre</th>
-              <th className="text-left py-3 px-4 font-medium">Tipo</th>
-              <th className="text-left py-3 px-4 font-medium">Encargado</th>
-              <th className="text-left py-3 px-4 font-medium">Ciudad</th>
-              <th className="text-left py-3 px-4 font-medium">Comuna</th>
-              <th className="text-left py-3 px-4 font-medium">Región</th>
-              <th className="text-center py-3 px-4 font-medium">Predet.</th>
-              <th className="text-left py-3 px-4 font-medium">Estado</th>
-              <th className="text-right py-3 px-4 font-medium">Acciones</th>
-            </tr></thead>
-            <tbody>
-              {data.map(w => (
-                <tr key={w.id} className={`border-b border-theme-border hover:bg-theme-text/5 transition-colors ${selected.has(w.id) ? 'bg-theme-accent/5' : ''}`}>
-                  <td className="py-3 px-4"><input type="checkbox" checked={selected.has(w.id)} onChange={() => toggleSelect(w.id)} className="accent-emerald-600" /></td>
-                  <td className="py-3 px-4 text-theme-text text-xs font-mono font-medium">{w.code}</td>
-                  <td className="py-3 px-4 text-theme-text text-xs font-semibold">{w.name}</td>
-                  <td className="py-3 px-4 text-theme-text-muted text-xs">{w.warehouse_type}</td>
-                  <td className="py-3 px-4 text-theme-text-muted text-xs">{w.manager_name || '—'}</td>
-                  <td className="py-3 px-4 text-theme-text-muted text-xs">{w.city || '—'}</td>
-                  <td className="py-3 px-4 text-theme-text-muted text-xs">{w.commune || '—'}</td>
-                  <td className="py-3 px-4 text-theme-text-muted text-xs">{w.region || '—'}</td>
-                  <td className="py-3 px-4 text-center">{w.is_default ? <span className="text-xs text-theme-accent font-semibold">★</span> : '—'}</td>
-                  <td className="py-3 px-4">{w.is_active ? <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-theme-accent/10 dark:bg-theme-accent/10 text-theme-accent dark:text-theme-accent border-emerald-300 dark:border-emerald-500/20">Activa</span> : <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 border-red-300 dark:border-red-500/20">Inactiva</span>}</td>
-                  <td className="py-3 px-4 text-right">
-                    <button onClick={() => openEdit(w)} className="text-xs text-theme-text-muted hover:text-theme-text font-medium mr-3 transition-colors">Editar</button>
-                    <button onClick={() => handleDeactivate(w)} className={`text-xs font-medium transition-colors ${w.is_active ? 'text-red-500 hover:text-red-600' : 'text-theme-text-muted hover:text-theme-text'}`}>{w.is_active ? 'Desactivar' : 'Activar'}</button>
-                  </td>
+      : (<div className="min-h-0 flex-1 overflow-auto px-4 pb-4 md:px-5 md:pb-5">
+          <div className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface">
+            <table className="w-full min-w-[900px] border-collapse text-sm">
+              <thead className="sticky top-0 z-10 bg-theme-surface">
+                <tr className="border-b border-theme-border bg-theme-text/[0.025] text-[10px] uppercase tracking-[0.12em] text-theme-text-muted/80">
+                  <th className="w-10 px-3 py-2.5 text-left"><input aria-label="Seleccionar todas las bodegas" type="checkbox" checked={data.length > 0 && data.every(d => selected.has(d.id))} onChange={toggleAll} className="accent-emerald-600" /></th>
+                  <th className="px-3 py-2.5 text-left font-semibold">Bodega</th>
+                  <th className="px-3 py-2.5 text-left font-semibold">Código</th>
+                  <th className="px-3 py-2.5 text-left font-semibold">Tipo</th>
+                  <th className="px-3 py-2.5 text-right font-semibold">Pasillos</th>
+                  <th className="px-3 py-2.5 text-right font-semibold">Ubicaciones</th>
+                  <th className="px-3 py-2.5 text-right font-semibold">Con stock</th>
+                  <th className="px-3 py-2.5 text-right font-semibold">Vacías</th>
+                  <th className="px-3 py-2.5 text-center font-semibold">Estado</th>
+                  <th className="px-4 py-2.5 text-right font-semibold">Acciones</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {data.map(w => {
+                  const warehouseStats = stats.find(s => s.warehouse_id === w.id)
+                  const totalLocations = warehouseStats?.total_locations || 0
+                  const locationsWithStock = warehouseStats?.locations_with_stock || 0
+                  return (
+                    <tr key={w.id} className={`group border-b border-theme-border/70 transition-colors last:border-b-0 hover:bg-theme-accent/[0.035] ${selected.has(w.id) ? 'bg-theme-accent/10' : ''}`}>
+                      <td className="px-3 py-2"><input aria-label={`Seleccionar ${w.name}`} type="checkbox" checked={selected.has(w.id)} onChange={() => toggleSelect(w.id)} className="accent-emerald-600" /></td>
+                      <td className="max-w-[220px] px-3 py-2">
+                        <div className="flex min-w-0 items-center gap-2">
+                          {w.is_default && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-theme-accent" title="Bodega predeterminada" />}
+                          <span className="truncate text-xs font-semibold text-theme-text" title={w.name}>{w.name}</span>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 font-mono text-[11px] font-semibold tabular-nums text-theme-text-muted">{w.code}</td>
+                      <td className="px-3 py-2 text-[11px] text-theme-text-muted">{w.warehouse_type}</td>
+                      <td className="px-3 py-2 text-right text-xs tabular-nums text-theme-text-muted">{warehouseStats?.total_aisles || 0}</td>
+                      <td className="px-3 py-2 text-right text-xs font-semibold tabular-nums text-theme-text">{totalLocations}</td>
+                      <td className="px-3 py-2 text-right text-xs font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{locationsWithStock}</td>
+                      <td className="px-3 py-2 text-right text-xs tabular-nums text-theme-text-muted">{totalLocations - locationsWithStock}</td>
+                      <td className="px-3 py-2 text-center">{w.is_active ? <span className="inline-flex items-center rounded-md border border-theme-accent/25 bg-theme-accent/10 px-2 py-0.5 text-[10px] font-semibold text-theme-text-accent">Activa</span> : <span className="inline-flex items-center rounded-md border border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-500">Inactiva</span>}</td>
+                      <td className="px-4 py-2 text-right whitespace-nowrap">
+                        <div className="inline-flex items-center gap-1 rounded-lg border border-theme-border/70 bg-theme-surface px-1 py-0.5 opacity-80 transition-all group-hover:border-theme-border group-hover:opacity-100">
+                          <button onClick={() => openEdit(w)} className="rounded-md px-2 py-1 text-xs font-medium text-theme-text-muted hover:bg-theme-accent/10 hover:text-theme-text-accent">Editar</button>
+                          <button onClick={() => handleDeactivate(w)} className={`rounded-md px-2 py-1 text-xs font-medium ${w.is_active ? 'text-red-500/80 hover:bg-red-500/10 hover:text-red-500' : 'text-theme-text-muted hover:bg-theme-accent/10 hover:text-theme-text-accent'}`}>{w.is_active ? 'Desactivar' : 'Activar'}</button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
           </div>
         </div>)}
 
       {tp > 1 && (
-        <div className="shrink-0 flex items-center justify-between text-xs p-4 border-t border-theme-border/60 bg-theme-text/[0.01]">
+        <div className="shrink-0 flex flex-col gap-3 border-t border-theme-border/60 bg-theme-text/[0.012] px-5 py-3 text-xs sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2">
             <span className="text-theme-text-muted/50">Mostrar</span>
             <select value={filters.pageSize} onChange={e => setFilter('pageSize', e.target.value)} className="h-8 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30">
@@ -326,11 +339,11 @@ export function WarehousesPanel() {
               <option value={50} className="bg-white dark:bg-theme-surface">50</option>
               <option value={100} className="bg-white dark:bg-theme-surface">100</option>
             </select>
-            <span className="text-theme-text-muted/50">de {total} registros</span>
+            <span className="text-theme-text-muted/60">de <strong className="font-semibold text-theme-text">{total.toLocaleString('es-CL')}</strong> registros</span>
           </div>
           <div className="flex items-center gap-2">
             <button disabled={(filters.page ?? 1) <= 1} onClick={() => setFilters(p => ({ ...p, page: (p.page ?? 1) - 1 }))} className="px-3 py-1.5 rounded-lg border border-theme-border text-theme-text-muted/70 hover:text-theme-text disabled:opacity-30 disabled:cursor-not-allowed">Anterior</button>
-            <span className="text-theme-text-muted/50">Pág. {filters.page ?? 1} de {tp}</span>
+            <span className="min-w-[92px] text-center text-theme-text-muted/60">Pág. <strong className="font-semibold text-theme-text">{filters.page ?? 1}</strong> de {tp}</span>
             <button disabled={(filters.page ?? 1) >= tp} onClick={() => setFilters(p => ({ ...p, page: (p.page ?? 1) + 1 }))} className="px-3 py-1.5 rounded-lg border border-theme-border text-theme-text-muted/70 hover:text-theme-text disabled:opacity-30 disabled:cursor-not-allowed">Siguiente</button>
           </div>
         </div>
