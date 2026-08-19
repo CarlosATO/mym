@@ -15,13 +15,13 @@ interface AppTopbarProps {
   permissions: string[]
   moduleName?: string
   showPortalLink?: boolean
-  variant?: 'default' | 'wms'
+  variant?: 'default' | 'module'
   sidebarMode?: 'expanded' | 'compact'
 }
 
 export function AppTopbar({ profile, activeCompany, permissions, moduleName, showPortalLink = false, variant = 'default', sidebarMode }: AppTopbarProps) {
   return (
-    <header className={cn('fixed top-0 left-0 right-0 z-30 h-12 border-b border-theme-border/60 backdrop-blur-md', variant === 'wms' ? 'bg-theme-surface/90 shadow-sm' : 'bg-theme-bg/60')}>
+    <header className={cn('fixed top-0 left-0 right-0 z-30 h-12 border-b border-theme-border/60 backdrop-blur-md', variant === 'module' ? 'bg-theme-surface/90 shadow-sm' : 'bg-theme-bg/60')}>
       <div className={cn(
         'h-full max-w-7xl mx-auto px-4 lg:px-6 flex items-center justify-between gap-4',
         sidebarMode === 'compact' && 'md:!pl-[92px]',
