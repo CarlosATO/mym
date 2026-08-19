@@ -4,14 +4,15 @@ interface InventoryPageHeaderProps {
   title: string
   description?: string
   breadcrumb?: string[]
+  showBreadcrumb?: boolean
   action?: React.ReactNode
   className?: string
 }
 
-export function InventoryPageHeader({ title, description, breadcrumb, action, className }: InventoryPageHeaderProps) {
+export function InventoryPageHeader({ title, description, breadcrumb, showBreadcrumb = false, action, className }: InventoryPageHeaderProps) {
   return (
     <div className={cn('mb-5', className)}>
-      {breadcrumb && breadcrumb.length > 0 && (
+      {showBreadcrumb && breadcrumb && breadcrumb.length > 0 && (
         <nav aria-label="Breadcrumb" className="mb-1.5 flex items-center gap-1.5 text-[11px] text-theme-text-muted/70">
           {breadcrumb.map((crumb, index) => (
             <span key={crumb} className="flex items-center gap-1.5">

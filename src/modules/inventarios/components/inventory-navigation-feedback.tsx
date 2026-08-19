@@ -42,10 +42,10 @@ export function InventoryNavigationFeedback() {
 
   return (
     <>
-      <div className="fixed inset-x-0 top-12 z-[1000] h-0.5 bg-theme-accent/20">
+      <div className="pointer-events-none fixed inset-x-0 top-12 z-20 h-0.5 bg-theme-accent/20">
         <div className="h-full w-1/3 animate-pulse bg-theme-accent" />
       </div>
-      <div role="status" aria-live="polite" className="fixed right-4 top-14 z-[1000] inline-flex items-center gap-1.5 rounded-full border border-theme-border bg-theme-surface px-2.5 py-1 text-[11px] font-medium text-theme-text-muted shadow-sm">
+      <div role="status" aria-live="polite" className="fixed right-4 top-14 z-20 inline-flex items-center gap-1.5 rounded-full border border-theme-border bg-theme-surface px-2.5 py-1 text-[11px] font-medium text-theme-text-muted shadow-sm">
         <Loader2 className="h-3 w-3 animate-spin text-theme-accent" />
         Cargando…
       </div>

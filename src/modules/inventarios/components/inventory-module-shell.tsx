@@ -2,12 +2,12 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { AppTopbar } from '@/components/layout/app-topbar'
-import { InventorySidebar } from '@/modules/inventarios/components/inventory-sidebar'
+import { ModuleShell } from '@/components/layout/module-shell'
 import { getActiveCompany, type Company } from '@/app/actions/companies'
 import type { Profile } from '@/lib/types'
 import { AlertTriangle, LayoutDashboard, Loader2 } from 'lucide-react'
 import { InventoryNavigationFeedback } from '@/modules/inventarios/components/inventory-navigation-feedback'
+import { getInventoryBreadcrumb, inventoryNavigation } from '@/modules/inventarios/lib/navigation'
 
 interface InventoryModuleShellProps {
   children: React.ReactNode
@@ -19,7 +19,6 @@ export function InventoryModuleShell({ children, profile, permissions }: Invento
   const [activeCompany, setActiveCompany] = useState<Company | null>(null)
   const [loading, setLoading] = useState(true)
   const [initError, setInitError] = useState<string | null>(null)
-  const [mobileOpen, setMobileOpen] = useState(false)
 
   const loadCompany = useCallback(() => {
     getActiveCompany()
@@ -45,9 +44,6 @@ export function InventoryModuleShell({ children, profile, permissions }: Invento
     setLoading(true)
     loadCompany()
   }, [loadCompany])
-
-  const closeMobile = useCallback(() => setMobileOpen(false), [])
-  const openMobile = useCallback(() => setMobileOpen(true), [])
 
   if (loading) {
     return (
@@ -111,35 +107,22 @@ export function InventoryModuleShell({ children, profile, permissions }: Invento
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-theme-bg text-theme-text">
-      <AppTopbar
-        profile={profile}
-        activeCompany={activeCompany}
-        permissions={permissions}
-        moduleName="Inventarios"
-      />
+    <ModuleShell
+      activeCompany={activeCompany}
+      legacySidebarStorageKey="mym.inventory.sidebarCollapsed"
+      identity={{ id: 'inventarios', label: 'Inventarios', subtitle: 'Control de Inventario', icon: LayoutDashboard }}
+      navigation={inventoryNavigation}
+      profile={profile}
+      permissions={permissions}
+      pageTitle="Inventarios"
+      breadcrumb={getInventoryBreadcrumb}
+      topbarVariant="module"
+      showPortalLink
+    >
       <InventoryNavigationFeedback />
-
-      <div className="flex flex-1 pt-12">
-        <InventorySidebar mobileOpen={mobileOpen} onMobileOpen={openMobile} onMobileClose={closeMobile} />
-
-        <main className="min-w-0 flex-1">
-          {/* Volver al portal: extremo superior derecho del área del módulo */}
-          <div className="flex justify-end px-4 pt-3 lg:px-6">
-            <Link
-              href="/dashboard"
-              aria-label="Volver al portal"
-              title="Volver al portal"
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-2.5 text-xs font-medium text-theme-text-muted shadow-sm transition-colors hover:bg-theme-text/5 hover:text-theme-text"
-            >
-              <LayoutDashboard className="h-3.5 w-3.5 shrink-0" />
-              <span className="hidden sm:inline">Volver al portal</span>
-            </Link>
-          </div>
-
-          <div className="mx-auto max-w-7xl p-4 lg:p-6">{children}</div>
-        </main>
+      <div className="mx-auto max-w-7xl p-4 lg:p-6">
+        {children}
       </div>
-    </div>
+    </ModuleShell>
   )
 }

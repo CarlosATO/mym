@@ -14,6 +14,8 @@ type ModuleShellProps = {
   identity: ModuleIdentity
   navigation: ModuleNavigation
   profile: { nombre: string; apellido: string; email: string; roles: { name: string } }
+  activeCompany?: Company | null
+  legacySidebarStorageKey?: string
   permissions?: string[]
   pageTitle: string
   breadcrumb: BreadcrumbValue
@@ -31,6 +33,8 @@ export function ModuleShell({
   identity,
   navigation,
   profile,
+  activeCompany: providedActiveCompany,
+  legacySidebarStorageKey,
   permissions = [],
   pageTitle,
   breadcrumb,
@@ -40,14 +44,14 @@ export function ModuleShell({
 }: ModuleShellProps) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
-  const [activeCompany, setActiveCompany] = useState<Company | null>(null)
-  const [collapsed, setCollapsed] = useState(() => readCollapsedPreference())
+  const [loadedActiveCompany, setLoadedActiveCompany] = useState<Company | null>(null)
+  const [collapsed, setCollapsed] = useState(() => readCollapsedPreference(legacySidebarStorageKey))
   const [mobileOpen, setMobileOpen] = useState(false)
   const [isWideViewport, setIsWideViewport] = useState(() => typeof window !== 'undefined' && window.matchMedia(WIDE_VIEWPORT_QUERY).matches)
 
   useEffect(() => {
-    getActiveCompany().then(setActiveCompany)
-  }, [])
+    if (providedActiveCompany === undefined) getActiveCompany().then(setLoadedActiveCompany)
+  }, [providedActiveCompany])
 
   useEffect(() => {
     const mediaQuery = window.matchMedia(WIDE_VIEWPORT_QUERY)
@@ -60,6 +64,7 @@ export function ModuleShell({
   const effectiveCollapsed = collapsed || responsiveCollapsed
   const location: NavigationLocation = { pathname, searchParams }
   const resolvedBreadcrumb = typeof breadcrumb === 'function' ? breadcrumb(location) : breadcrumb
+  const activeCompany = providedActiveCompany === undefined ? loadedActiveCompany : providedActiveCompany
 
   function toggleCollapsed() {
     setCollapsed(value => {
@@ -115,9 +120,10 @@ export function ModuleShell({
   )
 }
 
-function readCollapsedPreference() {
+function readCollapsedPreference(legacyStorageKey = LEGACY_STORAGE_KEY) {
   if (typeof window === 'undefined') return false
   const globalValue = window.localStorage.getItem(STORAGE_KEY)
-  if (globalValue !== null) return globalValue === 'true'
-  return window.localStorage.getItem(LEGACY_STORAGE_KEY) === 'true'
+  if (globalValue !== null) return globalValue === 'true' || globalValue === '1'
+  const legacyValue = window.localStorage.getItem(legacyStorageKey)
+  return legacyValue === 'true' || legacyValue === '1'
 }

@@ -15,7 +15,7 @@ import {
 
 type ModuleSidebarProps = {
   identity: ModuleIdentity
-  navigation: { home?: ModuleNavItem; groups: ModuleNavGroup[] }
+  navigation: { home?: ModuleNavItem; primaryAction?: ModuleNavItem; groups: ModuleNavGroup[] }
   collapsed: boolean
   responsiveCollapsed: boolean
   mobileOpen: boolean
@@ -34,6 +34,7 @@ export function ModuleSidebar({ identity, navigation, collapsed, responsiveColla
     .filter(group => group.items.length > 0)
   const home = navigation.home && isVisible(navigation.home, permissions) ? navigation.home : null
   const sidebarWidth = collapsed || responsiveCollapsed ? 'md:w-[68px]' : 'md:w-[244px]'
+  const primaryAction = navigation.primaryAction && isVisible(navigation.primaryAction, permissions) ? navigation.primaryAction : null
 
   return (
     <aside className={cn(
@@ -43,10 +44,15 @@ export function ModuleSidebar({ identity, navigation, collapsed, responsiveColla
     )}>
       <div className={cn('flex h-[76px] shrink-0 items-center border-b border-theme-sidebar-border bg-theme-sidebar-surface px-4', effectiveCollapsed && 'md:justify-center md:px-2')}>
         <div className="min-w-0">
-          <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-theme-sidebar-accent">{identity.label}</p>
+          <div className="flex min-w-0 items-center gap-2">
+            {identity.icon && <identity.icon className="h-4 w-4 shrink-0 text-theme-sidebar-accent" />}
+            <p className="truncate text-[11px] font-bold uppercase tracking-[0.22em] text-theme-sidebar-accent">{identity.label}</p>
+          </div>
           {(!effectiveCollapsed || mobileOpen) && identity.subtitle && <p className="mt-1 truncate text-sm font-medium text-theme-sidebar-text">{identity.subtitle}</p>}
         </div>
       </div>
+
+      {primaryAction && <PrimaryAction item={primaryAction} collapsed={effectiveCollapsed} searchParams={searchParams} onNavigate={onNavigate} />}
 
       <nav className="flex-1 overflow-y-auto px-3 py-4">
         {home && <SidebarItem item={home} location={location} collapsed={effectiveCollapsed} permissions={permissions} onNavigate={onNavigate} />}
@@ -85,7 +91,7 @@ function SidebarItem({ item, location, collapsed, permissions, onNavigate }: { i
   const children = (item.children ?? []).filter(child => isVisible(child, permissions))
   const active = isItemActive(item, location) || children.some(child => isItemActive(child, location))
   const Icon = item.icon
-  const href = buildNavHref(item.target)
+  const href = buildNavHref(item.target, location.searchParams)
   const itemContent = (
     <>
       {Icon ? <Icon className={cn('h-[17px] w-[17px] shrink-0', active ? 'text-theme-sidebar-accent' : 'text-theme-sidebar-muted group-hover:text-theme-sidebar-text')} /> : <span className="h-[17px] w-[17px] shrink-0" />}
@@ -114,6 +120,24 @@ function SidebarItem({ item, location, collapsed, permissions, onNavigate }: { i
       </Link>
       {children.map(child => <SidebarItem key={child.id} item={child} location={location} collapsed={collapsed} permissions={permissions} onNavigate={onNavigate} />)}
     </>
+  )
+}
+
+function PrimaryAction({ item, collapsed, searchParams, onNavigate }: { item: ModuleNavItem; collapsed: boolean; searchParams: Pick<URLSearchParams, 'get'>; onNavigate: () => void }) {
+  const Icon = item.icon
+  return (
+    <div className={cn('shrink-0 py-2.5', collapsed ? 'px-2' : 'px-3')}>
+      <Link
+        href={buildNavHref(item.target, searchParams)}
+        title={collapsed ? item.label : undefined}
+        aria-label={item.label}
+        onClick={onNavigate}
+        className={cn('flex items-center justify-center gap-1.5 rounded-lg bg-theme-accent px-2 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-theme-accent-hover', collapsed && 'px-0')}
+      >
+        {Icon && <Icon className="h-4 w-4 shrink-0" />}
+        {!collapsed && <span>{item.label}</span>}
+      </Link>
+    </div>
   )
 }
 

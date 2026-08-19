@@ -9,7 +9,11 @@ export type ModuleIdentity = {
 
 export type NavTarget =
   | { href: string }
-  | { pathname: string; query?: Record<string, string | undefined> }
+  | {
+      pathname: string
+      query?: Record<string, string | undefined>
+      preserveQuery?: string[] | ((key: string, value: string) => boolean)
+    }
 
 export type NavigationLocation = {
   pathname: string
@@ -47,6 +51,7 @@ export type ModuleNavGroup = {
 
 export type ModuleNavigation = {
   home?: ModuleNavItem
+  primaryAction?: ModuleNavItem
   groups: ModuleNavGroup[]
 }
 
@@ -54,13 +59,23 @@ export type SurfaceMode = 'standard' | 'compact' | 'none'
 
 export type BreadcrumbValue = string[] | ((location: NavigationLocation) => string[])
 
-export function buildNavHref(target: NavTarget) {
+export function buildNavHref(target: NavTarget, currentSearchParams?: Pick<URLSearchParams, 'get'>) {
   if ('href' in target) return target.href
 
   const params = new URLSearchParams()
   Object.entries(target.query ?? {}).forEach(([key, value]) => {
     if (value !== undefined) params.set(key, value)
   })
+  if (target.preserveQuery && currentSearchParams) {
+    const preserveQuery = target.preserveQuery
+    const preservedKeys = Array.isArray(target.preserveQuery)
+      ? target.preserveQuery
+      : Object.keys(target.query ?? {})
+    preservedKeys.forEach(key => {
+      const value = currentSearchParams.get(key)
+      if (value !== null && (Array.isArray(preserveQuery) || preserveQuery(key, value))) params.set(key, value)
+    })
+  }
   const query = params.toString()
   return query ? `${target.pathname}?${query}` : target.pathname
 }
