@@ -140,6 +140,23 @@ export function OperationalTableSortIndicator({ active, direction }: { active: b
     : <ChevronDown aria-label="Orden descendente" className="h-3 w-3 text-theme-accent" />
 }
 
+export function sortOperationalRows<T>(rows: T[], sort: OperationalTableSort | null, columns: OperationalTableColumn[], getValue: (row: T, sortKey: string) => unknown): T[] {
+  if (!sort) return rows
+  const column = columns.find(item => item.id === sort.column && item.sortable !== false && item.sortKey)
+  if (!column?.sortKey) return rows
+  const direction = sort.direction === 'asc' ? 1 : -1
+  return [...rows].sort((left, right) => {
+    const a = getValue(left, column.sortKey!)
+    const b = getValue(right, column.sortKey!)
+    if (a == null && b == null) return 0
+    if (a == null) return 1
+    if (b == null) return -1
+    if (column.sortType === 'number') return (Number(a) - Number(b)) * direction
+    if (column.sortType === 'date') return (new Date(String(a)).getTime() - new Date(String(b)).getTime()) * direction
+    return String(a).localeCompare(String(b), 'es', { sensitivity: 'base', numeric: true }) * direction
+  })
+}
+
 type OperationalTableResizeHandleProps = {
   column: OperationalTableColumn
   width: number

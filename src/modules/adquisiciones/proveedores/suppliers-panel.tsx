@@ -3,9 +3,34 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { getSuppliers, createSupplier, updateSupplier, deactivateSupplier, importSuppliers, getBsalePseudoStats, type Supplier, type BsalePseudoStat } from '@/app/actions/adquisiciones/suppliers'
 import * as XLSX from 'xlsx'
-import { Search, Plus, FileSpreadsheet, Upload, Download, MoreHorizontal, Filter, X, ArrowLeft, Check, AlertCircle } from 'lucide-react'
+import { Search, Plus, FileSpreadsheet, Upload, Download, MoreHorizontal, Filter, X, ArrowLeft, Check, AlertCircle, LoaderCircle } from 'lucide-react'
 import { PseudoSupplierBsaleSyncStatus } from '@/components/integraciones/bsale-sync-status'
 import { BsaleBrandSupplierPanel } from './bsale-brand-supplier-panel'
+import { OperationalTableResizeHandle, OperationalTableSortIndicator, sortOperationalRows, useOperationalTableSort, useOperationalTableWidths, type OperationalTableColumn } from '@/components/ui/operational-table'
+
+const REAL_TABLE_KEY = 'mym:table:adquisiciones:proveedores-reales'
+const PSEUDO_TABLE_KEY = 'mym:table:adquisiciones:pseudoproveedores'
+
+const REAL_COLUMNS: OperationalTableColumn[] = [
+  { id: 'rut', defaultWidth: 135, minWidth: 110, maxWidth: 220, sortable: true, sortKey: 'rut', sortType: 'text' },
+  { id: 'business-name', defaultWidth: 280, minWidth: 200, maxWidth: 520, sortable: true, sortKey: 'business_name', sortType: 'text' },
+  { id: 'fantasy-name', defaultWidth: 210, minWidth: 150, maxWidth: 400, sortable: true, sortKey: 'fantasy_name', sortType: 'text' },
+  { id: 'contact', defaultWidth: 180, minWidth: 130, maxWidth: 320, sortable: true, sortKey: 'contact_name', sortType: 'text' },
+  { id: 'email', defaultWidth: 240, minWidth: 170, maxWidth: 400, sortable: true, sortKey: 'contact_email', sortType: 'text' },
+  { id: 'payment', defaultWidth: 150, minWidth: 110, maxWidth: 280, sortable: true, sortKey: 'payment_terms', sortType: 'text' },
+  { id: 'status', defaultWidth: 110, minWidth: 90, maxWidth: 180, sortable: true, sortKey: 'is_active', sortType: 'number' },
+  { id: 'actions', defaultWidth: 165, minWidth: 150, maxWidth: 230, sticky: 'right' },
+]
+
+const PSEUDO_COLUMNS: OperationalTableColumn[] = [
+  { id: 'display-name', defaultWidth: 280, minWidth: 200, maxWidth: 520, sortable: true, sortKey: 'display_name', sortType: 'text' },
+  { id: 'root', defaultWidth: 180, minWidth: 130, maxWidth: 320, sortable: true, sortKey: 'suggested_root', sortType: 'text' },
+  { id: 'parent', defaultWidth: 260, minWidth: 180, maxWidth: 460, sortable: true, sortKey: 'parent_supplier_name', sortType: 'text' },
+  { id: 'total', defaultWidth: 125, minWidth: 100, maxWidth: 180, sortable: true, sortKey: 'total_products', sortType: 'number' },
+  { id: 'active', defaultWidth: 155, minWidth: 120, maxWidth: 220, sortable: true, sortKey: 'active_products', sortType: 'number' },
+  { id: 'mappings', defaultWidth: 180, minWidth: 140, maxWidth: 260, sortable: true, sortKey: 'mappings_with_cost', sortType: 'number' },
+  { id: 'status', defaultWidth: 230, minWidth: 170, maxWidth: 360 },
+]
 
 export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: boolean }) {
   const [activeTab, setActiveTab] = useState<'REAL' | 'BSALE' | 'BSALE_BRANDS'>('REAL')
@@ -19,13 +44,32 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
   const [filters, setFilters] = useState({ region: '', city: '', is_active: '' })
   const [showFilters, setShowFilters] = useState(false)
   const [showExportMenu, setShowExportMenu] = useState(false)
-  const [loading, setLoading] = useState(true)
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [message, setMessage] = useState('')
 
   const [preview, setPreview] = useState<{ rows: Record<string, unknown>[]; errors: string[]; warnings: string[] } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const requestSequence = useRef(0)
+  const loadedTabs = useRef({ REAL: false, BSALE: false })
+  const { widths: realWidths, setColumnWidth: setRealColumnWidth, persist: persistRealWidths, reset: resetRealWidths } = useOperationalTableWidths(REAL_TABLE_KEY, REAL_COLUMNS)
+  const { sort: realSort, cycleSort: cycleRealSort } = useOperationalTableSort(REAL_TABLE_KEY, REAL_COLUMNS)
+  const { widths: pseudoWidths, setColumnWidth: setPseudoColumnWidth, persist: persistPseudoWidths, reset: resetPseudoWidths } = useOperationalTableWidths(PSEUDO_TABLE_KEY, PSEUDO_COLUMNS)
+  const { sort: pseudoSort, cycleSort: cyclePseudoSort } = useOperationalTableSort(PSEUDO_TABLE_KEY, PSEUDO_COLUMNS)
+
+  function tableColumn(columns: OperationalTableColumn[], id: string) { return columns.find(column => column.id === id)! }
+  function headerLabel(columns: OperationalTableColumn[], sort: ReturnType<typeof useOperationalTableSort>['sort'], cycleSort: ReturnType<typeof useOperationalTableSort>['cycleSort'], id: string, label: string) {
+    const column = tableColumn(columns, id)
+    if (!column.sortable) return <span className="truncate">{label}</span>
+    const active = sort?.column === id
+    return <button type="button" onClick={() => cycleSort(column)} className="group flex min-w-0 items-center gap-1 text-left hover:text-theme-text" title="Ordenar columna"><span className="truncate">{label}</span><OperationalTableSortIndicator active={active} direction={active ? sort?.direction : undefined} /></button>
+  }
+  function resizeHandle(columns: OperationalTableColumn[], widths: Record<string, number>, setWidth: (column: OperationalTableColumn, width: number) => void, persist: () => void, id: string) {
+    const column = tableColumn(columns, id)
+    return <OperationalTableResizeHandle column={column} width={widths[id] ?? column.defaultWidth} onResize={width => setWidth(column, width)} onResizeEnd={persist} />
+  }
 
   // Form states
   const [form, setForm] = useState({
@@ -39,17 +83,32 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
   const [selectedPseudos, setSelectedPseudos] = useState<Set<string>>(new Set())
 
   const load = useCallback(async () => {
-    setLoading(true)
-    if (activeTab === 'REAL') {
-      const data = await getSuppliers(search || undefined, 'REAL')
-      setSuppliers(data)
-    } else if (activeTab === 'BSALE') {
-      const data = await getBsalePseudoStats()
-      // local search
-      const term = search.toLowerCase()
-      setPseudos(data.filter(p => !term || p.display_name.toLowerCase().includes(term) || p.business_name.toLowerCase().includes(term) || p.suggested_root.toLowerCase().includes(term)))
+    if (activeTab === 'BSALE_BRANDS') return
+    const requestId = ++requestSequence.current
+    const tab = activeTab === 'REAL' ? 'REAL' : 'BSALE'
+    const isInitialLoad = !loadedTabs.current[tab]
+    if (isInitialLoad) setInitialLoading(true)
+    else setRefreshing(true)
+    try {
+      if (activeTab === 'REAL') {
+        const data = await getSuppliers(search || undefined, 'REAL')
+        if (requestId !== requestSequence.current) return
+        setSuppliers(data)
+      } else {
+        const data = await getBsalePseudoStats()
+        const term = search.toLowerCase()
+        if (requestId !== requestSequence.current) return
+        setPseudos(data.filter(p => !term || p.display_name.toLowerCase().includes(term) || p.business_name.toLowerCase().includes(term) || p.suggested_root.toLowerCase().includes(term)))
+      }
+      loadedTabs.current[tab] = true
+    } catch {
+      if (requestId === requestSequence.current) msg('No se pudo actualizar la tabla de proveedores.')
+    } finally {
+      if (requestId === requestSequence.current) {
+        setInitialLoading(false)
+        setRefreshing(false)
+      }
     }
-    setLoading(false)
   }, [search, activeTab])
 
   useEffect(() => { load() }, [load])
@@ -75,6 +134,8 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
     })
   }, [visibleRealSuppliers, filters])
 
+  const sortedSuppliers = useMemo(() => sortOperationalRows(filteredSuppliers, realSort, REAL_COLUMNS, (supplier, key) => supplier[key as keyof Supplier]), [filteredSuppliers, realSort])
+
   useEffect(() => {
     console.log('[SuppliersPanel]', {
       activeTab,
@@ -86,6 +147,8 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
 
   const uniqueRegions = useMemo(() => Array.from(new Set(visibleRealSuppliers.map(s => s.region).filter(Boolean))), [visibleRealSuppliers])
   const uniqueCities = useMemo(() => Array.from(new Set(visibleRealSuppliers.map(s => s.city).filter(Boolean))), [visibleRealSuppliers])
+
+  const sortedPseudos = useMemo(() => sortOperationalRows(pseudos, pseudoSort, PSEUDO_COLUMNS, (pseudo, key) => pseudo[key as keyof BsalePseudoStat]), [pseudos, pseudoSort])
 
   const filteredFormPseudos = useMemo(() => {
     let list = allPseudos
@@ -503,7 +566,7 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
   }
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
+    <div className="relative flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
       {message && (
         <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-muted">{message}</div>
       )}
@@ -553,6 +616,7 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
                       <Upload className="w-4 h-4" /> Importar Excel
                       <input ref={fileInputRef} type="file" accept=".xlsx,.xls" onChange={handleFileUpload} className="hidden" />
                     </label>
+                    <button type="button" onClick={resetRealWidths} className="w-full text-left px-3 py-2.5 text-xs font-medium text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 rounded-lg transition-colors">Restablecer ancho de columnas</button>
                     <div className="h-px bg-theme-border my-1" />
                     <div className="w-full text-left px-3 py-2 text-[10px] font-bold text-theme-text-muted/50 uppercase tracking-wider">Exportar</div>
                     <button onClick={() => exportToExcel(suppliers, 'todos_reales')} className="w-full text-left px-3 py-2 text-xs font-medium text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 rounded-lg transition-colors">Todos los proveedores</button>
@@ -571,6 +635,7 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
                 </button>
               </>
             )}
+            {activeTab === 'BSALE' && <button type="button" onClick={resetPseudoWidths} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs font-semibold text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text">Restablecer anchos</button>}
           </div>
         </div>
 
@@ -620,7 +685,8 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
         </div>
       )}
 
-      {activeTab === 'BSALE_BRANDS' ? <BsaleBrandSupplierPanel canWrite={canManageBsale} /> : loading ? (
+      {refreshing && activeTab !== 'BSALE_BRANDS' && <div role="status" aria-live="polite" className="pointer-events-none absolute left-1/2 top-20 z-50 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-theme-border bg-theme-surface/95 px-3 py-1.5 text-[11px] font-semibold text-theme-text-muted shadow-md"><LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin text-theme-accent" />Actualizando...</div>}
+      {activeTab === 'BSALE_BRANDS' ? <BsaleBrandSupplierPanel canWrite={canManageBsale} /> : initialLoading ? (
         <div className="flex-1 flex items-center justify-center">
           <p className="text-theme-text-muted/50 text-sm font-medium">Cargando...</p>
         </div>
@@ -638,28 +704,29 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
           </div>
         ) : (
           <div className="flex-1 overflow-auto">
-            <table className="min-w-[1080px] w-full whitespace-nowrap text-sm border-collapse">
+            <table className="min-w-[1450px] w-full table-fixed whitespace-nowrap text-sm border-collapse">
+              <colgroup>{REAL_COLUMNS.map(column => <col key={column.id} style={{ width: realWidths[column.id] ?? column.defaultWidth }} />)}</colgroup>
               <thead className="sticky top-0 z-10 bg-theme-surface">
                 <tr className="border-b border-theme-border text-xs text-theme-accent/60 uppercase tracking-wider">
-                  <th className="text-left py-2.5 px-4 font-medium">RUT</th>
-                  <th className="text-left py-2.5 px-4 font-medium">Razón social</th>
-                  <th className="text-left py-2.5 px-4 font-medium">Nombre fantasía</th>
-                  <th className="text-left py-2.5 px-4 font-medium">Contacto</th>
-                  <th className="text-left py-2.5 px-4 font-medium">Correo</th>
-                  <th className="text-left py-2.5 px-4 font-medium">Cond. pago</th>
-                  <th className="text-left py-2.5 px-4 font-medium">Estado</th>
-                  <th className="text-right py-2.5 px-4 font-medium">Acciones</th>
+                  <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'rut', 'RUT')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'rut')}</th>
+                  <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'business-name', 'Razón social')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'business-name')}</th>
+                  <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'fantasy-name', 'Nombre fantasía')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'fantasy-name')}</th>
+                  <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'contact', 'Contacto')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'contact')}</th>
+                  <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'email', 'Correo')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'email')}</th>
+                  <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'payment', 'Cond. pago')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'payment')}</th>
+                  <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'status', 'Estado')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'status')}</th>
+                  <th className="sticky right-0 z-30 border-l border-theme-border bg-theme-surface text-right py-2.5 px-4 font-medium">Acciones</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredSuppliers.map(s => (
-                  <tr key={s.id} className="border-b border-theme-border hover:bg-theme-text/5 transition-colors">
-                    <td className="py-2.5 px-4 text-theme-text-accent/80 text-xs font-mono">{s.rut || '—'}</td>
-                    <td className="py-2.5 px-4 text-theme-text text-xs font-medium">{s.business_name}</td>
-                    <td className="py-2.5 px-4 text-theme-text-accent/80 text-xs">{s.fantasy_name || '—'}</td>
-                    <td className="py-2.5 px-4 text-theme-text-accent/80 text-xs">{s.contact_name || '—'}</td>
-                    <td className="py-2.5 px-4 text-theme-text-muted/60 text-xs">{s.contact_email || '—'}</td>
-                    <td className="py-2.5 px-4 text-theme-text-accent/80 text-xs">{s.payment_terms || '—'}</td>
+                {sortedSuppliers.map(s => (
+                  <tr key={s.id} onDoubleClick={event => { if (!(event.target instanceof Element && event.target.closest('button, input, select, textarea, a'))) openEdit(s) }} className="border-b border-theme-border hover:bg-theme-text/5 transition-colors">
+                    <td className="py-2.5 px-4 text-theme-text-accent/80 text-xs font-mono truncate" title={s.rut || undefined}>{s.rut || '—'}</td>
+                    <td className="py-2.5 px-4 text-theme-text text-xs font-medium truncate" title={s.business_name}>{s.business_name}</td>
+                    <td className="py-2.5 px-4 text-theme-text-accent/80 text-xs truncate" title={s.fantasy_name || undefined}>{s.fantasy_name || '—'}</td>
+                    <td className="py-2.5 px-4 text-theme-text-accent/80 text-xs truncate" title={s.contact_name || undefined}>{s.contact_name || '—'}</td>
+                    <td className="py-2.5 px-4 text-theme-text-muted/60 text-xs truncate" title={s.contact_email || undefined}>{s.contact_email || '—'}</td>
+                    <td className="py-2.5 px-4 text-theme-text-accent/80 text-xs truncate" title={s.payment_terms || undefined}>{s.payment_terms || '—'}</td>
                     <td className="py-2.5 px-4">
                       {s.is_active ? (
                         <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-theme-accent-hover/10 text-theme-accent border-theme-accent/20">Activo</span>
@@ -667,7 +734,7 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
                         <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-red-500/10 text-red-400 border-red-500/20">Inactivo</span>
                       )}
                     </td>
-                    <td className="py-2.5 px-4 text-right">
+                    <td className="sticky right-0 z-20 border-l border-theme-border bg-theme-surface py-2.5 px-4 text-right shadow-[-6px_0_12px_-10px_rgba(0,0,0,0.5)]">
                       <button onClick={() => openEdit(s)} className="text-xs text-theme-accent/70 hover:text-theme-text-muted mr-3 font-semibold">Editar</button>
                       <button onClick={() => handleDeactivate(s)}
                         className={`text-xs font-semibold ${s.is_active ? 'text-red-400/70 hover:text-red-400' : 'text-theme-accent/70 hover:text-theme-text-muted'}`}>
@@ -682,31 +749,32 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
         )
       ) : (
         <div className="flex-1 overflow-auto bg-theme-text/[0.02]">
-          <table className="w-full text-sm border-collapse">
+          <table className="min-w-[1400px] w-full table-fixed text-sm border-collapse">
+            <colgroup>{PSEUDO_COLUMNS.map(column => <col key={column.id} style={{ width: pseudoWidths[column.id] ?? column.defaultWidth }} />)}</colgroup>
             <thead className="sticky top-0 z-10 bg-theme-surface">
               <tr className="border-b border-theme-border text-[11px] text-theme-text-muted uppercase tracking-wider font-semibold">
-                <th className="text-left py-2.5 px-4">Pseudoproveedor Bsale</th>
-                <th className="text-left py-2.5 px-4">Raíz Sugerida</th>
-                <th className="text-left py-2.5 px-4">Proveedor Real Asociado</th>
-                <th className="text-right py-2.5 px-4">Productos Totales</th>
-                <th className="text-right py-2.5 px-4">Activos / Inactivos</th>
-                <th className="text-right py-2.5 px-4">Mappings C / S Costo</th>
-                <th className="text-left py-2.5 px-4">Estado</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'display-name', 'Pseudoproveedor Bsale')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'display-name')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'root', 'Raíz Sugerida')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'root')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'parent', 'Proveedor Real Asociado')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'parent')}</th>
+                <th className="relative border-r border-theme-border/30 text-right py-2.5 px-4">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'total', 'Productos Totales')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'total')}</th>
+                <th className="relative border-r border-theme-border/30 text-right py-2.5 px-4">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'active', 'Activos / Inactivos')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'active')}</th>
+                <th className="relative border-r border-theme-border/30 text-right py-2.5 px-4">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'mappings', 'Mappings C / S Costo')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'mappings')}</th>
+                <th className="relative text-left py-2.5 px-4">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'status', 'Estado')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'status')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-theme-border/50">
-              {pseudos.map(p => {
+              {sortedPseudos.map(p => {
                 const isRemnant = p.total_products === 0
                 return (
                   <tr key={p.id} className="hover:bg-theme-surface transition-colors">
-                    <td className="py-2.5 px-4 font-medium text-theme-text text-xs">
+                    <td className="py-2.5 px-4 font-medium text-theme-text text-xs truncate" title={`${p.display_name}${p.display_name !== p.business_name ? ` · ${p.business_name}` : ''}`}>
                       {p.display_name}
                       {p.display_name !== p.business_name && (
                         <div className="text-[10px] text-theme-text-muted/60 font-mono mt-0.5">{p.business_name}</div>
                       )}
                     </td>
-                    <td className="py-2.5 px-4 text-theme-text-muted text-xs font-mono">{p.suggested_root}</td>
-                    <td className="py-2.5 px-4">
+                    <td className="py-2.5 px-4 text-theme-text-muted text-xs font-mono truncate" title={p.suggested_root}>{p.suggested_root}</td>
+                      <td className="py-2.5 px-4 truncate">
                       {p.parent_supplier_name ? (
                         <span className="text-xs font-semibold text-theme-text-accent bg-theme-accent/5 px-2 py-1 rounded border border-theme-accent/10">
                           {p.parent_supplier_name}

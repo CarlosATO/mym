@@ -91,6 +91,6 @@ test('incluye estados loading, error, empty y responsive', () => {
   assert.match(panel, /Cargando Brands Bsale/)
   assert.match(panel, /No fue posible cargar la relación Brand\/Proveedor/)
   assert.match(panel, /No hay Brands para mostrar/)
-  assert.match(panel, /min-w-\[1080px\]/)
+  assert.match(panel, /min-w-\[1500px\]/)
   assert.match(panel, /overflow-x-auto overflow-y-auto/)
 })

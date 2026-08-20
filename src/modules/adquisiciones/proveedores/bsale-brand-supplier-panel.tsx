@@ -10,6 +10,7 @@ import {
   type BsaleBrandSupplierCandidate,
 } from '@/app/actions/integraciones/bsale-brand-supplier-links'
 import { getSuppliers, type Supplier } from '@/app/actions/adquisiciones/suppliers'
+import { OperationalTableResizeHandle, OperationalTableSortIndicator, sortOperationalRows, useOperationalTableSort, useOperationalTableWidths, type OperationalTableColumn } from '@/components/ui/operational-table'
 
 type LinkTarget = {
   brand: BsaleBrandSupplierCandidate
@@ -34,6 +35,18 @@ const statusLabels: Record< BsaleBrandSupplierCandidate['derived_status'], strin
   PENDING: 'Pendiente',
   CONFLICT: 'Requiere revisión',
 }
+
+const BRAND_TABLE_KEY = 'mym:table:adquisiciones:proveedor-bsale'
+const BRAND_COLUMNS: OperationalTableColumn[] = [
+  { id: 'brand', defaultWidth: 135, minWidth: 105, maxWidth: 220, sortable: true, sortKey: 'bsale_brand_id', sortType: 'number' },
+  { id: 'products', defaultWidth: 105, minWidth: 85, maxWidth: 160, sortable: true, sortKey: 'active_products', sortType: 'number' },
+  { id: 'candidate', defaultWidth: 260, minWidth: 180, maxWidth: 460, sortable: true, sortKey: 'candidate_supplier_name', sortType: 'text' },
+  { id: 'coverage', defaultWidth: 180, minWidth: 140, maxWidth: 280 },
+  { id: 'classification', defaultWidth: 170, minWidth: 130, maxWidth: 280, sortable: true, sortKey: 'classification', sortType: 'text' },
+  { id: 'status', defaultWidth: 145, minWidth: 115, maxWidth: 240, sortable: true, sortKey: 'derived_status', sortType: 'text' },
+  { id: 'linked', defaultWidth: 280, minWidth: 190, maxWidth: 480, sortable: true, sortKey: 'linked_supplier_name', sortType: 'text' },
+  { id: 'actions', defaultWidth: 250, minWidth: 220, maxWidth: 360, sticky: 'right' },
+]
 
 function coverage(candidate: BsaleBrandSupplierCandidate) {
   const total = candidate.active_products
@@ -69,6 +82,8 @@ export function BsaleBrandSupplierPanel({ canWrite }: Props) {
   const [supplierSearch, setSupplierSearch] = useState('')
   const [loadingSuppliers, setLoadingSuppliers] = useState(false)
   const [mutation, setMutation] = useState<'LINK' | 'UNLINK' | null>(null)
+  const { widths, setColumnWidth, persist, reset: resetWidths } = useOperationalTableWidths(BRAND_TABLE_KEY, BRAND_COLUMNS)
+  const { sort, cycleSort } = useOperationalTableSort(BRAND_TABLE_KEY, BRAND_COLUMNS)
 
   async function loadCandidates() {
     setLoading(true)
@@ -99,6 +114,20 @@ export function BsaleBrandSupplierPanel({ canWrite }: Props) {
         || (candidate.linked_supplier_name ?? '').toLowerCase().includes(term)
     })
   }, [candidates, classificationFilter, search, statusFilter])
+
+  const sortedCandidates = useMemo(() => sortOperationalRows(visibleCandidates, sort, BRAND_COLUMNS, (candidate, key) => candidate[key as keyof BsaleBrandSupplierCandidate]), [sort, visibleCandidates])
+
+  function brandColumn(id: string) { return BRAND_COLUMNS.find(column => column.id === id)! }
+  function brandHeader(id: string, label: string) {
+    const column = brandColumn(id)
+    if (!column.sortable) return <span className="truncate">{label}</span>
+    const active = sort?.column === id
+    return <button type="button" onClick={() => cycleSort(column)} className="group flex min-w-0 items-center gap-1 text-left hover:text-theme-text" title="Ordenar columna"><span className="truncate">{label}</span><OperationalTableSortIndicator active={active} direction={active ? sort?.direction : undefined} /></button>
+  }
+  function brandResize(id: string) {
+    const column = brandColumn(id)
+    return <OperationalTableResizeHandle column={column} width={widths[id] ?? column.defaultWidth} onResize={width => setColumnWidth(column, width)} onResizeEnd={persist} />
+  }
 
   const summary = useMemo(() => ({
     total: candidates.length,
@@ -208,25 +237,27 @@ export function BsaleBrandSupplierPanel({ canWrite }: Props) {
           <option value="MIXTO">Mixto</option>
           <option value="SIN_RESOLVER">Sin resolver</option>
         </select>
+        <button type="button" onClick={resetWidths} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs font-semibold text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text">Restablecer anchos</button>
       </div>
 
       {loading ? <LoadingState /> : error ? <ErrorState onRetry={() => void loadCandidates()} /> : visibleCandidates.length === 0 ? <EmptyState /> : (
         <div className="min-h-0 flex-1 overflow-x-auto overflow-y-auto">
-          <table className="min-w-[1080px] w-full whitespace-nowrap text-xs">
+          <table className="min-w-[1500px] w-full table-fixed whitespace-nowrap text-xs">
+            <colgroup>{BRAND_COLUMNS.map(column => <col key={column.id} style={{ width: widths[column.id] ?? column.defaultWidth }} />)}</colgroup>
             <thead className="sticky top-0 z-10 border-b border-theme-border bg-theme-surface text-[10px] uppercase tracking-wider text-theme-text-muted">
               <tr>
-                <th className="px-4 py-3 text-left font-semibold">Brand Bsale</th>
-                <th className="px-4 py-3 text-left font-semibold">Productos</th>
-                <th className="px-4 py-3 text-left font-semibold">Proveedor candidato</th>
-                <th className="px-4 py-3 text-left font-semibold">Cobertura</th>
-                <th className="px-4 py-3 text-left font-semibold">Clasificación</th>
-                <th className="px-4 py-3 text-left font-semibold">Estado</th>
-                <th className="px-4 py-3 text-left font-semibold">Proveedor vinculado</th>
-                <th className="px-4 py-3 text-right font-semibold">Acción</th>
+                <th className="relative border-r border-theme-border/30 px-4 py-3 text-left font-semibold">{brandHeader('brand', 'Brand Bsale')}{brandResize('brand')}</th>
+                <th className="relative border-r border-theme-border/30 px-4 py-3 text-left font-semibold">{brandHeader('products', 'Productos')}{brandResize('products')}</th>
+                <th className="relative border-r border-theme-border/30 px-4 py-3 text-left font-semibold">{brandHeader('candidate', 'Proveedor candidato')}{brandResize('candidate')}</th>
+                <th className="relative border-r border-theme-border/30 px-4 py-3 text-left font-semibold">{brandHeader('coverage', 'Cobertura')}{brandResize('coverage')}</th>
+                <th className="relative border-r border-theme-border/30 px-4 py-3 text-left font-semibold">{brandHeader('classification', 'Clasificación')}{brandResize('classification')}</th>
+                <th className="relative border-r border-theme-border/30 px-4 py-3 text-left font-semibold">{brandHeader('status', 'Estado')}{brandResize('status')}</th>
+                <th className="relative border-r border-theme-border/30 px-4 py-3 text-left font-semibold">{brandHeader('linked', 'Proveedor vinculado')}{brandResize('linked')}</th>
+                <th className="sticky right-0 z-30 border-l border-theme-border bg-theme-surface px-4 py-3 text-right font-semibold">Acción</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-theme-border/50">
-              {visibleCandidates.map(candidate => (
+              {sortedCandidates.map(candidate => (
                 <BrandRow
                   key={`${candidate.company_id}-${candidate.bsale_brand_id}`}
                   candidate={candidate}
@@ -260,12 +291,12 @@ function BrandRow({ candidate, canWrite, onLink, onPick, onUnlink }: { candidate
     <tr className="hover:bg-theme-text/[0.025]">
       <td className="px-4 py-3 align-top"><div className="font-mono font-bold text-theme-text">Brand {candidate.bsale_brand_id}</div><div className="mt-1 text-[10px] text-theme-text-muted">ID fuente Bsale</div></td>
       <td className="px-4 py-3 align-top font-mono text-theme-text">{candidate.active_products}</td>
-      <td className="px-4 py-3 align-top"><div className="font-semibold text-theme-text">{candidate.candidate_supplier_name ?? '—'}</div><div className="mt-1 text-[10px] text-theme-text-muted">{candidate.candidate_supplier_rut ?? 'Sin RUT disponible'}</div></td>
+      <td className="px-4 py-3 align-top"><div className="truncate font-semibold text-theme-text" title={candidate.candidate_supplier_name ?? undefined}>{candidate.candidate_supplier_name ?? '—'}</div><div className="mt-1 truncate text-[10px] text-theme-text-muted">{candidate.candidate_supplier_rut ?? 'Sin RUT disponible'}</div></td>
       <td className="px-4 py-3 align-top font-mono text-theme-text">{coverage(candidate)}</td>
       <td className="px-4 py-3 align-top"><span className={`inline-flex rounded border px-2 py-1 text-[10px] font-semibold ${classificationClass(candidate.classification)}`}>{classificationLabels[candidate.classification]}</span></td>
       <td className="px-4 py-3 align-top"><span className={`inline-flex rounded border px-2 py-1 text-[10px] font-semibold ${statusClass(candidate.derived_status)}`}>{statusLabels[candidate.derived_status]}</span></td>
-      <td className="px-4 py-3 align-top"><div className="font-semibold text-theme-text">{candidate.linked_supplier_name ?? '—'}</div>{candidate.linked_supplier_rut && <div className="mt-1 text-[10px] text-theme-text-muted">{candidate.linked_supplier_rut}</div>}</td>
-      <td className="px-4 py-3 text-right align-top">
+      <td className="px-4 py-3 align-top"><div className="truncate font-semibold text-theme-text" title={candidate.linked_supplier_name ?? undefined}>{candidate.linked_supplier_name ?? '—'}</div>{candidate.linked_supplier_rut && <div className="mt-1 truncate text-[10px] text-theme-text-muted">{candidate.linked_supplier_rut}</div>}</td>
+      <td className="sticky right-0 z-20 border-l border-theme-border bg-theme-surface px-4 py-3 text-right align-top shadow-[-6px_0_12px_-10px_rgba(0,0,0,0.5)]">
         {!canWrite ? <span className="text-[10px] text-theme-text-muted">Solo lectura</span> : candidate.derived_status === 'LINKED' ? <button onClick={() => onUnlink(candidate)} className="inline-flex h-7 items-center gap-1 rounded-lg border border-red-500/20 px-2.5 text-[11px] font-semibold text-red-400 hover:bg-red-500/10"><Unlink className="h-3.5 w-3.5" /> Desvincular</button> : (
           <div className="flex justify-end gap-1.5">
             {candidate.derived_status === 'PENDING' && candidate.candidate_supplier_id && <button onClick={() => onLink(candidate)} className="inline-flex h-7 items-center gap-1 rounded-lg bg-theme-accent px-2.5 text-[11px] font-semibold text-white hover:bg-theme-accent-hover"><Link2 className="h-3.5 w-3.5" /> Vincular</button>}
