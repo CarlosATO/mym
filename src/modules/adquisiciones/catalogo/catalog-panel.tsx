@@ -1,17 +1,41 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { getProducts, getClassifiers, createProduct, updateProduct, deactivateProduct, importProducts, type Product, type ProductFilters } from '@/app/actions/adquisiciones/products'
 import { getRealSuppliers } from '@/app/actions/adquisiciones/suppliers'
 import * as XLSX from 'xlsx'
 import { ClassifierCombobox } from '@/components/ui/classifier-combobox'
-import { Search, Plus, FileSpreadsheet, Upload, Download, List, Grid, MoreHorizontal, Filter, X, ArrowLeft } from 'lucide-react'
+import { Search, Plus, FileSpreadsheet, Upload, List, Grid, MoreHorizontal, Filter, X, ArrowLeft, LoaderCircle } from 'lucide-react'
 import { CatalogBsaleSyncStatus } from '@/components/integraciones/bsale-sync-status'
+import { OperationalTableResizeHandle, OperationalTableSortIndicator, shouldIgnoreOperationalRowDoubleClick, useOperationalTableSort, useOperationalTableWidths, type OperationalTableColumn } from '@/components/ui/operational-table'
+
+const CATALOG_TABLE_KEY = 'mym:table:adquisiciones:catalogo'
+
+const CATALOG_COLUMNS: OperationalTableColumn[] = [
+  { id: 'select', defaultWidth: 48, minWidth: 44, resizable: false },
+  { id: 'image', defaultWidth: 76, minWidth: 64, resizable: false },
+  { id: 'sku', defaultWidth: 120, minWidth: 90, maxWidth: 220, sortable: true, sortKey: 'sku', sortType: 'text' },
+  { id: 'barcode', defaultWidth: 145, minWidth: 110, maxWidth: 240, sortable: true, sortKey: 'barcode', sortType: 'text' },
+  { id: 'description', defaultWidth: 360, minWidth: 220, maxWidth: 560, sortable: true, sortKey: 'description', sortType: 'text' },
+  { id: 'real-supplier', defaultWidth: 230, minWidth: 150, maxWidth: 420 },
+  { id: 'supplier-origin', defaultWidth: 190, minWidth: 130, maxWidth: 360 },
+  { id: 'bsale-supplier', defaultWidth: 250, minWidth: 180, maxWidth: 460 },
+  { id: 'category', defaultWidth: 150, minWidth: 100, maxWidth: 280, sortable: true, sortKey: 'category', sortType: 'text' },
+  { id: 'bsale-type', defaultWidth: 170, minWidth: 120, maxWidth: 320 },
+  { id: 'presentation', defaultWidth: 150, minWidth: 100, maxWidth: 280, sortable: true, sortKey: 'presentation', sortType: 'text' },
+  { id: 'unit', defaultWidth: 100, minWidth: 80, maxWidth: 180, sortable: true, sortKey: 'unit_of_measure', sortType: 'text' },
+  { id: 'min-stock', defaultWidth: 82, minWidth: 70, maxWidth: 140, sortable: true, sortKey: 'min_stock', sortType: 'number' },
+  { id: 'reorder', defaultWidth: 92, minWidth: 70, maxWidth: 150, sortable: true, sortKey: 'reorder_point', sortType: 'number' },
+  { id: 'integration', defaultWidth: 125, minWidth: 100, maxWidth: 220 },
+  { id: 'status', defaultWidth: 105, minWidth: 90, maxWidth: 180, sortable: true, sortKey: 'is_active', sortType: 'number' },
+  { id: 'actions', defaultWidth: 160, minWidth: 145, maxWidth: 220, sticky: 'right' },
+]
 
 export function CatalogPanel() {
   const [products, setProducts] = useState<Product[]>([])
   const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [message, setMessage] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
@@ -26,6 +50,26 @@ export function CatalogPanel() {
   const [showFilters, setShowFilters] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const imgRef = useRef<HTMLInputElement>(null)
+  const requestSequence = useRef(0)
+  const hasLoadedDataset = useRef(false)
+  const { widths, setColumnWidth, persist, reset: resetColumnWidths } = useOperationalTableWidths(CATALOG_TABLE_KEY, CATALOG_COLUMNS)
+  const { sort, cycleSort } = useOperationalTableSort(CATALOG_TABLE_KEY, CATALOG_COLUMNS)
+
+  function catalogColumn(id: string) {
+    return CATALOG_COLUMNS.find(column => column.id === id)!
+  }
+
+  function resizeHandle(id: string) {
+    const column = catalogColumn(id)
+    return <OperationalTableResizeHandle column={column} width={widths[id] ?? column.defaultWidth} onResize={width => setColumnWidth(column, width)} onResizeEnd={persist} />
+  }
+
+  function headerLabel(id: string, label: string) {
+    const column = catalogColumn(id)
+    if (!column.sortable) return <span className="truncate">{label}</span>
+    const active = sort?.column === id
+    return <button type="button" onClick={() => { cycleSort(column); setFilters(current => current.page === 1 ? current : { ...current, page: 1 }) }} className="group flex min-w-0 items-center gap-1 text-left hover:text-theme-text" title={active ? `Orden ${sort?.direction === 'asc' ? 'ascendente' : 'descendente'}. Click para cambiar.` : 'Ordenar columna'}><span className="truncate">{label}</span><OperationalTableSortIndicator active={active} direction={active ? sort?.direction : undefined} /></button>
+  }
 
   const [form, setForm] = useState<Record<string, string>>({
     sku: '', barcode: '', internal_code: '', description: '', short_description: '',
@@ -39,12 +83,31 @@ export function CatalogPanel() {
   const [bsaleMeta, setBsaleMeta] = useState<Partial<Product> | null>(null)
 
   const load = useCallback(async () => {
-    setLoading(true)
-    const res = await getProducts(filters)
-    setProducts(res.data)
-    setTotal(res.total)
-    setLoading(false)
-  }, [filters])
+    const requestId = ++requestSequence.current
+    const isInitialLoad = !hasLoadedDataset.current
+    if (isInitialLoad) setInitialLoading(true)
+    else setRefreshing(true)
+
+    try {
+      const activeSort = sort ? catalogColumn(sort.column) : null
+      const res = await getProducts({ ...filters, sortBy: activeSort?.sortKey as ProductFilters['sortBy'], sortDirection: sort?.direction })
+      if (requestId !== requestSequence.current) return
+      if (res.error) {
+        msg(`No se pudo actualizar el catálogo: ${res.error}`)
+        return
+      }
+      setProducts(res.data)
+      setTotal(res.total)
+      hasLoadedDataset.current = true
+    } catch {
+      if (requestId === requestSequence.current) msg('No se pudo actualizar el catálogo.')
+    } finally {
+      if (requestId === requestSequence.current) {
+        setInitialLoading(false)
+        setRefreshing(false)
+      }
+    }
+  }, [filters, sort])
 
   useEffect(() => { load() }, [load])
 
@@ -391,7 +454,7 @@ export function CatalogPanel() {
   }
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
+    <div className="relative flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
       {message && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
 
       <div className="shrink-0 flex flex-col gap-2.5 p-3 border-b border-theme-border/60 bg-theme-text/[0.01]">
@@ -438,6 +501,9 @@ export function CatalogPanel() {
                   <Upload className="w-4 h-4" /> Importar Excel
                   <input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={handleFileUpload} className="hidden" />
                 </label>
+                <button type="button" onClick={resetColumnWidths} className="w-full text-left px-3 py-2.5 text-xs font-medium text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 rounded-lg transition-colors">
+                  Restablecer ancho de columnas
+                </button>
                 <div className="h-px bg-theme-border my-1" />
                 <div className="w-full text-left px-3 py-2 text-[10px] font-bold text-theme-text-muted/50 uppercase tracking-wider">Exportar</div>
                 <button onClick={handleExportAll} className="w-full text-left px-3 py-2 text-xs font-medium text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 rounded-lg transition-colors">Todos los productos</button>
@@ -534,6 +600,9 @@ export function CatalogPanel() {
         )}
       </div>
 
+      <div className="relative flex min-h-0 flex-1 flex-col">
+      {refreshing && <div role="status" aria-live="polite" className="pointer-events-none absolute left-1/2 top-2 z-50 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-theme-border bg-theme-surface/95 px-3 py-1.5 text-[11px] font-semibold text-theme-text-muted shadow-md"><LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin text-theme-accent" />Actualizando...</div>}
+
       {selected.size > 0 && (
         <div className="text-xs text-theme-text-muted/70 px-1">{selected.size} producto(s) seleccionado(s)</div>
       )}
@@ -560,7 +629,7 @@ export function CatalogPanel() {
         </div>
       )}
 
-      {loading ? (
+      {initialLoading ? (
         <div className="rounded-2xl border border-gray-200/80 dark:border-theme-border bg-black/5 dark:bg-theme-text/5 p-10 text-center"><p className="text-theme-text-muted/50 text-sm">Cargando...</p></div>
       ) : products.length === 0 && viewMode === 'table' ? (
         <div className="rounded-2xl border border-gray-200/80 dark:border-theme-border bg-black/5 dark:bg-theme-text/5 p-10 text-center"><p className="text-theme-text-muted/50 text-sm">No hay productos en el catálogo.</p></div>
@@ -596,44 +665,47 @@ export function CatalogPanel() {
         </div>
       ) : (
         <div className="flex-1 overflow-auto">
-          <table className="min-w-[1500px] w-full whitespace-nowrap text-sm border-collapse">
+          <table className="min-w-[1500px] w-full table-fixed whitespace-nowrap text-sm border-collapse">
+            <colgroup>
+              {CATALOG_COLUMNS.map(column => <col key={column.id} style={{ width: widths[column.id] ?? column.defaultWidth }} />)}
+            </colgroup>
             <thead className="sticky top-0 z-10 bg-theme-surface">
               <tr className="border-b border-gray-200/80 dark:border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider">
-                <th className="py-2.5 px-4 text-left w-10"><input type="checkbox" checked={products.length > 0 && products.every(p => selected.has(p.id))} onChange={toggleSelectAll} className="accent-emerald-600" /></th>
-                <th className="text-left py-2.5 px-4 font-medium w-14">Imagen</th>
-                <th className="text-left py-2.5 px-4 font-medium">SKU</th>
-                <th className="text-left py-2.5 px-4 font-medium">Código barra</th>
-                <th className="text-left py-2.5 px-4 font-medium">Descripción</th>
-                <th className="text-left py-2.5 px-4 font-medium">Proveedor real</th>
-                <th className="text-left py-2.5 px-4 font-medium">Origen prov.</th>
-                <th className="text-left py-2.5 px-4 font-medium">Proveedor en Bsale</th>
-                <th className="text-left py-2.5 px-4 font-medium">Categoría</th>
-                <th className="text-left py-2.5 px-4 font-medium">Tipo Bsale</th>
-                <th className="text-left py-2.5 px-4 font-medium">Presentación</th>
-                <th className="text-left py-2.5 px-4 font-medium">U.Medida</th>
-                <th className="text-left py-2.5 px-4 font-medium">St.Min</th>
-                <th className="text-left py-2.5 px-4 font-medium">P.Repos</th>
-                <th className="text-left py-2.5 px-4 font-medium">Integ. Bsale</th>
-                <th className="text-left py-2.5 px-4 font-medium">Estado</th>
-                <th className="text-right py-2.5 px-4 font-medium">Acciones</th>
+                <th className="relative border-r border-theme-border/30 py-2.5 px-4 text-left"><input type="checkbox" checked={products.length > 0 && products.every(p => selected.has(p.id))} onChange={toggleSelectAll} className="accent-emerald-600" />{resizeHandle('select')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel('image', 'Imagen')}{resizeHandle('image')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel('sku', 'SKU')}{resizeHandle('sku')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel('barcode', 'Código barra')}{resizeHandle('barcode')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel('description', 'Descripción')}{resizeHandle('description')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel('real-supplier', 'Proveedor real')}{resizeHandle('real-supplier')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel('supplier-origin', 'Origen prov.')}{resizeHandle('supplier-origin')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel('bsale-supplier', 'Proveedor en Bsale')}{resizeHandle('bsale-supplier')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel('category', 'Categoría')}{resizeHandle('category')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel('bsale-type', 'Tipo Bsale')}{resizeHandle('bsale-type')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel('presentation', 'Presentación')}{resizeHandle('presentation')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel('unit', 'U.Medida')}{resizeHandle('unit')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel('min-stock', 'St.Min')}{resizeHandle('min-stock')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel('reorder', 'P.Repos')}{resizeHandle('reorder')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel('integration', 'Integ. Bsale')}{resizeHandle('integration')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel('status', 'Estado')}{resizeHandle('status')}</th>
+                <th className="sticky right-0 z-30 border-l border-theme-border bg-theme-surface py-2.5 px-4 text-right font-medium shadow-[-6px_0_12px_-10px_rgba(0,0,0,0.5)]">Acciones</th>
               </tr>
             </thead>
             <tbody>
               {filteredData.map(p => (
-                <tr key={p.id} className={`border-b border-theme-border hover:bg-theme-text/5 transition-colors ${selected.has(p.id) ? 'bg-white dark:bg-emerald-900/10' : ''}`}>
+                <tr key={p.id} onDoubleClick={event => { if (!shouldIgnoreOperationalRowDoubleClick(event.target)) openEdit(p) }} className={`border-b border-theme-border hover:bg-theme-text/5 transition-colors ${selected.has(p.id) ? 'bg-white dark:bg-emerald-900/10' : ''}`}>
                   <td className="py-2.5 px-4"><input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleSelect(p.id)} className="accent-emerald-600" /></td>
                   <td className="py-2 px-4">{p.image_url ? <img src={p.image_url} alt="" className="w-10 h-10 rounded-lg object-cover border border-gray-200 dark:border-theme-border" /> : <div className="w-10 h-10 rounded-lg bg-black/5 dark:bg-theme-text/5 border border-gray-200 dark:border-theme-border flex items-center justify-center text-theme-text-muted/50 text-xs">📷</div>}</td>
-                  <td className="py-2.5 px-4 text-theme-text text-xs font-mono font-medium">{p.sku}</td>
-                  <td className="py-2.5 px-4 text-theme-text-muted/60 text-xs font-mono">{p.barcode || '—'}</td>
-                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs max-w-[200px] truncate" title={p.description}>{p.description}</td>
+                  <td className="py-2.5 px-4 text-theme-text text-xs font-mono font-medium truncate" title={p.sku}>{p.sku}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/60 text-xs font-mono truncate" title={p.barcode || undefined}>{p.barcode || '—'}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs truncate" title={p.description}>{p.description}</td>
                   <td className="py-2.5 px-4">
-                    <span className={`text-xs font-semibold ${p.real_supplier_name ? 'text-emerald-600 dark:text-emerald-400' : 'text-theme-text-muted/40'}`}>
+                    <span className={`block truncate text-xs font-semibold ${p.real_supplier_name ? 'text-emerald-600 dark:text-emerald-400' : 'text-theme-text-muted/40'}`} title={p.real_supplier_name || undefined}>
                       {p.real_supplier_name || '—'}
                     </span>
                   </td>
                   <td className="py-2.5 px-4">
                     <div className="flex flex-col items-start gap-0.5">
-                      <span className="text-xs text-theme-text-muted/80" title={p.supplier_origin_label}>{p.supplier_origin_label || '—'}</span>
+                      <span className="block max-w-full truncate text-xs text-theme-text-muted/80" title={p.supplier_origin_label}>{p.supplier_origin_label || '—'}</span>
                       <span className="text-[9px] uppercase tracking-wider font-bold text-theme-text-muted/50">
                         {p.supplier_resolution_status === 'PENDIENTE_ASOCIACION' ? 'PENDIENTE ASOCIACIÓN' : (p.supplier_resolution_status === 'SIN_PROVEEDOR' ? 'SIN PROVEEDOR' : p.supplier_resolution_status?.replace('_', ' '))}
                       </span>
@@ -641,28 +713,28 @@ export function CatalogPanel() {
                   </td>
                   <td className="py-2.5 px-4">
                     {p.bsale_supplier_link_status === 'LINKED' ? (
-                      <span className="text-xs font-semibold text-theme-text" title={p.bsale_supplier_rut ? `RUT: ${p.bsale_supplier_rut}` : undefined}>{p.bsale_supplier_name}</span>
+                      <span className="block max-w-full truncate text-xs font-semibold text-theme-text" title={`${p.bsale_supplier_name}${p.bsale_supplier_rut ? ` · RUT: ${p.bsale_supplier_rut}` : ''}`}>{p.bsale_supplier_name}</span>
                     ) : p.bsale_supplier_link_status === 'PENDING' ? (
-                      <span className="inline-flex items-center gap-1.5 rounded border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-600">Pendiente de vincular{p.bsale_brand_id != null && <span className="font-normal text-amber-600/70">(Brand {p.bsale_brand_id})</span>}</span>
+                      <span className="inline-flex max-w-full items-center gap-1.5 truncate rounded border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-600" title={`Pendiente de vincular${p.bsale_brand_id != null ? ` · Brand ${p.bsale_brand_id}` : ''}`}>Pendiente de vincular{p.bsale_brand_id != null && <span className="font-normal text-amber-600/70">(Brand {p.bsale_brand_id})</span>}</span>
                     ) : p.bsale_supplier_link_status === 'NOT_APPLICABLE' ? (
                       <span className="text-xs text-theme-text-muted/50">No aplica</span>
                     ) : (
                       <span className="text-xs text-theme-text-muted/60">Sin proveedor informado</span>
                     )}
                   </td>
-                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs">{p.category || '—'}</td>
-                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs">{p.bsale_product_type_name || p.product_type || '—'}</td>
-                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs">{p.presentation || '—'}</td>
-                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs">{p.unit_of_measure || '—'}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs truncate" title={p.category || undefined}>{p.category || '—'}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs truncate" title={p.bsale_product_type_name || p.product_type || undefined}>{p.bsale_product_type_name || p.product_type || '—'}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs truncate" title={p.presentation || undefined}>{p.presentation || '—'}</td>
+                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs truncate" title={p.unit_of_measure || undefined}>{p.unit_of_measure || '—'}</td>
                   <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs">{p.min_stock}</td>
                   <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs">{p.reorder_point}</td>
-                  <td className="py-2.5 px-4 flex flex-col gap-1 items-start">
+                  <td className="py-2.5 px-4 flex flex-col gap-1 items-start truncate">
                     {p.source === 'BSALE' && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 border border-blue-500/20">BSALE</span>}
                     {p.requires_lot && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-600 border border-purple-500/20">LOTE</span>}
                     {p.bsale_status_conflict && <span title={p.bsale_status_conflict_reason || ''} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 border border-amber-500/20">! CONFLICTO</span>}
                   </td>
                   <td className="py-2.5 px-4">{p.is_active ? <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-theme-accent-hover/10 text-theme-text-accent border-theme-accent/20">Activo</span> : <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-red-500/10 text-red-500 border-red-500/20">Inactivo</span>}</td>
-                  <td className="py-2.5 px-4 text-right">
+                  <td className="sticky right-0 z-20 border-l border-theme-border bg-theme-surface py-2.5 px-4 text-right shadow-[-6px_0_12px_-10px_rgba(0,0,0,0.5)]">
                     <button onClick={() => openEdit(p)} className="text-xs text-theme-text-muted/70 hover:text-theme-text-accent mr-3">Editar</button>
                     <button onClick={() => handleDeactivate(p)} className={`text-xs ${p.is_active ? 'text-red-500/80 hover:text-red-500' : 'text-theme-text-muted/70 hover:text-theme-text-accent'}`}>{p.is_active ? 'Desactivar' : 'Activar'}</button>
                   </td>
@@ -691,6 +763,8 @@ export function CatalogPanel() {
           </div>
         </div>
       )}
+
+      </div>
 
 
     </div>

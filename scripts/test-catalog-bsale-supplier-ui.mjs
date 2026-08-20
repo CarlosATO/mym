@@ -44,3 +44,14 @@ test('la tabla conserva scroll responsive y la exportación incluye el proveedor
   assert.match(panel, /min-w-\[1500px\]/)
   assert.match(panel, /proveedor_en_bsale/)
 })
+
+test('sorting conserva filtros y sólo expone columnas SQL soportables', () => {
+  assert.match(action, /sortBy\?: ProductSortKey/)
+  assert.match(action, /PRODUCT_SORT_COLUMNS/)
+  assert.match(action, /\.order\(PRODUCT_SORT_COLUMNS\[sortBy\]/)
+  assert.match(action, /\.range\(from, to\)/)
+  assert.match(panel, /id: 'sku'.*sortable: true/)
+  assert.match(panel, /id: 'min-stock'.*sortKey: 'min_stock'.*sortType: 'number'/)
+  assert.doesNotMatch(panel, /id: 'bsale-supplier'.*sortable: true/)
+  assert.doesNotMatch(panel, /id: 'real-supplier'.*sortable: true/)
+})

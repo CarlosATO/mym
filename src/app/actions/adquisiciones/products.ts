@@ -122,8 +122,24 @@ export interface ProductFilters {
   bsale_inactive?: string
   no_barcode?: string
   no_bsale_type?: string
+  sortBy?: ProductSortKey
+  sortDirection?: 'asc' | 'desc'
   page?: number
   pageSize?: number
+}
+
+export type ProductSortKey = 'sku' | 'barcode' | 'description' | 'category' | 'presentation' | 'unit_of_measure' | 'min_stock' | 'reorder_point' | 'is_active'
+
+const PRODUCT_SORT_COLUMNS: Record<ProductSortKey, string> = {
+  sku: 'sku',
+  barcode: 'barcode',
+  description: 'description',
+  category: 'category',
+  presentation: 'presentation',
+  unit_of_measure: 'unit_of_measure',
+  min_stock: 'min_stock',
+  reorder_point: 'reorder_point',
+  is_active: 'is_active',
 }
 
 type BsaleBrandSupplierLink = {
@@ -176,7 +192,7 @@ export async function getProductCatalogBySkus(skus: string[]): Promise<ProductCa
   return rows
 }
 
-export async function getProducts(filters: ProductFilters = {}): Promise<{ data: Product[]; total: number }> {
+export async function getProducts(filters: ProductFilters = {}): Promise<{ data: Product[]; total: number; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { data: [], total: 0 }
@@ -236,9 +252,14 @@ export async function getProducts(filters: ProductFilters = {}): Promise<{ data:
   const from = (page - 1) * pageSize
   const to = from + pageSize - 1
 
-  query = query.order('sku').range(from, to)
+  const sortBy = filters.sortBy && Object.prototype.hasOwnProperty.call(PRODUCT_SORT_COLUMNS, filters.sortBy) ? filters.sortBy : 'sku'
+  const sortDirection = filters.sortDirection === 'desc' ? 'desc' : 'asc'
+  query = query
+    .order(PRODUCT_SORT_COLUMNS[sortBy], { ascending: sortDirection === 'asc', nullsFirst: false })
+    .order('id', { ascending: true })
+    .range(from, to)
   const { data, error, count } = await query
-  if (error) return { data: [], total: 0 }
+  if (error) return { data: [], total: 0, error: error.message }
   const products = (data ?? []) as Product[]
 
   if (products.length > 0) {

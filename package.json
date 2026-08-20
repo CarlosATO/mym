@@ -17,6 +17,7 @@
     "test:bsale-brand-supplier-links": "node --experimental-strip-types --test scripts/test-bsale-brand-supplier-links.mjs",
     "test:bsale-brand-supplier-ui": "node --experimental-strip-types --test scripts/test-bsale-brand-supplier-ui.mjs",
     "test:catalog-bsale-supplier-ui": "node --experimental-strip-types --test scripts/test-catalog-bsale-supplier-ui.mjs",
+    "test:operational-table": "node --experimental-strip-types --test scripts/test-operational-table.mjs",
     "test:bsale-product-batches": "node --experimental-strip-types --test scripts/test-bsale-product-batches.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
