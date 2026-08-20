@@ -2,28 +2,59 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { getWarehouses, type Warehouse } from '@/app/actions/adquisiciones/warehouses'
+import { LoaderCircle } from 'lucide-react'
+import { OperationalTableResizeHandle, useOperationalTableWidths, type OperationalTableColumn } from '@/components/ui/operational-table'
+
+const WAREHOUSES_TABLE_KEY = 'mym:table:adquisiciones:bodegas'
+const WAREHOUSES_COLUMNS: OperationalTableColumn[] = [
+  { id: 'code', defaultWidth: 135, minWidth: 105, maxWidth: 220 },
+  { id: 'name', defaultWidth: 300, minWidth: 200, maxWidth: 520 },
+  { id: 'type', defaultWidth: 155, minWidth: 120, maxWidth: 260 },
+  { id: 'location', defaultWidth: 280, minWidth: 190, maxWidth: 460 },
+  { id: 'manager', defaultWidth: 220, minWidth: 160, maxWidth: 380 },
+  { id: 'capacity', defaultWidth: 145, minWidth: 110, maxWidth: 220 },
+  { id: 'status', defaultWidth: 135, minWidth: 105, maxWidth: 190 },
+]
 
 export function WarehousesPanel() {
   const [data, setData] = useState<Warehouse[]>([])
   const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [msg, setMsg] = useState('')
   const [filters, setFilters] = useState<{ search?: string; warehouse_type?: string; status?: string; is_active?: string; page: number; pageSize: number }>({ page: 1, pageSize: 50 })
   const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const requestSequence = useRef(0)
+  const loaded = useRef(false)
+  const { widths, setColumnWidth, persist, reset: resetWidths } = useOperationalTableWidths(WAREHOUSES_TABLE_KEY, WAREHOUSES_COLUMNS)
 
   const load = useCallback(async () => {
     const start = performance.now()
-    setLoading(true)
-    const r = await getWarehouses(filters)
-    setData(r.data)
-    setTotal(r.total)
-    setLoading(false)
-    if (process.env.NODE_ENV === 'development') {
-      console.log(`[WarehousesPanel] load completa`, Math.round(performance.now() - start), 'ms')
+    const requestId = ++requestSequence.current
+    if (loaded.current) setRefreshing(true)
+    else setInitialLoading(true)
+    try {
+      const r = await getWarehouses(filters)
+      if (requestId !== requestSequence.current) return
+      setData(r.data)
+      setTotal(r.total)
+      loaded.current = true
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[WarehousesPanel] load completa`, Math.round(performance.now() - start), 'ms')
+      }
+    } catch {
+      if (requestId === requestSequence.current) setMsg('No se pudieron actualizar las bodegas.')
+    } finally {
+      if (requestId === requestSequence.current) {
+        setInitialLoading(false)
+        setRefreshing(false)
+      }
     }
   }, [filters])
 
+  /* eslint-disable react-hooks/set-state-in-effect -- load synchronizes server data after filters change */
   useEffect(() => { load() }, [load])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   function setFilter(k: string, v: string) {
     if (k === 'search') {
@@ -39,8 +70,14 @@ export function WarehousesPanel() {
   const tp = Math.ceil(total / (filters.pageSize ?? 50))
   const typeOpts = ['CENTRAL','SUCURSAL','TRANSITO','DEVOLUCIONES','CONSIGNACION','OTRO']
 
+  function warehouseColumn(id: string) { return WAREHOUSES_COLUMNS.find(column => column.id === id)! }
+  function resizeHandle(id: string) {
+    const column = warehouseColumn(id)
+    return <OperationalTableResizeHandle column={column} width={widths[id] ?? column.defaultWidth} onResize={width => setColumnWidth(column, width)} onResizeEnd={persist} />
+  }
+
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
+    <div className="relative flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
       {msg && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2 text-sm text-theme-text-accent">{msg}</div>}
 
       <div className="shrink-0 flex flex-col gap-2.5 p-3 border-b border-theme-border/60 bg-theme-text/[0.01]">
@@ -62,44 +99,50 @@ export function WarehousesPanel() {
             <option value="BLOCKED" className="bg-white dark:bg-theme-surface">BLOQUEADA</option>
           </select>
           <button onClick={() => setFilters({ page: 1, pageSize: 50 })} className="h-9 px-3 rounded-lg border border-theme-border text-theme-text-muted/70 hover:text-theme-text hover:bg-theme-text/5 text-xs transition-colors">✕ Limpiar filtros</button>
+          <button type="button" onClick={resetWidths} className="h-9 px-3 rounded-lg border border-theme-border text-theme-text-muted/70 hover:text-theme-text hover:bg-theme-text/5 text-xs transition-colors">Restablecer anchos</button>
         </div>
       </div>
 
-      {loading ? (
+      {refreshing && <div role="status" aria-live="polite" className="pointer-events-none absolute left-1/2 top-20 z-50 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-theme-border bg-theme-surface/95 px-3 py-1.5 text-[11px] font-semibold text-theme-text-muted shadow-md"><LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin text-theme-accent" />Actualizando...</div>}
+
+      {initialLoading ? (
         <div className="p-10 text-center text-theme-text-muted/50 text-sm">Cargando bodegas...</div>
       ) : data.length === 0 ? (
         <div className="p-10 text-center text-theme-text-muted/50 text-sm">No se encontraron bodegas.</div>
       ) : (
         <div className="flex-1 overflow-auto">
-          <table className="w-full text-sm border-collapse">
+          <table className="min-w-[1370px] w-full table-fixed whitespace-nowrap text-sm border-collapse">
+            <colgroup>{WAREHOUSES_COLUMNS.map(column => <col key={column.id} style={{ width: widths[column.id] ?? column.defaultWidth }} />)}</colgroup>
             <thead className="sticky top-0 z-10 bg-theme-surface">
               <tr className="border-b border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider">
-                <th className="text-left py-2.5 px-4 font-medium">Código</th>
-                <th className="text-left py-2.5 px-4 font-medium">Nombre</th>
-                <th className="text-left py-2.5 px-4 font-medium">Tipo</th>
-                <th className="text-left py-2.5 px-4 font-medium">Ubicación</th>
-                <th className="text-left py-2.5 px-4 font-medium">Encargado</th>
-                <th className="text-center py-2.5 px-4 font-medium">Capacidad</th>
-                <th className="text-center py-2.5 px-4 font-medium">Estado</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">Código{resizeHandle('code')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">Nombre{resizeHandle('name')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">Tipo{resizeHandle('type')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">Ubicación{resizeHandle('location')}</th>
+                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">Encargado{resizeHandle('manager')}</th>
+                <th className="relative border-r border-theme-border/30 text-center py-2.5 px-4 font-medium">Capacidad{resizeHandle('capacity')}</th>
+                <th className="relative text-center py-2.5 px-4 font-medium">Estado{resizeHandle('status')}</th>
               </tr>
             </thead>
             <tbody>
               {data.map(w => (
                 <tr key={w.id} className="border-b border-theme-border transition-colors hover:bg-theme-text/5">
-                  <td className="py-2.5 px-4 font-mono font-semibold text-theme-accent text-xs">{w.code}</td>
-                  <td className="py-2.5 px-4 font-medium text-theme-text flex items-center gap-2">
-                    {w.name} {w.is_default && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-theme-accent/10 text-theme-accent border border-theme-accent/20 uppercase">Default</span>}
+                  <td className="py-2.5 px-4 truncate font-mono font-semibold text-theme-accent text-xs" title={w.code}>{w.code}</td>
+                  <td className="py-2.5 px-4 truncate font-medium text-theme-text" title={w.name}>
+                    <span className="inline-flex min-w-0 items-center gap-2">
+                      <span className="truncate">{w.name}</span> {w.is_default && <span className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold bg-theme-accent/10 text-theme-accent border border-theme-accent/20 uppercase">Default</span>}
+                    </span>
                   </td>
-                  <td className="py-2.5 px-4 text-theme-text-muted/70 text-xs">{w.warehouse_type}</td>
+                  <td className="py-2.5 px-4 truncate text-theme-text-muted/70 text-xs" title={w.warehouse_type}>{w.warehouse_type}</td>
                   <td className="py-2.5 px-4 text-xs">
-                    <p className="text-theme-text">{w.commune || '—'}</p>
-                    <p className="text-theme-text-muted/50">{w.address || ''}</p>
+                    <p className="truncate text-theme-text" title={w.commune || undefined}>{w.commune || '—'}</p>
+                    <p className="truncate text-theme-text-muted/50" title={w.address || undefined}>{w.address || ''}</p>
                   </td>
                   <td className="py-2.5 px-4 text-xs">
-                    <p className="text-theme-text">{w.manager_name || '—'}</p>
-                    {w.manager_phone && <p className="text-theme-text-muted/50">{w.manager_phone}</p>}
+                    <p className="truncate text-theme-text" title={w.manager_name || undefined}>{w.manager_name || '—'}</p>
+                    {w.manager_phone && <p className="truncate text-theme-text-muted/50" title={w.manager_phone}>{w.manager_phone}</p>}
                   </td>
-                  <td className="py-2.5 px-4 text-center text-xs text-theme-text-muted/70">
+                  <td className="py-2.5 px-4 text-center text-xs tabular-nums text-theme-text-muted/70">
                     {w.capacity_pallets ? `${w.capacity_pallets} plts` : '—'}
                   </td>
                   <td className="py-2.5 px-4 text-center">

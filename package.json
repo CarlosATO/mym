@@ -19,6 +19,7 @@
     "test:catalog-bsale-supplier-ui": "node --experimental-strip-types --test scripts/test-catalog-bsale-supplier-ui.mjs",
     "test:operational-table": "node --experimental-strip-types --test scripts/test-operational-table.mjs",
     "test:table-2a-suppliers": "node --experimental-strip-types --test scripts/test-table-2a-suppliers.mjs",
+    "test:table-2b-warehouses": "node --experimental-strip-types --test scripts/test-table-2b-warehouses.mjs",
     "test:bsale-product-batches": "node --experimental-strip-types --test scripts/test-bsale-product-batches.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
