@@ -3,6 +3,27 @@ import type { RouteSettlementsDashboardRow } from '@/app/actions/adquisiciones/r
 import { formatCurrency, formatDate } from '../utils/route-settlement-formatters'
 import { SettlementStatusBadge } from './route-settlement-badges'
 import { ArrowRight, Filter, Search, X } from 'lucide-react'
+import { OperationalTableResizeHandle, shouldIgnoreOperationalRowDoubleClick, useOperationalTableWidths, type OperationalTableColumn } from '@/components/ui/operational-table'
+
+const ROUTE_SETTLEMENTS_TABLE_KEY = 'mym:table:adquisiciones:rendicion-rutas'
+const ROUTE_SETTLEMENT_COLUMNS: OperationalTableColumn[] = [
+  { id: 'guide', defaultWidth: 110, minWidth: 95, maxWidth: 180 },
+  { id: 'settlement', defaultWidth: 125, minWidth: 105, maxWidth: 210 },
+  { id: 'date', defaultWidth: 95, minWidth: 85, maxWidth: 145 },
+  { id: 'route', defaultWidth: 140, minWidth: 115, maxWidth: 280 },
+  { id: 'driver', defaultWidth: 120, minWidth: 105, maxWidth: 240 },
+  { id: 'seller', defaultWidth: 120, minWidth: 105, maxWidth: 240 },
+  { id: 'routeTotal', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
+  { id: 'settleableTotal', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
+  { id: 'cashExpected', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
+  { id: 'cashReceived', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
+  { id: 'cashDifference', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
+  { id: 'transferConfirmed', defaultWidth: 115, minWidth: 105, maxWidth: 190 },
+  { id: 'transferPending', defaultWidth: 120, minWidth: 105, maxWidth: 200 },
+  { id: 'settleableInvoices', defaultWidth: 105, minWidth: 95, maxWidth: 180 },
+  { id: 'status', defaultWidth: 140, minWidth: 120, maxWidth: 220 },
+  { id: 'actions', defaultWidth: 125, minWidth: 115, maxWidth: 190, sticky: 'right', resizable: false },
+]
 
 interface UnifiedTableProps {
   data: RouteSettlementsDashboardRow[]
@@ -32,6 +53,7 @@ export function UnifiedRouteSettlementsTable({
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null)
+  const { widths, setColumnWidth, persist, reset: resetWidths } = useOperationalTableWidths(ROUTE_SETTLEMENTS_TABLE_KEY, ROUTE_SETTLEMENT_COLUMNS)
 
   // Ref para distinguir doble clic de clic simple
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -83,7 +105,13 @@ export function UnifiedRouteSettlementsTable({
     }
   }
 
-  if (isLoading) {
+  function routeSettlementColumn(id: string) { return ROUTE_SETTLEMENT_COLUMNS.find(column => column.id === id)! }
+  function resizeHandle(id: string) {
+    const column = routeSettlementColumn(id)
+    return <OperationalTableResizeHandle column={column} width={widths[id] ?? column.defaultWidth} onResize={width => setColumnWidth(column, width)} onResizeEnd={persist} />
+  }
+
+  if (isLoading && data.length === 0) {
     return (
       <div className="w-full h-full min-h-0 flex items-center justify-center rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
         <div className="flex flex-col items-center gap-2 opacity-50">
@@ -95,7 +123,7 @@ export function UnifiedRouteSettlementsTable({
   }
 
   return (
-    <div className="h-full min-h-0 min-w-0 flex flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
+    <div className="relative h-full min-h-0 min-w-0 flex flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
       {/* Barra compacta de filtros */}
       <div className="shrink-0 min-w-0 flex flex-col gap-2 border-b border-theme-border/70 bg-theme-surface px-3 py-2.5 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex min-w-0 items-center gap-2">
@@ -130,7 +158,7 @@ export function UnifiedRouteSettlementsTable({
             className="text-xs bg-theme-bg/40 border border-theme-border rounded-lg px-2.5 py-1.5 text-theme-text focus:outline-none focus:border-theme-accent"
             aria-label="Fecha hasta"
           />
-          <select
+           <select
             value={paymentFilter}
             onChange={(e) => setPaymentFilter(e.target.value as 'CASH_ONLY' | 'ALL' | 'CREDIT')}
             className="text-xs bg-theme-bg/40 border border-theme-border rounded-lg px-2.5 py-1.5 text-theme-text focus:outline-none focus:border-theme-accent"
@@ -151,9 +179,16 @@ export function UnifiedRouteSettlementsTable({
             <option value="SETTLED">Rendida</option>
             <option value="SETTLED_WITH_DIFFERENCE">Con diferencias</option>
             <option value="CLOSED">Cerrada</option>
-            <option value="CANCELLED">Anulada</option>
-          </select>
-          {(filterStatus !== 'ALL' || paymentFilter !== 'CASH_ONLY' || searchTerm !== '' || dateFrom !== '' || dateTo !== '') && (
+             <option value="CANCELLED">Anulada</option>
+           </select>
+           <button
+             type="button"
+             onClick={resetWidths}
+             className="shrink-0 rounded-lg border border-theme-border px-2.5 py-1.5 text-[11px] font-semibold text-theme-text-muted transition-colors hover:bg-theme-text/5 hover:text-theme-text"
+           >
+             Restablecer anchos
+           </button>
+           {(filterStatus !== 'ALL' || paymentFilter !== 'CASH_ONLY' || searchTerm !== '' || dateFrom !== '' || dateTo !== '') && (
             <button
               onClick={() => { setFilterStatus('ALL'); setPaymentFilter('CASH_ONLY'); setSearchTerm(''); setDateFrom(''); setDateTo('') }}
               className="p-1.5 rounded-lg text-theme-text-muted hover:text-red-500 hover:bg-red-500/10 transition-colors shrink-0"
@@ -163,28 +198,31 @@ export function UnifiedRouteSettlementsTable({
             </button>
           )}
         </div>
-      </div>
+         </div>
 
-      <div className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto overscroll-contain">
-        <table className="w-full min-w-[1840px] table-fixed text-left text-xs whitespace-nowrap">
-          <thead className="sticky top-0 z-20 bg-theme-surface">
-            <tr className="border-b border-theme-border/70 bg-theme-surface shadow-sm">
-              <th className="w-[110px] px-3 py-2.5 font-bold text-theme-text-muted">Guía</th>
-              <th className="w-[125px] px-3 py-2.5 font-bold text-theme-text-muted">Rendición</th>
-              <th className="w-[95px] px-3 py-2.5 font-bold text-theme-text-muted">Fecha</th>
-              <th className="w-[140px] px-3 py-2.5 font-bold text-theme-text-muted">Ruta</th>
-              <th className="w-[120px] px-3 py-2.5 font-bold text-theme-text-muted">Conductor</th>
-              <th className="w-[120px] px-3 py-2.5 font-bold text-theme-text-muted">Vendedor</th>
-              <th className="w-[110px] px-3 py-2.5 text-right font-bold text-theme-text-muted">Total ruta</th>
-              <th className="w-[110px] px-3 py-2.5 text-right font-bold text-theme-text-muted">Total rendible</th>
-              <th className="w-[110px] px-3 py-2.5 text-right font-bold text-theme-text-muted">Ef. esperado</th>
-              <th className="w-[110px] px-3 py-2.5 text-right font-bold text-theme-text-muted">Ef. recibido</th>
-              <th className="w-[110px] px-3 py-2.5 text-right font-bold text-theme-text-muted">Dif. ef.</th>
-              <th className="w-[115px] px-3 py-2.5 text-right font-bold text-theme-text-muted">Transf. conf.</th>
-              <th className="w-[120px] px-3 py-2.5 text-center font-bold text-theme-text-muted">Transf. pend.</th>
-              <th className="w-[105px] px-3 py-2.5 text-center font-bold text-theme-text-muted">Fact. rendibles</th>
-              <th className="w-[140px] px-3 py-2.5 text-center font-bold text-theme-text-muted">Estado</th>
-              <th className="w-[125px] px-3 py-2.5 text-center font-bold text-theme-text-muted">Acción</th>
+         {isLoading && <div role="status" aria-live="polite" className="pointer-events-none absolute left-1/2 top-16 z-50 inline-flex -translate-x-1/2 items-center rounded-full border border-theme-border bg-theme-surface/95 px-3 py-1.5 text-[11px] font-semibold text-theme-text-muted shadow-md">Actualizando...</div>}
+
+         <div className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto overscroll-contain">
+           <table className="w-full min-w-[1840px] table-fixed text-left text-xs whitespace-nowrap">
+             <colgroup>{ROUTE_SETTLEMENT_COLUMNS.map(column => <col key={column.id} style={{ width: widths[column.id] ?? column.defaultWidth }} />)}</colgroup>
+             <thead className="sticky top-0 z-20 bg-theme-surface">
+               <tr className="border-b border-theme-border/70 bg-theme-surface shadow-sm">
+               <th className="relative border-r border-theme-border/30 px-3 py-2.5 font-bold text-theme-text-muted">Guía{resizeHandle('guide')}</th>
+               <th className="relative border-r border-theme-border/30 px-3 py-2.5 font-bold text-theme-text-muted">Rendición{resizeHandle('settlement')}</th>
+               <th className="relative border-r border-theme-border/30 px-3 py-2.5 font-bold text-theme-text-muted">Fecha{resizeHandle('date')}</th>
+               <th className="relative border-r border-theme-border/30 px-3 py-2.5 font-bold text-theme-text-muted">Ruta{resizeHandle('route')}</th>
+               <th className="relative border-r border-theme-border/30 px-3 py-2.5 font-bold text-theme-text-muted">Conductor{resizeHandle('driver')}</th>
+               <th className="relative border-r border-theme-border/30 px-3 py-2.5 font-bold text-theme-text-muted">Vendedor{resizeHandle('seller')}</th>
+               <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Total ruta{resizeHandle('routeTotal')}</th>
+               <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Total rendible{resizeHandle('settleableTotal')}</th>
+               <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Ef. esperado{resizeHandle('cashExpected')}</th>
+               <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Ef. recibido{resizeHandle('cashReceived')}</th>
+               <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Dif. ef.{resizeHandle('cashDifference')}</th>
+               <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Transf. conf.{resizeHandle('transferConfirmed')}</th>
+               <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-center font-bold text-theme-text-muted">Transf. pend.{resizeHandle('transferPending')}</th>
+               <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-center font-bold text-theme-text-muted">Fact. rendibles{resizeHandle('settleableInvoices')}</th>
+               <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-center font-bold text-theme-text-muted">Estado{resizeHandle('status')}</th>
+               <th className="sticky right-0 z-30 border-l border-theme-border bg-theme-surface px-3 py-2.5 text-center font-bold text-theme-text-muted">Acción</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-theme-border/50">
@@ -212,7 +250,7 @@ export function UnifiedRouteSettlementsTable({
                     tabIndex={0}
                     title={`Doble clic, Enter o botón ${actionLabel}`}
                     onClick={() => handleRowClick(item.route_guide_id)}
-                    onDoubleClick={() => handleRowDoubleClick(item)}
+                     onDoubleClick={(event) => { if (!shouldIgnoreOperationalRowDoubleClick(event.target)) handleRowDoubleClick(item) }}
                     onKeyDown={handleKeyDown}
                     className={`
                       cursor-pointer transition-colors select-none outline-none
@@ -221,40 +259,40 @@ export function UnifiedRouteSettlementsTable({
                         : 'hover:bg-theme-text/[0.03] focus:bg-theme-text/[0.04]'}
                     `}
                   >
-                    <td className="w-[110px] px-3 py-2.5 font-bold text-theme-text">{item.guide_number}</td>
-                    <td className="w-[125px] px-3 py-2.5 font-mono text-[11px] text-theme-text">{item.settlement_number || '—'}</td>
-                    <td className="w-[95px] px-3 py-2.5 text-theme-text-muted">{formatDate(item.guide_date ?? '')}</td>
-                    <td className="w-[140px] max-w-[140px] truncate px-3 py-2.5 text-theme-text" title={item.route_name || undefined}>{item.route_name || '—'}</td>
-                    <td className="w-[120px] max-w-[120px] truncate px-3 py-2.5 text-theme-text" title={item.driver_name || undefined}>{item.driver_name || '—'}</td>
-                    <td className="w-[120px] max-w-[120px] truncate px-3 py-2.5 text-theme-text" title={item.seller_name || undefined}>{item.seller_name || '—'}</td>
-                    <td className="w-[110px] px-3 py-2.5 text-right font-semibold tabular-nums text-theme-text">{formatCurrency(item.total_route_amount)}</td>
-                    <td className="w-[110px] px-3 py-2.5 text-right font-semibold tabular-nums text-theme-text">{formatCurrency(totalRendible)}</td>
-                    <td className="w-[110px] px-3 py-2.5 text-right font-semibold tabular-nums text-theme-text">{formatCurrency(item.total_cash_expected)}</td>
-                    <td className="w-[110px] px-3 py-2.5 text-right font-semibold tabular-nums text-green-600 dark:text-green-400">
+                     <td className="truncate px-3 py-2.5 font-bold text-theme-text" title={item.guide_number || undefined}>{item.guide_number || '—'}</td>
+                     <td className="truncate px-3 py-2.5 font-mono text-[11px] text-theme-text" title={item.settlement_number || undefined}>{item.settlement_number || '—'}</td>
+                     <td className="truncate px-3 py-2.5 text-theme-text-muted" title={formatDate(item.guide_date ?? '')}>{formatDate(item.guide_date ?? '')}</td>
+                     <td className="truncate px-3 py-2.5 text-theme-text" title={item.route_name || undefined}>{item.route_name || '—'}</td>
+                     <td className="truncate px-3 py-2.5 text-theme-text" title={item.driver_name || undefined}>{item.driver_name || '—'}</td>
+                     <td className="truncate px-3 py-2.5 text-theme-text" title={item.seller_name || undefined}>{item.seller_name || '—'}</td>
+                     <td className="truncate px-3 py-2.5 text-right font-semibold tabular-nums text-theme-text" title={formatCurrency(item.total_route_amount)}>{formatCurrency(item.total_route_amount)}</td>
+                     <td className="truncate px-3 py-2.5 text-right font-semibold tabular-nums text-theme-text" title={formatCurrency(totalRendible)}>{formatCurrency(totalRendible)}</td>
+                     <td className="truncate px-3 py-2.5 text-right font-semibold tabular-nums text-theme-text" title={formatCurrency(item.total_cash_expected)}>{formatCurrency(item.total_cash_expected)}</td>
+                     <td className="truncate px-3 py-2.5 text-right font-semibold tabular-nums text-green-600 dark:text-green-400" title={item.settlement_id ? formatCurrency(item.total_cash_received) : '—'}>
                       {item.settlement_id ? formatCurrency(item.total_cash_received) : '—'}
                     </td>
-                    <td className="w-[110px] px-3 py-2.5 text-right tabular-nums">
+                     <td className="truncate px-3 py-2.5 text-right tabular-nums" title={item.settlement_id ? formatCurrency(item.total_cash_difference) : '—'}>
                       <span className={`font-bold ${item.total_cash_difference > 0 ? 'text-red-500' : 'text-theme-text-muted'}`}>
                         {item.settlement_id ? formatCurrency(item.total_cash_difference) : '—'}
                       </span>
                     </td>
-                    <td className="w-[115px] px-3 py-2.5 text-right font-semibold tabular-nums text-theme-text">
+                     <td className="truncate px-3 py-2.5 text-right font-semibold tabular-nums text-theme-text" title={item.settlement_id ? formatCurrency(item.total_transfer_confirmed) : '—'}>
                       {item.settlement_id ? formatCurrency(item.total_transfer_confirmed) : '—'}
                     </td>
-                    <td className="w-[120px] px-3 py-2.5 text-center tabular-nums">
+                     <td className="truncate px-3 py-2.5 text-center tabular-nums">
                       <span className={`px-2 py-0.5 rounded-md font-medium ${item.total_transfer_pending > 0 ? 'bg-orange-500/10 text-orange-600' : 'bg-theme-text/5 text-theme-text'}`}>
                         {item.total_transfer_pending > 0 ? formatCurrency(item.total_transfer_pending) : '0'}
                       </span>
                     </td>
-                    <td className="w-[105px] px-3 py-2.5 text-center tabular-nums">
+                     <td className="truncate px-3 py-2.5 text-center tabular-nums">
                       <span className="px-2 py-0.5 rounded-md bg-theme-text/5 text-theme-text font-medium">
                         {item.settlement_id ? `${item.paid_count} / ${item.total_rendible_count}` : `0 / ${item.total_rendible_count}`}
                       </span>
                     </td>
-                    <td className="w-[140px] px-3 py-2.5 text-center">
+                     <td className="truncate px-3 py-2.5 text-center">
                       <SettlementStatusBadge status={item.operational_status} />
                     </td>
-                    <td className="w-[125px] px-3 py-2.5 text-center">
+                     <td className="sticky right-0 z-10 bg-theme-surface px-3 py-2.5 text-center">
                       <button
                         type="button"
                         disabled={!item.settlement_id && !canCreateSettlement}

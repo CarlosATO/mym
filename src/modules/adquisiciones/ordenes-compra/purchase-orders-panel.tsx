@@ -15,6 +15,7 @@ import { getProducts, type Product } from '@/app/actions/adquisiciones/products'
 import { getWarehouses, type Warehouse } from '@/app/actions/adquisiciones/warehouses'
 import { downloadPOBooklet, generatePdfBlob } from '@/lib/pdf/generate-po-pdf'
 import { getActiveCompany, type Company } from '@/app/actions/companies'
+import { OperationalTableResizeHandle, shouldIgnoreOperationalRowDoubleClick, useOperationalTableWidths, type OperationalTableColumn } from '@/components/ui/operational-table'
 import { ReplenishmentAnalysisPanel } from './replenishment-analysis-panel'
 
 const STATUS_BADGES: Record<string, { bg: string; text: string; border: string }> = {
@@ -44,6 +45,22 @@ const INVOICE_BADGES: Record<string, { bg: string; text: string; border: string 
   FACTURADA_TOTAL: { bg: 'bg-emerald-500/10', text: 'text-emerald-500', border: 'border-emerald-500/20' },
   PAGADA: { bg: 'bg-emerald-500/10', text: 'text-emerald-500', border: 'border-emerald-500/20' },
 }
+
+const PURCHASE_ORDERS_TABLE_KEY = 'mym:table:adquisiciones:ordenes-compra'
+const PURCHASE_ORDER_COLUMNS: OperationalTableColumn[] = [
+  { id: 'correlative', defaultWidth: 120, minWidth: 100, maxWidth: 190 },
+  { id: 'issueDate', defaultWidth: 105, minWidth: 95, maxWidth: 150 },
+  { id: 'supplier', defaultWidth: 250, minWidth: 190, maxWidth: 420 },
+  { id: 'type', defaultWidth: 95, minWidth: 85, maxWidth: 170 },
+  { id: 'warehouse', defaultWidth: 165, minWidth: 130, maxWidth: 300 },
+  { id: 'requester', defaultWidth: 150, minWidth: 120, maxWidth: 260 },
+  { id: 'authorized', defaultWidth: 150, minWidth: 120, maxWidth: 260 },
+  { id: 'status', defaultWidth: 125, minWidth: 110, maxWidth: 210 },
+  { id: 'total', defaultWidth: 125, minWidth: 110, maxWidth: 190 },
+  { id: 'receipt', defaultWidth: 125, minWidth: 110, maxWidth: 210 },
+  { id: 'invoice', defaultWidth: 125, minWidth: 110, maxWidth: 210 },
+  { id: 'actions', defaultWidth: 115, minWidth: 105, maxWidth: 170, sticky: 'right', resizable: false },
+]
 
 function formatCurrency(amount: number, currency = 'CLP') {
   return amount.toLocaleString('es-CL', { style: 'currency', currency })
@@ -84,7 +101,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
   const [editId, setEditId] = useState<string | null>(null)
   const [data, setData] = useState<PurchaseOrder[]>([])
   const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [message, setMessage] = useState('')
   const [filters, setFilters] = useState<PurchaseOrderFilters>({ page: 1, pageSize: 50 })
   const [detail, setDetail] = useState<PurchaseOrderDetail | null>(null)
@@ -127,6 +145,9 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
   const [warehouseSearch, setWarehouseSearch] = useState('')
   const [warehouseOpen, setWarehouseOpen] = useState(false)
   const warehouseRef = useRef<HTMLDivElement>(null)
+  const requestSequence = useRef(0)
+  const loaded = useRef(false)
+  const { widths, setColumnWidth, persist, reset: resetWidths } = useOperationalTableWidths(PURCHASE_ORDERS_TABLE_KEY, PURCHASE_ORDER_COLUMNS)
 
   const [form, setForm] = useState({
     issue_date: new Date().toISOString().slice(0, 10),
@@ -164,14 +185,32 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
   const totalPages = Math.ceil(total / (filters.pageSize ?? 50))
 
   const load = useCallback(async () => {
-    setLoading(true)
-    const res = await getPurchaseOrders(filters)
-    setData(res.data)
-    setTotal(res.total)
-    setLoading(false)
+    const requestId = ++requestSequence.current
+    if (loaded.current) setRefreshing(true)
+    else setInitialLoading(true)
+    try {
+      const res = await getPurchaseOrders(filters)
+      if (requestId !== requestSequence.current) return
+      setData(res.data)
+      setTotal(res.total)
+      loaded.current = true
+    } catch {
+      if (requestId === requestSequence.current) msg('No se pudieron actualizar las órdenes de compra.')
+    } finally {
+      if (requestId === requestSequence.current) {
+        setInitialLoading(false)
+        setRefreshing(false)
+      }
+    }
   }, [filters])
 
   useEffect(() => { load() }, [load])
+
+  function poColumn(id: string) { return PURCHASE_ORDER_COLUMNS.find(column => column.id === id)! }
+  function resizeHandle(id: string) {
+    const column = poColumn(id)
+    return <OperationalTableResizeHandle column={column} width={widths[id] ?? column.defaultWidth} onResize={width => setColumnWidth(column, width)} onResizeEnd={persist} />
+  }
 
   const openPOById = useCallback(async (poId: string, mode: 'detail' | 'edit' = 'detail') => {
     if (mode === 'detail' && selectedPo?.id === poId) return;
@@ -1267,7 +1306,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
   }
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
+    <div className="relative flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
       <div className="flex flex-1 overflow-hidden">
         <div className={`flex flex-col h-full overflow-hidden transition-all duration-300 ${selectedPo ? "w-full md:w-1/3 lg:w-1/4 border-r border-theme-border" : "w-full"}`}>
       {message && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
@@ -1285,6 +1324,9 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
             <button onClick={() => setShowFilters(!showFilters)} className={`h-9 px-2.5 md:px-3 rounded-lg border transition-all flex items-center justify-center gap-1.5 text-sm font-semibold ${showFilters ? 'bg-theme-text/10 border-theme-border text-theme-text' : 'bg-theme-surface border-theme-border hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text'}`}>
               <Filter className="w-4 h-4" />
               <span className="hidden md:inline">Filtros</span>
+            </button>
+            <button type="button" onClick={resetWidths} className="h-9 px-2.5 rounded-lg border border-theme-border bg-theme-surface text-xs font-semibold text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text transition-all">
+              Restablecer anchos
             </button>
 
             <button onClick={() => setView('analysis')} className="h-9 px-3.5 rounded-lg border border-theme-accent/30 text-theme-accent hover:bg-theme-accent/10 text-sm font-semibold transition-all flex items-center justify-center gap-1.5 shadow-sm">
@@ -1334,7 +1376,9 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
         )}
       </div>
 
-      {loading ? (
+      {refreshing && <div role="status" aria-live="polite" className="pointer-events-none absolute left-1/2 top-20 z-50 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-theme-border bg-theme-surface/95 px-3 py-1.5 text-[11px] font-semibold text-theme-text-muted shadow-md">Actualizando...</div>}
+
+      {initialLoading ? (
         <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-10 text-center">
           <p className="text-theme-text-muted/50 text-sm">Cargando...</p>
         </div>
@@ -1344,52 +1388,39 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
         </div>
       ) : (
         <div className="min-w-0 flex-1 overflow-x-auto overflow-y-auto">
-          <table className="min-w-[1650px] w-full table-fixed border-collapse text-sm">
-            <colgroup>
-              <col className="w-[120px]" />
-              <col className="w-[105px]" />
-              <col className="w-[250px]" />
-              <col className="w-[95px]" />
-              <col className="w-[165px]" />
-              <col className="w-[150px]" />
-              <col className="w-[150px]" />
-              <col className="w-[125px]" />
-              <col className="w-[125px]" />
-              <col className="w-[125px]" />
-              <col className="w-[125px]" />
-              <col className="w-[115px]" />
-            </colgroup>
+          <table className="min-w-[1650px] w-full table-fixed whitespace-nowrap border-collapse text-sm">
+            <colgroup>{PURCHASE_ORDER_COLUMNS.map(column => <col key={column.id} style={{ width: widths[column.id] ?? column.defaultWidth }} />)}</colgroup>
             <thead className="sticky top-0 z-10 bg-theme-surface">
               <tr className="border-b border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider">
-                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">N° OC</th>
-                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">Fecha</th>
-                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">Proveedor</th>
-                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">Tipo</th>
-                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">Bodega</th>
-                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">Solicitante</th>
-                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">Autoriza</th>
-                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">Estado</th>
-                <th className="whitespace-nowrap px-4 py-2.5 text-right font-medium">Total</th>
-                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">Recepción</th>
-                <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium">Factura</th>
-                <th className={`whitespace-nowrap px-4 py-2.5 text-right font-medium ${selectedPo ? "hidden" : ""}`}>Acciones</th>
+                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">N° OC{resizeHandle('correlative')}</th>
+                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">Fecha{resizeHandle('issueDate')}</th>
+                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">Proveedor{resizeHandle('supplier')}</th>
+                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">Tipo{resizeHandle('type')}</th>
+                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">Bodega{resizeHandle('warehouse')}</th>
+                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">Solicitante{resizeHandle('requester')}</th>
+                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">Autoriza{resizeHandle('authorized')}</th>
+                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">Estado{resizeHandle('status')}</th>
+                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-right font-medium">Total{resizeHandle('total')}</th>
+                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">Recepción{resizeHandle('receipt')}</th>
+                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">Factura{resizeHandle('invoice')}</th>
+                <th className={`sticky right-0 z-20 border-l border-theme-border bg-theme-surface px-4 py-2.5 text-right font-medium ${selectedPo ? "hidden" : ""}`}>Acciones</th>
               </tr>
             </thead>
             <tbody>
               {data.map(po => (
-                <tr key={po.id} className={`border-b border-theme-border hover:bg-theme-text/5 transition-colors cursor-pointer ${selectedPo?.id === po.id ? "bg-theme-accent/5 border-l-2 border-l-theme-accent" : ""}`} onClick={() => openDetail(po)} onMouseEnter={() => prefetchDetail(po.id)}>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-xs font-mono font-semibold text-theme-text-accent">{po.correlative}</td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-xs text-theme-text">{formatDate(po.issue_date)}</td>
-                  <td className="px-4 py-2.5 text-xs text-theme-text"><div className="truncate" title={po.supplier_name}>{po.supplier_name}</div></td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-xs text-theme-text-muted/60">{po.po_type}</td>
-                  <td className="px-4 py-2.5 text-xs text-theme-text-muted/60"><div className="truncate" title={po.warehouse_name || '—'}>{po.warehouse_name || '—'}</div></td>
-                  <td className="px-4 py-2.5 text-xs text-theme-text-muted/60"><div className="truncate" title={po.requester_name}>{po.requester_name}</div></td>
-                  <td className="px-4 py-2.5 text-xs text-theme-text-muted/60"><div className="truncate" title={po.authorized_name || '—'}>{po.authorized_name || '—'}</div></td>
-                  <td className="whitespace-nowrap px-4 py-2.5"><Badge value={po.status} map={STATUS_BADGES} /></td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-right text-xs tabular-nums text-theme-text font-medium">{formatCurrency(po.grand_total, po.currency)}</td>
-                  <td className="whitespace-nowrap px-4 py-2.5"><Badge value={po.receipt_status} map={RECEIPT_BADGES} /></td>
-                  <td className="whitespace-nowrap px-4 py-2.5"><Badge value={po.invoice_status} map={INVOICE_BADGES} /></td>
-                  <td className={`whitespace-nowrap px-4 py-2.5 text-right ${selectedPo ? "hidden" : ""}`} onClick={e => e.stopPropagation()}>
+                <tr key={po.id} className={`border-b border-theme-border hover:bg-theme-text/5 transition-colors cursor-pointer ${selectedPo?.id === po.id ? "bg-theme-accent/5 border-l-2 border-l-theme-accent" : ""}`} onClick={() => openDetail(po)} onDoubleClick={event => { if (!shouldIgnoreOperationalRowDoubleClick(event.target)) openDetail(po) }} onMouseEnter={() => prefetchDetail(po.id)}>
+                  <td className="px-4 py-2.5 truncate text-xs font-mono font-semibold text-theme-text-accent" title={po.correlative}>{po.correlative}</td>
+                  <td className="px-4 py-2.5 truncate text-xs text-theme-text" title={formatDate(po.issue_date)}>{formatDate(po.issue_date)}</td>
+                  <td className="px-4 py-2.5 truncate text-xs text-theme-text" title={po.supplier_name}>{po.supplier_name}</td>
+                  <td className="px-4 py-2.5 truncate text-xs text-theme-text-muted/60" title={po.po_type}>{po.po_type}</td>
+                  <td className="px-4 py-2.5 truncate text-xs text-theme-text-muted/60" title={po.warehouse_name || '—'}>{po.warehouse_name || '—'}</td>
+                  <td className="px-4 py-2.5 truncate text-xs text-theme-text-muted/60" title={po.requester_name}>{po.requester_name}</td>
+                  <td className="px-4 py-2.5 truncate text-xs text-theme-text-muted/60" title={po.authorized_name || '—'}>{po.authorized_name || '—'}</td>
+                  <td className="px-4 py-2.5 truncate"><Badge value={po.status} map={STATUS_BADGES} /></td>
+                  <td className="px-4 py-2.5 truncate text-right text-xs tabular-nums text-theme-text font-medium" title={formatCurrency(po.grand_total, po.currency)}>{formatCurrency(po.grand_total, po.currency)}</td>
+                  <td className="px-4 py-2.5 truncate"><Badge value={po.receipt_status} map={RECEIPT_BADGES} /></td>
+                  <td className="px-4 py-2.5 truncate"><Badge value={po.invoice_status} map={INVOICE_BADGES} /></td>
+                  <td className={`sticky right-0 z-[5] border-l border-theme-border bg-theme-surface whitespace-nowrap px-4 py-2.5 text-right ${selectedPo ? "hidden" : ""}`} onClick={e => e.stopPropagation()}>
                     <button onClick={() => openDetail(po)} className="p-1.5 rounded-lg hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text transition-colors" title="Ver detalle">
                       <Eye className="w-4 h-4" />
                     </button>

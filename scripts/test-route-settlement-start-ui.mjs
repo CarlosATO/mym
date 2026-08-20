@@ -19,7 +19,8 @@ test('la acción de fila distingue pendiente, editable y terminal', () => {
 })
 
 test('doble clic continúa siendo navegación y no inicio', () => {
-  assert.match(table, /onDoubleClick=\{\(\) => handleRowDoubleClick\(item\)\}/)
+  assert.match(table, /shouldIgnoreOperationalRowDoubleClick/)
+  assert.match(table, /onDoubleClick=\{\(event\) => \{ if \(!shouldIgnoreOperationalRowDoubleClick\(event\.target\)\) handleRowDoubleClick\(item\) \}\}/)
   assert.match(table, /onRowDoubleClick\(row\)/)
   assert.match(workspace, /createRouteSettlementFromGuide\(guide\.id\)/)
 })
