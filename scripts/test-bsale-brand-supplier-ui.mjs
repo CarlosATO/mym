@@ -3,9 +3,11 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 const panelPath = new URL('../src/modules/adquisiciones/proveedores/bsale-brand-supplier-panel.tsx', import.meta.url)
+const actionPath = new URL('../src/app/actions/integraciones/bsale-brand-supplier-links.ts', import.meta.url)
 const suppliersPath = new URL('../src/modules/adquisiciones/proveedores/suppliers-panel.tsx', import.meta.url)
-const [panel, suppliers] = await Promise.all([
+const [panel, action, suppliers] = await Promise.all([
   readFile(panelPath, 'utf8'),
+  readFile(actionPath, 'utf8'),
   readFile(suppliersPath, 'utf8'),
 ])
 
@@ -15,50 +17,34 @@ test('Proveedor en Bsale se integra como tab separado de reales y pseudoproveedo
   assert.match(suppliers, /<BsaleBrandSupplierPanel canWrite=\{canManageBsale\} \/>/)
 })
 
-test('el listado usa candidatos backend y muestra evidencia de cobertura', () => {
+test('el listado muestra sólo el modelo operativo vigente', () => {
   assert.match(panel, /listBsaleBrandSupplierCandidates/)
   assert.match(panel, /Brand Bsale/)
-  assert.match(panel, /Proveedor candidato/)
-  assert.match(panel, /Productos cubiertos/)
-  assert.match(panel, /resolved_preferred_products/)
-  assert.match(panel, /toLocaleString\('es-CL'/)
+  assert.match(panel, /Productos activos/)
+  assert.match(panel, /Proveedor REAL/)
+  assert.doesNotMatch(panel, /Cobertura|Clasificación|Proveedor candidato|resolved_preferred_products/)
 })
 
-test('representa estados y clasificaciones sin cambiar su semántica', () => {
+test('representa sólo estados derivados del Brand Supplier Link', () => {
   assert.match(panel, /LINKED: 'Vinculado'/)
   assert.match(panel, /PENDING: 'Pendiente'/)
-  assert.match(panel, /CONFLICT: 'Requiere revisión'/)
-  assert.match(panel, /INEQUIVOCO: 'Inequívoco'/)
-  assert.match(panel, /CASI_INEQUIVOCO: 'Casi inequívoco'/)
-  assert.match(panel, /MIXTO: 'Mixto'/)
-  assert.match(panel, /SIN_RESOLVER: 'Sin resolver'/)
+  assert.match(panel, /return candidate\.link_id \? 'LINKED' as const : 'PENDING' as const/)
+  assert.doesNotMatch(panel, /CONFLICT|INEQUIVOCO|CASI_INEQUIVOCO|MIXTO|SIN_RESOLVER/)
 })
 
-test('un Brand PENDING con candidato ofrece vincular y usar otro', () => {
-  assert.match(panel, /candidate\.derived_status === 'LINKED'/)
-  assert.match(panel, /candidate\.candidate_supplier_id && <button onClick=\{\(\) => onLink\(candidate\)\}/)
-  assert.match(panel, /Usar otro/)
+test('un Brand pendiente ofrece seleccionar proveedor', () => {
+  assert.match(panel, /currentStatus\(candidate\) === 'LINKED'/)
+  assert.match(panel, /Seleccionar proveedor/)
+  assert.doesNotMatch(panel, /Usar otro|Vincular<\/button>/)
 })
 
-test('un Brand PENDING sin candidato ofrece seleccionar proveedor', () => {
-  assert.match(panel, /candidate\.candidate_supplier_id \? 'Usar otro' : 'Seleccionar proveedor'/)
-  assert.match(panel, /candidate_supplier_name \?\? '—'/)
-})
-
-test('un Brand LINKED muestra proveedor oficial y permite desvincular', () => {
+test('un Brand vinculado muestra proveedor REAL y permite desvincular', () => {
   assert.match(panel, /candidate\.linked_supplier_name \?\? '—'/)
-  assert.match(panel, /candidate\.derived_status === 'LINKED' \? <button onClick=\{\(\) => onUnlink\(candidate\)\}/)
-  assert.match(panel, /Proveedor vinculado/)
-})
-
-test('un Brand CONFLICT no ofrece aprobación rápida del candidato', () => {
-  assert.match(panel, /candidate\.derived_status === 'PENDING' && candidate\.candidate_supplier_id/)
-  assert.match(panel, /onPick/)
-  assert.match(panel, /Requiere revisión/)
+  assert.match(panel, /currentStatus\(candidate\) === 'LINKED' \? <button onClick=\{\(\) => onUnlink\(candidate\)\}/)
+  assert.match(panel, /Proveedor REAL/)
 })
 
 test('no autoaprueba y exige confirmación antes de link y unlink', () => {
-  assert.match(panel, /function openCandidateConfirmation/)
   assert.match(panel, /function confirmLink/)
   assert.match(panel, /Confirmar vínculo/)
   assert.match(panel, /function confirmUnlink/)
@@ -91,6 +77,21 @@ test('incluye estados loading, error, empty y responsive', () => {
   assert.match(panel, /Cargando Brands Bsale/)
   assert.match(panel, /No fue posible cargar la relación Brand\/Proveedor/)
   assert.match(panel, /No hay Brands para mostrar/)
-  assert.match(panel, /min-w-\[1500px\]/)
+  assert.match(panel, /min-w-\[980px\]/)
   assert.match(panel, /overflow-x-auto overflow-y-auto/)
+})
+
+test('el doble clic abre el detalle y no se dispara desde controles de acción', () => {
+  assert.match(panel, /onDoubleClick=\{event => \{ if \(\(event\.target as Element\)\.closest\('button, select, a, input, textarea'\)\) return; onDetails\(\) \}\}/)
+  assert.match(panel, /Productos asociados — Brand \$\{brand\.bsale_brand_id\}/)
+  assert.match(panel, /listBsaleBrandProducts\(brand\.bsale_brand_id\)/)
+})
+
+test('el detalle consulta todos los productos del Brand sin mostrar información legado', () => {
+  assert.match(action, /\.eq\('bsale_brand_id', bsaleBrandId\)/)
+  assert.doesNotMatch(action, /product_supplier_mappings|is_preferred|parent_supplier_id/)
+  assert.match(panel, /Todos los productos asociados al Brand\./)
+  assert.match(panel, /Proveedor REAL/)
+  assert.match(panel, /Estado de resolución/)
+  assert.doesNotMatch(panel, /mapping|preferred|BSALE_OPERATIVE|parent_supplier_id/)
 })
