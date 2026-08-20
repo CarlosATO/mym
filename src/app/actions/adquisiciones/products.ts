@@ -67,6 +67,12 @@ export interface Product {
   real_supplier_name?: string;
   supplier_resolution_status?: 'DIRECTO' | 'ASOCIADO' | 'PENDIENTE_ASOCIACION' | 'SIN_PROVEEDOR';
   supplier_origin_label?: string;
+  bsale_brand_id?: number | null;
+  bsale_brand_href?: string | null;
+  bsale_supplier_link_status?: 'LINKED' | 'PENDING' | 'NO_BRAND' | 'NOT_APPLICABLE';
+  bsale_supplier_id?: string | null;
+  bsale_supplier_name?: string | null;
+  bsale_supplier_rut?: string | null;
 }
 
 async function validateClassifier(type: string, name: string | null, companyId: string): Promise<string | null> {
@@ -118,6 +124,13 @@ export interface ProductFilters {
   no_bsale_type?: string
   page?: number
   pageSize?: number
+}
+
+type BsaleBrandSupplierLink = {
+  company_id: string
+  bsale_brand_id: number
+  supplier_id: string
+  supplier?: { id: string; business_name: string; rut: string | null; supplier_kind: string; is_active: boolean; status: string } | null
 }
 
 export interface ProductCatalogLookup {
@@ -172,13 +185,31 @@ export async function getProducts(filters: ProductFilters = {}): Promise<{ data:
   if (!companyId) return { data: [], total: 0 }
 
   const db = adqAdmin()
+  let linkedSearchBrandIds: number[] = []
+  if (filters.search) {
+    const { data: matchingSuppliers } = await db.from('suppliers')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('supplier_kind', 'REAL')
+      .ilike('business_name', `%${filters.search}%`)
+    const supplierIds = (matchingSuppliers ?? []).map(s => s.id)
+    if (supplierIds.length > 0) {
+      const { data: matchingLinks } = await db.schema('integraciones').from('bsale_brand_supplier_links')
+        .select('bsale_brand_id')
+        .eq('company_id', companyId)
+        .in('supplier_id', supplierIds)
+      linkedSearchBrandIds = Array.from(new Set((matchingLinks ?? []).map(l => l.bsale_brand_id)))
+    }
+  }
   let query = db.from('products')
     .select('*', { count: 'exact' })
     .or(`company_id.is.null,company_id.eq.${companyId}`)
 
   if (filters.search) {
     const s = filters.search
-    query = query.or(`sku.ilike.%${s}%,barcode.ilike.%${s}%,description.ilike.%${s}%,brand.ilike.%${s}%,category.ilike.%${s}%`)
+    const searchClauses = [`sku.ilike.%${s}%`, `barcode.ilike.%${s}%`, `description.ilike.%${s}%`, `brand.ilike.%${s}%`, `category.ilike.%${s}%`]
+    if (linkedSearchBrandIds.length > 0) searchClauses.push(`bsale_brand_id.in.(${linkedSearchBrandIds.join(',')})`)
+    query = query.or(searchClauses.join(','))
   }
   if (filters.brand) query = query.eq('brand', filters.brand)
   if (filters.category) query = query.eq('category', filters.category)
@@ -211,6 +242,46 @@ export async function getProducts(filters: ProductFilters = {}): Promise<{ data:
   const products = (data ?? []) as Product[]
 
   if (products.length > 0) {
+    const bsaleBrandIds = Array.from(new Set(products
+      .filter(p => p.source === 'BSALE' && p.bsale_brand_id != null)
+      .map(p => p.bsale_brand_id as number)))
+    const bsaleLinks = new Map<number, BsaleBrandSupplierLink>()
+    if (bsaleBrandIds.length > 0) {
+      const { data: links } = await db.schema('integraciones').from('bsale_brand_supplier_links')
+        .select('company_id, bsale_brand_id, supplier_id')
+        .eq('company_id', companyId)
+        .in('bsale_brand_id', bsaleBrandIds)
+      const supplierIds = Array.from(new Set((links ?? []).map(l => l.supplier_id)))
+      let suppliers: BsaleBrandSupplierLink['supplier'][] = []
+      if (supplierIds.length > 0) {
+        const { data: supplierRows } = await db.from('suppliers')
+          .select('id, business_name, rut, supplier_kind, is_active, status')
+          .eq('company_id', companyId)
+          .eq('supplier_kind', 'REAL')
+          .eq('is_active', true)
+          .eq('status', 'ACTIVE')
+          .in('id', supplierIds)
+        suppliers = supplierRows ?? []
+      }
+      const supplierMap = new Map((suppliers ?? []).map(s => [s?.id, s]))
+      for (const link of links ?? []) {
+        const supplier = supplierMap.get(link.supplier_id)
+        if (supplier) bsaleLinks.set(link.bsale_brand_id, { ...link, supplier })
+      }
+    }
+    for (const p of products) {
+      if (p.source !== 'BSALE') {
+        p.bsale_supplier_link_status = 'NOT_APPLICABLE'
+      } else if (p.bsale_brand_id == null) {
+        p.bsale_supplier_link_status = 'NO_BRAND'
+      } else {
+        const link = bsaleLinks.get(p.bsale_brand_id)
+        p.bsale_supplier_link_status = link ? 'LINKED' : 'PENDING'
+        p.bsale_supplier_id = link?.supplier_id ?? null
+        p.bsale_supplier_name = link?.supplier?.business_name ?? null
+        p.bsale_supplier_rut = link?.supplier?.rut ?? null
+      }
+    }
     const productIds = products.map(p => p.id)
     const { data: mappings } = await db.from('product_supplier_mappings')
       .select('id, product_id, supplier_id, is_active')
@@ -489,4 +560,3 @@ export async function importProducts(products: Record<string, unknown>[]) {
     total: products.length
   }
 }
-

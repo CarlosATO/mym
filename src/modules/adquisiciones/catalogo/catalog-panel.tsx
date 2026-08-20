@@ -76,7 +76,7 @@ export function CatalogPanel() {
   function openEdit(p: Product) {
     setForm({ sku: p.sku, barcode: p.barcode ?? '', internal_code: p.internal_code ?? '', description: p.description, short_description: p.short_description ?? '', brand: p.brand ?? '', category: p.category ?? '', subcategory: p.subcategory ?? '', product_type: p.product_type ?? '', species: p.species ?? '', presentation: p.presentation ?? '', unit_of_measure: p.unit_of_measure ?? '', net_weight: String(p.net_weight ?? ''), weight_unit: p.weight_unit ?? '', package_quantity: String(p.package_quantity ?? ''), package_unit: p.package_unit ?? '', purchase_unit: p.purchase_unit ?? '', sales_unit: p.sales_unit ?? '', min_stock: String(p.min_stock), max_stock: String(p.max_stock), reorder_point: String(p.reorder_point), tax_rate: String(p.tax_rate), is_perishable: p.is_perishable ? 'true' : 'false', requires_lot: p.requires_lot ? 'true' : 'false', requires_expiration: p.requires_expiration ? 'true' : 'false', notes: p.notes ?? '', existing_image: p.image_url ?? '', real_supplier_id: p.real_supplier_id ?? '' })
     setEditId(p.id); setShowForm(true)
-    setBsaleMeta({ source: p.source, bsale_product_id: p.bsale_product_id, bsale_variant_id: p.bsale_variant_id, bsale_product_type_name: p.bsale_product_type_name, bsale_product_state: p.bsale_product_state, bsale_variant_state: p.bsale_variant_state, last_bsale_sync_at: p.last_bsale_sync_at, bsale_status_conflict: p.bsale_status_conflict, bsale_status_conflict_reason: p.bsale_status_conflict_reason, pseudo_supplier_name: p.pseudo_supplier_name, real_supplier_name: p.real_supplier_name, supplier_resolution_status: p.supplier_resolution_status })
+    setBsaleMeta({ source: p.source, bsale_product_id: p.bsale_product_id, bsale_variant_id: p.bsale_variant_id, bsale_product_type_name: p.bsale_product_type_name, bsale_product_state: p.bsale_product_state, bsale_variant_state: p.bsale_variant_state, last_bsale_sync_at: p.last_bsale_sync_at, bsale_status_conflict: p.bsale_status_conflict, bsale_status_conflict_reason: p.bsale_status_conflict_reason, pseudo_supplier_name: p.pseudo_supplier_name, real_supplier_name: p.real_supplier_name, supplier_resolution_status: p.supplier_resolution_status, bsale_brand_id: p.bsale_brand_id, bsale_supplier_name: p.bsale_supplier_name, bsale_supplier_rut: p.bsale_supplier_rut, bsale_supplier_link_status: p.bsale_supplier_link_status })
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -112,10 +112,11 @@ export function CatalogPanel() {
   }
 
   function exportToExcel(rows: Product[], label: string) {
-    const headers = ['sku','codigo_barra','codigo_interno','descripcion','descripcion_corta','marca','categoria','subcategoria','tipo_producto','especie','presentacion','unidad_medida','peso_neto','unidad_peso','cantidad_empaque','unidad_empaque','unidad_compra','unidad_venta','stock_minimo','stock_maximo','punto_reposicion','iva_porcentaje','perecible','requiere_lote','requiere_vencimiento','image_url','observacion']
+    const headers = ['sku','codigo_barra','codigo_interno','descripcion','descripcion_corta','proveedor_en_bsale','marca','categoria','subcategoria','tipo_producto','especie','presentacion','unidad_medida','peso_neto','unidad_peso','cantidad_empaque','unidad_empaque','unidad_compra','unidad_venta','stock_minimo','stock_maximo','punto_reposicion','iva_porcentaje','perecible','requiere_lote','requiere_vencimiento','image_url','observacion']
     const data = rows.map(r => ({
       sku: r.sku, codigo_barra: r.barcode ?? '', codigo_interno: r.internal_code ?? '',
       descripcion: r.description, descripcion_corta: r.short_description ?? '',
+      proveedor_en_bsale: r.bsale_supplier_name ?? (r.bsale_supplier_link_status === 'PENDING' ? 'Pendiente de vincular' : r.bsale_supplier_link_status === 'NO_BRAND' ? 'Sin proveedor informado' : r.bsale_supplier_link_status === 'NOT_APPLICABLE' ? 'No aplica' : ''),
       marca: r.brand ?? '', categoria: r.category ?? '', subcategoria: r.subcategory ?? '',
       tipo_producto: r.product_type ?? '', especie: r.species ?? '', presentacion: r.presentation ?? '',
       unidad_medida: r.unit_of_measure ?? '', peso_neto: r.net_weight ?? '', unidad_peso: r.weight_unit ?? '',
@@ -406,7 +407,7 @@ export function CatalogPanel() {
           <div className="relative flex-1 w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted/50" />
             <input type="text" value={filters.search ?? ''} onChange={e => setFilter('search', e.target.value)}
-              placeholder="Buscar por SKU, descripción, marca o categoría..."
+              placeholder="Buscar por SKU, descripción, proveedor en Bsale o categoría..."
               className="w-full h-9 pl-10 pr-4 rounded-lg border border-theme-border bg-theme-surface hover:bg-theme-text/5 focus:bg-theme-surface focus:ring-2 focus:ring-theme-accent/20 focus:border-theme-accent transition-all text-sm text-theme-text placeholder:text-theme-text-muted/40" />
           </div>
 
@@ -472,7 +473,7 @@ export function CatalogPanel() {
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-2">
               <select value={filters.brand ?? ''} onChange={e => setFilter('brand', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40 appearance-none">
-                <option value="">Todas las marcas</option>
+                <option value="">Marca de producto (todas)</option>
                 {classifierOptions.BRAND?.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
               </select>
               <select value={filters.category ?? ''} onChange={e => setFilter('category', e.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40 appearance-none">
@@ -578,7 +579,10 @@ export function CatalogPanel() {
                   </div>
                   <p className="text-xs text-theme-text-muted/80 leading-tight line-clamp-2">{p.description}</p>
                   <div className="flex flex-wrap gap-1.5">
-                    {p.brand && <span className="text-[10px] px-2 py-0.5 rounded-full bg-black/5 dark:bg-theme-text/5 text-theme-text-muted/70">{p.brand}</span>}
+                    {p.bsale_supplier_link_status === 'LINKED' && <span className="text-[10px] px-2 py-0.5 rounded-full bg-theme-text/5 text-theme-text-muted/80">{p.bsale_supplier_name}</span>}
+                    {p.bsale_supplier_link_status === 'PENDING' && <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600">Pendiente de vincular</span>}
+                    {p.bsale_supplier_link_status === 'NO_BRAND' && <span className="text-[10px] px-2 py-0.5 rounded-full bg-theme-text/5 text-theme-text-muted/60">Sin proveedor informado</span>}
+                    {p.bsale_supplier_link_status === 'NOT_APPLICABLE' && <span className="text-[10px] px-2 py-0.5 rounded-full bg-theme-text/5 text-theme-text-muted/50">No aplica</span>}
                   </div>
                   <div className="flex items-center gap-2 pt-1 border-t border-gray-200/80 dark:border-theme-border">
                     <button onClick={e => { e.stopPropagation(); openEdit(p) }} className="text-xs text-theme-text-muted/70 hover:text-theme-text-accent">Editar</button>
@@ -602,7 +606,7 @@ export function CatalogPanel() {
                 <th className="text-left py-2.5 px-4 font-medium">Descripción</th>
                 <th className="text-left py-2.5 px-4 font-medium">Proveedor real</th>
                 <th className="text-left py-2.5 px-4 font-medium">Origen prov.</th>
-                <th className="text-left py-2.5 px-4 font-medium">Marca</th>
+                <th className="text-left py-2.5 px-4 font-medium">Proveedor en Bsale</th>
                 <th className="text-left py-2.5 px-4 font-medium">Categoría</th>
                 <th className="text-left py-2.5 px-4 font-medium">Tipo Bsale</th>
                 <th className="text-left py-2.5 px-4 font-medium">Presentación</th>
@@ -635,7 +639,17 @@ export function CatalogPanel() {
                       </span>
                     </div>
                   </td>
-                  <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs">{p.brand || '—'}</td>
+                  <td className="py-2.5 px-4">
+                    {p.bsale_supplier_link_status === 'LINKED' ? (
+                      <span className="text-xs font-semibold text-theme-text" title={p.bsale_supplier_rut ? `RUT: ${p.bsale_supplier_rut}` : undefined}>{p.bsale_supplier_name}</span>
+                    ) : p.bsale_supplier_link_status === 'PENDING' ? (
+                      <span className="inline-flex items-center gap-1.5 rounded border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-600">Pendiente de vincular{p.bsale_brand_id != null && <span className="font-normal text-amber-600/70">(Brand {p.bsale_brand_id})</span>}</span>
+                    ) : p.bsale_supplier_link_status === 'NOT_APPLICABLE' ? (
+                      <span className="text-xs text-theme-text-muted/50">No aplica</span>
+                    ) : (
+                      <span className="text-xs text-theme-text-muted/60">Sin proveedor informado</span>
+                    )}
+                  </td>
                   <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs">{p.category || '—'}</td>
                   <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs">{p.bsale_product_type_name || p.product_type || '—'}</td>
                   <td className="py-2.5 px-4 text-theme-text-muted/80 text-xs">{p.presentation || '—'}</td>
