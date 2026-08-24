@@ -2028,17 +2028,32 @@ export function ComisionesV2Inspection({
     }
   }, [from, isSuperUser, loadBatch, loadSyncHealth, syncBusy, to]);
 
-  const handlePlanSaved = useCallback(async () => {
-    setSimulationRefreshNotice(null);
-    const refreshed = await loadBatch(from, to, {
-      force: true,
-      silentError: true,
-    });
-    if (!refreshed)
+  const handlePlanSaved = useCallback(
+    async (savedPlan: ComisionesV2FamilyPlanListItem, previousPlanId: string | null) => {
+      setPlanCache((current) => {
+        if (!current) return current;
+        const logicalPlan = (item: ComisionesV2FamilyPlanListItem) =>
+          item.supplier_id === savedPlan.supplier_id &&
+          item.plan_code === savedPlan.plan_code &&
+          item.plan_type === savedPlan.plan_type;
+        const next = current.filter(
+          (item) =>
+            item.id !== previousPlanId &&
+            !(item.id !== savedPlan.id && logicalPlan(item)),
+        );
+        return [...next, savedPlan];
+      });
+      if (activeCompanyRef.current) {
+        batchCacheRef.current.delete(
+          `${activeCompanyRef.current}:${from}:${to}`,
+        );
+      }
       setSimulationRefreshNotice(
-        "Plan guardado. La simulación no pudo actualizarse; puedes consultarla manualmente.",
+        "Regla guardada. La próxima consulta usará la versión vigente.",
       );
-  }, [from, loadBatch, to]);
+    },
+    [from, to],
+  );
 
   const handlePlansChanged = useCallback(async () => {
     await loadPlanList({ force: true });
@@ -2226,11 +2241,8 @@ export function ComisionesV2Inspection({
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-lg font-bold text-theme-text">
-                Comisiones V2
+                Comisiones
               </h1>
-              <span className="rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-600">
-                En validación
-              </span>
             </div>
             <p className="mt-1 max-w-2xl text-xs leading-5 text-theme-text-muted/75">
               Inspección de líneas reales y gestión documental de liquidaciones
@@ -2281,7 +2293,7 @@ export function ComisionesV2Inspection({
             <div
               className="mt-2 inline-flex rounded-lg border border-theme-border bg-theme-surface p-1"
               role="tablist"
-              aria-label="Secciones de Comisiones V2"
+               aria-label="Secciones de Comisiones"
             >
               <button
                 type="button"
@@ -2693,7 +2705,7 @@ export function ComisionesV2Inspection({
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             <div>
               <p className="font-semibold">
-                No se pudo consultar Comisiones V2
+                 No se pudo consultar Comisiones
               </p>
               <p className="mt-1 text-xs">{error}</p>
             </div>
@@ -4448,7 +4460,10 @@ function FamilyPlanConfigurator({
   bootstrapLoading,
   bootstrapError,
 }: {
-  onPlanSaved: () => Promise<void>;
+  onPlanSaved: (
+    savedPlan: ComisionesV2FamilyPlanListItem,
+    previousPlanId: string | null,
+  ) => Promise<void>;
   onPlansChanged: () => Promise<void>;
   initialPlans: ComisionesV2FamilyPlanListItem[] | null;
   initialSuppliers: ComisionesV2Supplier[] | null;
@@ -4689,34 +4704,6 @@ function FamilyPlanConfigurator({
     setSaving(true);
     setError(null);
     setNotice(null);
-    const tiersChanged =
-      (plan?.tiers ?? []).length !== tiers.length ||
-      (plan?.tiers ?? []).some((tier, index) => {
-        const next = tiers[index];
-        return (
-          !next ||
-          tier.lower_bound !== next.lower_bound ||
-          tier.upper_bound !== next.upper_bound ||
-          tier.percentage !== next.percentage
-        );
-      });
-    const familyRatesChanged = Boolean(
-      plan &&
-      (plan.rates.length !==
-        Object.values(rates).filter((value) => value.trim() !== "").length ||
-        plan.rates.some(
-          (rate) =>
-            Number(rate.percentage) !==
-            percentageNumber(rates[rate.family_bsale_product_type_id] ?? ""),
-        )),
-    );
-    const willVersion = Boolean(
-      plan?.has_issued_usage &&
-      (plan.valid_from !== validFrom ||
-        (planType === "SUPPLIER_SALES_TARGET"
-          ? tiersChanged
-          : familyRatesChanged)),
-    );
     const parsedRates: ComisionesV2FamilyRate[] = Object.entries(rates)
       .filter(([, value]) => value.trim() !== "")
       .map(([familyId, value]) => ({
@@ -4752,33 +4739,58 @@ function FamilyPlanConfigurator({
       setConflictsRefresh((value) => value + 1);
       return;
     }
+    if (!result.data) {
+      setError("El backend no devolvió la regla guardada.");
+      return;
+    }
+    const previousPlanId = plan?.id ?? null;
+    const savedPlan: ComisionesV2FamilyPlanListItem = {
+      id: result.data.plan_id,
+      supplier_id: supplierId,
+      plan_code: planCode.trim(),
+      version_no: result.data.version_no,
+      plan_type: planType,
+      valid_from: validFrom,
+      valid_to: validTo || null,
+      supplier_name:
+        suppliers.find((supplier) => supplier.supplier_id === supplierId)
+          ?.supplier_name ??
+        plan?.supplier_name ??
+        null,
+      status: "ACTIVE",
+      active: true,
+      supersedes_plan_id:
+        result.data.plan_id !== previousPlanId ? previousPlanId : plan?.supersedes_plan_id ?? null,
+      has_issued_usage: false,
+      issued_usage_known: true,
+      family_names: parsedRates.map((rate) => rate.family_name_snapshot),
+    };
+    const savedDetail: ComisionesV2FamilyPlan = {
+      ...savedPlan,
+      rates: parsedRates,
+      tiers,
+    };
+    setPlan(savedDetail);
+    setPlanType(savedDetail.plan_type);
+    setSelectedPlanId(savedDetail.id);
+    setIsNew(false);
+    setRates(
+      Object.fromEntries(
+        parsedRates.map((rate) => [
+          rate.family_bsale_product_type_id,
+          normalizePercentageInput(rate.percentage),
+        ]),
+      ),
+    );
+    setTiers(normalizeTierBounds(tiers));
     setNotice(
-      willVersion
+      result.data.plan_id !== previousPlanId
         ? "Se creó una nueva versión. Las comisiones anteriores no fueron modificadas."
         : "Cambios guardados correctamente.",
     );
-    const refreshed = await getComisionesV2FamilyPlanById(
-      result.data?.plan_id ?? "",
-    );
-    if (!refreshed.error && refreshed.data) {
-      setPlan(refreshed.data);
-      setPlanType(refreshed.data.plan_type);
-      setSelectedPlanId(refreshed.data.id);
-      setIsNew(false);
-      setRates(
-        Object.fromEntries(
-          (refreshed.data.rates ?? []).map((rate) => [
-            rate.family_bsale_product_type_id,
-            normalizePercentageInput(rate.percentage),
-          ]),
-        ),
-      );
-      setTiers(normalizeTierBounds(refreshed.data.tiers ?? []));
-    }
-    await onPlansChanged();
     setSelectedFamilyIds(new Set());
     setBulkPercentage("");
-    await onPlanSaved();
+    await onPlanSaved(savedPlan, previousPlanId);
   }
 
   const loading = bootstrapLoading || !initialPlans || !initialSuppliers;
@@ -4846,7 +4858,7 @@ function FamilyPlanConfigurator({
         <aside className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-theme-border bg-theme-surface p-3">
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-sm font-bold text-theme-text">
-              Planes existentes
+              Reglas existentes
             </h2>
             <button
               type="button"

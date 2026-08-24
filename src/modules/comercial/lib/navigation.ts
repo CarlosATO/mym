@@ -94,7 +94,7 @@ function isV2SectionActive(pathname: string, section: string | null, expected: s
 export const getComercialBreadcrumb: BreadcrumbValue = ({ pathname }) => {
   if (pathname.startsWith(`${comercialBase}/clientes`)) return ['Clientes y Ventas', 'Clientes']
   if (pathname.startsWith(`${comercialBase}/cobranza`)) return ['Clientes y Ventas', 'Cobranza']
-  if (pathname.startsWith(`${comercialBase}/comisiones-v2`)) return ['Clientes y Ventas', 'Comisiones V2']
+  if (pathname.startsWith(`${comercialBase}/comisiones-v2`)) return ['Clientes y Ventas', 'Comisiones']
   if (pathname.startsWith(`${comercialBase}/comisiones`)) return ['Clientes y Ventas', 'Comisiones']
   return ['Clientes y Ventas']
 }
