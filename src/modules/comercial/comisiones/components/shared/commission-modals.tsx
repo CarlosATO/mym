@@ -81,7 +81,7 @@ export function PdfPreviewModal({
   filename,
   onClose,
   onDownload,
-}: {
+  }: {
   base64: string;
   filename: string;
   onClose: () => void;

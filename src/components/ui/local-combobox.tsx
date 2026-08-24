@@ -2,6 +2,7 @@
 
 import { useCallback, useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
+import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export interface ComboboxOption {
@@ -17,9 +18,11 @@ interface LocalComboboxProps {
   disabled?: boolean
   className?: string
   onCreateNew?: (name: string) => Promise<void>
+  emptyText?: string
+  clearable?: boolean
 }
 
-export function LocalCombobox({ value, onChange, options, placeholder = "Seleccionar...", disabled, className, onCreateNew }: LocalComboboxProps) {
+export function LocalCombobox({ value, onChange, options, placeholder = "Seleccionar...", disabled, className, onCreateNew, emptyText = 'Sin resultados', clearable = false }: LocalComboboxProps) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [dropdownRect, setDropdownRect] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null)
@@ -85,8 +88,9 @@ export function LocalCombobox({ value, onChange, options, placeholder = "Selecci
         onFocus={() => { updateDropdownRect(); setOpen(true); setSearch('') }}
         placeholder={placeholder}
         disabled={disabled}
-        className={cn("w-full focus:outline-none text-theme-text placeholder:text-theme-text-muted/60", className)}
+         className={cn("w-full focus:outline-none text-theme-text placeholder:text-theme-text-muted/60", clearable && value ? 'pr-8' : '', className)}
       />
+      {clearable && value && !disabled && <button type="button" aria-label="Limpiar selección" onClick={() => { onChange(''); setSearch(''); setOpen(false) }} className="absolute right-1 top-1/2 z-10 -translate-y-1/2 rounded p-1 text-theme-text-muted hover:bg-theme-text/10 hover:text-theme-text"><X className="h-3.5 w-3.5" /></button>}
       {open && !disabled && createPortal(
         <>
           <div className="fixed inset-0 z-40" onClick={() => { setOpen(false); setSearch(''); }} />
@@ -102,7 +106,7 @@ export function LocalCombobox({ value, onChange, options, placeholder = "Selecci
           >
             {filtered.length === 0 && (
               <div className="flex items-center justify-between px-3 py-2 text-[11px] font-medium text-theme-text-muted">
-                <span>Sin resultados</span>
+                 <span>{emptyText}</span>
                 {onCreateNew && search.trim() && (
                   <button
                     onClick={async (e) => {
