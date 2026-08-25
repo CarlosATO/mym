@@ -3,6 +3,11 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { getActiveCompanyId } from '@/app/actions/companies'
+import {
+  SETTLEMENT_ATTACHMENT_ALLOWED_MIMES,
+  SETTLEMENT_ATTACHMENT_BUCKET,
+  SETTLEMENT_ATTACHMENT_MAX_SIZE,
+} from '@/modules/adquisiciones/rendicion-rutas/utils/settlement-attachment-config'
 
 export interface RouteSettlementsDashboardKpis {
   pending_count: number
@@ -57,9 +62,11 @@ export interface RouteSettlementDetailInvoice {
   customer_bsale_id: number | null
   applied_amount: number
   unapplied_amount: number
+  remaining_amount?: number
   invoice_result: 'PENDING' | 'PARTIAL' | 'PAID' | 'PENDING_PAYMENT' | 'CREDIT' | 'NOT_DELIVERED' | 'REVIEW_REQUIRED'
   resolved_for_settlement: boolean
   resolution_type: 'PENDING_PAYMENT' | 'CREDIT' | 'NOT_DELIVERED' | 'REVIEW_REQUIRED' | null
+  resolution_source?: 'MANUAL' | 'DERIVED' | null
   resolution_notes: string | null
   resolved_by: string | null
   resolved_at: string | null
@@ -95,6 +102,7 @@ export interface RouteSettlementDetailPayment {
   voided_at: string | null
   void_reason: string | null
   allocations: RouteSettlementDetailAllocation[]
+  allocation_history?: RouteSettlementDetailAllocation[]
 }
 
 export interface RouteSettlementDetailClient {
@@ -151,9 +159,11 @@ export interface RouteSettlementDetail {
     total_applied_new: number
     total_pending_new: number
     total_difference_new: number
+    total_route_expenses: number
     notes: string | null
   }
   clients: RouteSettlementDetailClient[]
+  expenses: RouteSettlementDetailExpense[]
 }
 
 export interface RegisterRouteSettlementPaymentInput {
@@ -349,7 +359,7 @@ export async function getRouteSettlementsDashboardData() {
       if (guideItemsRes.error) throw guideItemsRes.error
 
       for (const item of guideItemsRes.data || []) {
-        if (!['CASH', 'TRANSFER', 'CHECK'].includes(item.payment_method_normalized)) continue
+        if (!['CASH', 'CHECK'].includes(item.payment_method_normalized)) continue
         guideRendibleCountMap.set(item.route_guide_id, (guideRendibleCountMap.get(item.route_guide_id) ?? 0) + 1)
       }
     }
@@ -371,9 +381,9 @@ export async function getRouteSettlementsDashboardData() {
         route_name: guide.route_name_snapshot,
         driver_name: guide.driver_name_snapshot,
         seller_name: guide.seller_name_snapshot,
-        total_route_amount: Number(settlement?.total_route_amount ?? guide.total_amount ?? 0),
-        total_cash_expected: Number(settlement?.total_cash_expected ?? guide.total_cash_expected ?? 0),
-        total_check_expected: Number(settlement?.total_check_expected ?? guide.total_check_expected ?? 0),
+        total_route_amount: Number(guide.total_amount ?? 0),
+        total_cash_expected: Number(guide.total_cash_expected ?? 0),
+        total_check_expected: Number(guide.total_check_expected ?? 0),
         total_transfer_expected: Number(settlement?.total_transfer_expected ?? guide.total_transfer ?? 0),
         total_credit_amount: Number(settlement?.total_credit_amount ?? guide.total_credit ?? 0),
         total_cash_received: Number(settlement?.total_cash_received ?? 0),
@@ -382,7 +392,7 @@ export async function getRouteSettlementsDashboardData() {
         total_transfer_pending: Number(settlement?.total_transfer_pending ?? guide.total_transfer ?? 0),
         total_invoices: Number(settlement?.total_invoices ?? guide.total_invoices ?? 0),
         paid_count: Number(settlementItemStats?.paid_count ?? settlement?.paid_count ?? 0),
-        total_rendible_count: Number(settlementItemStats?.total_rendible_count ?? guideRendibleCountMap.get(guide.id) ?? 0),
+        total_rendible_count: Number(guideRendibleCountMap.get(guide.id) ?? 0),
         settlement_id: settlement?.id ?? null,
         settlement_number: settlement?.settlement_number ?? null,
         settlement_status: settlement?.status ?? null,
@@ -700,6 +710,31 @@ export async function getRouteSettlementDetail(settlementId: string) {
   }
 }
 
+export async function getRouteSettlementExpenseUploadContext(settlementId: string) {
+  const adquisicionesDb = await createAdquisicionesClient()
+
+  try {
+    const { data: userData, error: userError } = await adquisicionesDb.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(adquisicionesDb, userData.user.id, 'adquisiciones.route_settlements.view')
+
+    const { data, error } = await adquisicionesDb
+      .from('route_settlements')
+      .select('id, company_id')
+      .eq('id', settlementId)
+      .eq('company_id', companyId)
+      .single()
+    if (error || !data) throw new Error('Rendición no encontrada o sin acceso.')
+    return { data: { companyId: data.company_id as string }, error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudo preparar la carga del comprobante.'
+    console.error('getRouteSettlementExpenseUploadContext error:', err)
+    return { data: null, error: message }
+  }
+}
+
 export async function closeRouteSettlement(settlementId: string) {
   const adquisicionesDb = await createAdquisicionesClient()
 
@@ -742,6 +777,262 @@ export async function closeRouteSettlement(settlementId: string) {
 }
 
 export type RouteSettlementResolutionType = 'PENDING_PAYMENT' | 'CREDIT' | 'NOT_DELIVERED' | 'REVIEW_REQUIRED'
+
+export type RouteSettlementExpenseType = 'PEAJES' | 'COMBUSTIBLE' | 'VIATICOS' | 'MANTENIMIENTO' | 'OTROS'
+
+export interface RouteSettlementDetailExpense {
+  id: string
+  expense_type: RouteSettlementExpenseType
+  amount: number
+  expense_date: string
+  notes: string | null
+  custody_user_id: string | null
+  created_by?: string | null
+  status: 'ACTIVE' | 'VOIDED'
+  created_at: string
+  voided_at: string | null
+  voided_by?: string | null
+  void_reason?: string | null
+  fund_closure_id?: string | null
+  attachments: RouteSettlementDetailExpenseAttachment[]
+}
+
+export interface RouteSettlementDetailExpenseAttachment {
+  id: string
+  attachment_type: 'EXPENSE'
+  file_name: string
+  storage_path: string
+  file_mime_type: string | null
+  file_size: number | null
+  uploaded_by: string
+  uploaded_at: string
+  fund_closure_id: string | null
+}
+
+export interface UpsertRouteSettlementExpenseInput {
+  settlementId: string
+  expenseId?: string | null
+  expenseType: RouteSettlementExpenseType
+  amount: string
+  expenseDate: string
+  notes?: string | null
+}
+
+export async function upsertRouteSettlementExpense(input: UpsertRouteSettlementExpenseInput) {
+  const adquisicionesDb = await createAdquisicionesClient()
+
+  try {
+    const { data: userData, error: userError } = await adquisicionesDb.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(adquisicionesDb, userData.user.id, 'adquisiciones.route_settlements.update')
+    if (!/^[1-9]\d*$/.test(input.amount)) throw new Error('El monto debe ser un entero mayor que cero.')
+    if (!input.expenseDate) throw new Error('La fecha del gasto es obligatoria.')
+
+    const { data, error } = await adquisicionesDb.rpc('upsert_route_settlement_expense', {
+      p_settlement_id: input.settlementId,
+      p_expense_id: input.expenseId ?? null,
+      p_expense_type: input.expenseType,
+      p_amount: input.amount,
+      p_expense_date: input.expenseDate,
+      p_notes: input.notes?.trim() || null,
+    })
+    if (error) throw new Error(error.message)
+    return { data, error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudo guardar el gasto.'
+    console.error('upsertRouteSettlementExpense error:', err)
+    return { data: null, error: message }
+  }
+}
+
+export async function voidRouteSettlementExpense(expenseId: string, voidReason: string) {
+  const adquisicionesDb = await createAdquisicionesClient()
+
+  try {
+    const { data: userData, error: userError } = await adquisicionesDb.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(adquisicionesDb, userData.user.id, 'adquisiciones.route_settlements.update')
+    if (!voidReason.trim()) throw new Error('El motivo de anulación es obligatorio.')
+
+    const { data, error } = await adquisicionesDb.rpc('void_route_settlement_expense', {
+      p_expense_id: expenseId,
+      p_void_reason: voidReason.trim(),
+    })
+    if (error) throw new Error(error.message)
+    return { data, error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudo anular el gasto.'
+    console.error('voidRouteSettlementExpense error:', err)
+    return { data: null, error: message }
+  }
+}
+
+export interface SaveRouteSettlementExpenseAttachmentInput {
+  expenseId: string
+  settlementId: string
+  filePath: string
+  fileName: string
+  fileMimeType: string
+  fileSize: number
+}
+
+/** Stores metadata after the client uploads a receipt to rendicion-rutas. */
+export async function saveRouteSettlementExpenseAttachment(input: SaveRouteSettlementExpenseAttachmentInput) {
+  const adquisicionesDb = await createAdquisicionesClient()
+
+  try {
+    const { data: userData, error: userError } = await adquisicionesDb.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(adquisicionesDb, userData.user.id, 'adquisiciones.route_settlements.update')
+
+    if (input.fileSize <= 0 || input.fileSize > SETTLEMENT_ATTACHMENT_MAX_SIZE) {
+      throw new Error('El archivo debe pesar entre 1 byte y 10 MB.')
+    }
+    if (!(SETTLEMENT_ATTACHMENT_ALLOWED_MIMES as readonly string[]).includes(input.fileMimeType)) {
+      throw new Error('Tipo de archivo no permitido. Solo PDF, PNG, JPG o WebP.')
+    }
+
+    const { data: expense, error: expenseError } = await adquisicionesDb
+      .from('route_fund_closure_expenses')
+      .select('id, company_id, route_settlement_id, fund_closure_id')
+      .eq('id', input.expenseId)
+      .eq('company_id', companyId)
+      .single()
+    if (expenseError || !expense) throw new Error('Gasto no encontrado o sin acceso.')
+    if (expense.route_settlement_id !== input.settlementId) {
+      throw new Error('El gasto no pertenece a esta rendición.')
+    }
+
+    const expectedPathPrefix = `${companyId}/rendicion-rutas/${input.settlementId}/expenses/${input.expenseId}/`
+    if (!input.filePath.startsWith(expectedPathPrefix)) {
+      throw new Error('Ruta de archivo inválida para este gasto.')
+    }
+
+    const { data, error } = await adquisicionesDb
+      .from('route_fund_closure_attachments')
+      .insert({
+        company_id: companyId,
+        fund_closure_id: expense.fund_closure_id,
+        attachment_type: 'EXPENSE',
+        expense_id: expense.id,
+        file_name: input.fileName,
+        storage_path: input.filePath,
+        file_mime_type: input.fileMimeType,
+        file_size: input.fileSize,
+        uploaded_by: userData.user.id,
+      })
+      .select()
+      .single()
+    if (error) throw new Error(error.message)
+    return { data, error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudo guardar el comprobante.'
+    console.error('saveRouteSettlementExpenseAttachment error:', err)
+    return { data: null, error: message }
+  }
+}
+
+export async function getRouteSettlementExpenseAttachments(expenseId: string) {
+  const adquisicionesDb = await createAdquisicionesClient()
+
+  try {
+    const { data: userData, error: userError } = await adquisicionesDb.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(adquisicionesDb, userData.user.id, 'adquisiciones.route_settlements.view')
+
+    const { data, error } = await adquisicionesDb
+      .from('route_fund_closure_attachments')
+      .select('*')
+      .eq('expense_id', expenseId)
+      .eq('attachment_type', 'EXPENSE')
+      .eq('company_id', companyId)
+      .order('uploaded_at', { ascending: true })
+    if (error) throw error
+    return { data: data || [], error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudieron cargar los comprobantes.'
+    console.error('getRouteSettlementExpenseAttachments error:', err)
+    return { data: null, error: message }
+  }
+}
+
+export async function getRouteSettlementExpenseAttachmentSignedUrl(attachmentId: string) {
+  const adquisicionesDb = await createAdquisicionesClient()
+
+  try {
+    const { data: userData, error: userError } = await adquisicionesDb.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(adquisicionesDb, userData.user.id, 'adquisiciones.route_settlements.view')
+
+    const { data: attachment, error } = await adquisicionesDb
+      .from('route_fund_closure_attachments')
+      .select('id, storage_path, file_name, file_mime_type')
+      .eq('id', attachmentId)
+      .eq('company_id', companyId)
+      .eq('attachment_type', 'EXPENSE')
+      .single()
+    if (error || !attachment) throw new Error('Comprobante no encontrado o sin acceso.')
+
+    const { data: signed, error: signError } = await adquisicionesDb.storage
+      .from(SETTLEMENT_ATTACHMENT_BUCKET)
+      .createSignedUrl(attachment.storage_path, 300)
+    if (signError || !signed?.signedUrl) throw new Error('No se pudo generar la URL del comprobante.')
+    return {
+      data: { signedUrl: signed.signedUrl, fileName: attachment.file_name, mimeType: attachment.file_mime_type, expiresIn: 300 },
+      error: null,
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudo abrir el comprobante.'
+    console.error('getRouteSettlementExpenseAttachmentSignedUrl error:', err)
+    return { data: null, error: message }
+  }
+}
+
+export async function deleteRouteSettlementExpenseAttachment(attachmentId: string) {
+  const adquisicionesDb = await createAdquisicionesClient()
+
+  try {
+    const { data: userData, error: userError } = await adquisicionesDb.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(adquisicionesDb, userData.user.id, 'adquisiciones.route_settlements.update')
+
+    const { data: attachment, error } = await adquisicionesDb
+      .from('route_fund_closure_attachments')
+      .select('id, storage_path')
+      .eq('id', attachmentId)
+      .eq('company_id', companyId)
+      .eq('attachment_type', 'EXPENSE')
+      .single()
+    if (error || !attachment) throw new Error('Comprobante no encontrado o sin acceso.')
+
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
+    const adminDb = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey, {
+      db: { schema: 'adquisiciones' },
+      cookies: { getAll() { return [] }, setAll() {} },
+    })
+    const { error: storageError } = await adminDb.storage.from(SETTLEMENT_ATTACHMENT_BUCKET).remove([attachment.storage_path])
+    if (storageError) throw new Error(`No se pudo eliminar el archivo: ${storageError.message}`)
+    const { error: deleteError } = await adminDb.from('route_fund_closure_attachments').delete().eq('id', attachmentId)
+    if (deleteError) throw deleteError
+    return { data: { deleted: true }, error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudo eliminar el comprobante.'
+    console.error('deleteRouteSettlementExpenseAttachment error:', err)
+    return { data: null, error: message }
+  }
+}
 
 export async function setRouteSettlementItemResolution(
   settlementItemId: string,

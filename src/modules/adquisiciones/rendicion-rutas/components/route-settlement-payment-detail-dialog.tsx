@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { AlertTriangle, Eye, Pencil, XCircle } from 'lucide-react'
 import {
   RouteSettlementDetailPayment,
+  RouteSettlementDetailInvoice,
   voidRouteSettlementPayment,
 } from '@/app/actions/adquisiciones/rendicion-rutas'
 import { Button } from '@/components/ui/button'
@@ -19,6 +20,7 @@ import { formatCurrency, formatDate } from '../utils/route-settlement-formatters
 
 interface PaymentDetailDialogProps {
   payment: RouteSettlementDetailPayment | null
+  invoices: RouteSettlementDetailInvoice[]
   open: boolean
   onOpenChange: (open: boolean) => void
   onEdit: () => void
@@ -26,12 +28,18 @@ interface PaymentDetailDialogProps {
   canUpdateSettlement: boolean
 }
 
-export function RouteSettlementPaymentDetailDialog({ payment, open, onOpenChange, onEdit, onVoid, canUpdateSettlement }: PaymentDetailDialogProps) {
+export function RouteSettlementPaymentDetailDialog({ payment, invoices, open, onOpenChange, onEdit, onVoid, canUpdateSettlement }: PaymentDetailDialogProps) {
   if (!payment) return null
 
   const method = payment.payment_method_received === 'CASH'
     ? 'Efectivo'
     : payment.payment_method_received === 'CHECK' ? 'Cheque' : 'Transferencia'
+  const invoiceOrder = new Map(invoices.map((invoice, index) => [invoice.settlement_item_id, index]))
+  const orderedAllocations = [...payment.allocations].sort((a, b) =>
+    (invoiceOrder.get(a.settlement_item_id) ?? Number.MAX_SAFE_INTEGER) -
+    (invoiceOrder.get(b.settlement_item_id) ?? Number.MAX_SAFE_INTEGER),
+  )
+  const showsPhysicalCustody = !payment.voided_at && (payment.payment_method_received === 'CASH' || payment.payment_method_received === 'CHECK') && (payment.custody_user_id || payment.custody_received_at)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -57,14 +65,15 @@ export function RouteSettlementPaymentDetailDialog({ payment, open, onOpenChange
             {payment.check_number && <DetailValue label="Cheque" value={payment.check_number} />}
             {payment.bank_name && <DetailValue label="Banco" value={payment.bank_name} />}
             {payment.check_date && <DetailValue label="Fecha cheque" value={formatDate(payment.check_date)} />}
-            {payment.custody_user_id && <DetailValue label="Custodia" value="Registrada" />}
+            {showsPhysicalCustody && <DetailValue label="Custodia" value="Registrada" />}
+            {showsPhysicalCustody && payment.custody_received_at && <DetailValue label="Desde" value={formatDateTime(payment.custody_received_at)} />}
             {payment.void_reason && <DetailValue label="Motivo de anulación" value={payment.void_reason} />}
           </div>
 
           <section>
             <h3 className="mb-2 font-semibold text-theme-text">Allocations</h3>
             <div className="divide-y divide-theme-border rounded-lg border border-theme-border">
-              {payment.allocations.map(allocation => (
+              {orderedAllocations.map(allocation => (
                 <div key={allocation.allocation_id} className="flex items-center justify-between gap-3 px-3 py-2">
                   <span className="text-theme-text-muted">Factura {allocation.invoice_number}</span>
                   <span className="font-semibold tabular-nums text-theme-text">
@@ -75,7 +84,12 @@ export function RouteSettlementPaymentDetailDialog({ payment, open, onOpenChange
             </div>
           </section>
 
-          {payment.notes && <p className="rounded-lg bg-theme-text/[0.03] px-3 py-2 text-theme-text-muted">{payment.notes}</p>}
+          {payment.notes && (
+            <section className="rounded-lg bg-theme-text/[0.03] px-3 py-2">
+              <h3 className="mb-1 font-semibold text-theme-text">Observación</h3>
+              <p className="text-theme-text-muted">{payment.notes}</p>
+            </section>
+          )}
         </div>
 
         <DialogFooter className="border-theme-border bg-theme-text/[0.02]">

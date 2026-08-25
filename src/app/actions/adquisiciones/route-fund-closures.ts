@@ -409,11 +409,25 @@ export async function addClosureExpense(closureId: string, formData: FormData) {
     throw new Error("No tienes permiso para modificar un cierre de otro usuario.");
   }
 
+  const { data: closureItemContext, error: closureItemContextError } = await db
+    .from('route_fund_closure_items')
+    .select('route_settlement_id, route_guide_id')
+    .eq('fund_closure_id', closureId)
+    .eq('route_guide_id', route_guide_id)
+    .eq('company_id', companyId)
+    .limit(1)
+    .maybeSingle();
+  if (closureItemContextError || !closureItemContext) {
+    throw new Error('La guía no pertenece a los fondos de este cierre.');
+  }
+
   // 1. Insertar el gasto
   const { data: expenseData, error: expenseError } = await db.from('route_fund_closure_expenses').insert({
     company_id: companyId,
     fund_closure_id: closureId,
+    route_settlement_id: closureItemContext.route_settlement_id,
     route_guide_id,
+    custody_user_id: closureDataCheck.custody_user_id,
     expense_scope,
     expense_type,
     amount,

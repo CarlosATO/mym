@@ -199,7 +199,7 @@ export function RegisterRouteSettlementPaymentDialog({
           </DialogTitle>
           <DialogDescription className="text-theme-text-muted">
             Cliente: <span className="font-semibold text-theme-text">{client.customer_name}</span>
-            <span className="mx-1.5">·</span>{client.invoice_count} facturas
+            <span className="mx-1.5">·</span>{client.invoice_count} {client.invoice_count === 1 ? 'factura' : 'facturas'}
             <span className="mx-1.5">·</span>Pendiente total: {displayBigInt(amountValue(client.pending_amount))}
           </DialogDescription>
         </DialogHeader>

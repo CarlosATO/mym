@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { AlertTriangle, CheckCircle2, Eye, Pencil, Trash2 } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Eye, Trash2 } from 'lucide-react'
 import {
   setRouteSettlementItemResolution,
   type RouteSettlementDetailInvoice,
@@ -75,6 +75,7 @@ function InvoiceResolutionForm({
   const [notes, setNotes] = useState(invoice.resolution_notes ?? '')
   const [error, setError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [manualOverride, setManualOverride] = useState(false)
   const hasAppliedAmount = invoice.applied_amount > 0
   const requiresNotes = resolutionType === 'NOT_DELIVERED' || resolutionType === 'REVIEW_REQUIRED'
   const coveredBy = payments.filter(payment =>
@@ -119,8 +120,8 @@ function InvoiceResolutionForm({
       <DialogContent className="max-w-md border-theme-border bg-theme-surface text-theme-text">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-theme-text">
-            {invoice.resolution_type ? <Pencil className="h-4 w-4 text-theme-text-muted" /> : <Eye className="h-4 w-4 text-theme-text-muted" />}
-            {invoice.resolution_type ? 'Cambiar situación' : 'Definir situación de factura'}
+            <Eye className="h-4 w-4 text-theme-text-muted" />
+            Detalle de factura
           </DialogTitle>
           <DialogDescription className="text-theme-text-muted">
             Factura {invoice.invoice_number} · Saldo pendiente: {formatCurrency(Number(invoice.unapplied_amount) || 0)}
@@ -152,6 +153,12 @@ function InvoiceResolutionForm({
               <p className="mb-1.5 font-semibold text-theme-text">Situación del saldo</p>
               {invoice.applied_amount >= invoice.expected_amount ? (
                 <div className="flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-emerald-700 dark:bg-emerald-950/20 dark:text-emerald-300"><CheckCircle2 className="h-4 w-4" /> Pagada</div>
+              ) : invoice.resolution_source === 'DERIVED' && !manualOverride && canUpdateSettlement ? (
+                <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-blue-700 dark:border-blue-900/50 dark:bg-blue-950/20 dark:text-blue-300">
+                  Pago pendiente derivado automáticamente del saldo: <span className="font-semibold">{formatCurrency(Number(invoice.unapplied_amount) || 0)}</span>.
+                  Puedes registrar otro pago o editar el Payment existente. Si corresponde una decisión operacional distinta, puedes indicarla explícitamente.
+                  <button type="button" onClick={() => setManualOverride(true)} className="mt-2 block font-semibold underline underline-offset-2">Indicar situación manual</button>
+                </div>
               ) : !canUpdateSettlement ? (
                 <p className="text-theme-text-muted">No tienes permisos para modificar esta rendición.</p>
               ) : (

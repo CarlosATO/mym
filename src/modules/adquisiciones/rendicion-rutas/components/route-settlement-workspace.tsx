@@ -263,27 +263,20 @@ export function RouteSettlementWorkspace({
   const hasSaveableChanges = hasDirtyChanges || notesDirty
   const editingRow = rows.find(r => r.guideItemId === editingRowId) ?? null
   const previewRow = rows.find(r => r.guideItemId === previewRowId) ?? null
-  const isCountedPayment = (method: string) => ['CASH', 'TRANSFER', 'CHECK'].includes(method)
+  const isCountedPayment = (method: string) => ['CASH', 'CHECK'].includes(method)
   const visibleRows = invoiceFilter === 'CASH_ONLY' ? rows.filter(r => isCountedPayment(r.expected_payment_method)) : rows
   const hiddenCreditCount = rows.filter(r => !isCountedPayment(r.expected_payment_method)).length
 
   const summary = useMemo(() => {
-    const getEffectiveMethod = (r: WorkspaceRow) => {
-      if (r.status === 'PAID_CASH') return 'CASH'
-      if (r.status === 'TRANSFER_CONFIRMED') return 'TRANSFER'
-      if (r.status === 'CHECK_RECEIVED') return 'CHECK'
-      return r.expected_payment_method
-    }
-
-    const countedRows = rows.filter(r => isCountedPayment(getEffectiveMethod(r)))
+    const countedRows = rows.filter(r => isCountedPayment(r.expected_payment_method))
     const countedTotal = countedRows.reduce((a, r) => a + r.expected_amount, 0)
-    
-    const cashRows = rows.filter(r => getEffectiveMethod(r) === 'CASH')
+
+    const cashRows = countedRows.filter(r => r.expected_payment_method === 'CASH')
     const cashExpected = cashRows.reduce((a, r) => a + r.expected_amount, 0)
     const cashReceived = cashRows.reduce((a, r) => a + (r.status === 'PAID_CASH' ? r.received_amount : 0), 0)
     const cashDiff = cashExpected - cashReceived
     
-    const transferRows = rows.filter(r => getEffectiveMethod(r) === 'TRANSFER')
+    const transferRows = rows.filter(r => r.expected_payment_method === 'TRANSFER')
     const transferExpected = transferRows.reduce((a, r) => a + r.expected_amount, 0)
     const transferConfirmed = transferRows
       .filter(r => r.status === 'TRANSFER_CONFIRMED' || r.transfer_confirmed)
@@ -292,7 +285,7 @@ export function RouteSettlementWorkspace({
       .filter(r => r.status !== 'TRANSFER_CONFIRMED' && !r.transfer_confirmed)
       .reduce((a, r) => a + r.expected_amount, 0)
       
-    const checkRows = rows.filter(r => getEffectiveMethod(r) === 'CHECK')
+    const checkRows = countedRows.filter(r => r.expected_payment_method === 'CHECK')
     const checkExpected = checkRows.reduce((a, r) => a + r.expected_amount, 0)
     const checkReceived = checkRows.reduce((a, r) => a + (r.status === 'CHECK_RECEIVED' ? r.received_amount : 0), 0)
     
@@ -874,7 +867,7 @@ export function RouteSettlementWorkspace({
             </button>
           </div>
           {invoiceFilter === 'CASH_ONLY' && hiddenCreditCount > 0 && (
-            <span className="text-[11px] text-theme-text-muted">{hiddenCreditCount} factura{hiddenCreditCount !== 1 ? 's' : ''} de crédito ocultas</span>
+            <span className="text-[11px] text-theme-text-muted">{hiddenCreditCount} factura{hiddenCreditCount !== 1 ? 's' : ''} no rendible{hiddenCreditCount !== 1 ? 's' : ''} ocultas</span>
           )}
         </div>
         <div className="flex-1 min-h-0 overflow-auto">

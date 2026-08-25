@@ -16,6 +16,7 @@ const ROUTE_SETTLEMENT_COLUMNS: OperationalTableColumn[] = [
   { id: 'routeTotal', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
   { id: 'settleableTotal', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
   { id: 'cashExpected', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
+  { id: 'checkExpected', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
   { id: 'cashReceived', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
   { id: 'cashDifference', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
   { id: 'transferConfirmed', defaultWidth: 115, minWidth: 105, maxWidth: 190 },
@@ -62,7 +63,7 @@ export function UnifiedRouteSettlementsTable({
     return data.filter(row => {
       if (filterStatus !== 'ALL' && row.operational_status !== filterStatus) return false
 
-      const countedAmount = row.total_cash_expected + row.total_check_expected + row.total_transfer_expected
+       const countedAmount = row.total_cash_expected + row.total_check_expected
       if (paymentFilter === 'CASH_ONLY' && countedAmount <= 0) return false
       if (paymentFilter === 'CREDIT' && row.total_credit_amount <= 0) return false
 
@@ -216,7 +217,8 @@ export function UnifiedRouteSettlementsTable({
                <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Total ruta{resizeHandle('routeTotal')}</th>
                <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Total rendible{resizeHandle('settleableTotal')}</th>
                <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Ef. esperado{resizeHandle('cashExpected')}</th>
-               <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Ef. recibido{resizeHandle('cashReceived')}</th>
+                <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Cheque esp.{resizeHandle('checkExpected')}</th>
+                <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Ef. recibido{resizeHandle('cashReceived')}</th>
                <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Dif. ef.{resizeHandle('cashDifference')}</th>
                <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Transf. conf.{resizeHandle('transferConfirmed')}</th>
                <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-center font-bold text-theme-text-muted">Transf. pend.{resizeHandle('transferPending')}</th>
@@ -228,7 +230,7 @@ export function UnifiedRouteSettlementsTable({
           <tbody className="divide-y divide-theme-border/50">
             {filteredData.length === 0 ? (
               <tr>
-                <td colSpan={16} className="px-4 py-12 text-center text-theme-text-muted">
+                <td colSpan={17} className="px-4 py-12 text-center text-theme-text-muted">
                   {data.length === 0
                     ? 'No hay guías despachadas disponibles para rendición.'
                     : 'No se encontraron resultados para los filtros seleccionados.'}
@@ -237,7 +239,7 @@ export function UnifiedRouteSettlementsTable({
             ) : (
               filteredData.map((item) => {
                 const isSelected = selectedRowId === item.route_guide_id
-                const totalRendible = item.total_cash_expected + item.total_check_expected + item.total_transfer_expected
+                const totalRendible = item.total_cash_expected + item.total_check_expected
                 const isTerminal = item.operational_status === 'CLOSED' || item.operational_status === 'CANCELLED'
                 const actionLabel = !item.settlement_id
                   ? 'Iniciar rendición'
@@ -267,7 +269,8 @@ export function UnifiedRouteSettlementsTable({
                      <td className="truncate px-3 py-2.5 text-theme-text" title={item.seller_name || undefined}>{item.seller_name || '—'}</td>
                      <td className="truncate px-3 py-2.5 text-right font-semibold tabular-nums text-theme-text" title={formatCurrency(item.total_route_amount)}>{formatCurrency(item.total_route_amount)}</td>
                      <td className="truncate px-3 py-2.5 text-right font-semibold tabular-nums text-theme-text" title={formatCurrency(totalRendible)}>{formatCurrency(totalRendible)}</td>
-                     <td className="truncate px-3 py-2.5 text-right font-semibold tabular-nums text-theme-text" title={formatCurrency(item.total_cash_expected)}>{formatCurrency(item.total_cash_expected)}</td>
+                      <td className="truncate px-3 py-2.5 text-right font-semibold tabular-nums text-theme-text" title={formatCurrency(item.total_cash_expected)}>{formatCurrency(item.total_cash_expected)}</td>
+                      <td className="truncate px-3 py-2.5 text-right font-semibold tabular-nums text-theme-text" title={formatCurrency(item.total_check_expected)}>{formatCurrency(item.total_check_expected)}</td>
                      <td className="truncate px-3 py-2.5 text-right font-semibold tabular-nums text-green-600 dark:text-green-400" title={item.settlement_id ? formatCurrency(item.total_cash_received) : '—'}>
                       {item.settlement_id ? formatCurrency(item.total_cash_received) : '—'}
                     </td>

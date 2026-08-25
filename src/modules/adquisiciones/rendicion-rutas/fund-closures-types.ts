@@ -33,7 +33,7 @@ export interface RouteFundClosureItem {
   company_id: string;
   fund_closure_id: string;
   route_settlement_item_id: string;
-  route_settlement_id: string;
+  route_settlement_id: string | null;
   route_guide_id: string;
   
   invoice_number: string;
@@ -51,17 +51,22 @@ export interface RouteFundClosureItem {
 export interface RouteFundClosureExpense {
   id: string;
   company_id: string;
-  fund_closure_id: string;
+  fund_closure_id: string | null;
+  route_settlement_id: string;
   route_guide_id: string;
+  custody_user_id: string | null;
   expense_scope: 'GUIDE' | 'ITEMS';
   expense_type: string;
   amount: number;
   expense_date: string;
   notes: string | null;
-  
+  status: 'ACTIVE' | 'VOIDED';
   created_by: string;
   created_at: string;
   updated_at: string;
+  voided_at: string | null;
+  voided_by: string | null;
+  void_reason: string | null;
 }
 
 export interface RouteFundClosureDeposit {
