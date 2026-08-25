@@ -14,6 +14,8 @@ export default async function RendicionRutasPage() {
   return (
     <RouteSettlementsPanel
       canCreateSettlement={permissionCodes.includes('adquisiciones.route_settlements.create')}
+      canUpdateSettlement={permissionCodes.includes('adquisiciones.route_settlements.update')}
+      canCloseSettlement={permissionCodes.includes('adquisiciones.route_settlements.close')}
     />
   )
 }

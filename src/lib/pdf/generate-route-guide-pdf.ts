@@ -8,10 +8,11 @@ import { formatCivilDate, todayInSantiago } from '@/lib/datetime'
 const DARK_HEADER: [number, number, number] = [30, 58, 95]
 const EMERALD: [number, number, number] = [16, 185, 129]
 const DARK_TEXT: [number, number, number] = [30, 41, 59]
-const LIGHT_GRAY: [number, number, number] = [248, 250, 252]
 const WHITE: [number, number, number] = [255, 255, 255]
 const MID_GRAY: [number, number, number] = [100, 116, 139]
 const LIGHT_BORDER: [number, number, number] = [226, 232, 240]
+
+export type RouteGuidePdfOrientation = 'portrait' | 'landscape'
 
 function formatCurrency(amount: number): string {
   return `$ ${Math.round(amount).toLocaleString('es-CL')}`
@@ -24,6 +25,7 @@ function formatDate(dateStr: string): string {
 
 function drawPageFooter(doc: jsPDF, pageNum: number, totalPages: number): void {
   const pageWidth = doc.internal.pageSize.getWidth()
+  const pageHeight = doc.internal.pageSize.getHeight()
   const margin = 15
 
   doc.setFont('helvetica', 'normal')
@@ -31,12 +33,12 @@ function drawPageFooter(doc: jsPDF, pageNum: number, totalPages: number): void {
   doc.setTextColor(...MID_GRAY)
   doc.setDrawColor(...LIGHT_BORDER)
   doc.setLineWidth(0.3)
-  doc.line(margin, 282, pageWidth - margin, 282)
+  doc.line(margin, pageHeight - 15, pageWidth - margin, pageHeight - 15)
 
   doc.text(
     `Documento generado el ${formatDate(todayInSantiago())} | Página ${pageNum} de ${totalPages}`,
     pageWidth / 2,
-    288.5,
+    pageHeight - 8.5,
     { align: 'center' },
   )
 }
@@ -81,9 +83,15 @@ function getImageSizeFromBase64(base64: string): { width: number; height: number
   return null
 }
 
-export async function generateRouteGuidePdfBlob(guide: RouteGuide, logoBase64?: string, secondLogoBase64?: string): Promise<Blob> {
-  const doc = new jsPDF('p', 'mm', 'a4')
+export async function generateRouteGuidePdfBlob(
+  guide: RouteGuide,
+  logoBase64?: string,
+  secondLogoBase64?: string,
+  orientation: RouteGuidePdfOrientation = 'portrait',
+): Promise<Blob> {
+  const doc = new jsPDF(orientation === 'landscape' ? 'l' : 'p', 'mm', 'a4')
   const pageWidth = doc.internal.pageSize.getWidth()
+  const pageHeight = doc.internal.pageSize.getHeight()
   const margin = 15
   const usableWidth = pageWidth - 2 * margin
   let cursorY = margin
@@ -236,96 +244,55 @@ export async function generateRouteGuidePdfBlob(guide: RouteGuide, logoBase64?: 
   // TABLE
   const validItems = guide.items?.filter(i => !isEmptyRouteGuideRow(i)) || []
   
-  const tableHeaders = ['#', 'Factura', 'Cliente', 'Comuna', 'Monto', 'Forma Pago', 'Obs.']
+  const tableHeaders = ['#', 'Factura', 'Cliente', 'Dirección', 'Comuna', 'Monto', 'Forma Pago', 'Obs.']
   const tableBody = validItems.map(item => [
     item.line_number.toString(),
     item.invoice_number,
-    item.customer_address && item.customer_address.trim() !== '' ? `${item.customer_name}\nDir: ${item.customer_address.trim()}` : item.customer_name,
+    item.customer_name,
+    item.customer_address?.trim() || '-',
     item.commune,
     formatRouteGuideLineAmount(item.amount),
     formatPaymentMethodLabel(item.payment_method_normalized, item.payment_method_original),
     item.notes
   ])
 
-  const blockHeight = 55;
-  const blockStartY = 297 - margin - blockHeight; // 197 -> 227
+  const blockHeight = 55
+  const blockStartY = pageHeight - margin - blockHeight
+  const tableColumnWidths = orientation === 'landscape'
+    ? [8, 22, 55, 65, 28, 25, 38, 26]
+    : [7, 18, 32, 34, 20, 22, 28, 19]
 
   const autoTableOptions = {
     head: [tableHeaders],
     startY: cursorY,
     margin: { left: margin, right: margin, bottom: 15 },
-    styles: { font: 'helvetica', fontSize: 7, textColor: [30, 41, 59], lineColor: [226, 232, 240], lineWidth: 0.3 },
-    headStyles: { fillColor: [30, 58, 95], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7, halign: 'center' },
+    styles: { font: 'helvetica', fontSize: 8, cellPadding: 2, textColor: [30, 41, 59], lineColor: [226, 232, 240], lineWidth: 0.3, overflow: 'linebreak' },
+    headStyles: { fillColor: [30, 58, 95], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8, halign: 'center', cellPadding: 2 },
     columnStyles: {
-      0: { halign: 'center', cellWidth: 8 },
-      1: { halign: 'center', cellWidth: 15 },
-      2: { cellWidth: 50 },
-      3: { cellWidth: 30 },
-      4: { halign: 'right', cellWidth: 20 },
-      5: { halign: 'center', cellWidth: 20 },
-      6: { cellWidth: 30 }
+      0: { halign: 'center', cellWidth: tableColumnWidths[0] },
+      1: { halign: 'center', cellWidth: tableColumnWidths[1] },
+      2: { cellWidth: tableColumnWidths[2] },
+      3: { cellWidth: tableColumnWidths[3] },
+      4: { cellWidth: tableColumnWidths[4] },
+      5: { halign: 'right', cellWidth: tableColumnWidths[5] },
+      6: { halign: 'center', cellWidth: tableColumnWidths[6] },
+      7: { cellWidth: tableColumnWidths[7] }
     },
     alternateRowStyles: { fillColor: [248, 250, 252] }
   } as any;
 
-  // PASS 1: Simular renderizado para calcular paginación
-  const doc1 = new jsPDF('p', 'mm', 'a4')
-  autoTable(doc1, { ...autoTableOptions, body: tableBody });
-  const pages1 = doc1.getNumberOfPages();
-  const finalY1 = (doc1 as any).lastAutoTable.finalY;
-
-  let splitIndex = -1;
-  // Si la tabla termina invadiendo el área reservada para el bloque final (blockStartY)
-  if (finalY1 > blockStartY) {
-    const allRows = (doc1 as any).lastAutoTable.body;
-    
-    // Calcular en qué página cayó cada fila analizando los saltos de su coordenada Y
-    let currentPage = 1;
-    let lastY = 0;
-    for (const r of allRows) {
-      if (r.y < lastY - 10) {
-        currentPage++; // La coordenada Y bajó abruptamente, hubo salto de página
-      }
-      r.pageNumber = currentPage;
-      lastY = r.y;
-    }
-    
-    const finalPageRows = allRows.filter((r: any) => r.pageNumber === pages1);
-    
-    for (const r of finalPageRows) {
-      if (r.y + r.height > blockStartY) {
-        splitIndex = r.index;
-        break;
-      }
-    }
-    
-    // Si no encontramos un índice claro, dividimos antes de la última fila de esa página
-    if (splitIndex === -1 && finalPageRows.length > 0) {
-      splitIndex = finalPageRows[finalPageRows.length - 1].index;
-    }
-    
-    // Evitar cortes nulos
-    if (splitIndex <= 0 && tableBody.length > 1) {
-      splitIndex = 1;
-    }
-  }
-
-  // PASS 2: Renderizado real con división de tabla si es necesario
-  if (splitIndex > -1 && splitIndex < tableBody.length) {
-    const tableBody1 = tableBody.slice(0, splitIndex);
-    const tableBody2 = tableBody.slice(splitIndex);
-
-    autoTable(doc, { ...autoTableOptions, body: tableBody1 });
-    doc.addPage();
-    autoTable(doc, { ...autoTableOptions, body: tableBody2, startY: margin });
-  } else {
-    autoTable(doc, { ...autoTableOptions, body: tableBody });
+  // Let autoTable paginate and repeat the header. Reserve the final summary
+  // block only after knowing where the last table page actually ended.
+  autoTable(doc, { ...autoTableOptions, body: tableBody })
+  const tableFinalY = (doc as any).lastAutoTable.finalY as number
+  let summaryStartY = blockStartY
+  if (tableFinalY > blockStartY) {
+    doc.addPage()
+    summaryStartY = margin
   }
 
   // TOTALS (New layout)
   doc.setPage(doc.getNumberOfPages()); // Nos aseguramos de estar en la última página
-  
-  const summaryStartY = blockStartY;
   
   // Title
   doc.setFont('helvetica', 'bold');
@@ -355,8 +322,8 @@ export async function generateRouteGuidePdfBlob(guide: RouteGuide, logoBase64?: 
     startY: summaryStartY + 3,
     margin: { left: margin },
     tableWidth: 100,
-    styles: { font: 'helvetica', fontSize: 7, cellPadding: 1.5, textColor: [30, 41, 59], lineColor: [226, 232, 240], lineWidth: 0.3 },
-    headStyles: { fillColor: [30, 58, 95], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7, halign: 'center' },
+     styles: { font: 'helvetica', fontSize: 8, cellPadding: 1.8, textColor: [30, 41, 59], lineColor: [226, 232, 240], lineWidth: 0.3 },
+     headStyles: { fillColor: [30, 58, 95], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8, halign: 'center' },
     columnStyles: {
       0: { cellWidth: 35, fontStyle: 'bold' },
       1: { cellWidth: 25, halign: 'right' },
@@ -388,7 +355,7 @@ export async function generateRouteGuidePdfBlob(guide: RouteGuide, logoBase64?: 
   doc.text(formatCurrency((guide.total_cash_expected || 0) + (guide.total_check_expected || 0)), pageWidth - margin, ty + 1, { align: 'right' });
 
   // SIGNATURES
-  let sigY = blockStartY + 45; 
+  const sigY = summaryStartY + 45;
   
   doc.setFont('helvetica', 'normal')
   doc.setFontSize(8)
@@ -419,8 +386,12 @@ export async function generateRouteGuidePdfBlob(guide: RouteGuide, logoBase64?: 
   return doc.output('blob')
 }
 
-export async function downloadRouteGuidePdf(guide: RouteGuide, filename: string): Promise<void> {
-  const blob = await generateRouteGuidePdfBlob(guide)
+export async function downloadRouteGuidePdf(
+  guide: RouteGuide,
+  filename: string,
+  orientation: RouteGuidePdfOrientation = 'portrait',
+): Promise<void> {
+  const blob = await generateRouteGuidePdfBlob(guide, undefined, undefined, orientation)
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url

@@ -3,18 +3,18 @@
 import React, { useState, useEffect, useRef } from 'react'
 import {
   getRouteSettlementsDashboardData,
-  getRouteSettlementById,
+  getRouteSettlementDetail,
   getRouteGuideWorkspaceData,
   type RouteSettlementsDashboardKpis,
   type RouteSettlementsDashboardRow,
   type RouteGuideWorkspaceData,
   type SaveRouteSettlementResult,
   type CreateRouteSettlementResult,
+  type RouteSettlementDetail,
 } from '@/app/actions/adquisiciones/rendicion-rutas'
 import { UnifiedRouteSettlementsTable } from './components/unified-route-settlements-table'
-import { RouteSettlementDetailPanel } from './components/route-settlement-detail-panel'
 import { RouteSettlementWorkspace } from './components/route-settlement-workspace'
-import { RouteSettlement, RouteSettlementItem } from './types'
+import { RouteSettlementClientView } from './components/route-settlement-client-view'
 import { AlertTriangle, RefreshCw, Wallet } from 'lucide-react'
 import { FundClosuresWorkspace } from './fund-closures-workspace'
 
@@ -61,22 +61,19 @@ type PanelView =
       guideData: RouteGuideWorkspaceData
       dashboardRow: RouteSettlementsDashboardRow
     }
+  | { kind: 'loading-settlement'; settlementId: string }
   | {
-      kind: 'loading-settlement'; settlementId: string
-    }
-  | {
-      kind: 'workspace-has-rr'
-      guideData: RouteGuideWorkspaceData
-      settlement: RouteSettlement
-      settlementItems: RouteSettlementItem[]
-      dashboardRow: RouteSettlementsDashboardRow
+      kind: 'client-view'
+      detail: RouteSettlementDetail
     }
 
 interface RouteSettlementsPanelProps {
   canCreateSettlement: boolean
+  canUpdateSettlement: boolean
+  canCloseSettlement: boolean
 }
 
-export function RouteSettlementsPanel({ canCreateSettlement }: RouteSettlementsPanelProps) {
+export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement, canCloseSettlement }: RouteSettlementsPanelProps) {
   const [rows, setRows] = useState<RouteSettlementsDashboardRow[]>([])
   const [kpis, setKpis] = useState<RouteSettlementsDashboardKpis>(EMPTY_KPIS)
   const [isLoading, setIsLoading] = useState(true)
@@ -201,6 +198,23 @@ export function RouteSettlementsPanel({ canCreateSettlement }: RouteSettlementsP
     if (dashboardCache) dashboardCache = { ...dashboardCache, rows: update(dashboardCache.rows) }
   }
 
+  const handleSettlementStarted = async (guideId: string, result: CreateRouteSettlementResult) => {
+    updateRowAfterStart(guideId, result)
+    setErrorMsg(null)
+    setView({ kind: 'loading-settlement', settlementId: result.settlement_id })
+
+    const settlementRes = await getRouteSettlementDetail(result.settlement_id)
+    if (!isMountedRef.current) return
+
+    if (settlementRes.error || !settlementRes.data) {
+      setErrorMsg(settlementRes.error ?? 'La rendición fue iniciada, pero no se pudo cargar su detalle.')
+      setView({ kind: 'list' })
+      return
+    }
+
+    setView({ kind: 'client-view', detail: settlementRes.data })
+  }
+
   // ── Manejador de doble clic ──────────────────────────────────────────────
   /**
    * REGLA: No crea RR. Solo navega al workspace correcto.
@@ -238,11 +252,7 @@ export function RouteSettlementsPanel({ canCreateSettlement }: RouteSettlementsP
       }
       setView({ kind: 'loading-settlement', settlementId: row.settlement_id })
 
-      // Cargar RR + items + guía en paralelo
-      const [settlementRes, guideRes] = await Promise.all([
-        getRouteSettlementById(row.settlement_id),
-        getRouteGuideWorkspaceData(row.route_guide_id),
-      ])
+      const settlementRes = await getRouteSettlementDetail(row.settlement_id)
       if (!isMountedRef.current) return
 
       if (settlementRes.error || !settlementRes.data) {
@@ -250,26 +260,7 @@ export function RouteSettlementsPanel({ canCreateSettlement }: RouteSettlementsP
         setView({ kind: 'list' })
         return
       }
-      if (guideRes.error || !guideRes.data) {
-        setErrorMsg(guideRes.error ?? 'No se pudo cargar la guía.')
-        setView({ kind: 'list' })
-        return
-      }
-
-      const sd = settlementRes.data
-      setView({
-        kind: 'workspace-has-rr',
-        guideData: guideRes.data,
-        settlement: {
-          ...sd,
-          guide_number: sd.guide_info?.guide_number,
-          route_name: sd.guide_info?.route_name_snapshot,
-          driver_name: sd.guide_info?.driver_name_snapshot,
-          seller_name: sd.guide_info?.seller_name_snapshot,
-        },
-        settlementItems: sd.items,
-        dashboardRow: row,
-      })
+      setView({ kind: 'client-view', detail: settlementRes.data })
     }
   }
 
@@ -277,7 +268,7 @@ export function RouteSettlementsPanel({ canCreateSettlement }: RouteSettlementsP
   const handleCloseWorkspace = (savedResult?: SaveRouteSettlementResult) => {
     const currentView = view
 
-    if (savedResult && (currentView.kind === 'workspace-no-rr' || currentView.kind === 'workspace-has-rr')) {
+    if (savedResult && currentView.kind === 'workspace-no-rr') {
       // Hubo guardado: actualizar fila localmente (sin refrescar todo el dashboard)
       updateRowAfterSave(currentView.dashboardRow.route_guide_id, savedResult)
     }
@@ -306,21 +297,23 @@ export function RouteSettlementsPanel({ canCreateSettlement }: RouteSettlementsP
         settlement={null}
         settlementItems={null}
         canCreateSettlement={canCreateSettlement}
-        onSettlementStarted={(result) => updateRowAfterStart(view.dashboardRow.route_guide_id, result)}
+         onSettlementStarted={(result) => handleSettlementStarted(view.dashboardRow.route_guide_id, result)}
         onClose={handleCloseWorkspace}
       />
     )
   }
 
-  if (view.kind === 'workspace-has-rr') {
+  if (view.kind === 'client-view') {
     return (
-      <RouteSettlementWorkspace
-        mode="has-rr"
-        guideData={view.guideData}
-        settlement={view.settlement}
-        settlementItems={view.settlementItems}
-        canCreateSettlement={canCreateSettlement}
-        onClose={handleCloseWorkspace}
+              <RouteSettlementClientView
+                detail={view.detail}
+                onClose={() => setView({ kind: 'list' })}
+                canUpdateSettlement={canUpdateSettlement}
+                canCloseSettlement={canCloseSettlement}
+                onPaymentSaved={async () => {
+          const refreshed = await getRouteSettlementDetail(view.detail.settlement.id)
+          if (refreshed.data) setView({ kind: 'client-view', detail: refreshed.data })
+        }}
       />
     )
   }

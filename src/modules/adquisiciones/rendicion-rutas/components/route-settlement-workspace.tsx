@@ -76,7 +76,7 @@ interface RouteSettlementWorkspaceProps {
   settlement?: RouteSettlement | null
   settlementItems?: RouteSettlementItem[] | null
   canCreateSettlement: boolean
-  onSettlementStarted?: (result: CreateRouteSettlementResult) => void
+  onSettlementStarted?: (result: CreateRouteSettlementResult) => Promise<void> | void
   onClose: (savedResult?: SaveRouteSettlementResult) => void
 }
 
@@ -253,7 +253,7 @@ export function RouteSettlementWorkspace({
     setSavedNotes(loadedSettlement.notes ?? '')
     setStartNotice(settlementResult.replayed ? 'La rendición ya había sido iniciada. Se abrió la existente.' : 'Rendición iniciada correctamente.')
     setIsStartingSettlement(false)
-    onSettlementStarted?.(settlementResult)
+    await onSettlementStarted?.(settlementResult)
   }
 
   // ── Estado derivado ──────────────────────────────────────────────────────

@@ -6,7 +6,7 @@ import { formatCurrency, formatDate, formatPaymentMethodLabel } from '../utils/r
 import { RouteGuideForm } from './route-guide-form';
 import { RouteGuideEditModal } from './route-guide-edit-modal';
 import { Printer, Edit, Download } from 'lucide-react';
-import { generateRouteGuidePdfBlob, downloadRouteGuidePdf } from '@/lib/pdf/generate-route-guide-pdf';
+import { generateRouteGuidePdfBlob, downloadRouteGuidePdf, type RouteGuidePdfOrientation } from '@/lib/pdf/generate-route-guide-pdf';
 
 import type { RouteSaveDuplicateWarning, SaveRouteGuideDraftResult } from '@/app/actions/logistica/guias-ruta';
 
@@ -36,12 +36,13 @@ export function RouteGuideDetailPanel({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [pdfOrientation, setPdfOrientation] = useState<RouteGuidePdfOrientation>('portrait');
 
 
 
   const handlePrint = async () => {
     try {
-      const blob = await generateRouteGuidePdfBlob(guide);
+      const blob = await generateRouteGuidePdfBlob(guide, undefined, undefined, pdfOrientation);
       const url = URL.createObjectURL(blob);
       setPreviewUrl(url);
     } catch (e: any) {
@@ -79,7 +80,7 @@ export function RouteGuideDetailPanel({
               <button onClick={() => { const win = window.open(previewUrl, '_blank'); win?.print(); }} className="px-4 py-1.5 rounded-lg bg-theme-surface border border-theme-border text-theme-text hover:bg-theme-text/5 text-xs font-bold transition-colors shadow-sm flex items-center gap-1.5">
                 <Printer className="w-4 h-4" /> Imprimir PDF
               </button>
-              <button onClick={() => { downloadRouteGuidePdf(guide, `Guia_${guide.guide_number}`); }} className="px-4 py-1.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-xs font-bold transition-colors shadow-lg shadow-theme-accent/20 flex items-center gap-1.5">
+               <button onClick={() => { downloadRouteGuidePdf(guide, `Guia_${guide.guide_number}`, pdfOrientation); }} className="px-4 py-1.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-xs font-bold transition-colors shadow-lg shadow-theme-accent/20 flex items-center gap-1.5">
                 <Download className="w-4 h-4" /> Descargar PDF
               </button>
               <button onClick={() => { URL.revokeObjectURL(previewUrl); setPreviewUrl(null); }} className="px-4 py-1.5 rounded-lg border border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/10 text-xs font-semibold transition-colors">
@@ -122,7 +123,18 @@ export function RouteGuideDetailPanel({
             </span>
           )}
         </div>
-        <div className="flex gap-3">
+         <div className="flex items-center gap-3">
+           <label className="flex items-center gap-2 text-xs font-semibold text-theme-text-muted">
+             <span>Orientación</span>
+             <select
+               value={pdfOrientation}
+               onChange={event => setPdfOrientation(event.target.value as RouteGuidePdfOrientation)}
+               className="rounded-lg border border-theme-border bg-theme-surface px-2 py-2 text-xs text-theme-text outline-none focus:border-theme-accent"
+             >
+               <option value="portrait">Vertical</option>
+               <option value="landscape">Horizontal</option>
+             </select>
+           </label>
           <button
             onClick={onClose}
             className="px-4 py-2 border border-theme-border rounded-lg text-theme-text hover:bg-theme-text/5 text-sm font-semibold transition-colors"

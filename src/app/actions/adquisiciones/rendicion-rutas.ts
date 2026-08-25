@@ -48,6 +48,131 @@ export interface CreateRouteSettlementResult {
   replayed: boolean
 }
 
+export interface RouteSettlementDetailInvoice {
+  settlement_item_id: string
+  route_guide_item_id: string
+  invoice_number: string
+  expected_payment_method: string
+  expected_amount: number
+  customer_bsale_id: number | null
+  applied_amount: number
+  unapplied_amount: number
+  invoice_result: 'PENDING' | 'PARTIAL' | 'PAID' | 'PENDING_PAYMENT' | 'CREDIT' | 'NOT_DELIVERED' | 'REVIEW_REQUIRED'
+  resolved_for_settlement: boolean
+  resolution_type: 'PENDING_PAYMENT' | 'CREDIT' | 'NOT_DELIVERED' | 'REVIEW_REQUIRED' | null
+  resolution_notes: string | null
+  resolved_by: string | null
+  resolved_at: string | null
+  legacy_status: string
+  legacy_received_amount: number
+  legacy_difference_amount: number
+  legacy_notes: string | null
+}
+
+export interface RouteSettlementDetailAllocation {
+  allocation_id: string
+  settlement_item_id: string
+  invoice_number: string
+  amount_applied: number
+  voided_at: string | null
+}
+
+export interface RouteSettlementDetailPayment {
+  id: string
+  payment_method_received: string
+  amount_received: number
+  amount_applied: number
+  unallocated_amount: number
+  verification_status: string
+  received_at: string
+  reference_number: string | null
+  bank_name: string | null
+  check_number: string | null
+  check_date: string | null
+  notes: string | null
+  custody_user_id: string | null
+  custody_received_at: string | null
+  voided_at: string | null
+  void_reason: string | null
+  allocations: RouteSettlementDetailAllocation[]
+}
+
+export interface RouteSettlementDetailClient {
+  customer_bsale_id: number | null
+  customer_name: string
+  rut: string | null
+  invoice_count: number
+  expected_amount: number
+  applied_amount: number
+  pending_amount: number
+  payment_count: number
+  resolved_invoice_count: number
+  unresolved_invoice_count: number
+  review_required_count: number
+  status: 'PENDING' | 'PARTIAL' | 'PAID'
+  invoices: RouteSettlementDetailInvoice[]
+  payments: RouteSettlementDetailPayment[]
+}
+
+export interface RouteSettlementBlockingInvoice {
+  settlement_item_id: string
+  invoice_number: string
+  customer_bsale_id: number | null
+  customer_name: string
+  reason: string
+}
+
+export interface RouteSettlementDetail {
+  settlement: {
+    id: string
+    settlement_number: string
+    route_guide_id: string
+    route_guide_number: string
+    guide_date: string
+    settlement_date: string
+    workflow_status: string | null
+    financial_result: string | null
+    derived_workflow_status: string | null
+    derived_financial_result: string | null
+    can_close: boolean
+    unresolved_invoice_count: number
+    resolved_invoice_count: number
+    review_required_count: number
+    pending_payment_count: number
+    credit_count: number
+    not_delivered_count: number
+    paid_count: number
+    partial_count: number
+    blocking_invoices: RouteSettlementBlockingInvoice[]
+    status: string
+    customer_count: number
+    invoice_count: number
+    total_expected: number
+    total_applied_new: number
+    total_pending_new: number
+    total_difference_new: number
+    notes: string | null
+  }
+  clients: RouteSettlementDetailClient[]
+}
+
+export interface RegisterRouteSettlementPaymentInput {
+  settlementId: string
+  paymentId?: string | null
+  customerBsaleId: number
+  paymentMethod: 'CASH' | 'TRANSFER' | 'CHECK'
+  amountReceived: string
+  referenceNumber?: string
+  bankName?: string
+  checkNumber?: string
+  checkDate?: string
+  notes?: string
+  allocations: Array<{
+    settlementItemId: string
+    amountApplied: string
+  }>
+}
+
 function toOperationalStatus(status: string | null, hasWorkedItems: boolean): RouteSettlementsDashboardRow['operational_status'] {
   if (!status) return 'PENDING_SETTLEMENT'
   if (status === 'IN_REVIEW') return hasWorkedItems ? 'IN_REVIEW' : 'PENDING_SETTLEMENT'
@@ -548,6 +673,215 @@ export async function getRouteSettlementById(settlementId: string) {
   }
 }
 
+export async function getRouteSettlementDetail(settlementId: string) {
+  const adquisicionesDb = await createAdquisicionesClient()
+
+  try {
+    const { data: userData, error: userError } = await adquisicionesDb.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa. Verifique que haya una empresa seleccionada.')
+    await requirePermission(adquisicionesDb, userData.user.id, 'adquisiciones.route_settlements.view')
+
+    const { data, error } = await adquisicionesDb.rpc('get_route_settlement_detail', {
+      p_settlement_id: settlementId,
+    })
+
+    if (error) throw error
+    if (!data?.settlement || data.settlement.id === undefined) {
+      throw new Error('No se pudo cargar el detalle de la rendición.')
+    }
+
+    return { data: data as RouteSettlementDetail, error: null }
+  } catch (err: any) {
+    console.error('getRouteSettlementDetail error:', err)
+    return { data: null, error: err.message }
+  }
+}
+
+export async function closeRouteSettlement(settlementId: string) {
+  const adquisicionesDb = await createAdquisicionesClient()
+
+  try {
+    const { data: userData, error: userError } = await adquisicionesDb.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(adquisicionesDb, userData.user.id, 'adquisiciones.route_settlements.close')
+
+    const { data, error } = await adquisicionesDb.rpc('close_route_settlement', {
+      p_settlement_id: settlementId,
+      p_user_id: userData.user.id,
+    })
+
+    if (error) {
+      const message = error.message || ''
+      if (/sin resolver|unresolved|no resuelta/i.test(message)) {
+        throw new Error('Todavía existen facturas por resolver.')
+      }
+      if (/requieren revisión|review|required/i.test(message)) {
+        throw new Error('Hay facturas que requieren revisión antes de cerrar.')
+      }
+      if (/cerrada|cancelada|already closed/i.test(message)) {
+        throw new Error('Esta rendición ya está cerrada.')
+      }
+      if (/permiso|permission|autoriz/i.test(message)) {
+        throw new Error('No tienes permisos para cerrar esta rendición.')
+      }
+      throw new Error('No se pudo cerrar la rendición. Inténtalo nuevamente.')
+    }
+
+    return { data, error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudo cerrar la rendición.'
+    console.error('closeRouteSettlement error:', err)
+    return { data: null, error: message }
+  }
+}
+
+export type RouteSettlementResolutionType = 'PENDING_PAYMENT' | 'CREDIT' | 'NOT_DELIVERED' | 'REVIEW_REQUIRED'
+
+export async function setRouteSettlementItemResolution(
+  settlementItemId: string,
+  resolutionType: RouteSettlementResolutionType | null,
+  resolutionNotes: string | null
+) {
+  const adquisicionesDb = await createAdquisicionesClient()
+
+  try {
+    const { data: userData, error: userError } = await adquisicionesDb.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(adquisicionesDb, userData.user.id, 'adquisiciones.route_settlements.update')
+
+    const notes = resolutionNotes?.trim() || null
+    if ((resolutionType === 'NOT_DELIVERED' || resolutionType === 'REVIEW_REQUIRED') && !notes) {
+      throw new Error('Debes ingresar un motivo.')
+    }
+
+    const { data, error } = await adquisicionesDb.rpc('set_route_settlement_item_resolution', {
+      p_settlement_item_id: settlementItemId,
+      p_resolution_type: resolutionType,
+      p_resolution_notes: notes,
+    })
+
+    if (error) {
+      const message = error.message || ''
+      if (/no puedes marcar como no entregada|allocation|pago aplicado|applied/i.test(message)) {
+        throw new Error('No puedes marcar como no entregada una factura que ya tiene un pago aplicado.')
+      }
+      if (/motivo|obligatorio|notes/i.test(message)) throw new Error('Debes ingresar un motivo.')
+      if (/permiso|permission|autoriz/i.test(message)) throw new Error('No tienes permisos para modificar esta rendición.')
+      throw new Error('No se pudo actualizar la situación de la factura. Inténtalo nuevamente.')
+    }
+
+    return { data, error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudo actualizar la situación de la factura.'
+    console.error('setRouteSettlementItemResolution error:', err)
+    return { data: null, error: message }
+  }
+}
+
+export async function registerRouteSettlementPayment(input: RegisterRouteSettlementPaymentInput) {
+  const adquisicionesDb = await createAdquisicionesClient()
+
+  try {
+    const { data: userData, error: userError } = await adquisicionesDb.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(adquisicionesDb, userData.user.id, 'adquisiciones.route_settlements.update')
+
+    if (!/^[1-9]\d*$/.test(input.amountReceived)) {
+      throw new Error('El monto recibido debe ser un número entero mayor que cero.')
+    }
+    if (!input.allocations.some(allocation => /^[1-9]\d*$/.test(allocation.amountApplied))) {
+      throw new Error('Debes aplicar un monto a al menos una factura.')
+    }
+    if (input.paymentMethod === 'CHECK' && !input.checkNumber?.trim()) {
+      throw new Error('El número de cheque es obligatorio.')
+    }
+
+    const { data, error } = await adquisicionesDb.rpc('upsert_route_settlement_payment', {
+      p_settlement_id: input.settlementId,
+      p_payment_id: input.paymentId ?? null,
+      p_customer_bsale_id: input.customerBsaleId,
+      p_payment_method_received: input.paymentMethod,
+      p_amount_received: input.amountReceived,
+      p_received_at: new Date().toISOString(),
+      p_verification_status: 'CONFIRMED',
+      p_reference_number: input.referenceNumber?.trim() || null,
+      p_bank_name: input.bankName?.trim() || null,
+      p_check_number: input.checkNumber?.trim() || null,
+      p_check_date: input.checkDate || null,
+      p_notes: input.notes?.trim() || null,
+      p_allocations: input.allocations.map(allocation => ({
+        settlement_item_id: allocation.settlementItemId,
+        amount_applied: allocation.amountApplied,
+      })),
+    })
+
+    if (error) {
+      const message = error.message || ''
+      if (/superan|supera expected|amount_received/i.test(message)) {
+        throw new Error('El monto aplicado supera el límite permitido para una factura o para el pago.')
+      }
+      if (/cliente|customer_bsale|factura.*rendici[oó]n|pertenece/i.test(message)) {
+        throw new Error('Una de las facturas no pertenece a este cliente o rendición.')
+      }
+      if (/cerrada|cancelada/i.test(message)) {
+        throw new Error('La rendición ya no está disponible para registrar pagos.')
+      }
+      throw new Error('No se pudo registrar el pago. Revisa los datos e inténtalo nuevamente.')
+    }
+
+    return { data, error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudo registrar el pago.'
+    console.error('registerRouteSettlementPayment error:', err)
+    return { data: null, error: message }
+  }
+}
+
+export async function voidRouteSettlementPayment(paymentId: string, voidReason: string) {
+  const adquisicionesDb = await createAdquisicionesClient()
+
+  try {
+    const { data: userData, error: userError } = await adquisicionesDb.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(adquisicionesDb, userData.user.id, 'adquisiciones.route_settlements.update')
+
+    if (!voidReason.trim()) throw new Error('El motivo de anulación es obligatorio.')
+
+    const { data, error } = await adquisicionesDb.rpc('void_route_settlement_payment', {
+      p_payment_id: paymentId,
+      p_void_reason: voidReason.trim(),
+    })
+
+    if (error) {
+      const message = error.message || ''
+      if (/ya est[aá] anulado|VOIDED/i.test(message)) throw new Error('Este pago ya fue anulado.')
+      if (/cerrada|cancelada/i.test(message)) throw new Error('La rendición ya no permite modificaciones.')
+      throw new Error('No se pudo anular el pago. Inténtalo nuevamente.')
+    }
+
+    return { data, error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudo anular el pago.'
+    console.error('voidRouteSettlementPayment error:', err)
+    return { data: null, error: message }
+  }
+}
+
 // ─── Fase 3 ──────────────────────────────────────────────────────────────────
 
 export interface RouteGuideWorkspaceItem {
@@ -821,37 +1155,6 @@ export async function saveRouteSettlementChanges(
     }
   } catch (err: any) {
     console.error('saveRouteSettlementChanges error:', err)
-    return { data: null, error: err.message as string }
-  }
-}
-
-/**
- * 7. closeRouteSettlement
- * Cierra una rendición. Solo disponible si status = IN_REVIEW.
- * UI de cierre no priorizada en Fase 3 — preparada para Fase 4.
- */
-export async function closeRouteSettlement(settlementId: string) {
-  const adquisicionesDb = await createAdquisicionesClient()
-
-  try {
-    const { data: userData, error: userError } = await adquisicionesDb.auth.getUser()
-    if (userError || !userData?.user) throw new Error('No autorizado')
-
-    const companyId = await getActiveCompanyId(userData.user)
-    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
-    await requirePermission(adquisicionesDb, userData.user.id, 'adquisiciones.route_settlements.close')
-
-    const { data, error } = await adquisicionesDb.rpc('close_route_settlement', {
-      p_settlement_id: settlementId,
-      p_user_id: userData.user.id,
-    })
-
-    if (error) throw new Error(`Error cerrando rendición: ${error.message}`)
-    if (!data?.success) throw new Error(data?.error || 'No se pudo cerrar la rendición')
-
-    return { data: { status: data.status as string }, error: null }
-  } catch (err: any) {
-    console.error('closeRouteSettlement error:', err)
     return { data: null, error: err.message as string }
   }
 }
