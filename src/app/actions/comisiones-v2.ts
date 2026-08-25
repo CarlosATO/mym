@@ -149,6 +149,17 @@ export type ComisionesV2FamilyPlanListItem = Omit<
 };
 
 export type ComisionesV2SimulationLine = ComisionesV2PaymentEligibility & {
+  line_kind?: "INVOICE" | "CREDIT_NOTE";
+  source_document_bsale_id?: number | null;
+  source_document_number?: number | null;
+  source_document_type_id?: number | null;
+  source_document_line_id?: string | null;
+  source_document_detail_bsale_id?: number | null;
+  original_invoice_bsale_id?: number | null;
+  original_invoice_number?: number | null;
+  original_invoice_line_id?: string | null;
+  original_invoice_detail_bsale_id?: number | null;
+  credit_note_date?: string | null;
   plan_id: string | null;
   plan_code: string | null;
   family_percentage: number | null;

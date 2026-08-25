@@ -4,6 +4,13 @@ import type { ComisionesV2SettlementDetail } from '@/app/actions/comisiones-v2'
 import { buildSnapshotSupplierChartRows, topSupplierChartRows, type SupplierChartRow } from './comisiones-v2-supplier-chart'
 
 type SnapshotLine = ComisionesV2SettlementDetail['lines'][number]
+type PdfSnapshotLine = SnapshotLine & {
+  line_kind?: 'INVOICE' | 'CREDIT_NOTE'
+  original_invoice_bsale_id?: number | null
+  original_invoice_number?: number | null
+  original_invoice_line_id?: string | null
+  credit_note_date?: string | null
+}
 type Rgb = [number, number, number]
 
 const DARK_HEADER: Rgb = [30, 58, 95]
@@ -84,28 +91,87 @@ function addLogo(doc: jsPDF, logoBase64: string | undefined) {
   try { doc.addImage(logoBase64, 'PNG', 17, 5, 22, 17) } catch { /* Logo failure must not block the export. */ }
 }
 
+function isPdfInvoice(line: PdfSnapshotLine) {
+  return line.line_kind === 'INVOICE'
+}
+
+function isPdfCreditNote(line: PdfSnapshotLine) {
+  return line.line_kind === 'CREDIT_NOTE'
+}
+
 function invoiceRows(lines: SnapshotLine[]) {
-  const invoices = new Map<number, { number: number | string; customer: string; payment: string | null; net: number; commission: number }>()
-  for (const line of lines) {
+  const pdfLines = lines as PdfSnapshotLine[]
+  type InvoiceGroup = {
+    number: number | string
+    customer: string
+    payment: string | null
+    net: number
+    commission: number
+    creditNotes: Map<string, { number: number | string; customer: string; net: number; commission: number; date: string | null; originNumber: number | string }>
+  }
+  const invoices = new Map<number, InvoiceGroup>()
+  const invoicesByLineKey = new Map<string, InvoiceGroup>()
+
+  for (const line of pdfLines) {
+    if (!isPdfInvoice(line)) continue
     const invoiceId = line.source_document_bsale_id
     const current = invoices.get(invoiceId)
-    if (current) {
-      current.net += line.net_amount
-      current.commission += line.commission_amount
-      if (!current.payment && line.full_payment_date) current.payment = line.full_payment_date
-      continue
-    }
-    invoices.set(invoiceId, {
+    const invoice = current ?? {
       number: line.source_document_number ?? invoiceId,
       customer: line.customer_name_snapshot ?? '—',
       payment: line.full_payment_date,
+      net: 0,
+      commission: 0,
+      creditNotes: new Map(),
+    }
+    invoice.net += line.net_amount
+    invoice.commission += line.commission_amount
+    if (!invoice.payment && line.full_payment_date) invoice.payment = line.full_payment_date
+    if (line.source_document_line_id != null) {
+      const sourceLineKey = String(line.source_document_line_id)
+      invoicesByLineKey.set(sourceLineKey, invoice)
+    }
+    invoices.set(invoiceId, invoice)
+  }
+
+  for (const line of pdfLines) {
+    if (!isPdfCreditNote(line)) continue
+    const originLineKey = line.original_invoice_line_id ? String(line.original_invoice_line_id) : null
+    const invoice = (originLineKey ? invoicesByLineKey.get(originLineKey) : undefined) ??
+      (line.original_invoice_bsale_id != null ? invoices.get(line.original_invoice_bsale_id) : undefined)
+    if (!invoice) continue
+    const noteKey = `${line.source_document_bsale_id}:${originLineKey ?? line.original_invoice_bsale_id ?? 'unknown'}`
+    const current = invoice.creditNotes.get(noteKey)
+    if (current) {
+      current.net += line.net_amount
+      current.commission += line.commission_amount
+      continue
+    }
+    invoice.creditNotes.set(noteKey, {
+      number: line.source_document_number ?? line.source_document_bsale_id,
+      customer: line.customer_name_snapshot ?? invoice.customer,
       net: line.net_amount,
       commission: line.commission_amount,
+      date: line.credit_note_date ?? null,
+      originNumber: line.original_invoice_number ?? invoice.number,
     })
   }
-  return Array.from(invoices.values()).map(invoice => [
-    String(invoice.number), invoice.customer, civilDate(invoice.payment), currency(invoice.net), currency(invoice.commission),
-  ])
+
+  return Array.from(invoices.values()).flatMap(invoice => {
+    const invoiceRow = [[
+      String(invoice.number), invoice.customer, civilDate(invoice.payment), currency(invoice.net), currency(invoice.commission),
+    ]]
+    const creditNoteRows = Array.from(invoice.creditNotes.values())
+      .sort((a, b) => String(a.date ?? '').localeCompare(String(b.date ?? '')) || Number(a.number) - Number(b.number))
+      .map(note => [
+        `-> NC ${note.number}\nFactura origen ${note.originNumber}`,
+        note.customer,
+        civilDate(invoice.payment),
+        currency(note.net),
+        currency(note.commission),
+      ])
+    return [...invoiceRow, ...creditNoteRows]
+  })
 }
 
 function drawSupplierChart(doc: jsPDF, rows: SupplierChartRow[], startY: number, width: number) {
@@ -190,13 +256,13 @@ export function generateComisionesV2DraftPdf(detail: ComisionesV2SettlementDetai
   doc.setFont('helvetica', 'bold'); doc.text('CREACIÓN', col3, infoY); doc.setFont('helvetica', 'normal'); doc.text(instantDate(settlement.created_at), col3 + 18, infoY)
   infoY += 5; doc.setFont('helvetica', 'bold'); doc.text('ESTADO', col1, infoY); doc.setFont('helvetica', 'normal'); doc.text(isDraft ? 'BORRADOR' : 'EMITIDA', col1 + 20, infoY); doc.setFont('helvetica', 'bold'); doc.text('EMISIÓN', col2, infoY); doc.setFont('helvetica', 'normal'); doc.text(isDraft ? 'Pendiente' : instantDate(options.issuedAt), col2 + 18, infoY)
   infoY += 7; doc.setDrawColor(...LIGHT_BORDER); doc.line(margin + 3, infoY, width - margin - 3, infoY); infoY += 4
-  const kpis = [['Facturas', String(new Set(lines.map(line => line.source_document_bsale_id)).size)], ['Líneas', lines.length.toLocaleString('es-CL')], ['Sin comisión', noCommissionLines.length.toLocaleString('es-CL')], ['Neto sin comisión', currency(noCommissionNet)], ['Neto elegible', currency(settlement.total_net_amount)], ['Comisión total', currency(settlement.total_commission_amount)], ['% efectivo', percent(effectivePercent)]]
+  const kpis = [['Facturas', String(new Set((lines as PdfSnapshotLine[]).filter(isPdfInvoice).map(line => line.source_document_bsale_id)).size)], ['Líneas', lines.length.toLocaleString('es-CL')], ['Sin comisión', noCommissionLines.length.toLocaleString('es-CL')], ['Neto sin comisión', currency(noCommissionNet)], ['Neto elegible', currency(settlement.total_net_amount)], ['Comisión total', currency(settlement.total_commission_amount)], ['% efectivo', percent(effectivePercent)]]
   const kpiWidth = usableWidth / kpis.length
   doc.setFontSize(6.2); kpis.forEach(([label], index) => { doc.setFont('helvetica', 'bold'); doc.text(label, margin + kpiWidth * index + kpiWidth / 2, infoY, { align: 'center' }) }); infoY += 3.5
   kpis.forEach(([, value], index) => { doc.setFont('helvetica', 'normal'); doc.text(value, margin + kpiWidth * index + kpiWidth / 2, infoY, { align: 'center' }) })
   cursorY += 43
 
-  autoTable(doc, { startY: cursorY, head: [['Factura', 'Cliente', 'Pago completo', 'Neto elegible', 'Comisión']], body: invoiceRows(lines), margin: { left: margin, right: margin }, styles: { fontSize: 7, textColor: [...DARK_TEXT], lineColor: [...LIGHT_BORDER], lineWidth: 0.3 }, headStyles: { fillColor: [...DARK_HEADER], textColor: 255, fontSize: 7, fontStyle: 'bold' }, alternateRowStyles: { fillColor: [248, 250, 252] }, columnStyles: { 0: { cellWidth: 22 }, 1: { cellWidth: 62 }, 2: { cellWidth: 28 }, 3: { cellWidth: 35, halign: 'right' }, 4: { cellWidth: 35, halign: 'right' } }, didDrawPage: () => footer(doc, doc.getCurrentPageInfo().pageNumber, doc.getNumberOfPages(), isDraft) })
+  autoTable(doc, { startY: cursorY, head: [['Documento', 'Cliente', 'Pago completo', 'Neto elegible', 'Comisión']], body: invoiceRows(lines), margin: { left: margin, right: margin }, styles: { fontSize: 7, textColor: [...DARK_TEXT], lineColor: [...LIGHT_BORDER], lineWidth: 0.3 }, headStyles: { fillColor: [...DARK_HEADER], textColor: 255, fontSize: 7, fontStyle: 'bold' }, alternateRowStyles: { fillColor: [248, 250, 252] }, columnStyles: { 0: { cellWidth: 22 }, 1: { cellWidth: 62 }, 2: { cellWidth: 28 }, 3: { cellWidth: 35, halign: 'right' }, 4: { cellWidth: 35, halign: 'right' } }, didDrawPage: () => footer(doc, doc.getCurrentPageInfo().pageNumber, doc.getNumberOfPages(), isDraft) })
   const finalY = ((doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY) + 6
   doc.setDrawColor(...LIGHT_BORDER); doc.setFillColor(248, 250, 252); doc.roundedRect(margin, finalY, usableWidth, 22, 2, 2, 'FD')
   doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(...DARK_TEXT); doc.text('NETO ELEGIBLE', margin + 8, finalY + 8); doc.text(currency(settlement.total_net_amount), width - margin - 8, finalY + 8, { align: 'right' }); doc.setTextColor(...EMERALD); doc.text('COMISIÓN TOTAL', margin + 8, finalY + 16); doc.text(currency(settlement.total_commission_amount), width - margin - 8, finalY + 16, { align: 'right' })
@@ -214,11 +280,48 @@ export function generateComisionesV2DraftPdf(detail: ComisionesV2SettlementDetai
 }
 
 export function buildComisionesV2DraftWorkbook(detail: ComisionesV2SettlementDetail) {
-  const data = detail.lines.map(line => ({
+  type ExcelSnapshotLine = SnapshotLine & {
+    line_kind?: 'INVOICE' | 'CREDIT_NOTE'
+    original_invoice_line_id?: string | null
+    credit_note_date?: string | null
+  }
+  const lines = detail.lines as ExcelSnapshotLine[]
+  const invoiceNumberByLineId = new Map<string, number | string>()
+  const creditNotesByInvoiceLineId = new Map<string, ExcelSnapshotLine[]>()
+  for (const line of lines) {
+    if (line.line_kind === 'INVOICE' && line.source_document_line_id != null) {
+      invoiceNumberByLineId.set(String(line.source_document_line_id), line.source_document_number ?? line.source_document_bsale_id)
+    }
+  }
+  for (const line of lines) {
+    if (line.line_kind !== 'CREDIT_NOTE' || !line.original_invoice_line_id) continue
+    const key = String(line.original_invoice_line_id)
+    const children = creditNotesByInvoiceLineId.get(key) ?? []
+    children.push(line)
+    creditNotesByInvoiceLineId.set(key, children)
+  }
+  const orderedLines: ExcelSnapshotLine[] = []
+  const matchedCreditNotes = new Set<ExcelSnapshotLine>()
+  for (const line of lines) {
+    if (line.line_kind !== 'INVOICE') continue
+    orderedLines.push(line)
+    const children = creditNotesByInvoiceLineId.get(String(line.source_document_line_id)) ?? []
+    orderedLines.push(...children)
+    children.forEach(child => matchedCreditNotes.add(child))
+  }
+  orderedLines.push(...lines.filter(line => line.line_kind !== 'INVOICE' && !matchedCreditNotes.has(line)))
+
+  const data = orderedLines.map(line => {
+    const isCreditNote = line.line_kind === 'CREDIT_NOTE'
+    const originNumber = isCreditNote && line.original_invoice_line_id
+      ? invoiceNumberByLineId.get(String(line.original_invoice_line_id)) ?? ''
+      : ''
+    return {
     Estado: 'Borrador', Vendedor: detail.settlement.seller_name_snapshot, Período: `${civilDate(detail.settlement.period_from)} al ${civilDate(detail.settlement.period_to)}`,
-    Factura: line.source_document_number ?? line.source_document_bsale_id, Cliente: line.customer_name_snapshot ?? '', 'Pago completo': civilDate(line.full_payment_date), SKU: line.sku_snapshot ?? '', Producto: line.description_snapshot ?? '', 'Proveedor REAL': line.real_supplier_name_snapshot ?? '', Familia: line.family_name_snapshot ?? '', Cantidad: Number(line.quantity), Neto: Number(line.net_amount), 'Estado comisión': statusLabel(line), 'Plan / Regla': planLabel(line), 'Tipo de comisión': typeLabel(line), '%': Number(isNoCommission(line) ? 0 : line.percentage ?? 0), Comisión: Number(isNoCommission(line) ? 0 : line.commission_amount),
+    'Tipo documento': isCreditNote ? 'Nota de Crédito' : 'Factura', Documento: line.source_document_number ?? line.source_document_bsale_id, 'Factura origen': originNumber, 'Fecha NC': isCreditNote ? civilDate(line.credit_note_date) : '', Cliente: line.customer_name_snapshot ?? '', 'Pago completo': civilDate(line.full_payment_date), SKU: line.sku_snapshot ?? '', Producto: line.description_snapshot ?? '', 'Proveedor REAL': line.real_supplier_name_snapshot ?? '', Familia: line.family_name_snapshot ?? '', Cantidad: Number(line.quantity), Neto: Number(line.net_amount), 'Estado comisión': statusLabel(line), 'Plan / Regla': planLabel(line), 'Tipo de comisión': typeLabel(line), '%': Number(line.percentage ?? 0), Comisión: Number(line.commission_amount),
     bsale_variant_id: line.bsale_variant_id ?? null, source_document_bsale_id: line.source_document_bsale_id, source_document_line_id: line.source_document_line_id ?? null, source_document_detail_bsale_id: line.source_document_detail_bsale_id ?? null, plan_id: line.plan_id ?? null, plan_code_snapshot: line.plan_code_snapshot ?? null, plan_version: line.plan_version_no ?? null, family_rate_id: line.family_rate_id ?? null, tier_id: line.tier_id ?? null, supplier_total_net: line.supplier_total_net ?? null, tier_min: line.tier_lower_bound ?? null, tier_max: line.tier_upper_bound ?? null, simulation_status: status(line),
-  }))
+    }
+  })
   return data
 }
 

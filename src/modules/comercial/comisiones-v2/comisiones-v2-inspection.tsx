@@ -296,6 +296,73 @@ function displaySku(row: ComisionesV2SimulationLine) {
   return row.variant_code_snapshot || row.current_sku || "—";
 }
 
+function isCreditNote(row: ComisionesV2SimulationLine) {
+  return row.line_kind === "CREDIT_NOTE";
+}
+
+function isInvoice(row: ComisionesV2SimulationLine) {
+  return !isCreditNote(row);
+}
+
+function invoiceLineKey(row: ComisionesV2SimulationLine) {
+  return row.detail_id;
+}
+
+type SimulationLineGroup = {
+  parent: ComisionesV2SimulationLine;
+  children: ComisionesV2SimulationLine[];
+};
+
+function groupSimulationRows(rows: ComisionesV2SimulationLine[]) {
+  const groups = new Map<string, SimulationLineGroup>();
+  for (const row of rows) {
+    if (isInvoice(row)) {
+      groups.set(invoiceLineKey(row), { parent: row, children: [] });
+    }
+  }
+  for (const row of rows) {
+    if (!isCreditNote(row) || !row.original_invoice_line_id) continue;
+    const group = groups.get(row.original_invoice_line_id);
+    if (group) group.children.push(row);
+  }
+  for (const group of groups.values()) {
+    group.children.sort(
+      (a, b) =>
+        String(a.credit_note_date ?? a.emission_date ?? "").localeCompare(
+          String(b.credit_note_date ?? b.emission_date ?? ""),
+        ) ||
+        Number(a.source_document_number ?? a.document_number ?? 0) -
+          Number(b.source_document_number ?? b.document_number ?? 0) ||
+        Number(a.source_document_detail_bsale_id ?? a.detail_bsale_id ?? 0) -
+          Number(b.source_document_detail_bsale_id ?? b.detail_bsale_id ?? 0),
+    );
+  }
+  return [...groups.values()];
+}
+
+function searchValues(row: ComisionesV2SimulationLine) {
+  return [
+    row.document_number,
+    row.document_bsale_id,
+    row.source_document_number,
+    row.source_document_bsale_id,
+    row.original_invoice_number,
+    row.original_invoice_bsale_id,
+    row.customer_name,
+    row.variant_code_snapshot,
+    row.current_sku,
+    row.current_product_description,
+    row.variant_description_snapshot,
+    row.variant_id,
+    row.seller_bsale_id,
+    row.seller_name,
+    row.real_supplier_business_name,
+    row.family_name,
+    row.plan_code,
+    row.simulation_status,
+  ];
+}
+
 function statusLabel(status: string) {
   if (status === "RULE_APPLIED") return "Regla aplicada";
   if (status === "NO_ACTIVE_PLAN") return "Sin plan";
@@ -534,10 +601,9 @@ function buildExecutiveSupplierRows(rows: ComisionesV2SimulationLine[]) {
           supplierRows[0]?.real_supplier_business_name ??
           "Proveedor sin nombre",
         invoices: new Set(
-          supplierRows.map(
-            (row) =>
-              `${row.document_type_id ?? "document"}:${row.document_bsale_id}`,
-          ),
+          supplierRows
+            .filter(isInvoice)
+            .map((row) => row.document_bsale_id),
         ).size,
         lines: supplierRows.length,
         net,
@@ -725,7 +791,7 @@ function SupplierSalesChartRow({
         <div className="truncate tabular-nums text-theme-text-muted">
           {formatCurrency(row.net)} · Comisión {formatCurrency(row.commission)} · {percentLabel(row.effectivePercent)}
         </div>
-      </div>
+       </div>
     </div>
   );
 }
@@ -756,12 +822,9 @@ function ExecutiveSummary({
   const supplierRows = useMemo(() => buildExecutiveSupplierRows(rows), [rows]);
   const kpis = useMemo(
     () => ({
-      invoices: new Set(
-        rows.map(
-          (row) =>
-            `${row.document_type_id ?? "document"}:${row.document_bsale_id}`,
-        ),
-      ).size,
+       invoices: new Set(
+         rows.filter(isInvoice).map((row) => row.document_bsale_id),
+       ).size,
       lines: rows.length,
       net: rows.reduce((sum, row) => sum + Number(row.net_amount ?? 0), 0),
       commission: rows.reduce(
@@ -981,9 +1044,9 @@ function ExecutiveSummary({
                     </tr>
                   ))}
                 </tbody>
-              </table>
-            </div>
-          </section>
+               </table>
+             </div>
+           </section>
           {targetRows.length > 0 && (
             <div className="mt-3 rounded-xl border border-sky-500/25 bg-sky-500/5 p-3 text-xs text-sky-800">
               <p className="font-semibold">Meta de ventas</p>
@@ -1195,6 +1258,7 @@ function SupplierSettlementSummary({
 }: {
   detail: ComisionesV2SettlementDetail;
 }) {
+  const [isOpen, setIsOpen] = useState(false);
   const rows = useMemo(() => buildSupplierSettlementSummary(detail), [detail]);
   const summaryNet = rows.reduce((sum, row) => sum + row.netAmount, 0);
   const summaryCommission = rows.reduce(
@@ -1217,16 +1281,22 @@ function SupplierSettlementSummary({
     );
   }
   return (
-    <section className="shrink-0 border-b border-theme-border bg-theme-surface p-3 md:p-4">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <h4 className="text-sm font-bold text-theme-text">
-          Resumen por Proveedor
-        </h4>
+    <section className="shrink-0 border-b border-theme-border bg-theme-surface">
+      <div className="flex items-center justify-between gap-2 px-3 py-2 md:px-4">
+        <button
+          type="button"
+          onClick={() => setIsOpen((open) => !open)}
+          aria-expanded={isOpen}
+          className="text-xs font-bold text-theme-text hover:text-theme-accent"
+        >
+          {isOpen ? "Ocultar resumen" : "Ver resumen por proveedor"}
+        </button>
         <span className="text-[10px] text-theme-text-muted">
-          Snapshot persistido
+          {rows.length.toLocaleString("es-CL")} proveedores · Snapshot persistido
         </span>
       </div>
-      <div className="overflow-x-auto">
+      {isOpen && <div className="border-t border-theme-border px-3 py-3 md:px-4 md:py-4">
+        <div className="overflow-x-auto">
         <table className="min-w-[1050px] w-full table-fixed text-xs">
           <thead className="bg-theme-text/[0.03] text-left text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">
             <tr>
@@ -1291,9 +1361,10 @@ function SupplierSettlementSummary({
               </tr>
             ))}
           </tbody>
-        </table>
-      </div>
-    </section>
+         </table>
+         </div>
+       </div>}
+     </section>
   );
 }
 
@@ -2111,7 +2182,7 @@ export function ComisionesV2Inspection({
   );
   const inspectionResult = useMemo(() => {
     const term = search.trim().toLowerCase();
-    const visibleRows = rows.filter((row) => {
+    const matchesRow = (row: ComisionesV2SimulationLine) => {
       if (
         statusFilter === "SIN_REGLA" &&
         row.simulation_status !== "NO_ACTIVE_PLAN" &&
@@ -2145,38 +2216,41 @@ export function ComisionesV2Inspection({
       )
         return false;
       if (!term) return true;
-      return [
-        row.document_number,
-        row.document_bsale_id,
-        row.customer_name,
-        row.variant_code_snapshot,
-        row.current_sku,
-        row.current_product_description,
-        row.variant_description_snapshot,
-        row.variant_id,
-        row.seller_bsale_id,
-        row.seller_name,
-        row.real_supplier_business_name,
-        row.family_name,
-        row.plan_code,
-        row.simulation_status,
-      ].some((value) =>
+      return searchValues(row).some((value) =>
         String(value ?? "")
           .toLowerCase()
           .includes(term),
       );
+    };
+    const groups = groupSimulationRows(rows).filter((group) =>
+      [group.parent, ...group.children].some(matchesRow),
+    );
+    const sortedParents = sortOperationalRows(
+      groups.map((group) => group.parent),
+      sort,
+      COLUMNS,
+      (row, key) => row[key as keyof ComisionesV2SimulationLine],
+    );
+    const groupsByParent = new Map(
+      groups.map((group) => [invoiceLineKey(group.parent), group]),
+    );
+    const visibleRows = sortedParents.flatMap((parent) => {
+      const group = groupsByParent.get(invoiceLineKey(parent));
+      return group ? [group.parent, ...group.children] : [parent];
     });
     return {
-      rows: sortOperationalRows(
-        visibleRows,
-        sort,
-        COLUMNS,
-        (row, key) => row[key as keyof ComisionesV2SimulationLine],
-      ),
+      rows: visibleRows,
       summary: {
         invoices: new Set(
           visibleRows
+            .filter(isInvoice)
             .map((row) => row.document_bsale_id)
+            .filter((value) => value != null),
+        ).size,
+        creditNotes: new Set(
+          visibleRows
+            .filter(isCreditNote)
+            .map((row) => row.source_document_bsale_id)
             .filter((value) => value != null),
         ).size,
         lines: visibleRows.length,
@@ -2188,6 +2262,15 @@ export function ComisionesV2Inspection({
           (total, row) => total + Number(row.commission_amount ?? 0),
           0,
         ),
+        creditNotesNet: visibleRows
+          .filter(isCreditNote)
+          .reduce((total, row) => total + Number(row.net_amount ?? 0), 0),
+        creditNotesCommission: visibleRows
+          .filter(isCreditNote)
+          .reduce(
+            (total, row) => total + Number(row.commission_amount ?? 0),
+            0,
+          ),
         noRule: visibleRows.filter(
           (row) =>
             row.simulation_status === "NO_ACTIVE_PLAN" ||
@@ -2372,7 +2455,7 @@ export function ComisionesV2Inspection({
             </div>
           </div>
           {section === "LINES" && (
-            <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4 xl:grid-cols-7 xl:gap-1.5">
+            <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4 xl:grid-cols-8 xl:gap-1.5">
               <Summary
                 label="Facturas"
                 value={selectedSellerId == null ? "—" : summary.invoices}
@@ -2380,6 +2463,15 @@ export function ComisionesV2Inspection({
               <Summary
                 label="Líneas"
                 value={selectedSellerId == null ? "—" : summary.lines}
+              />
+              <Summary
+                label="Notas de crédito"
+                value={selectedSellerId == null ? "—" : summary.creditNotes}
+                secondary={
+                  selectedSellerId == null
+                    ? undefined
+                    : `Neto ${formatCurrency(summary.creditNotesNet)} · Comisión ${formatCurrency(summary.creditNotesCommission)}`
+                }
               />
               <Summary
                 label="Neto"
@@ -2917,14 +3009,32 @@ function InspectionRow({
         ? "border-l border-theme-border/70 shadow-[-6px_0_12px_-10px_rgba(0,0,0,0.5)]"
         : "";
     return {
-      style: { right },
-      className: `sticky z-10 bg-theme-surface group-hover:bg-theme-surface-hover ${separator} px-3 py-3 ${alignment}`,
+      className: `sticky z-10 ${isCreditNote(row) ? "" : "bg-theme-surface group-hover:bg-theme-surface-hover"} ${separator} px-3 py-3 ${alignment}`,
+      style: {
+        right,
+        ...(isCreditNote(row)
+          ? {
+              backgroundColor: "var(--theme-surface)",
+              backgroundImage:
+                "linear-gradient(color-mix(in srgb, var(--theme-text) 2%, transparent), color-mix(in srgb, var(--theme-text) 2%, transparent))",
+            }
+          : {}),
+      },
     };
   };
   return (
-    <tr className="group align-top hover:bg-theme-text/[0.025]">
+    <tr className={`group align-top hover:bg-theme-text/[0.025] ${isCreditNote(row) ? "bg-theme-text/[0.018]" : ""}`}>
       <td className="px-3 py-3 font-semibold text-theme-text">
-        {row.document_number ?? row.document_bsale_id ?? "—"}
+        {isCreditNote(row) ? (
+          <div className="pl-3">
+            <div>↳ NC {row.source_document_number ?? row.document_number ?? row.document_bsale_id ?? "—"}</div>
+            <div className="mt-0.5 text-[10px] font-normal text-theme-text-muted">
+              Factura {row.original_invoice_number ?? row.original_invoice_bsale_id ?? "—"}
+            </div>
+          </div>
+        ) : (
+          row.document_number ?? row.document_bsale_id ?? "—"
+        )}
       </td>
       <td className="px-3 py-3">
         <span
@@ -4022,6 +4132,82 @@ function LegacySettlementDraftsSection({
 void LegacySettlementDraftsSection;
 void ExecutiveSummary;
 
+type DraftSettlementLine = ComisionesV2SettlementDetail["lines"][number] & {
+  line_kind?: "INVOICE" | "CREDIT_NOTE";
+  original_invoice_line_id?: string | null;
+  original_invoice_number?: number | null;
+  original_invoice_bsale_id?: number | null;
+};
+
+function draftLineSearchValues(line: DraftSettlementLine) {
+  return [
+    line.source_document_number,
+    line.source_document_bsale_id,
+    line.customer_name_snapshot,
+    line.sku_snapshot,
+    line.description_snapshot,
+    line.real_supplier_name_snapshot,
+    line.family_name_snapshot,
+    line.original_invoice_number,
+    line.original_invoice_bsale_id,
+  ];
+}
+
+function draftLineIsCreditNote(line: DraftSettlementLine) {
+  return line.line_kind === "CREDIT_NOTE";
+}
+
+function draftLineGroups(detail: ComisionesV2SettlementDetail) {
+  const lines = detail.lines as DraftSettlementLine[];
+  const parentKey = (line: DraftSettlementLine) =>
+    line.source_document_line_id != null
+      ? String(line.source_document_line_id)
+      : line.id;
+  const byId = new Map(
+    lines
+      .map((line) => [parentKey(line), line] as const)
+      .filter(([key]) => key != null),
+  );
+  const groups = new Map<string, DraftSettlementLine[]>();
+
+  for (const line of lines) {
+    if (draftLineIsCreditNote(line) && line.original_invoice_line_id) {
+      const parent = byId.get(String(line.original_invoice_line_id));
+      if (parent && !draftLineIsCreditNote(parent)) {
+        const children = groups.get(line.original_invoice_line_id) ?? [];
+        children.push(line);
+        groups.set(line.original_invoice_line_id, children);
+      }
+    } else if (!draftLineIsCreditNote(line) && parentKey(line)) {
+      groups.set(parentKey(line)!, []);
+    }
+  }
+
+  return lines
+    .filter((line) => !draftLineIsCreditNote(line) && parentKey(line))
+    .map((parent) => ({
+      parent,
+      children: groups.get(parentKey(parent)!) ?? [],
+    }));
+}
+
+function draftLineRows(
+  detail: ComisionesV2SettlementDetail,
+  query: string,
+) {
+  const normalizedQuery = normalizePlanSearch(query);
+  return draftLineGroups(detail).flatMap(({ parent, children }) => {
+    const group = [parent, ...children];
+    if (!normalizedQuery) return group;
+    const matches = group.some((line) =>
+      draftLineSearchValues(line).some((value) =>
+        normalizePlanSearch(String(value ?? "")).includes(normalizedQuery),
+      ),
+    );
+    return matches ? group : [];
+  });
+}
+
 function SettlementDraftDetailLayout({
   detail,
   loading,
@@ -4049,6 +4235,7 @@ function SettlementDraftDetailLayout({
   mode?: "DRAFT" | "ISSUED";
   exportBusy: "PDF" | "EXCEL" | null;
 }) {
+  const [lineSearch, setLineSearch] = useState("");
   if (loading)
     return (
       <div className="flex flex-1 items-center justify-center p-4 text-sm text-theme-text-muted">
@@ -4204,8 +4391,24 @@ function SettlementDraftDetailLayout({
               />
             </div>
           </div>
-        </div>
+         </div>
         <div className="min-h-0 flex-1 overflow-auto">
+          <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-2 border-b border-theme-border bg-theme-surface px-3 py-2 md:px-4">
+            <label className="relative flex min-w-[240px] flex-1 items-center sm:max-w-xl">
+              <Search className="pointer-events-none absolute left-2.5 h-3.5 w-3.5 text-theme-text-muted" />
+              <input
+                type="search"
+                value={lineSearch}
+                onChange={(event) => setLineSearch(event.target.value)}
+                placeholder="Buscar factura, NC, SKU, producto, cliente, proveedor o familia"
+                aria-label="Buscar líneas del snapshot"
+                className="h-8 w-full rounded-lg border border-theme-border bg-theme-surface pl-8 pr-3 text-xs text-theme-text outline-none placeholder:text-theme-text-muted/70 focus:border-theme-accent"
+              />
+            </label>
+            <span className="text-[10px] text-theme-text-muted">
+              {draftLineRows(detail, lineSearch).length.toLocaleString("es-CL")} líneas visibles
+            </span>
+          </div>
           <SupplierSettlementSummary detail={detail} />
           <table className="min-w-[1650px] w-full table-fixed whitespace-nowrap text-xs">
             <colgroup>
@@ -4243,20 +4446,25 @@ function SettlementDraftDetailLayout({
               </tr>
             </thead>
             <tbody className="divide-y divide-theme-border/60">
-              {detail.lines.map((line, index) => {
+             {draftLineRows(detail, lineSearch).map((line, index) => {
                 const status = snapshotStatus(line);
+                const isCreditNote = draftLineIsCreditNote(line);
                 return (
                   <tr
-                    key={`${line.source_document_bsale_id}-${line.source_document_number ?? "line"}-${index}`}
-                    className={
-                      status === "NO_ACTIVE_PLAN" || status === "NO_FAMILY_RATE"
-                        ? "bg-amber-500/[0.035]"
-                        : undefined
-                    }
+                    key={`${line.id ?? line.source_document_bsale_id}-${index}`}
+                    className={`${isCreditNote ? "bg-rose-500/[0.045]" : ""} ${status === "NO_ACTIVE_PLAN" || status === "NO_FAMILY_RATE" ? "bg-amber-500/[0.035]" : ""}`}
                   >
                     <td className="px-3 py-3 font-semibold text-theme-text">
-                      {line.source_document_number ??
-                        line.source_document_bsale_id}
+                      {isCreditNote ? (
+                        <div className="pl-3">
+                          <div>↳ NC {line.source_document_number ?? line.source_document_bsale_id}</div>
+                          <div className="mt-0.5 text-[10px] font-normal text-theme-text-muted">
+                            Factura {line.original_invoice_number ?? line.original_invoice_bsale_id ?? "—"}
+                          </div>
+                        </div>
+                      ) : (
+                        line.source_document_number ?? line.source_document_bsale_id
+                      )}
                     </td>
                     <td className="px-3 py-3">
                       <span
@@ -5800,6 +6008,7 @@ function planState(plan: ComisionesV2FamilyPlanListItem, today: string) {
 function Summary({
   label,
   value,
+  secondary,
   tone,
   wide = false,
   active = false,
@@ -5807,6 +6016,7 @@ function Summary({
 }: {
   label: string;
   value: string | number;
+  secondary?: string;
   tone?: "green" | "amber" | "red";
   wide?: boolean;
   active?: boolean;
@@ -5821,6 +6031,11 @@ function Summary({
       <div className="mt-0.5 truncate text-sm font-bold tabular-nums text-theme-text">
         {value}
       </div>
+      {secondary && (
+        <div className="mt-0.5 truncate text-[10px] tabular-nums text-theme-text-muted">
+          {secondary}
+        </div>
+      )}
     </>
   );
   return onClick ? (
