@@ -778,7 +778,9 @@ export async function getComisionesV2FamilyPlan(
   };
 }
 
-export async function listComisionesV2FamilyPlans(): Promise<{
+export async function listComisionesV2FamilyPlans(options?: {
+  archived?: boolean;
+}): Promise<{
   data: ComisionesV2FamilyPlanListItem[];
   suppliers: ComisionesV2Supplier[];
   error?: string;
@@ -824,14 +826,18 @@ export async function listComisionesV2FamilyPlans(): Promise<{
       suppliers: [],
       error: "Selecciona una compañía activa para consultar Comisiones V2.",
     };
-  const { data, error } = await supabase
+  let plansQuery = supabase
     .schema("comisiones")
     .from("commission_plans")
     .select(
       "id,supplier_id,plan_code,version_no,plan_type,valid_from,valid_to,status,active,supersedes_plan_id",
     )
     .eq("company_id", companyId)
-    .in("plan_type", ["FAMILY_FIXED_PERCENT", "SUPPLIER_SALES_TARGET"])
+    .in("plan_type", ["FAMILY_FIXED_PERCENT", "SUPPLIER_SALES_TARGET"]);
+  plansQuery = options?.archived
+    ? plansQuery.eq("status", "RETIRED").eq("active", false)
+    : plansQuery.eq("status", "ACTIVE").eq("active", true);
+  const { data, error } = await plansQuery
     .order("valid_from", { ascending: false })
     .order("version_no", { ascending: false });
   if (error) {
@@ -1097,6 +1103,84 @@ export async function saveComisionesV2FamilyPlan(input: {
       (
         data as { plan_id: string; plan_code: string; version_no: number }[]
       )[0] ?? null,
+  };
+}
+
+export type ComisionesV2PlanRemovalResult = {
+  result: "DELETED" | "ARCHIVED";
+  plan_id: string;
+  plan_code: string;
+  version_no: number;
+};
+
+export async function removeComisionesV2Plan(
+  planId: string,
+): Promise<{ data: ComisionesV2PlanRemovalResult | null; error?: string }> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { data: null, error: "No autorizado" };
+
+  const admin = portalAdmin();
+  const { data: permissions, error: permissionError } = await admin.rpc(
+    "get_user_permissions",
+    { p_user_id: user.id },
+  );
+  if (permissionError) {
+    logSupabaseError(
+      "Comisiones V2 plan removal permission validation error",
+      permissionError,
+    );
+    return {
+      data: null,
+      error: "No se pudo validar el permiso para eliminar la regla.",
+    };
+  }
+  const permissionCodes = (permissions ?? []).map(
+    (permission: { permission_code: string }) => permission.permission_code,
+  );
+  if (
+    !permissionCodes.includes("comisiones.v2.plans.manage") &&
+    !permissionCodes.includes("system.admin")
+  )
+    return {
+      data: null,
+      error: "No tienes permiso para eliminar reglas V2.",
+    };
+
+  const companyId = await getActiveCompanyId(user);
+  if (!companyId)
+    return {
+      data: null,
+      error: "Selecciona una compañía activa para eliminar la regla.",
+    };
+
+  const { data, error } = await supabase
+    .schema("comisiones")
+    .rpc("remove_commission_plan", {
+      p_company_id: companyId,
+      p_plan_id: planId,
+    });
+  if (error) {
+    logSupabaseError("Comisiones V2 plan removal error", error);
+    const message = error.message.toUpperCase();
+    if (message.includes("PLAN_NOT_ACTIVE"))
+      return {
+        data: null,
+        error: "La regla ya no está vigente. Se actualizará la lista.",
+      };
+    if (message.includes("PLAN_NOT_FOUND"))
+      return { data: null, error: "La regla ya no existe." };
+    if (message.includes("PERMISSION_DENIED"))
+      return { data: null, error: "No tienes permiso para eliminar reglas V2." };
+    return {
+      data: null,
+      error: error.message || "No se pudo eliminar la regla.",
+    };
+  }
+  return {
+    data: (data as ComisionesV2PlanRemovalResult[] | null)?.[0] ?? null,
   };
 }
 
