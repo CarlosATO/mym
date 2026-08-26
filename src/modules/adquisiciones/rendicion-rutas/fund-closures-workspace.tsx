@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react'
 import { getPendingRouteFundGroups, getFundClosures, getFundClosureById, executeCloseFundClosure, addClosureExpense, addClosureDeposit, getAttachmentSignedUrl, canCancelFundClosure, cancelFundClosure } from '@/app/actions/adquisiciones/route-fund-closures'
-import { PendingRouteFundGroup } from './fund-closures-types'
+import { PendingRouteFundGroup, RouteFundClosure } from './fund-closures-types'
 import { CreateFundClosureDialog } from './components/create-fund-closure-dialog'
 import { RefreshCw, Plus, AlertTriangle, FileText, Wallet, Eye, Download, Paperclip, Search } from 'lucide-react'
 import { toast } from 'sonner'
@@ -10,6 +10,28 @@ import { formatCivilDate, formatInstantInSantiago, todayInSantiago } from '@/lib
 
 function formatPendingAmount(value: number) {
   return `$${Number(value || 0).toLocaleString('es-CL')}`
+}
+
+type PhysicalClosureData = Pick<RouteFundClosure, 'total_cash_received' | 'total_expenses'> & {
+  cash_delivered?: number | null
+  physical_difference?: number | null
+}
+
+function physicalClosureBalance(closure: PhysicalClosureData) {
+  const expected = Number(closure.total_cash_received || 0) - Number(closure.total_expenses || 0)
+  const delivered = Number(closure.cash_delivered || 0)
+  const difference = Number(closure.physical_difference ?? delivered - expected)
+  return { expected, delivered, difference, pending: expected - delivered }
+}
+
+function physicalDifferenceLabel(difference: number) {
+  if (difference === 0) return `Cuadrado ${formatPendingAmount(0)}`
+  return `${difference < 0 ? 'Faltante' : 'Sobrante'} ${formatPendingAmount(Math.abs(difference))}`
+}
+
+function physicalPendingLabel(balance: ReturnType<typeof physicalClosureBalance>) {
+  if (balance.difference === 0) return formatPendingAmount(0)
+  return `${balance.difference < 0 ? 'Faltante' : 'Sobrante'} ${formatPendingAmount(Math.abs(balance.pending))}`
 }
 
 function pendingGroupKey(group: PendingRouteFundGroup) {
@@ -265,25 +287,27 @@ export function FundClosuresWorkspace() {
                   <tr>
                     <th className="p-3">Nº Cierre</th>
                     <th className="p-3">Fecha</th>
-                    <th className="p-3">Estado</th>
-                    <th className="p-3 text-center">Guías</th>
-                    <th className="p-3 text-center">Facturas</th>
+                     <th className="p-3">Estado</th>
+                     <th className="p-3 text-center">Guías</th>
+                     <th className="p-3 text-center">Cobros</th>
+                     <th className="p-3 text-center">Facturas</th>
                     <th className="p-3 text-right">Efectivo</th>
                     <th className="p-3 text-right">Cheques</th>
                     <th className="p-3 text-right">Gastos</th>
                     <th className="p-3 text-right">Depósitos</th>
                     <th className="p-3 text-right">Saldo Pdte</th>
-                    {hasCancelPermission && <th className="p-3 text-center">Custodio</th>}
+                     <th className="p-3 text-center">Custodio</th>
                     <th className="p-3 text-center">Adjuntos</th>
                     <th className="p-3 text-center">Acciones</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-theme-border">
                   {closures.length === 0 ? (
-                    <tr><td colSpan={12} className="p-8 text-center text-theme-text-muted">No se encontraron cierres con los filtros aplicados.</td></tr>
+                    <tr><td colSpan={13} className="p-8 text-center text-theme-text-muted">No se encontraron cierres con los filtros aplicados.</td></tr>
                   ) : closures.map(closure => {
+                    const physicalBalance = physicalClosureBalance(closure);
                     const uniqueGuides = [...new Set((closure.items || []).map((i:any) => i.guide_number).filter(Boolean))];
-                    const uniqueInvoices = [...new Set((closure.items || []).map((i:any) => i.invoice_number).filter(Boolean))];
+                     const uniqueInvoices = [...new Set((closure.items || []).map((i:any) => i.invoice_number).filter(Boolean))];
                     
                     const guideText = uniqueGuides.length > 0 
                       ? (uniqueGuides.length <= 2 ? uniqueGuides.join(', ') : `${uniqueGuides.length} guías`) 
@@ -302,17 +326,16 @@ export function FundClosuresWorkspace() {
                         <span className={`px-2 py-1 text-[11px] font-bold rounded ${closure.status === 'CLOSED' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : closure.status === 'WITH_DIFFERENCE' ? 'bg-orange-500/10 text-orange-600 dark:text-orange-400' : closure.status === 'CANCELLED' ? 'bg-red-500/10 text-red-600 dark:text-red-400' : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'}`}>{closure.status}</span>
                       </td>
                       <td className="p-3 text-center font-mono text-xs text-theme-text" title={uniqueGuides.join(', ')}>{guideText}</td>
-                      <td className="p-3 text-center font-mono text-xs text-theme-text" title={uniqueInvoices.join(', ')}>{invoiceText}</td>
+                      <td className="p-3 text-center font-mono text-xs text-theme-text">{closure.payment_count ?? new Set((closure.items || []).map((item: any) => item.payment_id).filter(Boolean)).size}</td>
+                      <td className="p-3 text-center font-mono text-xs text-theme-text" title={uniqueInvoices.join(', ')}>{closure.invoice_count ?? invoiceText}</td>
                       <td className="p-3 text-right font-mono text-theme-text">${Number(closure.total_cash_received).toLocaleString('es-CL')}</td>
                       <td className="p-3 text-right font-mono text-theme-text">${Number(closure.total_check_received).toLocaleString('es-CL')}</td>
                       <td className="p-3 text-right font-mono text-red-600 dark:text-red-400">${Number(closure.total_expenses).toLocaleString('es-CL')}</td>
                       <td className="p-3 text-right font-mono text-emerald-600 dark:text-emerald-400">${Number(closure.total_deposits).toLocaleString('es-CL')}</td>
-                      <td className="p-3 text-right font-mono font-bold text-theme-text">${Number(closure.total_pending).toLocaleString('es-CL')}</td>
-                      {hasCancelPermission && (
-                        <td className="p-3 text-center text-xs text-theme-text-muted">
-                          {closure.custody_user ? `${closure.custody_user.first_name || ''} ${closure.custody_user.last_name || ''}` : '---'}
-                        </td>
-                      )}
+                      <td className={`p-3 text-right font-mono font-bold ${physicalBalance.difference === 0 ? 'text-theme-text' : 'text-orange-500'}`}>{physicalPendingLabel(physicalBalance)}</td>
+                       <td className="p-3 text-center text-xs text-theme-text-muted">
+                         {closure.custody_user ? `${closure.custody_user.nombre || ''} ${closure.custody_user.apellido || ''}`.trim() : '---'}
+                       </td>
                       <td className="p-3 text-center">
                         {attachCount > 0 ? (
                           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-theme-text/10 text-theme-text text-xs font-bold font-mono"><Paperclip className="w-3 h-3" /> {attachCount}</span>
@@ -468,13 +491,28 @@ function FundClosureDetail({ closureId, onBack }: { closureId: string; onBack: (
 
   const closure = data.closure
   const isClosed = closure.status === 'CLOSED' || closure.status === 'CANCELLED'
+  const physicalBalance = physicalClosureBalance(closure)
+  const paymentRows = data.items.map((item: any) => {
+    const allocations = Array.isArray(item.allocations) && item.allocations.length > 0
+      ? item.allocations
+      : [{ invoice_number: item.invoice_number, customer_name: item.customer_name }]
+    return {
+      ...item,
+      allocations,
+      customers: [...new Set(allocations.map((allocation: any) => allocation.customer_name).filter(Boolean))],
+      invoiceNumbers: [...new Set(allocations.map((allocation: any) => allocation.invoice_number).filter(Boolean))],
+    }
+  })
 
   return (
     <div className="flex flex-col h-full bg-theme-surface">
       <div className="flex flex-col md:flex-row md:items-center gap-4 border-b border-theme-border px-4 py-3 relative">
         <button onClick={onBack} className="text-sm font-bold text-theme-text-muted hover:text-theme-text">← Volver</button>
         <div className="flex items-center gap-3">
-          <h2 className="text-xl font-bold text-theme-text">Cierre {closure.closure_number}</h2>
+          <div>
+            <h2 className="text-xl font-bold text-theme-text">Cierre {closure.closure_number}</h2>
+            <p className="text-xs text-theme-text-muted">Custodio: {closure.custody_user ? `${closure.custody_user.nombre || ''} ${closure.custody_user.apellido || ''}`.trim() : 'No disponible'}</p>
+          </div>
           <span className={`px-2 py-0.5 text-xs font-bold rounded ${closure.status === 'CLOSED' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : closure.status === 'WITH_DIFFERENCE' ? 'bg-orange-500/10 text-orange-600 dark:text-orange-400' : closure.status === 'CANCELLED' ? 'bg-red-500/10 text-red-600 dark:text-red-400' : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'}`}>{closure.status}</span>
         </div>
         
@@ -638,19 +676,19 @@ function FundClosureDetail({ closureId, onBack }: { closureId: string; onBack: (
               <table className="w-full text-left text-sm text-theme-text">
                 <thead className="bg-theme-text/5 border-b border-theme-border">
                   <tr>
-                    <th className="p-3">Guía</th>
-                    <th className="p-3">Factura</th>
+                     <th className="p-3">Rendición / Guía</th>
+                     <th className="p-3">Facturas</th>
                     <th className="p-3">Cliente</th>
                     <th className="p-3">Método</th>
                     <th className="p-3 text-right">Monto</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-theme-border">
-                  {data.items.map((item: any) => (
-                    <tr key={item.id}>
-                      <td className="p-3 font-mono text-theme-text-muted">{item.guide_number || '---'}</td>
-                      <td className="p-3 font-mono">{item.invoice_number}</td>
-                      <td className="p-3">{item.customer_name}</td>
+                   {paymentRows.map((item: any) => (
+                     <tr key={item.id}>
+                       <td className="p-3 font-mono text-theme-text-muted"><span className="block">{item.settlement_number || '---'}</span><span className="block text-xs">{item.guide_number || '---'}</span></td>
+                       <td className="p-3" title={item.invoiceNumbers.join(', ')}>{item.invoiceNumbers.length} factura{item.invoiceNumbers.length === 1 ? '' : 's'}</td>
+                       <td className="p-3">{item.customers.join(', ') || 'Cliente no disponible'}</td>
                       <td className="p-3">
                         <span className="px-2 py-0.5 rounded bg-theme-text/10 text-[11px] font-bold">
                           {item.payment_method === 'CASH' ? 'Efectivo' : 'Cheque'}
@@ -745,36 +783,47 @@ function FundClosureDetail({ closureId, onBack }: { closureId: string; onBack: (
         <div className="flex flex-col gap-3">
            <h3 className="font-bold text-theme-text flex items-center gap-2">Resumen</h3>
            <div className="border border-theme-border rounded-xl bg-theme-surface p-4 flex flex-col gap-3 text-sm text-theme-text">
-             <div className="flex justify-between items-center text-theme-text-muted">
-               <span>Efectivo Recibido</span>
-               <span className="font-mono">${Number(closure.total_cash_received).toLocaleString('es-CL')}</span>
-             </div>
+              <div className="flex justify-between items-center text-theme-text-muted">
+                <span>Efectivo Recibido</span>
+                <span className="font-mono">${Number(closure.total_cash_received).toLocaleString('es-CL')}</span>
+              </div>
              <div className="flex justify-between items-center text-theme-text-muted">
                <span>Cheques Recibidos</span>
                <span className="font-mono">${Number(closure.total_check_received).toLocaleString('es-CL')}</span>
              </div>
-             <div className="h-px bg-theme-border my-1" />
-             <div className="flex justify-between items-center font-bold">
-               <span>Total a Rendir</span>
-               <span className="font-mono">${(Number(closure.total_cash_received) + Number(closure.total_check_received)).toLocaleString('es-CL')}</span>
-             </div>
-             
-             <div className="flex justify-between items-center text-red-500 mt-2">
-               <span>Gastos</span>
-               <span className="font-mono">-${Number(closure.total_expenses).toLocaleString('es-CL')}</span>
-             </div>
-             <div className="flex justify-between items-center text-emerald-500">
-               <span>Depósitos/Entregas</span>
-               <span className="font-mono">-${Number(closure.total_deposits).toLocaleString('es-CL')}</span>
-             </div>
-             
-             <div className="h-px bg-theme-border my-1" />
-             <div className="flex justify-between items-center font-bold text-lg">
-               <span>Saldo Pendiente</span>
-               <span className={`font-mono ${Number(closure.total_pending) > 0 ? 'text-orange-500' : 'text-theme-text'}`}>
-                 ${Number(closure.total_pending).toLocaleString('es-CL')}
-               </span>
-             </div>
+              <div className="h-px bg-theme-border my-1" />
+              <div className="flex justify-between items-center font-bold">
+                <span>Efectivo esperado a entregar</span>
+                <span className="font-mono">{formatPendingAmount(physicalBalance.expected)}</span>
+              </div>
+              <div className="flex justify-between items-center text-red-500 mt-2">
+                <span>Gastos</span>
+                <span className="font-mono">-${Number(closure.total_expenses).toLocaleString('es-CL')}</span>
+              </div>
+              <div className="flex justify-between items-center text-theme-text-muted">
+                <span>Efectivo entregado</span>
+                <span className="font-mono">{formatPendingAmount(physicalBalance.delivered)}</span>
+              </div>
+              <div className={`flex justify-between items-center font-semibold ${physicalBalance.difference === 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-orange-500'}`}>
+                <span>Diferencia</span>
+                <span className="font-mono">{physicalDifferenceLabel(physicalBalance.difference)}</span>
+              </div>
+              <div className="flex justify-between items-center text-emerald-500">
+                <span>Depósitos registrados</span>
+                <span className="font-mono">{formatPendingAmount(Number(closure.total_deposits))}</span>
+              </div>
+
+              <div className="h-px bg-theme-border my-1" />
+              <div className="flex justify-between items-center font-bold text-lg">
+                <span>Saldo Pendiente</span>
+                <span className={`font-mono ${physicalBalance.difference === 0 ? 'text-theme-text' : 'text-orange-500'}`}>
+                  {physicalPendingLabel(physicalBalance)}
+                </span>
+              </div>
+              <div className="flex justify-between items-center text-theme-text-muted">
+                <span>Resultado</span>
+                <span className="font-semibold">{physicalDifferenceLabel(physicalBalance.difference)}</span>
+              </div>
            </div>
         </div>
       </div>

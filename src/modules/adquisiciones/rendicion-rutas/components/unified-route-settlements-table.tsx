@@ -13,8 +13,7 @@ const ROUTE_SETTLEMENT_COLUMNS: OperationalTableColumn[] = [
   { id: 'route', defaultWidth: 140, minWidth: 115, maxWidth: 280 },
   { id: 'driver', defaultWidth: 120, minWidth: 105, maxWidth: 240 },
   { id: 'seller', defaultWidth: 120, minWidth: 105, maxWidth: 240 },
-  { id: 'routeTotal', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
-  { id: 'settleableTotal', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
+  { id: 'expectedTotal', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
   { id: 'cashExpected', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
   { id: 'checkExpected', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
   { id: 'cashReceived', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
@@ -22,7 +21,7 @@ const ROUTE_SETTLEMENT_COLUMNS: OperationalTableColumn[] = [
   { id: 'cashDifference', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
   { id: 'transferConfirmed', defaultWidth: 115, minWidth: 105, maxWidth: 190 },
   { id: 'transferPending', defaultWidth: 120, minWidth: 105, maxWidth: 200 },
-  { id: 'settleableInvoices', defaultWidth: 105, minWidth: 95, maxWidth: 180 },
+  { id: 'invoiceProgress', defaultWidth: 105, minWidth: 95, maxWidth: 180 },
   { id: 'status', defaultWidth: 140, minWidth: 120, maxWidth: 220 },
   { id: 'actions', defaultWidth: 125, minWidth: 115, maxWidth: 190, sticky: 'right', resizable: false },
 ]
@@ -33,8 +32,6 @@ interface UnifiedTableProps {
   onRowDoubleClick: (row: RouteSettlementsDashboardRow) => void
   filterStatus: string
   setFilterStatus: (status: string) => void
-  paymentFilter: 'CASH_ONLY' | 'ALL' | 'CREDIT'
-  setPaymentFilter: (filter: 'CASH_ONLY' | 'ALL' | 'CREDIT') => void
   canCreateSettlement: boolean
   onStartSettlement: (row: RouteSettlementsDashboardRow) => void
 }
@@ -45,8 +42,6 @@ export function UnifiedRouteSettlementsTable({
   onRowDoubleClick,
   filterStatus,
   setFilterStatus,
-  paymentFilter,
-  setPaymentFilter,
   canCreateSettlement,
   onStartSettlement,
 }: UnifiedTableProps) {
@@ -67,10 +62,6 @@ export function UnifiedRouteSettlementsTable({
          if (!isRendida && row.operational_status !== filterStatus) return false
        }
 
-       const countedAmount = row.total_cash_expected + row.total_check_expected
-      if (paymentFilter === 'CASH_ONLY' && countedAmount <= 0) return false
-      if (paymentFilter === 'CREDIT' && row.total_credit_amount <= 0) return false
-
       if (searchTerm) {
         const lowerSearch = searchTerm.toLowerCase()
         const matchesGuide = row.guide_number?.toLowerCase().includes(lowerSearch)
@@ -86,7 +77,7 @@ export function UnifiedRouteSettlementsTable({
 
       return true
     })
-  }, [data, dateFrom, dateTo, filterStatus, paymentFilter, searchTerm])
+  }, [data, dateFrom, dateTo, filterStatus, searchTerm])
 
   /** Clic simple: solo selecciona la fila (resalta), no abre ni crea nada */
   const handleRowClick = (rowId: string) => {
@@ -163,16 +154,6 @@ export function UnifiedRouteSettlementsTable({
             className="text-xs bg-theme-bg/40 border border-theme-border rounded-lg px-2.5 py-1.5 text-theme-text focus:outline-none focus:border-theme-accent"
             aria-label="Fecha hasta"
           />
-           <select
-            value={paymentFilter}
-            onChange={(e) => setPaymentFilter(e.target.value as 'CASH_ONLY' | 'ALL' | 'CREDIT')}
-            className="text-xs bg-theme-bg/40 border border-theme-border rounded-lg px-2.5 py-1.5 text-theme-text focus:outline-none focus:border-theme-accent"
-            aria-label="Filtro tipo de pago"
-          >
-            <option value="CASH_ONLY">Solo rendibles</option>
-            <option value="ALL">Todos</option>
-            <option value="CREDIT">Crédito</option>
-          </select>
           <select
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
@@ -193,9 +174,9 @@ export function UnifiedRouteSettlementsTable({
            >
              Restablecer anchos
            </button>
-           {(filterStatus !== 'ALL' || paymentFilter !== 'CASH_ONLY' || searchTerm !== '' || dateFrom !== '' || dateTo !== '') && (
+            {(filterStatus !== 'ALL' || searchTerm !== '' || dateFrom !== '' || dateTo !== '') && (
             <button
-              onClick={() => { setFilterStatus('ALL'); setPaymentFilter('CASH_ONLY'); setSearchTerm(''); setDateFrom(''); setDateTo('') }}
+               onClick={() => { setFilterStatus('ALL'); setSearchTerm(''); setDateFrom(''); setDateTo('') }}
               className="p-1.5 rounded-lg text-theme-text-muted hover:text-red-500 hover:bg-red-500/10 transition-colors shrink-0"
               title="Limpiar filtros"
             >
@@ -218,8 +199,7 @@ export function UnifiedRouteSettlementsTable({
                <th className="relative border-r border-theme-border/30 px-3 py-2.5 font-bold text-theme-text-muted">Ruta{resizeHandle('route')}</th>
                <th className="relative border-r border-theme-border/30 px-3 py-2.5 font-bold text-theme-text-muted">Conductor{resizeHandle('driver')}</th>
                <th className="relative border-r border-theme-border/30 px-3 py-2.5 font-bold text-theme-text-muted">Vendedor{resizeHandle('seller')}</th>
-               <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Total ruta{resizeHandle('routeTotal')}</th>
-               <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Total rendible{resizeHandle('settleableTotal')}</th>
+                <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Total guía{resizeHandle('expectedTotal')}</th>
                <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Ef. esperado{resizeHandle('cashExpected')}</th>
                 <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Cheque esp.{resizeHandle('checkExpected')}</th>
                  <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Ef. recibido{resizeHandle('cashReceived')}</th>
@@ -227,7 +207,7 @@ export function UnifiedRouteSettlementsTable({
                  <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Dif. ef.{resizeHandle('cashDifference')}</th>
                <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Transf. conf.{resizeHandle('transferConfirmed')}</th>
                <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-center font-bold text-theme-text-muted">Transf. pend.{resizeHandle('transferPending')}</th>
-               <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-center font-bold text-theme-text-muted">Fact. rendibles{resizeHandle('settleableInvoices')}</th>
+                <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-center font-bold text-theme-text-muted">Facturas{resizeHandle('invoiceProgress')}</th>
                <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-center font-bold text-theme-text-muted">Estado{resizeHandle('status')}</th>
                <th className="sticky right-0 z-30 border-l border-theme-border bg-theme-surface px-3 py-2.5 text-center font-bold text-theme-text-muted">Acción</th>
             </tr>
@@ -235,7 +215,7 @@ export function UnifiedRouteSettlementsTable({
           <tbody className="divide-y divide-theme-border/50">
             {filteredData.length === 0 ? (
               <tr>
-                 <td colSpan={18} className="px-4 py-12 text-center text-theme-text-muted">
+                  <td colSpan={17} className="px-4 py-12 text-center text-theme-text-muted">
                   {data.length === 0
                     ? 'No hay guías despachadas disponibles para rendición.'
                     : 'No se encontraron resultados para los filtros seleccionados.'}
@@ -244,7 +224,6 @@ export function UnifiedRouteSettlementsTable({
             ) : (
               filteredData.map((item) => {
                 const isSelected = selectedRowId === item.route_guide_id
-                const totalRendible = item.total_cash_expected + item.total_check_expected
                 const isTerminal = item.operational_status === 'CLOSED' || item.operational_status === 'CANCELLED'
                 const actionLabel = !item.settlement_id
                   ? 'Iniciar rendición'
@@ -272,8 +251,7 @@ export function UnifiedRouteSettlementsTable({
                      <td className="truncate px-3 py-2.5 text-theme-text" title={item.route_name || undefined}>{item.route_name || '—'}</td>
                      <td className="truncate px-3 py-2.5 text-theme-text" title={item.driver_name || undefined}>{item.driver_name || '—'}</td>
                      <td className="truncate px-3 py-2.5 text-theme-text" title={item.seller_name || undefined}>{item.seller_name || '—'}</td>
-                     <td className="truncate px-3 py-2.5 text-right font-semibold tabular-nums text-theme-text" title={formatCurrency(item.total_route_amount)}>{formatCurrency(item.total_route_amount)}</td>
-                     <td className="truncate px-3 py-2.5 text-right font-semibold tabular-nums text-theme-text" title={formatCurrency(totalRendible)}>{formatCurrency(totalRendible)}</td>
+                      <td className="truncate px-3 py-2.5 text-right font-semibold tabular-nums text-theme-text" title={formatCurrency(item.total_route_amount)}>{formatCurrency(item.total_route_amount)}</td>
                       <td className="truncate px-3 py-2.5 text-right font-semibold tabular-nums text-theme-text" title={formatCurrency(item.total_cash_expected)}>{formatCurrency(item.total_cash_expected)}</td>
                       <td className="truncate px-3 py-2.5 text-right font-semibold tabular-nums text-theme-text" title={formatCurrency(item.total_check_expected)}>{formatCurrency(item.total_check_expected)}</td>
                       <td className="truncate px-3 py-2.5 text-right font-semibold tabular-nums text-green-600 dark:text-green-400" title={item.settlement_id ? formatCurrency(item.total_cash_received) : '—'}>
@@ -297,7 +275,7 @@ export function UnifiedRouteSettlementsTable({
                     </td>
                      <td className="truncate px-3 py-2.5 text-center tabular-nums">
                       <span className="px-2 py-0.5 rounded-md bg-theme-text/5 text-theme-text font-medium">
-                        {item.settlement_id ? `${item.paid_count} / ${item.total_rendible_count}` : `0 / ${item.total_rendible_count}`}
+                         {item.settlement_id ? `${item.paid_count} / ${item.total_invoice_count}` : `0 / ${item.total_invoice_count}`}
                       </span>
                     </td>
                      <td className="truncate px-3 py-2.5 text-center">

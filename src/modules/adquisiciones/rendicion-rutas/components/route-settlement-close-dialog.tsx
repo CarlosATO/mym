@@ -27,7 +27,13 @@ export function RouteSettlementCloseDialog({
     .filter(payment => !payment.voided_at && payment.verification_status === 'CONFIRMED')
   const activeExpenses = detail.expenses.filter(expense => expense.status === 'ACTIVE')
   const totalReceived = activeConfirmedPayments.reduce((total, payment) => total + Number(payment.amount_received || 0), 0)
-  const totalUnapplied = invoices.reduce((total, invoice) => total + Number(invoice.unapplied_amount || 0), 0)
+  const notReceivedByResolution = invoices.reduce<Record<string, number>>((breakdown, invoice) => {
+    if (!invoice.resolved_for_settlement || Number(invoice.unapplied_amount || 0) <= 0) return breakdown
+    const resolution = invoice.resolution_type ?? 'OTHER'
+    breakdown[resolution] = (breakdown[resolution] ?? 0) + Number(invoice.unapplied_amount || 0)
+    return breakdown
+  }, {})
+  const totalNotReceived = Object.values(notReceivedByResolution).reduce((total, amount) => total + amount, 0)
   const paymentMethods = {
     CASH: activeConfirmedPayments.filter(payment => payment.payment_method_received === 'CASH').reduce((total, payment) => total + Number(payment.amount_received || 0), 0),
     TRANSFER: activeConfirmedPayments.filter(payment => payment.payment_method_received === 'TRANSFER').reduce((total, payment) => total + Number(payment.amount_received || 0), 0),
@@ -52,14 +58,14 @@ export function RouteSettlementCloseDialog({
 
   return (
     <Dialog open={open} onOpenChange={openState => { if (!isClosing) onOpenChange(openState) }}>
-      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto border-theme-border bg-theme-surface text-theme-text">
+      <DialogContent className="w-[calc(100vw-2rem)] max-h-[90vh] max-w-4xl overflow-y-auto border-theme-border bg-theme-surface text-theme-text sm:max-w-4xl lg:max-w-5xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-theme-text"><LockKeyhole className="h-4 w-4 text-theme-text-muted" />Cerrar rendición</DialogTitle>
           <DialogDescription className="text-theme-text-muted">{settlement.settlement_number}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 text-xs">
-          <div className="grid grid-cols-2 gap-3 rounded-lg border border-theme-border px-3 py-3 sm:grid-cols-4">
+        <div className="space-y-3 text-xs">
+          <div className="grid grid-cols-2 gap-3 rounded-lg border border-theme-border px-4 py-3 sm:grid-cols-4 lg:grid-cols-8">
             <Metric label="Facturas totales" value={settlement.invoice_count} />
             <Metric label="Resueltas" value={`${settlement.resolved_invoice_count} / ${settlement.invoice_count}`} />
             <Metric label="Por resolver" value={settlement.unresolved_invoice_count} />
@@ -70,26 +76,40 @@ export function RouteSettlementCloseDialog({
             <Metric label="No entregadas" value={settlement.not_delivered_count} />
           </div>
 
-          <section className="rounded-lg border border-theme-border px-3 py-3">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Resumen financiero</p>
-            <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Metric label="Total esperado" value={formatCurrency(Number(settlement.total_expected) || 0)} />
-              <Metric label="Total recibido" value={formatCurrency(totalReceived)} />
-              <Metric label="Sin aplicar" value={formatCurrency(totalUnapplied)} />
-              <Metric label="Gastos de ruta" value={formatCurrency(totalExpenses)} />
-            </div>
-          </section>
+          <div className="grid gap-3 lg:grid-cols-2">
+            <section className="rounded-lg border border-theme-border px-4 py-3">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Resumen financiero</p>
+              <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-2">
+                <Metric label="Total esperado" value={formatCurrency(Number(settlement.total_expected) || 0)} />
+                <Metric label="Total recibido" value={formatCurrency(totalReceived)} />
+                <div>
+                  <Metric label="No recibido" value={formatCurrency(totalNotReceived)} />
+                  {totalNotReceived > 0 && (
+                    <div className="mt-1 space-y-0.5 text-[11px] text-theme-text-muted">
+                      {Object.entries(notReceivedByResolution).map(([resolution, amount]) => (
+                        <div key={resolution} className="flex items-center justify-between gap-2">
+                          <span>{resolutionLabel(resolution)}:</span>
+                          <span className="font-semibold tabular-nums text-theme-text">{formatCurrency(amount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <Metric label="Gastos de ruta" value={formatCurrency(totalExpenses)} />
+              </div>
+            </section>
 
-          <section className="rounded-lg border border-theme-border px-3 py-3">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Medios recibidos</p>
-            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-              <SummaryInline label="Efectivo" value={formatCurrency(paymentMethods.CASH)} />
-              <SummaryInline label="Transferencias" value={formatCurrency(paymentMethods.TRANSFER)} />
-              <SummaryInline label="Cheques" value={formatCurrency(paymentMethods.CHECK)} />
-            </div>
-          </section>
+            <section className="rounded-lg border border-theme-border px-4 py-3">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Medios recibidos</p>
+              <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
+                <SummaryInline label="Efectivo" value={formatCurrency(paymentMethods.CASH)} />
+                <SummaryInline label="Transferencias" value={formatCurrency(paymentMethods.TRANSFER)} />
+                <SummaryInline label="Cheques" value={formatCurrency(paymentMethods.CHECK)} />
+              </div>
+            </section>
+          </div>
 
-          <section className="rounded-lg border border-theme-border px-3 py-3">
+          <section className="rounded-lg border border-theme-border px-4 py-3">
             <p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Gastos de ruta</p>
             {activeExpenses.length > 0 ? (
               <div className="mt-2 space-y-1 text-xs">
@@ -140,4 +160,12 @@ function expenseLabel(expense: RouteSettlementDetailExpense) {
   if (expense.expense_type === 'COMBUSTIBLE') return 'Combustible'
   if (expense.expense_type === 'VIATICOS') return 'Viáticos'
   return 'Mantenimiento'
+}
+
+function resolutionLabel(resolution: string) {
+  if (resolution === 'CREDIT') return 'Crédito'
+  if (resolution === 'PENDING_PAYMENT') return 'Pago pendiente'
+  if (resolution === 'NOT_DELIVERED') return 'No entregada'
+  if (resolution === 'REVIEW_REQUIRED') return 'Revisión'
+  return 'Otros'
 }

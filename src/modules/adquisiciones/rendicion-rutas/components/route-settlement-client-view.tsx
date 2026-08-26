@@ -50,6 +50,27 @@ function clientOperationalStatus(client: RouteSettlementDetailClient) {
       className: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300',
     }
   }
+  const hasCreditResolution = client.invoices.some(invoice =>
+    invoice.resolution_type === 'CREDIT' && invoice.unapplied_amount > 0,
+  )
+  if (hasCreditResolution) {
+    return {
+      label: 'Crédito',
+      className: 'border-theme-border bg-theme-text/5 text-theme-text-muted',
+    }
+  }
+  if (client.invoices.some(invoice => invoice.resolution_type === 'PENDING_PAYMENT')) {
+    return {
+      label: 'Pago pendiente',
+      className: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300',
+    }
+  }
+  if (client.invoices.some(invoice => invoice.resolution_type === 'NOT_DELIVERED')) {
+    return {
+      label: 'No entregada',
+      className: 'border-theme-border bg-theme-text/5 text-theme-text-muted',
+    }
+  }
   return {
     label: client.pending_amount > 0 ? 'Rendido con saldo' : 'Rendido',
     className: client.pending_amount > 0
@@ -84,6 +105,13 @@ function paymentMethodLabel(method: string) {
   if (method === 'CHECK') return 'Cheque'
   if (method === 'TRANSFER') return 'Transferencia'
   return method
+}
+
+function invoiceReceivedMethods(invoice: RouteSettlementDetailInvoice, payments: RouteSettlementDetailPayment[]) {
+  const methods = payments
+    .filter(payment => !payment.voided_at && payment.allocations.some(allocation => allocation.settlement_item_id === invoice.settlement_item_id))
+    .map(payment => paymentMethodLabel(payment.payment_method_received))
+  return [...new Set(methods)].join(', ') || 'Sin Payment'
 }
 
 export function RouteSettlementClientView({ detail, onClose, canUpdateSettlement, canCloseSettlement, onPaymentSaved }: RouteSettlementClientViewProps) {
@@ -209,7 +237,7 @@ export function RouteSettlementClientView({ detail, onClose, canUpdateSettlement
       </main>
 
       <Sheet open={selectedClient !== null} onOpenChange={open => !open && setSelectedClientId(null)}>
-        <SheetContent side="right" className="w-full overflow-y-auto border-theme-border bg-theme-surface sm:max-w-2xl">
+        <SheetContent side="right" className="w-full overflow-y-auto border-theme-border bg-theme-surface sm:max-w-3xl lg:max-w-5xl">
           {selectedClient && (
             <ClientDetail
               client={selectedClient}
@@ -286,6 +314,16 @@ function SettlementSummary({ detail, isClosed }: { detail: RouteSettlementDetail
     TRANSFER: activeConfirmedPayments.filter(payment => payment.payment_method_received === 'TRANSFER').reduce((total, payment) => total + Number(payment.amount_received || 0), 0),
     CHECK: activeConfirmedPayments.filter(payment => payment.payment_method_received === 'CHECK').reduce((total, payment) => total + Number(payment.amount_received || 0), 0),
   }
+  const expectedMethods = {
+    CASH: invoices.filter(invoice => invoice.expected_payment_method === 'CASH').reduce((total, invoice) => total + Number(invoice.expected_amount || 0), 0),
+    CHECK: invoices.filter(invoice => invoice.expected_payment_method === 'CHECK').reduce((total, invoice) => total + Number(invoice.expected_amount || 0), 0),
+    TRANSFER: invoices.filter(invoice => invoice.expected_payment_method === 'TRANSFER').reduce((total, invoice) => total + Number(invoice.expected_amount || 0), 0),
+    CREDIT: invoices.filter(invoice => invoice.expected_payment_method === 'CREDIT').reduce((total, invoice) => total + Number(invoice.expected_amount || 0), 0),
+  }
+  const resolvedMethods = {
+    ...paymentMethods,
+    CREDIT: invoices.filter(invoice => invoice.resolution_type === 'CREDIT').reduce((total, invoice) => total + Number(invoice.unapplied_amount || 0), 0),
+  }
   const situations = invoices.reduce((counts, invoice) => {
     if (invoice.invoice_result === 'PAID') counts.paid += 1
     if (invoice.invoice_result === 'PENDING_PAYMENT') counts.pending += 1
@@ -301,42 +339,54 @@ function SettlementSummary({ detail, isClosed }: { detail: RouteSettlementDetail
       : 'En progreso'
 
   return (
-    <section className="mb-6 rounded-xl border border-theme-border bg-theme-surface/70 p-4 lg:p-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <section className="mb-4 rounded-xl border border-theme-border bg-theme-surface/70 p-3 lg:p-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-sm font-bold text-theme-text">Resumen de la rendición</h2>
-          <p className="mt-0.5 text-xs text-theme-text-muted">Estado financiero y operacional actual.</p>
+          <p className="mt-0.5 text-[11px] text-theme-text-muted">Estado financiero y operacional actual.</p>
         </div>
-        <span className="inline-flex w-fit rounded-full border border-theme-border bg-theme-text/5 px-2.5 py-1 text-[11px] font-semibold text-theme-text">{workflowLabel}</span>
+        <span className="inline-flex w-fit rounded-full border border-theme-border bg-theme-text/5 px-2 py-0.5 text-[10px] font-semibold text-theme-text">{workflowLabel}</span>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
         <SummaryMetric label="Total esperado" value={displayAmount(totalExpected)} />
         <SummaryMetric label="Total recibido" value={displayAmount(totalReceived)} />
         <SummaryMetric label="Sin aplicar" value={displayAmount(balanceToCover)} />
         <SummaryMetric label="Gastos de ruta" value={displayAmount(Number(summary.total_route_expenses) || 0)} />
       </div>
 
-      <div className="mt-4 border-t border-theme-border/70 pt-3">
-        <p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Medios recibidos</p>
-        <div className="mt-2 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
-          <SummaryInline label="Efectivo" value={displayAmount(paymentMethods.CASH)} />
-          <SummaryInline label="Transferencias" value={displayAmount(paymentMethods.TRANSFER)} />
-          <SummaryInline label="Cheques" value={displayAmount(paymentMethods.CHECK)} />
+      <div className="mt-3 border-t border-theme-border/70 pt-2.5">
+        <div className="flex items-baseline justify-between gap-3">
+          <p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Comparación de medios</p>
+          <p className="text-[10px] text-theme-text-muted">Esperado · Real · Diferencia</p>
+        </div>
+        <div className="mt-1.5 grid grid-cols-[minmax(6.5rem,1fr)_repeat(3,minmax(4.5rem,auto))] items-center gap-x-2 gap-y-1 text-[11px]">
+          <span />
+          <span className="text-right font-semibold text-theme-text-muted">Esperado</span>
+          <span className="text-right font-semibold text-theme-text-muted">Real</span>
+          <span className="text-right font-semibold text-theme-text-muted">Dif.</span>
+          {(['CASH', 'CHECK', 'TRANSFER', 'CREDIT'] as const).map(method => (
+            <MethodComparisonRow
+              key={method}
+              label={method === 'CASH' ? 'Efectivo' : method === 'CHECK' ? 'Cheques' : method === 'TRANSFER' ? 'Transferencia' : 'Crédito'}
+              expected={expectedMethods[method]}
+              real={resolvedMethods[method]}
+            />
+          ))}
         </div>
       </div>
 
-      <div className="mt-4 flex flex-col gap-3 border-t border-theme-border/70 pt-3 lg:flex-row lg:items-end lg:justify-between">
+      <div className="mt-3 flex flex-col gap-2 border-t border-theme-border/70 pt-2.5 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Estado operacional</p>
-          <div className="mt-2 text-xs text-theme-text-muted">
+          <div className="mt-1 text-xs text-theme-text-muted">
             <p><strong className="text-theme-text">{summary.resolved_invoice_count} de {summary.invoice_count} facturas resueltas</strong></p>
-            <p className="mt-1">{summary.unresolved_invoice_count} por resolver <span className="mx-1">·</span> {summary.review_required_count} en revisión</p>
+            <p className="mt-0.5">{summary.unresolved_invoice_count} por resolver <span className="mx-1">·</span> {summary.review_required_count} en revisión</p>
           </div>
         </div>
-        <div className="mt-3 border-t border-theme-border/70 pt-3">
+        <div className="mt-2 border-t border-theme-border/70 pt-2 lg:mt-0 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
           <p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Situaciones</p>
-          <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+          <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px]">
             <SituationBadge label="Pagadas" value={situations.paid} />
             <SituationBadge label="Pago pendiente" value={situations.pending} />
             <SituationBadge label="Crédito" value={situations.credit} />
@@ -350,15 +400,29 @@ function SettlementSummary({ detail, isClosed }: { detail: RouteSettlementDetail
 }
 
 function SummaryMetric({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-lg border border-theme-border bg-theme-surface px-3 py-2.5"><p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">{label}</p><p className="mt-1 text-base font-bold tabular-nums text-theme-text">{value}</p></div>
+  return <div className="rounded-lg border border-theme-border bg-theme-surface px-2.5 py-1.5"><p className="text-[9px] font-bold uppercase tracking-wide text-theme-text-muted">{label}</p><p className="mt-0.5 text-sm font-bold tabular-nums text-theme-text">{value}</p></div>
 }
 
-function SummaryInline({ label, value }: { label: string; value: string }) {
-  return <div className="flex items-center justify-between gap-3 rounded-lg bg-theme-text/[0.03] px-3 py-2"><span className="text-theme-text-muted">{label}</span><strong className="tabular-nums text-theme-text">{value}</strong></div>
+function formatSignedAmount(value: number) {
+  if (value === 0) return '$0'
+  const formatted = formatCurrency(Math.abs(value))
+  return value > 0 ? `+${formatted}` : `-${formatted}`
+}
+
+function MethodComparisonRow({ label, expected, real }: { label: string; expected: number; real: number }) {
+  const difference = real - expected
+  return (
+    <>
+      <span className="rounded-md bg-theme-text/[0.03] px-2 py-1 font-semibold text-theme-text-muted">{label}</span>
+      <span className="text-right tabular-nums text-theme-text">{displayAmount(expected)}</span>
+      <span className="text-right tabular-nums text-theme-text">{displayAmount(real)}</span>
+      <span className={`text-right font-semibold tabular-nums ${difference === 0 ? 'text-theme-text-muted' : difference > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>{formatSignedAmount(difference)}</span>
+    </>
+  )
 }
 
 function SituationBadge({ label, value, warning = false }: { label: string; value: number; warning?: boolean }) {
-  return <span className={`inline-flex rounded-full border px-2.5 py-1 font-semibold ${warning ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800/70 dark:bg-amber-950/30 dark:text-amber-300' : 'border-theme-border bg-theme-text/[0.03] text-theme-text-muted'}`}>{label} {value}</span>
+  return <span className={`inline-flex rounded-full border px-2 py-0.5 font-semibold ${warning ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800/70 dark:bg-amber-950/30 dark:text-amber-300' : 'border-theme-border bg-theme-text/[0.03] text-theme-text-muted'}`}>{label} {value}</span>
 }
 
 type BlockingInvoiceRow = RouteSettlementBlockingInvoice & { unapplied_amount: number }
@@ -488,35 +552,41 @@ function ClientDetail({
         <section>
           <SectionHeading icon={<FileText className="h-4 w-4" />} title="Facturas" />
           <div className="overflow-x-auto rounded-lg border border-theme-border">
-            <table className="w-full table-fixed text-xs">
+            <table className="w-full min-w-[960px] table-fixed text-xs">
               <colgroup>
-                <col className="w-[26%]" />
-                <col className="w-[21%]" />
-                <col className="w-[21%]" />
-                <col className="w-[19%]" />
+                <col className="w-[15%]" />
+                <col className="w-[14%]" />
+                <col className="w-[18%]" />
                 <col className="w-[13%]" />
+                <col className="w-[18%]" />
+                <col className="w-[14%]" />
+                <col className="w-[8%]" />
               </colgroup>
               <thead className="border-b border-theme-border bg-theme-text/[0.03] text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">
                 <tr>
                   <th className="px-3 py-2 text-left">Factura</th>
-                  <th className="px-3 py-2 text-right">Esperado</th>
-                  <th className="px-3 py-2 text-right">Aplicado</th>
-                  <th className="px-2 py-2 text-left">Situación</th>
-                  <th className="px-2 py-2 text-right">Acción</th>
+                   <th className="px-3 py-2 text-right">Monto esperado</th>
+                    <th className="min-w-[150px] px-3 py-2 text-left">Medio esperado</th>
+                   <th className="px-3 py-2 text-right">Aplicado</th>
+                    <th className="min-w-[150px] px-3 py-2 text-left">Payment real</th>
+                   <th className="min-w-[120px] px-3 py-2 pr-4 text-left">Situación</th>
+                   <th className="min-w-[85px] border-l border-theme-border/60 px-3 py-2 pl-4 text-right">Acción</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-theme-border/70">
                 {client.invoices.map(invoice => (
                   <tr key={invoice.settlement_item_id}>
                     <td className="px-3 py-2.5 font-semibold text-theme-text">{invoice.invoice_number}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums text-theme-text">{displayAmount(invoice.expected_amount)}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums text-theme-text">{displayAmount(invoice.applied_amount)}</td>
-                    <td className="whitespace-normal px-2 py-2.5">
+                   <td className="px-3 py-2.5 text-right tabular-nums text-theme-text">{displayAmount(invoice.expected_amount)}</td>
+                    <td className="min-w-[150px] px-3 py-2.5 text-left text-theme-text-muted">{paymentMethodLabel(invoice.expected_payment_method)}{invoice.expected_payment_method_original && invoice.expected_payment_method_original !== invoice.expected_payment_method ? <span className="block text-[10px]">({invoice.expected_payment_method_original})</span> : null}</td>
+                   <td className="px-3 py-2.5 text-right tabular-nums text-theme-text">{displayAmount(invoice.applied_amount)}</td>
+                    <td className="min-w-[150px] px-3 py-2.5 text-left text-theme-text-muted">{invoiceReceivedMethods(invoice, client.payments)}</td>
+                     <td className="min-w-[120px] whitespace-normal px-3 py-2.5 pr-4">
                       <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${invoiceSituationClass(invoice)}`}>
                         {invoiceSituationLabel(invoice)}
                       </span>
                     </td>
-                    <td className="px-2 py-2.5 text-right">
+                    <td className="min-w-[85px] border-l border-theme-border/60 px-3 py-2.5 pl-4 text-right">
                       <button type="button" onClick={() => setSelectedInvoice(invoice)} className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 font-semibold text-theme-text-muted transition-colors hover:bg-theme-text/5 hover:text-theme-text">
                         Ver <ChevronRight className="h-3.5 w-3.5" />
                       </button>

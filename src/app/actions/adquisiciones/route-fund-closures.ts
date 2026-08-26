@@ -368,7 +368,7 @@ export async function getFundClosures(filters?: {
   let query = db.from('route_fund_closures')
     .select(`
       *,
-      items:route_fund_closure_items(route_guide_id, invoice_number, payment_method, amount),
+      items:route_fund_closure_items(route_guide_id, payment_id, invoice_number, payment_method, amount),
       attachments:route_fund_closure_attachments(id)
     `)
     .eq('company_id', companyId)
@@ -397,11 +397,38 @@ export async function getFundClosures(filters?: {
   if (error) throw new Error(error.message);
 
   if (data && data.length > 0) {
+    const paymentToClosure = new Map<string, string>()
+    data.forEach(closure => {
+      for (const item of (closure.items || []) as Array<{ payment_id?: string }>) {
+        if (item.payment_id) paymentToClosure.set(item.payment_id, closure.id)
+      }
+    })
+    const paymentIds = [...paymentToClosure.keys()]
+    let allocations: Array<{ payment_id: string; settlement_item_id: string }> = []
+    if (paymentIds.length > 0) {
+      const allocationsResult = await db.from('route_settlement_payment_allocations').select('payment_id, settlement_item_id').in('payment_id', paymentIds).is('voided_at', null)
+      if (allocationsResult.error) throw new Error(allocationsResult.error.message)
+      allocations = (allocationsResult.data ?? []) as Array<{ payment_id: string; settlement_item_id: string }>
+    }
+    const invoiceCounts = new Map<string, Set<string>>()
+    for (const allocation of allocations ?? []) {
+      const closureId = paymentToClosure.get(allocation.payment_id)
+      if (!closureId) continue
+      const invoiceIds = invoiceCounts.get(closureId) ?? new Set<string>()
+      invoiceIds.add(allocation.settlement_item_id)
+      invoiceCounts.set(closureId, invoiceIds)
+    }
+
+    data.forEach(closure => {
+      closure.payment_count = new Set((closure.items || []).map((item: any) => item.payment_id).filter(Boolean)).size
+      closure.invoice_count = invoiceCounts.get(closure.id)?.size ?? 0
+    })
+
     const userIds = [...new Set(data.map(d => d.custody_user_id).filter(Boolean))];
     const guideIds = [...new Set(data.flatMap(d => (d.items || []).map((i: any) => i.route_guide_id)).filter(Boolean))];
 
     const [usersRes, guidesRes] = await Promise.all([
-      userIds.length > 0 ? db.schema('portal').from('users').select('id, first_name, last_name').in('id', userIds) : Promise.resolve({ data: null }),
+      userIds.length > 0 ? db.schema('portal').from('users').select('id, nombre, apellido').in('id', userIds) : Promise.resolve({ data: null }),
       guideIds.length > 0 ? db.schema('logistica').from('route_guides').select('id, guide_number').in('id', guideIds) : Promise.resolve({ data: null })
     ]);
 
@@ -454,7 +481,7 @@ export async function getFundClosureById(id: string) {
   ]);
 
   if (closure.data && closure.data.custody_user_id) {
-    const { data: cUserData } = await db.schema('portal').from('users').select('id, first_name, last_name').eq('id', closure.data.custody_user_id).single();
+     const { data: cUserData } = await db.schema('portal').from('users').select('id, nombre, apellido').eq('id', closure.data.custody_user_id).single();
     if (cUserData) {
       closure.data.custody_user = cUserData;
     }
@@ -463,6 +490,45 @@ export async function getFundClosureById(id: string) {
   const closureItems = items.data || [];
   if (closureItems.length > 0) {
     const guideIds = [...new Set(closureItems.map((i: any) => i.route_guide_id).filter(Boolean))];
+    const paymentIds = [...new Set(closureItems.map((i: any) => i.payment_id).filter(Boolean))];
+    const settlementIds = [...new Set(closureItems.map((i: any) => i.route_settlement_id).filter(Boolean))];
+    const [{ data: allocations, error: allocationsError }, { data: settlements, error: settlementsError }] = await Promise.all([
+      paymentIds.length > 0
+        ? db.from('route_settlement_payment_allocations').select('payment_id, settlement_item_id, amount_applied').in('payment_id', paymentIds).is('voided_at', null)
+        : Promise.resolve({ data: [], error: null }),
+      settlementIds.length > 0
+        ? db.from('route_settlements').select('id, settlement_number').in('id', settlementIds).eq('company_id', companyId)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (allocationsError) throw new Error(allocationsError.message);
+    if (settlementsError) throw new Error(settlementsError.message);
+
+    const allocationItemIds = [...new Set((allocations ?? []).map(allocation => allocation.settlement_item_id))];
+    const { data: settlementItems, error: settlementItemsError } = allocationItemIds.length > 0
+      ? await db.from('route_settlement_items').select('id, invoice_number, customer_name').in('id', allocationItemIds).eq('company_id', companyId)
+      : { data: [], error: null };
+    if (settlementItemsError) throw new Error(settlementItemsError.message);
+
+    const settlementNumbers = new Map((settlements ?? []).map(settlement => [settlement.id, settlement.settlement_number]));
+    const settlementItemsById = new Map((settlementItems ?? []).map(item => [item.id, item]));
+    const allocationsByPayment = new Map<string, Array<{ settlement_item_id: string; amount_applied: number; invoice_number: string; customer_name: string }>>();
+    for (const allocation of allocations ?? []) {
+      const settlementItem = settlementItemsById.get(allocation.settlement_item_id);
+      const paymentAllocations = allocationsByPayment.get(allocation.payment_id) ?? [];
+      paymentAllocations.push({
+        settlement_item_id: allocation.settlement_item_id,
+        amount_applied: Number(allocation.amount_applied || 0),
+        invoice_number: settlementItem?.invoice_number ?? allocation.settlement_item_id,
+        customer_name: settlementItem?.customer_name ?? 'Cliente no disponible',
+      });
+      allocationsByPayment.set(allocation.payment_id, paymentAllocations);
+    }
+
+    closureItems.forEach((item: any) => {
+      item.settlement_number = settlementNumbers.get(item.route_settlement_id) ?? item.route_settlement_id;
+      item.allocations = allocationsByPayment.get(item.payment_id) ?? [];
+    });
+
     if (guideIds.length > 0) {
       const { data: guidesData } = await db.schema('logistica').from('route_guides').select('id, guide_number').in('id', guideIds);
       if (guidesData) {
@@ -479,6 +545,7 @@ export async function getFundClosureById(id: string) {
   return {
     closure: closure.data,
     items: items.data || [],
+    allocations: closureItems.flatMap((item: any) => item.allocations || []),
     expenses: expenses.data || [],
     deposits: deposits.data || [],
     attachments: attachments.data || []

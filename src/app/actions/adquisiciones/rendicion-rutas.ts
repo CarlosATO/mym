@@ -35,7 +35,7 @@ export interface RouteSettlementsDashboardRow {
   total_transfer_pending: number
   total_invoices: number
   paid_count: number
-  total_rendible_count: number
+  total_invoice_count: number
   settlement_id: string | null
   settlement_number: string | null
   settlement_status: string | null
@@ -59,6 +59,7 @@ export interface RouteSettlementDetailInvoice {
   route_guide_item_id: string
   invoice_number: string
   expected_payment_method: string
+  expected_payment_method_original?: string | null
   expected_amount: number
   customer_bsale_id: number | null
   applied_amount: number
@@ -365,30 +366,11 @@ export async function getRouteSettlementsDashboardData() {
           settlementItemsWorkedMap.set(item.settlement_id, false)
         }
 
-        if (['CASH', 'CHECK'].includes(item.expected_payment_method)) {
-          const appliedAmount = appliedAmountByItem.get(item.id) ?? 0
-          const resolved = appliedAmount >= Number(item.expected_amount ?? 0)
-            || ['PENDING_PAYMENT', 'CREDIT', 'NOT_DELIVERED'].includes(item.resolution_type ?? '')
-          const resolvedCount = settlementItemStatsMap.get(item.settlement_id) ?? 0
-          settlementItemStatsMap.set(item.settlement_id, resolvedCount + (resolved ? 1 : 0))
-        }
-      }
-    }
-
-    const guideRendibleCountMap = new Map<string, number>()
-    const dispatchedGuideIds = (dispatchedGuidesRes.data || []).map(guide => guide.id)
-    if (dispatchedGuideIds.length > 0) {
-      const guideItemsRes = await logisticaDb
-        .from('route_guide_items')
-        .select('route_guide_id, payment_method_normalized')
-        .eq('company_id', companyId)
-        .in('route_guide_id', dispatchedGuideIds)
-
-      if (guideItemsRes.error) throw guideItemsRes.error
-
-      for (const item of guideItemsRes.data || []) {
-        if (!['CASH', 'CHECK'].includes(item.payment_method_normalized)) continue
-        guideRendibleCountMap.set(item.route_guide_id, (guideRendibleCountMap.get(item.route_guide_id) ?? 0) + 1)
+        const appliedAmount = appliedAmountByItem.get(item.id) ?? 0
+        const resolved = appliedAmount >= Number(item.expected_amount ?? 0)
+          || ['PENDING_PAYMENT', 'CREDIT', 'NOT_DELIVERED'].includes(item.resolution_type ?? '')
+        const resolvedCount = settlementItemStatsMap.get(item.settlement_id) ?? 0
+        settlementItemStatsMap.set(item.settlement_id, resolvedCount + (resolved ? 1 : 0))
       }
     }
 
@@ -430,7 +412,7 @@ export async function getRouteSettlementsDashboardData() {
         total_transfer_pending: Math.max(transferExpected - transferReceived, 0),
         total_invoices: Number(settlement?.total_invoices ?? guide.total_invoices ?? 0),
         paid_count: Number(settlementItemStats ?? 0),
-        total_rendible_count: Number(guideRendibleCountMap.get(guide.id) ?? 0),
+        total_invoice_count: Number(guide.total_invoices ?? 0),
         settlement_id: settlement?.id ?? null,
         settlement_number: settlement?.settlement_number ?? null,
         settlement_status: settlement?.workflow_status ?? null,

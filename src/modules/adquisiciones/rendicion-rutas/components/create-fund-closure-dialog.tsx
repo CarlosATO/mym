@@ -10,6 +10,11 @@ function money(value: number) {
   return `$${Number(value || 0).toLocaleString('es-CL')}`
 }
 
+function formatCashInput(value: string) {
+  const digits = value.replace(/\D/g, '')
+  return digits ? `$${Number(digits).toLocaleString('es-CL')}` : ''
+}
+
 function expenseLabel(type: string) {
   return type === 'PEAJES' ? 'Peajes' : type === 'OTROS' ? 'Otros' : type
 }
@@ -26,7 +31,8 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated }: CreateFu
   const cashReceived = groups.reduce((sum, group) => sum + Number(group.cash_received || 0), 0)
   const expenseTotal = groups.reduce((sum, group) => sum + Number(group.active_route_expenses || 0), 0)
   const cashExpected = cashReceived - expenseTotal
-  const [cashDelivered, setCashDelivered] = useState(String(cashExpected))
+  const [cashDeliveredInput, setCashDeliveredInput] = useState('')
+  const [cashDelivered, setCashDelivered] = useState<number | null>(null)
   const [notes, setNotes] = useState('')
   const [confirmedChecks, setConfirmedChecks] = useState<Set<string>>(new Set())
   const [isLoading, setIsLoading] = useState(true)
@@ -34,11 +40,12 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated }: CreateFu
 
   const paymentIds = groups.flatMap(group => group.payment_ids)
   const expectedChecks = groups.reduce((sum, group) => sum + Number(group.checks_received || 0), 0)
-  const delivered = Number(cashDelivered) || 0
+  const delivered = cashDelivered ?? 0
   const difference = delivered - cashExpected
   const checks = payments.filter(payment => payment.payment_method_received === 'CHECK')
   const hasUnconfirmedCheck = checks.some(check => !confirmedChecks.has(check.id))
-  const hasDifference = difference !== 0
+  const hasCashDelivered = cashDelivered !== null
+  const hasDifference = hasCashDelivered && difference !== 0
 
   useEffect(() => {
     let active = true
@@ -57,6 +64,7 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated }: CreateFu
   }, [groups])
 
   const submit = async () => {
+    if (!hasCashDelivered) return
     if (hasDifference && notes.trim().length === 0) return
     if (hasUnconfirmedCheck) return
     setIsSubmitting(true)
@@ -98,9 +106,9 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated }: CreateFu
             <div className="divide-y divide-theme-border rounded-lg border border-theme-border">
               {groups.map(group => <div key={`${group.route_settlement_id}:${group.custody_user_id}`} className="flex items-center justify-between px-3 py-2 text-sm"><span className="font-semibold text-theme-text">{group.settlement_number} <span className="font-normal text-theme-text-muted">/ {group.guide_number}</span></span><span className="font-mono text-theme-text">{money(group.net_cash_pending)}</span></div>)}
             </div>
-          </section>
+           </section>
 
-          <section>
+           <section>
             <h3 className="mb-2 text-sm font-bold text-theme-text">Resumen esperado</h3>
             <div className="grid grid-cols-2 gap-3 rounded-lg border border-theme-border p-4 sm:grid-cols-4">
               <div><p className="text-[10px] uppercase text-theme-text-muted">Efectivo recibido</p><p className="font-mono font-bold">{money(cashReceived)}</p></div>
@@ -108,19 +116,40 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated }: CreateFu
               <div><p className="text-[10px] uppercase text-theme-text-muted">Efectivo a entregar</p><p className="font-mono font-bold text-theme-text">{money(cashExpected)}</p></div>
               <div><p className="text-[10px] uppercase text-theme-text-muted">Cheques esperados</p><p className="font-mono font-bold">{money(expectedChecks)}</p></div>
             </div>
-          </section>
+           </section>
 
-          <section>
-            <h3 className="mb-2 text-sm font-bold text-theme-text">Registro físico</h3>
-            <label className="block text-sm font-semibold text-theme-text">Efectivo realmente entregado
-              <input type="number" min="0" step="1" value={cashDelivered} onChange={event => setCashDelivered(event.target.value)} className="mt-1 w-full rounded-lg border border-theme-border bg-theme-surface px-3 py-2 font-mono text-theme-text outline-none focus:border-theme-accent" />
-            </label>
-            <div className={`mt-3 flex items-center justify-between rounded-lg border px-3 py-2 text-sm ${hasDifference ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-300' : 'border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/20 dark:text-emerald-300'}`}>
-              <span className="font-semibold">Estado previsto</span><span className="font-bold">{hasDifference ? `${difference < 0 ? 'Faltante' : 'Sobrante'} ${money(Math.abs(difference))}` : 'Cuadrado'}</span>
-            </div>
-          </section>
+           <section>
+             <h3 className="mb-2 text-sm font-bold text-theme-text">Registro físico</h3>
+             <label className="block text-sm font-semibold text-theme-text">Efectivo realmente entregado
+               <input
+                 type="text"
+                 inputMode="numeric"
+                 minLength={1}
+                 value={cashDeliveredInput}
+                 onChange={event => {
+                   const digits = event.target.value.replace(/\D/g, '')
+                   setCashDeliveredInput(formatCashInput(event.target.value))
+                   setCashDelivered(digits ? Number(digits) : null)
+                 }}
+                 required
+                 aria-required="true"
+                 placeholder="$0"
+                 className="mt-1 w-full rounded-lg border border-theme-border bg-theme-surface px-3 py-2 font-mono text-theme-text outline-none focus:border-theme-accent"
+               />
+             </label>
+             <div className={`mt-3 flex flex-col gap-1 rounded-lg border px-3 py-2 text-sm sm:flex-row sm:items-center sm:justify-between ${!hasCashDelivered ? 'border-theme-border bg-theme-text/5 text-theme-text-muted' : hasDifference ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-300' : 'border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/20 dark:text-emerald-300'}`}>
+               <span className="font-semibold">Estado previsto</span><span className="font-bold">{!hasCashDelivered ? 'Pendiente de ingresar efectivo recibido' : hasDifference ? `${difference < 0 ? 'Faltante' : 'Sobrante'} ${money(Math.abs(difference))}` : 'Cuadrado'}</span>
+             </div>
+           </section>
 
-          <section>
+           <section className="rounded-lg border border-theme-border p-3">
+             <label className="block text-sm font-semibold text-theme-text">Observación {hasDifference && <span className="text-amber-700">(obligatoria por diferencia)</span>}
+               <textarea value={notes} onChange={event => setNotes(event.target.value)} rows={3} required={hasDifference} className="mt-1 w-full resize-y rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-sm text-theme-text outline-none focus:border-theme-accent" placeholder="Comentario opcional del cierre" />
+             </label>
+           </section>
+           {(!hasCashDelivered || hasDifference && notes.trim().length === 0) && <div className="flex items-start gap-2 text-xs text-amber-700"><AlertTriangle className="h-4 w-4 shrink-0" />{!hasCashDelivered ? 'Ingresa el efectivo recibido para continuar.' : 'Ingresa el motivo del faltante o sobrante para continuar.'}</div>}
+
+           <section>
             <h3 className="mb-2 text-sm font-bold text-theme-text">Gastos justificados</h3>
             {isLoading ? <div className="flex items-center gap-2 text-sm text-theme-text-muted"><Loader2 className="h-4 w-4 animate-spin" />Cargando gastos y cheques...</div> : expenses.length === 0 ? <p className="text-sm text-theme-text-muted">Sin gastos registrados.</p> : <div className="divide-y divide-theme-border rounded-lg border border-theme-border">{expenses.map(expense => <div key={expense.id} className="flex justify-between px-3 py-2 text-sm"><span>{expenseLabel(expense.expense_type)}</span><span className="font-mono">{money(expense.amount)}</span></div>)}</div>}
           </section>
@@ -130,15 +159,12 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated }: CreateFu
             {checks.length === 0 ? <p className="text-sm text-theme-text-muted">Sin cheques por recibir</p> : <div className="space-y-2">{checks.map(check => <label key={check.id} className="flex items-center gap-3 rounded-lg border border-theme-border px-3 py-2 text-sm"><input type="checkbox" checked={confirmedChecks.has(check.id)} onChange={event => setConfirmedChecks(current => { const next = new Set(current); if (event.target.checked) next.add(check.id); else next.delete(check.id); return next })} /><span className="flex-1">Cheque {check.check_number ?? check.reference_number ?? check.id}</span><span className="font-mono">{money(check.amount_received)}</span></label>)}</div>}
           </section>
 
-          <label className="block text-sm font-semibold text-theme-text">Observación {hasDifference && <span className="text-amber-700">(obligatoria por diferencia)</span>}
-            <textarea value={notes} onChange={event => setNotes(event.target.value)} rows={3} className="mt-1 w-full resize-y rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-sm text-theme-text outline-none focus:border-theme-accent" placeholder="Observación opcional del cierre" />
-          </label>
-          {(hasDifference && notes.trim().length === 0 || hasUnconfirmedCheck) && <div className="flex items-start gap-2 text-xs text-amber-700"><AlertTriangle className="h-4 w-4 shrink-0" />{hasDifference && notes.trim().length === 0 ? 'Ingresa el motivo del faltante o sobrante para continuar.' : 'Confirma la recepción física de cada cheque para continuar.'}</div>}
+           {hasUnconfirmedCheck && <div className="flex items-start gap-2 text-xs text-amber-700"><AlertTriangle className="h-4 w-4 shrink-0" />Confirma la recepción física de cada cheque para continuar.</div>}
         </div>
 
         <div className="flex justify-end gap-2 border-t border-theme-border px-5 py-4">
           <button type="button" onClick={onClose} disabled={isSubmitting} className="rounded-lg border border-theme-border px-4 py-2 text-sm font-semibold text-theme-text">Cancelar</button>
-          <button type="button" onClick={submit} disabled={isLoading || isSubmitting || hasDifference && notes.trim().length === 0 || hasUnconfirmedCheck} className="rounded-lg bg-theme-accent px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">{isSubmitting ? 'Confirmando...' : 'Confirmar cierre'}</button>
+           <button type="button" onClick={submit} disabled={isLoading || isSubmitting || !hasCashDelivered || hasDifference && notes.trim().length === 0 || hasUnconfirmedCheck} className="rounded-lg bg-theme-accent px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">{isSubmitting ? 'Confirmando...' : 'Confirmar cierre'}</button>
         </div>
       </div>
     </div>

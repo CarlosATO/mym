@@ -78,7 +78,6 @@ export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement
   const [kpis, setKpis] = useState<RouteSettlementsDashboardKpis>(EMPTY_KPIS)
   const [isLoading, setIsLoading] = useState(true)
   const [filterStatus, setFilterStatus] = useState('ALL')
-  const [paymentFilter, setPaymentFilter] = useState<'CASH_ONLY' | 'ALL' | 'CREDIT'>('CASH_ONLY')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [view, setView] = useState<PanelView>({ kind: 'list' })
   const [mainTab, setMainTab] = useState<'TRAY' | 'FUND_CLOSURES'>('TRAY')
@@ -420,8 +419,6 @@ export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement
           onRowDoubleClick={handleRowDoubleClick}
           filterStatus={filterStatus}
           setFilterStatus={setFilterStatus}
-          paymentFilter={paymentFilter}
-          setPaymentFilter={setPaymentFilter}
           canCreateSettlement={canCreateSettlement}
           onStartSettlement={handleRowDoubleClick}
         />

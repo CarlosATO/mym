@@ -83,17 +83,7 @@ interface RouteSettlementWorkspaceProps {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function defaultStatusForMethod(method: string): RouteSettlementItem['status'] {
-  switch (method) {
-    case 'CASH':
-    case 'CHECK':
-      return 'PENDING_PAYMENT'
-    case 'TRANSFER':
-      return 'TRANSFER_PENDING'
-    case 'CREDIT':
-      return 'CREDIT_REGISTERED'
-    default:
-      return 'REVIEW_REQUIRED'
-  }
+  return method === 'UNKNOWN' ? 'REVIEW_REQUIRED' : 'PENDING_PAYMENT'
 }
 
 function buildInitialRows(
@@ -173,6 +163,34 @@ function formatStartError(error: string) {
   return error
 }
 
+interface WorkspaceSummary {
+  totalExpected: number
+  cashExpected: number
+  transferExpected: number
+  checkExpected: number
+  creditExpected: number
+  paid: number
+  invoiceCount: number
+}
+
+function ExpectedMethods({ summary }: { summary: WorkspaceSummary }) {
+  return (
+    <div className="mt-3 border-t border-theme-border/60 pt-3">
+      <p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Medios esperados</p>
+      <div className="mt-2 grid grid-cols-2 gap-2 text-xs lg:grid-cols-4">
+        <SummaryMethod label="Efectivo" value={summary.cashExpected} />
+        <SummaryMethod label="Cheques" value={summary.checkExpected} />
+        <SummaryMethod label="Transferencia" value={summary.transferExpected} />
+        <SummaryMethod label="Crédito" value={summary.creditExpected} />
+      </div>
+    </div>
+  )
+}
+
+function SummaryMethod({ label, value }: { label: string; value: number }) {
+  return <div className="flex items-center justify-between gap-2 rounded-lg bg-theme-text/[0.03] px-3 py-2"><span className="text-theme-text-muted">{label}</span><strong className="tabular-nums text-theme-text">{formatCurrency(value)}</strong></div>
+}
+
 // ─── Componente Principal ─────────────────────────────────────────────────────
 
 export function RouteSettlementWorkspace({
@@ -191,7 +209,6 @@ export function RouteSettlementWorkspace({
   const [previewRowId, setPreviewRowId] = useState<string | null>(null)
   const [editingRowId, setEditingRowId] = useState<string | null>(null)
   const [documentViewer, setDocumentViewer] = useState<{ rowId: string; attachmentId?: string } | null>(null)
-  const [invoiceFilter, setInvoiceFilter] = useState<'CASH_ONLY' | 'ALL'>('CASH_ONLY')
   const [isSaving, setIsSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [startError, setStartError] = useState<string | null>(null)
@@ -263,36 +280,24 @@ export function RouteSettlementWorkspace({
   const hasSaveableChanges = hasDirtyChanges || notesDirty
   const editingRow = rows.find(r => r.guideItemId === editingRowId) ?? null
   const previewRow = rows.find(r => r.guideItemId === previewRowId) ?? null
-  const isCountedPayment = (method: string) => ['CASH', 'CHECK'].includes(method)
-  const visibleRows = invoiceFilter === 'CASH_ONLY' ? rows.filter(r => isCountedPayment(r.expected_payment_method)) : rows
-  const hiddenCreditCount = rows.filter(r => !isCountedPayment(r.expected_payment_method)).length
+  const visibleRows = rows
 
   const summary = useMemo(() => {
-    const countedRows = rows.filter(r => isCountedPayment(r.expected_payment_method))
-    const countedTotal = countedRows.reduce((a, r) => a + r.expected_amount, 0)
-
-    const cashRows = countedRows.filter(r => r.expected_payment_method === 'CASH')
+    const totalExpected = rows.reduce((a, r) => a + r.expected_amount, 0)
+    const cashRows = rows.filter(r => r.expected_payment_method === 'CASH')
     const cashExpected = cashRows.reduce((a, r) => a + r.expected_amount, 0)
-    const cashReceived = cashRows.reduce((a, r) => a + (r.status === 'PAID_CASH' ? r.received_amount : 0), 0)
     
     const transferRows = rows.filter(r => r.expected_payment_method === 'TRANSFER')
     const transferExpected = transferRows.reduce((a, r) => a + r.expected_amount, 0)
-    const transferConfirmed = transferRows
-      .filter(r => r.status === 'TRANSFER_CONFIRMED' || r.transfer_confirmed)
-      .reduce((a, r) => a + r.expected_amount, 0)
-    const transferPending = transferRows
-      .filter(r => r.status !== 'TRANSFER_CONFIRMED' && !r.transfer_confirmed)
-      .reduce((a, r) => a + r.expected_amount, 0)
       
-    const checkRows = countedRows.filter(r => r.expected_payment_method === 'CHECK')
+    const checkRows = rows.filter(r => r.expected_payment_method === 'CHECK')
     const checkExpected = checkRows.reduce((a, r) => a + r.expected_amount, 0)
-    const checkReceived = checkRows.reduce((a, r) => a + (r.status === 'CHECK_RECEIVED' ? r.received_amount : 0), 0)
 
     const creditRows = rows.filter(r => r.expected_payment_method === 'CREDIT')
     const creditExpected = creditRows.reduce((a, r) => a + r.expected_amount, 0)
     
-    const paid = countedRows.filter(r => ['PAID_CASH', 'TRANSFER_CONFIRMED', 'CHECK_RECEIVED'].includes(r.status) && (r.status !== 'PAID_CASH' || r.received_amount === r.expected_amount)).length
-    return { countedTotal, cashExpected, cashReceived, transferExpected, transferConfirmed, transferPending, checkExpected, checkReceived, creditExpected, paid, countedCount: countedRows.length }
+    const paid = rows.filter(r => ['PAID_CASH', 'TRANSFER_CONFIRMED', 'CHECK_RECEIVED'].includes(r.status) && (r.status !== 'PAID_CASH' || r.received_amount === r.expected_amount)).length
+    return { totalExpected, cashExpected, transferExpected, checkExpected, creditExpected, paid, invoiceCount: rows.length }
   }, [rows])
 
   const currentStatus = useMemo(() => {
@@ -830,61 +835,28 @@ export function RouteSettlementWorkspace({
         </div>
       )}
 
-      {/* ── Resumen financiero compacto ── */}
-      <div className={`shrink-0 grid grid-cols-2 md:grid-cols-3 ${invoiceFilter === 'CASH_ONLY' ? 'xl:grid-cols-7' : 'xl:grid-cols-10'} rounded-lg border border-theme-border bg-theme-surface/70 overflow-hidden`}>
-        {(invoiceFilter === 'CASH_ONLY'
-          ? [
-              ['Total ruta', formatCurrency(guide.total_amount), 'text-theme-text'],
-              ['Total rendible', formatCurrency(summary.countedTotal), 'text-theme-text'],
-              ['Efectivo esperado', formatCurrency(summary.cashExpected), 'text-theme-text'],
-              ['Cheques esperados', formatCurrency(summary.checkExpected), 'text-theme-text'],
-              ['Efectivo recibido', formatCurrency(summary.cashReceived), 'text-green-600 dark:text-green-400'],
-              ['Cheques recibidos', formatCurrency(summary.checkReceived), 'text-green-600 dark:text-green-400'],
-              ['Fact. rendibles', `${summary.paid} / ${summary.countedCount}`, 'text-theme-text'],
-            ]
-          : [
-              ['Total ruta', formatCurrency(guide.total_amount), 'text-theme-text'],
-              ['Total rendible', formatCurrency(summary.countedTotal), 'text-theme-text'],
-              ['Efectivo esperado', formatCurrency(summary.cashExpected), 'text-theme-text'],
-              ['Cheques esperados', formatCurrency(summary.checkExpected), 'text-theme-text'],
-              ['Efectivo recibido', formatCurrency(summary.cashReceived), 'text-green-600 dark:text-green-400'],
-              ['Cheques recibidos', formatCurrency(summary.checkReceived), 'text-green-600 dark:text-green-400'],
-              ['Fact. rendibles', `${summary.paid} / ${summary.countedCount}`, 'text-theme-text'],
-              ['No rendible · Transf. esp/conf', `${formatCurrency(summary.transferExpected)} / ${formatCurrency(summary.transferConfirmed)}`, 'text-theme-text-muted'],
-              ['No rendible · Transf. pendiente', formatCurrency(summary.transferPending), summary.transferPending > 0 ? 'text-orange-500' : 'text-theme-text-muted'],
-              ['No rendible · Crédito esp.', formatCurrency(summary.creditExpected), 'text-theme-text-muted'],
-            ]
-        ).map(([label, value, color]) => (
+      {/* ── Resumen de la Guía completa ── */}
+      <div className="shrink-0 rounded-lg border border-theme-border bg-theme-surface/70 p-3">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+          {[
+            ['Total guía', formatCurrency(summary.totalExpected), 'text-theme-text'],
+            ['Facturas', `${summary.paid} / ${summary.invoiceCount} resueltas`, 'text-theme-text'],
+            ['Clientes', new Set(rows.map(row => row.customer_name)).size.toString(), 'text-theme-text'],
+          ].map(([label, value, color]) => (
           <div key={label} className="px-3 py-2 border-b md:border-b-0 xl:border-r border-theme-border/50 last:border-r-0">
             <p className="text-[9px] font-bold uppercase tracking-wider text-theme-text-muted leading-tight">{label}</p>
             <p className={`text-xs font-bold leading-tight mt-0.5 ${color}`}>{value}</p>
           </div>
         ))}
+        </div>
+        <ExpectedMethods summary={summary} />
       </div>
 
       {/* ── Tabla de facturas ── */}
       <div className="flex-1 min-h-0 rounded-xl border border-theme-border bg-theme-surface overflow-hidden flex flex-col">
-        <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-2 border-b border-theme-border/70 bg-theme-surface/95">
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setInvoiceFilter('CASH_ONLY')}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-bold border transition-colors ${invoiceFilter === 'CASH_ONLY' ? 'border-theme-accent/50 bg-theme-accent/15 text-theme-text' : 'border-theme-border bg-theme-text/5 text-theme-text-muted hover:text-theme-text'}`}
-            >
-              Solo rendibles
-            </button>
-            <button
-              type="button"
-              onClick={() => setInvoiceFilter('ALL')}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-bold border transition-colors ${invoiceFilter === 'ALL' ? 'border-theme-accent/50 bg-theme-accent/15 text-theme-text' : 'border-theme-border bg-theme-text/5 text-theme-text-muted hover:text-theme-text'}`}
-            >
-              Mostrar todas
-            </button>
-          </div>
-          {invoiceFilter === 'CASH_ONLY' && hiddenCreditCount > 0 && (
-            <span className="text-[11px] text-theme-text-muted">{hiddenCreditCount} factura{hiddenCreditCount !== 1 ? 's' : ''} no rendible{hiddenCreditCount !== 1 ? 's' : ''} ocultas</span>
-          )}
-        </div>
+         <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-2 border-b border-theme-border/70 bg-theme-surface/95">
+           <p className="text-[11px] font-semibold text-theme-text-muted">Todas las facturas de la Guía · {rows.length}</p>
+         </div>
         <div className="flex-1 min-h-0 overflow-auto">
           <table className="w-full text-left text-xs whitespace-nowrap">
             <thead>
