@@ -2108,7 +2108,9 @@ export function ComisionesV2Inspection({
         const logicalPlan = (item: ComisionesV2FamilyPlanListItem) =>
           item.supplier_id === savedPlan.supplier_id &&
           item.plan_code === savedPlan.plan_code &&
-          item.plan_type === savedPlan.plan_type;
+          item.plan_type === savedPlan.plan_type &&
+          (item.plan_type !== "SUPPLIER_SALES_TARGET" ||
+            item.seller_bsale_id === savedPlan.seller_bsale_id);
         const next = current.filter(
           (item) =>
             item.id !== previousPlanId &&
@@ -2754,6 +2756,7 @@ export function ComisionesV2Inspection({
             onPlansChanged={handlePlansChanged}
             initialPlans={planCache}
             initialSuppliers={planSuppliers}
+            profiles={sellerProfiles}
             bootstrapLoading={planLoading}
             bootstrapError={planError}
           />
@@ -4690,6 +4693,7 @@ function FamilyPlanConfigurator({
   onPlansChanged,
   initialPlans,
   initialSuppliers,
+  profiles,
   bootstrapLoading,
   bootstrapError,
 }: {
@@ -4701,10 +4705,14 @@ function FamilyPlanConfigurator({
   onPlansChanged: () => Promise<void>;
   initialPlans: ComisionesV2FamilyPlanListItem[] | null;
   initialSuppliers: ComisionesV2Supplier[] | null;
+  profiles: ComisionesV2SellerProfile[];
   bootstrapLoading: boolean;
   bootstrapError: string | null;
 }) {
   const suppliers = initialSuppliers ?? [];
+  const availableSellers = profiles.filter(
+    (profile) => profile.active && profile.is_commissionable,
+  );
   const [families, setFamilies] = useState<ComisionesV2Family[]>([]);
   const [conflicts, setConflicts] = useState<
     Record<number, ComisionesV2FamilyConflict>
@@ -4731,6 +4739,8 @@ function FamilyPlanConfigurator({
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [isNew, setIsNew] = useState(true);
   const [supplierId, setSupplierId] = useState("");
+  const [sellerScope, setSellerScope] = useState<"ALL" | "SPECIFIC">("ALL");
+  const [sellerBsaleId, setSellerBsaleId] = useState<number | null>(null);
   const [planCode, setPlanCode] = useState("");
   const [validFrom, setValidFrom] = useState(() => initialChileCycle().from);
   const [validTo, setValidTo] = useState(() => initialChileCycle().to);
@@ -4779,6 +4789,11 @@ function FamilyPlanConfigurator({
       validFrom,
       validTo: validTo || null,
       excludePlanId: plan?.id,
+      planType,
+      sellerBsaleId:
+        planType === "SUPPLIER_SALES_TARGET" && sellerScope === "SPECIFIC"
+          ? sellerBsaleId
+          : null,
     };
     void Promise.all([
       getComisionesV2BasePlanConflict(input),
@@ -4805,7 +4820,16 @@ function FamilyPlanConfigurator({
     return () => {
       current = false;
     };
-  }, [supplierId, validFrom, validTo, plan?.id, planType, conflictsRefresh]);
+  }, [
+    supplierId,
+    validFrom,
+    validTo,
+    plan?.id,
+    planType,
+    sellerScope,
+    sellerBsaleId,
+    conflictsRefresh,
+  ]);
 
   function selectSupplier(value: string) {
     setSupplierId(value);
@@ -4830,6 +4854,8 @@ function FamilyPlanConfigurator({
     setError(null);
     setPlanType("FAMILY_FIXED_PERCENT");
     setSupplierId("");
+    setSellerScope("ALL");
+    setSellerBsaleId(null);
     const cycle = initialChileCycle();
     setPlanCode("");
     setValidFrom(cycle.from);
@@ -4855,6 +4881,8 @@ function FamilyPlanConfigurator({
     setPlan(null);
     setBaseConflict(null);
     setSupplierId("");
+    setSellerScope("ALL");
+    setSellerBsaleId(null);
     setPlanCode("");
     setValidFrom("");
     setValidTo("");
@@ -4874,6 +4902,17 @@ function FamilyPlanConfigurator({
       setPlan(loaded);
       setPlanType(loaded.plan_type);
       setSupplierId(loaded.supplier_id);
+      setSellerBsaleId(
+        loaded.plan_type === "SUPPLIER_SALES_TARGET"
+          ? (loaded.seller_bsale_id ?? null)
+          : null,
+      );
+      setSellerScope(
+        loaded.plan_type === "SUPPLIER_SALES_TARGET" &&
+          loaded.seller_bsale_id != null
+          ? "SPECIFIC"
+          : "ALL",
+      );
       setPlanCode(loaded.plan_code);
       setValidFrom(loaded.valid_from);
       setValidTo(loaded.valid_to ?? "");
@@ -4964,6 +5003,14 @@ function FamilyPlanConfigurator({
   }
 
   async function executeSave() {
+    if (
+      planType === "SUPPLIER_SALES_TARGET" &&
+      sellerScope === "SPECIFIC" &&
+      sellerBsaleId == null
+    ) {
+      setError("Selecciona un vendedor para el alcance específico.");
+      return;
+    }
     setSaving(true);
     setError(null);
     setNotice(null);
@@ -4987,6 +5034,7 @@ function FamilyPlanConfigurator({
             validFrom,
             validTo: validTo || null,
             tiers,
+            sellerBsaleId: sellerScope === "SPECIFIC" ? sellerBsaleId : null,
           })
         : await saveComisionesV2FamilyPlan({
             planId: plan?.id ?? null,
@@ -5013,6 +5061,15 @@ function FamilyPlanConfigurator({
       plan_code: planCode.trim(),
       version_no: result.data.version_no,
       plan_type: planType,
+      seller_bsale_id:
+        planType === "SUPPLIER_SALES_TARGET" && sellerScope === "SPECIFIC"
+          ? sellerBsaleId
+          : null,
+      seller_name:
+        planType === "SUPPLIER_SALES_TARGET" && sellerScope === "SPECIFIC"
+          ? profiles.find((profile) => profile.seller_bsale_id === sellerBsaleId)
+              ?.seller_name ?? null
+          : null,
       valid_from: validFrom,
       valid_to: validTo || null,
       supplier_name:
@@ -5136,7 +5193,7 @@ function FamilyPlanConfigurator({
   const normalizedPlanSearch = normalizePlanSearch(planSearch);
   const filteredPlans = orderedPlans.flatMap((item) => {
     const planAndSupplierMatch = normalizePlanSearch(
-      `${item.plan_code} ${item.supplier_name ?? ""}`,
+      `${item.plan_code} ${item.supplier_name ?? ""} ${item.seller_name ?? profiles.find((profile) => profile.seller_bsale_id === item.seller_bsale_id)?.seller_name ?? ""}`,
     ).includes(normalizedPlanSearch);
     const matchingFamilies =
       normalizedPlanSearch && item.plan_type === "FAMILY_FIXED_PERCENT"
@@ -5224,6 +5281,11 @@ function FamilyPlanConfigurator({
               </p>
             ) : (
               filteredPlans.map(({ item, matchingFamilies }) => {
+                const sellerName =
+                  item.seller_name ??
+                  profiles.find(
+                    (profile) => profile.seller_bsale_id === item.seller_bsale_id,
+                  )?.seller_name;
                 return (
                   <button
                     key={item.id}
@@ -5245,7 +5307,7 @@ function FamilyPlanConfigurator({
                         {item.supplier_name ?? "Proveedor sin nombre"} ·{" "}
                         {item.plan_type === "FAMILY_FIXED_PERCENT"
                           ? "Por Familia"
-                          : "Meta de ventas"} · v{item.version_no} ·{" "}
+                          : `Meta de ventas · ${sellerName ?? "Todos los vendedores"}`} · v{item.version_no} ·{" "}
                         {formatDate(item.valid_from)}–
                         {formatDate(item.valid_to)}
                       </span>
@@ -5335,7 +5397,11 @@ function FamilyPlanConfigurator({
                 type="button"
                 role="tab"
                 aria-selected={planType === "FAMILY_FIXED_PERCENT"}
-                onClick={() => setPlanType("FAMILY_FIXED_PERCENT")}
+                onClick={() => {
+                  setPlanType("FAMILY_FIXED_PERCENT");
+                  setSellerScope("ALL");
+                  setSellerBsaleId(null);
+                }}
                 className={`rounded-md px-3 py-1.5 text-xs font-semibold ${planType === "FAMILY_FIXED_PERCENT" ? "bg-theme-accent text-white" : "text-theme-text-muted hover:text-theme-text"}`}
               >
                 Por Familia
@@ -5405,13 +5471,58 @@ function FamilyPlanConfigurator({
               />
             </label>
           </div>
-          {planType === "SUPPLIER_SALES_TARGET" && (
-            <TargetTierEditorUx
-              tiers={tiers}
-              disabled={Boolean(loadingPlanId) || isReadOnly}
-              onChange={setTiers}
-            />
-          )}
+           {planType === "SUPPLIER_SALES_TARGET" && (
+             <>
+               <div className="mt-4 grid gap-3 md:grid-cols-2">
+                 <label className="grid gap-1 text-[11px] font-semibold text-theme-text-muted">
+                   Aplicar a
+                   <select
+                     value={sellerScope}
+                     disabled={Boolean(loadingPlanId) || isReadOnly}
+                     onChange={(event) => {
+                       const nextScope = event.target.value as "ALL" | "SPECIFIC";
+                       setSellerScope(nextScope);
+                       if (nextScope === "ALL") setSellerBsaleId(null);
+                     }}
+                     className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs font-normal text-theme-text disabled:opacity-60"
+                   >
+                     <option value="ALL">Todos los vendedores</option>
+                     <option value="SPECIFIC">Vendedor específico</option>
+                   </select>
+                 </label>
+                 {sellerScope === "SPECIFIC" && (
+                   <label className="grid gap-1 text-[11px] font-semibold text-theme-text-muted">
+                     Vendedor
+                     <select
+                       value={sellerBsaleId == null ? "" : String(sellerBsaleId)}
+                       disabled={Boolean(loadingPlanId) || isReadOnly}
+                       onChange={(event) =>
+                         setSellerBsaleId(
+                           event.target.value ? Number(event.target.value) : null,
+                         )
+                       }
+                       className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs font-normal text-theme-text disabled:opacity-60"
+                     >
+                       <option value="">Selecciona un vendedor...</option>
+                       {availableSellers.map((profile) => (
+                         <option
+                           key={profile.seller_bsale_id}
+                           value={profile.seller_bsale_id}
+                         >
+                           {profile.seller_name}
+                         </option>
+                       ))}
+                     </select>
+                   </label>
+                 )}
+               </div>
+               <TargetTierEditorUx
+                 tiers={tiers}
+                 disabled={Boolean(loadingPlanId) || isReadOnly}
+                 onChange={setTiers}
+               />
+             </>
+           )}
           <div className={planType === "SUPPLIER_SALES_TARGET" ? "hidden" : ""}>
             <div className="mt-6 overflow-hidden rounded-lg border border-theme-border">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-theme-border bg-theme-text/[0.03] px-3 py-2">

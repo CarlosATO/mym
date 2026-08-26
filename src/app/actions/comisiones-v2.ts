@@ -123,6 +123,7 @@ export type ComisionesV2FamilyPlan = {
   plan_code: string;
   version_no: number;
   plan_type: ComisionesV2PlanType;
+  seller_bsale_id?: number | null;
   valid_from: string;
   valid_to: string | null;
   rates: ComisionesV2FamilyRate[];
@@ -146,6 +147,8 @@ export type ComisionesV2FamilyPlanListItem = Omit<
   supersedes_plan_id: string | null;
   has_issued_usage: boolean;
   family_names: string[];
+  seller_bsale_id?: number | null;
+  seller_name?: string | null;
 };
 
 export type ComisionesV2SimulationLine = ComisionesV2PaymentEligibility & {
@@ -702,6 +705,8 @@ export async function getComisionesV2BasePlanConflict(input: {
   validFrom: string;
   validTo: string | null;
   excludePlanId?: string | null;
+  planType?: ComisionesV2PlanType;
+  sellerBsaleId?: number | null;
 }): Promise<{ data: ComisionesV2BasePlanConflict | null; error?: string }> {
   const supabase = await createClient();
   const {
@@ -722,8 +727,7 @@ export async function getComisionesV2BasePlanConflict(input: {
       p_valid_from: input.validFrom,
       p_valid_to: input.validTo,
       p_exclude_plan_id: input.excludePlanId ?? null,
-    })
-    .limit(1);
+    });
   if (error) {
     logSupabaseError("Comisiones V2 base plan conflict read error", error);
     return {
@@ -731,9 +735,48 @@ export async function getComisionesV2BasePlanConflict(input: {
       error: "No se pudo comprobar la vigencia del proveedor.",
     };
   }
-  return {
-    data: ((data ?? [])[0] as ComisionesV2BasePlanConflict | undefined) ?? null,
-  };
+  const candidates = (data ?? []) as ComisionesV2BasePlanConflict[];
+  if (input.planType !== "SUPPLIER_SALES_TARGET") {
+    return { data: candidates[0] ?? null };
+  }
+
+  const targetCandidates = candidates.filter(
+    (candidate) => candidate.conflict_plan_type === "SUPPLIER_SALES_TARGET",
+  );
+  const { data: scopedPlans, error: scopedPlansError } =
+    targetCandidates.length === 0
+      ? { data: [], error: null }
+      : await supabase
+          .schema("comisiones")
+          .from("commission_plans")
+          .select("id,seller_bsale_id")
+          .eq("company_id", companyId)
+          .in(
+            "id",
+            targetCandidates.map((candidate) => candidate.conflict_plan_id),
+          );
+  if (scopedPlansError) {
+    logSupabaseError(
+      "Comisiones V2 scoped plan conflict read error",
+      scopedPlansError,
+    );
+    return {
+      data: null,
+      error: "No se pudo comprobar el alcance de las reglas vigentes.",
+    };
+  }
+  const scopedSellerIds = new Map(
+    (scopedPlans ?? []).map((plan) => [plan.id, plan.seller_bsale_id as number | null]),
+  );
+  const matchingTarget = targetCandidates.find(
+    (candidate) =>
+      scopedSellerIds.get(candidate.conflict_plan_id) ===
+      (input.sellerBsaleId ?? null),
+  );
+  const familyConflict = candidates.find(
+    (candidate) => candidate.conflict_plan_type === "FAMILY_FIXED_PERCENT",
+  );
+  return { data: familyConflict ?? matchingTarget ?? null };
 }
 
 export async function getComisionesV2FamilyPlan(
@@ -841,7 +884,7 @@ export async function listComisionesV2FamilyPlans(options?: {
     .schema("comisiones")
     .from("commission_plans")
     .select(
-      "id,supplier_id,plan_code,version_no,plan_type,valid_from,valid_to,status,active,supersedes_plan_id",
+      "id,supplier_id,plan_code,version_no,plan_type,seller_bsale_id,valid_from,valid_to,status,active,supersedes_plan_id",
     )
     .eq("company_id", companyId)
     .in("plan_type", ["FAMILY_FIXED_PERCENT", "SUPPLIER_SALES_TARGET"]);
@@ -952,7 +995,7 @@ export async function getComisionesV2FamilyPlanById(
     .schema("comisiones")
     .from("commission_plans")
     .select(
-      "id,supplier_id,plan_code,version_no,plan_type,valid_from,valid_to,status,active,supersedes_plan_id",
+      "id,supplier_id,plan_code,version_no,plan_type,seller_bsale_id,valid_from,valid_to,status,active,supersedes_plan_id",
     )
     .eq("company_id", companyId)
     .eq("id", planId)
@@ -1202,6 +1245,7 @@ export async function saveComisionesV2SalesTargetPlan(input: {
   validFrom: string;
   validTo: string | null;
   tiers: ComisionesV2Tier[];
+  sellerBsaleId?: number | null;
 }): Promise<{
   data: { plan_id: string; plan_code: string; version_no: number } | null;
   error?: string;
@@ -1253,6 +1297,7 @@ export async function saveComisionesV2SalesTargetPlan(input: {
       p_valid_from: input.validFrom,
       p_valid_to: input.validTo,
       p_tiers: input.tiers,
+      p_seller_bsale_id: input.sellerBsaleId ?? null,
     });
   if (error) {
     logSupabaseError("Comisiones V2 sales target save error", error);
