@@ -274,7 +274,6 @@ export function RouteSettlementWorkspace({
     const cashRows = countedRows.filter(r => r.expected_payment_method === 'CASH')
     const cashExpected = cashRows.reduce((a, r) => a + r.expected_amount, 0)
     const cashReceived = cashRows.reduce((a, r) => a + (r.status === 'PAID_CASH' ? r.received_amount : 0), 0)
-    const cashDiff = cashExpected - cashReceived
     
     const transferRows = rows.filter(r => r.expected_payment_method === 'TRANSFER')
     const transferExpected = transferRows.reduce((a, r) => a + r.expected_amount, 0)
@@ -288,9 +287,12 @@ export function RouteSettlementWorkspace({
     const checkRows = countedRows.filter(r => r.expected_payment_method === 'CHECK')
     const checkExpected = checkRows.reduce((a, r) => a + r.expected_amount, 0)
     const checkReceived = checkRows.reduce((a, r) => a + (r.status === 'CHECK_RECEIVED' ? r.received_amount : 0), 0)
+
+    const creditRows = rows.filter(r => r.expected_payment_method === 'CREDIT')
+    const creditExpected = creditRows.reduce((a, r) => a + r.expected_amount, 0)
     
     const paid = countedRows.filter(r => ['PAID_CASH', 'TRANSFER_CONFIRMED', 'CHECK_RECEIVED'].includes(r.status) && (r.status !== 'PAID_CASH' || r.received_amount === r.expected_amount)).length
-    return { countedTotal, cashExpected, cashReceived, cashDiff, transferExpected, transferConfirmed, transferPending, checkExpected, checkReceived, paid, countedCount: countedRows.length }
+    return { countedTotal, cashExpected, cashReceived, transferExpected, transferConfirmed, transferPending, checkExpected, checkReceived, creditExpected, paid, countedCount: countedRows.length }
   }, [rows])
 
   const currentStatus = useMemo(() => {
@@ -829,17 +831,30 @@ export function RouteSettlementWorkspace({
       )}
 
       {/* ── Resumen financiero compacto ── */}
-      <div className="shrink-0 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-8 rounded-lg border border-theme-border bg-theme-surface/70 overflow-hidden">
-        {[
-          ['Total ruta', formatCurrency(guide.total_amount), 'text-theme-text'],
-          ['Total rendible', formatCurrency(summary.countedTotal), 'text-theme-text'],
-          ['Efectivo esp.', formatCurrency(summary.cashExpected), 'text-theme-text'],
-          ['Efectivo rec.', formatCurrency(summary.cashReceived), 'text-green-600 dark:text-green-400'],
-          ['Dif. efectivo', formatCurrency(summary.cashDiff), summary.cashDiff > 0 ? 'text-red-500' : 'text-theme-text-muted'],
-          ['Transf. esp/conf', `${formatCurrency(summary.transferExpected)} / ${formatCurrency(summary.transferConfirmed)}`, 'text-theme-text'],
-          ['Transf. pendiente', formatCurrency(summary.transferPending), summary.transferPending > 0 ? 'text-orange-500' : 'text-theme-text-muted'],
-          ['Fact. rendibles', `${summary.paid} / ${summary.countedCount}`, 'text-theme-text'],
-        ].map(([label, value, color]) => (
+      <div className={`shrink-0 grid grid-cols-2 md:grid-cols-3 ${invoiceFilter === 'CASH_ONLY' ? 'xl:grid-cols-7' : 'xl:grid-cols-10'} rounded-lg border border-theme-border bg-theme-surface/70 overflow-hidden`}>
+        {(invoiceFilter === 'CASH_ONLY'
+          ? [
+              ['Total ruta', formatCurrency(guide.total_amount), 'text-theme-text'],
+              ['Total rendible', formatCurrency(summary.countedTotal), 'text-theme-text'],
+              ['Efectivo esperado', formatCurrency(summary.cashExpected), 'text-theme-text'],
+              ['Cheques esperados', formatCurrency(summary.checkExpected), 'text-theme-text'],
+              ['Efectivo recibido', formatCurrency(summary.cashReceived), 'text-green-600 dark:text-green-400'],
+              ['Cheques recibidos', formatCurrency(summary.checkReceived), 'text-green-600 dark:text-green-400'],
+              ['Fact. rendibles', `${summary.paid} / ${summary.countedCount}`, 'text-theme-text'],
+            ]
+          : [
+              ['Total ruta', formatCurrency(guide.total_amount), 'text-theme-text'],
+              ['Total rendible', formatCurrency(summary.countedTotal), 'text-theme-text'],
+              ['Efectivo esperado', formatCurrency(summary.cashExpected), 'text-theme-text'],
+              ['Cheques esperados', formatCurrency(summary.checkExpected), 'text-theme-text'],
+              ['Efectivo recibido', formatCurrency(summary.cashReceived), 'text-green-600 dark:text-green-400'],
+              ['Cheques recibidos', formatCurrency(summary.checkReceived), 'text-green-600 dark:text-green-400'],
+              ['Fact. rendibles', `${summary.paid} / ${summary.countedCount}`, 'text-theme-text'],
+              ['No rendible · Transf. esp/conf', `${formatCurrency(summary.transferExpected)} / ${formatCurrency(summary.transferConfirmed)}`, 'text-theme-text-muted'],
+              ['No rendible · Transf. pendiente', formatCurrency(summary.transferPending), summary.transferPending > 0 ? 'text-orange-500' : 'text-theme-text-muted'],
+              ['No rendible · Crédito esp.', formatCurrency(summary.creditExpected), 'text-theme-text-muted'],
+            ]
+        ).map(([label, value, color]) => (
           <div key={label} className="px-3 py-2 border-b md:border-b-0 xl:border-r border-theme-border/50 last:border-r-0">
             <p className="text-[9px] font-bold uppercase tracking-wider text-theme-text-muted leading-tight">{label}</p>
             <p className={`text-xs font-bold leading-tight mt-0.5 ${color}`}>{value}</p>

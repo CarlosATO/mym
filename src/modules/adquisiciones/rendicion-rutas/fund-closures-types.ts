@@ -32,6 +32,7 @@ export interface RouteFundClosureItem {
   id: string;
   company_id: string;
   fund_closure_id: string;
+  payment_id: string | null;
   route_settlement_item_id: string;
   route_settlement_id: string | null;
   route_guide_id: string;
@@ -95,4 +96,44 @@ export interface PendingRouteFund {
   amount: number;
   guide_number: string | null;
   settlement_number: string | null;
+}
+
+export interface PendingRouteFundGroup {
+  route_settlement_id: string;
+  settlement_number: string;
+  settlement_date: string;
+  closed_at: string | null;
+  route_guide_id: string;
+  guide_number: string;
+  custody_user_id: string;
+  custody_name?: string;
+  custody_received_at: string | null;
+  cash_received: number;
+  active_route_expenses: number;
+  net_cash_pending: number;
+  checks_received: number;
+  check_count: number;
+  payment_ids: string[];
+}
+
+export interface PendingFundPayment {
+  id: string;
+  route_settlement_id: string;
+  payment_method_received: 'CASH' | 'CHECK';
+  amount_received: number;
+  reference_number: string | null;
+  bank_name: string | null;
+  check_number: string | null;
+  check_date: string | null;
+  custody_user_id: string | null;
+  custody_received_at: string | null;
+}
+
+export interface PendingFundExpense {
+  id: string;
+  route_settlement_id: string;
+  expense_type: string;
+  amount: number;
+  expense_date: string;
+  notes: string | null;
 }

@@ -1,18 +1,34 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
-import { getPendingRouteFunds, createFundClosure, getFundClosures, getFundClosureById, executeCloseFundClosure, addClosureExpense, addClosureDeposit, getAttachmentSignedUrl, canCancelFundClosure, cancelFundClosure } from '@/app/actions/adquisiciones/route-fund-closures'
-import { PendingRouteFund, RouteFundClosure } from './fund-closures-types'
-import { RefreshCw, Plus, CheckCircle, AlertTriangle, FileText, DollarSign, Wallet, Eye, Download, Paperclip, Search, Filter } from 'lucide-react'
+import { getPendingRouteFundGroups, getFundClosures, getFundClosureById, executeCloseFundClosure, addClosureExpense, addClosureDeposit, getAttachmentSignedUrl, canCancelFundClosure, cancelFundClosure } from '@/app/actions/adquisiciones/route-fund-closures'
+import { PendingRouteFundGroup } from './fund-closures-types'
+import { CreateFundClosureDialog } from './components/create-fund-closure-dialog'
+import { RefreshCw, Plus, AlertTriangle, FileText, Wallet, Eye, Download, Paperclip, Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatCivilDate, formatInstantInSantiago, todayInSantiago } from '@/lib/datetime'
+
+function formatPendingAmount(value: number) {
+  return `$${Number(value || 0).toLocaleString('es-CL')}`
+}
+
+function pendingGroupKey(group: PendingRouteFundGroup) {
+  return `${group.route_settlement_id}:${group.custody_user_id}`
+}
+
+function PendingTotal({ label, value, emphasized = false }: { label: string; value: number; emphasized?: boolean }) {
+  return <div><p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">{label}</p><p className={`mt-1 tabular-nums ${emphasized ? 'font-bold text-theme-text' : 'font-semibold text-theme-text'}`}>{formatPendingAmount(value)}</p></div>
+}
 
 export function FundClosuresWorkspace() {
   const [activeTab, setActiveTab] = useState<'PENDING' | 'HISTORY'>('PENDING')
   
   // Pending view state
-  const [pendingFunds, setPendingFunds] = useState<PendingRouteFund[]>([])
+  const [pendingFunds, setPendingFunds] = useState<PendingRouteFundGroup[]>([])
   const [selectedPendingIds, setSelectedPendingIds] = useState<Set<string>>(new Set())
+  const [selectionError, setSelectionError] = useState<string | null>(null)
+  const [preparedSelection, setPreparedSelection] = useState<PendingRouteFundGroup[] | null>(null)
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isLoadingPending, setIsLoadingPending] = useState(false)
   
   // History view state
@@ -32,8 +48,10 @@ export function FundClosuresWorkspace() {
   const loadPendingFunds = async () => {
     setIsLoadingPending(true)
     try {
-      const data = await getPendingRouteFunds()
+      const data = await getPendingRouteFundGroups()
       setPendingFunds(data)
+      setSelectedPendingIds(new Set())
+      setSelectionError(null)
     } catch (err: any) {
       toast.error(err.message)
     } finally {
@@ -60,25 +78,49 @@ export function FundClosuresWorkspace() {
 
   const togglePendingSelection = (id: string) => {
     const next = new Set(selectedPendingIds)
-    if (next.has(id)) next.delete(id)
-    else next.add(id)
+    if (next.has(id)) {
+      next.delete(id)
+      setSelectionError(null)
+    } else {
+      const group = pendingFunds.find(fund => pendingGroupKey(fund) === id)
+      const selectedCustody = pendingFunds.find(fund => next.has(pendingGroupKey(fund)))?.custody_user_id
+      if (group && selectedCustody && group.custody_user_id !== selectedCustody) {
+        setSelectionError('No puedes agrupar Rendiciones de custodios diferentes en un mismo cierre.')
+        return
+      }
+      next.add(id)
+      setSelectionError(null)
+    }
     setSelectedPendingIds(next)
   }
 
-  const handleCreateClosure = async () => {
+  const handlePrepareClosure = () => {
     if (selectedPendingIds.size === 0) return
-    const selected = pendingFunds.filter(f => selectedPendingIds.has(f.route_settlement_item_id))
-    try {
-      toast.loading("Creando cierre...")
-      const closureId = await createFundClosure(selected)
-      toast.dismiss()
-      toast.success("Cierre creado con éxito")
+    setPreparedSelection(pendingFunds.filter(fund => selectedPendingIds.has(pendingGroupKey(fund))))
+    setIsCreateDialogOpen(true)
+  }
+
+  const selectedFunds = pendingFunds.filter(fund => selectedPendingIds.has(pendingGroupKey(fund)))
+  const selectedTotals = selectedFunds.reduce((totals, fund) => ({
+    cashReceived: totals.cashReceived + Number(fund.cash_received || 0),
+    expenses: totals.expenses + Number(fund.active_route_expenses || 0),
+    netCash: totals.netCash + Number(fund.net_cash_pending || 0),
+    checks: totals.checks + Number(fund.checks_received || 0),
+  }), { cashReceived: 0, expenses: 0, netCash: 0, checks: 0 })
+
+  const handleSelectAll = (checked: boolean) => {
+    if (!checked) {
       setSelectedPendingIds(new Set())
-      setSelectedClosureId(closureId)
-    } catch (err: any) {
-      toast.dismiss()
-      toast.error(err.message)
+      setSelectionError(null)
+      return
     }
+    const custodyIds = new Set(pendingFunds.map(fund => fund.custody_user_id))
+    if (custodyIds.size > 1) {
+      setSelectionError('No puedes seleccionar todas: las Rendiciones pertenecen a custodios diferentes.')
+      return
+    }
+    setSelectedPendingIds(new Set(pendingFunds.map(pendingGroupKey)))
+    setSelectionError(null)
   }
 
   if (selectedClosureId) {
@@ -105,72 +147,87 @@ export function FundClosuresWorkspace() {
       <div className="flex-1 overflow-auto p-4">
         {activeTab === 'PENDING' ? (
           <div className="flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-bold text-theme-text">Fondos recibidos por rendir</h3>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <h3 className="text-lg font-bold text-theme-text">Fondos recibidos por rendir</h3>
+                <div className="flex items-center gap-2">
                 <button onClick={loadPendingFunds} disabled={isLoadingPending} className="p-2 border border-theme-border rounded-md hover:bg-theme-text/5 text-theme-text">
                   <RefreshCw className={`w-4 h-4 ${isLoadingPending ? 'animate-spin' : ''}`} />
                 </button>
                 <button 
-                  onClick={handleCreateClosure}
+                  onClick={handlePrepareClosure}
                   disabled={selectedPendingIds.size === 0}
                   className="px-4 py-2 bg-theme-accent text-white font-bold text-sm rounded-lg hover:bg-theme-accent-hover disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >
                   <Plus className="w-4 h-4" />
-                  Crear Cierre ({selectedPendingIds.size})
+                  Crear cierre ({selectedPendingIds.size})
                 </button>
               </div>
             </div>
+
+            {selectionError && <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{selectionError}</div>}
+
+            {selectedPendingIds.size > 0 && (
+              <div className="grid grid-cols-2 gap-3 rounded-lg border border-theme-border bg-theme-surface px-3 py-3 sm:grid-cols-5">
+                <PendingTotal label="Efectivo recibido" value={selectedTotals.cashReceived} />
+                <PendingTotal label="Gastos" value={selectedTotals.expenses} />
+                <PendingTotal label="Efectivo a entregar" value={selectedTotals.netCash} emphasized />
+                <PendingTotal label="Cheques" value={selectedTotals.checks} />
+                <div><p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Rendiciones</p><p className="mt-1 font-bold tabular-nums text-theme-text">{selectedFunds.length}</p></div>
+              </div>
+            )}
 
             <div className="bg-theme-surface border border-theme-border rounded-xl overflow-hidden">
               <table className="w-full text-left text-sm text-theme-text">
                 <thead className="bg-theme-text/5 border-b border-theme-border text-theme-text-muted">
                   <tr>
                     <th className="p-3 w-10">
-                      <input 
-                        type="checkbox" 
-                        checked={selectedPendingIds.size === pendingFunds.length && pendingFunds.length > 0}
-                        onChange={(e) => {
-                          if (e.target.checked) setSelectedPendingIds(new Set(pendingFunds.map(f => f.route_settlement_item_id)))
-                          else setSelectedPendingIds(new Set())
-                        }}
-                      />
+                      <input type="checkbox" checked={selectedPendingIds.size === pendingFunds.length && pendingFunds.length > 0} onChange={(e) => handleSelectAll(e.target.checked)} aria-label="Seleccionar Rendiciones" />
                     </th>
+                    <th className="p-3 font-semibold">Rendición</th>
                     <th className="p-3 font-semibold">Guía</th>
-                    <th className="p-3 font-semibold">Factura</th>
-                    <th className="p-3 font-semibold">Cliente</th>
-                    <th className="p-3 font-semibold">Método</th>
-                    <th className="p-3 font-semibold text-right">Monto</th>
+                    <th className="p-3 font-semibold">Fecha</th>
+                    <th className="p-3 font-semibold">Custodio</th>
+                    <th className="p-3 font-semibold text-right">Efectivo recibido</th>
+                    <th className="p-3 font-semibold text-right">Gastos</th>
+                    <th className="p-3 font-semibold text-right">Efectivo a entregar</th>
+                    <th className="p-3 font-semibold text-right">Cheques</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-theme-border">
                   {pendingFunds.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="p-8 text-center text-theme-text-muted">No hay fondos pendientes por rendir.</td>
+                      <td colSpan={8} className="p-8 text-center text-theme-text-muted">No hay fondos pendientes por rendir.</td>
                     </tr>
                   ) : pendingFunds.map(fund => (
-                    <tr key={fund.route_settlement_item_id} className="hover:bg-theme-text/5">
+                    <tr key={pendingGroupKey(fund)} className={selectedPendingIds.has(pendingGroupKey(fund)) ? 'bg-theme-accent/10' : 'hover:bg-theme-text/5'}>
                       <td className="p-3">
-                        <input 
-                          type="checkbox" 
-                          checked={selectedPendingIds.has(fund.route_settlement_item_id)}
-                          onChange={() => togglePendingSelection(fund.route_settlement_item_id)}
-                        />
+                        <input type="checkbox" checked={selectedPendingIds.has(pendingGroupKey(fund))} onChange={() => togglePendingSelection(pendingGroupKey(fund))} aria-label={`Seleccionar ${fund.settlement_number}`} />
                       </td>
-                      <td className="p-3">{fund.settlement_number || '---'}</td>
-                      <td className="p-3 font-mono">{fund.invoice_number}</td>
-                      <td className="p-3">{fund.customer_name}</td>
-                      <td className="p-3">
-                        <span className="px-2 py-0.5 rounded bg-theme-text/10 text-[11px] font-bold">
-                          {fund.payment_method === 'CASH' ? 'Efectivo' : 'Cheque'}
-                        </span>
-                      </td>
-                      <td className="p-3 text-right font-mono font-bold">${fund.amount.toLocaleString('es-CL')}</td>
+                      <td className="p-3 font-semibold">{fund.settlement_number}</td>
+                      <td className="p-3 font-semibold">{fund.guide_number}</td>
+                      <td className="p-3 whitespace-nowrap text-theme-text-muted">{formatInstantInSantiago(fund.closed_at)}</td>
+                      <td className="p-3 text-theme-text-muted">{fund.custody_name ?? fund.custody_user_id}</td>
+                      <td className="p-3 text-right font-mono font-bold">{formatPendingAmount(fund.cash_received)}</td>
+                      <td className="p-3 text-right font-mono">{formatPendingAmount(fund.active_route_expenses)}</td>
+                      <td className="p-3 text-right font-mono font-bold text-theme-text">{formatPendingAmount(fund.net_cash_pending)}</td>
+                      <td className="p-3 text-right font-mono">{formatPendingAmount(fund.checks_received)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+
+            {preparedSelection && (
+              <div className="rounded-xl border border-theme-accent/40 bg-theme-accent/5 px-4 py-3 text-sm text-theme-text">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-bold">Selección preparada para crear cierre</p>
+                    <p className="mt-1 text-xs text-theme-text-muted">{preparedSelection.length} Rendición{preparedSelection.length === 1 ? '' : 'es'} del custodio {preparedSelection[0]?.custody_name ?? preparedSelection[0]?.custody_user_id}. No se ha creado ningún Cierre de Fondos.</p>
+                  </div>
+                  <button type="button" onClick={() => setPreparedSelection(null)} className="text-xs font-semibold text-theme-text-muted hover:text-theme-text">Cerrar</button>
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <div className="flex flex-col gap-4">
@@ -275,6 +332,18 @@ export function FundClosuresWorkspace() {
           </div>
         )}
       </div>
+      {isCreateDialogOpen && preparedSelection && (
+        <CreateFundClosureDialog
+          groups={preparedSelection}
+          onClose={() => setIsCreateDialogOpen(false)}
+          onCreated={() => {
+            setIsCreateDialogOpen(false)
+            setPreparedSelection(null)
+            setSelectedPendingIds(new Set())
+            loadPendingFunds()
+          }}
+        />
+      )}
     </div>
   )
 }

@@ -29,6 +29,7 @@ export interface RouteSettlementsDashboardRow {
   total_transfer_expected: number
   total_credit_amount: number
   total_cash_received: number
+  total_check_received: number
   total_cash_difference: number
   total_transfer_confirmed: number
   total_transfer_pending: number
@@ -183,13 +184,16 @@ export interface RegisterRouteSettlementPaymentInput {
   }>
 }
 
-function toOperationalStatus(status: string | null, hasWorkedItems: boolean): RouteSettlementsDashboardRow['operational_status'] {
-  if (!status) return 'PENDING_SETTLEMENT'
-  if (status === 'IN_REVIEW') return hasWorkedItems ? 'IN_REVIEW' : 'PENDING_SETTLEMENT'
-  if (status === 'SETTLED') return 'SETTLED'
-  if (status === 'SETTLED_WITH_DIFFERENCE') return 'SETTLED_WITH_DIFFERENCE'
-  if (status === 'CLOSED') return 'CLOSED'
-  if (status === 'CANCELLED') return 'CANCELLED'
+function toOperationalStatus(
+  workflowStatus: string | null,
+  hasWorkedItems: boolean,
+  financialResult: string | null,
+): RouteSettlementsDashboardRow['operational_status'] {
+  if (!workflowStatus) return 'PENDING_SETTLEMENT'
+  if (workflowStatus === 'IN_PROGRESS') return hasWorkedItems ? 'IN_REVIEW' : 'PENDING_SETTLEMENT'
+  if (workflowStatus === 'READY_TO_CLOSE') return financialResult === 'WITH_DIFFERENCE' ? 'SETTLED_WITH_DIFFERENCE' : 'SETTLED'
+  if (workflowStatus === 'CLOSED') return 'CLOSED'
+  if (workflowStatus === 'CANCELLED') return 'CANCELLED'
   return 'PENDING_SETTLEMENT'
 }
 
@@ -264,25 +268,21 @@ export async function getRouteSettlementsDashboardData() {
       console.log('[RendicionRutas:Server] dashboard start')
     }
 
-    const [settlementsRes, dispatchedGuidesRes] = await Promise.all([
+    const [settlementsRes, dispatchedGuidesRes, paymentsRes] = await Promise.all([
       adquisicionesDb
         .from('route_settlements')
         .select(`
           id,
           route_guide_id,
           settlement_number,
-          status,
+           workflow_status,
+           financial_result,
           total_route_amount,
           total_cash_expected,
           total_check_expected,
           total_transfer_expected,
           total_credit_amount,
-          total_cash_received,
-          total_cash_difference,
-          total_transfer_confirmed,
-          total_transfer_pending,
-          total_invoices,
-          paid_count
+           total_invoices
         `)
         .eq('company_id', companyId),
       logisticaDb
@@ -302,20 +302,54 @@ export async function getRouteSettlementsDashboardData() {
           total_invoices
         `)
         .eq('company_id', companyId)
-        .eq('status', 'DISPATCHED')
+         .eq('status', 'DISPATCHED'),
+      adquisicionesDb
+        .from('route_settlement_payments')
+        .select('id, settlement_id, payment_method_received, amount_received, verification_status, voided_at')
+        .eq('company_id', companyId)
+        .eq('verification_status', 'CONFIRMED')
+        .is('voided_at', null)
     ])
 
     if (settlementsRes.error) throw settlementsRes.error
     if (dispatchedGuidesRes.error) throw dispatchedGuidesRes.error
+    if (paymentsRes.error) throw paymentsRes.error
 
     const settlementIds = (settlementsRes.data || []).map(settlement => settlement.id)
     const settlementItemsWorkedMap = new Map<string, boolean>()
-    const settlementItemStatsMap = new Map<string, { total_rendible_count: number; paid_count: number }>()
+    const settlementItemStatsMap = new Map<string, number>()
+    const settlementPaymentStatsMap = new Map<string, { cashReceived: number; checkReceived: number; transferReceived: number }>()
+    const confirmedPaymentIds = new Set<string>()
+
+    for (const payment of paymentsRes.data || []) {
+      confirmedPaymentIds.add(payment.id)
+      const current = settlementPaymentStatsMap.get(payment.settlement_id) ?? { cashReceived: 0, checkReceived: 0, transferReceived: 0 }
+      if (payment.payment_method_received === 'CASH') current.cashReceived += Number(payment.amount_received ?? 0)
+      if (payment.payment_method_received === 'CHECK') current.checkReceived += Number(payment.amount_received ?? 0)
+      if (payment.payment_method_received === 'TRANSFER') current.transferReceived += Number(payment.amount_received ?? 0)
+      settlementPaymentStatsMap.set(payment.settlement_id, current)
+    }
+
+    const allocationsRes = await adquisicionesDb
+      .from('route_settlement_payment_allocations')
+      .select('settlement_id, settlement_item_id, payment_id, amount_applied, voided_at')
+      .eq('company_id', companyId)
+
+    if (allocationsRes.error) throw allocationsRes.error
+
+    const appliedAmountByItem = new Map<string, number>()
+    for (const allocation of allocationsRes.data || []) {
+      if (allocation.voided_at || !confirmedPaymentIds.has(allocation.payment_id)) continue
+      appliedAmountByItem.set(
+        allocation.settlement_item_id,
+        (appliedAmountByItem.get(allocation.settlement_item_id) ?? 0) + Number(allocation.amount_applied ?? 0),
+      )
+    }
 
     if (settlementIds.length > 0) {
       const settlementItemsRes = await adquisicionesDb
         .from('route_settlement_items')
-        .select('settlement_id, expected_payment_method, status, created_at, updated_at')
+        .select('id, settlement_id, expected_payment_method, expected_amount, resolution_type, created_at, updated_at')
         .eq('company_id', companyId)
         .in('settlement_id', settlementIds)
 
@@ -325,24 +359,18 @@ export async function getRouteSettlementsDashboardData() {
         const alreadyWorked = settlementItemsWorkedMap.get(item.settlement_id) === true
         if (!alreadyWorked && item.updated_at !== item.created_at) {
           settlementItemsWorkedMap.set(item.settlement_id, true)
-          continue
         }
 
         if (!settlementItemsWorkedMap.has(item.settlement_id)) {
           settlementItemsWorkedMap.set(item.settlement_id, false)
         }
 
-        const effectiveMethod = (['PAID_CASH', 'TRANSFER_CONFIRMED', 'CHECK_RECEIVED'].includes(item.status))
-          ? (item.status === 'PAID_CASH' ? 'CASH' : item.status === 'TRANSFER_CONFIRMED' ? 'TRANSFER' : 'CHECK')
-          : item.expected_payment_method
-
-        if (['CASH', 'TRANSFER', 'CHECK'].includes(effectiveMethod)) {
-          const current = settlementItemStatsMap.get(item.settlement_id) ?? { total_rendible_count: 0, paid_count: 0 }
-          current.total_rendible_count += 1
-          if (['PAID_CASH', 'TRANSFER_CONFIRMED', 'CHECK_RECEIVED'].includes(item.status)) {
-            current.paid_count += 1
-          }
-          settlementItemStatsMap.set(item.settlement_id, current)
+        if (['CASH', 'CHECK'].includes(item.expected_payment_method)) {
+          const appliedAmount = appliedAmountByItem.get(item.id) ?? 0
+          const resolved = appliedAmount >= Number(item.expected_amount ?? 0)
+            || ['PENDING_PAYMENT', 'CREDIT', 'NOT_DELIVERED'].includes(item.resolution_type ?? '')
+          const resolvedCount = settlementItemStatsMap.get(item.settlement_id) ?? 0
+          settlementItemStatsMap.set(item.settlement_id, resolvedCount + (resolved ? 1 : 0))
         }
       }
     }
@@ -372,7 +400,16 @@ export async function getRouteSettlementsDashboardData() {
       const settlement = settlementsByGuideId.get(guide.id)
       const hasWorkedItems = settlement ? settlementItemsWorkedMap.get(settlement.id) === true : false
       const settlementItemStats = settlement ? settlementItemStatsMap.get(settlement.id) : null
-      const operationalStatus = toOperationalStatus(settlement?.status ?? null, hasWorkedItems)
+      const operationalStatus = toOperationalStatus(
+        settlement?.workflow_status ?? null,
+        hasWorkedItems,
+        settlement?.financial_result ?? null,
+      )
+      const paymentStats = settlement ? settlementPaymentStatsMap.get(settlement.id) : null
+      const cashReceived = Number(paymentStats?.cashReceived ?? 0)
+      const checkReceived = Number(paymentStats?.checkReceived ?? 0)
+      const transferReceived = Number(paymentStats?.transferReceived ?? 0)
+      const transferExpected = Number(settlement?.total_transfer_expected ?? guide.total_transfer ?? 0)
 
       return {
         route_guide_id: guide.id,
@@ -384,18 +421,19 @@ export async function getRouteSettlementsDashboardData() {
         total_route_amount: Number(guide.total_amount ?? 0),
         total_cash_expected: Number(guide.total_cash_expected ?? 0),
         total_check_expected: Number(guide.total_check_expected ?? 0),
-        total_transfer_expected: Number(settlement?.total_transfer_expected ?? guide.total_transfer ?? 0),
+        total_transfer_expected: transferExpected,
         total_credit_amount: Number(settlement?.total_credit_amount ?? guide.total_credit ?? 0),
-        total_cash_received: Number(settlement?.total_cash_received ?? 0),
-        total_cash_difference: Number(settlement?.total_cash_difference ?? 0),
-        total_transfer_confirmed: Number(settlement?.total_transfer_confirmed ?? 0),
-        total_transfer_pending: Number(settlement?.total_transfer_pending ?? guide.total_transfer ?? 0),
+        total_cash_received: cashReceived,
+        total_check_received: checkReceived,
+        total_cash_difference: Number(guide.total_cash_expected ?? 0) - cashReceived,
+        total_transfer_confirmed: transferReceived,
+        total_transfer_pending: Math.max(transferExpected - transferReceived, 0),
         total_invoices: Number(settlement?.total_invoices ?? guide.total_invoices ?? 0),
-        paid_count: Number(settlementItemStats?.paid_count ?? settlement?.paid_count ?? 0),
+        paid_count: Number(settlementItemStats ?? 0),
         total_rendible_count: Number(guideRendibleCountMap.get(guide.id) ?? 0),
         settlement_id: settlement?.id ?? null,
         settlement_number: settlement?.settlement_number ?? null,
-        settlement_status: settlement?.status ?? null,
+        settlement_status: settlement?.workflow_status ?? null,
         has_worked_items: hasWorkedItems,
         operational_status: operationalStatus,
         action_type: settlement ? 'VIEW' : 'CREATE'
@@ -407,7 +445,7 @@ export async function getRouteSettlementsDashboardData() {
     const kpis: RouteSettlementsDashboardKpis = {
       pending_count: rows.filter(row => row.operational_status === 'PENDING_SETTLEMENT').length,
       in_review_count: rows.filter(row => row.operational_status === 'IN_REVIEW').length,
-      settled_count: rows.filter(row => row.operational_status === 'SETTLED').length,
+      settled_count: rows.filter(row => row.operational_status === 'SETTLED' || row.operational_status === 'CLOSED').length,
       with_difference_count: rows.filter(row => row.operational_status === 'SETTLED_WITH_DIFFERENCE').length
     }
 

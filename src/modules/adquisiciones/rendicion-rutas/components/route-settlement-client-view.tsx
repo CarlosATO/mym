@@ -254,7 +254,7 @@ export function RouteSettlementClientView({ detail, onClose, canUpdateSettlement
 
       {!isClosed && canCloseSettlement && summary.can_close && (
         <RouteSettlementCloseDialog
-          settlement={summary}
+          detail={detail}
           open={closeDialogOpen}
           onOpenChange={setCloseDialogOpen}
           onClosed={onPaymentSaved}

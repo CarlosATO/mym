@@ -3,7 +3,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { getActiveCompanyId } from '@/app/actions/companies'
-import { PendingRouteFund, RouteFundClosure } from '@/modules/adquisiciones/rendicion-rutas/fund-closures-types'
+import { PendingFundExpense, PendingFundPayment, PendingRouteFund, PendingRouteFundGroup } from '@/modules/adquisiciones/rendicion-rutas/fund-closures-types'
 
 async function createAdquisicionesClient() {
   const cookieStore = await cookies()
@@ -116,6 +116,113 @@ export async function getPendingRouteFunds(): Promise<PendingRouteFund[]> {
   }
 
   return pendingFunds;
+}
+
+/** Read model for the Payments-based pending-funds flow. UI wiring is intentionally separate. */
+export async function getPendingRouteFundGroups(): Promise<PendingRouteFundGroup[]> {
+  const db = await createAdquisicionesClient()
+  const { data: userData, error: userError } = await db.auth.getUser()
+  if (userError || !userData?.user) throw new Error('No autorizado')
+
+  const companyId = await getActiveCompanyId(userData.user)
+  if (!companyId) throw new Error('Empresa no seleccionada')
+  await requirePermission(db, userData.user.id, 'adquisiciones.route_fund_closures.view')
+
+  const { data, error } = await db.schema('adquisiciones').rpc('get_pending_route_fund_groups', {
+    p_company_id: companyId,
+  })
+  if (error) throw new Error(error.message)
+
+  const groups = (data ?? []) as PendingRouteFundGroup[]
+  const settlementIds = [...new Set(groups.map(group => group.route_settlement_id))]
+  const { data: settlements } = settlementIds.length > 0
+    ? await db.from('route_settlements').select('id, closed_at').in('id', settlementIds).eq('company_id', companyId)
+    : { data: [] }
+  const closedAtBySettlement = new Map((settlements ?? []).map(settlement => [settlement.id, settlement.closed_at]))
+  const custodyIds = [...new Set(groups.map(group => group.custody_user_id).filter(Boolean))]
+  const { data: users } = custodyIds.length > 0
+    ? await db.schema('portal').from('users').select('id, nombre, apellido').in('id', custodyIds)
+    : { data: [] }
+  const custodyNames = new Map((users ?? []).map(user => [
+    user.id,
+    [user.nombre, user.apellido].filter(Boolean).join(' ') || user.id,
+  ]))
+
+  return groups.map(group => ({
+    ...group,
+    closed_at: closedAtBySettlement.get(group.route_settlement_id) ?? null,
+    custody_name: custodyNames.get(group.custody_user_id) ?? group.custody_user_id,
+  }))
+}
+
+export async function getPendingFundPayments(paymentIds: string[]): Promise<PendingFundPayment[]> {
+  if (paymentIds.length === 0) return []
+  const db = await createAdquisicionesClient()
+  const { data: userData, error: userError } = await db.auth.getUser()
+  if (userError || !userData?.user) throw new Error('No autorizado')
+  const companyId = await getActiveCompanyId(userData.user)
+  if (!companyId) throw new Error('Empresa no seleccionada')
+  await requirePermission(db, userData.user.id, 'adquisiciones.route_fund_closures.view')
+
+  const { data, error } = await db
+    .from('route_settlement_payments')
+    .select('id, route_settlement_id:settlement_id, payment_method_received, amount_received, reference_number, bank_name, check_number, check_date, custody_user_id, custody_received_at')
+    .eq('company_id', companyId)
+    .in('id', paymentIds)
+    .eq('verification_status', 'CONFIRMED')
+    .is('voided_at', null)
+    .in('payment_method_received', ['CASH', 'CHECK'])
+  if (error) throw new Error(error.message)
+  return (data ?? []) as PendingFundPayment[]
+}
+
+export async function getPendingFundExpenses(settlementIds: string[]): Promise<PendingFundExpense[]> {
+  if (settlementIds.length === 0) return []
+  const db = await createAdquisicionesClient()
+  const { data: userData, error: userError } = await db.auth.getUser()
+  if (userError || !userData?.user) throw new Error('No autorizado')
+  const companyId = await getActiveCompanyId(userData.user)
+  if (!companyId) throw new Error('Empresa no seleccionada')
+  await requirePermission(db, userData.user.id, 'adquisiciones.route_fund_closures.view')
+  const { data, error } = await db
+    .from('route_fund_closure_expenses')
+    .select('id, route_settlement_id, expense_type, amount, expense_date, notes')
+    .eq('company_id', companyId)
+    .in('route_settlement_id', settlementIds)
+    .eq('status', 'ACTIVE')
+    .is('voided_at', null)
+    .is('fund_closure_id', null)
+    .order('expense_date', { ascending: true })
+  if (error) throw new Error(error.message)
+  return (data ?? []) as PendingFundExpense[]
+}
+
+export async function createFundClosureFromPayments(input: {
+  paymentIds: string[]
+  checkPaymentIds: string[]
+  cashDelivered: number
+  notes: string | null
+}) {
+  if (input.paymentIds.length === 0) throw new Error('Debe seleccionar al menos una Rendición.')
+  if (input.cashDelivered < 0) throw new Error('El efectivo entregado no puede ser negativo.')
+
+  const db = await createAdquisicionesClient()
+  const { data: userData, error: userError } = await db.auth.getUser()
+  if (userError || !userData?.user) throw new Error('No autorizado')
+  const companyId = await getActiveCompanyId(userData.user)
+  if (!companyId) throw new Error('Empresa no seleccionada')
+  await requirePermission(db, userData.user.id, 'adquisiciones.route_fund_closures.create')
+
+  const { data, error } = await db.schema('adquisiciones').rpc('create_route_fund_closure_from_payments', {
+    p_company_id: companyId,
+    p_payment_ids: input.paymentIds,
+    p_check_payment_ids: input.checkPaymentIds,
+    p_cash_delivered: input.cashDelivered,
+    p_notes: input.notes,
+    p_user_id: userData.user.id,
+  })
+  if (error) throw new Error(error.message)
+  return data as { closure_id: string; closure_number: string; status: string }
 }
 
 // 2. Crear un cierre de fondos nuevo a partir de una lista de fondos
