@@ -104,6 +104,8 @@ export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement
   const router = useRouter()
   const searchParams = useSearchParams()
   const mainTab = mainTabFromSearch(searchParams)
+  const previousMainTabRef = useRef(mainTab)
+  const viewRequestIdRef = useRef(0)
 
   const isMountedRef = useRef(false)
   const latestRequestIdRef = useRef(0)
@@ -120,8 +122,11 @@ export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement
   })
 
   useEffect(() => {
-    if (view.kind !== 'list') startTransition(() => setView({ kind: 'list' }))
-  }, [searchParams, view.kind])
+    if (previousMainTabRef.current === mainTab) return
+    previousMainTabRef.current = mainTab
+    viewRequestIdRef.current += 1
+    startTransition(() => setView({ kind: 'list' }))
+  }, [mainTab])
 
   function setMainTab(tab: MainTab) {
     router.push(`${pathname}?tab=${mainTabQuery[tab]}`, { scroll: false })
@@ -229,12 +234,13 @@ export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement
   }
 
   const handleSettlementStarted = async (guideId: string, result: CreateRouteSettlementResult) => {
+    const requestId = ++viewRequestIdRef.current
     updateRowAfterStart(guideId, result)
     setErrorMsg(null)
     setView({ kind: 'loading-settlement', settlementId: result.settlement_id })
 
     const settlementRes = await getRouteSettlementDetail(result.settlement_id)
-    if (!isMountedRef.current) return
+    if (!isMountedRef.current || requestId !== viewRequestIdRef.current) return
 
     if (settlementRes.error || !settlementRes.data) {
       setErrorMsg(settlementRes.error ?? 'La rendición fue iniciada, pero no se pudo cargar su detalle.')
@@ -252,6 +258,7 @@ export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement
    * - Con settlement_id  → carga rendición existente (modo has-rr)
    */
   const handleRowDoubleClick = async (row: RouteSettlementsDashboardRow) => {
+    const requestId = ++viewRequestIdRef.current
     setErrorMsg(null)
 
     if (!row.settlement_id) {
@@ -262,7 +269,7 @@ export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement
       setView({ kind: 'loading-workspace', guideId: row.route_guide_id })
 
       const { data, error } = await getRouteGuideWorkspaceData(row.route_guide_id)
-      if (!isMountedRef.current) return
+       if (!isMountedRef.current || requestId !== viewRequestIdRef.current) return
 
       if (error || !data) {
         setErrorMsg(error ?? 'No se pudo cargar la guía.')
@@ -283,7 +290,7 @@ export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement
       setView({ kind: 'loading-settlement', settlementId: row.settlement_id })
 
       const settlementRes = await getRouteSettlementDetail(row.settlement_id)
-      if (!isMountedRef.current) return
+       if (!isMountedRef.current || requestId !== viewRequestIdRef.current) return
 
       if (settlementRes.error || !settlementRes.data) {
         setErrorMsg(settlementRes.error ?? 'No se pudo cargar la rendición.')
@@ -296,6 +303,7 @@ export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement
 
   // ── Cerrar workspace ─────────────────────────────────────────────────────
   const handleCloseWorkspace = (savedResult?: SaveRouteSettlementResult) => {
+    viewRequestIdRef.current += 1
     const currentView = view
 
     if (savedResult && currentView.kind === 'workspace-no-rr') {

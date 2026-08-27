@@ -33,6 +33,19 @@ test('workspace confirma, bloquea submit y maneja created/replayed', () => {
   assert.match(panel, /onSettlementStarted=\{/)
 })
 
+test('abrir una rendición existente no se resetea por el cambio de view', () => {
+  assert.match(panel, /setView\(\{ kind: 'loading-settlement', settlementId: row\.settlement_id \}\)/)
+  assert.match(panel, /getRouteSettlementDetail\(row\.settlement_id\)/)
+  assert.match(panel, /setView\(\{ kind: 'client-view', detail: settlementRes\.data \}\)/)
+  assert.match(panel, /previousMainTabRef\.current === mainTab/)
+  assert.match(panel, /\}, \[mainTab\]\)/)
+  assert.match(panel, /startTransition\(\(\) => setView\(\{ kind: 'list' \}\)\)/)
+  assert.match(panel, /viewRequestIdRef\.current \+= 1/)
+  assert.match(panel, /requestId !== viewRequestIdRef\.current/)
+  assert.match(panel, /router\.push\(`\$\{pathname\}\?tab=/)
+  assert.doesNotMatch(panel, /\}, \[searchParams, view\.kind\]\)/)
+})
+
 test('la bandeja conserva un viewport interno con ancho mínimo profesional', () => {
   assert.match(table, /min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto/)
   assert.match(table, /min-w-\[1840px\]/)
