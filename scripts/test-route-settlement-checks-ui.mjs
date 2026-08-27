@@ -9,6 +9,7 @@ test('Cheques es informativo y sólo permite abrir el detalle', () => {
   assert.match(component, /getRouteSettlementCheckRegistry/)
   assert.match(component, /title="Ver"/)
   assert.doesNotMatch(component, /setRouteSettlementCheckStatus|set_route_settlement_check_status/)
+  assert.doesNotMatch(component, /route_settlement_check_status_history/)
   assert.doesNotMatch(component, /Entregar a depósito|Confirmar depósito|Confirmar cambio de situación|Observación o referencia/)
 })
 

@@ -19,6 +19,7 @@
     "test:route-settlement-null-customer-guard": "node --test scripts/test-route-settlement-null-customer-guard.mjs",
     "test:route-settlement-navigation": "node --test scripts/test-route-settlement-navigation.mjs",
     "test:route-settlement-checks-ui": "node --test scripts/test-route-settlement-checks-ui.mjs",
+    "test:route-settlement-pending-security": "node --test scripts/test-route-settlement-pending-security.mjs",
     "test:route-fund-partial-checks": "node --test scripts/test-route-fund-partial-checks.mjs",
     "test:route-settlement-check-registry": "node --test scripts/test-route-settlement-check-registry.mjs",
     "test:route-settlement-check-registry-derived": "node --test scripts/test-route-settlement-check-registry-derived.mjs",
