@@ -205,3 +205,35 @@ export interface RouteFundClosureDepositSummary {
   saldo_por_depositar: number;
   deposits: RouteFundClosureDeposit[];
 }
+
+export interface PendingRouteFundDepositCheck {
+  payment_id: string;
+  customer_name: string;
+  check_number: string | null;
+  bank: string | null;
+  check_date: string | null;
+  amount: number;
+}
+
+export interface PendingRouteFundDeposit {
+  fund_closure_id: string;
+  fund_closure_number: string;
+  created_at: string;
+  custodian_id: string;
+  custodian_name: string | null;
+  cash_delivered: number;
+  cash_deposited: number;
+  cash_pending: number;
+  checks_total_count: number;
+  checks_total_amount: number;
+  checks_deposited_count: number;
+  checks_deposited_amount: number;
+  checks_pending_count: number;
+  checks_pending_amount: number;
+  total_pending: number;
+  active_deposit_count: number;
+  last_deposit_date: string | null;
+  situation: 'PENDING' | 'PARTIAL';
+  reconciliation_status: 'RECONCILED';
+  available_checks: PendingRouteFundDepositCheck[];
+}

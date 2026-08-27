@@ -91,7 +91,14 @@ export const adquisicionesNavigation: ModuleNavigation = {
                visibility: { anyOf: ['adquisiciones.route_settlements.view', 'system.admin'] },
              },
              {
-               id: 'rendicion-rutas-cheques',
+                id: 'rendicion-rutas-depositos',
+                label: 'Depósitos',
+                target: { pathname: routes.routeSettlements, query: { tab: 'deposits' } },
+                active: { pathname: { exact: routes.routeSettlements }, query: { tab: 'deposits' } },
+                visibility: { anyOf: ['adquisiciones.route_settlements.view', 'system.admin'] },
+              },
+              {
+                id: 'rendicion-rutas-cheques',
                label: 'Cheques',
                target: { pathname: routes.routeSettlements, query: { tab: 'checks' } },
                active: { pathname: { exact: routes.routeSettlements }, query: { tab: 'checks' } },

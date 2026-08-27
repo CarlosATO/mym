@@ -3,7 +3,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { getActiveCompanyId } from '@/app/actions/companies'
-import { PendingFundExpense, PendingFundPayment, PendingRouteFund, PendingRouteFundGroup, RouteFundClosureDepositSummary } from '@/modules/adquisiciones/rendicion-rutas/fund-closures-types'
+import { PendingFundExpense, PendingFundPayment, PendingRouteFund, PendingRouteFundGroup, PendingRouteFundDeposit, RouteFundClosureDepositSummary } from '@/modules/adquisiciones/rendicion-rutas/fund-closures-types'
 import { SETTLEMENT_ATTACHMENT_ALLOWED_MIMES, SETTLEMENT_ATTACHMENT_BUCKET, SETTLEMENT_ATTACHMENT_MAX_SIZE, settlementAttachmentExtension } from '@/modules/adquisiciones/rendicion-rutas/utils/settlement-attachment-config'
 
 async function createAdquisicionesClient() {
@@ -940,6 +940,38 @@ export async function getRouteFundClosureDepositSummary(fundClosureId: string) {
     return { data: data as RouteFundClosureDepositSummary | null, error: null }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'No se pudo consultar el detalle de depósitos.'
+    return { data: null, error: message }
+  }
+}
+
+export interface PendingRouteFundDepositFilters {
+  closureNumber?: string
+  custodyUserId?: string
+  situation?: 'PENDING' | 'PARTIAL'
+  dateFrom?: string
+  dateTo?: string
+}
+
+export async function getPendingRouteFundDeposits(filters: PendingRouteFundDepositFilters = {}) {
+  const db = await createAdquisicionesClient()
+  try {
+    const { data: userData, error: userError } = await db.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('Empresa no seleccionada')
+    await requirePermission(db, userData.user.id, 'adquisiciones.route_fund_closures.view')
+    const { data, error } = await db.schema('adquisiciones').rpc('get_pending_route_fund_deposits', {
+      p_company_id: companyId,
+      p_closure_number: filters.closureNumber?.trim() || null,
+      p_custody_user_id: filters.custodyUserId || null,
+      p_situation: filters.situation || null,
+      p_date_from: filters.dateFrom || null,
+      p_date_to: filters.dateTo || null,
+    })
+    if (error) throw new Error(error.message)
+    return { data: (data ?? []) as PendingRouteFundDeposit[], error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudieron consultar los depósitos pendientes.'
     return { data: null, error: message }
   }
 }

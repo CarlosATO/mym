@@ -9,7 +9,7 @@ const [navigation, panel] = await Promise.all([
   readFile(panelPath, 'utf8'),
 ])
 
-test('Rendición de rutas expone sus tres vistas como hijos con URLs directas', () => {
+test('Rendición de rutas expone sus vistas como hijos con URLs directas', () => {
   assert.match(navigation, /children: \[/)
   assert.match(navigation, /label: 'Bandeja de Rendiciones'/)
   assert.match(navigation, /query: \{ tab: 'tray' \}/)
@@ -17,6 +17,8 @@ test('Rendición de rutas expone sus tres vistas como hijos con URLs directas', 
   assert.match(navigation, /query: \{ tab: 'post-collections' \}/)
   assert.match(navigation, /label: 'Cierre de Fondos'/)
   assert.match(navigation, /query: \{ tab: 'fund-closures' \}/)
+  assert.match(navigation, /label: 'Depósitos'/)
+  assert.match(navigation, /query: \{ tab: 'deposits' \}/)
   assert.match(navigation, /label: 'Cheques'/)
   assert.match(navigation, /query: \{ tab: 'checks' \}/)
   assert.match(navigation, /adquisiciones\.route_settlements\.view/)

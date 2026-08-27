@@ -1,18 +1,17 @@
 'use client'
 
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState } from 'react'
 import { Download, Eye, FileText, Loader2, Plus, Trash2, X } from 'lucide-react'
 import {
   deleteRouteFundClosureDepositAttachment,
   getRouteFundClosureDepositAttachmentSignedUrl,
   getRouteFundClosureDepositSummary,
-  registerRouteFundClosureDeposit,
-  saveRouteFundClosureDepositAttachment,
   voidRouteFundClosureDeposit,
 } from '@/app/actions/adquisiciones/route-fund-closures'
 import type { RouteFundClosureDeposit, RouteFundClosureDepositSummary } from '../fund-closures-types'
-import { formatCivilDate, todayInSantiago } from '@/lib/datetime'
+import { formatCivilDate } from '@/lib/datetime'
 import { toast } from 'sonner'
+import { RegisterFundClosureDepositDialog } from './register-fund-closure-deposit-dialog'
 
 function money(value: number) {
   return `$${Number(value || 0).toLocaleString('es-CL')}`
@@ -109,34 +108,7 @@ function DepositTotal({ label, value, emphasized = false }: { label: string; val
 }
 
 function DepositForm({ summary, closureId, onClose, onSaved }: { summary: RouteFundClosureDepositSummary; closureId: string; onClose: () => void; onSaved: () => Promise<void> }) {
-  const [amount, setAmount] = useState('')
-  const [date, setDate] = useState(todayInSantiago())
-  const [method, setMethod] = useState<'DEPOSIT' | 'CASH_DELIVERY' | 'TRANSFER' | 'OTHER'>('DEPOSIT')
-  const [reference, setReference] = useState('')
-  const [notes, setNotes] = useState('')
-  const [file, setFile] = useState<File | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
-  const maxAmount = summary.saldo_por_depositar
-
-  async function submit(event: FormEvent) {
-    event.preventDefault()
-    const numericAmount = Number(amount)
-    if (!Number.isInteger(numericAmount) || numericAmount <= 0 || numericAmount > maxAmount) { setError(`Ingresa un monto entre $1 y ${money(maxAmount)}.`); return }
-    setSaving(true); setError(null)
-    const response = await registerRouteFundClosureDeposit({ fundClosureId: closureId, amount: numericAmount, depositDate: date, depositMethod: method, referenceNumber: reference, notes })
-    if (response.error || !response.data) { setError(response.error ?? 'No se pudo registrar el depósito.'); setSaving(false); return }
-    if (file) {
-      const formData = new FormData(); formData.set('file', file)
-      const attachment = await saveRouteFundClosureDepositAttachment(response.data.deposit_id, closureId, formData)
-      if (attachment.error) { toast.error(`Depósito registrado, pero no se pudo guardar el comprobante: ${attachment.error}`) }
-    }
-    toast.success('Depósito registrado.')
-    await onSaved()
-    setSaving(false)
-  }
-
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><form onSubmit={submit} className="flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-2xl"><div className="flex items-start justify-between border-b border-theme-border px-5 py-4"><div><h3 className="font-bold text-theme-text">Registrar depósito</h3><p className="mt-0.5 text-xs text-theme-text-muted">Saldo disponible: <strong className="text-theme-text">{money(maxAmount)}</strong></p></div><button type="button" onClick={onClose} className="rounded p-1 text-theme-text-muted hover:bg-theme-text/10" aria-label="Cerrar"><X className="h-4 w-4" /></button></div><div className="grid gap-3 overflow-y-auto p-5 text-xs"><label className="font-semibold text-theme-text">Monto<input type="number" min="1" max={maxAmount} step="1" required value={amount} onChange={event => setAmount(event.target.value)} className="mt-1 h-9 w-full rounded-lg border border-theme-border bg-theme-surface px-3 font-mono outline-none focus:border-theme-accent" /></label><div className="grid gap-3 sm:grid-cols-2"><label className="font-semibold text-theme-text">Fecha del depósito<input type="date" required value={date} onChange={event => setDate(event.target.value)} className="mt-1 h-9 w-full rounded-lg border border-theme-border bg-theme-surface px-3 outline-none focus:border-theme-accent" /></label><label className="font-semibold text-theme-text">Método<select value={method} onChange={event => setMethod(event.target.value as typeof method)} className="mt-1 h-9 w-full rounded-lg border border-theme-border bg-theme-surface px-3 outline-none focus:border-theme-accent"><option value="DEPOSIT">Depósito bancario</option><option value="CASH_DELIVERY">Entrega de efectivo</option><option value="TRANSFER">Transferencia</option><option value="OTHER">Otro</option></select></label></div><label className="font-semibold text-theme-text">N.º comprobante / referencia<input value={reference} onChange={event => setReference(event.target.value)} className="mt-1 h-9 w-full rounded-lg border border-theme-border bg-theme-surface px-3 outline-none focus:border-theme-accent" /></label><label className="font-semibold text-theme-text">Comprobante<span className="mt-1 block"><input type="file" accept="application/pdf,image/png,image/jpeg,image/webp" onChange={event => setFile(event.target.files?.[0] ?? null)} className="w-full rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-xs file:mr-3 file:rounded file:border-0 file:bg-theme-text/10 file:px-2 file:py-1 file:text-xs" /></span><span className="mt-1 block font-normal text-[10px] text-theme-text-muted">PDF, PNG, JPEG o WEBP · máximo 10 MB.</span></label><label className="font-semibold text-theme-text">Observación<textarea rows={2} value={notes} onChange={event => setNotes(event.target.value)} className="mt-1 w-full resize-none rounded-lg border border-theme-border bg-theme-surface px-3 py-2 font-normal outline-none focus:border-theme-accent" /></label>{error && <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}</div><div className="flex justify-end gap-2 border-t border-theme-border px-5 py-3"><button type="button" onClick={onClose} disabled={saving} className="rounded-lg border border-theme-border px-4 py-2 text-xs font-bold text-theme-text">Cancelar</button><button type="submit" disabled={saving} className="rounded-lg bg-theme-accent px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{saving ? 'Guardando...' : 'Guardar depósito'}</button></div></form></div>
+  return <RegisterFundClosureDepositDialog closureId={closureId} maxAmount={summary.saldo_por_depositar} onClose={onClose} onSaved={onSaved} />
 }
 
 function DepositDetail({ deposit, onClose, onChanged, onOpenAttachment }: { deposit: RouteFundClosureDeposit; onClose: () => void; onChanged: () => Promise<void>; onOpenAttachment: (id: string) => Promise<void> }) {

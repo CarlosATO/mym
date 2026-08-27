@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, ChevronDown, Loader2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatInstantInSantiago } from '@/lib/datetime'
@@ -34,14 +34,20 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated, onPartialF
   const cashReceived = groups.reduce((sum, group) => sum + Number(group.cash_received || 0), 0)
   const expenseTotal = groups.reduce((sum, group) => sum + Number(group.active_route_expenses || 0), 0)
   const cashExpected = cashReceived - expenseTotal
-  const [cashDeliveredInput, setCashDeliveredInput] = useState('')
-  const [cashDelivered, setCashDelivered] = useState<number | null>(null)
+  const cashDeliveredGroupKey = groups.map(group => `${group.route_settlement_id}:${group.custody_user_id}`).sort().join('|')
+  const proposedCashDelivered = cashExpected > 0 ? cashExpected : 0
+  const [cashDeliveredInput, setCashDeliveredInput] = useState(() => formatCashInput(String(proposedCashDelivered)))
+  const [cashDelivered, setCashDelivered] = useState<number | null>(proposedCashDelivered)
+  const cashDeliveredWasEdited = useRef(false)
+  const previousCashDeliveredGroupKey = useRef(cashDeliveredGroupKey)
   const [notes, setNotes] = useState('')
   const [confirmedChecks, setConfirmedChecks] = useState<Set<string>>(new Set())
   const [depositCheckIds, setDepositCheckIds] = useState<Set<string>>(new Set())
   const [traceOpen, setTraceOpen] = useState(false)
   const [registerDepositNow, setRegisterDepositNow] = useState(false)
-  const [depositAmount, setDepositAmount] = useState('')
+  const [depositAmount, setDepositAmount] = useState(() => String(proposedCashDelivered))
+  const depositAmountWasEdited = useRef(false)
+  const depositCheckSelectionWasEdited = useRef(false)
   const [depositDate, setDepositDate] = useState(new Date().toISOString().slice(0, 10))
   const [depositMethod, setDepositMethod] = useState<'DEPOSIT' | 'CASH_DELIVERY' | 'TRANSFER' | 'OTHER'>('DEPOSIT')
   const [depositReference, setDepositReference] = useState('')
@@ -66,7 +72,27 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated, onPartialF
   const depositCheckTotal = depositChecks.filter(check => depositCheckIds.has(check.id)).reduce((sum, check) => sum + Number(check.amount_received || 0), 0)
   const hasCashDelivered = !requiresCashDelivery || cashDelivered !== null
   const hasDifference = hasCashDelivered && difference !== 0
-  const depositAvailable = hasCashDelivered ? delivered + expectedChecks : totalExpected
+  const depositCashAvailable = delivered
+  const depositTotal = Number(depositAmount || 0) + depositCheckTotal
+  const depositAvailable = depositCashAvailable + expectedChecks
+  const depositCashPending = Math.max(0, depositCashAvailable - Number(depositAmount || 0))
+  const depositChecksPending = Math.max(0, expectedChecks - depositCheckTotal)
+
+  useEffect(() => {
+    if (registerDepositNow && !depositAmountWasEdited.current) setDepositAmount(String(depositCashAvailable))
+  }, [registerDepositNow, depositCashAvailable])
+
+  useEffect(() => {
+    const groupChanged = previousCashDeliveredGroupKey.current !== cashDeliveredGroupKey
+    if (groupChanged) {
+      previousCashDeliveredGroupKey.current = cashDeliveredGroupKey
+      cashDeliveredWasEdited.current = false
+    }
+    if (groupChanged || !cashDeliveredWasEdited.current) {
+      setCashDeliveredInput(formatCashInput(String(proposedCashDelivered)))
+      setCashDelivered(proposedCashDelivered)
+    }
+  }, [cashDeliveredGroupKey, proposedCashDelivered])
 
   useEffect(() => {
     let active = true
@@ -78,7 +104,9 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated, onPartialF
         if (!active) return
         setPayments(loadedPayments)
         setExpenses(loadedExpenses)
-        setConfirmedChecks(new Set(loadedPayments.filter(payment => payment.payment_method_received === 'CHECK' && payment.custody_received_at).map(payment => payment.id)))
+        const loadedCheckIds = loadedPayments.filter(payment => payment.payment_method_received === 'CHECK' && payment.custody_received_at).map(payment => payment.id)
+        setConfirmedChecks(new Set(loadedCheckIds))
+        if (!depositCheckSelectionWasEdited.current) setDepositCheckIds(new Set(loadedCheckIds))
       })
       .catch(error => toast.error(error instanceof Error ? error.message : 'No fue posible cargar el detalle del cierre.'))
       .finally(() => active && setIsLoading(false))
@@ -89,13 +117,16 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated, onPartialF
     if (!hasCashDelivered) return
     if (hasDifference && notes.trim().length === 0) return
     if (registerDepositNow) {
-      const amount = Number(depositAmount)
-      if (!Number.isInteger(amount) || amount <= 0 || amount > depositAvailable) {
-        setFormError(`El monto a depositar debe estar entre $1 y ${money(depositAvailable)}.`)
+      if (!Number.isInteger(Number(depositAmount)) || Number(depositAmount) < 0 || Number(depositAmount) > depositCashAvailable) {
+        setFormError(`El efectivo a depositar debe estar entre $0 y ${money(depositCashAvailable)}.`)
         return
       }
-      if (depositCheckTotal > amount) {
-        setFormError(`El monto de los cheques seleccionados supera el depósito de ${money(amount)}.`)
+      if (!Number.isInteger(depositTotal) || depositTotal <= 0 || depositTotal > depositAvailable) {
+        setFormError(`El total del depósito debe estar entre $1 y ${money(depositAvailable)}.`)
+        return
+      }
+      if (depositCheckTotal > depositTotal) {
+        setFormError(`El monto de los cheques seleccionados supera el total del depósito de ${money(depositTotal)}.`)
         return
       }
       if (!depositDate) { setFormError('La fecha del depósito es obligatoria.'); return }
@@ -122,7 +153,7 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated, onPartialF
 
       const deposit = await registerRouteFundClosureDeposit({
         fundClosureId: closure.closure_id,
-        amount: Number(depositAmount),
+        amount: depositTotal,
         depositDate,
         depositMethod,
         referenceNumber: depositReference,
@@ -194,6 +225,7 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated, onPartialF
                   value={cashDeliveredInput}
                   onChange={event => {
                     const digits = event.target.value.replace(/\D/g, '')
+                    cashDeliveredWasEdited.current = true
                     setCashDeliveredInput(formatCashInput(event.target.value))
                     setCashDelivered(digits ? Number(digits) : null)
                   }}
@@ -245,13 +277,14 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated, onPartialF
           {registerDepositNow && <section className="rounded-lg border border-theme-accent/30 bg-theme-accent/[0.035] p-3.5">
             <div className="mb-2.5 flex items-baseline justify-between gap-3"><h3 className="text-xs font-bold uppercase tracking-[0.08em] text-theme-text">Depósito</h3><span className="text-[10px] text-theme-text-muted">Disponible para depositar: <strong className="text-theme-text">{money(depositAvailable)}</strong></span></div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <label className="text-xs font-semibold text-theme-text">Monto a depositar<input type="number" min="1" max={depositAvailable} step="1" required={registerDepositNow} value={depositAmount} onChange={event => setDepositAmount(event.target.value)} className="mt-1 h-9 w-full rounded-lg border border-theme-border bg-theme-surface px-3 font-mono outline-none focus:border-theme-accent" /></label>
+              <label className="text-xs font-semibold text-theme-text">Monto de efectivo a depositar<input type="number" min="0" max={depositCashAvailable} step="1" required={registerDepositNow} value={depositAmount} onChange={event => { depositAmountWasEdited.current = true; setDepositAmount(event.target.value) }} className="mt-1 h-9 w-full rounded-lg border border-theme-border bg-theme-surface px-3 font-mono outline-none focus:border-theme-accent" /></label>
               <label className="text-xs font-semibold text-theme-text">Fecha del depósito<input type="date" required={registerDepositNow} value={depositDate} onChange={event => setDepositDate(event.target.value)} className="mt-1 h-9 w-full rounded-lg border border-theme-border bg-theme-surface px-3 outline-none focus:border-theme-accent" /></label>
               <label className="text-xs font-semibold text-theme-text">Método<select value={depositMethod} onChange={event => setDepositMethod(event.target.value as typeof depositMethod)} className="mt-1 h-9 w-full rounded-lg border border-theme-border bg-theme-surface px-3 outline-none focus:border-theme-accent"><option value="DEPOSIT">Depósito bancario</option><option value="CASH_DELIVERY">Entrega de efectivo</option><option value="TRANSFER">Transferencia</option><option value="OTHER">Otro</option></select></label>
               <label className="text-xs font-semibold text-theme-text">N.º comprobante / referencia<input value={depositReference} onChange={event => setDepositReference(event.target.value)} className="mt-1 h-9 w-full rounded-lg border border-theme-border bg-theme-surface px-3 outline-none focus:border-theme-accent" /></label>
             </div>
              <div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="text-xs font-semibold text-theme-text">Adjuntar comprobante<input type="file" accept="application/pdf,image/png,image/jpeg,image/webp" onChange={event => setDepositFile(event.target.files?.[0] ?? null)} className="mt-1 w-full rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-xs file:mr-3 file:rounded file:border-0 file:bg-theme-text/10 file:px-2 file:py-1 file:text-xs" /><span className="mt-1 block font-normal text-[10px] text-theme-text-muted">PDF, PNG, JPEG o WEBP · máximo 10 MB.</span>{depositFile && <span className="mt-1 flex items-center gap-2 font-normal text-theme-text"><span className="truncate">{depositFile.name}</span><button type="button" onClick={() => setDepositFile(null)} className="font-bold text-red-600">Quitar</button></span>}</label><label className="text-xs font-semibold text-theme-text">Observación<span className="ml-1 font-normal text-theme-text-muted">(opcional)</span><textarea value={depositNotes} onChange={event => setDepositNotes(event.target.value)} rows={2} className="mt-1 w-full resize-none rounded-lg border border-theme-border bg-theme-surface px-3 py-2 font-normal outline-none focus:border-theme-accent" /></label></div>
-             <div className="mt-3 rounded-lg border border-theme-border bg-theme-surface px-3 py-2.5"><div className="flex items-baseline justify-between gap-2"><p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Cheques incluidos en este depósito</p><span className="text-[10px] text-theme-text-muted">{money(depositCheckTotal)}</span></div>{depositChecks.length === 0 ? <p className="mt-1 text-[11px] text-theme-text-muted">Depósito sólo de efectivo o sin cheques seleccionados.</p> : <div className="mt-1 divide-y divide-theme-border">{depositChecks.map(check => <label key={check.id} className="flex cursor-pointer items-center justify-between gap-3 py-1.5 text-xs"><span className="flex min-w-0 items-center gap-2"><input type="checkbox" checked={depositCheckIds.has(check.id)} onChange={event => setDepositCheckIds(current => { const next = new Set(current); if (event.target.checked) next.add(check.id); else next.delete(check.id); return next })} className="h-3.5 w-3.5 accent-theme-accent" /><span className="truncate">{check.customer_name || 'Cliente no disponible'} · #{check.check_number ?? check.reference_number ?? 'Sin número'}</span></span><span className="shrink-0 font-mono font-bold">{money(check.amount_received)}</span></label>)}</div>}</div>
+              <div className="mt-3 rounded-lg border border-theme-border bg-theme-surface px-3 py-2.5"><div className="flex items-baseline justify-between gap-2"><p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Cheques incluidos en este depósito</p><span className="text-[10px] text-theme-text-muted">{money(depositCheckTotal)}</span></div>{depositChecks.length === 0 ? <p className="mt-1 text-[11px] text-theme-text-muted">Depósito sólo de efectivo o sin cheques seleccionados.</p> : <div className="mt-1 divide-y divide-theme-border">{depositChecks.map(check => <label key={check.id} className="flex cursor-pointer items-center justify-between gap-3 py-1.5 text-xs"><span className="flex min-w-0 items-center gap-2"><input type="checkbox" checked={depositCheckIds.has(check.id)} onChange={event => { depositCheckSelectionWasEdited.current = true; setDepositCheckIds(current => { const next = new Set(current); if (event.target.checked) next.add(check.id); else next.delete(check.id); return next }) }} className="h-3.5 w-3.5 accent-theme-accent" /><span className="truncate">{check.customer_name || 'Cliente no disponible'} · #{check.check_number ?? check.reference_number ?? 'Sin número'}</span></span><span className="shrink-0 font-mono font-bold">{money(check.amount_received)}</span></label>)}</div>}</div>
+              <div className="mt-3 grid grid-cols-2 gap-2 rounded-lg border border-theme-accent/30 bg-theme-accent/[0.04] px-3 py-2.5 text-xs sm:grid-cols-4"><div><p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Se deposita ahora</p><p className="mt-0.5 font-mono font-bold text-theme-text">{money(depositTotal)}</p></div><div><p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Total depósito</p><p className="mt-0.5 font-mono font-bold text-theme-text">{money(depositTotal)}</p></div><div><p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Efectivo pendiente</p><p className="mt-0.5 font-mono font-semibold text-theme-text">{money(depositCashPending)}</p></div><div><p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Cheques pendientes</p><p className="mt-0.5 font-mono font-semibold text-theme-text">{money(depositChecksPending)}</p></div></div>
             {formError && <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">{formError}</p>}
           </section>}
 

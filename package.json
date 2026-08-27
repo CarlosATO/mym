@@ -24,6 +24,8 @@
     "test:route-settlement-check-registry": "node --test scripts/test-route-settlement-check-registry.mjs",
     "test:route-settlement-check-registry-derived": "node --test scripts/test-route-settlement-check-registry-derived.mjs",
     "test:route-fund-closure-attachment-key": "node --experimental-strip-types --test scripts/test-route-fund-closure-attachment-key.mjs",
+    "test:pending-route-fund-deposits": "node --test scripts/test-pending-route-fund-deposits-read-model.mjs",
+    "test:pending-route-fund-deposits-ui": "node --test scripts/test-pending-route-fund-deposits-ui.mjs",
     "test:table-2d-route-settlements": "node --experimental-strip-types --test scripts/test-table-2d-route-settlements.mjs",
     "test:bsale-brand": "node --experimental-strip-types --test scripts/test-bsale-brand.mjs",
     "test:bsale-brand-supplier-links": "node --experimental-strip-types --test scripts/test-bsale-brand-supplier-links.mjs",

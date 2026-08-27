@@ -20,6 +20,7 @@ import { AlertTriangle, RefreshCw, Wallet } from 'lucide-react'
 import { FundClosuresWorkspace } from './fund-closures-workspace'
 import { PostSettlementCollections } from './components/post-settlement-collections'
 import { RouteSettlementChecks } from './components/route-settlement-checks'
+import { PendingFundDepositsWorkspace } from './components/pending-fund-deposits-workspace'
 
 const EMPTY_KPIS: RouteSettlementsDashboardKpis = {
   pending_count: 0,
@@ -76,12 +77,13 @@ interface RouteSettlementsPanelProps {
   canCloseSettlement: boolean
 }
 
-type MainTab = 'TRAY' | 'POST_COLLECTIONS' | 'FUND_CLOSURES' | 'CHECKS'
+type MainTab = 'TRAY' | 'POST_COLLECTIONS' | 'FUND_CLOSURES' | 'DEPOSITS' | 'CHECKS'
 
 function mainTabFromSearch(searchParams: Pick<URLSearchParams, 'get'>): MainTab {
   const tab = searchParams.get('tab')
   if (tab === 'post-collections') return 'POST_COLLECTIONS'
   if (tab === 'fund-closures') return 'FUND_CLOSURES'
+  if (tab === 'deposits') return 'DEPOSITS'
   if (tab === 'checks') return 'CHECKS'
   return 'TRAY'
 }
@@ -90,6 +92,7 @@ const mainTabQuery: Record<MainTab, string> = {
   TRAY: 'tray',
   POST_COLLECTIONS: 'post-collections',
   FUND_CLOSURES: 'fund-closures',
+  DEPOSITS: 'deposits',
   CHECKS: 'checks',
 }
 
@@ -399,17 +402,27 @@ export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement
           <Wallet className="w-4 h-4" />
           Cierre de Fondos
         </button>
+        <button
+          onClick={() => setMainTab('DEPOSITS')}
+          className={`px-4 py-2 text-sm font-bold rounded-lg border transition-colors ${mainTab === 'DEPOSITS' ? 'bg-theme-accent text-white border-theme-accent' : 'bg-theme-surface border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5'}`}
+        >
+          Depósitos
+        </button>
       </div>
 
        {mainTab === 'POST_COLLECTIONS' ? (
          <div className="flex-1 min-h-0 border border-theme-border rounded-xl overflow-hidden bg-theme-surface">
            <PostSettlementCollections />
          </div>
-       ) : mainTab === 'FUND_CLOSURES' ? (
-        <div className="flex-1 min-h-0 border border-theme-border rounded-xl overflow-hidden bg-theme-surface">
-           <FundClosuresWorkspace />
-         </div>
-       ) : mainTab === 'CHECKS' ? (
+        ) : mainTab === 'FUND_CLOSURES' ? (
+         <div className="flex-1 min-h-0 border border-theme-border rounded-xl overflow-hidden bg-theme-surface">
+            <FundClosuresWorkspace />
+          </div>
+        ) : mainTab === 'DEPOSITS' ? (
+          <div className="flex-1 min-h-0 overflow-hidden rounded-xl border border-theme-border bg-theme-surface">
+            <PendingFundDepositsWorkspace />
+          </div>
+        ) : mainTab === 'CHECKS' ? (
          <div className="flex-1 min-h-0 overflow-hidden rounded-xl border border-theme-border bg-theme-surface">
            <RouteSettlementChecks />
          </div>
