@@ -33,6 +33,8 @@ export interface RouteFundClosureItem {
   company_id: string;
   fund_closure_id: string;
   payment_id: string | null;
+  post_settlement_payment_id?: string | null;
+  source_type?: 'ROUTE_SETTLEMENT_PAYMENT' | 'POST_SETTLEMENT_PAYMENT' | null;
   route_settlement_item_id: string;
   route_settlement_id: string | null;
   route_guide_id: string;
@@ -114,6 +116,26 @@ export interface PendingRouteFundGroup {
   checks_received: number;
   check_count: number;
   payment_ids: string[];
+  post_settlement_payment_ids?: string[];
+  physical_items?: PendingPhysicalFund[];
+}
+
+export type PendingFundSource = 'ROUTE_SETTLEMENT_PAYMENT' | 'POST_SETTLEMENT_PAYMENT';
+
+export interface PendingPhysicalFund {
+  source_type: PendingFundSource;
+  payment_id: string | null;
+  post_settlement_payment_id: string | null;
+  route_settlement_id: string;
+  settlement_number?: string | null;
+  guide_number?: string | null;
+  invoice_number?: string | null;
+  customer_name?: string | null;
+  received_at: string | null;
+  payment_method_received: 'CASH' | 'CHECK';
+  amount_received: number;
+  reference_number?: string | null;
+  check_number?: string | null;
 }
 
 export interface PendingFundPayment {
@@ -127,6 +149,13 @@ export interface PendingFundPayment {
   check_date: string | null;
   custody_user_id: string | null;
   custody_received_at: string | null;
+  source_type?: PendingFundSource;
+  post_settlement_payment_id?: string | null;
+  received_at?: string | null;
+  settlement_number?: string | null;
+  guide_number?: string | null;
+  invoice_number?: string | null;
+  customer_name?: string | null;
 }
 
 export interface PendingFundExpense {
@@ -136,4 +165,43 @@ export interface PendingFundExpense {
   amount: number;
   expense_date: string;
   notes: string | null;
+}
+
+export interface RouteFundClosureDepositAttachment {
+  id: string;
+  attachment_type: string;
+  file_name: string;
+  storage_path: string;
+  file_mime_type: string | null;
+  file_size: number | null;
+  uploaded_by: string;
+  uploaded_at: string;
+}
+
+export interface RouteFundClosureDeposit {
+  id: string;
+  deposit_method: 'DEPOSIT' | 'CASH_DELIVERY' | 'TRANSFER' | 'OTHER';
+  amount: number;
+  deposit_date: string;
+  reference_number: string | null;
+  notes: string | null;
+  status: 'ACTIVE' | 'VOIDED';
+  created_by: string;
+  created_at: string;
+  voided_at: string | null;
+  voided_by: string | null;
+  void_reason: string | null;
+  attachments: RouteFundClosureDepositAttachment[];
+}
+
+export interface RouteFundClosureDepositSummary {
+  fund_closure_id: string;
+  closure_number: string;
+  status: string;
+  cash_delivered: number;
+  total_check_received: number;
+  total_fisico_recibido: number;
+  total_depositado: number;
+  saldo_por_depositar: number;
+  deposits: RouteFundClosureDeposit[];
 }

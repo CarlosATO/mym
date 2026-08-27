@@ -54,6 +54,19 @@ export interface CreateRouteSettlementResult {
   replayed: boolean
 }
 
+export interface RecordRouteSettlementBulkRow {
+  settlement_item_id: string
+  result: 'CASH' | 'CHECK' | 'TRANSFER' | 'CREDIT'
+  amount: string | number
+  payment_group_key?: string | null
+  metadata?: {
+    bank_name?: string | null
+    check_number?: string | null
+    check_date?: string | null
+    [key: string]: unknown
+  } | null
+}
+
 export interface RouteSettlementDetailInvoice {
   settlement_item_id: string
   route_guide_item_id: string
@@ -65,7 +78,7 @@ export interface RouteSettlementDetailInvoice {
   applied_amount: number
   unapplied_amount: number
   remaining_amount?: number
-  invoice_result: 'PENDING' | 'PARTIAL' | 'PAID' | 'PENDING_PAYMENT' | 'CREDIT' | 'NOT_DELIVERED' | 'REVIEW_REQUIRED'
+  invoice_result: 'PENDING' | 'PARTIAL' | 'PAID' | 'PENDING_PAYMENT' | 'TRANSFER_PENDING_REVIEW' | 'CREDIT' | 'NOT_DELIVERED' | 'REVIEW_REQUIRED'
   resolved_for_settlement: boolean
   resolution_type: 'PENDING_PAYMENT' | 'CREDIT' | 'NOT_DELIVERED' | 'REVIEW_REQUIRED' | null
   resolution_source?: 'MANUAL' | 'DERIVED' | null
@@ -193,7 +206,7 @@ function toOperationalStatus(
   if (!workflowStatus) return 'PENDING_SETTLEMENT'
   if (workflowStatus === 'IN_PROGRESS') return hasWorkedItems ? 'IN_REVIEW' : 'PENDING_SETTLEMENT'
   if (workflowStatus === 'READY_TO_CLOSE') return financialResult === 'WITH_DIFFERENCE' ? 'SETTLED_WITH_DIFFERENCE' : 'SETTLED'
-  if (workflowStatus === 'CLOSED') return 'CLOSED'
+  if (workflowStatus === 'CLOSED') return 'SETTLED'
   if (workflowStatus === 'CANCELLED') return 'CANCELLED'
   return 'PENDING_SETTLEMENT'
 }
@@ -308,7 +321,6 @@ export async function getRouteSettlementsDashboardData() {
         .from('route_settlement_payments')
         .select('id, settlement_id, payment_method_received, amount_received, verification_status, voided_at')
         .eq('company_id', companyId)
-        .eq('verification_status', 'CONFIRMED')
         .is('voided_at', null)
     ])
 
@@ -319,15 +331,22 @@ export async function getRouteSettlementsDashboardData() {
     const settlementIds = (settlementsRes.data || []).map(settlement => settlement.id)
     const settlementItemsWorkedMap = new Map<string, boolean>()
     const settlementItemStatsMap = new Map<string, number>()
-    const settlementPaymentStatsMap = new Map<string, { cashReceived: number; checkReceived: number; transferReceived: number }>()
+    const settlementItemTotalMap = new Map<string, number>()
+    const settlementPaymentStatsMap = new Map<string, { cashReceived: number; checkReceived: number; transferReceived: number; transferPending: number }>()
     const confirmedPaymentIds = new Set<string>()
+    const pendingTransferPaymentIds = new Set<string>()
 
     for (const payment of paymentsRes.data || []) {
-      confirmedPaymentIds.add(payment.id)
-      const current = settlementPaymentStatsMap.get(payment.settlement_id) ?? { cashReceived: 0, checkReceived: 0, transferReceived: 0 }
-      if (payment.payment_method_received === 'CASH') current.cashReceived += Number(payment.amount_received ?? 0)
-      if (payment.payment_method_received === 'CHECK') current.checkReceived += Number(payment.amount_received ?? 0)
-      if (payment.payment_method_received === 'TRANSFER') current.transferReceived += Number(payment.amount_received ?? 0)
+      const current = settlementPaymentStatsMap.get(payment.settlement_id) ?? { cashReceived: 0, checkReceived: 0, transferReceived: 0, transferPending: 0 }
+      if (payment.verification_status === 'CONFIRMED') {
+        confirmedPaymentIds.add(payment.id)
+        if (payment.payment_method_received === 'CASH') current.cashReceived += Number(payment.amount_received ?? 0)
+        if (payment.payment_method_received === 'CHECK') current.checkReceived += Number(payment.amount_received ?? 0)
+        if (payment.payment_method_received === 'TRANSFER') current.transferReceived += Number(payment.amount_received ?? 0)
+      } else if (payment.verification_status === 'PENDING' && payment.payment_method_received === 'TRANSFER') {
+        pendingTransferPaymentIds.add(payment.id)
+        current.transferPending += Number(payment.amount_received ?? 0)
+      }
       settlementPaymentStatsMap.set(payment.settlement_id, current)
     }
 
@@ -339,12 +358,20 @@ export async function getRouteSettlementsDashboardData() {
     if (allocationsRes.error) throw allocationsRes.error
 
     const appliedAmountByItem = new Map<string, number>()
+    const pendingTransferAmountByItem = new Map<string, number>()
     for (const allocation of allocationsRes.data || []) {
-      if (allocation.voided_at || !confirmedPaymentIds.has(allocation.payment_id)) continue
-      appliedAmountByItem.set(
-        allocation.settlement_item_id,
-        (appliedAmountByItem.get(allocation.settlement_item_id) ?? 0) + Number(allocation.amount_applied ?? 0),
-      )
+      if (allocation.voided_at) continue
+      if (confirmedPaymentIds.has(allocation.payment_id)) {
+        appliedAmountByItem.set(
+          allocation.settlement_item_id,
+          (appliedAmountByItem.get(allocation.settlement_item_id) ?? 0) + Number(allocation.amount_applied ?? 0),
+        )
+      } else if (pendingTransferPaymentIds.has(allocation.payment_id)) {
+        pendingTransferAmountByItem.set(
+          allocation.settlement_item_id,
+          (pendingTransferAmountByItem.get(allocation.settlement_item_id) ?? 0) + Number(allocation.amount_applied ?? 0),
+        )
+      }
     }
 
     if (settlementIds.length > 0) {
@@ -357,8 +384,11 @@ export async function getRouteSettlementsDashboardData() {
       if (settlementItemsRes.error) throw settlementItemsRes.error
 
       for (const item of settlementItemsRes.data || []) {
+        settlementItemTotalMap.set(item.settlement_id, (settlementItemTotalMap.get(item.settlement_id) ?? 0) + 1)
         const alreadyWorked = settlementItemsWorkedMap.get(item.settlement_id) === true
-        if (!alreadyWorked && item.updated_at !== item.created_at) {
+        const appliedAmount = appliedAmountByItem.get(item.id) ?? 0
+        const pendingTransferAmount = pendingTransferAmountByItem.get(item.id) ?? 0
+        if (!alreadyWorked && (item.updated_at !== item.created_at || appliedAmount > 0 || pendingTransferAmount > 0 || item.resolution_type !== null)) {
           settlementItemsWorkedMap.set(item.settlement_id, true)
         }
 
@@ -366,8 +396,8 @@ export async function getRouteSettlementsDashboardData() {
           settlementItemsWorkedMap.set(item.settlement_id, false)
         }
 
-        const appliedAmount = appliedAmountByItem.get(item.id) ?? 0
         const resolved = appliedAmount >= Number(item.expected_amount ?? 0)
+          || pendingTransferAmount >= Number(item.expected_amount ?? 0)
           || ['PENDING_PAYMENT', 'CREDIT', 'NOT_DELIVERED'].includes(item.resolution_type ?? '')
         const resolvedCount = settlementItemStatsMap.get(item.settlement_id) ?? 0
         settlementItemStatsMap.set(item.settlement_id, resolvedCount + (resolved ? 1 : 0))
@@ -391,7 +421,9 @@ export async function getRouteSettlementsDashboardData() {
       const cashReceived = Number(paymentStats?.cashReceived ?? 0)
       const checkReceived = Number(paymentStats?.checkReceived ?? 0)
       const transferReceived = Number(paymentStats?.transferReceived ?? 0)
+      const transferPending = Number(paymentStats?.transferPending ?? 0)
       const transferExpected = Number(settlement?.total_transfer_expected ?? guide.total_transfer ?? 0)
+      const totalInvoiceCount = Number(settlement ? settlementItemTotalMap.get(settlement.id) ?? settlement.total_invoices : guide.total_invoices ?? 0)
 
       return {
         route_guide_id: guide.id,
@@ -409,10 +441,10 @@ export async function getRouteSettlementsDashboardData() {
         total_check_received: checkReceived,
         total_cash_difference: Number(guide.total_cash_expected ?? 0) - cashReceived,
         total_transfer_confirmed: transferReceived,
-        total_transfer_pending: Math.max(transferExpected - transferReceived, 0),
-        total_invoices: Number(settlement?.total_invoices ?? guide.total_invoices ?? 0),
+        total_transfer_pending: transferPending,
+        total_invoices: totalInvoiceCount,
         paid_count: Number(settlementItemStats ?? 0),
-        total_invoice_count: Number(guide.total_invoices ?? 0),
+        total_invoice_count: totalInvoiceCount,
         settlement_id: settlement?.id ?? null,
         settlement_number: settlement?.settlement_number ?? null,
         settlement_status: settlement?.workflow_status ?? null,
@@ -1098,6 +1130,35 @@ export async function setRouteSettlementItemResolution(
   }
 }
 
+export async function recordRouteSettlementBulk(
+  settlementId: string,
+  idempotencyKey: string,
+  rows: RecordRouteSettlementBulkRow[],
+) {
+  const adquisicionesDb = await createAdquisicionesClient()
+
+  try {
+    const { data: userData, error: userError } = await adquisicionesDb.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(adquisicionesDb, userData.user.id, 'adquisiciones.route_settlements.update')
+    if (!settlementId || !idempotencyKey || rows.length === 0) throw new Error('Rendición, idempotency_key y filas son obligatorios.')
+
+    const { data, error } = await adquisicionesDb.rpc('record_route_settlement_bulk', {
+      p_settlement_id: settlementId,
+      p_idempotency_key: idempotencyKey,
+      p_rows: rows,
+    })
+    if (error) throw error
+    return { data, error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudo grabar la rendición en bloque.'
+    console.error('recordRouteSettlementBulk error:', err)
+    return { data: null, error: message }
+  }
+}
+
 export async function registerRouteSettlementPayment(input: RegisterRouteSettlementPaymentInput) {
   const adquisicionesDb = await createAdquisicionesClient()
 
@@ -1189,6 +1250,280 @@ export async function voidRouteSettlementPayment(paymentId: string, voidReason: 
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'No se pudo anular el pago.'
     console.error('voidRouteSettlementPayment error:', err)
+    return { data: null, error: message }
+  }
+}
+
+export async function markRouteSettlementTransferReview(
+  settlementId: string,
+  customerBsaleId: number,
+  settlementItemIds: string[],
+) {
+  const db = await createAdquisicionesClient()
+  try {
+    const { data: userData, error: userError } = await db.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(db, userData.user.id, 'adquisiciones.route_settlements.update')
+    if (settlementItemIds.length === 0) throw new Error('Selecciona al menos una factura.')
+    const { data, error } = await db.rpc('mark_route_settlement_transfer_review', {
+      p_settlement_id: settlementId,
+      p_customer_bsale_id: customerBsaleId,
+      p_settlement_item_ids: settlementItemIds,
+    })
+    if (error) throw new Error(error.message)
+    return { data, error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudieron marcar las transferencias.'
+    console.error('markRouteSettlementTransferReview error:', err)
+    return { data: null, error: message }
+  }
+}
+
+export async function confirmRouteSettlementTransfer(paymentId: string) {
+  const db = await createAdquisicionesClient()
+  try {
+    const { data: userData, error: userError } = await db.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(db, userData.user.id, 'adquisiciones.route_settlements.update')
+    const { data, error } = await db.rpc('confirm_route_settlement_transfer', { p_payment_id: paymentId })
+    if (error) throw new Error(error.message)
+    return { data, error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudo confirmar la transferencia.'
+    return { data: null, error: message }
+  }
+}
+
+export async function rejectRouteSettlementTransfer(paymentId: string, reason: string) {
+  const db = await createAdquisicionesClient()
+  try {
+    const { data: userData, error: userError } = await db.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(db, userData.user.id, 'adquisiciones.route_settlements.update')
+    if (!reason.trim()) throw new Error('El motivo de rechazo es obligatorio.')
+    const { data, error } = await db.rpc('reject_route_settlement_transfer', { p_payment_id: paymentId, p_reason: reason.trim() })
+    if (error) throw new Error(error.message)
+    return { data, error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudo rechazar la transferencia.'
+    return { data: null, error: message }
+  }
+}
+
+export interface PostSettlementReceivable {
+  settlement_item_id: string
+  invoice_number: string
+  customer_bsale_id: number
+  customer_name: string
+  rut: string | null
+  route_guide_id: string
+  guide_number: string | null
+  route_settlement_id: string
+  settlement_number: string
+  original_amount: number
+  during_settlement_confirmed: number
+  post_settlement_confirmed: number
+  current_outstanding_amount: number
+  resolution_type: string | null
+  historical_situation: string
+  expected_payment_method: string
+  post_settlement_history: Array<{
+    payment_id: string
+    payment_method_received: string
+    amount_received: number
+    amount_applied: number
+    received_at: string
+    custody_user_id: string | null
+    verification_status: string
+    voided_at: string | null
+  }>
+}
+
+interface PostSettlementItemRow {
+  id: string
+  invoice_number: string
+  customer_bsale_id: number
+  customer_name: string
+  expected_amount: number
+  expected_payment_method: string
+  resolution_type: string | null
+  status: string
+  route_settlements: { id: string; settlement_number: string; route_guide_id: string } | Array<{ id: string; settlement_number: string; route_guide_id: string }>
+}
+
+export async function searchPostSettlementReceivables(search = '') {
+  const db = await createAdquisicionesClient()
+  const logisticaDb = await createLogisticaClient()
+  try {
+    const { data: userData, error: userError } = await db.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(db, userData.user.id, 'adquisiciones.route_settlements.view')
+
+    const term = search.trim()
+    const { data: items, error } = await db
+      .from('route_settlement_items')
+      .select('id, invoice_number, customer_bsale_id, customer_name, expected_amount, expected_payment_method, resolution_type, status, settlement_id, route_guide_item_id, route_settlements!inner(id, settlement_number, route_guide_id, workflow_status, company_id)')
+      .eq('company_id', companyId)
+      .eq('route_settlements.workflow_status', 'CLOSED')
+      .gt('expected_amount', 0)
+      .order('invoice_number')
+    if (error) throw error
+
+    const { data: clients, error: clientError } = await db.schema('integraciones').from('bsale_clients').select('bsale_client_id, code').eq('company_id', companyId)
+    if (clientError) throw clientError
+    const rutMap = new Map((clients ?? []).map(client => [client.bsale_client_id, client.code || null]))
+    const rawItems = (items ?? []) as unknown as PostSettlementItemRow[]
+    const filtered = rawItems.filter(item => !term || `${item.invoice_number} ${item.customer_name} ${item.customer_bsale_id} ${rutMap.get(item.customer_bsale_id) ?? ''}`.toLocaleLowerCase().includes(term.toLocaleLowerCase()))
+    const settlementOf = (item: PostSettlementItemRow) => Array.isArray(item.route_settlements) ? item.route_settlements[0] : item.route_settlements
+    const guideIds = [...new Set(filtered.map(item => settlementOf(item).route_guide_id))]
+    const { data: guides, error: guideError } = guideIds.length ? await logisticaDb.from('route_guides').select('id, guide_number').eq('company_id', companyId).in('id', guideIds) : { data: [], error: null }
+    if (guideError) throw guideError
+    const guideMap = new Map((guides ?? []).map(guide => [guide.id, guide.guide_number]))
+    const results = await Promise.all(filtered.map(async item => {
+      const { data: receivable, error: receivableError } = await db.rpc('get_current_receivable_by_invoice', { p_settlement_item_id: item.id })
+      if (receivableError) throw receivableError
+      return {
+        settlement_item_id: item.id,
+        invoice_number: item.invoice_number,
+        customer_bsale_id: item.customer_bsale_id,
+        customer_name: item.customer_name,
+        rut: rutMap.get(item.customer_bsale_id) ?? null,
+        route_guide_id: settlementOf(item).route_guide_id,
+        guide_number: guideMap.get(settlementOf(item).route_guide_id) ?? null,
+        route_settlement_id: settlementOf(item).id,
+        settlement_number: settlementOf(item).settlement_number,
+        original_amount: Number(receivable?.original_amount ?? item.expected_amount),
+        during_settlement_confirmed: Number(receivable?.during_settlement_confirmed ?? 0),
+        post_settlement_confirmed: Number(receivable?.post_settlement_confirmed ?? 0),
+        current_outstanding_amount: Number(receivable?.current_outstanding_amount ?? 0),
+        resolution_type: item.resolution_type ?? (item.status === 'CREDIT_REGISTERED' ? 'CREDIT' : item.status === 'TRANSFER_PENDING' ? 'TRANSFER_PENDING_REVIEW' : item.status),
+        historical_situation: item.resolution_type ?? (item.status === 'CREDIT_REGISTERED' ? 'CREDIT' : item.status === 'TRANSFER_PENDING' ? 'TRANSFER_PENDING_REVIEW' : item.status),
+        expected_payment_method: item.expected_payment_method,
+        post_settlement_history: receivable?.post_settlement_history ?? [],
+      } satisfies PostSettlementReceivable
+    }))
+    return { data: results.filter(item => item.current_outstanding_amount > 0), error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudieron consultar los cobros posteriores.'
+    return { data: null, error: message }
+  }
+}
+
+export interface RegisterPostSettlementPaymentInput {
+  routeSettlementId: string
+  customerBsaleId: number
+  paymentMethod: 'CASH' | 'CHECK' | 'TRANSFER'
+  amountReceived: string
+  receivedAt: string
+  referenceNumber?: string
+  bankName?: string
+  checkNumber?: string
+  checkDate?: string
+  custodyUserId?: string | null
+  notes?: string
+  settlementItemId: string
+}
+
+export async function registerPostSettlementPayment(input: RegisterPostSettlementPaymentInput) {
+  const db = await createAdquisicionesClient()
+  try {
+    const { data: userData, error: userError } = await db.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(db, userData.user.id, 'adquisiciones.route_settlements.update')
+    if (!/^[1-9]\d*$/.test(input.amountReceived)) throw new Error('El monto debe ser un entero mayor que cero.')
+    if (input.paymentMethod === 'CHECK' && !input.checkNumber?.trim()) throw new Error('El número de cheque es obligatorio.')
+    const { data, error } = await db.rpc('register_post_settlement_payment', {
+      p_route_settlement_id: input.routeSettlementId,
+      p_customer_bsale_id: input.customerBsaleId,
+      p_payment_method_received: input.paymentMethod,
+      p_amount_received: input.amountReceived,
+      p_received_at: input.receivedAt,
+      p_verification_status: 'CONFIRMED',
+      p_reference_number: input.referenceNumber?.trim() || null,
+      p_bank_name: input.bankName?.trim() || null,
+      p_check_number: input.checkNumber?.trim() || null,
+      p_check_date: input.checkDate || null,
+      p_custody_user_id: input.custodyUserId || userData.user.id,
+      p_notes: input.notes?.trim() || null,
+      p_allocations: [{ settlement_item_id: input.settlementItemId, amount_applied: input.amountReceived }],
+    })
+    if (error) throw new Error(error.message)
+    return { data, error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudo registrar el cobro posterior.'
+    return { data: null, error: message }
+  }
+}
+
+export interface RegisterGroupedPostSettlementPaymentInput {
+  customerBsaleId: number
+  settlementItemIds: string[]
+  paymentMethod: 'CASH' | 'CHECK' | 'TRANSFER'
+  receivedAt: string
+  referenceNumber?: string
+  bankName?: string
+  checkNumber?: string
+  checkDate?: string
+  notes?: string
+  idempotencyKey: string
+}
+
+export async function registerGroupedPostSettlementPayment(input: RegisterGroupedPostSettlementPaymentInput) {
+  const db = await createAdquisicionesClient()
+  try {
+    const { data: userData, error: userError } = await db.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(db, userData.user.id, 'adquisiciones.route_settlements.update')
+    if (input.settlementItemIds.length === 0) throw new Error('Selecciona al menos una factura.')
+    if (input.paymentMethod === 'CHECK' && (!input.bankName?.trim() || !input.checkNumber?.trim() || !input.checkDate)) {
+      throw new Error('Cheque requiere banco, número y fecha.')
+    }
+    const { data, error } = await db.rpc('register_grouped_post_settlement_payment', {
+      p_customer_bsale_id: input.customerBsaleId,
+      p_settlement_item_ids: input.settlementItemIds,
+      p_payment_method: input.paymentMethod,
+      p_received_at: input.receivedAt,
+      p_reference_number: input.referenceNumber?.trim() || null,
+      p_bank_name: input.bankName?.trim() || null,
+      p_check_number: input.checkNumber?.trim() || null,
+      p_check_date: input.checkDate || null,
+      p_notes: input.notes?.trim() || null,
+      p_idempotency_key: input.idempotencyKey,
+    })
+    if (error) throw new Error(error.message)
+    return { data, error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudo registrar el cobro posterior agrupado.'
+    return { data: null, error: message }
+  }
+}
+
+export async function voidPostSettlementPayment(paymentId: string, reason: string) {
+  const db = await createAdquisicionesClient()
+  try {
+    const { data: userData, error: userError } = await db.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(db, userData.user.id, 'adquisiciones.route_settlements.update')
+    if (!reason.trim()) throw new Error('El motivo de anulación es obligatorio.')
+    const { data, error } = await db.rpc('void_post_settlement_payment', { p_payment_id: paymentId, p_void_reason: reason.trim() })
+    if (error) throw new Error(error.message)
+    return { data, error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudo anular el cobro posterior.'
     return { data: null, error: message }
   }
 }

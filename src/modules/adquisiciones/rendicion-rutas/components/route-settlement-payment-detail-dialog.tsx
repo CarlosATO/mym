@@ -56,7 +56,7 @@ export function RouteSettlementPaymentDetailDialog({ payment, invoices, open, on
         <div className="space-y-4 text-xs">
           <div className="grid grid-cols-2 gap-x-5 gap-y-3 rounded-lg border border-theme-border px-3 py-3">
             <DetailValue label="Medio" value={method} />
-            <DetailValue label="Estado" value={payment.voided_at ? 'Anulado' : 'Confirmado'} />
+             <DetailValue label="Estado" value={payment.voided_at ? 'Anulado' : payment.verification_status === 'PENDING' ? 'Transferencia · Por revisar' : payment.verification_status === 'REJECTED' ? 'Rechazado' : 'Confirmado'} />
             <DetailValue label="Monto recibido" value={formatCurrency(payment.amount_received)} />
             <DetailValue label="Monto aplicado" value={formatCurrency(payment.amount_applied)} />
             <DetailValue label="Saldo sin aplicar" value={formatCurrency(payment.unallocated_amount)} />

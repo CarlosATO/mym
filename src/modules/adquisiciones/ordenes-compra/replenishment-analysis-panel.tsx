@@ -623,6 +623,23 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
     })
   }
 
+  function handleClearVisibleQuantities() {
+    const visibleSkus = new Set(filtered.map(row => row.sku.SKU))
+    const hasQuantitiesToClear = filtered.some(row => row.confirmedQty > 0 || confirmedSet.has(row.sku.SKU))
+    if (!hasQuantitiesToClear) return
+    if (!window.confirm('Se pondrán en 0 las cantidades de la consulta actual.\nLas cantidades sugeridas por el sistema se mantendrán.')) return
+
+    setRows(prev => prev.map(row => visibleSkus.has(row.sku.SKU)
+      ? { ...row, confirmedQty: 0, confirmedCost: 0 }
+      : row
+    ))
+    setConfirmedSet(prev => {
+      const next = new Set(prev)
+      visibleSkus.forEach(sku => next.delete(sku))
+      return next
+    })
+  }
+
   // ─── Visibilidad de columnas / historial ─────────────────────────
   const visibleFixed = useMemo(() => FIXED_COLUMNS.filter(id => !hiddenColumns.has(id)), [hiddenColumns])
   const effectiveHistorial = useMemo<HistorialVisible>(() => {
@@ -751,6 +768,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   }
 
   const hasResults = hasQuery && !error && !loading && filtered.length > 0
+  const canClearVisibleQuantities = filtered.some(row => row.confirmedQty > 0 || confirmedSet.has(row.sku.SKU))
 
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface text-theme-text shadow-sm animate-in fade-in duration-200">
@@ -803,10 +821,12 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
           busy={loading}
           downloading={downloadingExcel}
           creating={creating}
+          canClearQuantities={canClearVisibleQuantities}
           selectedCount={selectedVisibleRows.length}
           onExportVisible={handleExportVisible}
           onExportSelected={handleExportSelected}
           onCreate={() => setShowCreateModal(true)}
+          onClearQuantities={handleClearVisibleQuantities}
         />
       )}
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { RotateCcw } from 'lucide-react'
+import { Eraser, RotateCcw } from 'lucide-react'
 import { fmt, fmtN } from './replenishment-format'
 import { ReplenishmentExportMenu } from './replenishment-export-menu'
 
@@ -12,11 +12,13 @@ interface ReplenishmentResultsBarProps {
   busy: boolean
   downloading: boolean
   creating: boolean
+  canClearQuantities: boolean
   /** Filas de la consulta actual que tienen check activo (filtered ∩ confirmedSet) */
   selectedCount: number
   onExportVisible: () => void
   onExportSelected: () => void
   onCreate: () => void
+  onClearQuantities: () => void
   onNewQuery: () => void
 }
 
@@ -28,10 +30,12 @@ export function ReplenishmentResultsBar({
   busy,
   downloading,
   creating,
+  canClearQuantities,
   selectedCount,
   onExportVisible,
   onExportSelected,
   onCreate,
+  onClearQuantities,
   onNewQuery,
 }: ReplenishmentResultsBarProps) {
   const disabled = busy || creating
@@ -43,16 +47,13 @@ export function ReplenishmentResultsBar({
           {resultCount} {resultCount === 1 ? 'producto' : 'productos'}
         </span>
 
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          {effectiveSkus > 0 && (
-            <span className="inline-flex items-center gap-1.5 rounded-md border border-theme-border bg-theme-bg/40 px-2.5 py-1 text-[11px] leading-tight">
-              <span className="font-medium text-theme-text-muted">Confirmado:</span>
-              <span>SKU <strong className="font-semibold text-theme-text">{effectiveSkus}</strong></span>
-              <span>Unid. <strong className="font-semibold text-theme-text">{fmtN(effectiveUnits)}</strong></span>
-              <span>Monto <strong className="font-semibold text-theme-text">{fmt(effectiveCost)}</strong></span>
-            </span>
-          )}
+        <span className="inline-flex min-w-0 items-baseline gap-1.5 rounded-md border border-theme-accent/20 bg-theme-accent/5 px-2.5 py-1 text-[11px] leading-tight text-theme-text">
+          <span className="font-semibold text-theme-accent">Pedido actual</span>
+          <span className="text-theme-text-muted">· {effectiveSkus} {effectiveSkus === 1 ? 'producto' : 'productos'} · {fmtN(effectiveUnits)} unidades ·</span>
+          <strong className="truncate text-sm font-bold text-theme-text">Neto {fmt(effectiveCost)}</strong>
+        </span>
 
+        <div className="ml-auto flex flex-wrap items-center gap-2">
           <ReplenishmentExportMenu
             hasResults={resultCount > 0 && !disabled}
             visibleCount={resultCount}
@@ -61,6 +62,17 @@ export function ReplenishmentResultsBar({
             onExportVisible={onExportVisible}
             onExportSelected={onExportSelected}
           />
+
+          <button
+            id="clear-quantities-button"
+            onClick={onClearQuantities}
+            disabled={disabled || !canClearQuantities}
+            title="Poner en 0 las cantidades de la consulta actual"
+            className="flex h-7 items-center gap-1 rounded-md border border-theme-border px-2.5 text-[11px] font-semibold text-theme-text-muted transition hover:bg-theme-text/5 hover:text-theme-text disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Eraser className="h-3 w-3" />
+            Limpiar cantidades
+          </button>
 
           <button
             id="create-po-button"

@@ -9,3 +9,13 @@ export const SETTLEMENT_ATTACHMENT_ALLOWED_MIMES = [
   'image/png',
   'image/webp',
 ] as const
+
+export function settlementAttachmentExtension(mimeType: string) {
+  const extensions: Record<string, string> = {
+    'application/pdf': 'pdf',
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+  }
+  return extensions[mimeType]
+}

@@ -224,10 +224,9 @@ export function UnifiedRouteSettlementsTable({
             ) : (
               filteredData.map((item) => {
                 const isSelected = selectedRowId === item.route_guide_id
-                const isTerminal = item.operational_status === 'CLOSED' || item.operational_status === 'CANCELLED'
                 const actionLabel = !item.settlement_id
                   ? 'Iniciar rendición'
-                  : isTerminal
+                  : item.operational_status === 'CANCELLED'
                     ? 'Ver detalle'
                     : 'Abrir rendición'
                 return (

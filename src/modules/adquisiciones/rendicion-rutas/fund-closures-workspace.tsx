@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react'
 import { getPendingRouteFundGroups, getFundClosures, getFundClosureById, executeCloseFundClosure, addClosureExpense, addClosureDeposit, getAttachmentSignedUrl, canCancelFundClosure, cancelFundClosure } from '@/app/actions/adquisiciones/route-fund-closures'
 import { PendingRouteFundGroup, RouteFundClosure } from './fund-closures-types'
 import { CreateFundClosureDialog } from './components/create-fund-closure-dialog'
+import { FundClosureDeposits } from './components/fund-closure-deposits'
 import { RefreshCw, Plus, AlertTriangle, FileText, Wallet, Eye, Download, Paperclip, Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatCivilDate, formatInstantInSantiago, todayInSantiago } from '@/lib/datetime'
@@ -98,6 +99,10 @@ export function FundClosuresWorkspace() {
     else if (activeTab === 'HISTORY') loadHistory()
   }, [activeTab, filters.dateFrom, filters.dateTo, filters.status])
 
+  const refreshAfterClosureMutation = async () => {
+    await Promise.all([loadHistory(), loadPendingFunds()])
+  }
+
   const togglePendingSelection = (id: string) => {
     const next = new Set(selectedPendingIds)
     if (next.has(id)) {
@@ -146,7 +151,15 @@ export function FundClosuresWorkspace() {
   }
 
   if (selectedClosureId) {
-    return <FundClosureDetail closureId={selectedClosureId} onBack={() => setSelectedClosureId(null)} />
+    return <FundClosureDetail
+      closureId={selectedClosureId}
+      onBack={() => setSelectedClosureId(null)}
+      onCancelled={async () => {
+        await refreshAfterClosureMutation()
+        setSelectedClosureId(null)
+        setActiveTab('HISTORY')
+      }}
+    />
   }
 
   return (
@@ -194,7 +207,7 @@ export function FundClosuresWorkspace() {
                 <PendingTotal label="Gastos" value={selectedTotals.expenses} />
                 <PendingTotal label="Efectivo a entregar" value={selectedTotals.netCash} emphasized />
                 <PendingTotal label="Cheques" value={selectedTotals.checks} />
-                <div><p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Rendiciones</p><p className="mt-1 font-bold tabular-nums text-theme-text">{selectedFunds.length}</p></div>
+                 <div><p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Origen de fondos</p><p className="mt-1 font-bold tabular-nums text-theme-text">Rendiciones: {selectedFunds.reduce((sum, fund) => sum + fund.payment_ids.length, 0)} · Cobros posteriores: {selectedFunds.reduce((sum, fund) => sum + (fund.post_settlement_payment_ids?.length ?? 0), 0)}</p></div>
               </div>
             )}
 
@@ -205,7 +218,7 @@ export function FundClosuresWorkspace() {
                     <th className="p-3 w-10">
                       <input type="checkbox" checked={selectedPendingIds.size === pendingFunds.length && pendingFunds.length > 0} onChange={(e) => handleSelectAll(e.target.checked)} aria-label="Seleccionar Rendiciones" />
                     </th>
-                    <th className="p-3 font-semibold">Rendición</th>
+                     <th className="p-3 font-semibold">Origen</th>
                     <th className="p-3 font-semibold">Guía</th>
                     <th className="p-3 font-semibold">Fecha</th>
                     <th className="p-3 font-semibold">Custodio</th>
@@ -218,14 +231,14 @@ export function FundClosuresWorkspace() {
                 <tbody className="divide-y divide-theme-border">
                   {pendingFunds.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="p-8 text-center text-theme-text-muted">No hay fondos pendientes por rendir.</td>
+                       <td colSpan={9} className="p-8 text-center text-theme-text-muted">No hay fondos pendientes por rendir.</td>
                     </tr>
                   ) : pendingFunds.map(fund => (
                     <tr key={pendingGroupKey(fund)} className={selectedPendingIds.has(pendingGroupKey(fund)) ? 'bg-theme-accent/10' : 'hover:bg-theme-text/5'}>
                       <td className="p-3">
                         <input type="checkbox" checked={selectedPendingIds.has(pendingGroupKey(fund))} onChange={() => togglePendingSelection(pendingGroupKey(fund))} aria-label={`Seleccionar ${fund.settlement_number}`} />
                       </td>
-                      <td className="p-3 font-semibold">{fund.settlement_number}</td>
+                       <td className="p-3 font-semibold"><div className="flex flex-wrap gap-1">{fund.payment_ids.length > 0 && <span className="rounded bg-theme-text/10 px-1.5 py-0.5 text-[10px] font-bold text-theme-text">Rendición</span>}{(fund.post_settlement_payment_ids?.length ?? 0) > 0 && <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-bold text-violet-700 dark:text-violet-300">Cobro posterior</span>}</div><span className="mt-1 block">{fund.settlement_number}</span></td>
                       <td className="p-3 font-semibold">{fund.guide_number}</td>
                       <td className="p-3 whitespace-nowrap text-theme-text-muted">{formatInstantInSantiago(fund.closed_at)}</td>
                       <td className="p-3 text-theme-text-muted">{fund.custody_name ?? fund.custody_user_id}</td>
@@ -365,13 +378,21 @@ export function FundClosuresWorkspace() {
             setSelectedPendingIds(new Set())
             loadPendingFunds()
           }}
+          onPartialFailure={(closureId, message) => {
+            setIsCreateDialogOpen(false)
+            setPreparedSelection(null)
+            setSelectedPendingIds(new Set())
+            toast.error(message)
+            setSelectedClosureId(closureId)
+            loadPendingFunds()
+          }}
         />
       )}
     </div>
   )
 }
 
-function FundClosureDetail({ closureId, onBack }: { closureId: string; onBack: () => void }) {
+function FundClosureDetail({ closureId, onBack, onCancelled }: { closureId: string; onBack: () => void; onCancelled: () => Promise<void> }) {
   const [data, setData] = useState<any>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [hasCancelPermission, setHasCancelPermission] = useState(false)
@@ -433,7 +454,7 @@ function FundClosureDetail({ closureId, onBack }: { closureId: string; onBack: (
       await cancelFundClosure(closureId, cancelReason)
       toast.success("Cierre anulado con éxito", { id: 'cancel' })
       setIsCancelModalOpen(false)
-      load()
+      await onCancelled()
     } catch (err: any) {
       toast.error(err.message, { id: 'cancel' })
     } finally {
@@ -490,7 +511,8 @@ function FundClosureDetail({ closureId, onBack }: { closureId: string; onBack: (
   if (!data) return <div className="p-8">Error cargando datos.</div>
 
   const closure = data.closure
-  const isClosed = closure.status === 'CLOSED' || closure.status === 'CANCELLED'
+  const isClosed = closure.status === 'CLOSED' || closure.status === 'WITH_DIFFERENCE' || closure.status === 'CANCELLED'
+  const isFinalized = closure.status === 'CLOSED' || closure.status === 'WITH_DIFFERENCE'
   const physicalBalance = physicalClosureBalance(closure)
   const paymentRows = data.items.map((item: any) => {
     const allocations = Array.isArray(item.allocations) && item.allocations.length > 0
@@ -665,7 +687,9 @@ function FundClosureDetail({ closureId, onBack }: { closureId: string; onBack: (
         </div>
       )}
 
-      <div className="p-4 grid grid-cols-1 lg:grid-cols-3 gap-6 overflow-auto">
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        {isFinalized && <div className="mb-4"><FundClosureDeposits closureId={closureId} /></div>}
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* Columna Izquierda: Fondos */}
         <div className="lg:col-span-2 flex flex-col gap-6">
           <div className="flex flex-col gap-3">
@@ -676,7 +700,7 @@ function FundClosureDetail({ closureId, onBack }: { closureId: string; onBack: (
               <table className="w-full text-left text-sm text-theme-text">
                 <thead className="bg-theme-text/5 border-b border-theme-border">
                   <tr>
-                     <th className="p-3">Rendición / Guía</th>
+                     <th className="p-3">Origen / Rendición</th>
                      <th className="p-3">Facturas</th>
                     <th className="p-3">Cliente</th>
                     <th className="p-3">Método</th>
@@ -686,12 +710,12 @@ function FundClosureDetail({ closureId, onBack }: { closureId: string; onBack: (
                 <tbody className="divide-y divide-theme-border">
                    {paymentRows.map((item: any) => (
                      <tr key={item.id}>
-                       <td className="p-3 font-mono text-theme-text-muted"><span className="block">{item.settlement_number || '---'}</span><span className="block text-xs">{item.guide_number || '---'}</span></td>
+                       <td className="p-3 font-mono text-theme-text-muted"><span className={`mb-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${item.source_type === 'POST_SETTLEMENT_PAYMENT' ? 'bg-violet-500/10 text-violet-700 dark:text-violet-300' : 'bg-theme-text/10 text-theme-text'}`}>{item.source_type === 'POST_SETTLEMENT_PAYMENT' ? 'Cobro posterior' : 'Rendición'}</span><span className="block">{item.settlement_number || '---'}</span><span className="block text-xs">GR {item.guide_number || '---'} · RR {item.settlement_number || '---'}</span></td>
                        <td className="p-3" title={item.invoiceNumbers.join(', ')}>{item.invoiceNumbers.length} factura{item.invoiceNumbers.length === 1 ? '' : 's'}</td>
                        <td className="p-3">{item.customers.join(', ') || 'Cliente no disponible'}</td>
-                      <td className="p-3">
+                       <td className="p-3">
                         <span className="px-2 py-0.5 rounded bg-theme-text/10 text-[11px] font-bold">
-                          {item.payment_method === 'CASH' ? 'Efectivo' : 'Cheque'}
+                           {item.payment_method === 'CASH' ? 'Efectivo' : 'Cheque'}{item.source_type === 'POST_SETTLEMENT_PAYMENT' && <span className="ml-1 text-theme-text-muted">· {formatInstantInSantiago(item.received_at)}</span>}
                         </span>
                       </td>
                       <td className="p-3 text-right font-mono">${Number(item.amount).toLocaleString('es-CL')}</td>
@@ -740,42 +764,6 @@ function FundClosureDetail({ closureId, onBack }: { closureId: string; onBack: (
               </div>
             </div>
             
-            <div className="flex-1 flex flex-col gap-3 min-w-0">
-              <h3 className="font-bold text-theme-text flex items-center gap-2">Depósitos y Entregas</h3>
-              <div className="border border-theme-border rounded-xl bg-theme-surface overflow-x-auto hide-scrollbar text-sm">
-                <table className="w-full text-left">
-                  <thead className="bg-theme-text/10 border-b border-theme-border whitespace-nowrap text-theme-text font-bold">
-                    <tr>
-                      <th className="p-3">Método</th>
-                      <th className="p-3">Fecha</th>
-                      <th className="p-3 text-right">Monto</th>
-                      <th className="p-3 text-center">Comprobante</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-theme-border">
-                  {data.deposits.length === 0 ? (
-                    <tr><td colSpan={4} className="p-4 text-center text-theme-text-muted">No hay depósitos registrados</td></tr>
-                  ) : data.deposits.map((d:any) => {
-                    const attach = data.attachments.find((a:any) => a.deposit_id === d.id);
-                    return (
-                      <tr key={d.id} className="hover:bg-theme-text/5 transition-colors">
-                        <td className="p-3 text-theme-text font-medium">{d.deposit_method}</td>
-                        <td className="p-3 text-theme-text-muted whitespace-nowrap">{formatCivilDate(d.deposit_date)}</td>
-                        <td className="p-3 text-right font-mono text-emerald-600 dark:text-emerald-400 font-bold">${Number(d.amount).toLocaleString('es-CL')}</td>
-                        <td className="p-3 text-center">
-                          {attach ? (
-                            <button onClick={() => handleOpenAttachment(attach)} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-theme-text/10 hover:bg-theme-text/20 rounded-lg text-xs font-bold text-theme-text transition-colors">
-                              <Eye className="w-4 h-4" /> Ver
-                            </button>
-                          ) : <span className="text-theme-text-muted text-xs">-</span>}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
           </div>
         </div>
 
@@ -825,6 +813,7 @@ function FundClosureDetail({ closureId, onBack }: { closureId: string; onBack: (
                 <span className="font-semibold">{physicalDifferenceLabel(physicalBalance.difference)}</span>
               </div>
            </div>
+        </div>
         </div>
       </div>
 

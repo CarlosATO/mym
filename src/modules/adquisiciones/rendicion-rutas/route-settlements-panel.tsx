@@ -17,6 +17,7 @@ import { RouteSettlementWorkspace } from './components/route-settlement-workspac
 import { RouteSettlementClientView } from './components/route-settlement-client-view'
 import { AlertTriangle, RefreshCw, Wallet } from 'lucide-react'
 import { FundClosuresWorkspace } from './fund-closures-workspace'
+import { PostSettlementCollections } from './components/post-settlement-collections'
 
 const EMPTY_KPIS: RouteSettlementsDashboardKpis = {
   pending_count: 0,
@@ -80,7 +81,7 @@ export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement
   const [filterStatus, setFilterStatus] = useState('ALL')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [view, setView] = useState<PanelView>({ kind: 'list' })
-  const [mainTab, setMainTab] = useState<'TRAY' | 'FUND_CLOSURES'>('TRAY')
+  const [mainTab, setMainTab] = useState<'TRAY' | 'POST_COLLECTIONS' | 'FUND_CLOSURES'>('TRAY')
 
   const isMountedRef = useRef(false)
   const latestRequestIdRef = useRef(0)
@@ -134,14 +135,14 @@ export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement
     if (process.env.NODE_ENV === 'development') {
       console.log('[RendicionRutas:UI] mount')
     }
-    loadDashboardData()
+    const loadTimer = window.setTimeout(() => void loadDashboardData(), 0)
     return () => {
+      window.clearTimeout(loadTimer)
       isMountedRef.current = false
       if (process.env.NODE_ENV === 'development') {
         console.log('[RendicionRutas:UI] unmount')
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -306,7 +307,10 @@ export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement
     return (
               <RouteSettlementClientView
                 detail={view.detail}
-                onClose={() => setView({ kind: 'list' })}
+                onClose={() => {
+                  setView({ kind: 'list' })
+                  void loadDashboardData(true)
+                }}
                 canUpdateSettlement={canUpdateSettlement}
                 canCloseSettlement={canCloseSettlement}
                 onPaymentSaved={async () => {
@@ -331,6 +335,12 @@ export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement
       {/* Main Tab Switcher */}
       <div className="shrink-0 flex items-center gap-2 mb-3">
         <button
+          onClick={() => setMainTab('POST_COLLECTIONS')}
+          className={`px-4 py-2 text-sm font-bold rounded-lg border transition-colors ${mainTab === 'POST_COLLECTIONS' ? 'bg-theme-accent text-white border-theme-accent' : 'bg-theme-surface border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5'}`}
+        >
+          Cobros posteriores
+        </button>
+        <button
           onClick={() => setMainTab('TRAY')}
           className={`px-4 py-2 text-sm font-bold rounded-lg border transition-colors ${
             mainTab === 'TRAY'
@@ -353,7 +363,11 @@ export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement
         </button>
       </div>
 
-      {mainTab === 'FUND_CLOSURES' ? (
+       {mainTab === 'POST_COLLECTIONS' ? (
+         <div className="flex-1 min-h-0 border border-theme-border rounded-xl overflow-hidden bg-theme-surface">
+           <PostSettlementCollections />
+         </div>
+       ) : mainTab === 'FUND_CLOSURES' ? (
         <div className="flex-1 min-h-0 border border-theme-border rounded-xl overflow-hidden bg-theme-surface">
           <FundClosuresWorkspace />
         </div>
