@@ -3,7 +3,7 @@
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 
-import { RouteGuide, CatalogOptions, RoutePersonnelType } from '@/modules/logistica/guias-ruta/types';
+import { RouteGuide, CatalogOptions, RoutePersonnelType, RouteGuideProfitabilityV1 } from '@/modules/logistica/guias-ruta/types';
 import { getActiveCompanyId } from '@/app/actions/companies';
 
 // ---- Types ---------------------------------------------------------------
@@ -134,6 +134,16 @@ export async function getRouteGuideById(id: string): Promise<RouteGuide | null> 
   }
 
   return { ...guide, items: items ?? [] } as RouteGuide;
+}
+
+export async function getRouteGuideProfitabilityV1(id: string): Promise<RouteGuideProfitabilityV1> {
+  const supabase = await createLogisticaClient();
+  const { data, error } = await supabase.rpc('get_route_guide_profitability_v1', {
+    p_route_guide_id: id,
+  });
+
+  if (error) throw new Error(`Error cargando rentabilidad V1: ${error.message}`);
+  return data as RouteGuideProfitabilityV1;
 }
 
 export async function getRouteGuideCatalogOptions(): Promise<CatalogOptions> {

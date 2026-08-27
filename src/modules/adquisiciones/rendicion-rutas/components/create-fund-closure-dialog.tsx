@@ -38,6 +38,7 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated, onPartialF
   const [cashDelivered, setCashDelivered] = useState<number | null>(null)
   const [notes, setNotes] = useState('')
   const [confirmedChecks, setConfirmedChecks] = useState<Set<string>>(new Set())
+  const [depositCheckIds, setDepositCheckIds] = useState<Set<string>>(new Set())
   const [traceOpen, setTraceOpen] = useState(false)
   const [registerDepositNow, setRegisterDepositNow] = useState(false)
   const [depositAmount, setDepositAmount] = useState('')
@@ -50,16 +51,20 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated, onPartialF
   const [isLoading, setIsLoading] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  const paymentIds = groups.flatMap(group => group.payment_ids)
-  const postSettlementPaymentIds = groups.flatMap(group => group.post_settlement_payment_ids ?? [])
-  const expectedChecks = groups.reduce((sum, group) => sum + Number(group.checks_received || 0), 0)
+  const checks = payments.filter(payment => payment.payment_method_received === 'CHECK')
+  const includedPayments = payments.filter(payment => payment.payment_method_received === 'CASH' || confirmedChecks.has(payment.id))
+  const paymentIds = includedPayments.filter(payment => payment.source_type !== 'POST_SETTLEMENT_PAYMENT').map(payment => payment.id)
+  const postSettlementPaymentIds = includedPayments.filter(payment => payment.source_type === 'POST_SETTLEMENT_PAYMENT').map(payment => payment.post_settlement_payment_id ?? payment.id)
+  const expectedChecks = checks.filter(check => confirmedChecks.has(check.id)).reduce((sum, check) => sum + Number(check.amount_received || 0), 0)
   const totalExpected = cashExpected + expectedChecks
   const includedPaymentCount = paymentIds.length + postSettlementPaymentIds.length
   const delivered = cashDelivered ?? 0
+  const requiresCashDelivery = cashExpected > 0
   const difference = delivered - cashExpected
-  const checks = payments.filter(payment => payment.payment_method_received === 'CHECK')
-  const hasUnconfirmedCheck = checks.some(check => !confirmedChecks.has(check.id))
-  const hasCashDelivered = cashDelivered !== null
+  const pendingChecks = checks.filter(check => !confirmedChecks.has(check.id))
+  const depositChecks = checks.filter(check => confirmedChecks.has(check.id))
+  const depositCheckTotal = depositChecks.filter(check => depositCheckIds.has(check.id)).reduce((sum, check) => sum + Number(check.amount_received || 0), 0)
+  const hasCashDelivered = !requiresCashDelivery || cashDelivered !== null
   const hasDifference = hasCashDelivered && difference !== 0
   const depositAvailable = hasCashDelivered ? delivered + expectedChecks : totalExpected
 
@@ -83,11 +88,14 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated, onPartialF
   const submit = async () => {
     if (!hasCashDelivered) return
     if (hasDifference && notes.trim().length === 0) return
-    if (hasUnconfirmedCheck) return
     if (registerDepositNow) {
       const amount = Number(depositAmount)
       if (!Number.isInteger(amount) || amount <= 0 || amount > depositAvailable) {
         setFormError(`El monto a depositar debe estar entre $1 y ${money(depositAvailable)}.`)
+        return
+      }
+      if (depositCheckTotal > amount) {
+        setFormError(`El monto de los cheques seleccionados supera el depósito de ${money(amount)}.`)
         return
       }
       if (!depositDate) { setFormError('La fecha del depósito es obligatoria.'); return }
@@ -119,6 +127,7 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated, onPartialF
         depositMethod,
         referenceNumber: depositReference,
         notes: depositNotes,
+        checkPaymentIds: [...depositCheckIds],
       })
       if (deposit.error || !deposit.data) {
         onPartialFailure(closure.closure_id, `Cierre creado. No se pudo registrar el depósito. Detalle: ${deposit.error ?? 'error desconocido'}`)
@@ -188,8 +197,8 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated, onPartialF
                     setCashDeliveredInput(formatCashInput(event.target.value))
                     setCashDelivered(digits ? Number(digits) : null)
                   }}
-                  required
-                  aria-required="true"
+                   required={requiresCashDelivery}
+                   aria-required={requiresCashDelivery}
                   placeholder="$0"
                   className="mt-1 h-9 w-full rounded-lg border border-theme-border bg-theme-surface px-3 font-mono text-sm font-semibold text-theme-text outline-none focus:border-theme-accent"
                 />
@@ -208,7 +217,7 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated, onPartialF
                 {isLoading ? <div className="flex items-center gap-2 text-xs text-theme-text-muted"><Loader2 className="h-3.5 w-3.5 animate-spin" />Cargando gastos...</div> : expenses.length === 0 ? <p className="text-xs text-theme-text-muted">Sin gastos registrados.</p> : <div className="divide-y divide-theme-border">{expenses.map(expense => <div key={expense.id} className="flex justify-between py-1.5 text-xs"><span>{expenseLabel(expense.expense_type)}</span><span className="font-mono font-semibold">{money(expense.amount)}</span></div>)}</div>}
               </div>
 
-              {(!hasCashDelivered || hasDifference && notes.trim().length === 0) && <div className="mt-2.5 flex items-start gap-2 text-[11px] text-amber-700"><AlertTriangle className="h-3.5 w-3.5 shrink-0" />{!hasCashDelivered ? 'Ingresa el efectivo entregado para continuar.' : 'Ingresa el motivo del faltante o sobrante.'}</div>}
+               {((requiresCashDelivery && !hasCashDelivered) || hasDifference && notes.trim().length === 0) && <div className="mt-2.5 flex items-start gap-2 text-[11px] text-amber-700"><AlertTriangle className="h-3.5 w-3.5 shrink-0" />{!hasCashDelivered ? 'Ingresa el efectivo entregado para continuar.' : 'Ingresa el motivo del faltante o sobrante.'}</div>}
 
               <label className="mt-3 flex cursor-pointer items-center gap-2 border-t border-theme-border pt-3 text-xs font-semibold text-theme-text"><input type="checkbox" checked={registerDepositNow} onChange={event => { setRegisterDepositNow(event.target.checked); setFormError(null) }} className="h-3.5 w-3.5 accent-theme-accent" />Registrar depósito ahora</label>
             </section>
@@ -216,7 +225,7 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated, onPartialF
             <section className="rounded-lg border border-theme-border p-3.5">
               <div className="mb-2.5 flex items-baseline justify-between gap-3">
                 <h3 className="text-xs font-bold uppercase tracking-[0.08em] text-theme-text">Cheques recibidos</h3>
-                <span className="text-[10px] text-theme-text-muted">{checks.length} {checks.length === 1 ? 'cheque físico' : 'cheques físicos'} · {money(expectedChecks)}</span>
+                 <span className="text-[10px] text-theme-text-muted">Disponibles: {checks.length} · Incluidos: {checks.filter(check => confirmedChecks.has(check.id)).length} · Pendientes: {pendingChecks.length}</span>
               </div>
               {isLoading ? <div className="flex items-center gap-2 text-xs text-theme-text-muted"><Loader2 className="h-3.5 w-3.5 animate-spin" />Cargando cheques...</div> : checks.length === 0 ? <p className="rounded-lg bg-theme-text/[0.035] px-3 py-4 text-center text-xs text-theme-text-muted">Sin cheques por recibir.</p> : (
                 <div className="divide-y divide-theme-border overflow-hidden rounded-lg border border-theme-border">
@@ -229,7 +238,7 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated, onPartialF
                   ))}
                 </div>
               )}
-              {hasUnconfirmedCheck && <div className="mt-2.5 flex items-start gap-2 text-[11px] text-amber-700"><AlertTriangle className="h-3.5 w-3.5 shrink-0" />Confirma la recepción física de cada cheque.</div>}
+               {pendingChecks.length > 0 && <div className="mt-2.5 flex items-start gap-2 text-[11px] text-theme-text-muted"><AlertTriangle className="h-3.5 w-3.5 shrink-0" />Los cheques no incluidos permanecerán disponibles para un próximo Cierre de Fondos.</div>}
             </section>
           </div>
 
@@ -241,7 +250,8 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated, onPartialF
               <label className="text-xs font-semibold text-theme-text">Método<select value={depositMethod} onChange={event => setDepositMethod(event.target.value as typeof depositMethod)} className="mt-1 h-9 w-full rounded-lg border border-theme-border bg-theme-surface px-3 outline-none focus:border-theme-accent"><option value="DEPOSIT">Depósito bancario</option><option value="CASH_DELIVERY">Entrega de efectivo</option><option value="TRANSFER">Transferencia</option><option value="OTHER">Otro</option></select></label>
               <label className="text-xs font-semibold text-theme-text">N.º comprobante / referencia<input value={depositReference} onChange={event => setDepositReference(event.target.value)} className="mt-1 h-9 w-full rounded-lg border border-theme-border bg-theme-surface px-3 outline-none focus:border-theme-accent" /></label>
             </div>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="text-xs font-semibold text-theme-text">Adjuntar comprobante<input type="file" accept="application/pdf,image/png,image/jpeg,image/webp" onChange={event => setDepositFile(event.target.files?.[0] ?? null)} className="mt-1 w-full rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-xs file:mr-3 file:rounded file:border-0 file:bg-theme-text/10 file:px-2 file:py-1 file:text-xs" /><span className="mt-1 block font-normal text-[10px] text-theme-text-muted">PDF, PNG, JPEG o WEBP · máximo 10 MB.</span>{depositFile && <span className="mt-1 flex items-center gap-2 font-normal text-theme-text"><span className="truncate">{depositFile.name}</span><button type="button" onClick={() => setDepositFile(null)} className="font-bold text-red-600">Quitar</button></span>}</label><label className="text-xs font-semibold text-theme-text">Observación<span className="ml-1 font-normal text-theme-text-muted">(opcional)</span><textarea value={depositNotes} onChange={event => setDepositNotes(event.target.value)} rows={2} className="mt-1 w-full resize-none rounded-lg border border-theme-border bg-theme-surface px-3 py-2 font-normal outline-none focus:border-theme-accent" /></label></div>
+             <div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="text-xs font-semibold text-theme-text">Adjuntar comprobante<input type="file" accept="application/pdf,image/png,image/jpeg,image/webp" onChange={event => setDepositFile(event.target.files?.[0] ?? null)} className="mt-1 w-full rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-xs file:mr-3 file:rounded file:border-0 file:bg-theme-text/10 file:px-2 file:py-1 file:text-xs" /><span className="mt-1 block font-normal text-[10px] text-theme-text-muted">PDF, PNG, JPEG o WEBP · máximo 10 MB.</span>{depositFile && <span className="mt-1 flex items-center gap-2 font-normal text-theme-text"><span className="truncate">{depositFile.name}</span><button type="button" onClick={() => setDepositFile(null)} className="font-bold text-red-600">Quitar</button></span>}</label><label className="text-xs font-semibold text-theme-text">Observación<span className="ml-1 font-normal text-theme-text-muted">(opcional)</span><textarea value={depositNotes} onChange={event => setDepositNotes(event.target.value)} rows={2} className="mt-1 w-full resize-none rounded-lg border border-theme-border bg-theme-surface px-3 py-2 font-normal outline-none focus:border-theme-accent" /></label></div>
+             <div className="mt-3 rounded-lg border border-theme-border bg-theme-surface px-3 py-2.5"><div className="flex items-baseline justify-between gap-2"><p className="text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">Cheques incluidos en este depósito</p><span className="text-[10px] text-theme-text-muted">{money(depositCheckTotal)}</span></div>{depositChecks.length === 0 ? <p className="mt-1 text-[11px] text-theme-text-muted">Depósito sólo de efectivo o sin cheques seleccionados.</p> : <div className="mt-1 divide-y divide-theme-border">{depositChecks.map(check => <label key={check.id} className="flex cursor-pointer items-center justify-between gap-3 py-1.5 text-xs"><span className="flex min-w-0 items-center gap-2"><input type="checkbox" checked={depositCheckIds.has(check.id)} onChange={event => setDepositCheckIds(current => { const next = new Set(current); if (event.target.checked) next.add(check.id); else next.delete(check.id); return next })} className="h-3.5 w-3.5 accent-theme-accent" /><span className="truncate">{check.customer_name || 'Cliente no disponible'} · #{check.check_number ?? check.reference_number ?? 'Sin número'}</span></span><span className="shrink-0 font-mono font-bold">{money(check.amount_received)}</span></label>)}</div>}</div>
             {formError && <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">{formError}</p>}
           </section>}
 
@@ -256,7 +266,7 @@ export function CreateFundClosureDialog({ groups, onClose, onCreated, onPartialF
 
         <footer className="flex shrink-0 justify-end gap-2 border-t border-theme-border bg-theme-surface px-5 py-3">
           <button type="button" onClick={onClose} disabled={isSubmitting} className="rounded-lg border border-theme-border px-4 py-2 text-sm font-semibold text-theme-text">Cancelar</button>
-          <button type="button" onClick={submit} disabled={isLoading || isSubmitting || !hasCashDelivered || hasDifference && notes.trim().length === 0 || hasUnconfirmedCheck} className="rounded-lg bg-theme-accent px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">{isSubmitting ? 'Confirmando...' : registerDepositNow ? 'Confirmar cierre y depósito' : 'Confirmar cierre'}</button>
+           <button type="button" onClick={submit} disabled={isLoading || isSubmitting || includedPaymentCount === 0 || !hasCashDelivered || hasDifference && notes.trim().length === 0} className="rounded-lg bg-theme-accent px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">{isSubmitting ? 'Confirmando...' : registerDepositNow ? 'Confirmar cierre y depósito' : 'Confirmar cierre'}</button>
         </footer>
       </div>
     </div>

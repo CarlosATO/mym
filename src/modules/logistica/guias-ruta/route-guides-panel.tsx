@@ -1,14 +1,14 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { getRouteGuides, getRouteGuideCatalogOptions, saveRouteGuideDraft, dispatchRouteGuideAction, deleteRouteGuideDraftAction, RouteSaveDuplicateWarning, RouteDuplicateInvoice } from '@/app/actions/logistica/guias-ruta';
+import { getRouteGuides, getRouteGuideCatalogOptions, getRouteGuideProfitabilityV1, saveRouteGuideDraft, dispatchRouteGuideAction, deleteRouteGuideDraftAction, RouteSaveDuplicateWarning, RouteDuplicateInvoice } from '@/app/actions/logistica/guias-ruta';
 import { RouteGuidesTrayTable } from './components/route-guides-tray-table';
 import { RouteGuidesTraySkeleton } from './components/route-guide-skeletons';
 import { RouteGuideForm } from './components/route-guide-form';
 import { RouteGuideDetailPanel } from './components/route-guide-detail-panel';
 import { useRouteGuideDetailCache } from './hooks/use-route-guide-detail-cache';
 import { Plus } from 'lucide-react';
-import { CatalogOptions, RouteGuide } from './types';
+import { CatalogOptions, RouteGuide, RouteGuideProfitabilityV1 } from './types';
 import { toast } from 'sonner';
 
 // Shapes passed back to the form via re-throw (success path with warnings)
@@ -23,6 +23,7 @@ export function RouteGuidesPanel() {
   const [activeView, setActiveView] = useState<'TRAY' | 'NEW' | 'EDIT' | 'DETAIL'>('TRAY');
   const [selectedGuideId, setSelectedGuideId] = useState<string | null>(null);
   const [formSessionId, setFormSessionId] = useState<string>('');
+  const [profitabilityByGuide, setProfitabilityByGuide] = useState<Record<string, RouteGuideProfitabilityV1 | null>>({});
 
   // Operations State
   const [isSaving, setIsSaving] = useState(false);
@@ -35,6 +36,15 @@ export function RouteGuidesPanel() {
     try {
       const data = await getRouteGuides({ status: filterStatus });
       setGuides(data || []);
+      const profitability = await Promise.all((data || []).map(async guide => {
+        try {
+          return [guide.id, await getRouteGuideProfitabilityV1(guide.id)] as const;
+        } catch (error) {
+          console.warn(`No se pudo cargar rentabilidad V1 de ${guide.guide_number}:`, error);
+          return [guide.id, null] as const;
+        }
+      }));
+      setProfitabilityByGuide(Object.fromEntries(profitability));
     } catch (e: any) {
       toast.error('Error cargando guías de ruta: ' + e.message);
     } finally {
@@ -42,7 +52,7 @@ export function RouteGuidesPanel() {
         console.log('loadRouteGuides', Math.round(performance.now() - start), 'ms');
       }
     }
-  }, []);
+  }, [filterStatus]);
 
   const loadCatalogs = useCallback(async () => {
     try {
@@ -203,7 +213,7 @@ export function RouteGuidesPanel() {
       {/* Bandeja Principal (siempre de fondo excepto en NEW o EDIT) */}
       <div className={`flex-1 p-6 overflow-y-auto ${
         (activeView === 'NEW' || activeView === 'EDIT') ? 'hidden' : 
-        activeView === 'DETAIL' ? 'hidden md:block md:pr-96 lg:pr-[800px]' : ''
+         activeView === 'DETAIL' ? 'hidden md:block md:pr-[min(92vw,1200px)] lg:pr-[min(80vw,1500px)]' : ''
       }`}>
         <div className="flex justify-between items-center mb-6">
           <div>
@@ -230,10 +240,11 @@ export function RouteGuidesPanel() {
           </div>
         </div>
 
-        <RouteGuidesTrayTable 
+        <RouteGuidesTrayTable
           guides={guides} 
           onSelectGuide={handleOpenDetail} 
           onDeleteGuide={handleDeleteDraft}
+          profitabilityByGuide={profitabilityByGuide}
         />
       </div>
 
@@ -265,7 +276,7 @@ export function RouteGuidesPanel() {
 
       {/* Panel Lateral (Solo para Detalle) */}
       {activeView === 'DETAIL' && (
-        <div className="absolute inset-y-0 right-0 w-full md:w-[800px] bg-theme-surface text-theme-text shadow-2xl border-l border-theme-border flex flex-col z-10 transition-transform duration-300">
+        <div className="absolute inset-y-0 right-0 w-full md:w-[min(92vw,1200px)] lg:w-[min(80vw,1500px)] bg-theme-surface text-theme-text shadow-2xl border-l border-theme-border flex flex-col z-10 transition-transform duration-300">
           
           {selectedGuideId && (
             <>

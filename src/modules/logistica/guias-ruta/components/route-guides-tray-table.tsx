@@ -1,14 +1,21 @@
 import { RouteGuideStatusBadge } from './route-guide-badges';
 import { formatCurrency, formatDate } from '../utils/route-guide-formatters';
 import { Trash2 } from 'lucide-react';
+import type { RouteGuideProfitabilityV1 } from '../types';
 
 interface RouteGuidesTrayTableProps {
   guides: any[];
   onSelectGuide: (id: string) => void;
   onDeleteGuide: (id: string, guideNumber: string) => void;
+  profitabilityByGuide: Record<string, RouteGuideProfitabilityV1 | null>;
 }
 
-export function RouteGuidesTrayTable({ guides, onSelectGuide, onDeleteGuide }: RouteGuidesTrayTableProps) {
+function formatPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '—';
+  return `${new Intl.NumberFormat('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)}%`;
+}
+
+export function RouteGuidesTrayTable({ guides, onSelectGuide, onDeleteGuide, profitabilityByGuide }: RouteGuidesTrayTableProps) {
   if (guides.length === 0) {
     return (
       <div className="bg-theme-surface border border-theme-border rounded-2xl p-12 text-center shadow-sm">
@@ -24,12 +31,13 @@ export function RouteGuidesTrayTable({ guides, onSelectGuide, onDeleteGuide }: R
         <table className="w-full text-sm text-left border-collapse">
           <thead className="sticky top-0 z-10 bg-theme-surface border-b border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider">
             <tr>
-              <th className="px-6 py-4 font-medium">N° Guía</th>
-              <th className="px-6 py-4 font-medium">Fecha</th>
-              <th className="px-6 py-4 font-medium">Ruta / Vehículo</th>
-              <th className="px-6 py-4 font-medium">Conductor</th>
-              <th className="px-6 py-4 font-medium text-right">Facturas</th>
-              <th className="px-6 py-4 font-medium text-right">Monto Total</th>
+              <th className="px-4 py-4 font-medium">N° Guía</th>
+              <th className="px-4 py-4 font-medium">Fecha</th>
+              <th className="px-4 py-4 font-medium">Ruta / Vehículo</th>
+              <th className="px-4 py-4 font-medium">Conductor</th>
+              <th className="px-4 py-4 font-medium text-right">Facturas</th>
+              <th className="px-4 py-4 font-medium text-right">Monto Total</th>
+              <th className="px-4 py-4 font-medium">Rentabilidad V1</th>
               <th className="px-4 py-3 font-medium text-center">Estado</th>
               <th className="px-4 py-3 font-medium text-center w-12"></th>
             </tr>
@@ -59,6 +67,34 @@ export function RouteGuidesTrayTable({ guides, onSelectGuide, onDeleteGuide }: R
                 </td>
                 <td className="py-3 px-4 text-right font-medium text-theme-text">
                   {formatCurrency(guide.total_amount)}
+                </td>
+                <td className="py-2 px-4 min-w-[230px]" onClick={event => event.stopPropagation()}>
+                  {(() => {
+                    const hasProfitability = Object.prototype.hasOwnProperty.call(profitabilityByGuide, guide.id);
+                    const profitability = profitabilityByGuide[guide.id];
+                    if (!hasProfitability) {
+                      return <span className="text-[10px] text-theme-text-muted/60">Cargando…</span>;
+                    }
+                    if (!profitability) return <span className="text-[10px] text-theme-text-muted/60">No disponible</span>;
+                    const statusLabel = profitability.cost_status === 'COMPLETE'
+                      ? 'Cobertura 100%'
+                      : profitability.cost_status === 'PARTIAL'
+                        ? `Parcial · ${formatPercent(profitability.cost_coverage_pct)}`
+                        : 'Sin costo disponible';
+                    return (
+                      <div className="space-y-1 text-[10px] tabular-nums">
+                        <div className="grid grid-cols-3 gap-x-3 text-theme-text-muted">
+                          <span>Venta <strong className="text-theme-text">{formatCurrency(profitability.sales_net_total)}</strong></span>
+                          <span>Costo <strong className="text-theme-text">{formatCurrency(profitability.last_purchase_cost_total)}</strong></span>
+                          <span>Utilidad <strong className="text-theme-text">{formatCurrency(profitability.estimated_gross_profit)}</strong></span>
+                        </div>
+                        <div className="flex items-center gap-3 text-theme-text-muted">
+                          <span>Margen <strong className="text-theme-text">{formatPercent(profitability.estimated_margin_pct)}</strong></span>
+                          <span className="rounded-full border border-theme-accent/20 bg-theme-accent/5 px-1.5 py-0.5 font-semibold text-theme-accent">{statusLabel}</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </td>
                 <td className="py-3 px-4 text-center">
                   <RouteGuideStatusBadge status={guide.status} />

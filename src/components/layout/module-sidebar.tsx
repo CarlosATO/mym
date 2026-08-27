@@ -89,7 +89,10 @@ export function ModuleSidebar({ identity, navigation, collapsed, responsiveColla
 
 function SidebarItem({ item, location, collapsed, permissions, onNavigate, depth = 0 }: { item: ModuleNavItem; location: { pathname: string; searchParams: Pick<URLSearchParams, 'get' | 'has'> }; collapsed: boolean; permissions: string[]; onNavigate: () => void; depth?: number }) {
   const children = (item.children ?? []).filter(child => isVisible(child, permissions))
-  const active = isItemActive(item, location) || children.some(child => isBranchActive(child, location))
+  const childBranchActive = children.some(child => isBranchActive(child, location))
+  // A parent remains visible as context, but only the selected child receives
+  // the active treatment when this branch has a child selection.
+  const active = isItemActive(item, location) && !childBranchActive
   const Icon = item.icon
   const href = buildNavHref(item.target, location.searchParams)
   const itemContent = (

@@ -1,6 +1,7 @@
 'use client'
 
-import React, { useState, useEffect, useRef } from 'react'
+import React, { startTransition, useState, useEffect, useRef } from 'react'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import {
   getRouteSettlementsDashboardData,
   getRouteSettlementDetail,
@@ -18,6 +19,7 @@ import { RouteSettlementClientView } from './components/route-settlement-client-
 import { AlertTriangle, RefreshCw, Wallet } from 'lucide-react'
 import { FundClosuresWorkspace } from './fund-closures-workspace'
 import { PostSettlementCollections } from './components/post-settlement-collections'
+import { RouteSettlementChecks } from './components/route-settlement-checks'
 
 const EMPTY_KPIS: RouteSettlementsDashboardKpis = {
   pending_count: 0,
@@ -74,6 +76,23 @@ interface RouteSettlementsPanelProps {
   canCloseSettlement: boolean
 }
 
+type MainTab = 'TRAY' | 'POST_COLLECTIONS' | 'FUND_CLOSURES' | 'CHECKS'
+
+function mainTabFromSearch(searchParams: Pick<URLSearchParams, 'get'>): MainTab {
+  const tab = searchParams.get('tab')
+  if (tab === 'post-collections') return 'POST_COLLECTIONS'
+  if (tab === 'fund-closures') return 'FUND_CLOSURES'
+  if (tab === 'checks') return 'CHECKS'
+  return 'TRAY'
+}
+
+const mainTabQuery: Record<MainTab, string> = {
+  TRAY: 'tray',
+  POST_COLLECTIONS: 'post-collections',
+  FUND_CLOSURES: 'fund-closures',
+  CHECKS: 'checks',
+}
+
 export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement, canCloseSettlement }: RouteSettlementsPanelProps) {
   const [rows, setRows] = useState<RouteSettlementsDashboardRow[]>([])
   const [kpis, setKpis] = useState<RouteSettlementsDashboardKpis>(EMPTY_KPIS)
@@ -81,7 +100,10 @@ export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement
   const [filterStatus, setFilterStatus] = useState('ALL')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [view, setView] = useState<PanelView>({ kind: 'list' })
-  const [mainTab, setMainTab] = useState<'TRAY' | 'POST_COLLECTIONS' | 'FUND_CLOSURES'>('TRAY')
+  const pathname = usePathname()
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const mainTab = mainTabFromSearch(searchParams)
 
   const isMountedRef = useRef(false)
   const latestRequestIdRef = useRef(0)
@@ -96,6 +118,14 @@ export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement
       console.log('[RendicionRutas:UI] render count', renderCount.current)
     }
   })
+
+  useEffect(() => {
+    if (view.kind !== 'list') startTransition(() => setView({ kind: 'list' }))
+  }, [searchParams, view.kind])
+
+  function setMainTab(tab: MainTab) {
+    router.push(`${pathname}?tab=${mainTabQuery[tab]}`, { scroll: false })
+  }
 
   // ── Carga de dashboard ──────────────────────────────────────────────────
   const loadDashboardData = async (forceRefresh = false) => {
@@ -369,9 +399,13 @@ export function RouteSettlementsPanel({ canCreateSettlement, canUpdateSettlement
          </div>
        ) : mainTab === 'FUND_CLOSURES' ? (
         <div className="flex-1 min-h-0 border border-theme-border rounded-xl overflow-hidden bg-theme-surface">
-          <FundClosuresWorkspace />
-        </div>
-      ) : (
+           <FundClosuresWorkspace />
+         </div>
+       ) : mainTab === 'CHECKS' ? (
+         <div className="flex-1 min-h-0 overflow-hidden rounded-xl border border-theme-border bg-theme-surface">
+           <RouteSettlementChecks />
+         </div>
+       ) : (
         <>
           {/* Header operativo compacto */}
           <div className="shrink-0 flex flex-col gap-2 border border-theme-border bg-theme-surface/70 px-3 py-2.5 rounded-xl">

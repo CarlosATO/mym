@@ -870,6 +870,7 @@ export interface RegisterRouteFundClosureDepositInput {
   depositMethod: 'DEPOSIT' | 'CASH_DELIVERY' | 'TRANSFER' | 'OTHER'
   referenceNumber?: string | null
   notes?: string | null
+  checkPaymentIds?: string[]
 }
 
 export async function registerRouteFundClosureDeposit(input: RegisterRouteFundClosureDepositInput) {
@@ -891,6 +892,7 @@ export async function registerRouteFundClosureDeposit(input: RegisterRouteFundCl
       p_deposit_method: input.depositMethod,
       p_reference_number: input.referenceNumber?.trim() || null,
       p_notes: input.notes?.trim() || null,
+      p_check_payment_ids: input.checkPaymentIds ?? [],
     })
     if (error) throw new Error(error.message)
     return { data: data as { deposit_id: string; status: string; saldo_por_depositar: number; total_fisico_recibido: number; total_depositado: number } | null, error: null }

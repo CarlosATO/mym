@@ -198,6 +198,51 @@ export interface RegisterRouteSettlementPaymentInput {
   }>
 }
 
+export type RouteSettlementCheckStatus = 'CON_CUSTODIO' | 'EN_TESORERIA' | 'DEPOSITADO' | 'ANULADO'
+
+export interface RouteSettlementCheckRegistryRow {
+  payment_id: string
+  cheque_id: string
+  customer_name: string
+  customer_rut: string | null
+  check_date: string | null
+  amount: number
+  check_number: string | null
+  bank_name: string | null
+  guide_number: string | null
+  settlement_number: string | null
+  settlement_id: string
+  fund_closure_id: string | null
+  fund_closure_number: string | null
+  fund_closure_status: string | null
+  fund_closure_at: string | null
+  original_custodian_name: string | null
+  deposit_id: string | null
+  deposit_reference_number: string | null
+  deposit_status: string | null
+  deposit_amount: number | null
+  operational_status: RouteSettlementCheckStatus
+  current_location: RouteSettlementCheckStatus
+  current_holder_name: string | null
+  received_at: string | null
+  delivered_to_deposit_at: string | null
+  deposited_at: string | null
+  annulled_at: string | null
+  annulled_by: string | null
+  void_reason: string | null
+}
+
+export interface RouteSettlementCheckRegistryFilters {
+  customer?: string
+  checkNumber?: string
+  bank?: string
+  guideNumber?: string
+  settlementNumber?: string
+  status?: RouteSettlementCheckStatus | 'ALL'
+  checkDateFrom?: string
+  checkDateTo?: string
+}
+
 function toOperationalStatus(
   workflowStatus: string | null,
   hasWorkedItems: boolean,
@@ -261,6 +306,28 @@ async function requirePermission(db: any, userId: string, permissionCode: string
 
   if (error) throw error
   if (!data) throw new Error('No tiene permisos para realizar esta acción.')
+}
+
+export async function getRouteSettlementCheckRegistry(filters: RouteSettlementCheckRegistryFilters = {}) {
+  const adquisicionesDb = await createAdquisicionesClient()
+  try {
+    const { data, error } = await adquisicionesDb.rpc('get_route_settlement_check_registry', {
+      p_customer: filters.customer?.trim() || null,
+      p_check_number: filters.checkNumber?.trim() || null,
+      p_bank: filters.bank?.trim() || null,
+      p_guide_number: filters.guideNumber?.trim() || null,
+      p_settlement_number: filters.settlementNumber?.trim() || null,
+      p_status: filters.status && filters.status !== 'ALL' ? filters.status : null,
+      p_check_date_from: filters.checkDateFrom || null,
+      p_check_date_to: filters.checkDateTo || null,
+    })
+    if (error) throw error
+    return { data: (data ?? []) as RouteSettlementCheckRegistryRow[], error: null }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'No se pudo cargar el registro de cheques.'
+    console.error('getRouteSettlementCheckRegistry error:', err)
+    return { data: null, error: message }
+  }
 }
 
 // 0. getRouteSettlementsDashboardData (Consolidated for performance)
@@ -1538,7 +1605,7 @@ export interface RouteGuideWorkspaceItem {
   customer_address: string
   commune: string
   amount: number
-  payment_method_normalized: 'CASH' | 'CHECK' | 'TRANSFER' | 'CREDIT' | 'UNKNOWN'
+  payment_method_normalized: 'CASH' | 'AL_DIA' | 'CHECK' | 'TRANSFER' | 'CREDIT' | 'UNKNOWN'
   payment_method_original: string | null
   requires_settlement: boolean
 }

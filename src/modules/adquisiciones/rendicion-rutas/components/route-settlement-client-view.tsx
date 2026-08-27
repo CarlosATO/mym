@@ -52,6 +52,7 @@ function displayAmount(value: number) {
 }
 
 function paymentMethodLabel(method: string) {
+  if (method === 'AL_DIA') return 'Al día'
   if (method === 'CASH') return 'Efectivo'
   if (method === 'CHECK') return 'Cheque'
   if (method === 'TRANSFER') return 'Transferencia'
@@ -59,6 +60,7 @@ function paymentMethodLabel(method: string) {
 }
 
 type QuickResult = 'CASH' | 'CHECK' | 'TRANSFER' | 'CREDIT'
+type QuickSelection = QuickResult | ''
 
 const quickResultLabels: Record<QuickResult, string> = {
   CASH: 'Efectivo',
@@ -67,7 +69,8 @@ const quickResultLabels: Record<QuickResult, string> = {
   CREDIT: 'Crédito',
 }
 
-function quickResultFor(invoice: RouteSettlementDetailInvoice): QuickResult {
+function quickResultFor(invoice: RouteSettlementDetailInvoice): QuickSelection {
+  if (invoice.expected_payment_method === 'AL_DIA') return ''
   if (invoice.expected_payment_method === 'CHECK') return 'CHECK'
   if (invoice.expected_payment_method === 'TRANSFER') return 'TRANSFER'
   if (invoice.expected_payment_method === 'CREDIT') return 'CREDIT'
@@ -85,6 +88,27 @@ function quickAmount(invoice: RouteSettlementDetailInvoice) {
 function quickPaymentGroupKey(invoice: RouteSettlementDetailInvoice, result: QuickResult) {
   const customerKey = invoice.customer_bsale_id?.toString() ?? invoice.settlement_item_id
   return `quick:${customerKey}:${result}`
+}
+
+function clientUiKey(client: RouteSettlementDetailClient) {
+  if (client.customer_bsale_id !== null) return `bsale:${client.customer_bsale_id}`
+  return `unresolved:${client.invoices[0]?.settlement_item_id ?? client.customer_name}`
+}
+
+function splitUnidentifiedClients(clients: RouteSettlementDetailClient[]): RouteSettlementDetailClient[] {
+  return clients.flatMap(client => {
+    if (client.customer_bsale_id !== null || client.invoices.length <= 1) return [client]
+    return client.invoices.map(invoice => ({
+      ...client,
+      invoice_count: 1,
+      expected_amount: invoice.expected_amount,
+      applied_amount: invoice.applied_amount,
+      pending_amount: invoice.unapplied_amount,
+      status: (invoice.invoice_result === 'PAID' ? 'PAID' : invoice.applied_amount > 0 ? 'PARTIAL' : 'PENDING') as RouteSettlementDetailClient['status'],
+      invoices: [invoice],
+      payments: [],
+    }))
+  })
 }
 
 function normalizeQuickSearch(value: string) {
@@ -111,7 +135,7 @@ function QuickInvoiceRows({
 }: {
   client: RouteSettlementDetailClient
   selectedIds: string[]
-  results: Record<string, QuickResult>
+  results: Record<string, QuickSelection>
   onToggle: (invoiceId: string) => void
   onResultChange: (invoiceId: string, result: QuickResult) => void
 }) {
@@ -122,13 +146,14 @@ function QuickInvoiceRows({
     <div className="min-w-[720px] divide-y divide-theme-border/40">
         {client.invoices.map(invoice => {
           const eligible = quickEligible(invoice)
-          const result = results[invoice.settlement_item_id] ?? quickResultFor(invoice)
-          return <div key={invoice.settlement_item_id} className={`grid grid-cols-[4.5rem_1.2fr_0.9fr_1fr_1.15fr_1.15fr] items-center gap-2 px-2 py-1 text-xs transition-colors ${eligible && selectedIds.includes(invoice.settlement_item_id) ? 'bg-theme-accent/[0.045]' : 'hover:bg-theme-text/[0.025]'}`}>
+           const result = results[invoice.settlement_item_id] ?? quickResultFor(invoice)
+           const needsResult = invoice.expected_payment_method === 'AL_DIA' && result === ''
+           return <div key={invoice.settlement_item_id} className={`grid grid-cols-[4.5rem_1.2fr_0.9fr_1fr_1.15fr_1.15fr] items-center gap-2 px-2 py-1 text-xs transition-colors ${needsResult ? 'bg-amber-500/10' : eligible && selectedIds.includes(invoice.settlement_item_id) ? 'bg-theme-accent/[0.045]' : 'hover:bg-theme-text/[0.025]'}`}>
             <span><input type="checkbox" checked={eligible && selectedIds.includes(invoice.settlement_item_id)} disabled={!eligible} onChange={() => onToggle(invoice.settlement_item_id)} aria-label={`Procesar factura ${invoice.invoice_number}`} className="h-3.5 w-3.5 accent-theme-accent" /></span>
             <span className="font-semibold text-theme-text">{invoice.invoice_number}</span>
             <span className="text-right font-mono tabular-nums text-theme-text">{displayAmount(quickAmount(invoice))}</span>
-            <span className="text-theme-text-muted">{quickResultLabels[quickResultFor(invoice)]}</span>
-            <span><select value={result} disabled={!eligible} onChange={event => onResultChange(invoice.settlement_item_id, event.target.value as QuickResult)} className="h-7 max-w-full rounded-md border border-theme-border bg-theme-surface px-1.5 text-xs text-theme-text"><option value="CASH">Efectivo</option><option value="CHECK">Cheque</option><option value="TRANSFER">Transferencia</option><option value="CREDIT">Crédito</option></select></span>
+             <span className={invoice.expected_payment_method === 'AL_DIA' ? 'font-semibold text-amber-700 dark:text-amber-300' : 'text-theme-text-muted'}>{paymentMethodLabel(invoice.expected_payment_method)}</span>
+             <span><select value={result} disabled={!eligible} onChange={event => onResultChange(invoice.settlement_item_id, event.target.value as QuickResult)} className={`h-7 max-w-full rounded-md border bg-theme-surface px-1.5 text-xs text-theme-text ${needsResult ? 'border-amber-500' : 'border-theme-border'}`}><option value="">Seleccionar resultado…</option><option value="CASH">Efectivo</option><option value="CHECK">Cheque</option><option value="TRANSFER">Transferencia</option><option value="CREDIT">Crédito</option></select></span>
             <span><span className={`inline-flex rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${invoiceSituationClass(invoice)}`}>{invoiceSituationLabel(invoice)}</span></span>
           </div>
         })}
@@ -159,53 +184,56 @@ function ClientSelectionCheckbox({
 }
 
 export function RouteSettlementClientView({ detail, onClose, canUpdateSettlement, canCloseSettlement, onPaymentSaved }: RouteSettlementClientViewProps) {
-  const [selectedClientId, setSelectedClientId] = useState<number | null>(null)
+  const [selectedClientKey, setSelectedClientKey] = useState<string | null>(null)
   const [blockingDialogOpen, setBlockingDialogOpen] = useState(false)
   const [closeDialogOpen, setCloseDialogOpen] = useState(false)
   const [pendingFlowActive, setPendingFlowActive] = useState(false)
   const [pendingInvoiceId, setPendingInvoiceId] = useState<string | null>(null)
   const [quickSearch, setQuickSearch] = useState('')
-  const quickInvoices = detail.clients.flatMap(client => client.invoices).filter(quickEligible)
+  const uiClients = splitUnidentifiedClients(detail.clients)
+  const quickInvoices = uiClients.flatMap(client => client.invoices).filter(quickEligible)
   const [selectedQuickInvoices, setSelectedQuickInvoices] = useState<string[]>(() => quickInvoices.map(invoice => invoice.settlement_item_id))
-  const [quickResults, setQuickResults] = useState<Record<string, QuickResult>>(() => Object.fromEntries(quickInvoices.map(invoice => [invoice.settlement_item_id, quickResultFor(invoice)])))
+  const [quickResults, setQuickResults] = useState<Record<string, QuickSelection>>(() => Object.fromEntries(quickInvoices.map(invoice => [invoice.settlement_item_id, quickResultFor(invoice)])))
   const [checkDetails, setCheckDetails] = useState<Record<string, { bank_name: string; check_number: string; check_date: string }>>({})
   const [bulkConfirmationOpen, setBulkConfirmationOpen] = useState(false)
   const [bulkIdempotencyKey, setBulkIdempotencyKey] = useState<string | null>(null)
   const [bulkError, setBulkError] = useState<string | null>(null)
   const [isBulkSaving, setIsBulkSaving] = useState(false)
-  const selectedClient = detail.clients.find(client => client.customer_bsale_id === selectedClientId) ?? null
+  const selectedClient = uiClients.find(client => clientUiKey(client) === selectedClientKey) ?? null
   const summary = detail.settlement
   const isClosed = summary.workflow_status === 'CLOSED'
   const canModify = canUpdateSettlement && !isClosed
   const blockingInvoices = (summary.blocking_invoices ?? []).map(invoice => ({
     ...invoice,
-    unapplied_amount: detail.clients.flatMap(client => client.invoices).find(item => item.settlement_item_id === invoice.settlement_item_id)?.unapplied_amount ?? 0,
+    unapplied_amount: uiClients.flatMap(client => client.invoices).find(item => item.settlement_item_id === invoice.settlement_item_id)?.unapplied_amount ?? 0,
   }))
   const selectedQuickRows = quickInvoices.filter(invoice => selectedQuickInvoices.includes(invoice.settlement_item_id))
   const quickTotals = selectedQuickRows.reduce((totals, invoice) => {
     const result = quickResults[invoice.settlement_item_id] ?? quickResultFor(invoice)
+    if (!result) return totals
     totals[result].count += 1
     totals[result].amount += quickAmount(invoice)
     return totals
   }, { CASH: { count: 0, amount: 0 }, CHECK: { count: 0, amount: 0 }, TRANSFER: { count: 0, amount: 0 }, CREDIT: { count: 0, amount: 0 } } as Record<QuickResult, { count: number; amount: number }>)
   const quickExpectedAmounts = quickInvoices.reduce((totals, invoice) => {
-    totals[quickResultFor(invoice)] += quickAmount(invoice)
+    const result = quickResultFor(invoice)
+    if (result) totals[result] += quickAmount(invoice)
     return totals
   }, { CASH: 0, CHECK: 0, TRANSFER: 0, CREDIT: 0 } as Record<QuickResult, number>)
-  const quickExpectedTotal = Object.values(quickExpectedAmounts).reduce((total, amount) => total + amount, 0)
+  const quickExpectedTotal = quickInvoices.reduce((total, invoice) => total + quickAmount(invoice), 0)
   const quickPreparedTotal = Object.values(quickTotals).reduce((total, result) => total + result.amount, 0)
   const normalizedQuickSearch = normalizeQuickSearch(quickSearch)
   const filteredClients = normalizedQuickSearch
-    ? detail.clients.filter(client =>
+    ? uiClients.filter(client =>
       normalizeQuickSearch(`${client.customer_name} ${client.rut ?? ''}`).includes(normalizedQuickSearch) ||
       client.invoices.some(invoice => normalizeQuickSearch(invoice.invoice_number).includes(normalizedQuickSearch)),
     )
-    : detail.clients
+    : uiClients
   const checkGroups = Object.values(selectedQuickRows.reduce((groups, invoice) => {
     const result = quickResults[invoice.settlement_item_id] ?? quickResultFor(invoice)
     if (result !== 'CHECK') return groups
     const paymentGroupKey = quickPaymentGroupKey(invoice, result)
-    const client = detail.clients.find(item => item.invoices.some(clientInvoice => clientInvoice.settlement_item_id === invoice.settlement_item_id))
+    const client = uiClients.find(item => item.invoices.some(clientInvoice => clientInvoice.settlement_item_id === invoice.settlement_item_id))
     const group = groups[paymentGroupKey] ?? {
       paymentGroupKey,
       customerName: client?.customer_name ?? 'Cliente sin identificar',
@@ -231,6 +259,14 @@ export function RouteSettlementClientView({ detail, onClose, canUpdateSettlement
   }
 
   async function saveQuickRows() {
+    const missingAlDia = selectedQuickRows.filter(invoice => {
+      const result = quickResults[invoice.settlement_item_id] ?? quickResultFor(invoice)
+      return invoice.expected_payment_method === 'AL_DIA' && !result
+    })
+    if (missingAlDia.length > 0) {
+      setBulkError('Hay facturas seleccionadas con forma de pago \'Al día\' que requieren indicar cómo fueron pagadas.')
+      return
+    }
     const missingCheck = checkGroups.find(group => {
       const details = checkDetails[group.paymentGroupKey]
       return !details?.bank_name.trim() || !details.check_number.trim() || !details.check_date
@@ -244,6 +280,7 @@ export function RouteSettlementClientView({ detail, onClose, canUpdateSettlement
     try {
       const rows = selectedQuickRows.map(invoice => {
         const result = quickResults[invoice.settlement_item_id] ?? quickResultFor(invoice)
+        if (!result) throw new Error('Hay facturas seleccionadas con forma de pago \'Al día\' que requieren indicar cómo fueron pagadas.')
         const paymentGroupKey = quickPaymentGroupKey(invoice, result)
         return {
           settlement_item_id: invoice.settlement_item_id,
@@ -323,9 +360,17 @@ export function RouteSettlementClientView({ detail, onClose, canUpdateSettlement
                <h2 className="text-sm font-bold text-theme-text">Clientes de la rendición</h2>
                <p className="mt-0.5 text-xs text-theme-text-muted">Prepara las facturas directamente en la mesa. Marcar no produce efectos hasta grabar.</p>
              </div>
-             <div className="flex shrink-0 items-center justify-between sm:justify-end">
-               {canModify && <button type="button" onClick={() => { setBulkError(null); setBulkIdempotencyKey(crypto.randomUUID()); setBulkConfirmationOpen(true) }} disabled={selectedQuickRows.length === 0 || isBulkSaving} className="rounded-lg bg-theme-accent px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45">Grabar seleccionadas ({selectedQuickRows.length})</button>}
-             </div>
+              <div className="flex shrink-0 flex-col items-end gap-1 sm:justify-end">
+                {canModify && <button type="button" onClick={() => {
+                  const missingAlDia = selectedQuickRows.some(invoice => invoice.expected_payment_method === 'AL_DIA' && !(quickResults[invoice.settlement_item_id] ?? quickResultFor(invoice)))
+                  if (missingAlDia) {
+                    setBulkError('Hay facturas seleccionadas con forma de pago \'Al día\' que requieren indicar cómo fueron pagadas.')
+                    return
+                  }
+                  setBulkError(null); setBulkIdempotencyKey(crypto.randomUUID()); setBulkConfirmationOpen(true)
+                }} disabled={selectedQuickRows.length === 0 || isBulkSaving} className="rounded-lg bg-theme-accent px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45">Grabar seleccionadas ({selectedQuickRows.length})</button>}
+                {bulkError && <p role="alert" className="max-w-sm text-right text-[11px] font-semibold text-red-600 dark:text-red-400">{bulkError}</p>}
+              </div>
            </div>
 
            <div className="overflow-x-auto rounded-lg border border-theme-border bg-theme-surface">
@@ -343,7 +388,7 @@ export function RouteSettlementClientView({ detail, onClose, canUpdateSettlement
                          {client.rut && <div className="truncate text-[10px] leading-3.5 text-theme-text-muted">{client.rut}</div>}
                        </td>
                        <td className="w-36 whitespace-nowrap px-3 py-2 text-right font-semibold tabular-nums text-theme-text"><span className="mr-1 text-[10px] font-medium uppercase tracking-wide text-theme-text-muted">Total</span>{displayAmount(client.expected_amount)}</td>
-                       <td className="w-20 px-3 py-2 text-right"><button type="button" onClick={() => { setPendingFlowActive(false); setSelectedClientId(client.customer_bsale_id) }} className="inline-flex items-center gap-0.5 rounded-md px-1.5 py-1 text-[11px] font-semibold text-theme-text-muted transition-colors hover:bg-theme-text/5 hover:text-theme-text">Ver <ChevronRight className="h-3 w-3" /></button></td>
+                      <td className="w-20 px-3 py-2 text-right"><button type="button" onClick={() => { setPendingFlowActive(false); setSelectedClientKey(clientUiKey(client)) }} className="inline-flex items-center gap-0.5 rounded-md px-1.5 py-1 text-[11px] font-semibold text-theme-text-muted transition-colors hover:bg-theme-text/5 hover:text-theme-text">Ver <ChevronRight className="h-3 w-3" /></button></td>
                      </tr>
                      <tr className="border-b border-theme-border"><td colSpan={4} className="bg-theme-text/[0.02] px-3 py-1.5"><QuickInvoiceRows client={client} selectedIds={selectedQuickInvoices} results={quickResults} onToggle={toggleQuickInvoice} onResultChange={(id, result) => setQuickResults(current => ({ ...current, [id]: result }))} /></td></tr>
                    </Fragment>
@@ -410,7 +455,7 @@ export function RouteSettlementClientView({ detail, onClose, canUpdateSettlement
         </Dialog>
       )}
 
-      <Sheet open={selectedClient !== null} onOpenChange={open => !open && setSelectedClientId(null)}>
+      <Sheet open={selectedClient !== null} onOpenChange={open => !open && setSelectedClientKey(null)}>
         <SheetContent side="right" className="w-full overflow-y-auto border-theme-border bg-theme-surface sm:max-w-3xl lg:max-w-5xl">
           {selectedClient && (
             <ClientDetail
@@ -422,7 +467,7 @@ export function RouteSettlementClientView({ detail, onClose, canUpdateSettlement
               onInvoiceResolutionSaved={async () => {
                 if (pendingFlowActive) {
                   setPendingInvoiceId(null)
-                  setSelectedClientId(null)
+                   setSelectedClientKey(null)
                   await onPaymentSaved()
                   setBlockingDialogOpen(true)
                   return
@@ -432,7 +477,7 @@ export function RouteSettlementClientView({ detail, onClose, canUpdateSettlement
               onPendingFlowExit={() => {
                 if (!pendingFlowActive) return
                 setPendingInvoiceId(null)
-                setSelectedClientId(null)
+                 setSelectedClientKey(null)
                 setBlockingDialogOpen(true)
               }}
             />
@@ -449,7 +494,8 @@ export function RouteSettlementClientView({ detail, onClose, canUpdateSettlement
             setBlockingDialogOpen(false)
             setPendingFlowActive(true)
             setPendingInvoiceId(settlementItemId)
-            setSelectedClientId(customerId)
+             const client = uiClients.find(item => item.customer_bsale_id === customerId)
+             setSelectedClientKey(client ? clientUiKey(client) : null)
           }}
         />
       )}
@@ -787,8 +833,8 @@ function ClientDetail({
       <SheetHeader className="border-b border-theme-border px-5 py-5 pr-12">
         <SheetTitle className="text-lg text-theme-text">{client.customer_name}</SheetTitle>
         <SheetDescription className="flex flex-wrap gap-x-2 gap-y-1 text-xs text-theme-text-muted">
-          {client.rut && <span>RUT {client.rut}</span>}
-          {client.customer_bsale_id !== null && <span>Cliente Bsale {client.customer_bsale_id}</span>}
+           {client.rut && <span>RUT {client.rut}</span>}
+           {client.customer_bsale_id !== null ? <span>Cliente Bsale {client.customer_bsale_id}</span> : <span>Cliente sin ID Bsale</span>}
           <span>{client.invoice_count} {client.invoice_count === 1 ? 'factura' : 'facturas'}</span>
         </SheetDescription>
         <div className="mt-3 flex items-center gap-5 text-xs">

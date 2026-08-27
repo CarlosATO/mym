@@ -126,7 +126,7 @@ export function validateRouteGuideGrid(items: Partial<RouteGuideItem>[]): RouteG
       amount: item.amount || '', // Guardamos el valor crudo original en UI
       payment_method_original: item.payment_method_original || '',
       payment_method_normalized: normalizedPayment,
-      requires_settlement: normalizedPayment === 'CASH' || normalizedPayment === 'CHECK',
+       requires_settlement: normalizedPayment === 'CASH' || normalizedPayment === 'CHECK',
       validation_status: errors.length > 0 ? 'INVALID' : 'VALID',
       validation_errors: errors,
       notes: item.notes || '',

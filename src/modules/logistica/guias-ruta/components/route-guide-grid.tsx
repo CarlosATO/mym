@@ -8,7 +8,7 @@ export interface SaleConditionOption {
   id: string;
   bsale_id: number;
   name: string;
-  normalized: 'CASH' | 'CHECK' | 'TRANSFER' | 'CREDIT' | 'UNKNOWN';
+  normalized: 'CASH' | 'AL_DIA' | 'CHECK' | 'TRANSFER' | 'CREDIT' | 'UNKNOWN';
   label: string;
 }
 

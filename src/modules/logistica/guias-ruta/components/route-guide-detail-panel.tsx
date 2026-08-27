@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { RouteGuide, CatalogOptions } from '../types';
 import { RouteGuideStatusBadge } from './route-guide-badges';
@@ -8,7 +8,8 @@ import { RouteGuideEditModal } from './route-guide-edit-modal';
 import { Printer, Edit, Download } from 'lucide-react';
 import { generateRouteGuidePdfBlob, downloadRouteGuidePdf, type RouteGuidePdfOrientation } from '@/lib/pdf/generate-route-guide-pdf';
 
-import type { RouteSaveDuplicateWarning, SaveRouteGuideDraftResult } from '@/app/actions/logistica/guias-ruta';
+import { getRouteGuideProfitabilityV1, type RouteSaveDuplicateWarning, type SaveRouteGuideDraftResult } from '@/app/actions/logistica/guias-ruta';
+import type { RouteGuideProfitabilityV1 } from '../types';
 
 interface RouteGuideDetailPanelProps {
   guide: RouteGuide;
@@ -37,6 +38,24 @@ export function RouteGuideDetailPanel({
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [pdfOrientation, setPdfOrientation] = useState<RouteGuidePdfOrientation>('portrait');
+  const [profitability, setProfitability] = useState<RouteGuideProfitabilityV1 | null>(null);
+  const [profitabilityLoading, setProfitabilityLoading] = useState(true);
+  const [profitabilityError, setProfitabilityError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    getRouteGuideProfitabilityV1(guide.id)
+      .then(data => {
+        if (active) setProfitability(data);
+      })
+      .catch(error => {
+        if (active) setProfitabilityError(error instanceof Error ? error.message : 'No se pudo cargar la rentabilidad V1.');
+      })
+      .finally(() => {
+        if (active) setProfitabilityLoading(false);
+      });
+    return () => { active = false; };
+  }, [guide.id]);
 
 
 
@@ -95,6 +114,16 @@ export function RouteGuideDetailPanel({
       </div>,
       document.body
     );
+  };
+
+  const formatPercent = (value: number | null | undefined) => value === null || value === undefined
+    ? '—'
+    : `${new Intl.NumberFormat('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)}%`;
+
+  const profitabilityStatusLabel = (status: RouteGuideProfitabilityV1['cost_status']) => {
+    if (status === 'COMPLETE') return 'Cobertura 100%';
+    if (status === 'PARTIAL') return `Parcial · ${formatPercent(profitability?.cost_coverage_pct)}`;
+    return 'Sin costo disponible';
   };
 
   return (
@@ -229,6 +258,96 @@ export function RouteGuideDetailPanel({
             <p className="text-xl font-bold text-purple-700 dark:text-purple-500">{formatCurrency(guide.total_transfer)}</p>
           </div>
         </div>
+
+        <section className="rounded-2xl border border-theme-border bg-theme-surface shadow-sm overflow-hidden">
+          <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-theme-border">
+            <div>
+              <h3 className="text-sm font-bold uppercase tracking-wider text-theme-text">Rentabilidad V1</h3>
+              <p className="text-[11px] text-theme-text-muted mt-1">Costo última compra y utilidad estimada</p>
+            </div>
+            {profitability && (
+              <span className="rounded-full border border-theme-accent/20 bg-theme-accent/5 px-2 py-1 text-[10px] font-bold text-theme-accent">
+                {profitabilityStatusLabel(profitability.cost_status)}
+              </span>
+            )}
+          </div>
+          <div className="p-5">
+            {profitabilityLoading ? (
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4 animate-pulse">
+                {[1, 2, 3, 4, 5].map(item => <div key={item} className="h-12 rounded-lg bg-theme-text/5" />)}
+              </div>
+            ) : profitabilityError ? (
+              <p className="text-xs text-theme-text-muted">La rentabilidad V1 no está disponible en este momento. La guía se puede consultar normalmente.</p>
+            ) : profitability ? (
+              <>
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                  {[
+                    ['Venta neta', formatCurrency(profitability.sales_net_total)],
+                    ['Costo última compra', formatCurrency(profitability.last_purchase_cost_total)],
+                    ['Utilidad estimada', formatCurrency(profitability.estimated_gross_profit)],
+                    ['Margen estimado', formatPercent(profitability.estimated_margin_pct)],
+                    ['Cobertura de costo', formatPercent(profitability.cost_coverage_pct)],
+                  ].map(([label, value]) => (
+                    <div key={label}>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-theme-text-muted">{label}</p>
+                      <p className="mt-1 text-base font-bold tabular-nums text-theme-text">{value}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-4 text-[11px] font-medium text-theme-text-muted">Margen calculado sobre las líneas con costo disponible.</p>
+                {profitability.cost_status === 'PARTIAL' && (
+                  <p className="mt-1 text-[11px] text-theme-text-muted">
+                    {profitability.uncovered_lines} líneas sin costo · {formatCurrency(profitability.uncovered_sales_net)} de venta no incluida en el margen.
+                  </p>
+                )}
+                <details className="mt-5 group">
+                  <summary className="cursor-pointer select-none text-xs font-bold text-theme-accent hover:text-theme-accent-hover">
+                    Ver líneas utilizadas ({profitability.total_lines})
+                  </summary>
+                  <div className="mt-3 overflow-x-auto rounded-xl border border-theme-border">
+                    <table className="min-w-[920px] w-full text-[11px] text-left">
+                      <thead className="bg-theme-text/[0.03] text-[10px] uppercase tracking-wider text-theme-text-muted border-b border-theme-border">
+                        <tr>
+                          <th className="px-3 py-2">Factura</th>
+                          <th className="px-3 py-2">SKU / Producto</th>
+                          <th className="px-3 py-2 text-right">Cantidad</th>
+                          <th className="px-3 py-2 text-right">Venta neta</th>
+                          <th className="px-3 py-2 text-right">Último costo</th>
+                          <th className="px-3 py-2 text-right">Costo total</th>
+                          <th className="px-3 py-2 text-right">Utilidad</th>
+                          <th className="px-3 py-2 text-right">Margen</th>
+                          <th className="px-3 py-2 text-center">Estado</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-theme-border">
+                        {profitability.lines.map((line, index) => (
+                          <tr key={`${line.document}-${line.bsale_variant_id}-${index}`} className="hover:bg-theme-text/[0.02]">
+                            <td className="px-3 py-2 font-mono font-semibold text-theme-accent">{line.document}</td>
+                            <td className="px-3 py-2 max-w-[230px]">
+                              <p className="font-semibold text-theme-text">{line.sku || 'Sin SKU'}</p>
+                              <p className="truncate text-theme-text-muted">{line.product_name || 'Producto desconocido'}</p>
+                            </td>
+                            <td className="px-3 py-2 text-right tabular-nums text-theme-text">{line.quantity}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-theme-text">{formatCurrency(line.net_sales)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-theme-text">{line.last_purchase_unit_cost === null ? 'Sin costo' : formatCurrency(line.last_purchase_unit_cost)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-theme-text">{line.line_cost === null ? 'Sin costo' : formatCurrency(line.line_cost)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-theme-text">{line.estimated_profit === null ? '—' : formatCurrency(line.estimated_profit)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-theme-text">{formatPercent(line.estimated_margin_pct)}</td>
+                            <td className="px-3 py-2 text-center">
+                              <span className="rounded-full border border-theme-border px-2 py-0.5 font-semibold text-theme-text-muted">
+                                {line.cost_status === 'COSTED' ? 'Con costo' : 'Sin costo'}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+              </>
+            ) : null}
+          </div>
+        </section>
 
         {/* Detalle Items (Read Only) */}
         <div>

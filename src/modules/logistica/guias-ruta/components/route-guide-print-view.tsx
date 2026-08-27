@@ -1,5 +1,5 @@
 import { RouteGuide } from '../types';
-import { formatCurrency, formatDate } from '../utils/route-guide-formatters';
+import { formatCurrency, formatDate, formatPaymentMethodLabel } from '../utils/route-guide-formatters';
 import { CompanyLogo } from '@/components/company-logo';
 import { formatInstantInSantiago } from '@/lib/datetime';
 
@@ -87,7 +87,7 @@ export function RouteGuidePrintView({ guide }: RouteGuidePrintViewProps) {
               <td className="py-1 px-1 text-xs truncate max-w-[200px]">{item.customer_name}</td>
               <td className="py-1 px-1 text-xs">{item.commune}</td>
               <td className="py-1 px-1 text-right">{formatCurrency(item.amount)}</td>
-              <td className="py-1 px-1 text-center text-xs uppercase">{item.payment_method_normalized === 'UNKNOWN' ? item.payment_method_original : item.payment_method_normalized}</td>
+              <td className="py-1 px-1 text-center text-xs">{item.payment_method_normalized === 'UNKNOWN' ? item.payment_method_original : formatPaymentMethodLabel(item.payment_method_normalized, item.payment_method_original)}</td>
               <td className="py-1 px-1 text-xs truncate max-w-[150px]">{item.notes}</td>
             </tr>
           ))}

@@ -13,6 +13,7 @@ export { formatInstantInSantiago }
 
 export function formatExpectedPaymentMethod(method: string): string {
   switch (method) {
+    case 'AL_DIA': return 'Al día'
     case 'CREDIT': return 'Crédito'
     case 'CASH': return 'Efectivo'
     case 'CHECK': return 'Cheque'

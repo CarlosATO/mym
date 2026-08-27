@@ -31,10 +31,13 @@ export function normalizePaymentMethodAdvanced(rawMethod: string | null | undefi
     };
   }
 
-  // CASH: efectivo, contado, al dia, pago contra entrega, prepago, cash, 48 horas
+  // AL_DIA is intentionally distinct from real cash.
+  if (normalized === 'al dia' || normalized === 'aldia') {
+    return { normalized: 'AL_DIA', label: 'Al día', requiresSettlement: false, confidence: 'HIGH' };
+  }
+
+  // CASH: efectivo, contado, pago contra entrega, prepago, cash, 48 horas
   if (
-    normalized === 'al dia' || 
-    normalized === 'aldia' || 
     normalized === 'efectivo' || 
     normalized === 'contado' || 
     normalized === 'cash' ||
@@ -98,6 +101,7 @@ export function requiresSettlement(method: PaymentMethodNormalized): boolean {
 
 export function formatPaymentMethodLabel(value: PaymentMethodNormalized, originalValue?: string): string {
   if (value === 'CASH') return 'Efectivo';
+  if (value === 'AL_DIA') return 'Al día';
   if (value === 'CHECK') return 'Cheque';
   if (value === 'TRANSFER') return 'Transferencia';
   if (value === 'CREDIT') return 'Crédito';

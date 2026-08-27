@@ -31,6 +31,10 @@ export function PaymentMethodBadge({ method }: { method: PaymentMethodNormalized
   let label: string = method;
 
   switch (method) {
+    case 'AL_DIA':
+      color = 'bg-cyan-500/10 text-cyan-600 border-cyan-500/20';
+      label = 'Al día';
+      break;
     case 'CASH':
       color = 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20';
       label = 'Efectivo';

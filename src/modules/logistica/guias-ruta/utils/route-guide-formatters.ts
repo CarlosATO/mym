@@ -37,6 +37,7 @@ export function formatPaymentMethodLabel(normalizedValue?: string, originalValue
   
   const v = normalizedValue.toUpperCase();
   if (v === 'CASH') return 'Efectivo';
+  if (v === 'AL_DIA') return 'Al día';
   if (v === 'CHECK') return 'Cheque';
   if (v === 'CREDIT') return 'Crédito';
   if (v === 'TRANSFER') return 'Transferencia';
