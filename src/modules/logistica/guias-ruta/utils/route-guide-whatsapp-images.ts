@@ -56,6 +56,7 @@ function date(value: string): string {
 }
 
 function condition(item: RouteGuideItem): string {
+  if (item.payment_method_normalized === 'TRANSFER') return 'Transferencia';
   const original = item.payment_method_original?.trim();
   if (original && !['CASH', 'AL_DIA', 'CHECK', 'TRANSFER', 'CREDIT', 'UNKNOWN'].includes(original.toUpperCase())) return original;
   return ({
@@ -92,7 +93,7 @@ function detailSvg(guide: RouteGuide, profitability: RouteGuideProfitabilityV1):
   const rows = (guide.items || []).map((item, index) => {
     const row = profits.get(item.invoice_number) || { profit: 0, netSales: 0 };
     const gainPercent = row.netSales > 0 ? row.profit / row.netSales * 100 : null;
-    const y = 190 + index * 62;
+    const y = 285 + index * 62;
     const fill = index % 2 === 0 ? colors.surface : colors.soft;
     return [
       `<rect x="40" y="${y - 35}" width="1520" height="62" fill="${fill}"/>`,
@@ -107,34 +108,44 @@ function detailSvg(guide: RouteGuide, profitability: RouteGuideProfitabilityV1):
     ].join('');
   }).join('');
   const rowsHeight = Math.max((guide.items || []).length, 1) * 62;
-  const summaryY = 190 + rowsHeight + 32;
-  const summaryLines = [
-    `Documentos: ${guide.total_invoices}`,
-    `Total guía: ${currency(guide.total_amount)}`,
-    `Venta neta: ${currency(profitability.sales_net_total)}`,
-    `Costo: ${currency(profitability.last_purchase_cost_total)}`,
-    `Utilidad estimada: ${currency(profitability.estimated_gross_profit)}`,
-    `Margen estimado: ${percent(profitability.estimated_margin_pct)}`,
+  const metrics = [
+    ['DOCUMENTOS', guide.total_invoices],
+    ['TOTAL GUÍA', currency(guide.total_amount)],
+    ['VENTA NETA', currency(profitability.sales_net_total)],
+    ['COSTO', currency(profitability.last_purchase_cost_total)],
+    ['UTILIDAD ESTIMADA', currency(profitability.estimated_gross_profit)],
+    ['MARGEN ESTIMADO', percent(profitability.estimated_margin_pct)],
   ];
-  const summaryMarkup = summaryLines.map((line, index) => text(72 + (index % 2) * 470, summaryY + 42 + Math.floor(index / 2) * 34, line, 17, index === 0 ? 700 : 500)).join('');
-  const height = summaryY + 190;
+  const metricMarkup = metrics.map(([label, value], index) => {
+    const column = index % 3;
+    const row = Math.floor(index / 3);
+    const x = 850 + column * 230;
+    const y = 48 + row * 68;
+    return [
+      `<rect x="${x}" y="${y}" width="212" height="54" rx="12" fill="${colors.accentLight}"/>`,
+      text(x + 14, y + 19, label, 10, 700, colors.accent),
+      text(x + 14, y + 41, value, 17, 700, colors.ink),
+    ].join('');
+  }).join('');
+  const height = 285 + rowsHeight + 30;
   return shell(1600, height, [
-    '<rect x="40" y="32" width="1520" height="100" rx="22" fill="white" stroke="#dbe3e8"/>',
+    '<rect x="40" y="32" width="1520" height="165" rx="22" fill="white" stroke="#dbe3e8"/>',
     text(72, 72, `GUÍA ${shorten(guide.guide_number, 28)}`, 25, 700),
     text(72, 108, `${date(guide.guide_date)}  ·  ${shorten(guide.route_name_snapshot, 72)}`, 17, 400, colors.muted),
-    '<rect x="40" y="150" width="1520" height="40" rx="10" fill="#dff5ef"/>',
-    text(62, 176, 'FACTURA', 13, 700, colors.accent),
-    text(190, 176, 'CLIENTE', 13, 700, colors.accent),
-    text(520, 176, 'DIRECCIÓN', 13, 700, colors.accent),
-    text(820, 176, 'CIUDAD / COMUNA', 13, 700, colors.accent),
-    text(1025, 176, 'MONTO', 13, 700, colors.accent, 'end'),
-     text(1225, 176, 'UTILIDAD', 13, 700, colors.accent, 'end'),
-     text(1375, 176, 'GANANCIA %', 13, 700, colors.accent, 'end'),
-    text(1535, 176, 'CONDICIÓN', 13, 700, colors.accent, 'end'),
+    text(72, 140, 'RESUMEN DE LA GUÍA', 12, 700, colors.accent),
+    text(72, 164, 'Detalle operativo y rentabilidad estimada', 14, 400, colors.muted),
+    metricMarkup,
+    '<rect x="40" y="215" width="1520" height="40" rx="10" fill="#dff5ef"/>',
+    text(62, 241, 'FACTURA', 13, 700, colors.accent),
+    text(190, 241, 'CLIENTE', 13, 700, colors.accent),
+    text(520, 241, 'DIRECCIÓN', 13, 700, colors.accent),
+    text(820, 241, 'CIUDAD / COMUNA', 13, 700, colors.accent),
+    text(1025, 241, 'MONTO', 13, 700, colors.accent, 'end'),
+    text(1225, 241, 'UTILIDAD', 13, 700, colors.accent, 'end'),
+    text(1375, 241, 'GANANCIA %', 13, 700, colors.accent, 'end'),
+    text(1535, 241, 'CONDICIÓN', 13, 700, colors.accent, 'end'),
     rows,
-    `<rect x="40" y="${summaryY - 20}" width="1520" height="${height - summaryY - 20}" rx="22" fill="white" stroke="#dbe3e8"/>`,
-    text(72, summaryY + 14, 'RESUMEN', 19, 700, colors.accent),
-    summaryMarkup,
+    `<rect x="40" y="${height - 34}" width="1520" height="2" fill="${colors.border}"/>`,
   ].join(''));
 }
 
