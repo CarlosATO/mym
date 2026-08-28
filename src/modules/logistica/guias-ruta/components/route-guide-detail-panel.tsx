@@ -1,15 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import Image from 'next/image';
 import { RouteGuide, CatalogOptions } from '../types';
 import { RouteGuideStatusBadge } from './route-guide-badges';
 import { formatCurrency, formatDate, formatPaymentMethodLabel } from '../utils/route-guide-formatters';
 import { RouteGuideForm } from './route-guide-form';
 import { RouteGuideEditModal } from './route-guide-edit-modal';
-import { Printer, Edit, Download } from 'lucide-react';
+import { Printer, Edit, Download, Clipboard, Image as ImageIcon, X } from 'lucide-react';
+import { toast } from 'sonner';
 import { generateRouteGuidePdfBlob, downloadRouteGuidePdf, type RouteGuidePdfOrientation } from '@/lib/pdf/generate-route-guide-pdf';
 
 import { getRouteGuideProfitabilityV1, type RouteSaveDuplicateWarning, type SaveRouteGuideDraftResult } from '@/app/actions/logistica/guias-ruta';
 import type { RouteGuideProfitabilityV1 } from '../types';
+import { formatCoveragePercent } from '../utils/profitability-v1-display';
+import { createRouteGuideWhatsAppImages, type RouteGuideWhatsAppImages } from '../utils/route-guide-whatsapp-images';
 
 interface RouteGuideDetailPanelProps {
   guide: RouteGuide;
@@ -37,10 +41,13 @@ export function RouteGuideDetailPanel({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [pdfOrientation, setPdfOrientation] = useState<RouteGuidePdfOrientation>('portrait');
+  const [pdfOrientation, setPdfOrientation] = useState<RouteGuidePdfOrientation>('landscape');
   const [profitability, setProfitability] = useState<RouteGuideProfitabilityV1 | null>(null);
   const [profitabilityLoading, setProfitabilityLoading] = useState(true);
   const [profitabilityError, setProfitabilityError] = useState<string | null>(null);
+  const [whatsAppImages, setWhatsAppImages] = useState<RouteGuideWhatsAppImages | null>(null);
+  const [whatsAppImageUrls, setWhatsAppImageUrls] = useState<{ detail: string } | null>(null);
+  const [whatsAppLoading, setWhatsAppLoading] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -66,6 +73,54 @@ export function RouteGuideDetailPanel({
       setPreviewUrl(url);
     } catch (e: any) {
       console.error(e);
+    }
+  };
+
+  const handlePrepareWhatsApp = async () => {
+    if (!profitability || !guide.items?.length) return;
+    setWhatsAppLoading(true);
+    try {
+      const images = await createRouteGuideWhatsAppImages(guide, profitability);
+      setWhatsAppImages(images);
+      setWhatsAppImageUrls({
+        detail: URL.createObjectURL(images.detail),
+      });
+    } catch (error) {
+      console.error('No se pudieron preparar las imágenes para WhatsApp:', error);
+      toast.error('No se pudieron preparar las imágenes para WhatsApp.');
+    } finally {
+      setWhatsAppLoading(false);
+    }
+  };
+
+  const closeWhatsAppPreview = () => {
+    if (whatsAppImageUrls) {
+      URL.revokeObjectURL(whatsAppImageUrls.detail);
+    }
+    setWhatsAppImages(null);
+    setWhatsAppImageUrls(null);
+  };
+
+  const downloadWhatsAppImage = (kind: 'detail') => {
+    if (!whatsAppImageUrls) return;
+    const link = document.createElement('a');
+    link.href = whatsAppImageUrls[kind];
+    link.download = `Guia_${guide.guide_number}_Detalle.png`;
+    link.click();
+  };
+
+  const copyWhatsAppImage = async (kind: 'detail') => {
+    const image = whatsAppImages?.[kind];
+    if (!image) return;
+    if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+      toast.error('Tu navegador no permite copiar imágenes. Usa “Descargar imagen”.');
+      return;
+    }
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': image })]);
+      toast.success('Imagen copiada al portapapeles');
+    } catch {
+      toast.error('No se pudo copiar la imagen. Usa “Descargar imagen”.');
     }
   };
 
@@ -99,7 +154,7 @@ export function RouteGuideDetailPanel({
               <button onClick={() => { const win = window.open(previewUrl, '_blank'); win?.print(); }} className="px-4 py-1.5 rounded-lg bg-theme-surface border border-theme-border text-theme-text hover:bg-theme-text/5 text-xs font-bold transition-colors shadow-sm flex items-center gap-1.5">
                 <Printer className="w-4 h-4" /> Imprimir PDF
               </button>
-               <button onClick={() => { downloadRouteGuidePdf(guide, `Guia_${guide.guide_number}`, pdfOrientation); }} className="px-4 py-1.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-xs font-bold transition-colors shadow-lg shadow-theme-accent/20 flex items-center gap-1.5">
+                <button onClick={() => { downloadRouteGuidePdf(guide, `Guia_${guide.guide_number}`, pdfOrientation); }} className="px-4 py-1.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-xs font-bold transition-colors shadow-lg shadow-theme-accent/20 flex items-center gap-1.5">
                 <Download className="w-4 h-4" /> Descargar PDF
               </button>
               <button onClick={() => { URL.revokeObjectURL(previewUrl); setPreviewUrl(null); }} className="px-4 py-1.5 rounded-lg border border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/10 text-xs font-semibold transition-colors">
@@ -116,13 +171,61 @@ export function RouteGuideDetailPanel({
     );
   };
 
+  const renderWhatsAppModal = () => {
+    if (!whatsAppImages || !whatsAppImageUrls || typeof document === 'undefined') return null;
+    const imageCards = [
+      { kind: 'detail' as const, title: 'Detalle operativo', url: whatsAppImageUrls.detail },
+    ];
+    return createPortal(
+      <div className="fixed inset-0 z-[99998] flex items-center justify-center bg-black/70 p-3 backdrop-blur-sm" onClick={closeWhatsAppPreview}>
+        <div className="flex h-[94vh] w-[min(1400px,96vw)] flex-col overflow-hidden rounded-2xl border border-theme-border bg-theme-surface shadow-2xl" onClick={event => event.stopPropagation()}>
+          <div className="flex shrink-0 items-center justify-between gap-4 border-b border-theme-border px-5 py-4">
+            <div>
+              <h2 className="text-base font-bold text-theme-text">Preparar para WhatsApp</h2>
+              <p className="mt-1 text-xs text-theme-text-muted">Imágenes listas para copiar o descargar</p>
+            </div>
+            <div className="flex items-center gap-2">
+               <button type="button" onClick={() => downloadWhatsAppImage('detail')} className="flex items-center gap-2 rounded-lg bg-theme-accent px-3 py-2 text-xs font-bold text-white hover:bg-theme-accent-hover">
+                 <Download className="h-4 w-4" /> Descargar imagen
+              </button>
+              <button type="button" onClick={closeWhatsAppPreview} className="rounded-lg border border-theme-border p-2 text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text" title="Cerrar">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto bg-theme-text/[0.03] p-4">
+            {imageCards.map(card => (
+              <section key={card.kind} className="flex min-h-0 w-full flex-col rounded-xl border border-theme-border bg-theme-surface p-3 shadow-sm">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <h3 className="text-sm font-bold text-theme-text">{card.title}</h3>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => copyWhatsAppImage(card.kind)} className="flex items-center gap-1.5 rounded-lg border border-theme-accent/30 px-2.5 py-1.5 text-[11px] font-bold text-theme-accent hover:bg-theme-accent/10">
+                      <Clipboard className="h-3.5 w-3.5" /> Copiar imagen
+                    </button>
+                    <button type="button" onClick={() => downloadWhatsAppImage(card.kind)} className="flex items-center gap-1.5 rounded-lg border border-theme-border px-2.5 py-1.5 text-[11px] font-bold text-theme-text hover:bg-theme-text/5">
+                      <Download className="h-3.5 w-3.5" /> Descargar imagen
+                    </button>
+                  </div>
+                </div>
+                <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-theme-border bg-slate-100 p-2">
+                  <Image src={card.url} alt={card.title} width={1600} height={1000} unoptimized className="mx-auto h-auto w-full rounded shadow-sm" />
+                </div>
+              </section>
+            ))}
+          </div>
+        </div>
+      </div>,
+      document.body,
+    );
+  };
+
   const formatPercent = (value: number | null | undefined) => value === null || value === undefined
     ? '—'
     : `${new Intl.NumberFormat('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)}%`;
 
   const profitabilityStatusLabel = (status: RouteGuideProfitabilityV1['cost_status']) => {
     if (status === 'COMPLETE') return 'Cobertura 100%';
-    if (status === 'PARTIAL') return `Parcial · ${formatPercent(profitability?.cost_coverage_pct)}`;
+    if (status === 'PARTIAL') return `Parcial · ${formatCoveragePercent(profitability?.cost_coverage_pct, status)}`;
     return 'Sin costo disponible';
   };
 
@@ -130,6 +233,7 @@ export function RouteGuideDetailPanel({
     <div className="flex flex-col h-full bg-theme-surface text-theme-text relative">
       
       {renderPreviewModal()}
+      {renderWhatsAppModal()}
 
       {editModalOpen && (
         <RouteGuideEditModal
@@ -164,12 +268,21 @@ export function RouteGuideDetailPanel({
                <option value="landscape">Horizontal</option>
              </select>
            </label>
-          <button
-            onClick={onClose}
+           <button
+             onClick={onClose}
             className="px-4 py-2 border border-theme-border rounded-lg text-theme-text hover:bg-theme-text/5 text-sm font-semibold transition-colors"
           >
-            Cerrar
-          </button>
+             Cerrar
+           </button>
+
+           <button
+             type="button"
+             onClick={handlePrepareWhatsApp}
+             disabled={!profitability || !guide.items?.length || whatsAppLoading}
+             className="flex items-center gap-2 rounded-lg bg-theme-accent px-4 py-2 text-sm font-bold text-white shadow-sm transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+           >
+             <ImageIcon className="h-4 w-4" /> {whatsAppLoading ? 'Preparando…' : 'Preparar para WhatsApp'}
+           </button>
           
           <button
             onClick={handlePrint}
@@ -200,10 +313,10 @@ export function RouteGuideDetailPanel({
       </div>
 
       {/* Detail Content (Read Only View) */}
-      <div className="p-6 overflow-y-auto space-y-8 print:hidden">
+      <div className="p-4 overflow-y-auto space-y-4 print:hidden">
         
         {/* Resumen Cabecera */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-6 bg-theme-surface p-6 rounded-2xl border border-theme-border shadow-sm">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-theme-surface p-3 rounded-2xl border border-theme-border shadow-sm">
           <div>
             <p className="text-[10px] text-theme-text-muted font-bold uppercase tracking-wider mb-1">Fecha</p>
             <p className="font-semibold text-theme-text text-sm">{formatDate(guide.guide_date)}</p>
@@ -235,76 +348,76 @@ export function RouteGuideDetailPanel({
         </div>
 
         {/* Resumen Totales */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <div className="p-4 border border-theme-border rounded-2xl bg-theme-surface">
-            <p className="text-[10px] text-theme-text-muted font-bold uppercase tracking-wider">Monto Total</p>
-            <p className="text-xl font-bold text-theme-accent">{formatCurrency(guide.total_amount)}</p>
-            <p className="text-[10px] text-theme-text-muted/70 font-semibold mt-1">{guide.total_invoices} facturas</p>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+          <div className="p-2.5 border border-theme-border rounded-2xl bg-theme-surface">
+            <p className="text-[9px] text-theme-text-muted font-bold uppercase tracking-wider leading-tight">Monto Total</p>
+            <p className="text-lg font-bold leading-tight text-theme-accent">{formatCurrency(guide.total_amount)}</p>
+            <p className="text-[10px] text-theme-text-muted/70 font-semibold mt-0.5">{guide.total_invoices} facturas</p>
           </div>
-          <div className="p-4 border border-theme-border rounded-2xl bg-theme-surface">
-            <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold uppercase tracking-wider">Total Efectivo</p>
-            <p className="text-xl font-bold text-emerald-700 dark:text-emerald-500">{formatCurrency(guide.total_cash_expected)}</p>
+          <div className="p-2.5 border border-theme-border rounded-2xl bg-theme-surface">
+            <p className="text-[9px] text-emerald-600 dark:text-emerald-400 font-bold uppercase tracking-wider leading-tight">Total Efectivo</p>
+            <p className="text-lg font-bold leading-tight text-emerald-700 dark:text-emerald-500">{formatCurrency(guide.total_cash_expected)}</p>
           </div>
-          <div className="p-4 border border-theme-border rounded-2xl bg-theme-surface">
-            <p className="text-[10px] text-blue-600 dark:text-blue-400 font-bold uppercase tracking-wider">Total Cheques</p>
-            <p className="text-xl font-bold text-blue-700 dark:text-blue-500">{formatCurrency(guide.total_check_expected)}</p>
+          <div className="p-2.5 border border-theme-border rounded-2xl bg-theme-surface">
+            <p className="text-[9px] text-blue-600 dark:text-blue-400 font-bold uppercase tracking-wider leading-tight">Total Cheques</p>
+            <p className="text-lg font-bold leading-tight text-blue-700 dark:text-blue-500">{formatCurrency(guide.total_check_expected)}</p>
           </div>
-          <div className="p-4 border border-theme-border rounded-2xl bg-theme-surface">
-            <p className="text-[10px] text-orange-600 dark:text-orange-400 font-bold uppercase tracking-wider">Total Crédito</p>
-            <p className="text-xl font-bold text-orange-700 dark:text-orange-500">{formatCurrency(guide.total_credit)}</p>
+          <div className="p-2.5 border border-theme-border rounded-2xl bg-theme-surface">
+            <p className="text-[9px] text-orange-600 dark:text-orange-400 font-bold uppercase tracking-wider leading-tight">Total Crédito</p>
+            <p className="text-lg font-bold leading-tight text-orange-700 dark:text-orange-500">{formatCurrency(guide.total_credit)}</p>
           </div>
-          <div className="p-4 border border-theme-border rounded-2xl bg-theme-surface">
-            <p className="text-[10px] text-purple-600 dark:text-purple-400 font-bold uppercase tracking-wider">Total Transferencias</p>
-            <p className="text-xl font-bold text-purple-700 dark:text-purple-500">{formatCurrency(guide.total_transfer)}</p>
+          <div className="p-2.5 border border-theme-border rounded-2xl bg-theme-surface">
+            <p className="text-[9px] text-purple-600 dark:text-purple-400 font-bold uppercase tracking-wider leading-tight">Total Transferencias</p>
+            <p className="text-lg font-bold leading-tight text-purple-700 dark:text-purple-500">{formatCurrency(guide.total_transfer)}</p>
           </div>
         </div>
 
         <section className="rounded-2xl border border-theme-border bg-theme-surface shadow-sm overflow-hidden">
-          <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-theme-border">
+          <div className="flex items-center justify-between gap-3 px-4 py-2 border-b border-theme-border">
             <div>
               <h3 className="text-sm font-bold uppercase tracking-wider text-theme-text">Rentabilidad V1</h3>
-              <p className="text-[11px] text-theme-text-muted mt-1">Costo última compra y utilidad estimada</p>
+              <p className="text-[11px] text-theme-text-muted mt-0.5">Costo última compra y utilidad estimada</p>
             </div>
             {profitability && (
-              <span className="rounded-full border border-theme-accent/20 bg-theme-accent/5 px-2 py-1 text-[10px] font-bold text-theme-accent">
+              <span className="rounded-full border border-theme-accent/20 bg-theme-accent/5 px-2 py-0.5 text-[10px] font-bold text-theme-accent">
                 {profitabilityStatusLabel(profitability.cost_status)}
               </span>
             )}
           </div>
-          <div className="p-5">
+          <div className="p-3">
             {profitabilityLoading ? (
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4 animate-pulse">
-                {[1, 2, 3, 4, 5].map(item => <div key={item} className="h-12 rounded-lg bg-theme-text/5" />)}
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 animate-pulse">
+                {[1, 2, 3, 4, 5].map(item => <div key={item} className="h-8 rounded-lg bg-theme-text/5" />)}
               </div>
             ) : profitabilityError ? (
               <p className="text-xs text-theme-text-muted">La rentabilidad V1 no está disponible en este momento. La guía se puede consultar normalmente.</p>
             ) : profitability ? (
               <>
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                   {[
                     ['Venta neta', formatCurrency(profitability.sales_net_total)],
                     ['Costo última compra', formatCurrency(profitability.last_purchase_cost_total)],
                     ['Utilidad estimada', formatCurrency(profitability.estimated_gross_profit)],
                     ['Margen estimado', formatPercent(profitability.estimated_margin_pct)],
-                    ['Cobertura de costo', formatPercent(profitability.cost_coverage_pct)],
+                    ['Cobertura de costo', formatCoveragePercent(profitability.cost_coverage_pct, profitability.cost_status)],
                   ].map(([label, value]) => (
                     <div key={label}>
                       <p className="text-[10px] font-bold uppercase tracking-wider text-theme-text-muted">{label}</p>
-                      <p className="mt-1 text-base font-bold tabular-nums text-theme-text">{value}</p>
+                      <p className="mt-0.5 text-sm font-bold leading-tight tabular-nums text-theme-text">{value}</p>
                     </div>
                   ))}
                 </div>
-                <p className="mt-4 text-[11px] font-medium text-theme-text-muted">Margen calculado sobre las líneas con costo disponible.</p>
+                <p className="mt-2 text-[11px] font-medium text-theme-text-muted">Margen calculado sobre las líneas con costo disponible.</p>
                 {profitability.cost_status === 'PARTIAL' && (
                   <p className="mt-1 text-[11px] text-theme-text-muted">
                     {profitability.uncovered_lines} líneas sin costo · {formatCurrency(profitability.uncovered_sales_net)} de venta no incluida en el margen.
                   </p>
                 )}
-                <details className="mt-5 group">
+                <details className="mt-2 group">
                   <summary className="cursor-pointer select-none text-xs font-bold text-theme-accent hover:text-theme-accent-hover">
-                    Ver líneas utilizadas ({profitability.total_lines})
+                    Ver detalle de líneas ({profitability.total_lines})
                   </summary>
-                  <div className="mt-3 overflow-x-auto rounded-xl border border-theme-border">
+                  <div className="mt-2 overflow-x-auto rounded-xl border border-theme-border">
                     <table className="min-w-[920px] w-full text-[11px] text-left">
                       <thead className="bg-theme-text/[0.03] text-[10px] uppercase tracking-wider text-theme-text-muted border-b border-theme-border">
                         <tr>

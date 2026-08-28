@@ -244,23 +244,20 @@ export async function generateRouteGuidePdfBlob(
   // TABLE
   const validItems = guide.items?.filter(i => !isEmptyRouteGuideRow(i)) || []
   
-  const tableHeaders = ['#', 'Factura', 'Cliente', 'Dirección', 'Comuna', 'Monto', 'Forma Pago', 'Obs.']
+  const tableHeaders = ['Factura', 'Cliente', 'Dirección / Ciudad', 'Monto', 'Condición de venta']
   const tableBody = validItems.map(item => [
-    item.line_number.toString(),
     item.invoice_number,
     item.customer_name,
-    item.customer_address?.trim() || '-',
-    item.commune,
+    `${item.customer_address?.trim() || '-'} / ${item.commune || '-'}`,
     formatRouteGuideLineAmount(item.amount),
     formatPaymentMethodLabel(item.payment_method_normalized, item.payment_method_original),
-    item.notes
   ])
 
   const blockHeight = 55
   const blockStartY = pageHeight - margin - blockHeight
   const tableColumnWidths = orientation === 'landscape'
-    ? [8, 22, 55, 65, 28, 25, 38, 26]
-    : [7, 18, 32, 34, 20, 22, 28, 19]
+    ? [27, 70, 78, 30, 55]
+    : [25, 43, 48, 24, 40]
 
   const autoTableOptions = {
     head: [tableHeaders],
@@ -270,28 +267,25 @@ export async function generateRouteGuidePdfBlob(
     headStyles: { fillColor: [30, 58, 95], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8, halign: 'center', cellPadding: 2 },
     columnStyles: {
       0: { halign: 'center', cellWidth: tableColumnWidths[0] },
-      1: { halign: 'center', cellWidth: tableColumnWidths[1] },
+      1: { cellWidth: tableColumnWidths[1] },
       2: { cellWidth: tableColumnWidths[2] },
-      3: { cellWidth: tableColumnWidths[3] },
-      4: { cellWidth: tableColumnWidths[4] },
-      5: { halign: 'right', cellWidth: tableColumnWidths[5] },
-      6: { halign: 'center', cellWidth: tableColumnWidths[6] },
-      7: { cellWidth: tableColumnWidths[7] }
+      3: { halign: 'right', cellWidth: tableColumnWidths[3] },
+      4: { halign: 'center', cellWidth: tableColumnWidths[4] }
     },
     alternateRowStyles: { fillColor: [248, 250, 252] }
-  } as any;
+  } as Parameters<typeof autoTable>[1];
 
   // Let autoTable paginate and repeat the header. Reserve the final summary
   // block only after knowing where the last table page actually ended.
   autoTable(doc, { ...autoTableOptions, body: tableBody })
-  const tableFinalY = (doc as any).lastAutoTable.finalY as number
+  const tableFinalY = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY
   let summaryStartY = blockStartY
   if (tableFinalY > blockStartY) {
     doc.addPage()
     summaryStartY = margin
   }
 
-  // TOTALS (New layout)
+  // OPERATIONAL SUMMARY
   doc.setPage(doc.getNumberOfPages()); // Nos aseguramos de estar en la última página
   
   // Title
@@ -299,22 +293,15 @@ export async function generateRouteGuidePdfBlob(
   doc.setFontSize(9);
   doc.setTextColor(...DARK_TEXT);
   doc.text(`Resumen de guía: ${guide.total_invoices || 0} Facturas`, margin, summaryStartY);
-  
   const summaryTableBody = [
     ['Efectivo esperado', formatCurrency(guide.total_cash_expected || 0), ''],
     ['Cheques esperados', formatCurrency(guide.total_check_expected || 0), ''],
     ['Crédito', formatCurrency(guide.total_credit || 0), ''],
     ['Transferencia', formatCurrency(guide.total_transfer || 0), ''],
-  ];
-  
-  const totalUnknown = guide.items?.filter(i => i.payment_method_normalized === 'UNKNOWN').reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0) || 0;
-  const hasUnknown = totalUnknown > 0;
+  ]
 
-  if (hasUnknown) {
-    summaryTableBody.push(['No reconocido', formatCurrency(totalUnknown), '']);
-  }
-  
-  summaryTableBody.push(['Gastos', '', '']);
+  const totalUnknown = guide.items?.filter(i => i.payment_method_normalized === 'UNKNOWN').reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0) || 0
+  if (totalUnknown > 0) summaryTableBody.push(['No reconocido', formatCurrency(totalUnknown), ''])
   
   autoTable(doc, {
     head: [['Concepto', 'Emitido', 'Recibido / Rendido']],
@@ -332,27 +319,23 @@ export async function generateRouteGuidePdfBlob(
     alternateRowStyles: { fillColor: [248, 250, 252] },
   });
 
-  const totalsX = margin + 100 + 10;
-  let ty = summaryStartY + 10;
-  
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.setTextColor(...DARK_TEXT);
-  doc.text('Monto total ruta:', totalsX, ty);
-  doc.text(formatCurrency(guide.total_amount || 0), pageWidth - margin, ty, { align: 'right' });
-  
-  ty += 8;
-  
-  doc.setDrawColor(...EMERALD);
-  doc.setLineWidth(0.5);
-  doc.line(totalsX, ty - 4, pageWidth - margin, ty - 4);
-  
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.setTextColor(...EMERALD);
-  doc.text('Total a rendir:', totalsX, ty + 1);
-  doc.setFontSize(10);
-  doc.text(formatCurrency((guide.total_cash_expected || 0) + (guide.total_check_expected || 0)), pageWidth - margin, ty + 1, { align: 'right' });
+  // SIGNATURES
+  const totalsX = margin + 100 + 10
+  let ty = summaryStartY + 10
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8)
+  doc.setTextColor(...DARK_TEXT)
+  doc.text('Monto total ruta:', totalsX, ty)
+  doc.text(formatCurrency(guide.total_amount || 0), pageWidth - margin, ty, { align: 'right' })
+  ty += 8
+  doc.setDrawColor(...EMERALD)
+  doc.setLineWidth(0.5)
+  doc.line(totalsX, ty - 4, pageWidth - margin, ty - 4)
+  doc.setFontSize(9)
+  doc.setTextColor(...EMERALD)
+  doc.text('Total a rendir:', totalsX, ty + 1)
+  doc.setFontSize(10)
+  doc.text(formatCurrency((guide.total_cash_expected || 0) + (guide.total_check_expected || 0)), pageWidth - margin, ty + 1, { align: 'right' })
 
   // SIGNATURES
   const sigY = summaryStartY + 45;

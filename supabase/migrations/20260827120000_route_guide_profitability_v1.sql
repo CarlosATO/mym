@@ -28,7 +28,8 @@ DECLARE
     v_covered_variant_count integer;
     v_uncovered_variant_count integer;
     v_estimated_margin_pct numeric(14,2);
-    v_cost_coverage_pct numeric(14,2);
+    -- Keep calculation precision separate from the UI's two-decimal display.
+    v_cost_coverage_pct numeric(14,6);
     v_cost_status text;
     v_lines jsonb;
 BEGIN
@@ -112,10 +113,19 @@ BEGIN
             sl.*,
             reception.bsale_reception_id AS selected_reception_id,
             reception.admission_date AS selected_reception_date,
-            reception.cost AS last_purchase_unit_cost,
-            CASE WHEN reception.bsale_reception_id IS NULL THEN 'SIN_COSTO' ELSE 'COSTED' END AS cost_status,
-            CASE WHEN reception.bsale_reception_id IS NULL THEN NULL::numeric(14,2)
-                 ELSE (reception.cost * sl.quantity)::numeric(14,2) END AS line_cost
+            CASE
+                WHEN reception.bsale_reception_id IS NULL AND sl.bsale_variant_id = 5729 THEN 0::numeric(14,2)
+                ELSE reception.cost
+            END AS last_purchase_unit_cost,
+            CASE
+                WHEN reception.bsale_reception_id IS NOT NULL OR sl.bsale_variant_id = 5729 THEN 'COSTED'
+                ELSE 'SIN_COSTO'
+            END AS cost_status,
+            CASE
+                WHEN reception.bsale_reception_id IS NULL AND sl.bsale_variant_id = 5729 THEN 0::numeric(14,2)
+                WHEN reception.bsale_reception_id IS NULL THEN NULL::numeric(14,2)
+                ELSE (reception.cost * sl.quantity)::numeric(14,2)
+            END AS line_cost
         FROM sales_lines sl
         LEFT JOIN LATERAL (
             SELECT
@@ -189,8 +199,8 @@ BEGIN
         lr.uncovered_variant_count,
         CASE WHEN lr.covered_sales_net = 0 THEN NULL::numeric(14,2)
              ELSE round(((lr.covered_sales_net - lr.cost_total) / lr.covered_sales_net) * 100, 2)::numeric(14,2) END,
-        CASE WHEN lr.sales_net_total = 0 THEN NULL::numeric(14,2)
-             ELSE round((lr.covered_sales_net / lr.sales_net_total) * 100, 2)::numeric(14,2) END,
+        CASE WHEN lr.sales_net_total = 0 THEN NULL::numeric(14,6)
+             ELSE ((lr.covered_sales_net / lr.sales_net_total) * 100)::numeric(14,6) END,
         CASE WHEN lr.covered_sales_net = 0 THEN 'UNAVAILABLE'
              WHEN lr.covered_sales_net < lr.sales_net_total THEN 'PARTIAL'
              ELSE 'COMPLETE' END,

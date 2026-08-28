@@ -5,6 +5,7 @@ import { cookies } from 'next/headers';
 
 import { RouteGuide, CatalogOptions, RoutePersonnelType, RouteGuideProfitabilityV1 } from '@/modules/logistica/guias-ruta/types';
 import { getActiveCompanyId } from '@/app/actions/companies';
+import { syncBsaleDocumentsForRouteGuide } from '@/app/actions/integraciones/bsale-sync';
 
 // ---- Types ---------------------------------------------------------------
 
@@ -259,6 +260,13 @@ export async function saveRouteGuideDraft(
     };
   } else {
     // CREATE new draft
+    const verification = await syncBsaleDocumentsForRouteGuide({
+      company_id: companyId,
+      invoice_numbers: itemsData.map(item => String(item.invoice_number ?? '').trim()).filter(Boolean),
+    });
+    if (!verification.success || verification.ready !== verification.requested || verification.documents.some(item => item.status !== 'READY')) {
+      throw new Error('No fue posible verificar todas las facturas en Bsale.');
+    }
     const { data, error } = await supabase.rpc('create_route_guide_draft', {
       p_company_id: companyId,
       p_guide_data: guideData,

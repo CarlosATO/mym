@@ -73,6 +73,11 @@ const LIGHT_BORDER: [number, number, number] = [226, 232, 240]
 const GREEN: [number, number, number] = [16, 185, 129]
 const AMBER: [number, number, number] = [245, 158, 11]
 const RED: [number, number, number] = [239, 68, 68]
+const OFFICIAL_COMPANY_NAME = 'CAYLO PREMIUM SPA'
+const OFFICIAL_COMPANY_RUT = '77.196.005-7'
+const OFFICIAL_COMPANY_PHONE = '+56 9 4861 8906'
+const OFFICIAL_PURCHASE_EMAIL = 'Compras@mympremium.cl'
+const OFFICIAL_CONTACT_EMAIL = 'Contacto@mympremium.cl'
 
 function formatCurrency(amount: number): string {
   return `$ ${Math.round(amount).toLocaleString('es-CL')}`
@@ -244,10 +249,9 @@ export function generatePdfBlob(detail: PODetail, logoBase64?: string): Blob {
     }
   }
 
-  const compName = detail.po.company_name || 'DISTRIBUIDORA MYM'
-  const compRut = detail.po.company_rut || '76.123.456-7'
-  const compPhone = detail.po.company_phone || '+56 2 1234 5678'
-  const compEmail = detail.po.company_email || 'contacto@mym.cl'
+  const compName = OFFICIAL_COMPANY_NAME
+  const compRut = OFFICIAL_COMPANY_RUT
+  const compPhone = OFFICIAL_COMPANY_PHONE
   const compGiro = detail.po.company_giro ? `Giro: ${detail.po.company_giro}` : ''
   const compAddr = [
     detail.po.company_address,
@@ -262,9 +266,11 @@ export function generatePdfBlob(detail: PODetail, logoBase64?: string): Blob {
   doc.text(compName, pageWidth - margin, 8, { align: 'right' })
 
   doc.setFont('helvetica', 'normal')
-  doc.setFontSize(6.5)
+  doc.setFontSize(6.2)
   let headerY = 13
-  doc.text(`RUT: ${compRut} | Tel: ${compPhone} | Email: ${compEmail}`, pageWidth - margin, headerY, { align: 'right' })
+  doc.text(`RUT: ${compRut} | Tel: ${compPhone}`, pageWidth - margin, headerY, { align: 'right' })
+  headerY += 4.2
+  doc.text(`Compras: ${OFFICIAL_PURCHASE_EMAIL} | Contacto: ${OFFICIAL_CONTACT_EMAIL}`, pageWidth - margin, headerY, { align: 'right' })
   
   if (compGiro) {
     headerY += 4.2

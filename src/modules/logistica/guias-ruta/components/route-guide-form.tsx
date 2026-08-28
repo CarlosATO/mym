@@ -6,7 +6,9 @@ import { useRouteGuideGrid } from '../hooks/use-route-guide-grid';
 import { RouteGuideCombobox } from './route-guide-combobox';
 import { Save, Send, AlertTriangle, XCircle } from 'lucide-react';
 import { createDeliveryRouteInline, createRouteVehicleInline, createRoutePersonInline } from '@/app/actions/logistica/guias-ruta';
+import { getActiveCompanyId } from '@/app/actions/companies';
 import type { RouteSaveDuplicateWarning, RouteDuplicateInvoice, SaveRouteGuideDraftResult } from '@/app/actions/logistica/guias-ruta';
+import { syncBsaleDocumentsForRouteGuide, type DirectedBsaleSyncResult } from '@/app/actions/integraciones/bsale-sync';
 import { generateRouteGuidePdfBlob, downloadRouteGuidePdf, type RouteGuidePdfOrientation } from '@/lib/pdf/generate-route-guide-pdf';
 import { parseChileanMoney, isEmptyRouteGuideRow } from '../utils/route-guide-validation';
 import { dedupOptions, injectCurrentOption } from '../utils/route-guide-catalogs';
@@ -17,6 +19,14 @@ function formatStatus(status: string) {
   if (status === 'DRAFT') return 'Borrador';
   if (status === 'DISPATCHED') return 'Despachada';
   return status;
+}
+
+function formatBsaleVerificationStatus(status: string) {
+  if (status === 'NOT_FOUND') return 'Factura aún no disponible en Bsale.';
+  if (status === 'INVALID_DOCUMENT') return 'La factura no está vigente o no es válida.';
+  if (status === 'DETAILS_UNAVAILABLE') return 'No fue posible obtener el detalle de la factura.';
+  if (status === 'CUSTOMER_UNAVAILABLE') return 'No fue posible identificar el cliente de la factura.';
+  return 'No fue posible verificar la factura. Intenta nuevamente.';
 }
 
 interface RouteGuideFormProps {
@@ -56,11 +66,23 @@ export function RouteGuideForm({
   const [showErrors, setShowErrors] = useState(false);
   const [showPrintView, setShowPrintView] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [bsaleVerification, setBsaleVerification] = useState<DirectedBsaleSyncResult | null>(null);
+  const [isVerifyingBsale, setIsVerifyingBsale] = useState(false);
+  const verificationSequence = useRef(0);
+  const verificationRef = useRef<{ key: string; promise: Promise<DirectedBsaleSyncResult> } | null>(null);
+  const actionInProgress = useRef(false);
   const [pdfOrientation, setPdfOrientation] = useState<RouteGuidePdfOrientation>('portrait');
   const previewGuideRef = useRef<RouteGuide | null>(null);
 
   const grid = useRouteGuideGrid(initialData?.items || []);
   const readOnly = status === 'DISPATCHED' || status === 'CANCELLED';
+  const invoiceNumbers = React.useMemo(() => [...new Set(
+    grid.items
+      .filter(item => !isEmptyRouteGuideRow(item))
+      .map(item => String(item.invoice_number || '').trim())
+      .filter(Boolean)
+  )], [grid.items]);
+  const invoiceSetKey = invoiceNumbers.join('|');
 
   const [saleConditions, setSaleConditions] = useState<SaleConditionOption[]>([]);
   useEffect(() => {
@@ -165,7 +187,62 @@ export function RouteGuideForm({
     }
   };
 
+  const startBsaleVerification = async (numbers: string[]) => {
+    const key = numbers.join('|');
+    const previous = verificationRef.current;
+    if (previous?.key === key) return previous.promise;
+
+    const sequence = ++verificationSequence.current;
+    const companyId = await getActiveCompanyId();
+    if (!companyId) throw new Error('No se encontró empresa activa para verificar las facturas.');
+    setIsVerifyingBsale(true);
+    setBsaleVerification({ success: true, requested: numbers.length, ready: 0, missing: numbers.length, documents: [] });
+    const promise = syncBsaleDocumentsForRouteGuide({
+      company_id: companyId,
+      invoice_numbers: numbers,
+    }).then(result => {
+      if (sequence === verificationSequence.current) {
+        setBsaleVerification(result);
+        setIsVerifyingBsale(false);
+      }
+      return result;
+    }).catch(error => {
+      const result: DirectedBsaleSyncResult = {
+        success: false,
+        requested: numbers.length,
+        ready: 0,
+        missing: numbers.length,
+        documents: [],
+        error: error instanceof Error ? error.message : String(error),
+      };
+      if (sequence === verificationSequence.current) {
+        setBsaleVerification(result);
+        setIsVerifyingBsale(false);
+      }
+      return result;
+    });
+    verificationRef.current = { key, promise };
+    return promise;
+  };
+
+  useEffect(() => {
+    if (guideId || readOnly) return;
+    verificationSequence.current += 1;
+    verificationRef.current = null;
+    const timer = window.setTimeout(() => {
+      if (invoiceNumbers.length === 0) {
+        setBsaleVerification(null);
+        setIsVerifyingBsale(false);
+        return;
+      }
+      setBsaleVerification(null);
+      void startBsaleVerification(invoiceNumbers);
+    }, invoiceNumbers.length === 0 ? 0 : 500);
+    return () => window.clearTimeout(timer);
+  }, [guideId, readOnly, invoiceSetKey, invoiceNumbers]);
+
   const handleSaveDraft = async () => {
+    if (isSaving || isDispatching || actionInProgress.current) return;
     if (!guideDate || !routeId || !vehicleId) {
       setErrorMsg('Por favor completa al menos los campos básicos (Fecha, Ruta, Vehículo) para el borrador.');
       return;
@@ -201,10 +278,18 @@ export function RouteGuideForm({
         amount: parseChileanMoney(i.amount)
       }));
 
+    actionInProgress.current = true;
     try {
       setErrorMsg('');
       setDraftWarnings([]);
       setDispatchDuplicates([]);
+      if (!guideId) {
+        if (validItems.length === 0) throw new Error('Agrega al menos una factura antes de crear la guía.');
+        const verification = await startBsaleVerification(invoiceNumbers);
+        if (!verification.success || verification.ready !== verification.requested || verification.documents.some(document => document.status !== 'READY')) {
+          return;
+        }
+      }
       const res = await onSaveDraft(guideData, validItems);
       
       // Update local state to reflect the successfully saved state
@@ -217,7 +302,17 @@ export function RouteGuideForm({
       }
     } catch (err: any) {
       setErrorMsg(err.message || 'Ocurrió un error al guardar');
+    } finally {
+      setIsVerifyingBsale(false);
+      actionInProgress.current = false;
     }
+  };
+
+  const verifyBeforeDispatch = async () => {
+    if (invoiceNumbers.length === 0) throw new Error('La guía no contiene facturas para verificar.');
+    const verification = await startBsaleVerification(invoiceNumbers);
+    if (!verification.success || verification.ready !== verification.requested || verification.documents.some(document => document.status !== 'READY')) return false;
+    return true;
   };
 
   const unknownPayments = React.useMemo(() => {
@@ -228,7 +323,7 @@ export function RouteGuideForm({
   }, [grid.items]);
 
   const handleDispatch = async () => {
-    if (isSaving || isDispatching) return;
+    if (isSaving || isDispatching || actionInProgress.current) return;
     if (!guideId) {
       setErrorMsg('Debe guardar el borrador antes de despachar.');
       return;
@@ -252,10 +347,12 @@ export function RouteGuideForm({
       return;
     }
 
+    actionInProgress.current = true;
     try {
       setErrorMsg('');
       setDraftWarnings([]);
       setDispatchDuplicates([]);
+      if (!(await verifyBeforeDispatch())) return;
       await onDispatch(guideId);
     } catch (err: any) {
       // Render duplicates detail if available
@@ -263,6 +360,9 @@ export function RouteGuideForm({
         setDispatchDuplicates(err.duplicates);
       }
       setErrorMsg(err.message || 'Ocurrió un error al despachar');
+    } finally {
+      setIsVerifyingBsale(false);
+      actionInProgress.current = false;
     }
   };
 
@@ -339,7 +439,7 @@ export function RouteGuideForm({
                 disabled={isSaving || isDispatching}
                 className="flex items-center gap-2 bg-theme-accent hover:bg-theme-accent-hover disabled:bg-theme-accent/50 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-lg shadow-theme-accent/20"
               >
-                <Save className="w-4 h-4" /> {isSaving ? 'Guardando...' : (guideId ? 'Guardar Cambios' : 'Guardar Borrador')}
+                <Save className="w-4 h-4" /> {isVerifyingBsale ? 'Verificando facturas...' : isSaving ? 'Guardando...' : (guideId ? 'Guardar Cambios' : 'Crear Guía')}
               </button>
               
               {guideId && (
@@ -348,13 +448,39 @@ export function RouteGuideForm({
                   disabled={isSaving || isDispatching || grid.totals.error_count > 0}
                   className="flex items-center gap-1.5 px-6 py-2.5 rounded-xl bg-theme-accent hover:bg-theme-accent-hover text-white text-xs font-bold transition-all shadow-lg shadow-theme-accent/20 disabled:opacity-50"
                 >
-                  <Send className="w-4 h-4" /> {isDispatching ? 'Despachando...' : 'Confirmar Despacho'}
+                  <Send className="w-4 h-4" /> {isVerifyingBsale ? 'Verificando facturas...' : isDispatching ? 'Despachando...' : 'Confirmar Despacho'}
                 </button>
               )}
             </>
           )}
         </div>
       </div>
+
+      {bsaleVerification && (
+        <div className={`p-4 rounded-xl border text-xs font-medium ${bsaleVerification.ready === bsaleVerification.requested && bsaleVerification.success ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400' : 'border-orange-500/30 bg-orange-500/5 text-orange-700 dark:text-orange-300'}`}>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="font-bold">{bsaleVerification.ready} de {bsaleVerification.requested} facturas verificadas.</div>
+              {bsaleVerification.ready !== bsaleVerification.requested && <div className="mt-1">No fue posible verificar todas las facturas en Bsale.</div>}
+            </div>
+            {bsaleVerification.ready !== bsaleVerification.requested && !isVerifyingBsale && (
+              <button type="button" onClick={guideId ? handleDispatch : handleSaveDraft} className="shrink-0 rounded-lg border border-current px-3 py-1.5 text-[11px] font-bold hover:bg-current/10">
+                Reintentar verificación
+              </button>
+            )}
+          </div>
+          {bsaleVerification.ready !== bsaleVerification.requested && (
+            <div className="mt-3 space-y-1 border-t border-current/20 pt-3">
+              {bsaleVerification.documents.filter(document => document.status !== 'READY').map(document => (
+                <div key={document.invoice_number}>
+                  <span className="font-bold">Factura {document.invoice_number}</span>
+                  <span> — {formatBsaleVerificationStatus(document.status)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Error Panel General y de Duplicados en Despacho */}
       {errorMsg && (

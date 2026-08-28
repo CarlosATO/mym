@@ -2,6 +2,7 @@ import { RouteGuideStatusBadge } from './route-guide-badges';
 import { formatCurrency, formatDate } from '../utils/route-guide-formatters';
 import { Trash2 } from 'lucide-react';
 import type { RouteGuideProfitabilityV1 } from '../types';
+import { formatCoveragePercent } from '../utils/profitability-v1-display';
 
 interface RouteGuidesTrayTableProps {
   guides: any[];
@@ -79,7 +80,7 @@ export function RouteGuidesTrayTable({ guides, onSelectGuide, onDeleteGuide, pro
                     const statusLabel = profitability.cost_status === 'COMPLETE'
                       ? 'Cobertura 100%'
                       : profitability.cost_status === 'PARTIAL'
-                        ? `Parcial · ${formatPercent(profitability.cost_coverage_pct)}`
+                         ? `Parcial · ${formatCoveragePercent(profitability.cost_coverage_pct, profitability.cost_status)}`
                         : 'Sin costo disponible';
                     return (
                       <div className="space-y-1 text-[10px] tabular-nums">
