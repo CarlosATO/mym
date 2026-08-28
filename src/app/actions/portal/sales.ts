@@ -1,8 +1,8 @@
 'use server'
 
 import { getActiveCompanyId } from '@/app/actions/companies'
+import { getPortalPeriod, type PortalPeriodMode } from '@/app/actions/portal/periods'
 import { createClient } from '@/lib/supabase/server'
-import { todayInSantiago } from '@/lib/datetime'
 
 const AMIMASCOTA_BSALE_CLIENT_ID = 643
 
@@ -24,13 +24,11 @@ type SalesDocumentRow = {
   emission_date: string | null
 }
 
-export async function getPortalSales(): Promise<PortalSales> {
+export async function getPortalSales(mode: PortalPeriodMode = 'CALENDAR_MONTH'): Promise<PortalSales> {
   const companyId = await getActiveCompanyId()
   if (!companyId) throw new Error('No se encontró empresa activa para el usuario.')
 
-  const today = todayInSantiago()
-  const [year, month] = today.split('-')
-  const firstDay = `${year}-${month}-01`
+  const { from, toExclusive } = getPortalPeriod(mode)
 
   const supabase = await createClient()
   const { data, error } = await supabase
@@ -41,8 +39,8 @@ export async function getPortalSales(): Promise<PortalSales> {
     .eq('state', 0)
     .in('document_type_id', [2, 5])
     .or(`client_id.is.null,client_id.neq.${AMIMASCOTA_BSALE_CLIENT_ID}`)
-    .gte('emission_date', firstDay)
-    .lte('emission_date', today)
+    .gte('emission_date', from)
+    .lt('emission_date', toExclusive)
 
   if (error) throw new Error(`Error cargando ventas del Portal: ${error.message}`)
 

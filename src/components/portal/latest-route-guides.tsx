@@ -14,7 +14,7 @@ function currency(value: number) {
 export function LatestRouteGuides({ guides }: { guides: PortalRouteGuide[] }) {
   return (
     <section className="overflow-hidden rounded-2xl border border-theme-border/80 bg-theme-surface/80 shadow-sm">
-      <div className="flex items-start justify-between gap-3 border-b border-theme-border/70 px-4 py-4 sm:px-5">
+      <div className="flex items-start justify-between gap-3 border-b border-theme-border/70 px-4 py-3 sm:px-4">
         <div className="flex min-w-0 items-start gap-2.5">
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sky-500/10 text-sky-600 dark:text-sky-300">
             <MapPinned className="h-4 w-4" />
@@ -47,7 +47,7 @@ export function LatestRouteGuides({ guides }: { guides: PortalRouteGuide[] }) {
               {guides.map(guide => {
                 const partial = guide.cost_status !== 'COMPLETE' || (guide.cost_coverage_pct !== null && guide.cost_coverage_pct < 100)
                 return (
-                  <div key={guide.id} className="grid grid-cols-[minmax(64px,0.85fr)_minmax(66px,0.8fr)_minmax(75px,1.35fr)_34px_minmax(92px,1fr)_minmax(92px,1fr)] items-center gap-1.5 px-1 py-3 text-[10px] text-theme-text">
+                    <div key={guide.id} className="grid grid-cols-[minmax(64px,0.85fr)_minmax(66px,0.8fr)_minmax(75px,1.35fr)_34px_minmax(92px,1fr)_minmax(92px,1fr)] items-center gap-1.5 px-1 py-2.5 text-[10px] text-theme-text">
                     <Link href="/dashboard/logistica/guias-ruta" className="truncate font-bold text-theme-text-accent hover:text-theme-accent-hover hover:underline" title={`Abrir Guías de Ruta · ${guide.guide_number}`}>
                       {guide.guide_number}
                     </Link>

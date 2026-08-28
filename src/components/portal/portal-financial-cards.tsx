@@ -1,11 +1,13 @@
 import type { PortalDailyCollection, PortalCollections } from '@/app/actions/portal/collections'
 import type { PortalDailySales, PortalSales } from '@/app/actions/portal/sales'
-import { todayInSantiago } from '@/lib/datetime'
+import type { PortalPeriod, PortalPeriodMode } from '@/app/actions/portal/periods'
 
 type FinancialCardProps = {
   error: string | null
   kind: 'sales' | 'collections'
   data: PortalSales | PortalCollections | null
+  mode: PortalPeriodMode
+  period: PortalPeriod
 }
 
 function currency(value: number) {
@@ -32,25 +34,32 @@ function abbreviatedCurrency(value: number) {
   return `${sign}$${Math.round(absolute).toLocaleString('es-CL')}`
 }
 
-function relevantDays(values: (PortalDailySales | PortalDailyCollection)[]) {
-  const today = todayInSantiago()
-  const [year, month, day] = today.split('-').map(Number)
-  const amounts = new Map(values.map(value => [value.date.slice(0, 10), value.amount]))
+function relevantDays(values: (PortalDailySales | PortalDailyCollection)[], period: PortalPeriod) {
+  const start = new Date(`${period.from}T00:00:00Z`)
+  const end = new Date(`${period.to}T00:00:00Z`)
+  const amounts = new Map<string, number>()
+  for (const value of values) {
+    const date = String(value.date ?? '').slice(0, 10)
+    const amount = Number(value.amount ?? 0)
+    if (date.length === 10 && Number.isFinite(amount)) amounts.set(date, amount)
+  }
+  const days = []
 
-  return Array.from({ length: day }, (_, index) => {
-    const date = new Date(Date.UTC(year, month - 1, index + 1)).toISOString().slice(0, 10)
+  for (const dateValue = start; dateValue <= end; dateValue.setUTCDate(dateValue.getUTCDate() + 1)) {
+    const date = dateValue.toISOString().slice(0, 10)
     const amount = amounts.get(date) ?? 0
     const weekday = new Date(`${date}T00:00:00Z`).getUTCDay()
-    return { date, amount, isWeekend: weekday === 0 || weekday === 6 }
-  }).filter(value => !value.isWeekend || value.amount !== 0)
+    if ((weekday !== 0 && weekday !== 6) || amount !== 0) days.push({ date, amount })
+  }
+  return days
 }
 
-function DailyBars({ values, title }: { values: (PortalDailySales | PortalDailyCollection)[]; title: string }) {
-  const allRelevantDays = relevantDays(values)
+function DailyBars({ values, title, period, mode }: { values: (PortalDailySales | PortalDailyCollection)[]; title: string; period: PortalPeriod; mode: PortalPeriodMode }) {
+  const allRelevantDays = relevantDays(values, period)
   const useFallback = allRelevantDays.length > 14
   const days = useFallback ? allRelevantDays.slice(-14) : allRelevantDays
   const max = Math.max(...days.map(value => Math.abs(value.amount)), 1)
-  const chartTitle = `${title} · ${useFallback ? 'últimos 14 días' : 'mes actual'}`
+  const chartTitle = `${title} · ${useFallback ? 'últimos 14 días' : mode === 'COMMISSIONABLE' ? 'período comisionable' : 'mes actual'}`
 
   return (
     <div className="space-y-1.5">
@@ -84,27 +93,32 @@ function Metric({ label, value, format = 'currency' }: { label: string; value: n
   )
 }
 
-export function PortalFinancialCard({ error, kind, data }: FinancialCardProps) {
+function shortDate(value: string) {
+  return new Intl.DateTimeFormat('es-CL', { day: '2-digit', month: 'short', timeZone: 'UTC' }).format(new Date(`${value}T00:00:00Z`))
+}
+
+export function PortalFinancialCard({ error, kind, data, mode, period }: FinancialCardProps) {
   const sales = kind === 'sales' ? data as PortalSales | null : null
   const collections = kind === 'collections' ? data as PortalCollections | null : null
   const title = kind === 'sales' ? 'Ventas' : 'Cobranzas'
-  const subtitle = kind === 'sales' ? 'Resumen del mes en curso' : 'Resumen del mes en curso'
+  const subtitle = mode === 'COMMISSIONABLE' ? 'Período comisionable' : 'Mes actual'
   const dailyValues = sales?.daily_sales ?? collections?.daily_collections ?? []
 
   return (
-    <section className="flex h-full min-h-[270px] flex-col overflow-hidden rounded-2xl border border-theme-border/80 bg-theme-surface/80 shadow-sm">
-      <div className="border-b border-theme-border/70 px-4 py-3.5 sm:px-5">
+    <section className="flex h-full min-h-[240px] flex-col overflow-hidden rounded-2xl border border-theme-border/80 bg-theme-surface/80 shadow-sm">
+      <div className="border-b border-theme-border/70 px-4 py-2.5 sm:px-4">
         <h2 className="text-base font-semibold tracking-tight text-theme-text">{title}</h2>
         <p className="mt-0.5 text-[11px] text-theme-text-muted/70">
           {subtitle}<span className="mx-1.5 text-theme-text-muted/45">·</span><span className="text-[10px] text-theme-text-muted/60">Montos netos, sin IVA</span>
         </p>
+        <p className="mt-1 text-[10px] font-medium text-theme-text-muted/60">{shortDate(period.from)} – {shortDate(period.to)}</p>
       </div>
 
       {error ? (
         <div className="flex flex-1 items-center justify-center px-5 py-8 text-center text-xs text-theme-text-muted/75">No se pudo cargar {title.toLowerCase()}.</div>
       ) : (
-        <div className="flex flex-1 flex-col gap-4 p-4 sm:p-5">
-          <div className="grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-3">
+        <div className="flex flex-1 flex-col gap-3 p-4">
+          <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
             {kind === 'sales' ? (
               <>
                 <Metric label="Ventas del mes" value={sales?.sales_month ?? 0} />
@@ -114,14 +128,16 @@ export function PortalFinancialCard({ error, kind, data }: FinancialCardProps) {
             ) : (
               <>
                 <Metric label="Cobrado del mes" value={collections?.collected_month ?? 0} />
-                <Metric label="Pendiente por cobrar" value={collections?.pending_receivables ?? 0} />
-                <Metric label="Cartera vencida" value={collections?.overdue_receivables ?? 0} />
+                <Metric label={mode === 'COMMISSIONABLE' ? 'Pendiente actual' : 'Pendiente por cobrar'} value={collections?.pending_receivables ?? 0} />
+                <Metric label={mode === 'COMMISSIONABLE' ? 'Cartera vencida actual' : 'Cartera vencida'} value={collections?.overdue_receivables ?? 0} />
               </>
             )}
           </div>
           <DailyBars
             values={dailyValues}
             title={kind === 'sales' ? 'Ventas diarias · últimos 14 días operativos' : 'Cobros diarios · últimos 14 días operativos'}
+            period={period}
+            mode={mode}
           />
         </div>
       )}

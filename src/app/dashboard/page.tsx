@@ -3,13 +3,14 @@ import { ModuleCard } from '@/components/module-card'
 import { LatestRouteGuides } from '@/components/portal/latest-route-guides'
 import type { Modulo } from '@/lib/types'
 import { getPortalLatestRouteGuides } from '@/app/actions/logistica/guias-ruta'
-import { getPortalSales } from '@/app/actions/portal/sales'
-import { getPortalCollections } from '@/app/actions/portal/collections'
+import { getPortalSales, type PortalSales } from '@/app/actions/portal/sales'
+import { getPortalCollectionsByMode } from '@/app/actions/portal/collections'
 import { getPortalAmimascota } from '@/app/actions/portal/amimascota'
-import { PortalFinancialCard } from '@/components/portal/portal-financial-cards'
+import { PortalFinancialSection } from '@/components/portal/portal-financial-section'
 import { AmimascotaCard } from '@/components/portal/amimascota-card'
 import { getPortalTopProducts } from '@/app/actions/portal/top-products'
 import { TopProductsCard } from '@/components/portal/top-products-card'
+import type { PortalPeriodMode } from '@/app/actions/portal/periods'
 
 const adminCodes = ['dashboard', 'usuarios', 'roles', 'auditoria', 'seguridad']
 
@@ -59,24 +60,27 @@ export default async function DashboardPage() {
     return Number(bHasRoute) - Number(aHasRoute)
   })
 
-  const [guidesResult, salesResult, collectionsResult, amimascotaResult, topProductsResult] = await Promise.allSettled([
+  const [guidesResult, salesCalendarResult, salesCommissionableResult, collectionsResult, amimascotaResult, topProductsResult] = await Promise.allSettled([
     getPortalLatestRouteGuides(),
-    getPortalSales(),
-    getPortalCollections(),
+    getPortalSales('CALENDAR_MONTH'),
+    getPortalSales('COMMISSIONABLE'),
+    getPortalCollectionsByMode(),
     getPortalAmimascota(),
     getPortalTopProducts(),
   ])
   const latestRouteGuides = guidesResult.status === 'fulfilled' ? guidesResult.value : []
-  const sales = salesResult.status === 'fulfilled' ? salesResult.value : null
-  const collections = collectionsResult.status === 'fulfilled' ? collectionsResult.value : null
+  const sales: Record<PortalPeriodMode, PortalSales | null> = {
+    CALENDAR_MONTH: salesCalendarResult.status === 'fulfilled' ? salesCalendarResult.value : null,
+    COMMISSIONABLE: salesCommissionableResult.status === 'fulfilled' ? salesCommissionableResult.value : null,
+  }
   const amimascota = amimascotaResult.status === 'fulfilled' ? amimascotaResult.value : null
   const topProducts = topProductsResult.status === 'fulfilled' ? topProductsResult.value : []
 
   return (
     <>
-      <div className="pb-8 xl:grid xl:grid-cols-[minmax(0,1.55fr)_minmax(500px,1fr)] xl:items-start xl:gap-6">
-        <div className="space-y-6">
-        <section className="overflow-hidden rounded-2xl border border-sky-500/20 bg-sky-700 px-5 py-4 text-white shadow-sm shadow-sky-950/10 sm:px-6">
+      <div className="grid items-start gap-4 pb-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(500px,1fr)]">
+        <div className="space-y-4">
+        <section className="overflow-hidden rounded-2xl border border-sky-500/20 bg-sky-700 px-5 py-3 text-white shadow-sm shadow-sky-950/10 sm:px-6">
           <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-sky-100/75">Portal de Gestión MYM</p>
           <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Bienvenido {profile?.nombre ?? 'Usuario'}</h1>
@@ -84,9 +88,9 @@ export default async function DashboardPage() {
           </div>
         </section>
 
-        <div className="space-y-5">
+        <div className="space-y-4">
             {operationalModules.length > 0 ? (
-              <section className="space-y-3">
+              <section className="space-y-2">
                 <div className="flex items-end justify-between gap-3 px-1">
                   <div>
                     <h2 className="text-lg font-semibold tracking-tight text-theme-text">Módulos disponibles</h2>
@@ -118,19 +122,13 @@ export default async function DashboardPage() {
           <LatestRouteGuides guides={latestRouteGuides} />
           <TopProductsCard products={topProducts} error={topProductsResult.status === 'rejected'} />
         </div>
+      <PortalFinancialSection
+        sales={sales}
+        collections={collectionsResult.status === 'fulfilled' ? collectionsResult.value : { CALENDAR_MONTH: null, COMMISSIONABLE: null }}
+        salesError={salesCalendarResult.status === 'rejected' || salesCommissionableResult.status === 'rejected'}
+        collectionsError={collectionsResult.status === 'rejected'}
+      />
       </div>
-      <section className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <PortalFinancialCard
-          kind="sales"
-          data={sales}
-          error={salesResult.status === 'rejected' ? 'sales' : null}
-        />
-        <PortalFinancialCard
-          kind="collections"
-          data={collections}
-          error={collectionsResult.status === 'rejected' ? 'collections' : null}
-        />
-      </section>
     </>
   )
 }

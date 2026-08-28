@@ -11,7 +11,7 @@ function currency(value: number) {
 export function TopProductsCard({ products, error }: { products: PortalTopProduct[]; error: boolean }) {
   return (
     <section className="overflow-hidden rounded-2xl border border-theme-border/80 bg-theme-surface/80 shadow-sm">
-      <div className="border-b border-theme-border/70 px-4 py-3.5 sm:px-5">
+      <div className="border-b border-theme-border/70 px-4 py-3 sm:px-4">
         <h2 className="text-base font-semibold tracking-tight text-theme-text">Top 5 productos del mes</h2>
         <p className="mt-0.5 text-[10px] text-theme-text-muted/60">Montos netos, sin IVA</p>
       </div>
@@ -39,10 +39,10 @@ export function TopProductsCard({ products, error }: { products: PortalTopProduc
             <tbody className="divide-y divide-theme-border/60">
               {products.slice(0, 5).map(product => (
                 <tr key={`${product.rank}-${product.sku ?? product.name}`}>
-                  <td className="py-2 font-semibold tabular-nums text-theme-text-muted">{product.rank}</td>
-                  <td className="max-w-0 truncate py-2 pr-2 font-medium" title={product.name}>{product.name}</td>
-                  <td className="py-2 text-right tabular-nums text-theme-text-muted">{product.units.toLocaleString('es-CL')}</td>
-                  <td className="py-2 text-right font-semibold tabular-nums whitespace-nowrap">{currency(product.net_sales)}</td>
+                    <td className="py-1.5 font-semibold tabular-nums text-theme-text-muted">{product.rank}</td>
+                    <td className="max-w-0 truncate py-1.5 pr-2 font-medium" title={product.name}>{product.name}</td>
+                    <td className="py-1.5 text-right tabular-nums text-theme-text-muted">{product.units.toLocaleString('es-CL')}</td>
+                    <td className="py-1.5 text-right font-semibold tabular-nums whitespace-nowrap">{currency(product.net_sales)}</td>
                 </tr>
               ))}
             </tbody>
