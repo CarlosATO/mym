@@ -1,14 +1,14 @@
 import { RouteGuideStatusBadge } from './route-guide-badges';
 import { formatCurrency, formatDate } from '../utils/route-guide-formatters';
 import { Trash2 } from 'lucide-react';
-import type { RouteGuideProfitabilityV1 } from '../types';
+import type { RouteGuideProfitabilitySummaryV1 } from '@/app/actions/logistica/guias-ruta';
 import { formatCoveragePercent } from '../utils/profitability-v1-display';
 
 interface RouteGuidesTrayTableProps {
   guides: any[];
   onSelectGuide: (id: string) => void;
   onDeleteGuide: (id: string, guideNumber: string) => void;
-  profitabilityByGuide: Record<string, RouteGuideProfitabilityV1 | null>;
+  profitabilityByGuide: Record<string, RouteGuideProfitabilitySummaryV1 | null>;
 }
 
 function formatPercent(value: number | null | undefined): string {

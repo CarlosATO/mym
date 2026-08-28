@@ -1,14 +1,14 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { getRouteGuides, getRouteGuideCatalogOptions, getRouteGuideProfitabilityV1, saveRouteGuideDraft, dispatchRouteGuideAction, deleteRouteGuideDraftAction, RouteSaveDuplicateWarning, RouteDuplicateInvoice } from '@/app/actions/logistica/guias-ruta';
+import { getRouteGuides, getRouteGuideCatalogOptions, getRouteGuidesProfitabilitySummaryV1, saveRouteGuideDraft, dispatchRouteGuideAction, deleteRouteGuideDraftAction, RouteSaveDuplicateWarning, RouteDuplicateInvoice, RouteGuideProfitabilitySummaryV1 } from '@/app/actions/logistica/guias-ruta';
 import { RouteGuidesTrayTable } from './components/route-guides-tray-table';
 import { RouteGuidesTraySkeleton } from './components/route-guide-skeletons';
 import { RouteGuideForm } from './components/route-guide-form';
 import { RouteGuideDetailPanel } from './components/route-guide-detail-panel';
 import { useRouteGuideDetailCache } from './hooks/use-route-guide-detail-cache';
 import { Plus } from 'lucide-react';
-import { CatalogOptions, RouteGuide, RouteGuideProfitabilityV1 } from './types';
+import { CatalogOptions, RouteGuide } from './types';
 import { toast } from 'sonner';
 
 // Shapes passed back to the form via re-throw (success path with warnings)
@@ -23,7 +23,7 @@ export function RouteGuidesPanel() {
   const [activeView, setActiveView] = useState<'TRAY' | 'NEW' | 'EDIT' | 'DETAIL'>('TRAY');
   const [selectedGuideId, setSelectedGuideId] = useState<string | null>(null);
   const [formSessionId, setFormSessionId] = useState<string>('');
-  const [profitabilityByGuide, setProfitabilityByGuide] = useState<Record<string, RouteGuideProfitabilityV1 | null>>({});
+  const [profitabilityByGuide, setProfitabilityByGuide] = useState<Record<string, RouteGuideProfitabilitySummaryV1 | null>>({});
 
   // Operations State
   const [isSaving, setIsSaving] = useState(false);
@@ -36,15 +36,22 @@ export function RouteGuidesPanel() {
     try {
       const data = await getRouteGuides({ status: filterStatus });
       setGuides(data || []);
-      const profitability = await Promise.all((data || []).map(async guide => {
-        try {
-          return [guide.id, await getRouteGuideProfitabilityV1(guide.id)] as const;
-        } catch (error) {
-          console.warn(`No se pudo cargar rentabilidad V1 de ${guide.guide_number}:`, error);
-          return [guide.id, null] as const;
-        }
-      }));
-      setProfitabilityByGuide(Object.fromEntries(profitability));
+      const visibleGuides = data || [];
+      if (visibleGuides.length === 0) {
+        setProfitabilityByGuide({});
+        return;
+      }
+
+      try {
+        const summaries = await getRouteGuidesProfitabilitySummaryV1(visibleGuides.map(guide => guide.id));
+        const summariesByGuide = new Map(summaries.map(summary => [summary.route_guide_id, summary]));
+        setProfitabilityByGuide(Object.fromEntries(
+          visibleGuides.map(guide => [guide.id, summariesByGuide.get(guide.id) ?? null])
+        ));
+      } catch (error) {
+        console.warn('No se pudo cargar el resumen de rentabilidad V1:', error);
+        setProfitabilityByGuide(Object.fromEntries(visibleGuides.map(guide => [guide.id, null])));
+      }
     } catch (e: any) {
       toast.error('Error cargando guías de ruta: ' + e.message);
     } finally {

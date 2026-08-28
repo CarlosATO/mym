@@ -49,6 +49,22 @@ export interface PortalRouteGuide {
   cost_coverage_pct: number | null;
 }
 
+export interface RouteGuideProfitabilitySummaryV1 {
+  route_guide_id: string;
+  guide_number: string;
+  sales_net_total: number;
+  covered_sales_net: number;
+  uncovered_sales_net: number;
+  last_purchase_cost_total: number;
+  estimated_gross_profit: number;
+  estimated_margin_pct: number | null;
+  cost_coverage_pct: number | null;
+  total_lines: number;
+  covered_lines: number;
+  uncovered_lines: number;
+  cost_status: RouteGuideProfitabilityV1['cost_status'];
+}
+
 // ---- Client Factory -------------------------------------------------------
 
 async function createLogisticaClient() {
@@ -191,6 +207,25 @@ export async function getRouteGuideProfitabilityV1(id: string): Promise<RouteGui
 
   if (error) throw new Error(`Error cargando rentabilidad V1: ${error.message}`);
   return data as RouteGuideProfitabilityV1;
+}
+
+export async function getRouteGuidesProfitabilitySummaryV1(
+  guideIds: string[]
+): Promise<RouteGuideProfitabilitySummaryV1[]> {
+  const uniqueGuideIds = [...new Set(guideIds.filter(Boolean))];
+  if (uniqueGuideIds.length === 0) return [];
+
+  const companyId = await getActiveCompanyId();
+  if (!companyId) throw new Error('No se encontró empresa activa para cargar rentabilidad.');
+
+  const supabase = await createLogisticaClient();
+  const { data, error } = await supabase.rpc('get_route_guides_profitability_summary_v1', {
+    p_company_id: companyId,
+    p_route_guide_ids: uniqueGuideIds,
+  });
+
+  if (error) throw new Error(`Error cargando resumen de rentabilidad V1: ${error.message}`);
+  return (data || []) as RouteGuideProfitabilitySummaryV1[];
 }
 
 export async function getRouteGuideCatalogOptions(): Promise<CatalogOptions> {
