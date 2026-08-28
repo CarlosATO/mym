@@ -1,8 +1,10 @@
 'use server'
 
 import { createServerClient } from '@supabase/ssr'
+import { createClient as createSupabaseAdminClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
 import { getActiveCompanyId } from '@/app/actions/companies'
+import { syncBsaleDocumentsForRouteGuide } from '@/app/actions/integraciones/bsale-sync'
 import {
   SETTLEMENT_ATTACHMENT_ALLOWED_MIMES,
   SETTLEMENT_ATTACHMENT_BUCKET,
@@ -66,6 +68,15 @@ export interface RecordRouteSettlementBulkRow {
     [key: string]: unknown
   } | null
 }
+
+export type RouteSettlementCustomerIdentityPreflight =
+  | { status: 'READY'; checked: number; resolved: number }
+  | {
+      status: 'BLOCKED'
+      checked: number
+      resolved: number
+      unresolved: Array<{ invoice_number: string; reason: string }>
+    }
 
 export interface RouteSettlementDetailInvoice {
   settlement_item_id: string
@@ -296,6 +307,18 @@ async function createLogisticaClient() {
       },
     }
   )
+}
+
+function createIntegracionesAdminClient() {
+  return createSupabaseAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { db: { schema: 'integraciones' }, auth: { autoRefreshToken: false, persistSession: false } },
+  )
+}
+
+function normalizeIdentityText(value: unknown) {
+  return String(value ?? '').trim().toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
 }
 
 async function requirePermission(db: any, userId: string, permissionCode: string) {
@@ -1197,6 +1220,134 @@ export async function setRouteSettlementItemResolution(
   }
 }
 
+export async function ensureRouteSettlementCustomerIdentities(
+  settlementId: string,
+): Promise<RouteSettlementCustomerIdentityPreflight> {
+  const adquisicionesDb = await createAdquisicionesClient()
+
+  try {
+    const { data: userData, error: userError } = await adquisicionesDb.auth.getUser()
+    if (userError || !userData?.user) throw new Error('No autorizado')
+    const companyId = await getActiveCompanyId(userData.user)
+    if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
+    await requirePermission(adquisicionesDb, userData.user.id, 'adquisiciones.route_settlements.update')
+
+    const { data: settlement, error: settlementError } = await adquisicionesDb
+      .from('route_settlements')
+      .select('id, company_id, route_guide_id')
+      .eq('id', settlementId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (settlementError) throw settlementError
+    if (!settlement) throw new Error('Rendición no encontrada.')
+
+    const { data: items, error: itemsError } = await adquisicionesDb
+      .from('route_settlement_items')
+      .select('id, route_guide_item_id, invoice_number, expected_amount, customer_name, customer_bsale_id')
+      .eq('settlement_id', settlementId)
+      .eq('company_id', companyId)
+    if (itemsError) throw itemsError
+
+    const checked = items?.length ?? 0
+    const missing = (items ?? []).filter(item => item.customer_bsale_id == null)
+    if (missing.length === 0) return { status: 'READY', checked, resolved: 0 }
+
+    const invoiceNumbers = [...new Set(missing.map(item => String(item.invoice_number).trim()).filter(Boolean))]
+    const sync = await syncBsaleDocumentsForRouteGuide({
+      company_id: companyId,
+      invoice_numbers: invoiceNumbers,
+      route_guide_id: settlement.route_guide_id,
+      settlement_id: settlementId,
+    })
+    const integrationDb = createIntegracionesAdminClient()
+    const { data: documents, error: documentsError } = await integrationDb
+      .from('bsale_documents')
+      .select('bsale_id, number, document_type_id, state, client_id, total_amount, net_amount, emission_date, raw_json')
+      .eq('company_id', companyId)
+      .in('number', invoiceNumbers.map(Number).filter(Number.isFinite))
+    if (documentsError) throw documentsError
+
+    const clientIds = [...new Set((documents ?? [])
+      .map(document => Number(document.client_id))
+      .filter(Number.isInteger))]
+    const { data: clients, error: clientsError } = clientIds.length > 0
+      ? await integrationDb.from('bsale_clients').select('bsale_client_id, business_name, code').eq('company_id', companyId).in('bsale_client_id', clientIds)
+      : { data: [], error: null }
+    if (clientsError) throw clientsError
+    const validClients = new Set((clients ?? []).map(client => Number(client.bsale_client_id)))
+    const unresolved: Array<{ invoice_number: string; reason: string }> = []
+
+    for (const item of missing) {
+      const invoiceNumber = String(item.invoice_number).trim()
+      const syncDocument = sync.documents.find(document => document.invoice_number === invoiceNumber)
+      if (syncDocument?.status === 'ERROR' && /más de un documento|multiple|ambig/i.test(syncDocument.error ?? '')) {
+        unresolved.push({ invoice_number: invoiceNumber, reason: 'CUSTOMER_AMBIGUOUS' })
+        continue
+      }
+      const candidates = (documents ?? []).filter(document => String(document.number) === invoiceNumber)
+      const current = candidates.filter(document => (document.document_type_id === 5 || document.document_type_id === 7) && Number(document.state) === 0)
+      if (current.length !== 1) {
+        unresolved.push({ invoice_number: invoiceNumber, reason: current.length === 0 ? 'CUSTOMER_NOT_FOUND' : 'CUSTOMER_AMBIGUOUS' })
+        continue
+      }
+      const customerId = Number(current[0].client_id)
+      const client = (clients ?? []).find(candidate => Number(candidate.bsale_client_id) === customerId)
+      const guideCustomer = String(item.customer_name ?? '')
+      if (!Number.isInteger(customerId) || !validClients.has(customerId) || !client || normalizeIdentityText(client.business_name) !== normalizeIdentityText(guideCustomer)) {
+        unresolved.push({ invoice_number: invoiceNumber, reason: 'CUSTOMER_NOT_FOUND' })
+        continue
+      }
+      if (Number(current[0].total_amount) !== Number(item.expected_amount) && Number(current[0].net_amount) !== Number(item.expected_amount)) {
+        unresolved.push({ invoice_number: invoiceNumber, reason: 'DOCUMENT_AMOUNT_MISMATCH' })
+      }
+    }
+
+    if (unresolved.length > 0 || !sync.success || sync.ready !== sync.requested) {
+      return {
+        status: 'BLOCKED',
+        checked,
+        resolved: 0,
+        unresolved: unresolved.length > 0
+          ? unresolved
+          : invoiceNumbers.map(invoice_number => ({ invoice_number, reason: 'CUSTOMER_NOT_FOUND' })),
+      }
+    }
+
+    const guideItemIds = missing.map(item => item.route_guide_item_id)
+    const logisticaDb = await createLogisticaClient()
+    const { data: guideItems, error: guideItemsError } = await logisticaDb
+      .from('route_guide_items')
+      .select('id, invoice_number, customer_bsale_id')
+      .eq('company_id', companyId)
+      .eq('route_guide_id', settlement.route_guide_id)
+      .in('id', guideItemIds)
+    if (guideItemsError) throw guideItemsError
+
+    const updates = new Map(invoiceNumbers.map(invoiceNumber => {
+      const document = (documents ?? []).find(candidate => String(candidate.number) === invoiceNumber && (candidate.document_type_id === 5 || candidate.document_type_id === 7) && Number(candidate.state) === 0)
+      return [invoiceNumber, Number(document?.client_id)]
+    }))
+    for (const item of missing) {
+      const customerId = updates.get(String(item.invoice_number).trim())
+      const guideItem = (guideItems ?? []).find(candidate => candidate.id === item.route_guide_item_id)
+      if (!guideItem || customerId == null || guideItem.customer_bsale_id != null && guideItem.customer_bsale_id !== customerId) {
+        return { status: 'BLOCKED', checked, resolved: 0, unresolved: [{ invoice_number: String(item.invoice_number), reason: 'CUSTOMER_AMBIGUOUS' }] }
+      }
+      if (guideItem.customer_bsale_id == null) {
+        const { error } = await logisticaDb.from('route_guide_items').update({ customer_bsale_id: customerId }).eq('id', guideItem.id).is('customer_bsale_id', null)
+        if (error) throw error
+      }
+      const { error } = await adquisicionesDb.from('route_settlement_items').update({ customer_bsale_id: customerId }).eq('id', item.id).is('customer_bsale_id', null)
+      if (error) throw error
+    }
+
+    return { status: 'READY', checked, resolved: missing.length }
+  } catch (error: unknown) {
+    console.error('ensureRouteSettlementCustomerIdentities error:', error)
+    throw error instanceof Error ? error : new Error('No se pudo verificar la identidad de los clientes.')
+  }
+}
+
 export async function recordRouteSettlementBulk(
   settlementId: string,
   idempotencyKey: string,
@@ -1211,6 +1362,12 @@ export async function recordRouteSettlementBulk(
     if (!companyId) throw new Error('No se pudo cargar la empresa activa.')
     await requirePermission(adquisicionesDb, userData.user.id, 'adquisiciones.route_settlements.update')
     if (!settlementId || !idempotencyKey || rows.length === 0) throw new Error('Rendición, idempotency_key y filas son obligatorios.')
+
+    const identityPreflight = await ensureRouteSettlementCustomerIdentities(settlementId)
+    if (identityPreflight.status === 'BLOCKED') {
+      const first = identityPreflight.unresolved[0]
+      throw new Error(`No se puede grabar la factura ${first.invoice_number} porque no se pudo identificar su cliente en Bsale. (${first.reason})`)
+    }
 
     const { data, error } = await adquisicionesDb.rpc('record_route_settlement_bulk', {
       p_settlement_id: settlementId,

@@ -1286,6 +1286,7 @@ type DirectedDocument = {
   netAmount?: number | null
   taxAmount?: number | null
   exemptAmount?: number | null
+  address?: string | null
   client?: { id?: number | string | null } | null
   clientId?: number | string | null
   office?: { id?: number | string | null } | null
@@ -1313,7 +1314,7 @@ function directedDocumentTypeId(document: DirectedDocument) {
   return toNumber(document.documentTypeId ?? document.document_type?.id)
 }
 
-async function fetchDirectedDocument(invoiceNumber: string): Promise<DirectedDocument | null> {
+async function fetchDirectedDocument(invoiceNumber: string, scope?: { amount: number; emissionDate?: string; address?: string }): Promise<DirectedDocument | null> {
   const query = new URLSearchParams({ number: invoiceNumber, limit: '50' })
   const response = await fetch(`${BSALE_API_BASE}/documents.json?${query.toString()}`, {
     method: 'GET',
@@ -1329,8 +1330,21 @@ async function fetchDirectedDocument(invoiceNumber: string): Promise<DirectedDoc
 
   const data = await response.json() as { items?: DirectedDocument[] }
   const matches = (data.items || []).filter(document => String(document.number) === invoiceNumber)
-  if (matches.length > 1) throw new Error(`Más de un documento Bsale para el folio ${invoiceNumber}`)
-  return matches[0] || null
+  if (matches.length <= 1 || !scope) return matches[0] || null
+  const normalizedAddress = scope.address?.trim().toLocaleLowerCase()
+  const contextualMatches = matches.filter(document => {
+    const typeId = directedDocumentTypeId(document)
+    const emissionDate = document.emissionDate == null ? null : new Date(document.emissionDate * 1000).toISOString().slice(0, 10)
+    const amountMatches = Number(document.totalAmount) === scope.amount || Number(document.netAmount) === scope.amount
+    const addressMatches = !normalizedAddress || documentAddress(document)?.trim().toLocaleLowerCase() === normalizedAddress
+    return (typeId === 5 || typeId === 7) && Number(document.state) === 0 && emissionDate === scope.emissionDate && amountMatches && addressMatches
+  })
+  if (contextualMatches.length > 1) throw new Error(`Más de un documento Bsale coincide con la guía para el folio ${invoiceNumber}`)
+  return contextualMatches[0] || null
+}
+
+function documentAddress(document: DirectedDocument) {
+  return document.address ?? null
 }
 
 async function syncDirectedClient(companyId: string, clientId: number, runId: string) {
@@ -1453,13 +1467,14 @@ async function fetchAndUpsertDirectedDetails(companyId: string, runId: string, d
   return records.length
 }
 
-async function convergeDirectedCustomerIdentity(companyId: string, invoiceNumber: string, customerId: number) {
+async function convergeDirectedCustomerIdentity(companyId: string, invoiceNumber: string, customerId: number, scope?: { routeGuideId?: string; settlementId?: string }) {
   const db = integrDb()
   const { data: guideItems, error: guideError } = await db.schema('logistica')
     .from('route_guide_items')
     .select('id, customer_bsale_id')
     .eq('company_id', companyId)
     .eq('invoice_number', invoiceNumber)
+    .match(scope?.routeGuideId ? { route_guide_id: scope.routeGuideId } : {})
   if (guideError) throw guideError
 
   const existingIds = [...new Set((guideItems || []).map(item => item.customer_bsale_id).filter((id): id is number => id != null))]
@@ -1483,6 +1498,7 @@ async function convergeDirectedCustomerIdentity(companyId: string, invoiceNumber
     const { data, error } = await db.schema('adquisiciones').from('route_settlement_items')
       .update({ customer_bsale_id: customerId })
       .in('route_guide_item_id', guideIds)
+      .match(scope?.settlementId ? { settlement_id: scope.settlementId } : {})
       .is('customer_bsale_id', null)
       .select('id')
     if (error) throw error
@@ -1540,6 +1556,8 @@ async function loadLocallyReadyDirectedDocuments(companyId: string, invoiceNumbe
 export async function syncBsaleDocumentsForRouteGuide(input: {
   company_id: string
   invoice_numbers: string[]
+  route_guide_id?: string
+  settlement_id?: string
 }): Promise<DirectedBsaleSyncResult> {
   const requestedNumbers = [...new Set((input?.invoice_numbers || []).map(number => String(number).trim()).filter(Boolean))]
   const emptyResult = (error: string): DirectedBsaleSyncResult => ({ success: false, requested: requestedNumbers.length, ready: 0, missing: requestedNumbers.length, documents: [], error })
@@ -1564,22 +1582,40 @@ export async function syncBsaleDocumentsForRouteGuide(input: {
   try {
     run = await createSyncRun(input.company_id, 'ROUTE_GUIDE_DIRECTED')
     const locallyReady = await loadLocallyReadyDirectedDocuments(input.company_id, requestedNumbers)
+    const routeGuideContext = new Map<string, { amount: number; emissionDate?: string; address?: string }>()
+    if (input.route_guide_id) {
+      const { data: guideItems, error: guideItemsError } = await integrDb().schema('logistica')
+        .from('route_guide_items')
+        .select('invoice_number, amount, customer_address, created_at')
+        .eq('company_id', input.company_id)
+        .eq('route_guide_id', input.route_guide_id)
+        .in('invoice_number', requestedNumbers)
+      if (guideItemsError) throw guideItemsError
+      for (const item of guideItems ?? []) {
+        routeGuideContext.set(String(item.invoice_number).trim(), {
+          amount: Number(item.amount),
+          emissionDate: item.created_at ? String(item.created_at).slice(0, 10) : undefined,
+          address: item.customer_address ?? undefined,
+        })
+      }
+    }
     for (const invoiceNumber of requestedNumbers) {
       try {
         const local = locallyReady.get(invoiceNumber)
         if (local) {
-          const identity = await convergeDirectedCustomerIdentity(input.company_id, invoiceNumber, local.customerId)
+          const identity = await convergeDirectedCustomerIdentity(input.company_id, invoiceNumber, local.customerId, { routeGuideId: input.route_guide_id, settlementId: input.settlement_id })
           documents.push({ invoice_number: invoiceNumber, status: identity.conflict ? 'ERROR' : 'READY', bsale_document_id: local.document.id, customer_bsale_id: local.customerId, details_count: local.detailsCount, customer_identity_updated: identity.guideUpdated, settlement_identity_updated: identity.settlementUpdated, ...(identity.conflict ? { error: 'Conflicto de customer_bsale_id; no se modificaron identidades' } : {}) })
           continue
         }
-        const document = await fetchDirectedDocument(invoiceNumber)
+        const document = await fetchDirectedDocument(invoiceNumber, routeGuideContext.get(invoiceNumber))
         if (!document) {
           documents.push({ invoice_number: invoiceNumber, status: 'NOT_FOUND' })
           continue
         }
         const documentTypeId = directedDocumentTypeId(document)
         const customerId = toNumber(document.client?.id ?? document.clientId)
-        if (documentTypeId !== 5 || toNumber(document.state) !== 0 || customerId === null) {
+        const contextualTypeAllowed = input.route_guide_id && documentTypeId === 7
+        if ((documentTypeId !== 5 && !contextualTypeAllowed) || toNumber(document.state) !== 0 || customerId === null) {
           documents.push({ invoice_number: invoiceNumber, status: 'INVALID_DOCUMENT', bsale_document_id: document.id, customer_bsale_id: customerId })
           continue
         }
@@ -1588,7 +1624,7 @@ export async function syncBsaleDocumentsForRouteGuide(input: {
           continue
         }
         await upsertDirectedDocument(input.company_id, run.id, document)
-        const identity = await convergeDirectedCustomerIdentity(input.company_id, invoiceNumber, customerId)
+        const identity = await convergeDirectedCustomerIdentity(input.company_id, invoiceNumber, customerId, { routeGuideId: input.route_guide_id, settlementId: input.settlement_id })
         const detailsCount = await fetchAndUpsertDirectedDetails(input.company_id, run.id, document)
         if (detailsCount === 0) {
           documents.push({ invoice_number: invoiceNumber, status: 'DETAILS_UNAVAILABLE', bsale_document_id: document.id, customer_bsale_id: customerId, details_count: 0, customer_identity_updated: identity.guideUpdated, settlement_identity_updated: identity.settlementUpdated })

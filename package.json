@@ -22,6 +22,7 @@
     "test:route-guide-profitability-v1": "node --experimental-strip-types --test scripts/test-route-guide-profitability-v1.mjs",
     "test:route-guide-whatsapp": "node --experimental-strip-types --test scripts/test-route-guide-whatsapp.mjs",
     "test:route-settlement-null-customer-guard": "node --test scripts/test-route-settlement-null-customer-guard.mjs",
+    "test:route-settlement-customer-identity-preflight": "node --test scripts/test-route-settlement-customer-identity-preflight.mjs",
     "test:route-settlement-navigation": "node --test scripts/test-route-settlement-navigation.mjs",
     "test:route-settlement-checks-ui": "node --test scripts/test-route-settlement-checks-ui.mjs",
     "test:route-settlement-pending-security": "node --test scripts/test-route-settlement-pending-security.mjs",
