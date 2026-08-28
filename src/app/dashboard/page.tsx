@@ -1,10 +1,15 @@
 import { createClient } from '@/lib/supabase/server'
 import { ModuleCard } from '@/components/module-card'
-import { OperationalAgenda } from '@/components/operational-agenda'
+import { LatestRouteGuides } from '@/components/portal/latest-route-guides'
 import type { Modulo } from '@/lib/types'
-import Image from 'next/image'
-import { getDispatchCalendarCities, getDispatchCalendars } from '@/app/actions/logistica/dispatch-calendar'
-import { todayInSantiago } from '@/lib/datetime'
+import { getPortalLatestRouteGuides } from '@/app/actions/logistica/guias-ruta'
+import { getPortalSales } from '@/app/actions/portal/sales'
+import { getPortalCollections } from '@/app/actions/portal/collections'
+import { getPortalAmimascota } from '@/app/actions/portal/amimascota'
+import { PortalFinancialCard } from '@/components/portal/portal-financial-cards'
+import { AmimascotaCard } from '@/components/portal/amimascota-card'
+import { getPortalTopProducts } from '@/app/actions/portal/top-products'
+import { TopProductsCard } from '@/components/portal/top-products-card'
 
 const adminCodes = ['dashboard', 'usuarios', 'roles', 'auditoria', 'seguridad']
 
@@ -54,66 +59,78 @@ export default async function DashboardPage() {
     return Number(bHasRoute) - Number(aHasRoute)
   })
 
-  const dispatchCalendarsResult = await getDispatchCalendars()
-  const dispatchCalendar = dispatchCalendarsResult.data?.find(calendar => calendar.active) ?? dispatchCalendarsResult.data?.[0] ?? null
-  const dispatchCitiesResult = dispatchCalendar ? await getDispatchCalendarCities(dispatchCalendar.id) : null
-  const dispatchSummary = dispatchCalendar && dispatchCitiesResult?.data
-    ? {
-        name: dispatchCalendar.name,
-        cutoffTime: dispatchCalendar.default_cutoff_time.slice(0, 5),
-        assignments: dispatchCitiesResult.data.map(city => ({ weekday: city.weekday, normalized_city: city.normalized_city })),
-      }
-    : null
+  const [guidesResult, salesResult, collectionsResult, amimascotaResult, topProductsResult] = await Promise.allSettled([
+    getPortalLatestRouteGuides(),
+    getPortalSales(),
+    getPortalCollections(),
+    getPortalAmimascota(),
+    getPortalTopProducts(),
+  ])
+  const latestRouteGuides = guidesResult.status === 'fulfilled' ? guidesResult.value : []
+  const sales = salesResult.status === 'fulfilled' ? salesResult.value : null
+  const collections = collectionsResult.status === 'fulfilled' ? collectionsResult.value : null
+  const amimascota = amimascotaResult.status === 'fulfilled' ? amimascotaResult.value : null
+  const topProducts = topProductsResult.status === 'fulfilled' ? topProductsResult.value : []
 
   return (
-    <div className="pb-8 lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start lg:gap-6">
-      <div className="space-y-7">
-        <section className="relative isolate overflow-hidden rounded-2xl border border-theme-border/80 bg-theme-surface/65 shadow-sm">
-          <div className="pointer-events-none absolute -right-20 -top-24 -z-10 h-56 w-56 rounded-full bg-theme-accent/10 blur-3xl" />
-          <div className="grid items-center gap-3 px-5 py-4 sm:px-7 sm:py-5 lg:grid-cols-[1fr_150px] lg:px-8">
-            <div className="max-w-2xl">
-              <p className="mb-1.5 text-[9px] font-bold uppercase tracking-[0.22em] text-theme-text-accent">Portal de Gestión MYM</p>
-              <h1 className="text-2xl font-semibold tracking-tight text-theme-text sm:text-3xl">
-                Bienvenido {profile?.nombre ?? 'Usuario'}
-              </h1>
-              <p className="mt-1.5 max-w-xl text-xs leading-relaxed text-theme-text-muted/75 sm:text-sm">
-                Accede a las herramientas operativas de Distribuidora MYM desde un solo lugar.
-              </p>
-            </div>
-            <div className="flex items-center justify-center lg:justify-self-end">
-              <Image src="/logo.png" alt="Mascota MYM" width={132} height={120} priority className="h-24 w-32 rounded-lg object-contain drop-shadow-sm sm:h-28 sm:w-36" />
-            </div>
+    <>
+      <div className="pb-8 xl:grid xl:grid-cols-[minmax(0,1.55fr)_minmax(500px,1fr)] xl:items-start xl:gap-6">
+        <div className="space-y-6">
+        <section className="overflow-hidden rounded-2xl border border-sky-500/20 bg-sky-700 px-5 py-4 text-white shadow-sm shadow-sky-950/10 sm:px-6">
+          <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-sky-100/75">Portal de Gestión MYM</p>
+          <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Bienvenido {profile?.nombre ?? 'Usuario'}</h1>
+            <p className="text-xs text-sky-100/85 sm:text-sm">Todo lo operativo, en un solo lugar.</p>
           </div>
         </section>
 
-        {operationalModules.length > 0 ? (
-          <section className="space-y-3">
-            <div className="flex items-end justify-between gap-3 px-1">
-              <div>
-                <h2 className="text-lg font-semibold tracking-tight text-theme-text">Módulos disponibles</h2>
-              </div>
-            </div>
-            <div className="flex flex-wrap justify-center gap-3">
-              {operationalModules.map((mod) => (
-                <div key={mod.id} className="w-full sm:w-[calc(50%-0.375rem)] lg:w-[calc(33.333333%-0.5rem)]">
-                  <ModuleCard module={mod} />
+        <div className="space-y-5">
+            {operationalModules.length > 0 ? (
+              <section className="space-y-3">
+                <div className="flex items-end justify-between gap-3 px-1">
+                  <div>
+                    <h2 className="text-lg font-semibold tracking-tight text-theme-text">Módulos disponibles</h2>
+                  </div>
                 </div>
-              ))}
-            </div>
-          </section>
-        ) : (
-          <div className="space-y-5">
-            <div>
-              <h2 className="text-lg font-semibold tracking-tight text-theme-text">Módulos disponibles</h2>
-            </div>
-            <div className="rounded-2xl border border-dashed border-theme-border bg-theme-surface/60 p-10 text-center">
-              <p className="text-theme-text-muted/50 text-sm">No hay módulos operativos disponibles para tu usuario.</p>
-            </div>
-          </div>
-        )}
-      </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {operationalModules.map((mod) => (
+                    <div key={mod.id} className="h-full">
+                      <ModuleCard module={mod} />
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : (
+              <div className="space-y-5">
+                <div>
+                  <h2 className="text-lg font-semibold tracking-tight text-theme-text">Módulos disponibles</h2>
+                </div>
+                <div className="rounded-2xl border border-dashed border-theme-border bg-theme-surface/60 p-10 text-center">
+                  <p className="text-theme-text-muted/50 text-sm">No hay módulos operativos disponibles para tu usuario.</p>
+                </div>
+              </div>
+            )}
+            <AmimascotaCard data={amimascota} error={amimascotaResult.status === 'rejected'} />
+        </div>
+        </div>
 
-      <OperationalAgenda today={todayInSantiago()} dispatch={dispatchSummary} dispatchRoute="/dashboard/logistica?tab=catalogos&action=calendario_despacho" />
-    </div>
+        <div className="space-y-4">
+          <LatestRouteGuides guides={latestRouteGuides} />
+          <TopProductsCard products={topProducts} error={topProductsResult.status === 'rejected'} />
+        </div>
+      </div>
+      <section className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <PortalFinancialCard
+          kind="sales"
+          data={sales}
+          error={salesResult.status === 'rejected' ? 'sales' : null}
+        />
+        <PortalFinancialCard
+          kind="collections"
+          data={collections}
+          error={collectionsResult.status === 'rejected' ? 'collections' : null}
+        />
+      </section>
+    </>
   )
 }

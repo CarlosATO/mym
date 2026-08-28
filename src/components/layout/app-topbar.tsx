@@ -5,6 +5,7 @@ import { CompanyLogo } from '@/components/company-logo'
 import { CompanySwitcher } from '@/components/company-switcher'
 import { ThemeSwitcher } from '@/components/theme-switcher'
 import { UserMenu } from '@/components/layout/user-menu'
+import { TopbarDate } from '@/components/layout/topbar-date'
 import type { Profile } from '@/lib/types'
 import type { Company } from '@/app/actions/companies'
 import { cn } from '@/lib/utils'
@@ -60,6 +61,7 @@ export function AppTopbar({ profile, activeCompany, permissions, moduleName, sho
               <span>Portal</span>
             </Link>
           )}
+          <TopbarDate />
           <CompanySwitcher />
           <div className="w-px h-4 bg-theme-border/60 shrink-0" />
           <ThemeSwitcher />

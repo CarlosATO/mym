@@ -19,14 +19,12 @@ function getIcon(iconName: string) {
 function getDisplayModule(module: Modulo) {
   if (module.route === '/dashboard/logistica' || module.code === 'logistica') {
     return {
-      name: 'WMS · Logística de Bodegas',
-      description: 'Gestión de bodegas, rutas, despachos, movimientos e inventario.'
+      name: 'WMS · Logística de Bodegas'
     }
   }
 
   return {
-    name: module.name,
-    description: module.description
+    name: module.name
   }
 }
 
@@ -85,7 +83,7 @@ export function ModuleCard({ module, disabled }: ModuleCardProps) {
   const content = (
     <div
       className={cn(
-        'group relative flex min-h-[156px] flex-col overflow-hidden rounded-xl border p-4 transition-all duration-200',
+        'group relative flex h-[108px] min-h-0 flex-col overflow-hidden rounded-xl border p-3 transition-all duration-200',
         isDisabled
           ? 'cursor-default border-theme-border bg-theme-text/3 opacity-50'
           : `cursor-pointer border-theme-border/90 bg-theme-surface shadow-sm hover:-translate-y-0.5 ${accent.border} hover:bg-theme-surface-hover hover:shadow-md hover:shadow-theme-bg/20`
@@ -108,34 +106,17 @@ export function ModuleCard({ module, disabled }: ModuleCardProps) {
         )}
       </div>
 
-      <div className="mt-3 min-w-0 flex-1">
+      <div className="mt-2 min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', isDisabled ? 'bg-theme-text-muted/30' : accent.dot)} />
           <p className={cn(
-            'truncate text-sm font-semibold leading-tight tracking-tight',
+            'h-8 overflow-hidden whitespace-normal text-[12px] font-semibold leading-4 tracking-tight',
             isDisabled ? 'text-theme-text/40' : 'text-theme-text'
           )}>
             {displayModule.name}
           </p>
         </div>
-        <div className="mt-1.5 min-h-[32px]">
-          {displayModule.description && (
-            <p className={cn(
-              'line-clamp-2 text-[11px] leading-relaxed',
-              isDisabled ? 'text-theme-text-muted/30' : 'text-theme-text-muted/70'
-            )}>
-              {displayModule.description}
-            </p>
-          )}
-        </div>
       </div>
-
-      {!isDisabled && (
-        <div className={cn('mt-3 flex items-center gap-2 border-t border-theme-border/70 pt-2.5 text-[11px] font-semibold transition-colors', accent.cta)}>
-          <span>Ingresar al módulo</span>
-          <LucideIcons.ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
-        </div>
-      )}
     </div>
   )
 

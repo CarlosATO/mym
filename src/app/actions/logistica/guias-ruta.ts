@@ -37,6 +37,18 @@ export interface DispatchRouteGuideResult {
   warnings: RouteSaveDuplicateWarning[];
 }
 
+export interface PortalRouteGuide {
+  id: string;
+  guide_number: string;
+  guide_date: string;
+  route_name_snapshot: string | null;
+  total_invoices: number;
+  total_amount: number;
+  utility: number;
+  cost_status: RouteGuideProfitabilityV1['cost_status'];
+  cost_coverage_pct: number | null;
+}
+
 // ---- Client Factory -------------------------------------------------------
 
 async function createLogisticaClient() {
@@ -84,6 +96,40 @@ export async function getRouteGuides(filters?: { status?: 'ALL' | 'DRAFT' | 'DIS
   const { data, error } = await query.limit(50);
   if (error) throw error;
   return data || [];
+}
+
+export async function getPortalLatestRouteGuides(): Promise<PortalRouteGuide[]> {
+  const companyId = await getActiveCompanyId();
+  if (!companyId) throw new Error('No se encontró empresa activa para el usuario.');
+
+  const supabase = await createLogisticaClient();
+  const { data: guides, error } = await supabase
+    .from('route_guides')
+    .select('id, guide_number, guide_date, route_name_snapshot, total_invoices, total_amount')
+    .eq('company_id', companyId)
+    .eq('status', 'DISPATCHED')
+    .order('guide_date', { ascending: false })
+    .order('guide_number', { ascending: false })
+    .limit(5);
+
+  if (error) throw new Error(`Error cargando últimas guías del Portal: ${error.message}`);
+
+  const guidesWithProfitability = await Promise.all((guides ?? []).map(async guide => {
+    const profitability = await getRouteGuideProfitabilityV1(guide.id);
+    return {
+      id: guide.id,
+      guide_number: guide.guide_number,
+      guide_date: guide.guide_date,
+      route_name_snapshot: guide.route_name_snapshot,
+      total_invoices: guide.total_invoices,
+      total_amount: guide.total_amount,
+      utility: profitability.estimated_gross_profit,
+      cost_status: profitability.cost_status,
+      cost_coverage_pct: profitability.cost_coverage_pct,
+    };
+  }));
+
+  return guidesWithProfitability;
 }
 
 export async function getRouteGuideById(id: string): Promise<RouteGuide | null> {
