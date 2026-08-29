@@ -168,6 +168,7 @@ export function RouteGuideGrid({
             {items.map((item, idx) => {
               const isInvalid = item.validation_status === 'INVALID';
               const hasData = item.invoice_number || item.customer_name || item.amount || item.payment_method_original;
+              const hasCurrentSaleCondition = saleConditions.some(condition => condition.name === item.payment_method_original);
               const rowClass = isInvalid && hasData ? 'bg-red-500/[0.02] hover:bg-red-500/[0.04]' : 'bg-theme-text/[0.02] hover:bg-theme-text/[0.04]';
               
               return (
@@ -253,6 +254,9 @@ export function RouteGuideGrid({
                         disabled={readOnly}
                       >
                         <option value="">Seleccionar...</option>
+                        {item.payment_method_normalized === 'AL_DIA' && !hasCurrentSaleCondition && (
+                          <option value={item.payment_method_original}>Al día</option>
+                        )}
                         {saleConditions.map((sc) => (
                           <option key={sc.id} value={sc.name}>{sc.label}</option>
                         ))}

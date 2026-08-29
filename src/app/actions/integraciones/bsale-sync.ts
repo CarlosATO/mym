@@ -102,6 +102,7 @@ export type DirectedBsaleDocumentStatus =
   | 'READY'
   | 'NOT_FOUND'
   | 'INVALID_DOCUMENT'
+  | 'AMBIGUOUS'
   | 'DETAILS_UNAVAILABLE'
   | 'CUSTOMER_UNAVAILABLE'
   | 'ERROR'
@@ -1310,6 +1311,13 @@ type DirectedDetail = {
   variant?: { id?: number | string | null; code?: string | null; description?: string | null } | null
 }
 
+class DirectedDocumentSelectionError extends Error {
+  constructor(public status: 'INVALID_DOCUMENT' | 'AMBIGUOUS', message: string) {
+    super(message)
+    this.name = 'DirectedDocumentSelectionError'
+  }
+}
+
 function directedDocumentTypeId(document: DirectedDocument) {
   return toNumber(document.documentTypeId ?? document.document_type?.id)
 }
@@ -1330,7 +1338,18 @@ async function fetchDirectedDocument(invoiceNumber: string, scope?: { amount: nu
 
   const data = await response.json() as { items?: DirectedDocument[] }
   const matches = (data.items || []).filter(document => String(document.number) === invoiceNumber)
-  if (matches.length <= 1 || !scope) return matches[0] || null
+  if (!scope) {
+    const validInvoices = matches.filter(document => directedDocumentTypeId(document) === 5 && toNumber(document.state) === 0)
+    if (validInvoices.length === 1) return validInvoices[0]
+    if (validInvoices.length > 1) {
+      throw new DirectedDocumentSelectionError('AMBIGUOUS', `Más de una factura electrónica vigente para el folio ${invoiceNumber}`)
+    }
+    if (matches.length > 0) {
+      throw new DirectedDocumentSelectionError('INVALID_DOCUMENT', `No hay una factura electrónica vigente para el folio ${invoiceNumber}`)
+    }
+    return null
+  }
+  if (matches.length <= 1) return matches[0] || null
   const normalizedAddress = scope.address?.trim().toLocaleLowerCase()
   const contextualMatches = matches.filter(document => {
     const typeId = directedDocumentTypeId(document)
@@ -1632,7 +1651,11 @@ export async function syncBsaleDocumentsForRouteGuide(input: {
         }
         documents.push({ invoice_number: invoiceNumber, status: identity.conflict ? 'ERROR' : 'READY', bsale_document_id: document.id, customer_bsale_id: customerId, details_count: detailsCount, customer_identity_updated: identity.guideUpdated, settlement_identity_updated: identity.settlementUpdated, ...(identity.conflict ? { error: 'Conflicto de customer_bsale_id; no se modificaron identidades' } : {}) })
       } catch (error: unknown) {
-        documents.push({ invoice_number: invoiceNumber, status: 'ERROR', error: error instanceof Error ? error.message : String(error) })
+        if (error instanceof DirectedDocumentSelectionError) {
+          documents.push({ invoice_number: invoiceNumber, status: error.status, error: error.message })
+        } else {
+          documents.push({ invoice_number: invoiceNumber, status: 'ERROR', error: error instanceof Error ? error.message : String(error) })
+        }
       }
     }
     const ready = documents.filter(document => document.status === 'READY').length

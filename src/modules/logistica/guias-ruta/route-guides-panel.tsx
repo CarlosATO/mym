@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { getRouteGuides, getRouteGuideCatalogOptions, getRouteGuidesProfitabilitySummaryV1, saveRouteGuideDraft, dispatchRouteGuideAction, deleteRouteGuideDraftAction, RouteSaveDuplicateWarning, RouteDuplicateInvoice, RouteGuideProfitabilitySummaryV1 } from '@/app/actions/logistica/guias-ruta';
 import { RouteGuidesTrayTable } from './components/route-guides-tray-table';
 import { RouteGuidesTraySkeleton } from './components/route-guide-skeletons';
@@ -17,6 +17,8 @@ export type { RouteSaveDuplicateWarning, RouteDuplicateInvoice };
 export function RouteGuidesPanel() {
   const [guides, setGuides] = useState<any[]>([]);
   const [catalogs, setCatalogs] = useState<CatalogOptions | null>(null);
+  const [isCatalogsLoading, setIsCatalogsLoading] = useState(false);
+  const catalogsPromiseRef = useRef<Promise<CatalogOptions | null> | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<'ALL' | 'DRAFT' | 'DISPATCHED'>('ALL');
   
@@ -61,23 +63,37 @@ export function RouteGuidesPanel() {
     }
   }, [filterStatus]);
 
-  const loadCatalogs = useCallback(async () => {
-    try {
-      const data = await getRouteGuideCatalogOptions();
-      setCatalogs(data);
-    } catch (e: any) {
-      toast.error('Error cargando catálogos: ' + e.message);
-    }
-  }, []);
+  const ensureCatalogs = useCallback(() => {
+    if (catalogs) return Promise.resolve(catalogs);
+    if (catalogsPromiseRef.current) return catalogsPromiseRef.current;
+
+    setIsCatalogsLoading(true);
+    const promise = getRouteGuideCatalogOptions()
+      .then(data => {
+        setCatalogs(data);
+        return data;
+      })
+      .catch((e: any) => {
+        toast.error('Error cargando catálogos: ' + e.message);
+        return null;
+      })
+      .finally(() => {
+        catalogsPromiseRef.current = null;
+        setIsCatalogsLoading(false);
+      });
+    catalogsPromiseRef.current = promise;
+    return promise;
+  }, [catalogs]);
 
   useEffect(() => {
-    Promise.all([loadTray(), loadCatalogs()]).finally(() => setIsLoading(false));
-  }, [loadTray, loadCatalogs, filterStatus]);
+    loadTray().finally(() => setIsLoading(false));
+  }, [loadTray, filterStatus]);
 
   const handleOpenNew = () => {
     setActiveView('NEW');
     setSelectedGuideId(null);
     setFormSessionId(`new-${Date.now()}`);
+    void ensureCatalogs();
   };
 
   const handleOpenDetail = async (id: string) => {
@@ -120,6 +136,7 @@ export function RouteGuidesPanel() {
   const handleEdit = () => {
     setActiveView('EDIT');
     setFormSessionId(`edit-${selectedGuideId}`);
+    void ensureCatalogs();
   };
 
   const handleSaveDraft = async (guideData: any, itemsData: any[]) => {
@@ -206,7 +223,7 @@ export function RouteGuidesPanel() {
     }
   };
 
-  if (isLoading || !catalogs) {
+  if (isLoading) {
     return (
       <div className="p-6">
         <RouteGuidesTraySkeleton />
@@ -268,16 +285,22 @@ export function RouteGuidesPanel() {
             </div>
           )}
 
-          <RouteGuideForm 
-            key={formSessionId}
-            initialData={activeView === 'EDIT' && selectedGuideId && cache[selectedGuideId] ? cache[selectedGuideId] : undefined}
-            catalogOptions={catalogs}
-            onSaveDraft={handleSaveDraft}
-            onDispatch={handleDispatch}
-            onCancel={handleCloseDetail}
-            isSaving={isSaving}
-            isDispatching={isDispatching}
-          />
+          {catalogs ? (
+            <RouteGuideForm
+              key={formSessionId}
+              initialData={activeView === 'EDIT' && selectedGuideId && cache[selectedGuideId] ? cache[selectedGuideId] : undefined}
+              catalogOptions={catalogs}
+              onSaveDraft={handleSaveDraft}
+              onDispatch={handleDispatch}
+              onCancel={handleCloseDetail}
+              isSaving={isSaving}
+              isDispatching={isDispatching}
+            />
+          ) : (
+            <div className="flex min-h-32 items-center justify-center p-6 text-xs font-semibold text-theme-text-muted">
+              {isCatalogsLoading ? 'Cargando catálogos...' : 'No se pudieron cargar los catálogos.'}
+            </div>
+          )}
         </div>
       )}
 
@@ -292,7 +315,8 @@ export function RouteGuidesPanel() {
               ) : cache[selectedGuideId] ? (
                 <RouteGuideDetailPanel 
                   guide={cache[selectedGuideId]}
-                  catalogOptions={catalogs}
+                   catalogOptions={catalogs ?? undefined}
+                   onRequestCatalogs={() => { void ensureCatalogs(); }}
                   onClose={handleCloseDetail}
                   onEdit={handleEdit}
                   onGuideEdited={handleGuideEdited}

@@ -72,6 +72,21 @@ test('WhatsApp prepara una sola imagen de detalle amplia, sin cobertura ni estad
   assert.match(imageSource, /detail: Blob/)
   assert.doesNotMatch(imageSource, /summarySvg|Cobertura de costo|parcial/i)
   assert.match(imageSource, /GANANCIA %/)
+  assert.match(imageSource, /UTILIDAD ESTIMADA/)
+  assert.match(imageSource, /Transferencia/)
   assert.doesNotMatch(detailPanelSource, /Imagen 1|Descargar ambas|images\.summary/)
   assert.match(detailPanelSource, /Detalle operativo/)
+})
+
+test('el panel de detalle conserva el acceso a WhatsApp y no lo agrega a Nueva Guía', async () => {
+  assert.match(detailPanelSource, /const handlePrepareWhatsApp = async \(\) =>/)
+  assert.match(detailPanelSource, /createRouteGuideWhatsAppImages\(guide, profitability\)/)
+  assert.match(detailPanelSource, /Preparar para WhatsApp/)
+  assert.match(detailPanelSource, /disabled=\{!profitability \|\| !guide\.items\?\.length \|\| whatsAppLoading\}/)
+  assert.match(detailPanelSource, /Copiar imagen/)
+  assert.match(detailPanelSource, /Descargar imagen/)
+  assert.match(detailPanelSource, /setWhatsAppImageUrls\(\{\s*detail:/)
+
+  const formSource = await readFile(new URL('../src/modules/logistica/guias-ruta/components/route-guide-form.tsx', import.meta.url), 'utf8')
+  assert.doesNotMatch(formSource, /Preparar para WhatsApp|createRouteGuideWhatsAppImages/)
 })

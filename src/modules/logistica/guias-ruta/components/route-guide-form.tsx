@@ -24,6 +24,7 @@ function formatStatus(status: string) {
 function formatBsaleVerificationStatus(status: string) {
   if (status === 'NOT_FOUND') return 'Factura aún no disponible en Bsale.';
   if (status === 'INVALID_DOCUMENT') return 'La factura no está vigente o no es válida.';
+  if (status === 'AMBIGUOUS') return 'Hay más de una factura vigente para este folio.';
   if (status === 'DETAILS_UNAVAILABLE') return 'No fue posible obtener el detalle de la factura.';
   if (status === 'CUSTOMER_UNAVAILABLE') return 'No fue posible identificar el cliente de la factura.';
   return 'No fue posible verificar la factura. Intenta nuevamente.';
@@ -71,7 +72,7 @@ export function RouteGuideForm({
   const verificationSequence = useRef(0);
   const verificationRef = useRef<{ key: string; promise: Promise<DirectedBsaleSyncResult> } | null>(null);
   const actionInProgress = useRef(false);
-  const [pdfOrientation, setPdfOrientation] = useState<RouteGuidePdfOrientation>('portrait');
+  const [pdfOrientation, setPdfOrientation] = useState<RouteGuidePdfOrientation>('landscape');
   const previewGuideRef = useRef<RouteGuide | null>(null);
 
   const grid = useRouteGuideGrid(initialData?.items || []);
@@ -193,34 +194,41 @@ export function RouteGuideForm({
     if (previous?.key === key) return previous.promise;
 
     const sequence = ++verificationSequence.current;
-    const companyId = await getActiveCompanyId();
-    if (!companyId) throw new Error('No se encontró empresa activa para verificar las facturas.');
     setIsVerifyingBsale(true);
     setBsaleVerification({ success: true, requested: numbers.length, ready: 0, missing: numbers.length, documents: [] });
-    const promise = syncBsaleDocumentsForRouteGuide({
-      company_id: companyId,
-      invoice_numbers: numbers,
-    }).then(result => {
-      if (sequence === verificationSequence.current) {
-        setBsaleVerification(result);
-        setIsVerifyingBsale(false);
-      }
-      return result;
-    }).catch(error => {
-      const result: DirectedBsaleSyncResult = {
-        success: false,
-        requested: numbers.length,
-        ready: 0,
-        missing: numbers.length,
-        documents: [],
-        error: error instanceof Error ? error.message : String(error),
-      };
-      if (sequence === verificationSequence.current) {
-        setBsaleVerification(result);
-        setIsVerifyingBsale(false);
-      }
-      return result;
-    });
+    const promise = getActiveCompanyId()
+      .then(companyId => {
+        if (!companyId) throw new Error('No se encontró empresa activa para verificar las facturas.');
+        return syncBsaleDocumentsForRouteGuide({
+          company_id: companyId,
+          invoice_numbers: numbers,
+        });
+      })
+      .then(result => {
+        if (sequence === verificationSequence.current) {
+          setBsaleVerification(result);
+          setIsVerifyingBsale(false);
+        }
+        return result;
+      })
+      .catch(error => {
+        const result: DirectedBsaleSyncResult = {
+          success: false,
+          requested: numbers.length,
+          ready: 0,
+          missing: numbers.length,
+          documents: [],
+          error: error instanceof Error ? error.message : String(error),
+        };
+        if (sequence === verificationSequence.current) {
+          setBsaleVerification(result);
+          setIsVerifyingBsale(false);
+        }
+        return result;
+      })
+      .finally(() => {
+        if (verificationRef.current?.key === key) verificationRef.current = null;
+      });
     verificationRef.current = { key, promise };
     return promise;
   };
@@ -230,16 +238,17 @@ export function RouteGuideForm({
     verificationSequence.current += 1;
     verificationRef.current = null;
     const timer = window.setTimeout(() => {
-      if (invoiceNumbers.length === 0) {
+      const numbers = invoiceSetKey ? invoiceSetKey.split('|') : [];
+      if (numbers.length === 0) {
         setBsaleVerification(null);
         setIsVerifyingBsale(false);
         return;
       }
       setBsaleVerification(null);
-      void startBsaleVerification(invoiceNumbers);
-    }, invoiceNumbers.length === 0 ? 0 : 500);
+      void startBsaleVerification(numbers);
+    }, !invoiceSetKey ? 0 : 500);
     return () => window.clearTimeout(timer);
-  }, [guideId, readOnly, invoiceSetKey, invoiceNumbers]);
+  }, [guideId, readOnly, invoiceSetKey]);
 
   const handleSaveDraft = async () => {
     if (isSaving || isDispatching || actionInProgress.current) return;

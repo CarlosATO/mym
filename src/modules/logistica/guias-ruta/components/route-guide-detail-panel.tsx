@@ -17,7 +17,8 @@ import { createRouteGuideWhatsAppImages, type RouteGuideWhatsAppImages } from '.
 
 interface RouteGuideDetailPanelProps {
   guide: RouteGuide;
-  catalogOptions: CatalogOptions;
+  catalogOptions?: CatalogOptions;
+  onRequestCatalogs: () => void;
   onClose: () => void;
   onEdit?: () => void;
   onSaveDraft: (guideData: any, itemsData: any[]) => Promise<SaveRouteGuideDraftResult>;
@@ -30,6 +31,7 @@ interface RouteGuideDetailPanelProps {
 export function RouteGuideDetailPanel({
   guide,
   catalogOptions,
+  onRequestCatalogs,
   onClose,
   onEdit,
   onSaveDraft,
@@ -236,13 +238,21 @@ export function RouteGuideDetailPanel({
       {renderWhatsAppModal()}
 
       {editModalOpen && (
-        <RouteGuideEditModal
-          key={guide.id}
-          guide={guide}
-          catalogOptions={catalogOptions}
-          onClose={() => setEditModalOpen(false)}
-          onSaved={handleGuideSaved}
-        />
+        catalogOptions ? (
+          <RouteGuideEditModal
+            key={guide.id}
+            guide={guide}
+            catalogOptions={catalogOptions}
+            onClose={() => setEditModalOpen(false)}
+            onSaved={handleGuideSaved}
+          />
+        ) : (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20">
+            <div className="rounded-xl border border-theme-border bg-theme-surface px-5 py-4 text-xs font-semibold text-theme-text shadow-xl">
+              Cargando catálogos...
+            </div>
+          </div>
+        )
       )}
 
       {/* Header Actions */}
@@ -302,7 +312,10 @@ export function RouteGuideDetailPanel({
 
           {(guide.status === 'DRAFT' || guide.status === 'DISPATCHED') && (
             <button
-              onClick={() => setEditModalOpen(true)}
+               onClick={() => {
+                 setEditModalOpen(true);
+                 onRequestCatalogs();
+               }}
               title="Editar guía no rendida"
               className="px-4 py-2 border border-theme-border rounded-lg text-theme-text hover:bg-theme-text/5 flex items-center gap-2 text-sm font-semibold transition-colors"
             >

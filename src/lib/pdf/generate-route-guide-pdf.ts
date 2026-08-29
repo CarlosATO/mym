@@ -244,20 +244,21 @@ export async function generateRouteGuidePdfBlob(
   // TABLE
   const validItems = guide.items?.filter(i => !isEmptyRouteGuideRow(i)) || []
   
-  const tableHeaders = ['Factura', 'Cliente', 'Dirección / Ciudad', 'Monto', 'Condición de venta']
+  const tableHeaders = ['Factura', 'Cliente', 'Dirección / Ciudad', 'Monto', 'Condición de venta', 'Obs.']
   const tableBody = validItems.map(item => [
     item.invoice_number,
     item.customer_name,
     `${item.customer_address?.trim() || '-'} / ${item.commune || '-'}`,
     formatRouteGuideLineAmount(item.amount),
     formatPaymentMethodLabel(item.payment_method_normalized, item.payment_method_original),
+    item.notes || '',
   ])
 
   const blockHeight = 55
   const blockStartY = pageHeight - margin - blockHeight
   const tableColumnWidths = orientation === 'landscape'
-    ? [27, 70, 78, 30, 55]
-    : [25, 43, 48, 24, 40]
+    ? [24, 58, 72, 29, 48, 36]
+    : [22, 34, 38, 22, 34, 30]
 
   const autoTableOptions = {
     head: [tableHeaders],
@@ -270,7 +271,8 @@ export async function generateRouteGuidePdfBlob(
       1: { cellWidth: tableColumnWidths[1] },
       2: { cellWidth: tableColumnWidths[2] },
       3: { halign: 'right', cellWidth: tableColumnWidths[3] },
-      4: { halign: 'center', cellWidth: tableColumnWidths[4] }
+      4: { halign: 'center', cellWidth: tableColumnWidths[4] },
+      5: { cellWidth: tableColumnWidths[5] }
     },
     alternateRowStyles: { fillColor: [248, 250, 252] }
   } as Parameters<typeof autoTable>[1];
