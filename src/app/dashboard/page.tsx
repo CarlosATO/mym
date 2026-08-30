@@ -78,56 +78,68 @@ export default async function DashboardPage() {
 
   return (
     <>
-      <div className="grid items-start gap-4 pb-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(500px,1fr)]">
-        <div className="space-y-4">
-        <section className="overflow-hidden rounded-2xl border border-sky-500/20 bg-sky-700 px-5 py-3 text-white shadow-sm shadow-sky-950/10 sm:px-6">
-          <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-sky-100/75">Portal de Gestión MYM</p>
-          <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Bienvenido {profile?.nombre ?? 'Usuario'}</h1>
-            <p className="text-xs text-sky-100/85 sm:text-sm">Todo lo operativo, en un solo lugar.</p>
-          </div>
-        </section>
+      {/* Columna izquierda + columna derecha: flujo vertical independiente */}
+      <div className="grid gap-4 pb-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(500px,1fr)]">
+        {/* ── COLUMNA IZQUIERDA ── */}
+        <div className="flex flex-col gap-4">
+          {/* Bienvenido */}
+          <section className="overflow-hidden rounded-2xl border border-sky-500/20 bg-sky-700 px-5 py-3 text-white shadow-sm shadow-sky-950/10 sm:px-6">
+            <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-sky-100/75">Portal de Gestión MYM</p>
+            <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Bienvenido {profile?.nombre ?? 'Usuario'}</h1>
+              <p className="text-xs text-sky-100/85 sm:text-sm">Todo lo operativo, en un solo lugar.</p>
+            </div>
+          </section>
 
-        <div className="space-y-4">
-            {operationalModules.length > 0 ? (
-              <section className="space-y-2">
-                <div className="flex items-end justify-between gap-3 px-1">
-                  <div>
-                    <h2 className="text-lg font-semibold tracking-tight text-theme-text">Módulos disponibles</h2>
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  {operationalModules.map((mod) => (
-                    <div key={mod.id} className="h-full">
-                      <ModuleCard module={mod} />
-                    </div>
-                  ))}
-                </div>
-              </section>
-            ) : (
-              <div className="space-y-5">
+          {/* Módulos disponibles */}
+          {operationalModules.length > 0 ? (
+            <section className="space-y-2">
+              <div className="flex items-end justify-between gap-3 px-1">
                 <div>
                   <h2 className="text-lg font-semibold tracking-tight text-theme-text">Módulos disponibles</h2>
                 </div>
-                <div className="rounded-2xl border border-dashed border-theme-border bg-theme-surface/60 p-10 text-center">
-                  <p className="text-theme-text-muted/50 text-sm">No hay módulos operativos disponibles para tu usuario.</p>
-                </div>
               </div>
-            )}
-            <AmimascotaCard data={amimascota} error={amimascotaResult.status === 'rejected'} />
-        </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {operationalModules.map((mod) => (
+                  <div key={mod.id} className="h-full">
+                    <ModuleCard module={mod} />
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : (
+            <div className="space-y-5">
+              <div>
+                <h2 className="text-lg font-semibold tracking-tight text-theme-text">Módulos disponibles</h2>
+              </div>
+              <div className="rounded-2xl border border-dashed border-theme-border bg-theme-surface/60 p-10 text-center">
+                <p className="text-theme-text-muted/50 text-sm">No hay módulos operativos disponibles para tu usuario.</p>
+              </div>
+            </div>
+          )}
+
+          {/* Amimascota */}
+          <AmimascotaCard data={amimascota} error={amimascotaResult.status === 'rejected'} />
         </div>
 
-        <div className="space-y-4">
+        {/* ── COLUMNA DERECHA ── */}
+        <div className="flex flex-col gap-4">
+          {/* Últimas Guías de Ruta */}
           <LatestRouteGuides guides={latestRouteGuides} />
+
+          {/* Top 5 productos */}
           <TopProductsCard products={topProducts} error={topProductsResult.status === 'rejected'} />
         </div>
-      <PortalFinancialSection
-        sales={sales}
-        collections={collectionsResult.status === 'fulfilled' ? collectionsResult.value : { CALENDAR_MONTH: null, COMMISSIONABLE: null }}
-        salesError={salesCalendarResult.status === 'rejected' || salesCommissionableResult.status === 'rejected'}
-        collectionsError={collectionsResult.status === 'rejected'}
-      />
+      </div>
+
+      {/* ── FILA INFERIOR: Ventas y Cobranzas ── */}
+      <div className="grid gap-4 pb-4 sm:grid-cols-2">
+        <PortalFinancialSection
+          sales={sales}
+          collections={collectionsResult.status === 'fulfilled' ? collectionsResult.value : { CALENDAR_MONTH: null, COMMISSIONABLE: null }}
+          salesError={salesCalendarResult.status === 'rejected' || salesCommissionableResult.status === 'rejected'}
+          collectionsError={collectionsResult.status === 'rejected'}
+        />
       </div>
     </>
   )
