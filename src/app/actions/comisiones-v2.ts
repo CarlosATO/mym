@@ -55,6 +55,19 @@ export type ComisionesV2SellerProfile = {
   seller_type: string;
 };
 
+export type ComisionesV2CustomerCommissionability = {
+  bsale_client_id: number;
+  name: string;
+  rut: string | null;
+  is_internal_account: boolean;
+  is_commissionable: boolean;
+};
+
+export type ComisionesV2CustomerCommissionabilityResult = {
+  results: ComisionesV2CustomerCommissionability[];
+  excluded: ComisionesV2CustomerCommissionability[];
+};
+
 export type ComisionesV2PaymentEligibility = SalesLineResolution & {
   customer_bsale_id: number | null;
   customer_name: string | null;
@@ -179,6 +192,37 @@ export type ComisionesV2SimulationLine = ComisionesV2PaymentEligibility & {
   tier_lower_bound?: number | null;
   tier_upper_bound?: number | null;
   commission_percent?: number | null;
+};
+
+export type ComisionesV2LineProfitability = {
+  company_id: string;
+  line_id: string;
+  document_id: string | null;
+  document_bsale_id: number | null;
+  document_detail_id: string;
+  document_detail_bsale_id: number | null;
+  variant_id: number | null;
+  document_type_id: number | null;
+  document_number: number | null;
+  emission_date: string | null;
+  quantity: number | null;
+  net_sales: number | null;
+  line_kind: "INVOICE" | "CREDIT_NOTE";
+  original_invoice_line_id: string | null;
+  original_invoice_bsale_id: number | null;
+  original_invoice_number: number | null;
+  original_invoice_detail_bsale_id: number | null;
+  selected_reception_id: number | null;
+  selected_reception_date: string | null;
+  unit_cost: number | null;
+  line_cost: number | null;
+  gross_profit: number | null;
+  gross_margin_pct: number | null;
+  cost_status: "COSTED" | "SIN_COSTO";
+  total_lines: number;
+  covered_lines: number;
+  uncovered_lines: number;
+  cost_coverage_pct: number;
 };
 
 export type ComisionesV2SettlementDraftResult = {
@@ -329,6 +373,168 @@ function comisionesService() {
       auth: { autoRefreshToken: false, persistSession: false },
     },
   );
+}
+
+function comercialService() {
+  return createSupabaseClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    serviceKey,
+    {
+      db: { schema: "comercial" },
+      auth: { autoRefreshToken: false, persistSession: false },
+    },
+  );
+}
+
+export async function listComisionesV2CustomerCommissionability(
+  query = "",
+): Promise<{
+  data: ComisionesV2CustomerCommissionabilityResult;
+  error?: string;
+}> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { data: { results: [], excluded: [] }, error: "No autorizado" };
+
+  const admin = portalAdmin();
+  const { data: permissions, error: permissionError } = await admin.rpc(
+    "get_user_permissions",
+    { p_user_id: user.id },
+  );
+  if (permissionError) {
+    logSupabaseError("Comisiones V2 customer permission validation error", permissionError);
+    return {
+      data: { results: [], excluded: [] },
+      error: "No se pudo validar el permiso de Comisiones V2.",
+    };
+  }
+  const permissionCodes = (permissions ?? []).map(
+    (permission: { permission_code: string }) => permission.permission_code,
+  );
+  if (
+    !permissionCodes.includes("system.admin") &&
+    !permissionCodes.includes("comisiones.v2.plans.manage")
+  ) {
+    return {
+      data: { results: [], excluded: [] },
+      error: "No tienes permiso para administrar clientes no comisionables.",
+    };
+  }
+  const companyId = await getActiveCompanyId(user);
+  if (!companyId) {
+    return {
+      data: { results: [], excluded: [] },
+      error: "Selecciona una compañía activa para administrar Comisiones V2.",
+    };
+  }
+
+  const db = comercialService();
+  const term = query.trim().replace(/[%,()]/g, " ").trim();
+  const rutTerm = term.replace(/[^0-9kK]/g, "") || term;
+  let customerQuery = db
+    .from("customers")
+    .select("bsale_client_id,business_name,fantasy_name,rut,rut_clean")
+    .eq("company_id", companyId)
+    .not("bsale_client_id", "is", null)
+    .order("business_name")
+    .limit(30);
+  if (term) {
+    customerQuery = customerQuery.or(
+      `business_name.ilike.%${term}%,fantasy_name.ilike.%${term}%,rut.ilike.%${term}%,rut_clean.ilike.%${rutTerm}%`,
+    );
+  } else {
+    customerQuery = customerQuery.limit(0);
+  }
+
+  const [{ data: customers, error: customerError }, { data: profiles, error: profileError }] =
+    await Promise.all([
+      customerQuery,
+      db
+        .from("customer_reporting_profiles")
+        .select("bsale_client_id,is_internal_account,is_commissionable")
+        .eq("company_id", companyId)
+        .eq("is_commissionable", false),
+    ]);
+  if (customerError || profileError) {
+    if (customerError) logSupabaseError("Comisiones V2 customer search error", customerError);
+    if (profileError) logSupabaseError("Comisiones V2 customer profile error", profileError);
+    return {
+      data: { results: [], excluded: [] },
+      error: "No se pudieron cargar los clientes.",
+    };
+  }
+
+  const profileRows = (profiles ?? []) as Array<{
+    bsale_client_id: number | string;
+    is_internal_account: boolean;
+    is_commissionable: boolean;
+  }>;
+  const profileByClient = new Map(
+    profileRows.map((profile) => [Number(profile.bsale_client_id), profile]),
+  );
+  const excludedIds = profileRows.map((profile) => Number(profile.bsale_client_id));
+  const { data: excludedCustomers, error: excludedError } = excludedIds.length
+    ? await db
+        .from("customers")
+        .select("bsale_client_id,business_name,fantasy_name,rut,rut_clean")
+        .eq("company_id", companyId)
+        .in("bsale_client_id", excludedIds)
+        .order("business_name")
+    : { data: [], error: null };
+  if (excludedError) throw excludedError;
+
+  const mapCustomer = (customer: {
+    bsale_client_id: number | string;
+    business_name: string | null;
+    fantasy_name: string | null;
+    rut: string | null;
+    rut_clean: string | null;
+  }): ComisionesV2CustomerCommissionability => {
+    const profile = profileByClient.get(Number(customer.bsale_client_id));
+    return {
+      bsale_client_id: Number(customer.bsale_client_id),
+      name: customer.business_name || customer.fantasy_name || "Cliente sin nombre",
+      rut: customer.rut || customer.rut_clean,
+      is_internal_account: profile?.is_internal_account === true,
+      is_commissionable: profile?.is_commissionable !== false,
+    };
+  };
+  return {
+    data: {
+      results: ((customers ?? []) as Parameters<typeof mapCustomer>[0][]).map(mapCustomer),
+      excluded: ((excludedCustomers ?? []) as Parameters<typeof mapCustomer>[0][]).map(mapCustomer),
+    },
+  };
+}
+
+export async function setComisionesV2CustomerCommissionability(input: {
+  bsaleClientId: number;
+  isCommissionable: boolean;
+}) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "No autorizado" };
+  const companyId = await getActiveCompanyId(user);
+  if (!companyId) return { error: "Selecciona una compañía activa." };
+  const clientId = Number(input.bsaleClientId);
+  if (!Number.isSafeInteger(clientId) || clientId <= 0) {
+    return { error: "Cliente inválido" };
+  }
+
+  const { data, error } = await supabase.schema("comercial").rpc(
+    "set_customer_commissionability",
+    {
+      p_company_id: companyId,
+      p_bsale_client_id: clientId,
+      p_is_commissionable: input.isCommissionable,
+    },
+  );
+  if (error) return { error: error.message };
+  return { data };
 }
 
 export async function listComisionesV2Lines(
@@ -1455,6 +1661,86 @@ export async function listComisionesV2PeriodSimulation(
     if (!data || data.length < pageSize) break;
   }
   return { data: rows, companyId };
+}
+
+export async function listComisionesV2LineProfitability(
+  from: string,
+  to: string,
+): Promise<{
+  data: ComisionesV2LineProfitability[];
+  companyId: string | null;
+  error?: string;
+}> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { data: [], companyId: null, error: "No autorizado" };
+
+  const admin = portalAdmin();
+  const { data: permissions, error: permissionError } = await admin.rpc(
+    "get_user_permissions",
+    { p_user_id: user.id },
+  );
+  if (permissionError) {
+    logSupabaseError(
+      "Comisiones V2 profitability permission validation error",
+      permissionError,
+    );
+    return {
+      data: [],
+      companyId: null,
+      error: "No se pudo validar el permiso de Comisiones V2.",
+    };
+  }
+
+  const permissionCodes = (permissions ?? []).map(
+    (permission: { permission_code: string }) => permission.permission_code,
+  );
+  if (
+    !permissionCodes.includes("comisiones.v2.read") &&
+    !permissionCodes.includes("system.admin")
+  )
+    return {
+      data: [],
+      companyId: null,
+      error: "No tienes permiso para consultar Comisiones V2.",
+    };
+
+  const companyId = await getActiveCompanyId(user);
+  if (!companyId)
+    return {
+      data: [],
+      companyId: null,
+      error: "Selecciona una compañía activa para consultar Comisiones V2.",
+    };
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(from) ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(to) ||
+    from > to
+  )
+    return { data: [], companyId, error: "El período de pago no es válido." };
+
+  const { data, error } = await supabase
+    .schema("comisiones")
+    .rpc("get_v2_lines_profitability", {
+      p_company_id: companyId,
+      p_period_from: from,
+      p_period_to: to,
+    });
+  if (error) {
+    logSupabaseError("Comisiones V2 profitability read error", error);
+    return {
+      data: [],
+      companyId,
+      error: "No fue posible cargar la rentabilidad histórica.",
+    };
+  }
+
+  return {
+    data: (data ?? []) as ComisionesV2LineProfitability[],
+    companyId,
+  };
 }
 
 export async function createComisionesV2SettlementDraft(input: {

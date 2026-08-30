@@ -30,6 +30,7 @@ import {
   getComisionesV2SettlementDetail,
   getComisionesV2SettlementDraftReadiness,
   issueComisionesV2SettlementDraft,
+  listComisionesV2LineProfitability,
   listComisionesV2FamilyPlanConflicts,
   listComisionesV2FamilyPlans,
   listComisionesV2PeriodSimulation,
@@ -47,6 +48,7 @@ import {
   type ComisionesV2FamilyPlanListItem,
   type ComisionesV2PlanRemovalResult,
   type ComisionesV2FamilyRate,
+  type ComisionesV2LineProfitability,
   type ComisionesV2SimulationLine,
   type ComisionesV2Supplier,
   type ComisionesV2SellerProfile,
@@ -73,15 +75,22 @@ import {
 } from "./comisiones-v2-exports";
 import {
   buildSupplierChartRows,
-  type SupplierChartRow,
 } from "./comisiones-v2-supplier-chart";
+import { ComisionesV2CustomerCommissionability } from "./comisiones-v2-customer-commissionability";
 
 const TABLE_KEY = "mym:table:comercial:comisiones-v2-inspection";
-type InspectionSection = "LINES" | "SELLERS" | "PLANS" | "DRAFTS" | "ISSUED";
+type InspectionSection =
+  | "LINES"
+  | "SELLERS"
+  | "PLANS"
+  | "CUSTOMERS"
+  | "DRAFTS"
+  | "ISSUED";
 
 function sectionFromQuery(value: string | null): InspectionSection {
   return value === "SELLERS" ||
     value === "PLANS" ||
+    value === "CUSTOMERS" ||
     value === "DRAFTS" ||
     value === "ISSUED"
     ? value
@@ -628,171 +637,294 @@ function buildExecutiveSupplierRows(rows: ComisionesV2SimulationLine[]) {
     .sort((a, b) => b.net - a.net);
 }
 
-function SupplierSalesChart({
+type CompactRankingRow = {
+  key: string;
+  label: string;
+  net: number;
+  commission: number;
+  effectivePercent?: number;
+};
+
+function buildCompactRanking(
+  rows: ComisionesV2SimulationLine[],
+  keyFor: (row: ComisionesV2SimulationLine) => string,
+  labelFor: (row: ComisionesV2SimulationLine) => string,
+) {
+  const grouped = new Map<string, CompactRankingRow>();
+  for (const row of rows) {
+    const key = keyFor(row);
+    const current = grouped.get(key) ?? {
+      key,
+      label: labelFor(row),
+      net: 0,
+      commission: 0,
+    };
+    current.net += Number(row.net_amount ?? 0);
+    current.commission += Number(row.commission_amount ?? 0);
+    grouped.set(key, current);
+  }
+  return [...grouped.values()]
+    .map((row) => ({
+      ...row,
+      effectivePercent: row.net ? (row.commission / row.net) * 100 : 0,
+    }))
+    .sort((a, b) => b.net - a.net || a.label.localeCompare(b.label, "es-CL"))
+    .slice(0, 5);
+}
+
+type ProfitabilityProductRow = {
+  key: string;
+  label: string;
+  netSales: number;
+  lineCost: number;
+  grossProfit: number;
+  grossMarginPct: number;
+  totalLines: number;
+  coveredLines: number;
+};
+
+function buildProfitabilityProductRows(
+  visibleRows: ComisionesV2SimulationLine[],
+  profitabilityRows: ComisionesV2LineProfitability[],
+) {
+  const profitabilityByLine = new Map(
+    profitabilityRows.map((row) => [row.line_id, row]),
+  );
+  const grouped = new Map<
+    string,
+    Omit<ProfitabilityProductRow, "grossMarginPct"> & { label: string }
+  >();
+
+  for (const line of visibleRows) {
+    const profitability = profitabilityByLine.get(line.detail_id);
+    const key = rankingProductKey(line);
+    const group = grouped.get(key) ?? {
+      key,
+      label: rankingProductLabel(line),
+      netSales: 0,
+      lineCost: 0,
+      grossProfit: 0,
+      totalLines: 0,
+      coveredLines: 0,
+    };
+    group.totalLines += 1;
+    if (profitability?.cost_status === "COSTED") {
+      group.coveredLines += 1;
+      group.netSales += Number(profitability.net_sales ?? 0);
+      group.lineCost += Number(profitability.line_cost ?? 0);
+      group.grossProfit += Number(profitability.gross_profit ?? 0);
+    }
+    grouped.set(key, group);
+  }
+
+  return [...grouped.values()]
+    .filter((row) => row.totalLines === row.coveredLines)
+    .map((row): ProfitabilityProductRow => ({
+      ...row,
+      grossMarginPct:
+        row.netSales !== 0 ? (row.grossProfit / row.netSales) * 100 : 0,
+    }))
+    .sort(
+      (a, b) =>
+        b.grossProfit - a.grossProfit ||
+        a.label.localeCompare(b.label, "es-CL"),
+    )
+    .slice(0, 5);
+}
+
+function profitabilityCoverage(
+  visibleRows: ComisionesV2SimulationLine[],
+  profitabilityRows: ComisionesV2LineProfitability[],
+) {
+  const profitabilityByLine = new Map(
+    profitabilityRows.map((row) => [row.line_id, row]),
+  );
+  const coveredLines = visibleRows.filter(
+    (row) => profitabilityByLine.get(row.detail_id)?.cost_status === "COSTED",
+  ).length;
+  return { coveredLines, totalLines: visibleRows.length };
+}
+
+function rankingProductKey(row: ComisionesV2SimulationLine) {
+  if (row.variant_id != null) return `variant:${row.variant_id}`;
+  if (row.product_id != null) return `product:${row.product_id}`;
+  return `sku:${row.variant_code_snapshot ?? row.current_sku ?? row.current_product_description ?? "Sin producto"}`;
+}
+
+function rankingProductLabel(row: ComisionesV2SimulationLine) {
+  const name = row.current_product_description ?? row.variant_description_snapshot ?? "Producto sin nombre";
+  const sku = row.variant_code_snapshot ?? row.current_sku;
+  return sku ? `${name} · ${sku}` : name;
+}
+
+function CompactRanking({
+  title,
   rows,
-  supplierFilter,
+  commission = true,
+}: {
+  title: string;
+  rows: CompactRankingRow[];
+  commission?: boolean;
+}) {
+  const maxNet = Math.max(...rows.map((row) => Math.abs(row.net)), 0);
+  return (
+    <div className="flex min-w-0 flex-col rounded-lg border border-theme-border/70 bg-theme-surface px-2.5 py-2 xl:min-h-[170px]">
+      <h2 className="mb-1.5 truncate text-xs font-bold text-theme-text">{title}</h2>
+      {rows.length === 0 ? (
+        <p className="text-[11px] text-theme-text-muted">No hay líneas para mostrar.</p>
+      ) : (
+        <div className="space-y-0.5">
+          {rows.map((row) => {
+            const width = maxNet > 0 ? Math.max((Math.abs(row.net) / maxNet) * 100, 1) : 0;
+            return (
+              <div key={row.key} className="min-w-0 text-[10px] leading-tight">
+                <div className="flex min-w-0 items-center justify-between gap-2">
+                  <span className="truncate font-semibold text-theme-text" title={row.label}>{row.label}</span>
+                  <span className="shrink-0 tabular-nums text-theme-text-muted">{formatCurrency(row.net)}</span>
+                </div>
+                <div className="mt-0.5 h-1 overflow-hidden rounded-full bg-theme-text/10">
+                  <div className="h-full rounded-full bg-theme-accent" style={{ width: `${width}%` }} />
+                </div>
+                {commission && (
+                  <div className="truncate tabular-nums text-theme-text-muted">
+                    Comisión {formatCurrency(row.commission)}{row.effectivePercent != null ? ` · ${percentLabel(row.effectivePercent)}` : ""}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProfitabilityRanking({
+  rows,
+  profitabilityRows,
+  profitabilityLoading,
+  profitabilityError,
 }: {
   rows: ComisionesV2SimulationLine[];
-  supplierFilter: string;
+  profitabilityRows: ComisionesV2LineProfitability[];
+  profitabilityLoading: boolean;
+  profitabilityError: string | null;
 }) {
-  const context = useMemo(() => {
-    if (supplierFilter.startsWith("SUPPLIER:")) {
-      const supplierId = supplierFilter.slice("SUPPLIER:".length);
-      return {
-        mode: "SUPPLIER" as const,
-        rows: rows.filter((row) => String(row.real_supplier_id) === supplierId),
-        label: undefined,
-      };
-    }
-    if (supplierFilter.startsWith("FAMILY:")) {
-      const familyId = supplierFilter.slice("FAMILY:".length);
-      const familyRows = rows.filter(
-        (row) => String(row.family_bsale_product_type_id ?? "") === familyId,
-      );
-      return {
-        mode: "FAMILY" as const,
-        rows: familyRows,
-        label: familyRows[0]?.family_name ?? "Familia seleccionada",
-      };
-    }
-    return { mode: "GENERAL" as const, rows, label: undefined };
-  }, [rows, supplierFilter]);
-  const chartRows = useMemo(
-    () => buildSupplierChartRows(context.rows).slice(0, 5),
-    [context.rows],
-  );
-  const supplierSummary = useMemo(
-    () => buildExecutiveSupplierRows(context.rows)[0],
-    [context.rows],
-  );
-  const allSupplierRows = useMemo(() => buildSupplierChartRows(rows), [rows]);
-  const remaining = Math.max(0, allSupplierRows.length - 5);
-  const remainingNet = allSupplierRows
-    .slice(5)
-    .reduce((sum, row) => sum + row.net, 0);
-  const remainingCommission = allSupplierRows
-    .slice(5)
-    .reduce((sum, row) => sum + row.commission, 0);
-  const maxNet = chartRows[0]?.net ?? 0;
-  const title =
-    context.mode === "GENERAL"
-      ? "Top 5 proveedores por venta neta"
-      : context.mode === "FAMILY"
-        ? `Top proveedores para ${context.label}`
-        : "Resumen del proveedor seleccionado";
-  return (
-    <section className="shrink-0 border-b border-theme-border/60 bg-theme-surface px-3 py-2 md:px-4">
-      <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-xs font-bold text-theme-text">{title}</h2>
-        <span className="text-[10px] text-theme-text-muted">
-          No cambia con los filtros de la tabla.
-        </span>
+  if (profitabilityLoading)
+    return (
+      <div className="flex min-w-0 flex-col rounded-lg border border-theme-border/70 bg-theme-surface px-2.5 py-2 xl:min-h-[170px]">
+        <h2 className="mb-1.5 truncate text-xs font-bold text-theme-text">
+          Top 5 productos por utilidad
+        </h2>
+        <p className="text-[11px] text-theme-text-muted">Calculando utilidad...</p>
       </div>
-      {context.mode === "SUPPLIER" && supplierSummary ? (
-        <SupplierContextSummary row={supplierSummary} />
-      ) : chartRows.length === 0 ? (
+    );
+  if (profitabilityError)
+    return (
+      <div className="flex min-w-0 flex-col rounded-lg border border-theme-border/70 bg-theme-surface px-2.5 py-2 xl:min-h-[170px]">
+        <h2 className="mb-1.5 truncate text-xs font-bold text-theme-text">
+          Top 5 productos por utilidad
+        </h2>
         <p className="text-[11px] text-theme-text-muted">
-          No hay líneas para este contexto.
+          No fue posible cargar rentabilidad
+        </p>
+      </div>
+    );
+
+  const productRows = buildProfitabilityProductRows(rows, profitabilityRows);
+  const coverage = profitabilityCoverage(rows, profitabilityRows);
+  const hasPartialCoverage = coverage.coveredLines < coverage.totalLines;
+  const maxProfit = Math.max(...productRows.map((row) => row.grossProfit), 0);
+  return (
+    <div className="flex min-w-0 flex-col rounded-lg border border-theme-border/70 bg-theme-surface px-2.5 py-2 xl:min-h-[170px]">
+      <h2 className="mb-1.5 truncate text-xs font-bold text-theme-text">
+        Top 5 productos por utilidad
+      </h2>
+      {productRows.length === 0 ? (
+        <p className="text-[11px] text-theme-text-muted">
+          Sin costo histórico suficiente para calcular el ranking
         </p>
       ) : (
         <div className="space-y-0.5">
-          {chartRows.map((row) => (
-            <SupplierSalesChartRow key={row.key} row={row} maxNet={maxNet} />
-          ))}
-          {context.mode === "GENERAL" && remaining > 0 && (
-            <p className="pt-0.5 text-[10px] tabular-nums text-theme-text-muted">
-              {remaining.toLocaleString("es-CL")} proveedores restantes · Neto{" "}
-              {formatCurrency(remainingNet)} · Comisión{" "}
-              {formatCurrency(remainingCommission)}
-            </p>
-          )}
+          {productRows.map((row) => {
+            const width =
+              maxProfit > 0
+                ? Math.max((row.grossProfit / maxProfit) * 100, 1)
+                : 0;
+            return (
+              <div key={row.key} className="min-w-0 text-[10px] leading-tight">
+                <div className="flex min-w-0 items-center justify-between gap-2">
+                  <span
+                    className="truncate font-semibold text-theme-text"
+                    title={row.label}
+                  >
+                    {row.label}
+                  </span>
+                  <span className="shrink-0 tabular-nums text-theme-text-muted">
+                    {formatCurrency(row.grossProfit)}
+                  </span>
+                </div>
+                <div className="mt-0.5 h-1 overflow-hidden rounded-full bg-theme-text/10">
+                  <div
+                    className="h-full rounded-full bg-theme-accent"
+                    style={{ width: `${width}%` }}
+                  />
+                </div>
+                <div className="truncate tabular-nums text-theme-text-muted">
+                  Margen {percentLabel(row.grossMarginPct)}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
+      {hasPartialCoverage && (
+        <p className="mt-auto pt-1 text-[10px] text-theme-text-muted">
+          Cobertura de costo: {coverage.coveredLines} de {coverage.totalLines} líneas
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SupplierSalesChart({
+  rows,
+  profitabilityRows,
+  profitabilityLoading,
+  profitabilityError,
+}: {
+  rows: ComisionesV2SimulationLine[];
+  profitabilityRows: ComisionesV2LineProfitability[];
+  profitabilityLoading: boolean;
+  profitabilityError: string | null;
+}) {
+  const supplierRows = buildSupplierChartRows(rows).slice(0, 5).map((row) => ({
+    key: row.key,
+    label: row.supplierName,
+    net: row.net,
+    commission: row.commission,
+    effectivePercent: row.effectivePercent,
+  }));
+  const customerRows = buildCompactRanking(
+    rows,
+    (row) => row.customer_bsale_id != null ? `customer:${row.customer_bsale_id}` : `name:${row.customer_name ?? "Sin cliente"}`,
+    (row) => row.customer_name ?? "Cliente sin nombre",
+  );
+  const productRows = buildCompactRanking(rows, rankingProductKey, rankingProductLabel);
+  return (
+    <section className="shrink-0 border-b border-theme-border/60 bg-theme-surface px-3 py-2 md:px-4">
+      <div className="grid min-w-0 grid-cols-1 items-stretch gap-2 md:grid-cols-2 xl:grid-cols-4">
+        <CompactRanking title="Top 5 proveedores por venta neta" rows={supplierRows} />
+        <CompactRanking title="Top 5 clientes" rows={customerRows} />
+        <CompactRanking title="Top 5 productos por venta" rows={productRows} />
+        <ProfitabilityRanking
+          rows={rows}
+          profitabilityRows={profitabilityRows}
+          profitabilityLoading={profitabilityLoading}
+          profitabilityError={profitabilityError}
+        />
+      </div>
     </section>
-  );
-}
-
-function SupplierContextSummary({
-  row,
-}: {
-  row: ExecutiveSupplierRow;
-}) {
-  return (
-    <div className="rounded-lg border border-theme-border bg-theme-text/[0.02] px-2.5 py-2">
-      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-        <span
-          className="truncate text-xs font-bold text-theme-text"
-          title={row.supplierName}
-        >
-          {row.supplierName}
-        </span>
-        <span className="rounded-full border border-theme-accent/25 bg-theme-accent/10 px-1.5 py-0.5 text-[9px] font-bold text-theme-accent">
-          {row.type}
-        </span>
-        <span
-          className="max-w-[220px] truncate rounded-full border border-theme-border bg-theme-surface px-1.5 py-0.5 text-[9px] text-theme-text-muted"
-          title={row.plan}
-        >
-          {row.plan}
-        </span>
-      </div>
-      <div className="mt-1.5 grid grid-cols-3 gap-1.5 sm:max-w-[640px]">
-        <SupplierContextMetric label="Venta neta" value={formatCurrency(row.net)} />
-        <SupplierContextMetric label="Comisión" value={formatCurrency(row.commission)} />
-        <SupplierContextMetric label="Tasa comisión" value={percentLabel(row.effectivePercent)} />
-      </div>
-      <p className="mt-1.5 truncate text-[10px] text-theme-text-muted" title={row.rule}>
-        <span className="font-semibold text-theme-text-muted/80">Regla / contexto:</span>{" "}
-        {row.rule}
-        {row.type === "Por Familia" && (
-          <> · {row.familyCount.toLocaleString("es-CL")} familias · % agregado {percentLabel(row.effectivePercent)}{row.noCommission > 0 ? ` · ${formatCurrency(row.noCommissionNet)} sin regla` : ""}</>
-        )}
-      </p>
-    </div>
-  );
-}
-
-function SupplierContextMetric({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="min-w-0 rounded-md border border-theme-border/70 bg-theme-surface px-2 py-1">
-      <p className="text-[9px] font-semibold uppercase tracking-wide text-theme-text-muted">
-        {label}
-      </p>
-      <p className="truncate text-[11px] font-bold tabular-nums text-theme-text" title={value}>
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function SupplierSalesChartRow({
-  row,
-  maxNet,
-}: {
-  row: SupplierChartRow;
-  maxNet: number;
-}) {
-  const width = maxNet > 0 ? Math.max((row.net / maxNet) * 100, row.net ? 1 : 0) : 0;
-  return (
-    <div className="grid min-w-0 grid-cols-[minmax(120px,0.8fr)_minmax(110px,2fr)] items-center gap-2 text-[10px]">
-      <span className="truncate font-semibold text-theme-text" title={row.supplierName}>
-        {row.supplierName}
-      </span>
-      <div className="min-w-0">
-        <div className="h-1.5 overflow-hidden rounded-full bg-theme-text/10" title={row.supplierName}>
-          <div className="h-full rounded-full bg-theme-accent" style={{ width: `${width}%` }} />
-        </div>
-        <div className="truncate tabular-nums text-theme-text-muted">
-          {formatCurrency(row.net)} · Comisión {formatCurrency(row.commission)} · {percentLabel(row.effectivePercent)}
-        </div>
-       </div>
-    </div>
   );
 }
 
@@ -1428,7 +1560,7 @@ export function ComisionesV2Inspection({
   const searchParams = useSearchParams();
   const section = sectionFromQuery(searchParams.get("section"));
   const [visitedSections, setVisitedSections] = useState<Set<InspectionSection>>(
-    () => new Set(["LINES", "SELLERS", "PLANS", "DRAFTS", "ISSUED"]),
+    () => new Set(["LINES", "SELLERS", "PLANS", "CUSTOMERS", "DRAFTS", "ISSUED"]),
   );
   const [initialPeriod] = useState(initialChileCycle);
   const [from, setFrom] = useState(initialPeriod.from);
@@ -1438,6 +1570,13 @@ export function ComisionesV2Inspection({
   const [allSimulationRows, setAllSimulationRows] = useState<
     ComisionesV2SimulationLine[]
   >([]);
+  const [allProfitabilityRows, setAllProfitabilityRows] = useState<
+    ComisionesV2LineProfitability[]
+  >([]);
+  const [profitabilityLoading, setProfitabilityLoading] = useState(false);
+  const [profitabilityError, setProfitabilityError] = useState<string | null>(
+    null,
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hasQueried, setHasQueried] = useState(false);
@@ -1465,10 +1604,12 @@ export function ComisionesV2Inspection({
   const [simulationRefreshNotice, setSimulationRefreshNotice] = useState<
     string | null
   >(null);
+  const simulationStaleRef = useRef(false);
   const [statusFilter, setStatusFilter] = useState<
     "NONE" | "SIN_REGLA" | "INCIDENCIAS"
   >("NONE");
   const [supplierFilter, setSupplierFilter] = useState("ALL");
+  const [customerFilter, setCustomerFilter] = useState("ALL");
   const [ruleFilter, setRuleFilter] = useState("ALL");
   const [percentFilter, setPercentFilter] = useState("ALL");
   const supplierFilterRef = useRef(supplierFilter);
@@ -1481,12 +1622,18 @@ export function ComisionesV2Inspection({
         companyId: string;
         from: string;
         to: string;
-        rows: ComisionesV2SimulationLine[];
-      }
+         rows: ComisionesV2SimulationLine[];
+         profitabilityRows: ComisionesV2LineProfitability[];
+         profitabilityError: string | null;
+         profitabilityLoaded: boolean;
+       }
     >(),
   );
   const activeCompanyRef = useRef<string | null>(null);
   const batchRequestSequence = useRef(0);
+  const batchInFlightRef = useRef(new Map<string, Promise<boolean>>());
+  const profitabilityInFlightRef = useRef(new Map<string, Promise<void>>());
+  const currentBatchKeyRef = useRef<string | null>(null);
   const selectedSellerRef = useRef<number | null>(null);
   const planRequestSequence = useRef(0);
   const [drafts, setDrafts] = useState<
@@ -1884,7 +2031,37 @@ export function ComisionesV2Inspection({
     );
     if (nextSection === "DRAFTS") void loadDrafts();
     if (nextSection === "ISSUED") void loadIssued();
+    if (
+      nextSection === "LINES" &&
+      simulationStaleRef.current &&
+      hasQueried &&
+      selectedSellerId != null &&
+      /^\d{4}-\d{2}-\d{2}$/.test(from) &&
+      /^\d{4}-\d{2}-\d{2}$/.test(to) &&
+      from <= to
+    ) {
+      simulationStaleRef.current = false;
+      void loadBatch(from, to, { force: true, silentError: true }).then(
+        (refreshed) => {
+          if (!refreshed) {
+            simulationStaleRef.current = true;
+          }
+        },
+      );
+    }
   }
+
+  const handleCommissionabilityChanged = useCallback(() => {
+    simulationStaleRef.current = true;
+    if (activeCompanyRef.current) {
+      batchCacheRef.current.delete(
+        `${activeCompanyRef.current}:${from}:${to}`,
+      );
+    }
+    setSimulationRefreshNotice(
+      "La consulta de Emisión E.P. quedó desactualizada y se recargará al volver.",
+    );
+  }, [from, to]);
 
   useEffect(() => {
     supplierFilterRef.current = supplierFilter;
@@ -1932,89 +2109,149 @@ export function ComisionesV2Inspection({
       setPercentFilter("ALL");
   }
 
+  const loadProfitability = useCallback(
+    async (companyId: string, periodFrom: string, periodTo: string) => {
+      const key = `${companyId}:${periodFrom}:${periodTo}`;
+      const existing = profitabilityInFlightRef.current.get(key);
+      if (existing) return existing;
+
+      const request = (async () => {
+        const result = await listComisionesV2LineProfitability(
+          periodFrom,
+          periodTo,
+        );
+        const cached = batchCacheRef.current.get(key);
+        if (cached) {
+          batchCacheRef.current.set(key, {
+            ...cached,
+            profitabilityRows: result.data,
+            profitabilityError: result.error ?? null,
+            profitabilityLoaded: true,
+          });
+        }
+        if (currentBatchKeyRef.current !== key) return;
+        setAllProfitabilityRows(result.data);
+        setProfitabilityError(result.error ?? null);
+        setProfitabilityLoading(false);
+      })().finally(() => {
+        profitabilityInFlightRef.current.delete(key);
+      });
+      profitabilityInFlightRef.current.set(key, request);
+      return request;
+    },
+    [],
+  );
+
   const loadBatch = useCallback(
-    async (
+    (
       periodFrom: string,
       periodTo: string,
       options?: { force?: boolean; silentError?: boolean },
     ): Promise<boolean> => {
-      if (
-        !/^\d{4}-\d{2}-\d{2}$/.test(periodFrom) ||
-        !/^\d{4}-\d{2}-\d{2}$/.test(periodTo) ||
-        periodFrom > periodTo
-      ) {
-        if (!options?.silentError) setError("El período de pago no es válido.");
-        return false;
-      }
-      const requestId = ++batchRequestSequence.current;
-      const knownKey = activeCompanyRef.current
-        ? `${activeCompanyRef.current}:${periodFrom}:${periodTo}`
-        : null;
-      if (options?.force && knownKey) batchCacheRef.current.delete(knownKey);
-      const cached =
-        !options?.force && knownKey
-          ? batchCacheRef.current.get(knownKey)
-          : undefined;
-      if (cached) {
-        setAllSimulationRows(cached.rows);
-        setLoading(false);
-        setHasQueried(true);
-        return true;
-      }
-      setLoading(true);
-      setHasQueried(false);
-      if (!options?.silentError) setError(null);
-      setAllSimulationRows([]);
-      const result = await listComisionesV2PeriodSimulation(
-        periodFrom,
-        periodTo,
-      );
-      if (requestId !== batchRequestSequence.current) return false;
-      setLoading(false);
-      if (result.error || !result.companyId) {
+      const inFlightKey = `${activeCompanyRef.current ?? "pending"}:${periodFrom}:${periodTo}`;
+      const existing = batchInFlightRef.current.get(inFlightKey);
+      if (existing) return existing;
+
+      const request = (async () => {
+        if (
+          !/^\d{4}-\d{2}-\d{2}$/.test(periodFrom) ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(periodTo) ||
+          periodFrom > periodTo
+        ) {
+          if (!options?.silentError)
+            setError("El período de pago no es válido.");
+          return false;
+        }
+        const requestId = ++batchRequestSequence.current;
+        const force = options?.force === true || simulationStaleRef.current;
+        const knownKey = activeCompanyRef.current
+          ? `${activeCompanyRef.current}:${periodFrom}:${periodTo}`
+          : null;
+        if (force && knownKey) batchCacheRef.current.delete(knownKey);
+        const cached =
+          !force && knownKey
+            ? batchCacheRef.current.get(knownKey)
+            : undefined;
+        if (cached) {
+          setAllSimulationRows(cached.rows);
+          setAllProfitabilityRows(cached.profitabilityRows);
+          setProfitabilityError(cached.profitabilityError);
+          setProfitabilityLoading(!cached.profitabilityLoaded);
+          setLoading(false);
+          setHasQueried(true);
+          currentBatchKeyRef.current = `${cached.companyId}:${periodFrom}:${periodTo}`;
+          if (!cached.profitabilityLoaded)
+            void loadProfitability(cached.companyId, periodFrom, periodTo);
+          return true;
+        }
+        currentBatchKeyRef.current = null;
+        setLoading(true);
+        setProfitabilityLoading(true);
+        setProfitabilityError(null);
         setHasQueried(false);
-        if (!options?.silentError)
-          setError(result.error ?? "No se pudo cargar la simulación batch.");
-        return false;
-      }
-      if (
-        activeCompanyRef.current &&
-        activeCompanyRef.current !== result.companyId
-      ) {
-        batchCacheRef.current.clear();
-        selectedSellerRef.current = null;
-        setSelectedSellerId(null);
-        setSellerProfiles([]);
-        setCanManage(false);
-        setCanIssue(false);
-        setPlanCache(null);
-        setPlanSuppliers(null);
-        setPlanError(null);
-        setDrafts(null);
-        setDraftDetail(null);
-        setSelectedDraftId(null);
-        setIssued(null);
-        setIssuedDetail(null);
-        setSelectedIssuedId(null);
-        setIssuedDetailError(null);
-        setIssuedPdfError(null);
-        setIssuedPdfPreview(null);
-      }
-      activeCompanyRef.current = result.companyId;
-      batchCacheRef.current.set(
-        `${result.companyId}:${periodFrom}:${periodTo}`,
-        {
+        if (!options?.silentError) setError(null);
+        setAllSimulationRows([]);
+        setAllProfitabilityRows([]);
+        const result = await listComisionesV2PeriodSimulation(
+          periodFrom,
+          periodTo,
+        );
+        if (requestId !== batchRequestSequence.current) return false;
+        setLoading(false);
+        if (result.error || !result.companyId) {
+          setHasQueried(false);
+          setProfitabilityLoading(false);
+          if (!options?.silentError)
+            setError(result.error ?? "No se pudo cargar la simulación batch.");
+          return false;
+        }
+        if (
+          activeCompanyRef.current &&
+          activeCompanyRef.current !== result.companyId
+        ) {
+          batchCacheRef.current.clear();
+          selectedSellerRef.current = null;
+          setSelectedSellerId(null);
+          setSellerProfiles([]);
+          setCanManage(false);
+          setCanIssue(false);
+          setPlanCache(null);
+          setPlanSuppliers(null);
+          setPlanError(null);
+          setDrafts(null);
+          setDraftDetail(null);
+          setSelectedDraftId(null);
+          setIssued(null);
+          setIssuedDetail(null);
+          setSelectedIssuedId(null);
+          setIssuedDetailError(null);
+          setIssuedPdfError(null);
+          setIssuedPdfPreview(null);
+        }
+        activeCompanyRef.current = result.companyId;
+        const batchKey = `${result.companyId}:${periodFrom}:${periodTo}`;
+        currentBatchKeyRef.current = batchKey;
+        batchCacheRef.current.set(batchKey, {
           companyId: result.companyId,
           from: periodFrom,
           to: periodTo,
           rows: result.data,
-        },
-      );
-      setAllSimulationRows(result.data);
-      setHasQueried(true);
-      return true;
+          profitabilityRows: [],
+          profitabilityError: null,
+          profitabilityLoaded: false,
+        });
+        setAllSimulationRows(result.data);
+        setHasQueried(true);
+        simulationStaleRef.current = false;
+        void loadProfitability(result.companyId, periodFrom, periodTo);
+        return true;
+      })().finally(() => {
+        batchInFlightRef.current.delete(inFlightKey);
+      });
+      batchInFlightRef.current.set(inFlightKey, request);
+      return request;
     },
-    [],
+    [loadProfitability],
   );
 
   const loadSellerProfiles = useCallback(async () => {
@@ -2160,11 +2397,17 @@ export function ComisionesV2Inspection({
       void Promise.all([
         loadBatch(initialPeriod.from, initialPeriod.to),
         loadSellerProfiles(),
-        loadPlanList(),
       ]);
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [initialPeriod, loadBatch, loadPlanList, loadSellerProfiles]);
+  }, [initialPeriod, loadBatch, loadSellerProfiles]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadPlanList();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadPlanList]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -2207,6 +2450,10 @@ export function ComisionesV2Inspection({
           supplierFilter.slice(7)
       )
         return false;
+      if (customerFilter !== "ALL") {
+        const customerId = customerFilter.slice("CUSTOMER:".length);
+        if (String(row.customer_bsale_id ?? "") !== customerId) return false;
+      }
       if (
         ruleFilter !== "ALL" &&
         (row.plan_code ?? row.simulation_status) !== ruleFilter
@@ -2285,6 +2532,7 @@ export function ComisionesV2Inspection({
     };
   }, [
     percentFilter,
+    customerFilter,
     ruleFilter,
     rows,
     search,
@@ -2293,6 +2541,48 @@ export function ComisionesV2Inspection({
     supplierFilter,
   ]);
   const { rows: visibleRows, summary } = inspectionResult;
+  const supplierFilterOptions = [
+    { value: "ALL", label: "Todos" },
+    ...Array.from(
+      new Map(
+        rows
+          .filter((row) => row.real_supplier_id)
+          .map((row) => [
+            `SUPPLIER:${row.real_supplier_id}`,
+            `Proveedor: ${row.real_supplier_business_name ?? "Sin proveedor"}`,
+          ]),
+      ).entries(),
+    )
+      .sort((a, b) => a[1].localeCompare(b[1]))
+      .map(([value, label]) => ({ value, label })),
+    ...Array.from(
+      new Map(
+        rows
+          .filter((row) => row.family_bsale_product_type_id != null)
+          .map((row) => [
+            `FAMILY:${row.family_bsale_product_type_id}`,
+            `Familia: ${row.family_name ?? "Sin Familia"}`,
+          ]),
+      ).entries(),
+    )
+      .sort((a, b) => a[1].localeCompare(b[1]))
+      .map(([value, label]) => ({ value, label })),
+  ];
+  const customerFilterOptions = [
+    { value: "ALL", label: "Todos" },
+    ...Array.from(
+      new Map(
+        rows
+          .filter((row) => row.customer_bsale_id != null)
+          .map((row) => [
+            `CUSTOMER:${row.customer_bsale_id}`,
+            row.customer_name ?? `Cliente #${row.customer_bsale_id}`,
+          ]),
+      ).entries(),
+    )
+      .sort((a, b) => a[1].localeCompare(b[1]))
+      .map(([value, label]) => ({ value, label })),
+  ];
 
   function column(id: string) {
     return COLUMNS.find((item) => item.id === id)!;
@@ -2436,6 +2726,17 @@ export function ComisionesV2Inspection({
                 <button
                   type="button"
                   role="tab"
+                  aria-selected={section === "CUSTOMERS"}
+                  onClick={() => selectSection("CUSTOMERS")}
+                  className={`rounded-md px-3 py-1.5 text-xs font-semibold ${section === "CUSTOMERS" ? "bg-theme-accent text-white" : "text-theme-text-muted hover:text-theme-text"}`}
+                >
+                  Clientes no comisionables
+                </button>
+              )}
+              {canManage && (
+                <button
+                  type="button"
+                  role="tab"
                   aria-selected={section === "DRAFTS"}
                   onClick={() => selectSection("DRAFTS")}
                   className={`rounded-md px-3 py-1.5 text-xs font-semibold ${section === "DRAFTS" ? "bg-theme-accent text-white" : "text-theme-text-muted hover:text-theme-text"}`}
@@ -2457,57 +2758,39 @@ export function ComisionesV2Inspection({
             </div>
           </div>
           {section === "LINES" && (
-            <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4 xl:grid-cols-8 xl:gap-1.5">
+            <div className="grid grid-cols-2 items-stretch gap-1.5 sm:grid-cols-4 xl:grid-cols-8 xl:gap-1.5 [&>*]:h-[68px] [&>*]:overflow-hidden">
               <Summary
                 label="Facturas"
-                value={selectedSellerId == null ? "—" : summary.invoices}
+                value={summary.invoices}
               />
               <Summary
                 label="Líneas"
-                value={selectedSellerId == null ? "—" : summary.lines}
+                value={summary.lines}
               />
               <Summary
                 label="Notas de crédito"
-                value={selectedSellerId == null ? "—" : summary.creditNotes}
-                secondary={
-                  selectedSellerId == null
-                    ? undefined
-                    : `Neto ${formatCurrency(summary.creditNotesNet)} · Comisión ${formatCurrency(summary.creditNotesCommission)}`
-                }
+                value={summary.creditNotes}
+                secondary={`Neto ${formatCurrency(summary.creditNotesNet)} · Comisión ${formatCurrency(summary.creditNotesCommission)}`}
               />
               <Summary
                 label="Neto"
-                value={
-                  selectedSellerId == null ? "—" : formatCurrency(summary.net)
-                }
+                value={formatCurrency(summary.net)}
                 wide
               />
               <Summary
                 label="Comisión"
-                value={
-                  selectedSellerId == null
-                    ? "—"
-                    : formatCurrency(summary.commission)
-                }
+                value={formatCurrency(summary.commission)}
                 wide
               />
               <Summary
                 label="Tasa comisión"
-                value={
-                  selectedSellerId == null
-                    ? "—"
-                    : percentLabel(
-                        summary.net
-                          ? (summary.commission / summary.net) * 100
-                          : 0,
-                      )
-                }
+                value={summary.net ? percentLabel((summary.commission / summary.net) * 100) : "—"}
               />
               <Summary
                 label="Sin regla"
-                value={selectedSellerId == null ? "—" : summary.noRule}
+                value={summary.noRule}
                 tone={
-                  selectedSellerId != null && summary.noRule ? "amber" : "green"
+                  summary.noRule ? "amber" : "green"
                 }
                 active={statusFilter === "SIN_REGLA"}
                 onClick={() =>
@@ -2518,13 +2801,9 @@ export function ComisionesV2Inspection({
               />
               <Summary
                 label="Incidencias"
-                value={
-                  selectedSellerId == null ? "—" : summary.commercialIncidents
-                }
+                value={summary.commercialIncidents}
                 tone={
-                  selectedSellerId != null && summary.commercialIncidents
-                    ? "red"
-                    : "green"
+                  summary.commercialIncidents ? "red" : "green"
                 }
                 active={statusFilter === "INCIDENCIAS"}
                 onClick={() =>
@@ -2539,7 +2818,12 @@ export function ComisionesV2Inspection({
       </div>
 
       {section === "LINES" && selectedSellerId != null && hasQueried && (
-        <SupplierSalesChart rows={rows} supplierFilter={supplierFilter} />
+       <SupplierSalesChart
+         rows={visibleRows}
+         profitabilityRows={allProfitabilityRows}
+         profitabilityLoading={profitabilityLoading}
+         profitabilityError={profitabilityError}
+       />
       )}
       {section === "LINES" ? (
         <div className="shrink-0 flex flex-wrap items-end gap-3 border-b border-theme-border/60 p-3 md:p-4">
@@ -2589,45 +2873,23 @@ export function ComisionesV2Inspection({
           </label>
           <label className="grid min-w-[190px] flex-[1_1_230px] gap-1 text-[11px] font-semibold text-theme-text-muted">
             Proveedor o familia
-            <select
+            <LocalCombobox
               value={supplierFilter}
-              onChange={(event) => setSupplierFilter(event.target.value)}
-              className="h-9 w-full rounded-lg border border-theme-border bg-theme-surface px-2 text-xs font-normal text-theme-text"
-            >
-              <option value="ALL">Todos</option>
-              {Array.from(
-                new Map(
-                  rows
-                    .filter((row) => row.real_supplier_id)
-                    .map((row) => [
-                      `SUPPLIER:${row.real_supplier_id}`,
-                      row.real_supplier_business_name ?? "Sin proveedor",
-                    ]),
-                ).entries(),
-              )
-                .sort((a, b) => a[1].localeCompare(b[1]))
-                .map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              {Array.from(
-                new Map(
-                  rows
-                    .filter((row) => row.family_bsale_product_type_id != null)
-                    .map((row) => [
-                      `FAMILY:${row.family_bsale_product_type_id}`,
-                      row.family_name ?? "Sin Familia",
-                    ]),
-                ).entries(),
-              )
-                .sort((a, b) => a[1].localeCompare(b[1]))
-                .map(([value, label]) => (
-                  <option key={value} value={value}>
-                    Familia: {label}
-                  </option>
-                ))}
-            </select>
+              onChange={setSupplierFilter}
+              options={supplierFilterOptions}
+              placeholder="Todos"
+              className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs font-normal text-theme-text"
+            />
+          </label>
+          <label className="grid min-w-[190px] flex-[1_1_230px] gap-1 text-[11px] font-semibold text-theme-text-muted">
+            Cliente
+            <LocalCombobox
+              value={customerFilter}
+              onChange={setCustomerFilter}
+              options={customerFilterOptions}
+              placeholder="Todos"
+              className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs font-normal text-theme-text"
+            />
           </label>
           <label className="grid shrink-0 gap-1 text-[11px] font-semibold text-theme-text-muted">
             Regla
@@ -2688,9 +2950,10 @@ export function ComisionesV2Inspection({
           <button
             type="button"
             onClick={() => {
-              setSearch("");
-              setSupplierFilter("ALL");
-              setRuleFilter("ALL");
+               setSearch("");
+               setSupplierFilter("ALL");
+               setCustomerFilter("ALL");
+               setRuleFilter("ALL");
               setPercentFilter("ALL");
               setStatusFilter("NONE");
             }}
@@ -2759,6 +3022,15 @@ export function ComisionesV2Inspection({
             profiles={sellerProfiles}
             bootstrapLoading={planLoading}
             bootstrapError={planError}
+          />
+        </div>
+      )}
+      {visitedSections.has("CUSTOMERS") && (
+        <div
+          className={section === "CUSTOMERS" ? "flex min-h-0 flex-1" : "hidden"}
+        >
+          <ComisionesV2CustomerCommissionability
+            onCommissionabilityChanged={handleCommissionabilityChanged}
           />
         </div>
       )}
