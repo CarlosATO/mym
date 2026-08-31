@@ -87,7 +87,7 @@ export async function generateRouteGuidePdfBlob(
   guide: RouteGuide,
   logoBase64?: string,
   secondLogoBase64?: string,
-  orientation: RouteGuidePdfOrientation = 'portrait',
+  orientation: RouteGuidePdfOrientation = 'landscape',
 ): Promise<Blob> {
   const doc = new jsPDF(orientation === 'landscape' ? 'l' : 'p', 'mm', 'a4')
   const pageWidth = doc.internal.pageSize.getWidth()
@@ -244,11 +244,13 @@ export async function generateRouteGuidePdfBlob(
   // TABLE
   const validItems = guide.items?.filter(i => !isEmptyRouteGuideRow(i)) || []
   
-  const tableHeaders = ['Factura', 'Cliente', 'Dirección / Ciudad', 'Monto', 'Condición de venta', 'Obs.']
-  const tableBody = validItems.map(item => [
+  const tableHeaders = ['#', 'Factura', 'Cliente', 'Dirección', 'Comuna', 'Monto', 'Forma Pago', 'Obs.']
+  const tableBody = validItems.map((item, index) => [
+    String(index + 1),
     item.invoice_number,
     item.customer_name,
-    `${item.customer_address?.trim() || '-'} / ${item.commune || '-'}`,
+    item.customer_address?.trim() || '-',
+    item.commune?.trim() || '-',
     formatRouteGuideLineAmount(item.amount),
     formatPaymentMethodLabel(item.payment_method_normalized, item.payment_method_original),
     item.notes || '',
@@ -257,8 +259,8 @@ export async function generateRouteGuidePdfBlob(
   const blockHeight = 55
   const blockStartY = pageHeight - margin - blockHeight
   const tableColumnWidths = orientation === 'landscape'
-    ? [24, 58, 72, 29, 48, 36]
-    : [22, 34, 38, 22, 34, 30]
+    ? [12, 22, 39, 57, 30, 29, 35, 43]
+    : [10, 18, 27, 37, 22, 20, 25, 21]
 
   const autoTableOptions = {
     head: [tableHeaders],
@@ -268,11 +270,13 @@ export async function generateRouteGuidePdfBlob(
     headStyles: { fillColor: [30, 58, 95], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8, halign: 'center', cellPadding: 2 },
     columnStyles: {
       0: { halign: 'center', cellWidth: tableColumnWidths[0] },
-      1: { cellWidth: tableColumnWidths[1] },
+      1: { halign: 'center', cellWidth: tableColumnWidths[1] },
       2: { cellWidth: tableColumnWidths[2] },
-      3: { halign: 'right', cellWidth: tableColumnWidths[3] },
-      4: { halign: 'center', cellWidth: tableColumnWidths[4] },
-      5: { cellWidth: tableColumnWidths[5] }
+      3: { cellWidth: tableColumnWidths[3] },
+      4: { cellWidth: tableColumnWidths[4] },
+      5: { halign: 'right', cellWidth: tableColumnWidths[5] },
+      6: { halign: 'center', cellWidth: tableColumnWidths[6] },
+      7: { cellWidth: tableColumnWidths[7] }
     },
     alternateRowStyles: { fillColor: [248, 250, 252] }
   } as Parameters<typeof autoTable>[1];
@@ -374,7 +378,7 @@ export async function generateRouteGuidePdfBlob(
 export async function downloadRouteGuidePdf(
   guide: RouteGuide,
   filename: string,
-  orientation: RouteGuidePdfOrientation = 'portrait',
+  orientation: RouteGuidePdfOrientation = 'landscape',
 ): Promise<void> {
   const blob = await generateRouteGuidePdfBlob(guide, undefined, undefined, orientation)
   const url = URL.createObjectURL(blob)
