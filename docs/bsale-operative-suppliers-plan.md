@@ -40,9 +40,8 @@ Este documento resume el progreso realizado hoy para la lógica de proveedores o
 - **Productos sin proveedor/mapping:** 2 (SKU `74920` y `CNTG0`). Ambos se importaron correctamente al catálogo pero sin mapping asociado.
 - **SKUs Duplicados:** 0 (Se garantizó la idempotencia completa).
 - **Protección de Entorno:** El script fue actualizado para abortar inmediatamente si intenta ejecutarse en un entorno o company_id distinto a DISTRIBUIDORA MYM (`d1000000-0000-0000-0000-000000000001`), y la lógica es ahora 100% idempotente (manual, evadiendo fallos por falta de unique constraints en PostgREST).
-- **Nota sobre Data Antigua (`d200`):** Existe data cargada bajo la compañía original PetGrup (`d2000000-0000-0000-0000-000000000002`). Esta data duplicada queda pendiente de limpieza futura y no genera impacto operativo en el entorno activo.
+- **Registro histórico:** Las referencias antiguas a la compañía de pruebas/PetGrup pertenecen al historial de auditoría. La migración `20260831144838_remove_legacy_empresa_2` garantiza que no exista en el estado operativo reconstruido.
 
 ## Próximos pasos recomendados
 1. Habilitar la función "Generar OC" (Órdenes de Compra) en la UI y verificar que los productos operativos estén disponibles.
-2. Definir si la limpieza de la compañía `d200` (PetGrup) se ejecutará mediante script directo o durante el cierre final de pruebas.
-3. Avanzar con la visualización y análisis de costos/ventas en Órdenes de Compra usando los nuevos mappings.
+2. Avanzar con la visualización y análisis de costos/ventas en Órdenes de Compra usando los nuevos mappings.

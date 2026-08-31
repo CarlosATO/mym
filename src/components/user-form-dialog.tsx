@@ -68,27 +68,30 @@ export function UserFormDialog({ open, onOpenChange, roles, userToEdit }: UserFo
     setError('')
     setTempPassword(null)
 
-    if (userToEdit) {
-      const result = await updateUser(userToEdit.id, formData)
-      if (result.error) {
-        setError(result.error)
-        setPending(false)
-        return
+    try {
+      if (userToEdit) {
+        const result = await updateUser(userToEdit.id, formData)
+        if (result.error) {
+          setError(result.error)
+          return
+        }
+        router.refresh()
+        onOpenChange(false)
+      } else {
+        const result = await createUser(formData)
+        if (result.error) {
+          setError(result.error)
+          return
+        }
+        setTempPassword(result.tempPassword!)
+        router.refresh()
       }
-      router.refresh()
-      onOpenChange(false)
-    } else {
-      const result = await createUser(formData)
-      if (result.error) {
-        setError(result.error)
-        setPending(false)
-        return
-      }
-      setTempPassword(result.tempPassword!)
-      router.refresh()
+    } catch (err) {
+      console.error(err)
+      setError(err instanceof Error && err.message ? err.message : 'Error inesperado al guardar')
+    } finally {
+      setPending(false)
     }
-
-    setPending(false)
   }
 
   async function handleCopyPassword() {

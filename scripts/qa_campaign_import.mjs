@@ -29,7 +29,6 @@ if (!SUPABASE_URL || !ANON || !SERVICE) {
 }
 
 const QA_COMPANY_ID = 'd1000000-0000-0000-0000-000000000001'
-const OTHER_COMPANY_ID = 'd2000000-0000-0000-0000-000000000002'
 const IMPORT_BUCKET = 'inventario-imports'
 const MIME_XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
@@ -40,6 +39,7 @@ const state = {
   createdAuthUsers: [],
   createdPortalUsers: [],
   createdAccessRows: [],
+  createdCompanies: [],
   createdProducts: [],
   createdSites: [],
   createdLocations: [],
@@ -196,6 +196,15 @@ async function createTempUser(email, password, roleName, companyRole) {
     values (${sqlString(userId)}::uuid, ${sqlString(QA_COMPANY_ID)}::uuid, ${sqlString(companyRole)}, true, true)`)
   state.createdAccessRows.push({ userId, companyId: QA_COMPANY_ID })
   return { userId, email, password }
+}
+
+async function createIsolationCompany() {
+  const rows = dbQuery(`insert into core.companies (business_name, trade_name, email, is_active)
+    values (${sqlString(`QA Isolation ${shortId()}`)}, 'QA Isolation', 'qa-isolation@example.com', true)
+    returning id::text as id`)
+  const companyId = rows[0].id
+  state.createdCompanies.push(companyId)
+  return companyId
 }
 
 async function signIn(email, password) {
@@ -394,6 +403,7 @@ async function cleanup() {
   if (state.createdSites.length > 0) dbQuery(`delete from inventarios.inventory_sites where id in (${state.createdSites.map(sqlString).join(',')})`)
   if (state.createdProducts.length > 0) dbQuery(`delete from adquisiciones.products where id in (${state.createdProducts.map(sqlString).join(',')})`)
   if (state.createdAccessRows.length > 0) dbQuery(`delete from core.user_company_access where user_id in (${state.createdAccessRows.map(r => sqlString(r.userId)).join(',')})`)
+  if (state.createdCompanies.length > 0) dbQuery(`delete from core.companies where id in (${state.createdCompanies.map(sqlString).join(',')})`)
 
   for (const userId of state.createdAuthUsers.reverse()) {
     try { await admin.auth.admin.deleteUser(userId) } catch {}
@@ -431,6 +441,7 @@ async function main() {
   const goodUser = await createTempUser(`qa-good-${Date.now()}@example.com`, 'QaGood123!Aa', 'SUPER_USUARIO', 'ADMIN')
   const limitedUser = await createTempUser(`qa-limited-${Date.now()}@example.com`, 'QaLimited123!Aa', 'FINANZAS', 'FINANZAS')
   state.tempUsers.push(goodUser, limitedUser)
+  const isolationCompanyId = await createIsolationCompany()
 
   const goodClient = await signIn(goodUser.email, goodUser.password)
   const goodInventarios = goodClient.schema('inventarios')
@@ -645,11 +656,11 @@ async function main() {
     }
   }
 
-  // J another company blocked
+  // J company without access blocked; use a disposable QA-only company.
   {
     try {
       dbQuery(asAuth(goodUser.userId, `select inventarios.create_campaign_stock_import(
-        ${sqlString(OTHER_COMPANY_ID)}::uuid,
+        ${sqlString(isolationCompanyId)}::uuid,
         ${sqlString(crypto.randomUUID())}::uuid,
         'TOTAL_CAMPAIGN',
         ${sqlString(new Date().toISOString())}::timestamptz,
