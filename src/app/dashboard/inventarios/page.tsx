@@ -8,6 +8,8 @@ import { InventoryEmptyState } from '@/modules/inventarios/components/inventory-
 import { InventoryStatusBadge } from '@/modules/inventarios/components/inventory-status-badge'
 import { InventoryErrorState } from '@/modules/inventarios/components/inventory-error-state'
 import { formatDateChile } from '@/modules/inventarios/lib/format'
+import { canPublishMobileApp, getActiveMobileRelease } from '@/app/actions/inventarios/mobile-app'
+import { InventoryMobileAppCard } from '@/modules/inventarios/components/inventory-mobile-app-card'
 
 function kpiPercent(value: number): string {
   return `${Math.round(value)}%`
@@ -15,6 +17,8 @@ function kpiPercent(value: number): string {
 
 export default async function InventariosResumenPage() {
   const { data, error, companyId } = await getActiveCompanyDashboardSummary()
+  const mobileRelease = await getActiveMobileRelease()
+  const canPublishMobile = await canPublishMobileApp()
 
   const kpis = data?.kpis
   const attention = data?.attention_sessions ?? []
@@ -101,6 +105,8 @@ export default async function InventariosResumenPage() {
           />
         </div>
       </section>
+
+      <InventoryMobileAppCard release={mobileRelease} canPublish={canPublishMobile} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Secciones que requieren atención */}
