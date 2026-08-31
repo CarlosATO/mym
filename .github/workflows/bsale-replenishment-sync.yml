@@ -2,7 +2,7 @@ name: Bsale Replenishment Sync
 
 on:
   schedule:
-    - cron: '17,47 * * * *'
+    - cron: '17 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -23,6 +23,19 @@ jobs:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           set -uo pipefail
+
+          if [ "${GITHUB_EVENT_NAME:-}" = "schedule" ]; then
+            local_day="$(TZ=America/Santiago date +%u)"
+            local_hour="$(TZ=America/Santiago date +%H)"
+            local_hour_number=$((10#$local_hour))
+            if [ "$local_day" -gt 6 ] || [ "$local_hour_number" -lt 8 ] || [ "$local_hour_number" -gt 20 ]; then
+              echo "Outside scheduled sync window in America/Santiago: day=$local_day hour=$local_hour"
+              exit 0
+            fi
+            echo "Within scheduled sync window in America/Santiago: day=$local_day hour=$local_hour"
+          else
+            echo "Manual workflow dispatch: bypassing scheduled time window"
+          fi
 
           if [ -z "$SYNC_URL" ]; then
             echo "Missing PRODUCTION_SYNC_URL"

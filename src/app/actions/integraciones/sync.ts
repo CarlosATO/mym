@@ -8,6 +8,7 @@ import { syncBsaleProductTypes } from '@/lib/integraciones/bsale-product-types-s
 import { syncBsaleProducts } from '@/lib/integraciones/bsale-products-sync'
 import { syncBsaleReceptions } from '@/lib/integraciones/bsale-receptions-sync'
 import { getSyncStatus as getStatus } from '@/lib/integraciones/sync-core'
+import { runReplenishmentBsaleSync } from '@/app/actions/integraciones/bsale-sync'
 import { createClient } from '@supabase/supabase-js'
 
 async function requireSuperUsuario() {
@@ -217,4 +218,43 @@ export async function getBsaleSalesSyncHealth(): Promise<BsaleSalesSyncHealth> {
     isFresh: lastSuccessAgeMinutes !== null && lastSuccessAgeMinutes <= 180,
     hasScheduledEvidence: (scheduledCountResult.count || 0) > 0,
   }
+}
+
+export type LatestBsaleSyncRun = {
+  id: string
+  status: string
+  trigger: string
+  started_at: string | null
+  completed_at: string | null
+  error_message: string | null
+}
+
+export async function getLatestBsaleSyncRun(): Promise<LatestBsaleSyncRun | null> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return null
+
+  const admin = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  )
+
+  const { data, error } = await admin.schema('integraciones')
+    .from('bsale_sync_runs')
+    .select('id, status, trigger, started_at, completed_at, error_message')
+    .eq('company_id', companyId)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) throw new Error(`Error leyendo última sincronización Bsale: ${error.message}`)
+  return data as LatestBsaleSyncRun | null
+}
+
+export async function forceSyncBsaleReplenishment() {
+  await requireSuperUsuario()
+  const companyId = await getActiveCompanyId()
+  if (!companyId) throw new Error('Empresa no activa')
+
+  return runReplenishmentBsaleSync(companyId, 'MANUAL')
 }

@@ -296,7 +296,68 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
       }
     }
 
-    const plannerResult = planUniqueSafeProductUpdates(toUpdateProducts, existingProducts)
+    // Bsale can reuse a SKU/barcode after deleting or replacing a variant. In
+    // that case the old local owner is not present in the complete Bsale
+    // variant snapshot and must release only the values Bsale reassigned.
+    // Keep this as an ordinary ordered update so the existing transactional
+    // RPC still protects the write and stale-state checks.
+    const incomingVariantIds = new Set(productsRecords.map(rec => String(rec.bsale_variant_id)))
+    type BsaleProductOwner = {
+      id: string
+      sku: string | null
+      barcode: string | null
+      description: string | null
+      bsale_variant_id?: string | number | null
+      bsale_product_state: string | null
+      bsale_variant_state: string | null
+      bsale_product_type_id: string | number | null
+      bsale_product_type_name: string | null
+      product_type: string | null
+      bsale_brand_id: string | number | null
+      bsale_brand_href: string | null
+      is_active: boolean
+      last_bsale_sync_at: string | null
+      company_id: string
+    }
+    const staleOwnerCleanup = new Map<string, BsaleProductOwner>()
+    const ownerBySku = new Map((existingProducts || []).filter(p => p.sku).map(p => [String(p.sku).trim().toUpperCase(), p]))
+    const ownerByBarcode = new Map((existingProducts || []).filter(p => p.barcode).map(p => [String(p.barcode).trim(), p]))
+
+    for (const rec of productsRecords) {
+      const release = (owner: BsaleProductOwner | undefined, field: 'sku' | 'barcode') => {
+        if (!owner || owner.id === existingMapByVariant.get(String(rec.bsale_variant_id))?.id) return
+        if (owner.bsale_variant_id && incomingVariantIds.has(String(owner.bsale_variant_id))) return
+
+        const cleanup = staleOwnerCleanup.get(owner.id) || {
+          id: owner.id,
+          sku: owner.sku,
+          barcode: owner.barcode,
+          description: owner.description,
+          bsale_product_state: owner.bsale_product_state,
+          bsale_variant_state: owner.bsale_variant_state,
+          bsale_product_type_id: owner.bsale_product_type_id,
+          bsale_product_type_name: owner.bsale_product_type_name,
+          product_type: owner.product_type,
+          bsale_brand_id: owner.bsale_brand_id,
+          bsale_brand_href: owner.bsale_brand_href,
+          is_active: false,
+          last_bsale_sync_at: new Date().toISOString(),
+          company_id: companyId,
+        }
+        cleanup[field] = field === 'sku'
+          ? `__BSALE_ORPHAN__${owner.bsale_variant_id || owner.id.slice(0, 8)}`
+          : null
+        staleOwnerCleanup.set(owner.id, cleanup)
+      }
+
+      if (rec.sku) release(ownerBySku.get(String(rec.sku).trim().toUpperCase()), 'sku')
+      if (rec.barcode) release(ownerByBarcode.get(String(rec.barcode).trim()), 'barcode')
+    }
+
+    const plannerResult = planUniqueSafeProductUpdates(
+      [...staleOwnerCleanup.values(), ...toUpdateProducts],
+      existingProducts,
+    )
 
     if (isDryRun) {
       stats.updatedCount = toUpdateProducts.length

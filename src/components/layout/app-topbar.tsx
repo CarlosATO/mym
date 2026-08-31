@@ -8,9 +8,9 @@ import { CompanySwitcher } from '@/components/company-switcher'
 import { ThemeSwitcher } from '@/components/theme-switcher'
 import { UserMenu } from '@/components/layout/user-menu'
 import { TopbarDate } from '@/components/layout/topbar-date'
+import { BsaleReplenishmentTopbarControl } from '@/components/integraciones/bsale-replenishment-topbar-control'
 import type { Profile } from '@/lib/types'
 import type { Company } from '@/app/actions/companies'
-import { cn } from '@/lib/utils'
 
 interface AppTopbarProps {
   profile: Profile & { roles: { name: string } }
@@ -107,6 +107,7 @@ export function AppTopbar({ profile, activeCompany, permissions, moduleName }: A
           )}
 
           <TopbarDate />
+          <BsaleReplenishmentTopbarControl isSuperUsuario={profile.roles?.name === 'SUPER_USUARIO'} />
           <CompanySwitcher />
           <div className="w-px h-4 bg-theme-border/50 shrink-0 mx-0.5" />
           <ThemeSwitcher />
