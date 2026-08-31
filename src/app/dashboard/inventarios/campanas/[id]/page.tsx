@@ -14,6 +14,7 @@ import { InventoryLogisticsReconciliation } from '@/modules/inventarios/componen
 import { formatDateChile } from '@/modules/inventarios/lib/format'
 import { getLatestCampaignStockImport, type CampaignStockImportDetail } from '@/app/actions/inventarios/imports'
 import { getActiveCompanyCampaignLogisticsReconciliation } from '@/app/actions/inventarios/logistics-reconciliation'
+import { InventoryClosedStamp } from '@/modules/inventarios/components/inventory-closed-stamp'
 
 const CAMPAIGN_TYPE_LABELS: Record<string, string> = {
   GENERAL: 'General',
@@ -93,7 +94,8 @@ export default async function InventariosCampanaDetallePage({ params, searchPara
         <span className="font-medium text-theme-text">Resumen del inventario</span>
       </nav>
 
-      <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-sm">
+      <section className="relative overflow-hidden rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-sm">
+        {campaign.status === 'APPROVED' && <InventoryClosedStamp className="-right-14 top-8 rotate-[-18deg] sm:right-6 sm:top-6" />}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
           <h1 className="text-lg font-bold text-theme-text">{campaign.name}</h1>
           <InventoryStatusBadge status={campaign.status} />

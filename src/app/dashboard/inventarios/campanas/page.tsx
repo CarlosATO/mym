@@ -6,6 +6,7 @@ import { InventoryStatusBadge } from '@/modules/inventarios/components/inventory
 import { InventoryEmptyState } from '@/modules/inventarios/components/inventory-empty-state'
 import { InventoryErrorState } from '@/modules/inventarios/components/inventory-error-state'
 import { formatDateChile } from '@/modules/inventarios/lib/format'
+import { InventoryClosedStamp } from '@/modules/inventarios/components/inventory-closed-stamp'
 
 function campaignTypeLabel(type: string): string {
   if (type === 'GENERAL') return 'General'
@@ -65,13 +66,14 @@ export default async function InventariosCampanasPage() {
              <Link
                key={campaign.id}
                href={`/dashboard/inventarios/campanas/${campaign.id}`}
-               className={`group rounded-xl border p-3 shadow-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-theme-accent ${
+                className={`group relative overflow-hidden rounded-xl border p-3 shadow-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-theme-accent ${
                  isOperationalInventory(campaign.status)
                    ? 'border-sky-500/45 bg-sky-500/5 shadow-sky-500/10 hover:border-sky-500/70 hover:bg-sky-500/10'
                    : 'border-theme-border bg-theme-surface hover:border-theme-accent/50'
                }`}
-             >
-              <div className="flex items-start justify-between gap-2">
+              >
+                {campaign.status === 'APPROVED' && <InventoryClosedStamp className="-right-16 top-7 rotate-[-18deg]" />}
+               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold text-theme-text">{campaign.name}</p>
                   <p className="mt-0.5 text-xs text-theme-text-muted">
