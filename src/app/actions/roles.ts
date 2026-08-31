@@ -20,6 +20,24 @@ const hiddenPermCodes = ['dashboard.view', 'system.admin', 'modules.view', 'modu
 
 const admin = createAdminClient
 
+async function requireRoleManagementAccess() {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return null
+
+  const { data: canAssign, error: assignError } = await supabase.rpc('has_permission', {
+    p_permission_code: 'roles.assign',
+  })
+  if (!assignError && canAssign) return { supabase, user }
+
+  const { data: isSystemAdmin, error: adminError } = await supabase.rpc('has_permission', {
+    p_permission_code: 'system.admin',
+  })
+  if (!adminError && isSystemAdmin) return { supabase, user }
+
+  return null
+}
+
 export async function getRolesWithDetails(): Promise<RoleWithDetails[]> {
   const a = admin()
 
@@ -59,9 +77,9 @@ export async function getRolesWithDetails(): Promise<RoleWithDetails[]> {
 }
 
 export async function createRole(formData: FormData) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'No autorizado' }
+  const access = await requireRoleManagementAccess()
+  if (!access) return { error: 'No tienes autorización para gestionar roles' }
+  const { user } = access
 
   const rawName = (formData.get('name') as string ?? '').trim().toUpperCase().replace(/\s+/g, '_')
   if (!rawName) return { error: 'El nombre del rol es obligatorio' }
@@ -82,9 +100,8 @@ export async function createRole(formData: FormData) {
 }
 
 export async function updateRole(roleId: string, formData: FormData) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'No autorizado' }
+  const access = await requireRoleManagementAccess()
+  if (!access) return { error: 'No tienes autorización para gestionar roles' }
 
   const a = admin()
 
@@ -110,14 +127,14 @@ export async function updateRole(roleId: string, formData: FormData) {
 }
 
 export async function deactivateRole(roleId: string) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'No autorizado' }
+  const access = await requireRoleManagementAccess()
+  if (!access) return { error: 'No tienes autorización para gestionar roles' }
 
   const a = admin()
 
   const { data: role } = await a.from('roles').select('name, is_system, is_active').eq('id', roleId).single()
   if (!role) return { error: 'Rol no encontrado' }
+  if (role.name === 'SUPER_USUARIO') return { error: 'No puedes desactivar SUPER_USUARIO' }
 
   const { count: activeUsers } = await a
     .from('users').select('*', { count: 'exact', head: true })
@@ -133,9 +150,8 @@ export async function deactivateRole(roleId: string) {
 }
 
 export async function updateRoleDescription(roleId: string, description: string) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'No autorizado' }
+  const access = await requireRoleManagementAccess()
+  if (!access) return { error: 'No tienes autorización para gestionar roles' }
 
   const a = admin()
   const { error } = await a.from('roles').update({ description }).eq('id', roleId)
@@ -150,9 +166,9 @@ export async function getAllPermissions() {
 }
 
 export async function assignPermissionToRole(roleId: string, permissionId: string) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'No autorizado' }
+  const access = await requireRoleManagementAccess()
+  if (!access) return { error: 'No tienes autorización para gestionar roles' }
+  const { user } = access
 
   const a = admin()
   const { data: role } = await a.from('roles').select('name').eq('id', roleId).single()
@@ -164,20 +180,14 @@ export async function assignPermissionToRole(roleId: string, permissionId: strin
 }
 
 export async function removePermissionFromRole(roleId: string, permissionId: string) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'No autorizado' }
+  const access = await requireRoleManagementAccess()
+  if (!access) return { error: 'No tienes autorización para gestionar roles' }
 
   const a = admin()
   const { data: role } = await a.from('roles').select('name').eq('id', roleId).single()
   if (!role) return { error: 'Rol no encontrado' }
 
-  if (role.name === 'SUPER_USUARIO') {
-    const { data: perm } = await a.from('permissions').select('code').eq('id', permissionId).single()
-    if (perm && ['system.admin', 'usuarios.view', 'usuarios.create', 'usuarios.update', 'usuarios.deactivate', 'roles.view', 'roles.assign', 'modules.view', 'modules.manage', 'audit.view', 'security.view'].includes(perm.code)) {
-      return { error: 'No puedes quitar este permiso a SUPER_USUARIO' }
-    }
-  }
+  if (role.name === 'SUPER_USUARIO') return { error: 'No puedes quitar permisos a SUPER_USUARIO' }
 
   const { error } = await a.from('role_permissions').delete().eq('role_id', roleId).eq('permission_id', permissionId)
   if (error) return { error: error.message }

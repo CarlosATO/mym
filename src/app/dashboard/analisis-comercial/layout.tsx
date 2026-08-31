@@ -12,7 +12,7 @@ export default async function Layout({ children }: { children: React.ReactNode }
   const admin = createAdminClient()
   const { data: permissions } = await admin.rpc('get_user_permissions', { p_user_id: user.id })
   const permissionCodes: string[] = (permissions ?? []).map((permission: { permission_code: string }) => permission.permission_code)
-  if (!permissionCodes.includes('module.comercial.view') && !permissionCodes.includes('system.admin')) {
+  if (!permissionCodes.includes('module.analisis-comercial.view') && !permissionCodes.includes('system.admin')) {
     return <AccessDenied />
   }
 

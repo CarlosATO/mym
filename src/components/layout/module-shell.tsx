@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react'
 import { Menu } from 'lucide-react'
 import { getActiveCompany, type Company } from '@/app/actions/companies'
-import { AppTopbar } from '@/components/layout/app-topbar'
 import { cn } from '@/lib/utils'
 import { ModuleSidebar } from './module-sidebar'
 import type { BreadcrumbValue, ModuleIdentity, ModuleNavigation, NavigationLocation, SurfaceMode } from './module-shell-types'
@@ -66,6 +65,13 @@ export function ModuleShell({
   const resolvedBreadcrumb = typeof breadcrumb === 'function' ? breadcrumb(location) : breadcrumb
   const activeCompany = providedActiveCompany === undefined ? loadedActiveCompany : providedActiveCompany
 
+  // Notifica al AppTopbar persistente (en DashboardLayoutClient) cuánto padding aplicar
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent('mym:sidebar-change', { detail: { collapsed: effectiveCollapsed } })
+    )
+  }, [effectiveCollapsed])
+
   function toggleCollapsed() {
     setCollapsed(value => {
       const next = !value
@@ -78,14 +84,6 @@ export function ModuleShell({
 
   return (
     <div className="min-h-screen bg-theme-bg text-foreground">
-      <AppTopbar
-        profile={profile as never}
-        activeCompany={activeCompany}
-        permissions={permissions}
-        showPortalLink={showPortalLink}
-        variant={topbarVariant}
-        sidebarMode={effectiveCollapsed ? 'compact' : 'expanded'}
-      />
 
       {mobileOpen && <button aria-label="Cerrar navegación" className="fixed inset-0 z-30 bg-theme-sidebar-bg/70 md:hidden" onClick={() => setMobileOpen(false)} />}
 

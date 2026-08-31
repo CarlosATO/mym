@@ -1,6 +1,7 @@
 'use server'
 
 import { getActiveCompanyId } from '@/app/actions/companies'
+import { requirePortalSystemAdmin } from '@/app/actions/portal/authorization'
 import { getPortalPeriod, type PortalPeriodMode } from '@/app/actions/portal/periods'
 import { createClient } from '@/lib/supabase/server'
 
@@ -25,6 +26,7 @@ type SalesDocumentRow = {
 }
 
 export async function getPortalSales(mode: PortalPeriodMode = 'CALENDAR_MONTH'): Promise<PortalSales> {
+  await requirePortalSystemAdmin()
   const companyId = await getActiveCompanyId()
   if (!companyId) throw new Error('No se encontró empresa activa para el usuario.')
 

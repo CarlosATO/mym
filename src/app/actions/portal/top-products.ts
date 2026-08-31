@@ -1,6 +1,7 @@
 'use server'
 
 import { getActiveCompanyId } from '@/app/actions/companies'
+import { requirePortalSystemAdmin } from '@/app/actions/portal/authorization'
 import { todayInSantiago } from '@/lib/datetime'
 import { createClient } from '@/lib/supabase/server'
 
@@ -42,6 +43,7 @@ type ProductRow = {
 }
 
 export async function getPortalTopProducts(): Promise<PortalTopProduct[]> {
+  await requirePortalSystemAdmin()
   const companyId = await getActiveCompanyId()
   if (!companyId) throw new Error('No se encontró empresa activa para el usuario.')
 

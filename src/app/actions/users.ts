@@ -4,6 +4,10 @@ import { createClient } from '@/lib/supabase/server'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { createAdminClient } from '@/lib/supabase/admin'
 
+function normalizePersonName(value: string) {
+  return value.trim().replace(/\s+/g, ' ').toUpperCase()
+}
+
 export async function getUsers() {
   const admin = createAdminClient()
   const { data } = await admin
@@ -26,8 +30,8 @@ export async function createUser(formData: FormData) {
   if (!currentUser) return { error: 'No autorizado' }
 
   const email = formData.get('email') as string
-  const nombre = formData.get('nombre') as string
-  const apellido = formData.get('apellido') as string
+  const nombre = normalizePersonName((formData.get('nombre') as string) || '')
+  const apellido = normalizePersonName((formData.get('apellido') as string) || '')
   const roleId = formData.get('roleId') as string
   const companyIdsRaw = formData.get('companyIds') as string
   const companyIds: string[] = companyIdsRaw ? JSON.parse(companyIdsRaw) : []
@@ -96,6 +100,46 @@ export async function createUser(formData: FormData) {
   })
 
   return { tempPassword, userId: authData.user.id }
+}
+
+export async function updateMyProfile(formData: FormData) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado' }
+
+  const readText = (name: string) => {
+    const value = formData.get(name)
+    return typeof value === 'string' ? value.trim() : ''
+  }
+
+  const nombre = normalizePersonName(readText('nombre'))
+  const apellido = normalizePersonName(readText('apellido'))
+  const telefonoValue = readText('telefono')
+  const telefono = telefonoValue || null
+
+  if (!nombre) return { error: 'El nombre es obligatorio' }
+  if (nombre.length > 100) return { error: 'El nombre no puede superar los 100 caracteres' }
+  if (!apellido) return { error: 'El apellido es obligatorio' }
+  if (apellido.length > 100) return { error: 'El apellido no puede superar los 100 caracteres' }
+  if (telefonoValue.length > 20) return { error: 'El teléfono no puede superar los 20 caracteres' }
+
+  const { data: profile, error: profileError } = await supabase
+    .from('users')
+    .select('id, is_active, deleted_at')
+    .eq('id', user.id)
+    .maybeSingle()
+
+  if (profileError) return { error: 'No se pudo verificar el perfil' }
+  if (!profile) return { error: 'Perfil no encontrado' }
+  if (!profile.is_active || profile.deleted_at) return { error: 'El perfil no está activo' }
+
+  const { error } = await supabase
+    .from('users')
+    .update({ nombre, apellido, telefono })
+    .eq('id', user.id)
+
+  if (error) return { error: 'No se pudo actualizar el perfil' }
+  return { success: true }
 }
 
 export async function updateUser(userId: string, formData: FormData) {
@@ -244,7 +288,7 @@ export async function getCurrentProfile() {
   const admin = createAdminClient()
   const { data } = await admin
     .from('users')
-    .select('*')
+    .select('*, roles:role_id(name, description)')
     .eq('id', user.id)
     .maybeSingle()
 

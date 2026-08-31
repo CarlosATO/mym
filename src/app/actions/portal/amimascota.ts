@@ -1,6 +1,7 @@
 'use server'
 
 import { getActiveCompanyId } from '@/app/actions/companies'
+import { requirePortalSystemAdmin } from '@/app/actions/portal/authorization'
 import { todayInSantiago } from '@/lib/datetime'
 import { createClient } from '@/lib/supabase/server'
 import { netAmountForGross, type PortalDocumentMoney } from '@/app/actions/portal/net-monetary'
@@ -34,6 +35,7 @@ type ReceivablesRow = {
 type DocumentMoneyRow = PortalDocumentMoney & { bsale_id: number | string }
 
 export async function getPortalAmimascota(): Promise<PortalAmimascotaKpis> {
+  await requirePortalSystemAdmin()
   const companyId = await getActiveCompanyId()
   if (!companyId) throw new Error('No se encontró empresa activa para el usuario.')
 

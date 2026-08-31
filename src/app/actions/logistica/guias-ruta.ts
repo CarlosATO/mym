@@ -4,6 +4,7 @@ import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 
 import { RouteGuide, CatalogOptions, RoutePersonnelType, RouteGuideProfitabilityV1 } from '@/modules/logistica/guias-ruta/types';
+import { requirePortalSystemAdmin } from '@/app/actions/portal/authorization';
 import { getActiveCompanyId } from '@/app/actions/companies';
 import { syncBsaleDocumentsForRouteGuide } from '@/app/actions/integraciones/bsale-sync';
 
@@ -115,6 +116,7 @@ export async function getRouteGuides(filters?: { status?: 'ALL' | 'DRAFT' | 'DIS
 }
 
 export async function getPortalLatestRouteGuides(): Promise<PortalRouteGuide[]> {
+  await requirePortalSystemAdmin();
   const companyId = await getActiveCompanyId();
   if (!companyId) throw new Error('No se encontró empresa activa para el usuario.');
 

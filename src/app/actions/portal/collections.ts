@@ -1,6 +1,7 @@
 'use server'
 
 import { getActiveCompanyId } from '@/app/actions/companies'
+import { requirePortalSystemAdmin } from '@/app/actions/portal/authorization'
 import { createClient } from '@/lib/supabase/server'
 import { netAmountForGross, type PortalDocumentMoney } from '@/app/actions/portal/net-monetary'
 import { getPortalPeriod, type PortalPeriodMode } from '@/app/actions/portal/periods'
@@ -36,6 +37,7 @@ type ReceivableDocumentRow = {
 type DocumentMoneyRow = PortalDocumentMoney & { bsale_id: number | string }
 
 async function getPortalCollectionsForModes(modes: PortalPeriodMode[]): Promise<PortalCollectionsByMode> {
+  await requirePortalSystemAdmin()
   const companyId = await getActiveCompanyId()
   if (!companyId) throw new Error('No se encontró empresa activa para el usuario.')
 

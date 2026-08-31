@@ -104,12 +104,83 @@ export async function changePassword(formData: FormData) {
     p_user_id: user.id,
   })
 
-  await supabase
-    .from('users')
-    .update({ must_change_password: false })
-    .eq('id', user.id)
+  const { error: profileError } = await admin.rpc('complete_forced_password_change', {
+    p_user_id: user.id,
+  })
+  if (profileError) return { error: 'No se pudo completar el cambio de contraseña' }
 
   redirect('/dashboard')
+}
+
+export async function changeOwnPassword(formData: FormData) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Sesión no encontrada' }
+
+  const readPassword = (name: string) => {
+    const value = formData.get(name)
+    return typeof value === 'string' ? value : ''
+  }
+
+  const currentPassword = readPassword('currentPassword')
+  const newPassword = readPassword('newPassword')
+  const confirmPassword = readPassword('confirmPassword')
+
+  if (!currentPassword || !newPassword || !confirmPassword) {
+    return { error: 'Todos los campos de contraseña son obligatorios' }
+  }
+
+  if (newPassword !== confirmPassword) {
+    return { error: 'Las contraseñas nuevas no coinciden' }
+  }
+
+  if (newPassword.length < 6) {
+    return { error: 'La contraseña debe tener al menos 6 caracteres' }
+  }
+
+  if (newPassword === currentPassword) {
+    return { error: 'La nueva contraseña debe ser diferente a la actual' }
+  }
+
+  if (!user.email) return { error: 'No se pudo verificar la identidad de la sesión' }
+
+  const { data: reauthenticated, error: reauthenticationError } = await supabase.auth.signInWithPassword({
+    email: user.email,
+    password: currentPassword,
+  })
+
+  if (reauthenticationError || reauthenticated.user?.id !== user.id) {
+    const admin = createAdminClient()
+    await admin.rpc('log_security_event', {
+      p_event_type: 'PASSWORD_CHANGE_VOLUNTARY_FAILED',
+      p_success: false,
+      p_user_id: user.id,
+      p_email: user.email,
+    })
+    return { error: 'La contraseña actual no es válida' }
+  }
+
+  const { error: updateError } = await supabase.auth.updateUser({ password: newPassword })
+  if (updateError) {
+    const admin = createAdminClient()
+    await admin.rpc('log_security_event', {
+      p_event_type: 'PASSWORD_CHANGE_VOLUNTARY_FAILED',
+      p_success: false,
+      p_user_id: user.id,
+      p_email: user.email,
+    })
+    return { error: 'No se pudo cambiar la contraseña' }
+  }
+
+  const admin = createAdminClient()
+  await admin.rpc('log_security_event', {
+    p_event_type: 'PASSWORD_CHANGE_VOLUNTARY',
+    p_success: true,
+    p_user_id: user.id,
+    p_email: user.email,
+  })
+
+  return { success: true }
 }
 
 export async function logout() {

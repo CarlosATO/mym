@@ -2,32 +2,16 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import {
-  getRolesWithDetails, updateRoleDescription, getAllPermissions,
+  getRolesWithDetails, getAllPermissions,
   assignPermissionToRole, removePermissionFromRole,
   createRole, updateRole, deactivateRole,
   type RoleWithDetails,
 } from '@/app/actions/roles'
 
 interface PermWithModule {
-  id: string; code: string; name: string
+  id: string; code: string; name: string; description: string | null
   modules: { code: string | null; name: string | null } | null
 }
-
-const permLabels: Record<string, string> = {
-  'system.admin': 'Administrador global',
-  'usuarios.view': 'Ver usuarios', 'usuarios.create': 'Crear usuarios',
-  'usuarios.update': 'Actualizar usuarios', 'usuarios.deactivate': 'Desactivar usuarios',
-  'roles.view': 'Ver roles', 'roles.assign': 'Asignar roles',
-  'modules.view': 'Ver módulos', 'modules.manage': 'Gestionar módulos',
-  'audit.view': 'Ver auditoría', 'security.view': 'Ver seguridad',
-  'module.adquisiciones.view': 'Ver Adquisiciones',
-}
-
-const adminPermCodes = [
-  'usuarios.view', 'usuarios.create', 'usuarios.update', 'usuarios.deactivate',
-  'roles.view', 'roles.assign', 'audit.view', 'security.view',
-]
-const hiddenPermCodes = ['dashboard.view', 'system.admin', 'modules.view', 'modules.manage']
 
 interface RolesViewProps {
   userPermissions: string[]
@@ -58,13 +42,15 @@ export function RolesView({ userPermissions }: RolesViewProps) {
     setLoading(false)
   }, [])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    const timer = setTimeout(() => { void load() }, 0)
+    return () => clearTimeout(timer)
+  }, [load])
 
   function msg(text: string) { setMessage(text); setTimeout(() => setMessage(''), 3500) }
 
-  // Función para obtener la cantidad real de permisos visibles en el frontend
   const getVisiblePermsCount = useCallback((permissions: { code: string }[]) => {
-    return permissions.filter(p => !hiddenPermCodes.includes(p.code)).length
+    return permissions.length
   }, [])
 
   function localAddPerm(permId: string) {
@@ -143,11 +129,9 @@ export function RolesView({ userPermissions }: RolesViewProps) {
     setEditDesc(role.description ?? '')
   }
 
-  const operationalPerms = allPerms.filter(p => p.code.startsWith('module.') && !hiddenPermCodes.includes(p.code))
   const moduleGroups: { label: string; perms: PermWithModule[] }[] = []
-  for (const p of operationalPerms) {
-    const moduleName = p.code.replace(/^module\./, '').replace(/\.view$/, '')
-    const label = moduleName.charAt(0).toUpperCase() + moduleName.slice(1)
+  for (const p of allPerms) {
+    const label = p.modules?.name || p.modules?.code || 'Sin módulo'
     let group = moduleGroups.find(g => g.label === label)
     if (!group) { group = { label, perms: [] }; moduleGroups.push(group) }
     group.perms.push(p)
@@ -162,22 +146,26 @@ export function RolesView({ userPermissions }: RolesViewProps) {
     return (
       <div className="space-y-2.5">
         <h5 className="text-[11px] font-bold text-theme-accent uppercase tracking-widest">{title}</h5>
-        <div className="flex flex-wrap gap-2">
+        <div className="grid gap-2 sm:grid-cols-2">
           {visible.map(p => {
             const isAssigned = rp.some(r => r.id === p.id)
             const isProtected = selectedRole?.name === 'SUPER_USUARIO' && isAssigned
-            const label = permLabels[p.code] || p.name || p.code
             if (isAssigned) {
               return (
                 <button key={p.id} onClick={() => handleRemovePerm(p.id)} disabled={isProtected}
-                  className="inline-flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-lg border bg-theme-accent-hover/20 text-theme-text-accent border-theme-accent/30 hover:bg-red-500/20 hover:text-red-500 hover:border-red-500/30 transition-all duration-200 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="Quitar permiso">{label}<span className="text-theme-text-muted font-bold ml-1">&times;</span></button>
+                  className="flex min-w-0 items-start justify-between gap-3 text-left text-[11px] px-3 py-2.5 rounded-lg border bg-theme-accent-hover/20 text-theme-text-accent border-theme-accent/30 hover:bg-red-500/20 hover:text-red-500 hover:border-red-500/30 transition-all duration-200 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Quitar permiso">
+                  <span className="min-w-0"><strong className="block text-xs">{p.name || p.code}</strong>{p.description && <span className="block mt-0.5 text-theme-text-muted/80">{p.description}</span>}<code className="block mt-1 text-[10px] text-theme-text-muted/60 break-all">{p.code}</code></span>
+                  <span className="shrink-0 text-theme-text-muted font-bold">&times;</span>
+                </button>
               )
             }
             return (
               <button key={p.id} onClick={() => handleAddPerm(p.id)}
-                className="inline-flex items-center gap-1 text-[11px] px-3 py-1.5 rounded-lg border border-dashed border-theme-accent/30 bg-theme-accent-hover/5 text-theme-text-accent/80 hover:bg-theme-accent-hover/20 hover:text-theme-text hover:border-theme-accent-hover transition-all duration-200"
-                title="Asignar permiso">+ {label}</button>
+                className="flex min-w-0 items-start gap-3 text-left text-[11px] px-3 py-2.5 rounded-lg border border-dashed border-theme-accent/30 bg-theme-accent-hover/5 text-theme-text-accent/80 hover:bg-theme-accent-hover/20 hover:text-theme-text hover:border-theme-accent-hover transition-all duration-200"
+                title="Asignar permiso">
+                <span className="shrink-0 text-sm font-bold">+</span><span className="min-w-0"><strong className="block text-xs">{p.name || p.code}</strong>{p.description && <span className="block mt-0.5 text-theme-text-muted/80">{p.description}</span>}<code className="block mt-1 text-[10px] text-theme-text-muted/60 break-all">{p.code}</code></span>
+              </button>
             )
           })}
         </div>
@@ -337,24 +325,15 @@ export function RolesView({ userPermissions }: RolesViewProps) {
               <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 shadow-xl shadow-black/10 space-y-6">
                 <h4 className="text-xs font-bold text-theme-text uppercase tracking-widest border-b border-theme-border pb-2">Permisos Asignados</h4>
                 <div className="space-y-5">
-                  {renderSection('Administración', allPerms.filter(p => adminPermCodes.includes(p.code)), true)}
                   {moduleGroups.map(g => renderSection(g.label, g.perms, true))}
-                  {selectedRole.permissions.filter(p => {
-                    const pc = allPerms.find(a => a.id === p.id)
-                    return pc && (adminPermCodes.includes(pc.code) || pc.code.startsWith('module.')) && !hiddenPermCodes.includes(pc.code)
-                  }).length === 0 && <p className="text-[11px] text-theme-accent/40 font-medium">Sin permisos asignados</p>}
+                  {moduleGroups.every(g => !g.perms.some(p => selectedRole.permissions.some(rp => rp.id === p.id))) && <p className="text-[11px] text-theme-accent/40 font-medium">Sin permisos asignados</p>}
                 </div>
 
                 {canAssign && (
                   <div className="border-t border-theme-border pt-6 space-y-5">
                     <h4 className="text-xs font-bold text-theme-text uppercase tracking-widest border-b border-theme-border pb-2">Permisos Disponibles</h4>
-                    {renderSection('Administración', allPerms.filter(p => adminPermCodes.includes(p.code)), false)}
                     {moduleGroups.map(g => renderSection(g.label, g.perms, false))}
-                    {allPerms.filter(p =>
-                      (adminPermCodes.includes(p.code) || p.code.startsWith('module.')) &&
-                      !hiddenPermCodes.includes(p.code) &&
-                      !selectedRole.permissions.some(rp => rp.id === p.id)
-                    ).length === 0 && <p className="text-[11px] text-theme-accent/40 font-medium">Todos los permisos han sido asignados</p>}
+                    {allPerms.every(p => selectedRole.permissions.some(rp => rp.id === p.id)) && <p className="text-[11px] text-theme-accent/40 font-medium">Todos los permisos han sido asignados</p>}
                   </div>
                 )}
               </div>

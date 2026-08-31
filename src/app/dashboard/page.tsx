@@ -26,33 +26,12 @@ export default async function DashboardPage() {
     .maybeSingle()
 
   const { data: modules } = await supabase.rpc('get_visible_modules', { p_user_id: user.id })
+  const { data: isSystemAdmin } = await supabase.rpc('has_permission', {
+    p_permission_code: 'system.admin',
+  })
 
   const allModules: Modulo[] = modules ?? []
   const operationalModules = allModules.filter(m => !adminCodes.includes(m.code))
-  
-  if (!operationalModules.find(m => m.code === 'comercial')) {
-    operationalModules.push({
-      id: 'mock-comercial-id',
-      code: 'comercial',
-      name: 'Clientes y Ventas',
-      description: 'Gestión comercial, clientes, documentos y análisis de ventas.',
-      icon: 'Briefcase',
-      route: '/dashboard/comercial',
-      sort_order: 30
-    })
-  }
-
-  if (!operationalModules.find(m => m.code === 'analisis-comercial')) {
-    operationalModules.push({
-      id: 'mock-analisis-comercial-id',
-      code: 'analisis-comercial',
-      name: 'Análisis Comercial',
-      description: 'Análisis amplio por proveedor real, producto, ventas, stock, clientes y recepción vs venta.',
-      icon: 'BarChart3',
-      route: '/dashboard/analisis-comercial',
-      sort_order: 25
-    })
-  }
 
   operationalModules.sort((a, b) => {
     const aHasRoute = typeof a.route === 'string' && a.route.trim().length > 0
@@ -60,21 +39,27 @@ export default async function DashboardPage() {
     return Number(bHasRoute) - Number(aHasRoute)
   })
 
-  const [guidesResult, salesCalendarResult, salesCommissionableResult, collectionsResult, amimascotaResult, topProductsResult] = await Promise.allSettled([
+  const kpiResults = isSystemAdmin === true ? await Promise.allSettled([
     getPortalLatestRouteGuides(),
     getPortalSales('CALENDAR_MONTH'),
     getPortalSales('COMMISSIONABLE'),
     getPortalCollectionsByMode(),
     getPortalAmimascota(),
     getPortalTopProducts(),
-  ])
-  const latestRouteGuides = guidesResult.status === 'fulfilled' ? guidesResult.value : []
+  ]) : null
+  const guidesResult = kpiResults?.[0]
+  const salesCalendarResult = kpiResults?.[1]
+  const salesCommissionableResult = kpiResults?.[2]
+  const collectionsResult = kpiResults?.[3]
+  const amimascotaResult = kpiResults?.[4]
+  const topProductsResult = kpiResults?.[5]
+  const latestRouteGuides = guidesResult?.status === 'fulfilled' ? guidesResult.value : []
   const sales: Record<PortalPeriodMode, PortalSales | null> = {
-    CALENDAR_MONTH: salesCalendarResult.status === 'fulfilled' ? salesCalendarResult.value : null,
-    COMMISSIONABLE: salesCommissionableResult.status === 'fulfilled' ? salesCommissionableResult.value : null,
+    CALENDAR_MONTH: salesCalendarResult?.status === 'fulfilled' ? salesCalendarResult.value : null,
+    COMMISSIONABLE: salesCommissionableResult?.status === 'fulfilled' ? salesCommissionableResult.value : null,
   }
-  const amimascota = amimascotaResult.status === 'fulfilled' ? amimascotaResult.value : null
-  const topProducts = topProductsResult.status === 'fulfilled' ? topProductsResult.value : []
+  const amimascota = amimascotaResult?.status === 'fulfilled' ? amimascotaResult.value : null
+  const topProducts = topProductsResult?.status === 'fulfilled' ? topProductsResult.value : []
 
   return (
     <>
@@ -118,29 +103,30 @@ export default async function DashboardPage() {
             </div>
           )}
 
-          {/* Amimascota */}
-          <AmimascotaCard data={amimascota} error={amimascotaResult.status === 'rejected'} />
+          {isSystemAdmin === true && (
+            <AmimascotaCard data={amimascota} error={amimascotaResult?.status === 'rejected'} />
+          )}
         </div>
 
         {/* ── COLUMNA DERECHA ── */}
-        <div className="flex flex-col gap-4">
+        {isSystemAdmin === true && <div className="flex flex-col gap-4">
           {/* Últimas Guías de Ruta */}
           <LatestRouteGuides guides={latestRouteGuides} />
 
           {/* Top 5 productos */}
-          <TopProductsCard products={topProducts} error={topProductsResult.status === 'rejected'} />
-        </div>
+          <TopProductsCard products={topProducts} error={topProductsResult?.status === 'rejected'} />
+        </div>}
       </div>
 
       {/* ── FILA INFERIOR: Ventas y Cobranzas ── */}
-      <div className="grid gap-4 pb-4 sm:grid-cols-2">
+      {isSystemAdmin === true && <div className="grid gap-4 pb-4 sm:grid-cols-2">
         <PortalFinancialSection
           sales={sales}
-          collections={collectionsResult.status === 'fulfilled' ? collectionsResult.value : { CALENDAR_MONTH: null, COMMISSIONABLE: null }}
-          salesError={salesCalendarResult.status === 'rejected' || salesCommissionableResult.status === 'rejected'}
-          collectionsError={collectionsResult.status === 'rejected'}
+          collections={collectionsResult?.status === 'fulfilled' ? collectionsResult.value : { CALENDAR_MONTH: null, COMMISSIONABLE: null }}
+          salesError={salesCalendarResult?.status === 'rejected' || salesCommissionableResult?.status === 'rejected'}
+          collectionsError={collectionsResult?.status === 'rejected'}
         />
-      </div>
+      </div>}
     </>
   )
 }

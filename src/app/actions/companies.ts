@@ -47,20 +47,24 @@ export interface UserCompany {
   company_id: string
   role: string
   is_default: boolean
+  is_active: boolean
   company: Company
 }
 
-export async function getUserCompanies(): Promise<UserCompany[]> {
+export async function getUserCompanies(includeInactive = false): Promise<UserCompany[]> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return []
 
   const db = coreAdmin()
-  const { data, error } = await db
+  let query = db
     .from('user_company_access')
-    .select('company_id, role, is_default, companies:company_id (*)')
+    .select('company_id, role, is_default, is_active, companies:company_id (*)')
     .eq('user_id', user.id)
-    .eq('is_active', true)
+
+  if (!includeInactive) query = query.eq('is_active', true)
+
+  const { data, error } = await query
 
   if (error) {
     console.error('Error in getUserCompanies:', error)
@@ -71,6 +75,7 @@ export async function getUserCompanies(): Promise<UserCompany[]> {
     company_id: item.company_id,
     role: item.role,
     is_default: item.is_default,
+    is_active: item.is_active,
     company: item.companies as unknown as Company
   }))
 }

@@ -1,11 +1,8 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
-import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { logout } from '@/app/actions/auth'
-import { CompanyLogo } from '@/components/company-logo'
 import * as LucideIcons from 'lucide-react'
 import type { Profile } from '@/lib/types'
 import { AppTopbar } from '@/components/layout/app-topbar'
@@ -19,12 +16,11 @@ interface DashboardLayoutClientProps {
   activeCompany: Company | null
 }
 
-
-
 export function DashboardLayoutClient({ children, profile, permissions, activeCompany }: DashboardLayoutClientProps) {
   const pathname = usePathname()
-  // Module pages render their own layout (AppTopbar, ModuleTabs, Ribbon).
-  // They must NOT be wrapped by the portal layout (which has max-w-6xl mx-auto).
+
+  // Las páginas de módulos ERP montan su propio layout (sidebar, ribbon, etc.)
+  // Solo necesitamos saber si debemos envolver el contenido con el max-w del portal
   const MODULE_PREFIXES = [
     '/dashboard/adquisiciones',
     '/dashboard/logistica',
@@ -34,8 +30,7 @@ export function DashboardLayoutClient({ children, profile, permissions, activeCo
   ]
   const isModulePage = MODULE_PREFIXES.some(prefix => pathname.startsWith(prefix))
 
-
-  // Si no hay empresa activa, bloquear interacción y pedir selección
+  // Sin empresa activa: bloquear y pedir selección
   if (!activeCompany) {
     return (
       <div className="min-h-screen relative text-foreground flex items-center justify-center p-4">
@@ -64,23 +59,9 @@ export function DashboardLayoutClient({ children, profile, permissions, activeCo
     )
   }
 
-  if (isModulePage) {
-    return (
-      <div className="min-h-screen relative text-foreground">
-        <div className="fixed inset-0 bg-gradient-to-br from-theme-bg-gradient-start via-theme-bg-gradient-mid to-theme-bg-gradient-end -z-10" />
-        <div className="fixed inset-0 opacity-[0.025] -z-10" style={{
-          backgroundImage: `radial-gradient(circle at 25% 25%, white 1px, transparent 1px), radial-gradient(circle at 75% 75%, white 1px, transparent 1px)`,
-          backgroundSize: '60px 60px',
-        }} />
-        <div className="fixed top-0 right-0 w-[700px] h-[700px] bg-theme-accent-hover/8 rounded-full blur-3xl -translate-y-1/2 translate-x-1/4 -z-10" />
-        <div className="fixed bottom-0 left-0 w-[600px] h-[600px] bg-theme-accent-hover/8 rounded-full blur-3xl translate-y-1/3 -translate-x-1/4 -z-10" />
-        <main className="min-h-screen">{children}</main>
-      </div>
-    )
-  }
-
   return (
     <div className="min-h-screen relative text-foreground">
+      {/* Fondo decorativo — siempre presente */}
       <div className="fixed inset-0 bg-gradient-to-br from-theme-bg-gradient-start via-theme-bg-gradient-mid to-theme-bg-gradient-end -z-10" />
       <div className="fixed inset-0 opacity-[0.025] -z-10" style={{
         backgroundImage: `radial-gradient(circle at 25% 25%, white 1px, transparent 1px), radial-gradient(circle at 75% 75%, white 1px, transparent 1px)`,
@@ -89,18 +70,24 @@ export function DashboardLayoutClient({ children, profile, permissions, activeCo
       <div className="fixed top-0 right-0 w-[700px] h-[700px] bg-theme-accent-hover/8 rounded-full blur-3xl -translate-y-1/2 translate-x-1/4 -z-10" />
       <div className="fixed bottom-0 left-0 w-[600px] h-[600px] bg-theme-accent-hover/8 rounded-full blur-3xl translate-y-1/3 -translate-x-1/4 -z-10" />
 
+      {/* ── Topbar único y persistente para todo /dashboard ── */}
       <AppTopbar
         profile={profile}
         activeCompany={activeCompany}
         permissions={permissions}
-        moduleName="Portal de Gestión"
+        moduleName={isModulePage ? undefined : 'Portal de Gestión'}
       />
 
-      <main className="pt-12">
-        <div className="max-w-6xl mx-auto p-5 lg:p-8">
-          {children}
-        </div>
-      </main>
+      {/* Contenido: los módulos ERP se envuelven en un <main> limpio
+          (ellos mismos manejan pt-12 y el sidebar internamente).
+          El portal usa max-w-6xl centrado con padding. */}
+      {isModulePage ? (
+        <main className="min-h-screen">{children}</main>
+      ) : (
+        <main className="pt-12">
+          <div className="max-w-6xl mx-auto p-5 lg:p-8">{children}</div>
+        </main>
+      )}
     </div>
   )
 }

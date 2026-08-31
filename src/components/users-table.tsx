@@ -14,6 +14,10 @@ interface UsersTableProps {
   onEdit: (user: Profile & { roles: Pick<Rol, 'name' | 'description'> }) => void
 }
 
+function displayPersonName(value: string | null | undefined) {
+  return value?.trim().replace(/\s+/g, ' ').toUpperCase() || 'No registrado'
+}
+
 export function UsersTable({ users, onEdit }: UsersTableProps) {
   const router = useRouter()
   const [loadingId, setLoadingId] = useState<string | null>(null)
@@ -41,7 +45,7 @@ export function UsersTable({ users, onEdit }: UsersTableProps) {
         <TableBody className="divide-y divide-theme-border">
           {users.map((user) => (
             <TableRow key={user.id} className="hover:bg-theme-text/5 border-b border-theme-border transition-colors">
-              <TableCell className="font-bold text-theme-text py-4 px-4">{user.nombre} {user.apellido}</TableCell>
+              <TableCell className="font-bold text-theme-text py-4 px-4">{displayPersonName(user.nombre)} {displayPersonName(user.apellido)}</TableCell>
               <TableCell className="text-theme-text-accent font-medium text-xs py-4 px-4">{user.email}</TableCell>
               <TableCell className="py-4 px-4">
                 <Badge className="bg-theme-accent-hover/10 text-theme-text-muted border border-theme-accent/20 font-bold px-2 py-0.5 text-[9px] uppercase tracking-wider rounded-lg">
@@ -104,4 +108,3 @@ export function UsersTable({ users, onEdit }: UsersTableProps) {
     </div>
   )
 }
-
