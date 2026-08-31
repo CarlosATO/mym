@@ -15,27 +15,16 @@ function adqAdmin() {
 function normalize(s: string) { return s.toUpperCase().trim().replace(/\s+/g, ' ') }
 function v(s: string | null | undefined) { return s ? normalize(s) : null }
 
-async function verifyWriteAccess(): Promise<{ error?: string; userId?: string }> {
+async function verifyPermission(permissionCode: string): Promise<{ error?: string; userId?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'No autorizado' }
 
-  const { data: profile } = await supabase
-    .from('users')
-    .select('role_id')
-    .eq('id', user.id)
-    .maybeSingle()
-
-  if (!profile) return { error: 'Usuario no encontrado' }
-
-  const { data: role } = await supabase
-    .from('roles')
-    .select('name')
-    .eq('id', profile.role_id)
-    .single()
-
-  if (!role || !['SUPER_USUARIO', 'GERENCIA', 'BODEGA'].includes(role.name)) {
-    return { error: 'Permisos insuficientes. No tiene autorización para modificar el catálogo global.' }
+  const { data: allowed, error } = await supabase.rpc('has_permission', {
+    p_permission_code: permissionCode,
+  })
+  if (error || allowed !== true) {
+    return { error: 'Permisos insuficientes para esta operación.' }
   }
 
   return { userId: user.id }
@@ -90,6 +79,9 @@ async function validateClassifier(type: string, name: string | null, companyId: 
 }
 
 export async function getClassifiers(type: string) {
+  const authRes = await verifyPermission('adquisiciones.products.view')
+  if (authRes.error) return []
+
   const companyId = await getActiveCompanyId()
   const db = adqAdmin()
   let query = db.from('product_classifiers')
@@ -159,9 +151,8 @@ export interface ProductCatalogLookup {
 }
 
 export async function getProductCatalogBySkus(skus: string[]): Promise<ProductCatalogLookup[]> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
+  const authRes = await verifyPermission('adquisiciones.products.view')
+  if (authRes.error) return []
 
   const companyId = await getActiveCompanyId()
   if (!companyId) return []
@@ -193,9 +184,8 @@ export async function getProductCatalogBySkus(skus: string[]): Promise<ProductCa
 }
 
 export async function getProducts(filters: ProductFilters = {}): Promise<{ data: Product[]; total: number; error?: string }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { data: [], total: 0 }
+  const authRes = await verifyPermission('adquisiciones.products.view')
+  if (authRes.error) return { data: [], total: 0, error: authRes.error }
 
   const companyId = await getActiveCompanyId()
   if (!companyId) return { data: [], total: 0 }
@@ -380,7 +370,7 @@ export async function getProducts(filters: ProductFilters = {}): Promise<{ data:
 }
 
 export async function createProduct(formData: FormData) {
-  const authRes = await verifyWriteAccess()
+  const authRes = await verifyPermission('adquisiciones.products.create')
   if (authRes.error) return { error: authRes.error }
   const userId = authRes.userId!
 
@@ -421,6 +411,10 @@ export async function createProduct(formData: FormData) {
   function b(name: string) { return ['SI', 'TRUE', '1'].includes((formData.get(name) as string ?? '').trim().toUpperCase()) }
 
   const imageFile = formData.get('image') as File
+  if (imageFile && imageFile.size > 0) {
+    const imageAuthRes = await verifyPermission('adquisiciones.products.upload_image')
+    if (imageAuthRes.error) return { error: imageAuthRes.error }
+  }
 
   // Create as global product (company_id: null)
   const { data, error } = await db.from('products').insert({
@@ -465,7 +459,7 @@ export async function createProduct(formData: FormData) {
 }
 
 export async function updateProduct(productId: string, formData: FormData) {
-  const authRes = await verifyWriteAccess()
+  const authRes = await verifyPermission('adquisiciones.products.update')
   if (authRes.error) return { error: authRes.error }
   const userId = authRes.userId!
 
@@ -484,6 +478,10 @@ export async function updateProduct(productId: string, formData: FormData) {
   function n(name: string) { const val = parseFloat(formData.get(name) as string); return isNaN(val) ? 0 : val }
   function b(name: string) { return ['SI', 'TRUE', '1'].includes((formData.get(name) as string ?? '').trim().toUpperCase()) }
   const imageFile = formData.get('image') as File
+  if (imageFile && imageFile.size > 0) {
+    const imageAuthRes = await verifyPermission('adquisiciones.products.upload_image')
+    if (imageAuthRes.error) return { error: imageAuthRes.error }
+  }
   let image_url: string | null = (formData.get('existing_image') as string) || null
   if (imageFile && imageFile.size > 0) {
     const ext = imageFile.name.split('.').pop(); const path = `adquisiciones/products/${productId}/image.${ext}`
@@ -531,7 +529,7 @@ export async function updateProduct(productId: string, formData: FormData) {
 }
 
 export async function deactivateProduct(productId: string) {
-  const authRes = await verifyWriteAccess()
+  const authRes = await verifyPermission('adquisiciones.products.deactivate')
   if (authRes.error) return { error: authRes.error }
   const userId = authRes.userId!
 
@@ -544,7 +542,7 @@ export async function deactivateProduct(productId: string) {
 }
 
 export async function importProducts(products: Record<string, unknown>[]) {
-  const authRes = await verifyWriteAccess()
+  const authRes = await verifyPermission('adquisiciones.products.import')
   if (authRes.error) return { error: authRes.error }
   const userId = authRes.userId!
 

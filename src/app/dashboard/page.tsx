@@ -72,7 +72,7 @@ export default async function DashboardPage() {
             <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-sky-100/75">Portal de Gestión MYM</p>
             <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
               <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Bienvenido {profile?.nombre ?? 'Usuario'}</h1>
-              <p className="text-xs text-sky-100/85 sm:text-sm">Todo lo operativo, en un solo lugar.</p>
+              <p className="text-xs text-sky-100/85 sm:text-sm">Sistema unificado</p>
             </div>
           </section>
 

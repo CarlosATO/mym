@@ -1,13 +1,20 @@
 import { ClipboardList } from 'lucide-react'
 import { getInventorySessionCatalogs } from '@/app/actions/inventarios/sessions'
+import { getCampaignSessionCreatePermission } from '@/app/actions/inventarios/campaigns'
 import { getActiveCompanyId } from '@/app/actions/companies'
+import { AccessDenied } from '@/components/access-denied'
 import { InventorySessionWizard } from '@/modules/inventarios/components/inventory-session-wizard'
 import { InventoryEmptyState } from '@/modules/inventarios/components/inventory-empty-state'
 import { InventoryErrorState } from '@/modules/inventarios/components/inventory-error-state'
 import type { WizardCatalogs } from '@/modules/inventarios/lib/wizard'
 
 export default async function InventariosNuevaJornadaPage() {
+  const permission = await getCampaignSessionCreatePermission()
   const companyId = await getActiveCompanyId()
+
+  if (companyId && !permission.canCreate) {
+    return <AccessDenied />
+  }
 
   if (!companyId) {
     return (

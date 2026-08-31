@@ -1,11 +1,19 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { AccessDenied } from '@/components/access-denied'
 import { LogisticaLayoutClient } from './logistica-layout-client'
 
 export default async function Layout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
+
+  const { data: hasLogisticaAccess, error: permissionError } = await supabase.rpc('has_permission', {
+    p_permission_code: 'module.logistica.view',
+  })
+  if (permissionError || hasLogisticaAccess !== true) {
+    return <AccessDenied />
+  }
 
   const { data: profile } = await supabase
     .from('users')

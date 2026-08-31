@@ -127,7 +127,7 @@ export default async function InventariosCampanaDetallePage({ params, searchPara
            <InventoryErrorState description={reconciliationFetch.error ?? 'La conciliación logística aún no está disponible.'} />
          )
        ) : safeTab === 'informe' ? (
-        <InventoryCampaignReport campaignId={campaign.id} campaignName={campaign.name} />
+         <InventoryCampaignReport campaignId={campaign.id} campaignName={campaign.name} canManageCampaigns={managePermission.canManage} />
       ) : (
         <div className="space-y-3">
           {importError && (

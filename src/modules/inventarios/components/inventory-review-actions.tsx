@@ -10,11 +10,12 @@ interface InventoryReviewActionsProps {
   task: InventorySessionTask
   contributionSummary?: string
   onChanged: () => void
+  canValidateTasks: boolean
 }
 
 type Mode = 'validate' | 'invalidate' | 'reopen' | null
 
-export function InventoryReviewActions({ companyId, task, contributionSummary, onChanged }: InventoryReviewActionsProps) {
+export function InventoryReviewActions({ companyId, task, contributionSummary, onChanged, canValidateTasks }: InventoryReviewActionsProps) {
   const [mode, setMode] = useState<Mode>(null)
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
@@ -23,9 +24,9 @@ export function InventoryReviewActions({ companyId, task, contributionSummary, o
   const taskStatus = task.status
   const hasValidation = Boolean(task.validated_at && task.validated_by)
 
-  const canValidate = taskStatus === 'COMPLETED' && !hasValidation
-  const canInvalidate = taskStatus === 'COMPLETED' && hasValidation
-  const canReopen = taskStatus === 'COMPLETED'
+  const canValidate = canValidateTasks && taskStatus === 'COMPLETED' && !hasValidation
+  const canInvalidate = canValidateTasks && taskStatus === 'COMPLETED' && hasValidation
+  const canReopen = canValidateTasks && taskStatus === 'COMPLETED'
 
   const run = async () => {
     if (busy) return

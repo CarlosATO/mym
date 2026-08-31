@@ -61,36 +61,24 @@ function normalizeRut(rut: string): string {
   return rut.replace(/[.-]/g, '').replace(/\s/g, '').toUpperCase()
 }
 
-async function verifyWriteAccess(): Promise<{ error?: string; userId?: string }> {
+async function verifyPermission(permissionCode: string): Promise<{ error?: string; userId?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'No autorizado' }
 
-  const { data: profile } = await supabase
-    .from('users')
-    .select('role_id')
-    .eq('id', user.id)
-    .maybeSingle()
-
-  if (!profile) return { error: 'Usuario no encontrado' }
-
-  const { data: role } = await supabase
-    .from('roles')
-    .select('name')
-    .eq('id', profile.role_id)
-    .single()
-
-  if (!role || !['SUPER_USUARIO', 'GERENCIA', 'BODEGA'].includes(role.name)) {
-    return { error: 'Permisos insuficientes. No tiene autorización para modificar el catálogo global.' }
+  const { data: allowed, error } = await supabase.rpc('has_permission', {
+    p_permission_code: permissionCode,
+  })
+  if (error || allowed !== true) {
+    return { error: 'Permisos insuficientes para esta operación.' }
   }
 
   return { userId: user.id }
 }
 
 export async function getSuppliers(search?: string, kind: 'REAL' | 'BSALE_OPERATIVE' = 'REAL', includeGlobal: boolean = false) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
+  const authRes = await verifyPermission('adquisiciones.suppliers.view')
+  if (authRes.error) return []
 
   const companyId = await getActiveCompanyId()
   if (!companyId) return []
@@ -131,6 +119,9 @@ export async function getSuppliers(search?: string, kind: 'REAL' | 'BSALE_OPERAT
 }
 
 export async function getSupplier(id: string) {
+  const authRes = await verifyPermission('adquisiciones.suppliers.view')
+  if (authRes.error) return null
+
   const companyId = await getActiveCompanyId()
   if (!companyId) return null
 
@@ -144,6 +135,9 @@ export async function getSupplier(id: string) {
 }
 
 export async function getBsalePseudoStats(): Promise<BsalePseudoStat[]> {
+  const authRes = await verifyPermission('adquisiciones.suppliers.view')
+  if (authRes.error) return []
+
   const companyId = await getActiveCompanyId()
   if (!companyId) return []
 
@@ -258,7 +252,7 @@ export async function getBsalePseudoStats(): Promise<BsalePseudoStat[]> {
 }
 
 export async function createSupplier(formData: FormData, pseudoIds: string[] = []) {
-  const authRes = await verifyWriteAccess()
+  const authRes = await verifyPermission('adquisiciones.suppliers.create')
   if (authRes.error) return { error: authRes.error }
   const userId = authRes.userId!
 
@@ -335,7 +329,7 @@ export async function createSupplier(formData: FormData, pseudoIds: string[] = [
 }
 
 export async function updateSupplier(supplierId: string, formData: FormData, pseudoIds: string[] = []) {
-  const authRes = await verifyWriteAccess()
+  const authRes = await verifyPermission('adquisiciones.suppliers.update')
   if (authRes.error) return { error: authRes.error }
   const userId = authRes.userId!
 
@@ -414,7 +408,7 @@ export async function updateSupplier(supplierId: string, formData: FormData, pse
 }
 
 export async function deactivateSupplier(supplierId: string) {
-  const authRes = await verifyWriteAccess()
+  const authRes = await verifyPermission('adquisiciones.suppliers.deactivate')
   if (authRes.error) return { error: authRes.error }
   const userId = authRes.userId!
 
@@ -435,7 +429,7 @@ export async function deactivateSupplier(supplierId: string) {
 }
 
 export async function importSuppliers(suppliers: Record<string, unknown>[]) {
-  const authRes = await verifyWriteAccess()
+  const authRes = await verifyPermission('adquisiciones.suppliers.import')
   if (authRes.error) return { error: authRes.error }
   const userId = authRes.userId!
 
@@ -524,6 +518,9 @@ export async function importSuppliers(suppliers: Record<string, unknown>[]) {
 }
 
 export async function getRealSuppliers() {
+  const authRes = await verifyPermission('adquisiciones.suppliers.view')
+  if (authRes.error) return []
+
   const companyId = await getActiveCompanyId()
   if (!companyId) return []
 

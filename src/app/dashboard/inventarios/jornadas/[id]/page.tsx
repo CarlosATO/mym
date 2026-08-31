@@ -4,6 +4,7 @@ import { listInventoryCampaignParticipants } from '@/app/actions/inventarios/cam
 import { listInventorySessionScopes } from '@/app/actions/inventarios/counting-zones'
 import { getActiveCompanySessionDetail, getActiveCompanySessionReview, getInventorySessionCatalogs, getInventorySessionImportContext, type CatalogUserOption } from '@/app/actions/inventarios/sessions'
 import { getActiveCompanyResults } from '@/app/actions/inventarios/results'
+import { getActiveCompanyInventoryWritePermissions } from '@/app/actions/inventarios/permissions'
 import { InventorySessionHeader } from '@/modules/inventarios/components/inventory-session-header'
 import { InventorySessionTabs, type InventoryTab } from '@/modules/inventarios/components/inventory-session-tabs'
 import { InventorySessionOverview } from '@/modules/inventarios/components/inventory-session-overview'
@@ -55,6 +56,7 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
   const activeStep = typeof sp.step === 'string' ? Number.parseInt(sp.step, 10) || 1 : 1
 
   const { data: detail, error, companyId } = await getActiveCompanySessionDetail(id)
+  const permissions = await getActiveCompanyInventoryWritePermissions()
 
   if (!companyId) {
     return (
@@ -139,7 +141,7 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
             : undefined
         }
         action={
-          ['DRAFT', 'PREPARED', 'COUNTING', 'UNDER_REVIEW'].includes(status) ? (
+          permissions.canCancelSession && ['DRAFT', 'PREPARED', 'COUNTING', 'UNDER_REVIEW'].includes(status) ? (
             <InventoryCancelSessionPanel companyId={companyId} sessionId={id} />
           ) : undefined
         }
@@ -177,7 +179,7 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
                 }}
               />
              ) : (status === 'PREPARED' || status === 'COUNTING') && importContext?.campaign_id ? (
-               <InventoryOperationalSetup companyId={companyId} sessionId={id} campaignId={importContext.campaign_id} />
+               <InventoryOperationalSetup companyId={companyId} sessionId={id} campaignId={importContext.campaign_id} canManageZones={permissions.canManageZones} />
              ) : (
                <div className="space-y-4">
                 <div className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-sm">
@@ -202,7 +204,7 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
                   </div>
                 </div>
                 <InventoryParticipantsPanel detail={detail} campaignParticipants={campaignParticipants} />
-                <InventoryZonesPanel detail={detail} />
+                <InventoryZonesPanel detail={detail} canManageZones={permissions.canManageZones} />
                 <InventoryTasksPanel detail={detail} />
               </div>
             )
@@ -223,21 +225,24 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
                 users: [],
                 locations: catalogLocations,
               }}
+              canManageZones={permissions.canManageZones}
             />
           ) : status === 'DRAFT' && activeStep === 5 ? (
             <InventoryTasksStep
               companyId={companyId}
               sessionId={id}
               users={eligibleUsers}
+              canAssignTasks={permissions.canAssignTasks}
+              canCancelTasks={permissions.canCancelTasks}
             />
            ) : status === 'DRAFT' && activeStep === 6 ? (
              <InventoryReviewStep companyId={companyId} sessionId={id} />
            ) : (status === 'PREPARED' || status === 'COUNTING') && importContext?.campaign_id ? (
-             <InventoryOperationalSetup companyId={companyId} sessionId={id} campaignId={importContext.campaign_id} />
+              <InventoryOperationalSetup companyId={companyId} sessionId={id} campaignId={importContext.campaign_id} canManageZones={permissions.canManageZones} />
            ) : (
             <>
                 <InventoryParticipantsPanel detail={detail} campaignParticipants={campaignParticipants} />
-              <InventoryZonesPanel detail={detail} />
+              <InventoryZonesPanel detail={detail} canManageZones={permissions.canManageZones} />
               <InventoryTasksPanel detail={detail} />
             </>
           )}
@@ -254,11 +259,12 @@ export default async function InventariosJornadaDetallePage({ params, searchPara
           companyId={companyId}
           sessionId={id}
           initialDetail={detail}
+          canCloseSession={permissions.canCloseSession}
         />
       )}
 
       {safeTab === 'revision' && (
-        <InventoryReviewDashboard companyId={companyId} sessionId={id} initialReview={review} />
+        <InventoryReviewDashboard companyId={companyId} sessionId={id} initialReview={review} canApproveSession={permissions.canApproveSession} canValidateTasks={permissions.canValidateTasks} />
       )}
 
       {safeTab === 'resultados' && (

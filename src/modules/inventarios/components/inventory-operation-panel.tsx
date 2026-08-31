@@ -17,9 +17,10 @@ interface InventoryOperationPanelProps {
   companyId: string
   sessionId: string
   initialDetail: InventorySessionDetail | null
+  canCloseSession: boolean
 }
 
-export function InventoryOperationPanel({ companyId, sessionId, initialDetail }: InventoryOperationPanelProps) {
+export function InventoryOperationPanel({ companyId, sessionId, initialDetail, canCloseSession }: InventoryOperationPanelProps) {
   const [detail, setDetail] = useState<InventorySessionDetail | null>(initialDetail)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -104,7 +105,7 @@ export function InventoryOperationPanel({ companyId, sessionId, initialDetail }:
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       {/* Acciones según estado */}
-      <InventoryOperationActions companyId={companyId} sessionId={sessionId} detail={detail} />
+      <InventoryOperationActions companyId={companyId} sessionId={sessionId} detail={detail} canCloseSession={canCloseSession} />
 
       {/* Monitoreo COUNTING */}
       {status === 'COUNTING' && (

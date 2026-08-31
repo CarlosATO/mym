@@ -9,6 +9,7 @@ import { InventoryStatusBadge } from '@/modules/inventarios/components/inventory
 import { InventoryErrorState } from '@/modules/inventarios/components/inventory-error-state'
 import { formatDateChile } from '@/modules/inventarios/lib/format'
 import { canPublishMobileApp, getActiveMobileRelease } from '@/app/actions/inventarios/mobile-app'
+import { getCampaignSessionCreatePermission } from '@/app/actions/inventarios/campaigns'
 import { InventoryMobileAppCard } from '@/modules/inventarios/components/inventory-mobile-app-card'
 
 function kpiPercent(value: number): string {
@@ -19,6 +20,7 @@ export default async function InventariosResumenPage() {
   const { data, error, companyId } = await getActiveCompanyDashboardSummary()
   const mobileRelease = await getActiveMobileRelease()
   const canPublishMobile = await canPublishMobileApp()
+  const { canCreate } = await getCampaignSessionCreatePermission()
 
   const kpis = data?.kpis
   const attention = data?.attention_sessions ?? []
@@ -30,7 +32,7 @@ export default async function InventariosResumenPage() {
         title="Inventarios"
         description="Gestiona secciones de conteo: creación, conteo, revisión y resultados."
         breadcrumb={['Inventarios', 'Resumen']}
-        action={
+        action={canCreate ? (
           <Link
             href="/dashboard/inventarios/jornadas/nueva"
             className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-theme-accent px-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-theme-accent-hover"
@@ -38,7 +40,7 @@ export default async function InventariosResumenPage() {
             <Plus className="h-4 w-4" />
             Nueva sección de conteo
           </Link>
-        }
+        ) : undefined}
       />
 
       {/* KPIs */}
@@ -79,12 +81,14 @@ export default async function InventariosResumenPage() {
       <section aria-label="Accesos rápidos">
         <h2 className="mb-2.5 text-sm font-semibold text-theme-text-muted uppercase tracking-wider">Accesos rápidos</h2>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <InventoryQuickAction
-            label="Nueva sección de conteo"
-            description="Crea y configura una sección de conteo"
-            href="/dashboard/inventarios/jornadas/nueva"
-            icon={<Plus className="h-4 w-4" />}
-          />
+          {canCreate && (
+            <InventoryQuickAction
+              label="Nueva sección de conteo"
+              description="Crea y configura una sección de conteo"
+              href="/dashboard/inventarios/jornadas/nueva"
+              icon={<Plus className="h-4 w-4" />}
+            />
+          )}
           <InventoryQuickAction
             label="Continuar sección"
             description="Operación y avance de conteo"

@@ -23,10 +23,11 @@ interface ZonesStepProps {
   sessionId: string
   sessionWarehouseId: string
   catalogs: ZoneCatalogs
+  canManageZones: boolean
   onReadyChange?: (ready: boolean) => void
 }
 
-export function InventoryZonesStep({ companyId, sessionId, sessionWarehouseId, catalogs, onReadyChange }: ZonesStepProps) {
+export function InventoryZonesStep({ companyId, sessionId, sessionWarehouseId, catalogs, canManageZones, onReadyChange }: ZonesStepProps) {
 
   const [setup, setSetup] = useState<SessionZonesSetupResult | null>(null)
   const [loading, setLoading] = useState(true)
@@ -146,8 +147,8 @@ export function InventoryZonesStep({ companyId, sessionId, sessionWarehouseId, c
                 {req.met && <Check className="h-3 w-3" />}
               </span>
               {req.label}
-            </li>
-          ))}
+             </li>
+           ))}
         </ul>
       </div>
       {error && (
@@ -155,7 +156,7 @@ export function InventoryZonesStep({ companyId, sessionId, sessionWarehouseId, c
           {error}
         </div>
       )}
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto]">
+      {canManageZones && <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto]">
         <input
           value={newName}
           onChange={e => setNewName(e.target.value)}
@@ -179,7 +180,7 @@ export function InventoryZonesStep({ companyId, sessionId, sessionWarehouseId, c
           <Plus className="h-4 w-4" />
           Agregar zona
         </button>
-      </div>
+      </div>}
       {busy && <InventoryLoadingState compact label="Guardando cambios…" />}
       {zones.length === 0 ? (
         <p className="text-sm text-theme-text-muted">Aún no hay zonas. Crea la primera para comenzar.</p>
@@ -192,7 +193,7 @@ export function InventoryZonesStep({ companyId, sessionId, sessionWarehouseId, c
                   <p className="truncate text-sm font-semibold text-theme-text">{zone.display_name}</p>
                   <p className="font-mono text-xs text-theme-text-muted">{zone.zone_code}</p>
                 </div>
-                <button
+                {canManageZones && <button
                   type="button"
                   onClick={() => removeZone(zone)}
                   disabled={busy || (zone.locations?.length ?? 0) > 0}
@@ -201,7 +202,7 @@ export function InventoryZonesStep({ companyId, sessionId, sessionWarehouseId, c
                   className="flex h-7 w-7 items-center justify-center rounded-lg border border-theme-border text-theme-text-muted transition-colors hover:bg-red-500/10 hover:text-red-600 disabled:opacity-30"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
-                </button>
+                </button>}
               </div>
               <p className="mb-1.5 text-xs text-theme-text-muted">
                 {zone.locations?.length ?? 0} ubicación(es)
@@ -215,7 +216,7 @@ export function InventoryZonesStep({ companyId, sessionId, sessionWarehouseId, c
                         <span className="truncate text-xs text-theme-text">{location.name ?? location.code}</span>
                         <span className="font-mono text-[10px] text-theme-text-muted">{location.code}</span>
                       </span>
-                      <button
+                      {canManageZones && <button
                         type="button"
                         onClick={() => removeLocation(zone.id, location.location_id, location.name ?? location.code)}
                         disabled={busy}
@@ -223,14 +224,14 @@ export function InventoryZonesStep({ companyId, sessionId, sessionWarehouseId, c
                         className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-theme-border text-theme-text-muted transition-colors hover:bg-red-500/10 hover:text-red-600 disabled:opacity-30"
                       >
                         <X className="h-3 w-3" />
-                      </button>
-                    </li>
-                  ))}
+                      </button>}
+                     </li>
+                   ))}
                 </ul>
               ) : (
-                <p className="mb-2 text-xs text-theme-text-muted/60">Sin ubicaciones asignadas.</p>
-              )}
-                      {assignZoneId === zone.id ? (
+                 <p className="mb-2 text-xs text-theme-text-muted/60">Sin ubicaciones asignadas.</p>
+               )}
+                      {canManageZones && (assignZoneId === zone.id ? (
                 <div className="space-y-1.5">
                   <input
                     value={locationSearch}
@@ -259,8 +260,8 @@ export function InventoryZonesStep({ companyId, sessionId, sessionWarehouseId, c
                             </button>
                           </li>
                         ))}
-                      </ul>
-                    )}
+                       </ul>
+                     )}
                   </div>
                 </div>
               ) : (
@@ -273,7 +274,7 @@ export function InventoryZonesStep({ companyId, sessionId, sessionWarehouseId, c
                   <Plus className="h-3.5 w-3.5" />
                   Agregar ubicación
                 </button>
-              )}
+               ))}
             </div>
           ))}
         </div>

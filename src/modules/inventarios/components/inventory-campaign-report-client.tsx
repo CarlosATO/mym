@@ -76,6 +76,7 @@ interface InventoryCampaignReportClientProps {
   companyId: string
   initialSummary: CampaignReviewSummary | null
   initialReadiness: CampaignCloseReadiness | null
+  canManageCampaigns: boolean
 }
 
 export function InventoryCampaignReportClient({
@@ -84,6 +85,7 @@ export function InventoryCampaignReportClient({
   companyId,
   initialSummary,
   initialReadiness,
+  canManageCampaigns,
 }: InventoryCampaignReportClientProps) {
   const router = useRouter()
   const [search, setSearch] = useState('')
@@ -439,7 +441,7 @@ export function InventoryCampaignReportClient({
                   Listo para revisión final
                  </span>
                ) : null}
-              {readiness?.can_close_authorized && readiness?.campaign_status !== 'APPROVED' && (
+              {canManageCampaigns && readiness?.can_close_authorized && readiness?.campaign_status !== 'APPROVED' && (
                 <button
                   type="button"
                   onClick={() => setCloseOpen(true)}

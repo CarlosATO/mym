@@ -3,7 +3,7 @@ import {
   getActiveCompanyAuditCandidates,
   getActiveCompanyAuditEligibleParticipants,
 } from '@/app/actions/inventarios/audit-review'
-import { getActiveCompanyCampaignDetail } from '@/app/actions/inventarios/campaigns'
+import { getActiveCompanyCampaignDetail, getCampaignManagePermission } from '@/app/actions/inventarios/campaigns'
 import { InventoryAuditReviewClient } from '@/modules/inventarios/components/inventory-audit-review-client'
 import { InventoryEmptyState } from '@/modules/inventarios/components/inventory-empty-state'
 import { InventoryErrorState } from '@/modules/inventarios/components/inventory-error-state'
@@ -15,10 +15,11 @@ interface PageProps {
 export default async function RevisionDiferenciasPage({ params }: PageProps) {
   const { id } = await params
 
-  const [candidatesResult, participantsResult, campaignResult] = await Promise.all([
+  const [candidatesResult, participantsResult, campaignResult, managePermission] = await Promise.all([
     getActiveCompanyAuditCandidates(id, { page: 1, page_size: 50, sort_by: 'SKU', sort_direction: 'ASC' }),
     getActiveCompanyAuditEligibleParticipants(id),
     getActiveCompanyCampaignDetail(id),
+    getCampaignManagePermission(),
   ])
 
   const companyId = candidatesResult.companyId ?? participantsResult.companyId
@@ -51,6 +52,7 @@ export default async function RevisionDiferenciasPage({ params }: PageProps) {
       campaignStatus={candidatesResult.data?.campaign_status ?? null}
       initialCandidates={candidatesResult.data}
       initialParticipants={participantsResult.data?.participants ?? null}
+      canManageCampaigns={managePermission.canManage}
     />
   )
 }

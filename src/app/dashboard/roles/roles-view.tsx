@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { Search, X } from 'lucide-react'
+import { Input } from '@/components/ui/input'
 import {
   getRolesWithDetails, getAllPermissions,
   assignPermissionToRole, removePermissionFromRole,
@@ -27,6 +29,7 @@ export function RolesView({ userPermissions }: RolesViewProps) {
   const [message, setMessage] = useState('')
   const [showInactive, setShowInactive] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
+  const [permissionSearch, setPermissionSearch] = useState('')
   const [createName, setCreateName] = useState('')
   const [createDesc, setCreateDesc] = useState('')
   const [editName, setEditName] = useState('')
@@ -137,7 +140,24 @@ export function RolesView({ userPermissions }: RolesViewProps) {
     group.perms.push(p)
   }
 
+  const normalizedPermissionSearch = permissionSearch.trim().toLowerCase()
+  const availableModuleGroups = moduleGroups
+    .map(group => {
+      const moduleMatches = normalizedPermissionSearch.length > 0 && group.perms.some(p =>
+        p.modules?.name?.toLowerCase().includes(normalizedPermissionSearch)
+        || p.modules?.code?.toLowerCase().includes(normalizedPermissionSearch)
+      )
+      const perms = normalizedPermissionSearch.length === 0 || moduleMatches
+        ? group.perms
+        : group.perms.filter(p => [p.name, p.description, p.code].some(value => value?.toLowerCase().includes(normalizedPermissionSearch)))
+      return { ...group, perms }
+    })
+    .filter(group => group.perms.length > 0)
+
   const visibleRoles = roles.filter(r => showInactive || r.is_active)
+  const availablePermissionCount = availableModuleGroups.reduce((count, group) => {
+    return count + group.perms.filter(p => !selectedRole?.permissions.some(rp => rp.id === p.id)).length
+  }, 0)
 
   function renderSection(title: string, perms: PermWithModule[], assigned: boolean) {
     const rp = selectedRole?.permissions ?? []
@@ -332,8 +352,33 @@ export function RolesView({ userPermissions }: RolesViewProps) {
                 {canAssign && (
                   <div className="border-t border-theme-border pt-6 space-y-5">
                     <h4 className="text-xs font-bold text-theme-text uppercase tracking-widest border-b border-theme-border pb-2">Permisos Disponibles</h4>
-                    {moduleGroups.map(g => renderSection(g.label, g.perms, false))}
-                    {allPerms.every(p => selectedRole.permissions.some(rp => rp.id === p.id)) && <p className="text-[11px] text-theme-accent/40 font-medium">Todos los permisos han sido asignados</p>}
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-theme-text-muted/60" aria-hidden="true" />
+                      <Input
+                        value={permissionSearch}
+                        onChange={e => setPermissionSearch(e.target.value)}
+                        placeholder="Buscar por módulo, permiso, descripción o código"
+                        aria-label="Buscar permisos disponibles"
+                        className="h-10 pl-9 pr-9 border-theme-border bg-theme-text/5 text-xs text-theme-text placeholder:text-theme-text-muted/60"
+                      />
+                      {permissionSearch && (
+                        <button
+                          type="button"
+                          onClick={() => setPermissionSearch('')}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-theme-text-muted/60 transition-colors hover:bg-theme-text/10 hover:text-theme-text"
+                          aria-label="Limpiar búsqueda de permisos"
+                        >
+                          <X className="size-3.5" aria-hidden="true" />
+                        </button>
+                      )}
+                    </div>
+                    {availablePermissionCount > 0 ? (
+                      availableModuleGroups.map(g => renderSection(g.label, g.perms, false))
+                    ) : permissionSearch ? (
+                      <p className="rounded-lg border border-dashed border-theme-border px-3 py-5 text-center text-xs text-theme-text-muted">No se encontraron permisos disponibles para &quot;{permissionSearch}&quot;.</p>
+                    ) : (
+                      <p className="text-[11px] text-theme-accent/40 font-medium">Todos los permisos han sido asignados</p>
+                    )}
                   </div>
                 )}
               </div>

@@ -18,9 +18,11 @@ interface InventoryReviewDashboardProps {
   companyId: string
   sessionId: string
   initialReview?: InventorySessionReview | null
+  canApproveSession: boolean
+  canValidateTasks: boolean
 }
 
-export function InventoryReviewDashboard({ companyId, sessionId, initialReview }: InventoryReviewDashboardProps) {
+export function InventoryReviewDashboard({ companyId, sessionId, initialReview, canApproveSession, canValidateTasks }: InventoryReviewDashboardProps) {
   const [review, setReview] = useState<InventorySessionReview | null>(initialReview ?? null)
   const [counters, setCounters] = useState<InventoryParticipant[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -113,7 +115,7 @@ export function InventoryReviewDashboard({ companyId, sessionId, initialReview }
         ) : (
           <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
             {tasks.map(task => (
-              <InventoryTaskReviewCard key={task.id} companyId={companyId} task={task} review={review} onChanged={load} />
+               <InventoryTaskReviewCard key={task.id} companyId={companyId} task={task} review={review} onChanged={load} canValidateTasks={canValidateTasks} />
             ))}
           </div>
         )}
@@ -132,7 +134,7 @@ export function InventoryReviewDashboard({ companyId, sessionId, initialReview }
       />
 
       {/* Aprobación */}
-      <InventoryApprovalPanel companyId={companyId} sessionId={sessionId} review={review} />
+      <InventoryApprovalPanel companyId={companyId} sessionId={sessionId} review={review} canApprove={canApproveSession} />
     </div>
   )
 }

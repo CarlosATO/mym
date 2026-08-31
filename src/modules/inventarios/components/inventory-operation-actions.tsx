@@ -12,9 +12,10 @@ interface InventoryOperationActionsProps {
   companyId: string
   sessionId: string
   detail: InventorySessionDetail
+  canCloseSession: boolean
 }
 
-export function InventoryOperationActions({ companyId, sessionId, detail }: InventoryOperationActionsProps) {
+export function InventoryOperationActions({ companyId, sessionId, detail, canCloseSession }: InventoryOperationActionsProps) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
   const [confirm, setConfirm] = useState<'start' | 'close' | null>(null)
@@ -115,7 +116,7 @@ export function InventoryOperationActions({ companyId, sessionId, detail }: Inve
     return (
       <div className="space-y-3">
         {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
-        <button
+        {canCloseSession && <button
           type="button"
           onClick={() => setConfirm('close')}
           disabled={busy || !canClose}
@@ -124,7 +125,7 @@ export function InventoryOperationActions({ companyId, sessionId, detail }: Inve
         >
           <Lock className="h-4 w-4" />
           Cerrar conteo
-        </button>
+        </button>}
         {!canClose && (
           <p className="text-xs text-amber-700 dark:text-amber-300">
             {hasIncomplete ? `Hay ${tasks.filter(t => t.status !== 'COMPLETED').length} tarea(s) sin completar.` : ''}

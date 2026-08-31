@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { ClipboardList, Plus } from 'lucide-react'
 import { listActiveCompanyInventorySessions, getActiveCompanyWarehouses } from '@/app/actions/inventarios/sessions'
+import { getCampaignSessionCreatePermission } from '@/app/actions/inventarios/campaigns'
 import { InventoryPageHeader } from '@/modules/inventarios/components/inventory-page-header'
 import { InventorySessionFilters } from '@/modules/inventarios/components/inventory-session-filters'
 import { InventorySessionTable } from '@/modules/inventarios/components/inventory-session-table'
@@ -30,6 +31,7 @@ export default async function InventariosJornadasPage({ searchParams }: PageProp
   const pageSize = 25
 
   const { data: warehouses } = await getActiveCompanyWarehouses()
+  const { canCreate } = await getCampaignSessionCreatePermission()
 
   const { data, error, companyId } = await listActiveCompanyInventorySessions({
     status: status || undefined,
@@ -59,7 +61,7 @@ export default async function InventariosJornadasPage({ searchParams }: PageProp
         title="Secciones de conteo"
         description="Consulta y gestiona las secciones de conteo de la empresa."
         breadcrumb={['Inventarios', 'Secciones de conteo']}
-        action={
+        action={canCreate ? (
           <Link
             href="/dashboard/inventarios/jornadas/nueva"
             className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-theme-accent px-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-theme-accent-hover"
@@ -67,7 +69,7 @@ export default async function InventariosJornadasPage({ searchParams }: PageProp
             <Plus className="h-4 w-4" />
             Nueva sección de conteo
           </Link>
-        }
+        ) : undefined}
       />
 
       <InventorySessionFilters warehouses={warehouses ?? []} />

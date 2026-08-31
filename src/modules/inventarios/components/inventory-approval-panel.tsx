@@ -11,6 +11,7 @@ interface InventoryApprovalPanelProps {
   companyId: string
   sessionId: string
   review: InventorySessionReview
+  canApprove: boolean
 }
 
 function approvalIdempotencyKey(sessionId: string): string {
@@ -23,7 +24,7 @@ function approvalIdempotencyKey(sessionId: string): string {
   return key
 }
 
-export function InventoryApprovalPanel({ companyId, sessionId, review }: InventoryApprovalPanelProps) {
+export function InventoryApprovalPanel({ companyId, sessionId, review, canApprove }: InventoryApprovalPanelProps) {
   const router = useRouter()
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -60,7 +61,7 @@ export function InventoryApprovalPanel({ companyId, sessionId, review }: Invento
               : 'Resuelve todos los bloqueos para habilitar la aprobación.'}
           </p>
         </div>
-        <button
+        {canApprove && <button
           type="button"
           onClick={() => setConfirming(true)}
           disabled={!ready || busy}
@@ -68,7 +69,7 @@ export function InventoryApprovalPanel({ companyId, sessionId, review }: Invento
         >
           <BadgeCheck className="h-4 w-4" />
           Aprobar sección de conteo
-        </button>
+        </button>}
       </div>
 
       {error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>}

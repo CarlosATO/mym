@@ -4,6 +4,18 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getActiveCompanyId } from '@/app/actions/companies'
 
+async function requireLogisticaView() {
+  const supabase = await createClient()
+  const { data: allowed, error } = await supabase.rpc('has_permission', {
+    p_permission_code: 'module.logistica.view',
+  })
+
+  return {
+    supabase,
+    error: error || allowed !== true ? 'No autorizado para consultar Preparación de Pedidos.' : null,
+  }
+}
+
 export type SalesOrderClientData = {
   rut: string | null
   phone: string | null
@@ -135,7 +147,9 @@ export type SalesOrderPreparationTrace = {
 }
 
 export async function getSalesOrderPreparationBoard(companyId: string) {
-  const supabase = await createClient()
+  const { supabase, error: permissionError } = await requireLogisticaView()
+  if (permissionError) return { data: [], error: permissionError }
+
   const admin = await createAdminClient()
 
   // 1. Obtener contexto de la próxima ruta
@@ -184,7 +198,8 @@ export async function getSalesOrderPreparationBoard(companyId: string) {
 }
 
 export async function getSalesOrderPreparationItems(companyId: string, bsaleNvId: number) {
-  const supabase = await createClient()
+  const { supabase, error: permissionError } = await requireLogisticaView()
+  if (permissionError) return { data: [], error: permissionError }
 
   const { data, error } = await supabase
     .schema('integraciones')
@@ -203,7 +218,8 @@ export async function getSalesOrderPreparationItems(companyId: string, bsaleNvId
 }
 
 export async function previewSalesOrderPreparationCandidates(companyId: string, fromDate: string, toDate: string) {
-  const supabase = await createClient()
+  const { supabase, error: permissionError } = await requireLogisticaView()
+  if (permissionError) return { data: null, error: permissionError }
 
   const { data, error } = await supabase
     .rpc('preview_sales_order_preparation_candidates', {
@@ -228,7 +244,9 @@ export async function previewSalesOrderPreparationCandidates(companyId: string, 
 
 export async function previewNextRouteCandidates() {
   try {
-    const supabase = await createClient()
+    const { supabase, error: permissionError } = await requireLogisticaView()
+    if (permissionError) return { data: null, error: permissionError }
+
     const admin = await createAdminClient()
     
     const { data: { user } } = await supabase.auth.getUser()
@@ -279,6 +297,9 @@ export async function previewNextRouteCandidates() {
 
 export async function getSalesOrderPreparationTrace(): Promise<{ data: SalesOrderPreparationTrace | null; error: string | null }> {
   try {
+    const { error: permissionError } = await requireLogisticaView()
+    if (permissionError) return { data: null, error: permissionError }
+
     const admin = await createAdminClient()
     const companyId = await getActiveCompanyId()
     const { data, error } = await (admin as any)
@@ -333,7 +354,9 @@ export async function syncNextRoutePreparationCards(options?: { dryRun?: boolean
     throw new Error('Real materialization is not authorized from UI yet.')
   }
 
-  const supabase = await createClient()
+  const { supabase, error: permissionError } = await requireLogisticaView()
+  if (permissionError) return null
+
   const { data: { user } } = await supabase.auth.getUser()
 
   if (!user) {
@@ -361,7 +384,8 @@ export async function syncNextRoutePreparationCards(options?: { dryRun?: boolean
 }
 
 export async function getSalesOrderClientData(companyId: string, bsaleNvId: number): Promise<{ data: SalesOrderClientData | null, error: string | null }> {
-  const supabase = await createClient()
+  const { supabase, error: permissionError } = await requireLogisticaView()
+  if (permissionError) return { data: null, error: permissionError }
 
   // First get the client_id from the NV document
   const { data: doc, error: docError } = await supabase
@@ -431,10 +455,19 @@ export async function moveSalesOrderPreparationCard(params: {
     }
 
     // -----------------------------------------------------------------------
-    // 2. Validar rol usando el cliente admin (service_role) para leer portal
-    //    El cliente admin tiene schema portal por defecto (ver admin.ts)
-    //    Tablas reales: portal.users (nombre, apellido, role_id)
-    //                   portal.roles (id, name)
+    // 2. Validar permiso funcional con el cliente autenticado.
+    //    has_permission incluye el bypass canónico de system.admin.
+    // -----------------------------------------------------------------------
+    const { data: allowed, error: permissionError } = await supabase.rpc('has_permission', {
+      p_permission_code: 'logistica.preparation.manage',
+    })
+    if (permissionError || allowed !== true) {
+      return { ok: false, error: 'No tienes permiso para gestionar la preparación de pedidos.' }
+    }
+
+    // -----------------------------------------------------------------------
+    // 3. Obtener nombre real: nombre + apellido, con email como fallback
+    //    El cliente admin se usa solo después de validar autorización.
     // -----------------------------------------------------------------------
     const admin = createAdminClient()
 
@@ -448,20 +481,7 @@ export async function moveSalesOrderPreparationCard(params: {
       return { ok: false, error: 'No se pudo verificar el perfil del usuario' }
     }
 
-    const roleName = (profile.roles as any)?.name as string | undefined
-    const ALLOWED_ROLES = ['SUPER_USUARIO', 'GERENCIA', 'BODEGA']
-
-    if (!roleName || !ALLOWED_ROLES.includes(roleName)) {
-      return {
-        ok: false,
-        error: `Rol '${roleName ?? 'sin rol'}' no tiene permiso para mover tarjetas. Requiere: ${ALLOWED_ROLES.join(', ')}.`
-      }
-    }
-
-    // -----------------------------------------------------------------------
-    // 3. Obtener nombre real: nombre + apellido, con email como fallback
-    //    Columnas reales en portal.users: nombre, apellido, email
-    // -----------------------------------------------------------------------
+    // Columnas reales en portal.users: nombre, apellido, email
     const nombre   = (profile.nombre   as string | null) ?? ''
     const apellido = (profile.apellido as string | null) ?? ''
     const userName = `${nombre} ${apellido}`.trim() || (profile.email as string | null) || user.id
@@ -509,6 +529,9 @@ export async function getSalesOrderPreparationMovements(
   cardId: string
 ): Promise<{ data: SalesOrderPreparationMovement[]; error: string | null }> {
   try {
+    const { error: permissionError } = await requireLogisticaView()
+    if (permissionError) return { data: [], error: permissionError }
+
     // -----------------------------------------------------------------------
     // 1. Validar usuario autenticado (JWT)
     // -----------------------------------------------------------------------
@@ -567,6 +590,13 @@ export async function authorizeSalesOrderRouteException(params: {
     return { ok: false, error: 'No autorizado o sesión expirada' }
   }
 
+  const { data: allowed, error: permissionError } = await supabase.rpc('has_permission', {
+    p_permission_code: 'logistica.preparation.authorize_exception',
+  })
+  if (permissionError || allowed !== true) {
+    return { ok: false, error: 'No tienes permiso para autorizar excepciones de preparación.' }
+  }
+
   const companyId = await getActiveCompanyId()
   const adminClient = createAdminClient()
   
@@ -579,13 +609,6 @@ export async function authorizeSalesOrderRouteException(params: {
 
   if (profileError || !profile) {
     return { ok: false, error: 'No se pudo validar el perfil del usuario' }
-  }
-
-  const roleName = (profile?.roles as any)?.name
-  const allowedRoles = ['SUPER_USUARIO', 'GERENCIA', 'BODEGA']
-  
-  if (!allowedRoles.includes(roleName)) {
-    return { ok: false, error: 'No tienes permisos para autorizar excepciones' }
   }
 
   const authorizedByName =

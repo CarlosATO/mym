@@ -18,10 +18,12 @@ interface TasksStepProps {
   companyId: string
   sessionId: string
   users: CatalogUserOption[]
+  canAssignTasks: boolean
+  canCancelTasks: boolean
   onReadyChange?: (ready: boolean) => void
 }
 
-export function InventoryTasksStep({ companyId, sessionId, users, onReadyChange }: TasksStepProps) {
+export function InventoryTasksStep({ companyId, sessionId, users, canAssignTasks, canCancelTasks, onReadyChange }: TasksStepProps) {
   const router = useRouter()
   const [setup, setSetup] = useState<TasksSetup | null>(null)
   const [loading, setLoading] = useState(true)
@@ -197,7 +199,7 @@ export function InventoryTasksStep({ companyId, sessionId, users, onReadyChange 
                 )}
 
                 {!task ? (
-                  <div className="space-y-2">
+                  canAssignTasks ? <div className="space-y-2">
                     <p className="text-xs text-theme-text-muted/70">Esta zona no tiene tarea.</p>
                     <select
                       value={assignments[zone.id] ?? ''}
@@ -221,7 +223,7 @@ export function InventoryTasksStep({ companyId, sessionId, users, onReadyChange 
                       <Plus className="h-3.5 w-3.5" />
                       Crear tarea
                     </button>
-                  </div>
+                  </div> : <p className="text-xs text-theme-text-muted/70">Sin permiso para asignar tareas.</p>
                 ) : (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-2">
@@ -231,7 +233,9 @@ export function InventoryTasksStep({ companyId, sessionId, users, onReadyChange 
                       </span>
                     </div>
 
-                    {selectable.length > 0 ? (
+                    {!canAssignTasks ? (
+                      <p className="text-xs text-theme-text-muted/70">Sin permiso para reasignar tareas.</p>
+                    ) : selectable.length > 0 ? (
                       <div className="flex items-center gap-2">
                         <select
                           value=""
@@ -252,7 +256,7 @@ export function InventoryTasksStep({ companyId, sessionId, users, onReadyChange 
                       <p className="text-xs text-theme-text-muted/70">No hay otro tomador disponible.</p>
                     )}
 
-                    {task.status === 'ASSIGNED' && (
+                    {canCancelTasks && task.status === 'ASSIGNED' && (
                       <button
                         type="button"
                         onClick={() => cancelTask(task)}

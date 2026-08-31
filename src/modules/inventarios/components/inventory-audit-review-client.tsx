@@ -108,6 +108,7 @@ interface InventoryAuditReviewClientProps {
   campaignStatus: string | null
   initialCandidates: AuditCandidatesResult | null
   initialParticipants: EligibleAuditParticipant[] | null
+  canManageCampaigns: boolean
 }
 
 // Estado de alcance configurado por producto (solo aplica a NO_PREVIOUS_LOCATION).
@@ -234,6 +235,7 @@ export function InventoryAuditReviewClient({
   campaignStatus,
   initialCandidates,
   initialParticipants,
+  canManageCampaigns,
 }: InventoryAuditReviewClientProps) {
   const router = useRouter()
   const [candidates, setCandidates] = useState<AuditCandidatesResult | null>(initialCandidates)
@@ -387,7 +389,7 @@ export function InventoryAuditReviewClient({
   }, [selected, frozen])
 
   const toggleAll = useCallback(() => {
-    if (frozen) return
+    if (frozen || !canManageCampaigns) return
     const selectableItems = candidates?.items.filter(i => i.selectable) ?? []
     if (selectableItems.length > 0 && selectableItems.every(i => selected.has(i.bsale_variant_id))) {
       setSelected(new Set())
@@ -396,10 +398,10 @@ export function InventoryAuditReviewClient({
     }
     setSelected(new Set(selectableItems.map(i => i.bsale_variant_id)))
     setSelectedScopes({})
-  }, [candidates, selected, frozen])
+  }, [candidates, selected, frozen, canManageCampaigns])
 
   const openAssign = useCallback(() => {
-    if (frozen) return
+    if (frozen || !canManageCampaigns) return
     setAssignSuccess(null)
     idempotencyRef.current = makeKey()
     setAssignOpen(true)
@@ -416,7 +418,7 @@ export function InventoryAuditReviewClient({
         else setSearchScopesError(r.error ?? 'No se pudieron cargar las bodegas y zonas disponibles.')
       })
     }
-  }, [candidates, selected, campaignId, searchScopes, frozen])
+  }, [candidates, selected, campaignId, searchScopes, frozen, canManageCampaigns])
 
   const closeAssign = useCallback(() => {
     setAssignOpen(false)
@@ -444,7 +446,7 @@ export function InventoryAuditReviewClient({
   }, [])
 
   const handleAssign = useCallback(async () => {
-    if (frozen) return
+    if (frozen || !canManageCampaigns) return
     if (assigning || selected.size === 0) return
     if (!assignParticipant) {
       setError('Debes seleccionar un auditor para continuar.')
@@ -490,7 +492,7 @@ export function InventoryAuditReviewClient({
     void getActiveCompanyAuditEligibleParticipants(campaignId).then(r => {
       if (r.data) setParticipants(r.data.participants)
     })
-  }, [assigning, selected, assignParticipant, campaignId, candidates, selectedScopes, frozen])
+  }, [assigning, selected, assignParticipant, campaignId, candidates, selectedScopes, frozen, canManageCampaigns])
 
   const selectedCount = selected.size
   const totalPages = Math.max(1, Math.ceil((candidates?.total ?? 0) / PAGE_SIZE))

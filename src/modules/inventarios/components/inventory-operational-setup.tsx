@@ -28,6 +28,7 @@ interface InventoryOperationalSetupProps {
   sessionId: string
   campaignId: string
   readOnly?: boolean
+  canManageZones: boolean
 }
 
 interface ZoneAssigneeOption {
@@ -98,6 +99,7 @@ export function InventoryOperationalSetup({
   sessionId,
   campaignId,
   readOnly,
+  canManageZones,
 }: InventoryOperationalSetupProps) {
   const router = useRouter()
   const [scopes, setScopes] = useState<InventorySessionScopesResult | null>(null)
@@ -112,7 +114,7 @@ export function InventoryOperationalSetup({
   const [createError, setCreateError] = useState<string | null>(null)
   const createKeyRef = useRef<string | null>(null)
 
-  const editable = !readOnly
+  const editable = !readOnly && canManageZones
 
   const refresh = useCallback(async () => {
     const [scopesResult, setupResult] = await Promise.all([

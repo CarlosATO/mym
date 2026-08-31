@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { Monitor, Play, Plus } from 'lucide-react'
 import { listActiveCompanySessionsAll } from '@/app/actions/inventarios/sessions'
+import { getCampaignSessionCreatePermission } from '@/app/actions/inventarios/campaigns'
 import { InventoryPageHeader } from '@/modules/inventarios/components/inventory-page-header'
 import { InventoryStatusBadge } from '@/modules/inventarios/components/inventory-status-badge'
 import { InventoryEmptyState } from '@/modules/inventarios/components/inventory-empty-state'
@@ -12,6 +13,7 @@ export default async function InventariosOperacionPage() {
     listActiveCompanySessionsAll({ status: 'PREPARED' }),
     listActiveCompanySessionsAll({ status: 'COUNTING' }),
   ])
+  const { canCreate } = await getCampaignSessionCreatePermission()
 
   const companyId = prepared.companyId ?? counting.companyId
   const error = prepared.error ?? counting.error
@@ -26,7 +28,7 @@ export default async function InventariosOperacionPage() {
         title="Operación"
         description="Abre secciones de conteo preparadas y monitorea el avance del conteo."
         breadcrumb={['Inventarios', 'Operación']}
-        action={
+        action={canCreate ? (
           <Link
             href="/dashboard/inventarios/jornadas/nueva"
             className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-theme-accent px-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-theme-accent-hover"
@@ -34,7 +36,7 @@ export default async function InventariosOperacionPage() {
             <Plus className="h-4 w-4" />
             Nueva sección de conteo
           </Link>
-        }
+        ) : undefined}
       />
 
       <div className="rounded-xl border border-theme-border bg-theme-surface shadow-sm">

@@ -8,6 +8,7 @@ interface InventoryTaskReviewCardProps {
   task: InventorySessionTask
   review: InventorySessionReview
   onChanged: () => void
+  canValidateTasks: boolean
 }
 
 function contributionSummaryFor(review: InventorySessionReview, taskId: string): string {
@@ -16,7 +17,7 @@ function contributionSummaryFor(review: InventorySessionReview, taskId: string):
   return `${rows.length} contribucion(es) efectiva(s)`
 }
 
-export function InventoryTaskReviewCard({ companyId, task, review, onChanged }: InventoryTaskReviewCardProps) {
+export function InventoryTaskReviewCard({ companyId, task, review, onChanged, canValidateTasks }: InventoryTaskReviewCardProps) {
   const pending = !task.validated_at && !task.validated_by
   const statusLabel = task.cancelled_at
     ? 'Cancelada'
@@ -58,6 +59,7 @@ export function InventoryTaskReviewCard({ companyId, task, review, onChanged }: 
             task={task}
             contributionSummary={contributionSummaryFor(review, task.id)}
             onChanged={onChanged}
+            canValidateTasks={canValidateTasks}
           />
         </div>
       )}

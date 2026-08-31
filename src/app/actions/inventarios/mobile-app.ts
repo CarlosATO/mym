@@ -104,6 +104,13 @@ async function getAuthenticatedMobileRelease() {
 
   if (!user) return { release: null, error: 'Debes iniciar sesión para consultar la aplicación.' }
 
+  const { data: allowed, error: permissionError } = await supabase.rpc('has_permission', {
+    p_permission_code: 'inventarios.mobile_app.download',
+  })
+  if (permissionError || allowed !== true) {
+    return { release: null, error: 'No tienes permiso para descargar la App de Inventarios.' }
+  }
+
   const { data, error } = await supabase.rpc('get_active_mobile_release')
   if (error) {
     console.error('getActiveMobileRelease error:', error)

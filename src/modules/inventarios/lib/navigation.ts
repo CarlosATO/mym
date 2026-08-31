@@ -37,6 +37,7 @@ export const inventoryNavigation: ModuleNavigation = {
     id: 'nueva-seccion',
     label: 'Nueva sección de conteo',
     icon: Plus,
+    visibility: { allOf: ['inventarios.sessions.create'] },
     target: inventoryTarget(`${inventoryPath}/jornadas/nueva`),
   },
   home: inventoryItems.find(item => item.id === 'resumen'),

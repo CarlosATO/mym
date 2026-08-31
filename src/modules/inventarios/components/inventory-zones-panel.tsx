@@ -4,9 +4,10 @@ import { InventoryOperationalSetup } from '@/modules/inventarios/components/inve
 
 interface InventoryZonesPanelProps {
   detail: InventorySessionDetail
+  canManageZones: boolean
 }
 
-export async function InventoryZonesPanel({ detail }: InventoryZonesPanelProps) {
+export async function InventoryZonesPanel({ detail, canManageZones }: InventoryZonesPanelProps) {
   const importContextResult = await getInventorySessionImportContext(detail.session.id)
   const campaignId = importContextResult.data?.campaign_id
 
@@ -17,6 +18,7 @@ export async function InventoryZonesPanel({ detail }: InventoryZonesPanelProps) 
         sessionId={detail.session.id}
         campaignId={campaignId}
         readOnly={detail.session.status !== 'DRAFT'}
+        canManageZones={canManageZones}
       />
     )
   }

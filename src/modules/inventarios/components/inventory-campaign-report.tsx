@@ -8,9 +8,10 @@ import { InventoryErrorState } from '@/modules/inventarios/components/inventory-
 interface InventoryCampaignReportProps {
   campaignId: string
   campaignName: string
+  canManageCampaigns: boolean
 }
 
-export async function InventoryCampaignReport({ campaignId, campaignName }: InventoryCampaignReportProps) {
+export async function InventoryCampaignReport({ campaignId, campaignName, canManageCampaigns }: InventoryCampaignReportProps) {
   // La tabla inicia vacía: NO se consulta list_inventory_campaign_variances al
   // entrar. Solo summary + readiness para que cabecera, KPIs y preparación para
   // cierre estén disponibles de inmediato.
@@ -29,6 +30,7 @@ export async function InventoryCampaignReport({ campaignId, campaignName }: Inve
     <InventoryCampaignReportClient
       campaignId={campaignId}
       campaignName={campaignName}
+      canManageCampaigns={canManageCampaigns}
       companyId={companyId}
       initialSummary={summaryResult.data}
       initialReadiness={readinessResult.data}
