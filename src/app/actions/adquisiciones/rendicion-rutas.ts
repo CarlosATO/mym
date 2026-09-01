@@ -321,6 +321,58 @@ function normalizeIdentityText(value: unknown) {
   return String(value ?? '').trim().toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
 }
 
+async function normalizeRouteSettlementCustomerNames(
+  detail: RouteSettlementDetail,
+  companyId: string,
+): Promise<RouteSettlementDetail> {
+  const customerIds = [...new Set(detail.clients
+    .map(client => client.customer_bsale_id)
+    .filter((id): id is number => id != null))]
+  const integrationDb = createIntegracionesAdminClient()
+  const { data: customers, error } = customerIds.length > 0
+    ? await integrationDb
+      .from('bsale_clients')
+      .select('bsale_client_id, business_name, code')
+      .eq('company_id', companyId)
+      .in('bsale_client_id', customerIds)
+    : { data: [], error: null }
+  if (error) throw error
+
+  const canonicalById = new Map((customers ?? []).map(customer => [
+    Number(customer.bsale_client_id),
+    { businessName: customer.business_name, rut: customer.code },
+  ]))
+  const normalizedClients: RouteSettlementDetailClient[] = detail.clients.flatMap(client => {
+    const canonical = client.customer_bsale_id == null
+      ? null
+      : canonicalById.get(client.customer_bsale_id)
+    const normalized = {
+      ...client,
+      customer_name: canonical?.businessName?.trim() || client.customer_name,
+      rut: canonical?.rut?.trim() || client.rut,
+    }
+    if (client.customer_bsale_id !== null || client.invoices.length <= 1) return [normalized]
+
+    return client.invoices.map(invoice => ({
+      ...normalized,
+      invoice_count: 1,
+      expected_amount: invoice.expected_amount,
+      applied_amount: invoice.applied_amount,
+      pending_amount: invoice.unapplied_amount,
+      resolved_invoice_count: invoice.resolved_for_settlement ? 1 : 0,
+      unresolved_invoice_count: invoice.resolved_for_settlement ? 0 : 1,
+      review_required_count: invoice.resolution_type === 'REVIEW_REQUIRED' ? 1 : 0,
+      status: (invoice.invoice_result === 'PAID'
+        ? 'PAID'
+        : invoice.applied_amount > 0 ? 'PARTIAL' : 'PENDING') as RouteSettlementDetailClient['status'],
+      invoices: [invoice],
+      payments: [],
+    }))
+  })
+
+  return { ...detail, clients: normalizedClients }
+}
+
 async function requirePermission(db: any, userId: string, permissionCode: string) {
   const { data, error } = await db.schema('portal').rpc('user_has_permission', {
     p_user_id: userId,
@@ -845,7 +897,8 @@ export async function getRouteSettlementDetail(settlementId: string) {
       throw new Error('No se pudo cargar el detalle de la rendición.')
     }
 
-    return { data: data as RouteSettlementDetail, error: null }
+    const normalized = await normalizeRouteSettlementCustomerNames(data as RouteSettlementDetail, companyId)
+    return { data: normalized, error: null }
   } catch (err: any) {
     console.error('getRouteSettlementDetail error:', err)
     return { data: null, error: err.message }
