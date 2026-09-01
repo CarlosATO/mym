@@ -77,6 +77,20 @@ function quickResultFor(invoice: RouteSettlementDetailInvoice): QuickSelection {
   return 'CASH'
 }
 
+function persistedQuickResult(invoice: RouteSettlementDetailInvoice, payments: RouteSettlementDetailPayment[]): QuickSelection {
+  if (invoice.resolution_type === 'CREDIT' || invoice.invoice_result === 'CREDIT') return 'CREDIT'
+
+  const receivedMethod = payments.find(payment =>
+    !payment.voided_at && payment.allocations.some(allocation =>
+      !allocation.voided_at && allocation.settlement_item_id === invoice.settlement_item_id,
+    ),
+  )?.payment_method_received
+  if (receivedMethod === 'CASH' || receivedMethod === 'CHECK' || receivedMethod === 'TRANSFER') return receivedMethod
+
+  if (invoice.invoice_result === 'TRANSFER_PENDING_REVIEW') return 'TRANSFER'
+  return quickResultFor(invoice)
+}
+
 function quickEligible(invoice: RouteSettlementDetailInvoice) {
   return !invoice.resolved_for_settlement && quickAmount(invoice) > 0
 }
@@ -146,7 +160,7 @@ function QuickInvoiceRows({
     <div className="min-w-[720px] divide-y divide-theme-border/40">
         {client.invoices.map(invoice => {
           const eligible = quickEligible(invoice)
-           const result = results[invoice.settlement_item_id] ?? quickResultFor(invoice)
+           const result = results[invoice.settlement_item_id] ?? persistedQuickResult(invoice, client.payments)
            const needsResult = invoice.expected_payment_method === 'AL_DIA' && result === ''
            return <div key={invoice.settlement_item_id} className={`grid grid-cols-[4.5rem_1.2fr_0.9fr_1fr_1.15fr_1.15fr] items-center gap-2 px-2 py-1 text-xs transition-colors ${needsResult ? 'bg-amber-500/10' : eligible && selectedIds.includes(invoice.settlement_item_id) ? 'bg-theme-accent/[0.045]' : 'hover:bg-theme-text/[0.025]'}`}>
             <span><input type="checkbox" checked={eligible && selectedIds.includes(invoice.settlement_item_id)} disabled={!eligible} onChange={() => onToggle(invoice.settlement_item_id)} aria-label={`Procesar factura ${invoice.invoice_number}`} className="h-3.5 w-3.5 accent-theme-accent" /></span>
@@ -305,9 +319,9 @@ export function RouteSettlementClientView({ detail, onClose, canUpdateSettlement
 
   return (
     <div className="flex h-full min-h-0 flex-col animate-in fade-in duration-200">
-      <header className="shrink-0 border-b border-theme-border bg-theme-surface/80 px-4 py-3 lg:px-6">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 items-center gap-3">
+      <header className="shrink-0 border-b border-theme-border bg-theme-surface px-4 py-2 lg:px-6">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
             <button
               type="button"
               onClick={onClose}
@@ -317,21 +331,20 @@ export function RouteSettlementClientView({ detail, onClose, canUpdateSettlement
               <ArrowLeft className="h-4 w-4" />
             </button>
             <div className="min-w-0">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-theme-text-muted">Rendición de rutas</p>
-              <h1 className="truncate text-lg font-bold text-theme-text">{summary.settlement_number}</h1>
-              <p className="text-xs text-theme-text-muted">
-                Guía: <span className="font-semibold text-theme-text">{summary.route_guide_number}</span>
-                <span className="mx-1.5">·</span>{formatDate(summary.guide_date)}
-              </p>
+              <h1 className="truncate text-base font-bold leading-tight text-theme-text sm:text-lg">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-theme-text-muted">Guía de Ruta </span>
+                <span>{summary.route_guide_number}</span>
+                <span className="font-normal text-theme-text-muted"> · {formatDate(summary.guide_date)} · </span>
+                <span className="text-sm font-semibold text-theme-text">Rendición {summary.settlement_number}</span>
+              </h1>
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-4 border-t border-theme-border/60 pt-3 text-left lg:border-t-0 lg:pt-0">
+          <div className="grid shrink-0 grid-cols-3 gap-4 text-left">
             <SummaryValue label="Clientes" value={summary.customer_count} />
             <SummaryValue label="Facturas" value={summary.invoice_count} />
             <SummaryValue label="Total esperado" value={displayAmount(summary.total_expected)} emphasized />
           </div>
-        </div>
-        <div className="mt-3 flex flex-col gap-2 border-t border-theme-border/60 pt-3 text-xs lg:flex-row lg:items-center lg:justify-end">
+          <div className="ml-auto shrink-0 text-xs">
           {isClosed ? (
             <div className="inline-flex items-center gap-1.5 font-semibold text-theme-text"><LockKeyhole className="h-3.5 w-3.5" /> Rendición cerrada</div>
           ) : canCloseSettlement ? (
@@ -343,6 +356,7 @@ export function RouteSettlementClientView({ detail, onClose, canUpdateSettlement
               </button>
             </div>
           ) : null}
+          </div>
         </div>
       </header>
 

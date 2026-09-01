@@ -49,7 +49,7 @@ test('abrir una rendición existente no se resetea por el cambio de view', () =>
 test('la bandeja conserva un viewport interno con ancho mínimo profesional', () => {
   assert.match(table, /min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto/)
   assert.match(table, /min-w-\[1840px\]/)
-  assert.match(table, /sticky top-0 z-20/)
+  assert.match(table, /sticky top-0 z-40/)
   assert.match(panel, /h-\[calc\(100dvh-9\.75rem\)\] min-h-0 min-w-0 flex flex-col/)
   assert.match(panel, /lg:h-\[calc\(100dvh-7\.25rem\)\]/)
 })

@@ -3,26 +3,34 @@ import type { RouteSettlementsDashboardRow } from '@/app/actions/adquisiciones/r
 import { formatCurrency, formatDate } from '../utils/route-settlement-formatters'
 import { SettlementStatusBadge } from './route-settlement-badges'
 import { ArrowRight, Filter, Search, X } from 'lucide-react'
-import { OperationalTableResizeHandle, shouldIgnoreOperationalRowDoubleClick, useOperationalTableWidths, type OperationalTableColumn } from '@/components/ui/operational-table'
+import {
+  OperationalTableResizeHandle,
+  OperationalTableSortIndicator,
+  shouldIgnoreOperationalRowDoubleClick,
+  sortOperationalRows,
+  useOperationalTableSort,
+  useOperationalTableWidths,
+  type OperationalTableColumn,
+} from '@/components/ui/operational-table'
 
 const ROUTE_SETTLEMENTS_TABLE_KEY = 'mym:table:adquisiciones:rendicion-rutas'
 const ROUTE_SETTLEMENT_COLUMNS: OperationalTableColumn[] = [
-  { id: 'guide', defaultWidth: 110, minWidth: 95, maxWidth: 180 },
-  { id: 'settlement', defaultWidth: 125, minWidth: 105, maxWidth: 210 },
-  { id: 'date', defaultWidth: 95, minWidth: 85, maxWidth: 145 },
-  { id: 'route', defaultWidth: 140, minWidth: 115, maxWidth: 280 },
-  { id: 'driver', defaultWidth: 120, minWidth: 105, maxWidth: 240 },
-  { id: 'seller', defaultWidth: 120, minWidth: 105, maxWidth: 240 },
-  { id: 'expectedTotal', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
-  { id: 'cashExpected', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
-  { id: 'checkExpected', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
-  { id: 'cashReceived', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
-  { id: 'checkReceived', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
-  { id: 'cashDifference', defaultWidth: 110, minWidth: 100, maxWidth: 180 },
-  { id: 'transferConfirmed', defaultWidth: 115, minWidth: 105, maxWidth: 190 },
-  { id: 'transferPending', defaultWidth: 120, minWidth: 105, maxWidth: 200 },
-  { id: 'invoiceProgress', defaultWidth: 105, minWidth: 95, maxWidth: 180 },
-  { id: 'status', defaultWidth: 140, minWidth: 120, maxWidth: 220 },
+  { id: 'guide', defaultWidth: 110, minWidth: 95, maxWidth: 180, sortable: true, sortKey: 'guide_number', sortType: 'text' },
+  { id: 'settlement', defaultWidth: 125, minWidth: 105, maxWidth: 210, sortable: true, sortKey: 'settlement_number', sortType: 'text' },
+  { id: 'date', defaultWidth: 95, minWidth: 85, maxWidth: 145, sortable: true, sortKey: 'guide_date', sortType: 'date' },
+  { id: 'route', defaultWidth: 140, minWidth: 115, maxWidth: 280, sortable: true, sortKey: 'route_name', sortType: 'text' },
+  { id: 'driver', defaultWidth: 120, minWidth: 105, maxWidth: 240, sortable: true, sortKey: 'driver_name', sortType: 'text' },
+  { id: 'seller', defaultWidth: 120, minWidth: 105, maxWidth: 240, sortable: true, sortKey: 'seller_name', sortType: 'text' },
+  { id: 'expectedTotal', defaultWidth: 110, minWidth: 100, maxWidth: 180, sortable: true, sortKey: 'total_route_amount', sortType: 'number' },
+  { id: 'cashExpected', defaultWidth: 110, minWidth: 100, maxWidth: 180, sortable: true, sortKey: 'total_cash_expected', sortType: 'number' },
+  { id: 'checkExpected', defaultWidth: 110, minWidth: 100, maxWidth: 180, sortable: true, sortKey: 'total_check_expected', sortType: 'number' },
+  { id: 'cashReceived', defaultWidth: 110, minWidth: 100, maxWidth: 180, sortable: true, sortKey: 'total_cash_received', sortType: 'number' },
+  { id: 'checkReceived', defaultWidth: 110, minWidth: 100, maxWidth: 180, sortable: true, sortKey: 'total_check_received', sortType: 'number' },
+  { id: 'cashDifference', defaultWidth: 110, minWidth: 100, maxWidth: 180, sortable: true, sortKey: 'total_cash_difference', sortType: 'number' },
+  { id: 'transferConfirmed', defaultWidth: 115, minWidth: 105, maxWidth: 190, sortable: true, sortKey: 'total_transfer_confirmed', sortType: 'number' },
+  { id: 'transferPending', defaultWidth: 120, minWidth: 105, maxWidth: 200, sortable: true, sortKey: 'total_transfer_pending', sortType: 'number' },
+  { id: 'invoiceProgress', defaultWidth: 105, minWidth: 95, maxWidth: 180, sortable: true, sortKey: 'paid_count', sortType: 'number' },
+  { id: 'status', defaultWidth: 140, minWidth: 120, maxWidth: 220, sortable: true, sortKey: 'operational_status', sortType: 'text' },
   { id: 'actions', defaultWidth: 125, minWidth: 115, maxWidth: 190, sticky: 'right', resizable: false },
 ]
 
@@ -51,12 +59,13 @@ export function UnifiedRouteSettlementsTable({
   const [dateTo, setDateTo] = useState('')
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null)
   const { widths, setColumnWidth, persist, reset: resetWidths } = useOperationalTableWidths(ROUTE_SETTLEMENTS_TABLE_KEY, ROUTE_SETTLEMENT_COLUMNS)
+  const { sort, cycleSort } = useOperationalTableSort(ROUTE_SETTLEMENTS_TABLE_KEY, ROUTE_SETTLEMENT_COLUMNS)
 
   // Ref para distinguir doble clic de clic simple
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const filteredData = useMemo(() => {
-    return data.filter(row => {
+    const filtered = data.filter(row => {
        if (filterStatus !== 'ALL') {
          const isRendida = filterStatus === 'SETTLED' && (row.operational_status === 'SETTLED' || row.operational_status === 'CLOSED')
          if (!isRendida && row.operational_status !== filterStatus) return false
@@ -77,7 +86,8 @@ export function UnifiedRouteSettlementsTable({
 
       return true
     })
-  }, [data, dateFrom, dateTo, filterStatus, searchTerm])
+    return sortOperationalRows(filtered, sort, ROUTE_SETTLEMENT_COLUMNS, (row, sortKey) => row[sortKey as keyof RouteSettlementsDashboardRow])
+  }, [data, dateFrom, dateTo, filterStatus, searchTerm, sort])
 
   /** Clic simple: solo selecciona la fila (resalta), no abre ni crea nada */
   const handleRowClick = (rowId: string) => {
@@ -105,6 +115,26 @@ export function UnifiedRouteSettlementsTable({
   function resizeHandle(id: string) {
     const column = routeSettlementColumn(id)
     return <OperationalTableResizeHandle column={column} width={widths[id] ?? column.defaultWidth} onResize={width => setColumnWidth(column, width)} onResizeEnd={persist} />
+  }
+
+  function sortableHeader(id: string, label: string, className = '') {
+    const column = routeSettlementColumn(id)
+    const active = sort?.column === id
+    return (
+      <th className="relative border-r border-theme-border/30 px-3 py-2.5 font-bold text-theme-text-muted">
+        <button
+          type="button"
+          className={`group inline-flex w-full items-center justify-between gap-1 text-left ${className === 'text-right' ? 'justify-end' : className === 'text-center' ? 'justify-center' : ''}`}
+          onClick={() => cycleSort(column)}
+          aria-label={`Ordenar por ${label}`}
+          title={`Ordenar por ${label}`}
+        >
+          <span>{label}</span>
+          <OperationalTableSortIndicator active={active} direction={active ? sort?.direction : undefined} />
+        </button>
+        {resizeHandle(id)}
+      </th>
+    )
   }
 
   if (isLoading && data.length === 0) {
@@ -189,26 +219,26 @@ export function UnifiedRouteSettlementsTable({
          {isLoading && <div role="status" aria-live="polite" className="pointer-events-none absolute left-1/2 top-16 z-50 inline-flex -translate-x-1/2 items-center rounded-full border border-theme-border bg-theme-surface/95 px-3 py-1.5 text-[11px] font-semibold text-theme-text-muted shadow-md">Actualizando...</div>}
 
          <div className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto overscroll-contain">
-           <table className="w-full min-w-[1840px] table-fixed text-left text-xs whitespace-nowrap">
+            <table className="isolate w-full min-w-[1840px] table-fixed text-left text-xs whitespace-nowrap">
              <colgroup>{ROUTE_SETTLEMENT_COLUMNS.map(column => <col key={column.id} style={{ width: widths[column.id] ?? column.defaultWidth }} />)}</colgroup>
-             <thead className="sticky top-0 z-20 bg-theme-surface">
+              <thead className="sticky top-0 z-40 bg-theme-surface">
                <tr className="border-b border-theme-border/70 bg-theme-surface shadow-sm">
-               <th className="relative border-r border-theme-border/30 px-3 py-2.5 font-bold text-theme-text-muted">Guía{resizeHandle('guide')}</th>
-               <th className="relative border-r border-theme-border/30 px-3 py-2.5 font-bold text-theme-text-muted">Rendición{resizeHandle('settlement')}</th>
-               <th className="relative border-r border-theme-border/30 px-3 py-2.5 font-bold text-theme-text-muted">Fecha{resizeHandle('date')}</th>
-               <th className="relative border-r border-theme-border/30 px-3 py-2.5 font-bold text-theme-text-muted">Ruta{resizeHandle('route')}</th>
-               <th className="relative border-r border-theme-border/30 px-3 py-2.5 font-bold text-theme-text-muted">Conductor{resizeHandle('driver')}</th>
-               <th className="relative border-r border-theme-border/30 px-3 py-2.5 font-bold text-theme-text-muted">Vendedor{resizeHandle('seller')}</th>
-                <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Total guía{resizeHandle('expectedTotal')}</th>
-               <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Ef. esperado{resizeHandle('cashExpected')}</th>
-                <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Cheque esp.{resizeHandle('checkExpected')}</th>
-                 <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Ef. recibido{resizeHandle('cashReceived')}</th>
-                 <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Cheque rec.{resizeHandle('checkReceived')}</th>
-                 <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Dif. ef.{resizeHandle('cashDifference')}</th>
-               <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-right font-bold text-theme-text-muted">Transf. conf.{resizeHandle('transferConfirmed')}</th>
-               <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-center font-bold text-theme-text-muted">Transf. pend.{resizeHandle('transferPending')}</th>
-                <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-center font-bold text-theme-text-muted">Facturas{resizeHandle('invoiceProgress')}</th>
-               <th className="relative border-r border-theme-border/30 px-3 py-2.5 text-center font-bold text-theme-text-muted">Estado{resizeHandle('status')}</th>
+                {sortableHeader('guide', 'Guía')}
+                {sortableHeader('settlement', 'Rendición')}
+                {sortableHeader('date', 'Fecha')}
+                {sortableHeader('route', 'Ruta')}
+                {sortableHeader('driver', 'Conductor')}
+                {sortableHeader('seller', 'Vendedor')}
+                {sortableHeader('expectedTotal', 'Total guía', 'text-right')}
+                {sortableHeader('cashExpected', 'Ef. esperado', 'text-right')}
+                {sortableHeader('checkExpected', 'Cheque esp.', 'text-right')}
+                {sortableHeader('cashReceived', 'Ef. recibido', 'text-right')}
+                {sortableHeader('checkReceived', 'Cheque rec.', 'text-right')}
+                {sortableHeader('cashDifference', 'Dif. ef.', 'text-right')}
+                {sortableHeader('transferConfirmed', 'Transf. conf.', 'text-right')}
+                {sortableHeader('transferPending', 'Transf. pend.', 'text-center')}
+                {sortableHeader('invoiceProgress', 'Facturas', 'text-center')}
+                {sortableHeader('status', 'Estado', 'text-center')}
                <th className="sticky right-0 z-30 border-l border-theme-border bg-theme-surface px-3 py-2.5 text-center font-bold text-theme-text-muted">Acción</th>
             </tr>
           </thead>
@@ -224,6 +254,7 @@ export function UnifiedRouteSettlementsTable({
             ) : (
               filteredData.map((item) => {
                 const isSelected = selectedRowId === item.route_guide_id
+                const isPendingReception = item.operational_status === 'PENDING_SETTLEMENT'
                 const actionLabel = !item.settlement_id
                   ? 'Iniciar rendición'
                   : item.operational_status === 'CANCELLED'
@@ -237,11 +268,12 @@ export function UnifiedRouteSettlementsTable({
                     onClick={() => handleRowClick(item.route_guide_id)}
                      onDoubleClick={(event) => { if (!shouldIgnoreOperationalRowDoubleClick(event.target)) handleRowDoubleClick(item) }}
                     onKeyDown={handleKeyDown}
-                    className={`
+                    className={`group
                       cursor-pointer transition-colors select-none outline-none
-                      ${isSelected
-                        ? 'bg-theme-accent/10 ring-1 ring-inset ring-theme-accent/30'
-                        : 'hover:bg-theme-text/[0.03] focus:bg-theme-text/[0.04]'}
+                       ${isSelected ? 'ring-1 ring-inset ring-theme-accent/30' : ''}
+                       ${isPendingReception
+                         ? 'bg-emerald-50 hover:bg-emerald-100 focus:bg-emerald-100 dark:bg-emerald-950 dark:hover:bg-emerald-900 dark:focus:bg-emerald-900'
+                         : 'bg-theme-surface hover:bg-theme-surface-hover focus:bg-theme-surface-hover'}
                     `}
                   >
                      <td className="truncate px-3 py-2.5 font-bold text-theme-text" title={item.guide_number || undefined}>{item.guide_number || '—'}</td>
@@ -280,7 +312,7 @@ export function UnifiedRouteSettlementsTable({
                      <td className="truncate px-3 py-2.5 text-center">
                       <SettlementStatusBadge status={item.operational_status} />
                     </td>
-                     <td className="sticky right-0 z-10 bg-theme-surface px-3 py-2.5 text-center">
+                      <td className={`sticky right-0 z-30 border-l border-theme-border/60 px-3 py-2.5 text-center shadow-[-6px_0_10px_-10px_rgba(15,23,42,0.45)] ${isPendingReception ? 'bg-emerald-50 group-hover:bg-emerald-100 dark:bg-emerald-950 dark:group-hover:bg-emerald-900' : 'bg-theme-surface group-hover:bg-theme-surface-hover'}`}>
                       <button
                         type="button"
                         disabled={!item.settlement_id && !canCreateSettlement}

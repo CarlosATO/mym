@@ -36,6 +36,8 @@
     "test:route-fund-closure-attachment-key": "node --experimental-strip-types --test scripts/test-route-fund-closure-attachment-key.mjs",
     "test:pending-route-fund-deposits": "node --test scripts/test-pending-route-fund-deposits-read-model.mjs",
     "test:pending-route-fund-deposits-ui": "node --test scripts/test-pending-route-fund-deposits-ui.mjs",
+    "test:fund-closures-ui": "node --experimental-strip-types --test scripts/test-fund-closures-ui.mjs",
+    "test:pending-route-fund-origin": "node --test scripts/test-pending-route-fund-origin.mjs",
     "test:table-2d-route-settlements": "node --experimental-strip-types --test scripts/test-table-2d-route-settlements.mjs",
     "test:bsale-brand": "node --experimental-strip-types --test scripts/test-bsale-brand.mjs",
     "test:bsale-brand-supplier-links": "node --experimental-strip-types --test scripts/test-bsale-brand-supplier-links.mjs",

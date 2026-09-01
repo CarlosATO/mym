@@ -1,13 +1,32 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { getPendingRouteFundGroups, getFundClosures, getFundClosureById, executeCloseFundClosure, addClosureExpense, addClosureDeposit, getAttachmentSignedUrl, canCancelFundClosure, cancelFundClosure } from '@/app/actions/adquisiciones/route-fund-closures'
 import { PendingRouteFundGroup, RouteFundClosure } from './fund-closures-types'
 import { CreateFundClosureDialog } from './components/create-fund-closure-dialog'
 import { FundClosureDeposits } from './components/fund-closure-deposits'
-import { RefreshCw, Plus, AlertTriangle, FileText, Wallet, Eye, Download, Paperclip, Search } from 'lucide-react'
+import { RefreshCw, Plus, AlertTriangle, FileText, Wallet, Eye, Download, Paperclip, Search, ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatCivilDate, formatInstantInSantiago, todayInSantiago } from '@/lib/datetime'
+import { sortOperationalRows, type OperationalTableColumn, type OperationalTableSort, type OperationalTableSortDirection } from '@/components/ui/operational-table'
+
+const PENDING_FUNDS_TABLE_COLUMNS: OperationalTableColumn[] = [
+  { id: 'origin', defaultWidth: 180, minWidth: 140, sortable: true, sortKey: 'settlement_number', sortType: 'text' },
+  { id: 'guide', defaultWidth: 145, minWidth: 120, sortable: true, sortKey: 'guide_number', sortType: 'text' },
+  { id: 'date', defaultWidth: 145, minWidth: 125, sortable: true, sortKey: 'closed_at', sortType: 'date' },
+  { id: 'custodian', defaultWidth: 170, minWidth: 140, sortable: true, sortKey: 'custody_name', sortType: 'text' },
+  { id: 'cashReceived', defaultWidth: 145, minWidth: 125, sortable: true, sortKey: 'cash_received', sortType: 'number' },
+  { id: 'expenses', defaultWidth: 120, minWidth: 110, sortable: true, sortKey: 'active_route_expenses', sortType: 'number' },
+  { id: 'netCash', defaultWidth: 155, minWidth: 135, sortable: true, sortKey: 'net_cash_pending', sortType: 'number' },
+  { id: 'checks', defaultWidth: 110, minWidth: 100, sortable: true, sortKey: 'checks_received', sortType: 'number' },
+]
+
+function sortIndicator(active: boolean, direction?: OperationalTableSortDirection) {
+  if (!active) return <ChevronsUpDown aria-hidden="true" className="h-3.5 w-3.5 text-theme-text-muted/40" />
+  return direction === 'asc'
+    ? <ChevronUp aria-label="Orden ascendente" className="h-3.5 w-3.5 text-theme-accent" />
+    : <ChevronDown aria-label="Orden descendente" className="h-3.5 w-3.5 text-theme-accent" />
+}
 
 function formatPendingAmount(value: number) {
   return `$${Number(value || 0).toLocaleString('es-CL')}`
@@ -53,6 +72,7 @@ export function FundClosuresWorkspace() {
   const [preparedSelection, setPreparedSelection] = useState<PendingRouteFundGroup[] | null>(null)
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isLoadingPending, setIsLoadingPending] = useState(false)
+  const [pendingSort, setPendingSort] = useState<OperationalTableSort | null>(null)
   
   // History view state
   const [closures, setClosures] = useState<any[]>([])
@@ -128,6 +148,19 @@ export function FundClosuresWorkspace() {
   }
 
   const selectedFunds = pendingFunds.filter(fund => selectedPendingIds.has(pendingGroupKey(fund)))
+  const sortedPendingFunds = useMemo(
+    () => sortOperationalRows(pendingFunds, pendingSort, PENDING_FUNDS_TABLE_COLUMNS, (row, sortKey) => row[sortKey as keyof PendingRouteFundGroup]),
+    [pendingFunds, pendingSort],
+  )
+
+  const cyclePendingSort = (column: OperationalTableColumn) => {
+    if (!column.sortKey) return
+    setPendingSort(current => current?.column !== column.id
+      ? { column: column.id, direction: 'asc' }
+      : current.direction === 'asc'
+        ? { column: column.id, direction: 'desc' }
+        : null)
+  }
   const selectedTotals = selectedFunds.reduce((totals, fund) => ({
     cashReceived: totals.cashReceived + Number(fund.cash_received || 0),
     expenses: totals.expenses + Number(fund.active_route_expenses || 0),
@@ -179,7 +212,7 @@ export function FundClosuresWorkspace() {
         </button>
       </div>
 
-      <div className="flex-1 overflow-auto p-4">
+       <div className="flex-1 overflow-auto p-3">
         {activeTab === 'PENDING' ? (
           <div className="flex flex-col gap-4">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -211,21 +244,22 @@ export function FundClosuresWorkspace() {
               </div>
             )}
 
-            <div className="bg-theme-surface border border-theme-border rounded-xl overflow-hidden">
-              <table className="w-full text-left text-sm text-theme-text">
-                <thead className="bg-theme-text/5 border-b border-theme-border text-theme-text-muted">
+             <div className="bg-theme-surface border border-theme-border rounded-xl overflow-hidden">
+               <table className="w-full text-left text-sm text-theme-text">
+                 <thead className="bg-theme-text/5 border-b border-theme-border text-theme-text-muted">
                   <tr>
-                    <th className="p-3 w-10">
+                    <th className="px-3 py-2 w-10">
                       <input type="checkbox" checked={selectedPendingIds.size === pendingFunds.length && pendingFunds.length > 0} onChange={(e) => handleSelectAll(e.target.checked)} aria-label="Seleccionar Rendiciones" />
                     </th>
-                     <th className="p-3 font-semibold">Origen</th>
-                    <th className="p-3 font-semibold">Guía</th>
-                    <th className="p-3 font-semibold">Fecha</th>
-                    <th className="p-3 font-semibold">Custodio</th>
-                    <th className="p-3 font-semibold text-right">Efectivo recibido</th>
-                    <th className="p-3 font-semibold text-right">Gastos</th>
-                    <th className="p-3 font-semibold text-right">Efectivo a entregar</th>
-                    <th className="p-3 font-semibold text-right">Cheques</th>
+                    {PENDING_FUNDS_TABLE_COLUMNS.map(column => {
+                      const active = pendingSort?.column === column.id
+                      const label = column.id === 'origin' ? 'Origen' : column.id === 'guide' ? 'Guía' : column.id === 'date' ? 'Fecha' : column.id === 'custodian' ? 'Custodio' : column.id === 'cashReceived' ? 'Efectivo recibido' : column.id === 'expenses' ? 'Gastos' : column.id === 'netCash' ? 'Efectivo a entregar' : 'Cheques'
+                      return <th key={column.id} className={`px-3 py-2 font-semibold ${['cashReceived', 'expenses', 'netCash', 'checks'].includes(column.id) ? 'text-right' : ''}`}>
+                        <button type="button" onClick={() => cyclePendingSort(column)} className={`group inline-flex w-full items-center gap-1 ${['cashReceived', 'expenses', 'netCash', 'checks'].includes(column.id) ? 'justify-end' : 'justify-start'}`} aria-label={`Ordenar por ${label}`} title={`Ordenar por ${label}`}>
+                          <span>{label}</span>{sortIndicator(active, active ? pendingSort?.direction : undefined)}
+                        </button>
+                      </th>
+                    })}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-theme-border">
@@ -233,21 +267,26 @@ export function FundClosuresWorkspace() {
                     <tr>
                        <td colSpan={9} className="p-8 text-center text-theme-text-muted">No hay fondos pendientes por rendir.</td>
                     </tr>
-                  ) : pendingFunds.map(fund => (
-                    <tr key={pendingGroupKey(fund)} className={selectedPendingIds.has(pendingGroupKey(fund)) ? 'bg-theme-accent/10' : 'hover:bg-theme-text/5'}>
-                      <td className="p-3">
-                        <input type="checkbox" checked={selectedPendingIds.has(pendingGroupKey(fund))} onChange={() => togglePendingSelection(pendingGroupKey(fund))} aria-label={`Seleccionar ${fund.settlement_number}`} />
-                      </td>
-                       <td className="p-3 font-semibold"><div className="flex flex-wrap gap-1">{fund.payment_ids.length > 0 && <span className="rounded bg-theme-text/10 px-1.5 py-0.5 text-[10px] font-bold text-theme-text">Rendición</span>}{(fund.post_settlement_payment_ids?.length ?? 0) > 0 && <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-bold text-violet-700 dark:text-violet-300">Cobro posterior</span>}</div><span className="mt-1 block">{fund.settlement_number}</span></td>
-                      <td className="p-3 font-semibold">{fund.guide_number}</td>
-                      <td className="p-3 whitespace-nowrap text-theme-text-muted">{formatInstantInSantiago(fund.closed_at)}</td>
-                      <td className="p-3 text-theme-text-muted">{fund.custody_name ?? fund.custody_user_id}</td>
-                      <td className="p-3 text-right font-mono font-bold">{formatPendingAmount(fund.cash_received)}</td>
-                      <td className="p-3 text-right font-mono">{formatPendingAmount(fund.active_route_expenses)}</td>
-                      <td className="p-3 text-right font-mono font-bold text-theme-text">{formatPendingAmount(fund.net_cash_pending)}</td>
-                      <td className="p-3 text-right font-mono">{formatPendingAmount(fund.checks_received)}</td>
-                    </tr>
-                  ))}
+                   ) : sortedPendingFunds.map(fund => {
+                    const isCarryForward = fund.pending_origin_status === 'CARRY_FORWARD'
+                    const rowTone = isCarryForward
+                      ? 'bg-amber-50 hover:bg-amber-100 dark:bg-amber-950 dark:hover:bg-amber-900'
+                      : 'bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950 dark:hover:bg-emerald-900'
+                    const selectedTone = isCarryForward ? 'bg-amber-100 dark:bg-amber-950' : 'bg-emerald-100 dark:bg-emerald-950'
+                    return <tr key={pendingGroupKey(fund)} className={`transition-colors ${selectedPendingIds.has(pendingGroupKey(fund)) ? `${selectedTone} ring-1 ring-inset ring-theme-accent/30` : rowTone}`}>
+                       <td className="px-3 py-1.5">
+                         <input type="checkbox" checked={selectedPendingIds.has(pendingGroupKey(fund))} onChange={() => togglePendingSelection(pendingGroupKey(fund))} aria-label={`Seleccionar ${fund.settlement_number}`} className="h-3.5 w-3.5" />
+                       </td>
+                        <td className="px-3 py-1.5 font-semibold"><div className="flex flex-wrap gap-0.5">{fund.payment_ids.length > 0 && <span className="rounded bg-theme-text/10 px-1 py-0.5 text-[9px] font-bold text-theme-text">Rendición</span>}{(fund.post_settlement_payment_ids?.length ?? 0) > 0 && <span className="rounded bg-violet-500/10 px-1 py-0.5 text-[9px] font-bold text-violet-700 dark:text-violet-300">Cobro posterior</span>}</div><span className="mt-0.5 block">{fund.settlement_number}</span></td>
+                       <td className="px-3 py-1.5 font-semibold">{fund.guide_number}</td>
+                       <td className="px-3 py-1.5 whitespace-nowrap text-theme-text-muted">{formatInstantInSantiago(fund.closed_at)}</td>
+                       <td className="px-3 py-1.5 text-theme-text-muted">{fund.custody_name ?? fund.custody_user_id}</td>
+                       <td className="px-3 py-1.5 text-right font-mono font-bold">{formatPendingAmount(fund.cash_received)}</td>
+                       <td className="px-3 py-1.5 text-right font-mono">{formatPendingAmount(fund.active_route_expenses)}</td>
+                       <td className="px-3 py-1.5 text-right font-mono font-bold text-theme-text">{formatPendingAmount(fund.net_cash_pending)}</td>
+                       <td className="px-3 py-1.5 text-right font-mono">{formatPendingAmount(fund.checks_received)}</td>
+                     </tr>
+                   })}
                 </tbody>
               </table>
             </div>

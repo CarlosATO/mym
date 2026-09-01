@@ -13,6 +13,9 @@ const [clientView, formatters, bulkMigration] = await Promise.all([
 
 test('AL_DIA no tiene resultado rápido preseleccionado y se etiqueta Al día', () => {
   assert.match(clientView, /expected_payment_method === 'AL_DIA'\) return ''/)
+  assert.match(clientView, /function persistedQuickResult\(invoice: RouteSettlementDetailInvoice, payments: RouteSettlementDetailPayment\[\]\)/)
+  assert.match(clientView, /invoice\.resolution_type === 'CREDIT' \|\| invoice\.invoice_result === 'CREDIT'/)
+  assert.match(clientView, /receivedMethod === 'CASH' \|\| receivedMethod === 'CHECK' \|\| receivedMethod === 'TRANSFER'/)
   assert.match(clientView, /<option value="">Seleccionar resultado…<\/option>/)
   assert.match(clientView, /if \(method === 'AL_DIA'\) return 'Al día'/)
   assert.match(formatters, /case 'AL_DIA': return 'Al día'/)

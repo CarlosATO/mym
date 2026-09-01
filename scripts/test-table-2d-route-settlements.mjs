@@ -31,17 +31,32 @@ test('resize, persistencia, reset, separadores, truncado y tooltip permanecen co
 
 test('viewport, scroll y header sticky especializados no se modifican', () => {
   assert.match(table, /min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto overscroll-contain/)
-  assert.match(table, /sticky top-0 z-20/)
+  assert.match(table, /sticky top-0 z-40/)
   assert.match(panel, /h-\[calc\(100dvh-9\.75rem\)\] min-h-0 min-w-0 flex flex-col/)
   assert.match(panel, /lg:h-\[calc\(100dvh-7\.25rem\)\]/)
 })
 
-test('no ofrece sorting falso y el dataset sigue siendo completo/local', () => {
-  assert.doesNotMatch(table, /useOperationalTableSort/)
-  assert.doesNotMatch(table, /OperationalTableSortIndicator/)
-  assert.doesNotMatch(table, /sortOperationalRows/)
+test('ordena localmente el dataset completo sin romper los filtros', () => {
+  assert.match(table, /useOperationalTableSort\(ROUTE_SETTLEMENTS_TABLE_KEY, ROUTE_SETTLEMENT_COLUMNS\)/)
+  assert.match(table, /OperationalTableSortIndicator/)
+  assert.match(table, /sortOperationalRows\(filtered, sort, ROUTE_SETTLEMENT_COLUMNS/)
   assert.match(table, /data\.filter\(row =>/)
   assert.match(action, /export async function getRouteSettlementsDashboardData\(\)/)
+})
+
+test('resalta la fila completa según el estado operativo vigente', () => {
+  assert.match(table, /const isPendingReception = item\.operational_status === 'PENDING_SETTLEMENT'/)
+  assert.match(table, /bg-emerald-50/)
+  assert.match(table, /bg-theme-surface/)
+  assert.match(table, /sticky right-0 z-30 border-l border-theme-border\/60/)
+  assert.match(table, /isPendingReception \? 'bg-emerald-50 group-hover:bg-emerald-100/)
+})
+
+test('sticky Acción queda aislada, por encima y con fondos sólidos por estado', () => {
+  assert.match(table, /className="isolate w-full min-w-\[1840px\]/)
+  assert.match(table, /thead className="sticky top-0 z-40 bg-theme-surface"/)
+  assert.match(table, /bg-emerald-50 group-hover:bg-emerald-100 dark:bg-emerald-950/)
+  assert.match(table, /bg-theme-surface group-hover:bg-theme-surface-hover/)
 })
 
 test('refresh conserva filas y usa indicador sin desmontar la tabla', () => {

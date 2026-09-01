@@ -118,6 +118,7 @@ export interface PendingRouteFundGroup {
   payment_ids: string[];
   post_settlement_payment_ids?: string[];
   physical_items?: PendingPhysicalFund[];
+  pending_origin_status: 'READY' | 'CARRY_FORWARD';
 }
 
 export type PendingFundSource = 'ROUTE_SETTLEMENT_PAYMENT' | 'POST_SETTLEMENT_PAYMENT';
