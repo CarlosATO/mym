@@ -1,5 +1,5 @@
 import type { ActiveMatcher, ModuleNavigation, NavigationLocation } from '@/components/layout/module-shell-types'
-import { ArrowLeftRight, CalendarDays, ChartNoAxesCombined, ClipboardList, GitMerge, History, House, Layers3, Map, MapPin, Package, PackageOpen, SlidersHorizontal, Warehouse } from 'lucide-react'
+import { ArrowLeftRight, CalendarDays, ChartNoAxesCombined, ClipboardList, GitMerge, History, House, Layers3, Map, Package, PackageOpen, SlidersHorizontal, Warehouse } from 'lucide-react'
 
 const logisticaPath = '/dashboard/logistica'
 const actionIds = new Set(['resumen', 'bodegas', 'ubicaciones', 'productos', 'calendario_despacho', 'preparacion_pedidos', 'recepciones', 'traspasos', 'ajustes', 'guias_ruta', 'stock', 'kardex', 'trazabilidad', 'reportes_log'])
@@ -30,7 +30,6 @@ export const wmsNavigation: ModuleNavigation = {
       label: 'Parámetros',
       items: [
         { id: 'bodegas', label: 'Bodegas', icon: Warehouse, target: actionTarget('catalogos', 'bodegas'), active: actionMatcher('bodegas') },
-        { id: 'ubicaciones', label: 'Ubicaciones', icon: MapPin, target: actionTarget('catalogos', 'ubicaciones'), active: actionMatcher('ubicaciones') },
         { id: 'productos', label: 'Productos', icon: Package, target: actionTarget('catalogos', 'productos'), active: actionMatcher('productos') },
         { id: 'calendario_despacho', label: 'Calendario de Despacho', icon: CalendarDays, target: actionTarget('catalogos', 'calendario_despacho'), active: actionMatcher('calendario_despacho') },
       ],

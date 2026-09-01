@@ -7,7 +7,8 @@ import { LocationDetailPanel } from './location-detail-panel'
 import { LocationForm } from './location-form'
 import { LocationBulkForm } from './location-bulk-form'
 import { AisleManagementModal } from './aisle-management-modal'
-import { Maximize, ZoomIn, ZoomOut, RefreshCw, Save, Map as MapIcon, Package, MapPin, Plus, Sparkles, MoreHorizontal } from 'lucide-react'
+import { LocationLabelPrintModal } from './location-label-print-modal'
+import { Maximize, ZoomIn, ZoomOut, RefreshCw, Save, Map as MapIcon, Package, MapPin, Plus, Sparkles, MoreHorizontal, Printer, ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 function WarehouseAisleTable({
@@ -108,9 +109,11 @@ function WarehouseAisleTable({
 interface WarehouseMapViewProps {
   warehouseId: string
   warehouseName: string
+  warehouseActive: boolean
+  onDataChange?: () => void
 }
 
-export function WarehouseMapView({ warehouseId, warehouseName }: WarehouseMapViewProps) {
+export function WarehouseMapView({ warehouseId, warehouseName, warehouseActive, onDataChange }: WarehouseMapViewProps) {
   const [locations, setLocations] = useState<LocationWithLayout[]>([])
   const [stock, setStock] = useState<StockByLocation[]>([])
   const [loading, setLoading] = useState(true)
@@ -118,6 +121,8 @@ export function WarehouseMapView({ warehouseId, warehouseName }: WarehouseMapVie
   const [selectedLocation, setSelectedLocation] = useState<any | null>(null)
   const [highlightLocationId, setHighlightLocationId] = useState<string | null>(null)
   const [managingAisle, setManagingAisle] = useState<string | null>(null)
+  const [showLabelPrint, setShowLabelPrint] = useState(false)
+  const [expandedAisles, setExpandedAisles] = useState<Set<string>>(new Set())
   
   // Floor support
   const availableFloors = useMemo(() => {
@@ -186,8 +191,6 @@ export function WarehouseMapView({ warehouseId, warehouseName }: WarehouseMapVie
 
   // Group and sort locations
   const { groups, incomplete } = useMemo(() => {
-    const usesAisles = locations.some(l => !!l.aisle)
-
     const groupsObj: Record<string, any[]> = {}
     const incompleteArr: any[] = []
 
@@ -196,25 +199,14 @@ export function WarehouseMapView({ warehouseId, warehouseName }: WarehouseMapVie
       const stockCount = stockItems.reduce((acc, curr) => acc + curr.quantity, 0)
       const itemCount = new Set(stockItems.map(s => s.product_id)).size
       
-      const locExt = { ...loc, stockCount, itemCount, isIncomplete: false }
+      const normalizedAisle = loc.aisle?.trim().toUpperCase() || null
+      const locExt = { ...loc, aisle: normalizedAisle, stockCount, itemCount, isIncomplete: false }
 
-      // Check if incomplete
-      const isMissingAisleParts = usesAisles && (!loc.rack || !loc.level || !loc.position)
-      const endsWithP = loc.code.endsWith('-P')
-      const missingP = !loc.position && loc.code.toUpperCase().includes('P')
-      
-      // Additional safety check for malformed codes
-      const isIncomplete = isMissingAisleParts || endsWithP || missingP
-
-      locExt.isIncomplete = isIncomplete
-
-      if (isIncomplete) {
-        incompleteArr.push(locExt)
-      } else {
-        const groupName = loc.aisle ? `Pasillo ${loc.aisle}` : 'Zona General'
-        if (!groupsObj[groupName]) groupsObj[groupName] = []
-        groupsObj[groupName].push(locExt)
-      }
+      // Only fully described aisle/rack/level/position locations use the hierarchy.
+      // Optional physical fields are valid, so simple locations remain neutral.
+      const groupName = normalizedAisle ? `Pasillo ${normalizedAisle}` : 'Otras ubicaciones'
+      if (!groupsObj[groupName]) groupsObj[groupName] = []
+      groupsObj[groupName].push(locExt)
     })
 
     // Sort inside groups by rack, level, position
@@ -247,8 +239,26 @@ export function WarehouseMapView({ warehouseId, warehouseName }: WarehouseMapVie
   }).length
   const locationsEmpty = totalLocations - locationsWithStock
 
+  if (panelMode === 'bulk') {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-theme-surface">
+        <LocationBulkForm
+          warehouseId={warehouseId}
+          warehouseName={warehouseName}
+          warehouseActive={warehouseActive}
+          onClose={() => setPanelMode(null)}
+          onSuccess={async () => {
+            await load()
+            setPanelMode(null)
+            onDataChange?.()
+          }}
+        />
+      </div>
+    )
+  }
+
   return (
-    <div className="flex-1 relative bg-theme-surface overflow-hidden flex flex-col">
+    <div className="flex min-h-0 flex-1 relative bg-theme-surface overflow-hidden flex flex-col">
       {/* Toolbar */}
       <div className="h-14 border-b border-theme-border flex items-center justify-between px-4 bg-theme-text/[0.015] shrink-0">
         <div className="flex items-center gap-6">
@@ -271,6 +281,9 @@ export function WarehouseMapView({ warehouseId, warehouseName }: WarehouseMapVie
           <button onClick={() => { setSelectedLocation(null); setPanelMode('bulk'); }} className="px-3 py-1.5 rounded-lg bg-theme-accent/10 text-theme-accent hover:bg-theme-accent/20 text-xs font-bold transition-colors flex items-center gap-1.5">
             <Sparkles className="w-4 h-4" /> Masivo
           </button>
+          <button onClick={() => setShowLabelPrint(true)} disabled={!warehouseActive} title={!warehouseActive ? 'La bodega está inactiva' : 'Imprimir etiquetas'} className="px-3 py-1.5 rounded-lg border border-theme-border text-theme-text hover:bg-theme-text/5 text-xs font-bold transition-colors flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-40">
+            <Printer className="w-4 h-4" /> Imprimir etiquetas
+          </button>
           <div className="w-px h-6 bg-theme-border mx-1" />
           <button onClick={load} className="p-1.5 rounded-lg hover:bg-theme-text/5 text-theme-text-muted transition-colors" title="Actualizar plano">
             <RefreshCw className="w-4 h-4" />
@@ -279,7 +292,7 @@ export function WarehouseMapView({ warehouseId, warehouseName }: WarehouseMapVie
       </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex overflow-hidden min-w-0 relative">
+      <div className="flex min-h-0 flex-1 flex overflow-hidden min-w-0 relative">
         {locations.length === 0 ? (
           <div className="flex-1 flex flex-col items-center justify-center bg-theme-text/5 min-w-0">
             <MapIcon className="w-16 h-16 text-theme-text-muted/20 mb-4" />
@@ -313,9 +326,22 @@ export function WarehouseMapView({ warehouseId, warehouseName }: WarehouseMapVie
                           <MoreHorizontal className="w-4 h-4" />
                         </button>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => setExpandedAisles(current => {
+                          const next = new Set(current)
+                          if (next.has(groupName)) next.delete(groupName)
+                          else next.add(groupName)
+                          return next
+                        })}
+                        className="rounded p-1.5 text-theme-text-muted transition-colors hover:bg-theme-text/10 hover:text-theme-text"
+                        aria-label={expandedAisles.has(groupName) ? `Contraer ${groupName}` : `Expandir ${groupName}`}
+                      >
+                        <ChevronDown className={cn('h-4 w-4 transition-transform', expandedAisles.has(groupName) && 'rotate-180')} />
+                      </button>
                     </div>
                   </div>
-                  {(() => {
+                  {expandedAisles.has(groupName) && (() => {
                     const racksSet = new Set<string>()
                     const levelsSet = new Set<string>()
                     groupLocations.forEach(l => {
@@ -326,7 +352,11 @@ export function WarehouseMapView({ warehouseId, warehouseName }: WarehouseMapVie
                     const racks = Array.from(racksSet).sort((a, b) => collator.compare(a, b))
                     const levels = Array.from(levelsSet).sort((a, b) => collator.compare(b, a)) // Descending (top to bottom)
 
-                    if (racks.length === 0 || levels.length === 0) {
+                    // Simple/partial locations must never enter the matrix: its
+                    // cell filter requires both rack and level and would omit
+                    // valid locations that intentionally have either optional
+                    // field empty.
+                    if (groupName === 'Otras ubicaciones' || racks.length === 0 || levels.length === 0) {
                       return (
                         <div className="flex flex-wrap gap-3">
                           {groupLocations.map(loc => (
@@ -405,14 +435,22 @@ export function WarehouseMapView({ warehouseId, warehouseName }: WarehouseMapVie
 
         {panelMode === 'detail' && selectedLocation && (
           <aside className="w-[420px] shrink-0 h-full border-l border-theme-border shadow-[-10px_0_30px_-15px_rgba(0,0,0,0.1)]">
-            <LocationDetailPanel
+                    <LocationDetailPanel
               locationId={selectedLocation.id}
               locationCode={selectedLocation.code}
               isActive={selectedLocation.is_active}
               onClose={() => setPanelMode(null)}
               onEdit={() => setPanelMode('edit')}
+              onDelete={async () => {
+                await load()
+                onDataChange?.()
+                setSelectedLocation(null)
+                setPanelMode(null)
+              }}
               onStatusChange={async () => {
                 await load();
+                onDataChange?.()
+                setSelectedLocation(selectedLocation ? { ...selectedLocation, is_active: !selectedLocation.is_active } : null)
                 setHighlightLocationId(selectedLocation.id);
                 setTimeout(() => setHighlightLocationId(null), 2000);
               }}
@@ -428,7 +466,8 @@ export function WarehouseMapView({ warehouseId, warehouseName }: WarehouseMapVie
               onClose={() => setPanelMode(null)} 
               onSuccess={(id) => { 
                 setPanelMode(null); 
-                load(); 
+                load();
+                onDataChange?.()
                 if (id) {
                   setHighlightLocationId(id);
                   setTimeout(() => setHighlightLocationId(null), 2000);
@@ -447,7 +486,8 @@ export function WarehouseMapView({ warehouseId, warehouseName }: WarehouseMapVie
               onClose={() => setPanelMode('detail')} 
               onSuccess={(id) => { 
                 setPanelMode('detail'); 
-                load(); 
+                load();
+                onDataChange?.()
                 if (id) {
                   setHighlightLocationId(id);
                   setTimeout(() => setHighlightLocationId(null), 2000);
@@ -457,15 +497,6 @@ export function WarehouseMapView({ warehouseId, warehouseName }: WarehouseMapVie
           </aside>
         )}
 
-        {panelMode === 'bulk' && (
-          <div className="absolute inset-0 z-50 bg-theme-surface animate-in fade-in duration-200">
-            <LocationBulkForm 
-              warehouseId={warehouseId} 
-              onClose={() => setPanelMode(null)} 
-              onSuccess={() => { setPanelMode(null); load(); }} 
-            />
-          </div>
-        )}
       </div>
 
       {managingAisle && (
@@ -481,6 +512,12 @@ export function WarehouseMapView({ warehouseId, warehouseName }: WarehouseMapVie
             load()
           }}
         />
+      )}
+      {showLabelPrint && warehouseActive && (
+        <LocationLabelPrintModal warehouseName={warehouseName} locations={locations} onClose={() => setShowLabelPrint(false)} />
+      )}
+      {!warehouseActive && (
+        <div className="pointer-events-none absolute right-4 top-[4.5rem] rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-700 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-300">Bodega inactiva: impresión no disponible.</div>
       )}
     </div>
   )

@@ -42,6 +42,35 @@ export interface LocationFilters {
   is_active?: boolean
 }
 
+export interface LocationLifecycle {
+  found: boolean
+  location_id: string
+  has_stock: boolean
+  has_history: boolean
+  has_inventory_reference: boolean
+  has_active_operation: boolean
+  can_edit_structure: boolean
+  can_deactivate: boolean
+  can_delete: boolean
+  blocking_reasons: { code: string; message: string }[]
+}
+
+export async function getLocationLifecycle(locId: string): Promise<LocationLifecycle | { error: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado' }
+
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
+
+  const { data, error } = await logDb().rpc('evaluate_location_lifecycle', {
+    p_company_id: companyId,
+    p_location_id: locId,
+  })
+  if (error) return { error: error.message }
+  return data as LocationLifecycle
+}
+
 export async function getLocations(filters: LocationFilters = {}): Promise<{
   data: Location[]
   total: number
@@ -197,24 +226,16 @@ export async function deactivateLocation(locId: string) {
   const companyId = await getActiveCompanyId()
   if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
 
-  const d = logDb()
-  const { data: loc } = await d
-    .from('locations')
-    .select('is_active')
-    .eq('id', locId)
-    .eq('company_id', companyId)
-    .single()
-
-  if (!loc) return { error: 'Ubicación no encontrada' }
-
-  const { error } = await d
-    .from('locations')
-    .update({ is_active: !loc.is_active, updated_by: user.id })
-    .eq('id', locId)
-    .eq('company_id', companyId)
+  const { data, error } = await logDb().rpc('toggle_location_lifecycle', {
+    p_company_id: companyId,
+    p_location_id: locId,
+    p_user_id: user.id,
+  })
 
   if (error) return { error: error.message }
-  return { success: true, newActive: !loc.is_active }
+  const result = data as { success?: boolean; error?: string; new_active?: boolean; blocking_reasons?: unknown }
+  if (!result.success) return { error: result.error || 'No se pudo cambiar el estado de la ubicación' }
+  return { success: true, newActive: result.new_active }
 }
 
 // Helpers for bulk location creation
@@ -288,7 +309,7 @@ function formatCode(
   return res.toUpperCase()
 }
 
-export async function createLocationsBulk(data: {
+async function createLocationsBulkLegacy(data: {
   warehouse_id: string
   prefix?: string
   aisleFrom?: string
@@ -450,6 +471,92 @@ export async function createLocationsBulk(data: {
   }
 }
 
+export interface LocationBulkRequest {
+  warehouse_id: string
+  prefix?: string
+  code_format?: string
+  aisles?: string[]
+  racks?: string[]
+  levels?: string[]
+  positions?: string[]
+}
+
+type LocationBulkInput = Omit<LocationBulkRequest, 'aisles' | 'racks' | 'levels' | 'positions'> & {
+  codeFormat?: string
+  aisles?: string[] | string
+  racks?: string[] | string
+  levels?: string[] | string
+  positions?: string[] | string
+  aisleFrom?: string
+  aisleTo?: string
+  rackFrom?: string
+  rackTo?: string
+  levelFrom?: string
+  levelTo?: string
+  posFrom?: string
+  posTo?: string
+  positionFrom?: string
+  positionTo?: string
+}
+
+function dimensionValues(values: string[] | string | undefined, from?: string, to?: string) {
+  if (Array.isArray(values)) return values.map(value => value.trim().toUpperCase())
+  if (typeof values === 'string') return values.split(',').map(value => value.trim().toUpperCase()).filter(Boolean)
+  return generateRange(from ?? '', to ?? '')
+}
+
+function normalizeLocationBulkRequest(data: LocationBulkInput): LocationBulkRequest {
+  return {
+    warehouse_id: data.warehouse_id,
+    prefix: data.prefix?.trim() ?? '',
+    code_format: data.code_format ?? data.codeFormat,
+    aisles: dimensionValues(data.aisles, data.aisleFrom, data.aisleTo),
+    racks: dimensionValues(data.racks, data.rackFrom, data.rackTo),
+    levels: dimensionValues(data.levels, data.levelFrom, data.levelTo),
+    positions: dimensionValues(data.positions, data.posFrom ?? data.positionFrom, data.posTo ?? data.positionTo),
+  }
+}
+
+export async function previewLocationsBulk(data: LocationBulkInput) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'No autorizado' }
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { success: false, error: 'No se ha seleccionado una empresa activa' }
+
+  const request = normalizeLocationBulkRequest(data)
+  const { data: result, error } = await logDb().rpc('preview_location_bulk', {
+    p_company_id: companyId,
+    p_request: request,
+  })
+  if (error) return { success: false, error: error.message }
+  return result as Record<string, unknown>
+}
+
+/** Compatibility wrapper: both existing forms are normalized to the canonical request. */
+export async function createLocationsBulk(data: LocationBulkInput) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: 'No autorizado' }
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { success: false, error: 'No se ha seleccionado una empresa activa' }
+
+  const request = normalizeLocationBulkRequest(data)
+  const { data: result, error } = await logDb().rpc('create_location_bulk', {
+    p_company_id: companyId,
+    p_request: request,
+    p_user_id: user.id,
+  })
+  if (error) return { success: false, error: error.message }
+  const response = result as Record<string, unknown>
+  return {
+    ...response,
+    created: Number(response.created_count ?? 0),
+    skipped_duplicates: Number(response.existing_count ?? 0) + Number(response.duplicate_count ?? 0),
+    errors: Array.isArray(response.conflicts) ? response.conflicts : [],
+  }
+}
+
 export async function updateLocation(
   locId: string,
   data: {
@@ -473,51 +580,41 @@ export async function updateLocation(
   const code = (data.code ?? '').trim().toUpperCase()
   if (!code) return { error: 'El código es obligatorio' }
 
-  const d = logDb()
-
-  const { data: currentLoc } = await d
-    .from('locations')
-    .select('warehouse_id')
-    .eq('id', locId)
-    .eq('company_id', companyId)
-    .single()
-
-  if (!currentLoc) return { error: 'Ubicación no encontrada' }
-
-  // Verify uniqueness of the code, excluding this location itself
-  const { data: dup, error: checkError } = await d
-    .from('locations')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('warehouse_id', currentLoc.warehouse_id)
-    .eq('code', code)
-    .neq('id', locId)
-    .maybeSingle()
-
-  if (checkError) return { error: checkError.message }
-  if (dup) return { error: `La ubicación con código "${code}" ya existe en esta bodega` }
-
-  const updateFields: any = {
-    code,
-    name: data.name?.trim().toUpperCase() || null,
-    aisle: data.aisle?.trim().toUpperCase() || null,
-    rack: data.rack?.trim().toUpperCase() || null,
-    level: data.level?.trim().toUpperCase() || null,
-    position: data.position?.trim().toUpperCase() || null,
-    description: data.description?.trim().toUpperCase() || null,
-    updated_by: user.id
-  }
-
-  if (typeof data.is_active === 'boolean') {
-    updateFields.is_active = data.is_active
-  }
-
-  const { error } = await d
-    .from('locations')
-    .update(updateFields)
-    .eq('id', locId)
-    .eq('company_id', companyId)
+  const { data: result, error } = await logDb().rpc('update_location_lifecycle', {
+    p_company_id: companyId,
+    p_location_id: locId,
+    p_code: code,
+    p_name: data.name ?? null,
+    p_aisle: data.aisle ?? null,
+    p_rack: data.rack ?? null,
+    p_level: data.level ?? null,
+    p_position: data.position ?? null,
+    p_description: data.description ?? null,
+    p_is_active: data.is_active ?? null,
+    p_user_id: user.id,
+  })
 
   if (error) return { error: error.message }
+  const response = result as { success?: boolean; error?: string; blocking_reasons?: unknown }
+  if (!response.success) return { error: response.error || 'No se pudo actualizar la ubicación' }
+  return { success: true }
+}
+
+export async function deleteLocation(locId: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado' }
+
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
+
+  const { data, error } = await logDb().rpc('delete_location_lifecycle', {
+    p_company_id: companyId,
+    p_location_id: locId,
+    p_user_id: user.id,
+  })
+  if (error) return { error: error.message }
+  const result = data as { success?: boolean; error?: string; blocking_reasons?: unknown }
+  if (!result.success) return { error: result.error || 'No se pudo eliminar la ubicación' }
   return { success: true }
 }

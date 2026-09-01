@@ -1,8 +1,9 @@
 'use client'
 
 import React, { useState, useEffect, useMemo } from 'react'
-import { createLocation, updateLocation, type Location } from '@/app/actions/logistica/locations'
+import { createLocation, updateLocation, getLocationLifecycle, type Location, type LocationLifecycle } from '@/app/actions/logistica/locations'
 import { Save, X, Settings2, ChevronDown, ChevronUp } from 'lucide-react'
+import { lifecycleReasons, LocationLifecycleBadges } from './location-lifecycle'
 
 interface LocationFormProps {
   warehouseId: string
@@ -49,6 +50,7 @@ export function LocationForm({ warehouseId, warehouseName, editLoc, onClose, onS
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [lifecycle, setLifecycle] = useState<LocationLifecycle | null>(null)
 
   const [form, setForm] = useState({
     code: '',
@@ -63,6 +65,11 @@ export function LocationForm({ warehouseId, warehouseName, editLoc, onClose, onS
   })
 
   const [manualCode, setManualCode] = useState(false)
+  const structureLocked = Boolean(editLoc && lifecycle && !lifecycle.can_edit_structure)
+
+  function structureValue(value: string) {
+    return value || 'Sin definir'
+  }
 
   useEffect(() => {
     if (editLoc) {
@@ -70,7 +77,7 @@ export function LocationForm({ warehouseId, warehouseName, editLoc, onClose, onS
         code: editLoc.code || '',
         name: editLoc.name || '',
         warehouse_id: editLoc.warehouse_id || warehouseId,
-        aisle: editLoc.aisle || '',
+         aisle: editLoc.aisle?.trim().toUpperCase() || '',
         rack: editLoc.rack || '',
         level: editLoc.level || '',
         position: editLoc.position || '',
@@ -82,6 +89,15 @@ export function LocationForm({ warehouseId, warehouseName, editLoc, onClose, onS
       setForm(prev => ({ ...prev, warehouse_id: warehouseId }))
     }
   }, [editLoc, warehouseId])
+
+  useEffect(() => {
+    let active = true
+    if (!editLoc) { setLifecycle(null); return }
+    getLocationLifecycle(editLoc.id).then(result => {
+      if (active && !('error' in result)) setLifecycle(result)
+    })
+    return () => { active = false }
+  }, [editLoc])
 
   const generatedCode = useMemo(() => {
     const pAisle = form.aisle.trim().toUpperCase()
@@ -104,10 +120,6 @@ export function LocationForm({ warehouseId, warehouseName, editLoc, onClose, onS
     setError(null)
     
     try {
-      if (!form.rack.trim() || !form.level.trim() || !form.position.trim()) {
-        throw new Error('Rack, Nivel y Ubicación son obligatorios.')
-      }
-      
       const finalCode = manualCode ? form.code : generatedCode
       if (!finalCode) {
         throw new Error('No se pudo generar un código válido.')
@@ -119,7 +131,7 @@ export function LocationForm({ warehouseId, warehouseName, editLoc, onClose, onS
         const r = await updateLocation(editLoc.id, {
           code: finalCode,
           name: form.name || undefined,
-          aisle: form.aisle || undefined,
+          aisle: form.aisle.trim().toUpperCase() || undefined,
           rack: form.rack || undefined,
           level: form.level || undefined,
           position: form.position || undefined,
@@ -133,7 +145,7 @@ export function LocationForm({ warehouseId, warehouseName, editLoc, onClose, onS
           code: finalCode,
           name: form.name || undefined,
           warehouse_id: form.warehouse_id,
-          aisle: form.aisle || undefined,
+          aisle: form.aisle.trim().toUpperCase() || undefined,
           rack: form.rack || undefined,
           level: form.level || undefined,
           position: form.position || undefined,
@@ -177,26 +189,35 @@ export function LocationForm({ warehouseId, warehouseName, editLoc, onClose, onS
           )}
 
           <div className="space-y-4">
-            <h3 className="text-sm font-bold text-theme-text border-b border-theme-border pb-2">Estructura Física</h3>
+             <div className="flex items-center justify-between border-b border-theme-border pb-2">
+               <h3 className="text-sm font-bold text-theme-text">Estructura Física</h3>
+               {lifecycle && <LocationLifecycleBadges lifecycle={lifecycle} />}
+             </div>
+             {editLoc && lifecycle && !lifecycle.can_edit_structure && (
+               <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-300">
+                 {lifecycleReasons(lifecycle).join(' ')}
+               </div>
+             )}
             
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-theme-text uppercase tracking-wider">Pasillo / Zona</label>
-                <input 
+                 {structureLocked ? <div className="flex h-10 items-center rounded-xl border border-theme-border bg-theme-text/5 px-3 text-sm text-theme-text-muted">{structureValue(form.aisle)}</div> : <input
                   type="text"
                   value={form.aisle} 
-                  onChange={e => {
+                   onChange={e => {
                     setForm(p => ({ ...p, aisle: e.target.value }))
                     if (editLoc) setManualCode(false)
-                  }}
+                   }}
+                   disabled={Boolean(editLoc && lifecycle && !lifecycle.can_edit_structure)}
                   placeholder="Ej: A, 1"
                   className="w-full h-10 rounded-xl border border-theme-border bg-theme-surface px-3 text-sm text-theme-text focus:outline-none focus:ring-2 focus:ring-theme-accent/20 transition-all" 
-                />
+                 />}
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-theme-text uppercase tracking-wider">Rack / Columna *</label>
-                <input 
+                 <label className="text-xs font-bold text-theme-text uppercase tracking-wider">Rack / Columna</label>
+                 {structureLocked ? <div className="flex h-10 items-center rounded-xl border border-theme-border bg-theme-text/5 px-3 text-sm text-theme-text-muted">{structureValue(form.rack)}</div> : <input
                   type="text"
                   value={form.rack} 
                   onChange={e => {
@@ -204,14 +225,14 @@ export function LocationForm({ warehouseId, warehouseName, editLoc, onClose, onS
                     if (editLoc) setManualCode(false)
                   }}
                   placeholder="Ej: 1"
-                  required
+                   disabled={Boolean(editLoc && lifecycle && !lifecycle.can_edit_structure)}
                   className="w-full h-10 rounded-xl border border-theme-border bg-theme-surface px-3 text-sm text-theme-text focus:outline-none focus:ring-2 focus:ring-theme-accent/20 transition-all" 
-                />
+                 />}
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-theme-text uppercase tracking-wider">Nivel / Altura *</label>
-                <input 
+                 <label className="text-xs font-bold text-theme-text uppercase tracking-wider">Nivel / Altura</label>
+                 {structureLocked ? <div className="flex h-10 items-center rounded-xl border border-theme-border bg-theme-text/5 px-3 text-sm text-theme-text-muted">{structureValue(form.level)}</div> : <input
                   type="text"
                   value={form.level} 
                   onChange={e => {
@@ -219,14 +240,14 @@ export function LocationForm({ warehouseId, warehouseName, editLoc, onClose, onS
                     if (editLoc) setManualCode(false)
                   }}
                   placeholder="Ej: 3"
-                  required
+                   disabled={Boolean(editLoc && lifecycle && !lifecycle.can_edit_structure)}
                   className="w-full h-10 rounded-xl border border-theme-border bg-theme-surface px-3 text-sm text-theme-text focus:outline-none focus:ring-2 focus:ring-theme-accent/20 transition-all" 
-                />
+                 />}
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-theme-text uppercase tracking-wider">Ubicación (Pos) *</label>
-                <input 
+                 <label className="text-xs font-bold text-theme-text uppercase tracking-wider">Ubicación (Pos)</label>
+                 {structureLocked ? <div className="flex h-10 items-center rounded-xl border border-theme-border bg-theme-text/5 px-3 text-sm text-theme-text-muted">{structureValue(form.position)}</div> : <input
                   type="text"
                   value={form.position} 
                   onChange={e => {
@@ -234,17 +255,17 @@ export function LocationForm({ warehouseId, warehouseName, editLoc, onClose, onS
                     if (editLoc) setManualCode(false)
                   }}
                   placeholder="Ej: 1"
-                  required
-                  className="w-full h-10 rounded-xl border border-theme-border bg-theme-surface px-3 text-sm text-theme-text focus:outline-none focus:ring-2 focus:ring-theme-accent/20 transition-all" 
-                />
+                   disabled={Boolean(editLoc && lifecycle && !lifecycle.can_edit_structure)}
+                   className="w-full h-10 rounded-xl border border-theme-border bg-theme-surface px-3 text-sm text-theme-text focus:outline-none focus:ring-2 focus:ring-theme-accent/20 transition-all"
+                 />}
               </div>
             </div>
           </div>
 
           <div className="bg-theme-text/[0.02] border border-theme-border rounded-xl p-4 shadow-sm flex flex-col items-center">
-            <p className="text-[10px] font-bold text-theme-text-muted uppercase tracking-wider mb-2">Código Generado</p>
-            <div className="font-mono text-lg font-black text-theme-accent tracking-wide bg-theme-surface px-4 py-2 rounded-lg border border-theme-accent/20 shadow-sm">
-              {manualCode ? form.code : (generatedCode || '---')}
+             <p className="text-[10px] font-bold text-theme-text-muted uppercase tracking-wider mb-2">{structureLocked ? 'Código actual' : 'Código Generado'}</p>
+             <div className="font-mono text-lg font-black text-theme-accent tracking-wide bg-theme-surface px-4 py-2 rounded-lg border border-theme-accent/20 shadow-sm">
+               {structureLocked ? editLoc?.code : manualCode ? form.code : (generatedCode || '---')}
             </div>
           </div>
 
@@ -276,18 +297,20 @@ export function LocationForm({ warehouseId, warehouseName, editLoc, onClose, onS
             {editLoc && (
               <div className="flex items-center gap-2.5 pt-2">
                 <input 
-                  type="checkbox"
-                  checked={form.is_active}
-                  onChange={e => setForm(p => ({ ...p, is_active: e.target.checked }))}
-                  className="w-4 h-4 accent-theme-accent rounded cursor-pointer transition-all"
+                   type="checkbox"
+                   checked={form.is_active}
+                   onChange={e => setForm(p => ({ ...p, is_active: e.target.checked }))}
+                   disabled={Boolean(form.is_active && lifecycle && !lifecycle.can_deactivate)}
+                   title={form.is_active && lifecycle && !lifecycle.can_deactivate ? lifecycleReasons(lifecycle).join(' ') : undefined}
+                   className="w-4 h-4 accent-theme-accent rounded cursor-pointer transition-all disabled:cursor-not-allowed disabled:opacity-40"
                 />
                 <span className="text-sm font-bold text-theme-text">Ubicación Activa</span>
               </div>
             )}
           </div>
 
-          {/* Opciones Avanzadas Accordion */}
-          <div className="pt-2">
+           {/* Opciones Avanzadas Accordion */}
+           {!structureLocked && <div className="pt-2">
             <button
               type="button"
               onClick={() => setShowAdvanced(!showAdvanced)}
@@ -309,11 +332,12 @@ export function LocationForm({ warehouseId, warehouseName, editLoc, onClose, onS
                     setForm(p => ({ ...p, code: e.target.value }))
                     setManualCode(true)
                   }}
-                  className="w-full h-10 rounded-xl border border-theme-border bg-theme-surface px-3 text-sm font-mono text-theme-text focus:outline-none focus:ring-2 focus:ring-theme-accent/20 transition-all" 
+                   disabled={Boolean(editLoc && lifecycle && !lifecycle.can_edit_structure)}
+                   className="w-full h-10 rounded-xl border border-theme-border bg-theme-surface px-3 text-sm font-mono text-theme-text focus:outline-none focus:ring-2 focus:ring-theme-accent/20 transition-all disabled:cursor-not-allowed disabled:opacity-50"
                 />
-              </div>
-            )}
-          </div>
+            </div>
+             )}
+           </div>}
         </form>
       </div>
 

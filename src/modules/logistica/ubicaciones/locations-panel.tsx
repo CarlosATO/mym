@@ -1,27 +1,29 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { 
   getLocations, 
   createLocation, 
   deactivateLocation, 
-  createLocationsBulk, 
   updateLocation, 
+  deleteLocation,
+  getLocationLifecycle,
+  type LocationLifecycle,
   type Location 
 } from '@/app/actions/logistica/locations'
 import { getWarehouses, type Warehouse } from '@/app/actions/adquisiciones/warehouses'
 import { 
   ArrowLeft, 
   Plus, 
-  X, 
   Search, 
-  Filter, 
   Edit, 
   Sparkles, 
   CheckCircle, 
   AlertTriangle, 
   Building2 
 } from 'lucide-react'
+import { LocationLifecycleBadges, lifecycleReasons } from '../components/location-lifecycle'
+import { LocationBulkForm } from '../components/location-bulk-form'
 
 // Helpers for numeric range padding
 function padIfNumeric(val: string): string {
@@ -30,70 +32,6 @@ function padIfNumeric(val: string): string {
     return val.length >= 2 ? val : val.padStart(2, '0')
   }
   return val
-}
-
-// Ranges helper matching the backend logic
-function generateRange(from: string, to: string): string[] {
-  const f = (from ?? '').trim()
-  const t = (to ?? '').trim()
-
-  if (!f && !t) return ['']
-  if (!f) return [padIfNumeric(t)]
-  if (!t) return [padIfNumeric(f)]
-
-  const numFrom = parseInt(f, 10)
-  const numTo = parseInt(t, 10)
-  if (!isNaN(numFrom) && !isNaN(numTo)) {
-    const list: string[] = []
-    const min = Math.min(numFrom, numTo)
-    const max = Math.max(numFrom, numTo)
-    const padLength = Math.max(f.length, t.length, 2)
-    
-    for (let i = min; i <= max; i++) {
-      list.push(i.toString().padStart(padLength, '0'))
-    }
-    return list
-  }
-
-  if (f.length === 1 && t.length === 1) {
-    const list: string[] = []
-    const charCodeFrom = f.charCodeAt(0)
-    const charCodeTo = t.charCodeAt(0)
-    const min = Math.min(charCodeFrom, charCodeTo)
-    const max = Math.max(charCodeFrom, charCodeTo)
-    for (let i = min; i <= max; i++) {
-      list.push(String.fromCharCode(i).toUpperCase())
-    }
-    return list
-  }
-
-  return [f.toUpperCase()]
-}
-
-// Code formatting helper
-function formatCode(
-  formatStr: string,
-  prefix: string,
-  aisle: string,
-  rack: string,
-  level: string,
-  position: string
-): string {
-  let res = formatStr
-    .replace(/{prefix}/gi, prefix)
-    .replace(/{aisle}/gi, aisle)
-    .replace(/{rack}/gi, rack)
-    .replace(/{level}/gi, level)
-    .replace(/{position}/gi, position)
-  
-  if (!aisle) res = res.replace(/PAS-/gi, '')
-  if (!rack) res = res.replace(/-R(?=-|$)/gi, '').replace(/RACK-/gi, '')
-  if (!level) res = res.replace(/-N(?=-|$)/gi, '').replace(/NIV-/gi, '')
-  if (!position) res = res.replace(/-P(?=-|$)/gi, '').replace(/POS-/gi, '')
-
-  res = res.replace(/[-_+/]{2,}/g, (match) => match[0])
-  res = res.replace(/^[-_+/]+|[-_+/]+$/g, '')
-  return res.toUpperCase()
 }
 
 export function LocationsPanel() {
@@ -113,6 +51,18 @@ export function LocationsPanel() {
   
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [editLoc, setEditLoc] = useState<Location | null>(null)
+  const [editLifecycle, setEditLifecycle] = useState<LocationLifecycle | null>(null)
+  const [lifecycles, setLifecycles] = useState<Record<string, LocationLifecycle>>({})
+  const [lifecycleLoading, setLifecycleLoading] = useState(false)
+
+  // Kept only for the legacy branch below; all current bulk entry points use
+  // LocationBulkForm, which owns the canonical preview/create flow.
+  const [bulkForm, setBulkForm] = useState({ warehouse_id: '', prefix: '', aisles: '', rackFrom: '', rackTo: '', levelFrom: '', levelTo: '', positionFrom: '', positionTo: '', codeFormat: '' })
+  const resetBulkForm = () => setBulkForm(current => ({ ...current, warehouse_id: filters.warehouse_id ?? '' }))
+  const handleBulkSubmit = () => undefined
+  const totalCombinations = 0
+  const previewCodes: string[] = []
+  const isBulkExceeded = false
 
   // Single creation form state
   const [form, setForm] = useState({
@@ -127,20 +77,6 @@ export function LocationsPanel() {
     is_active: true
   })
 
-  // Bulk creation form state
-  const [bulkForm, setBulkForm] = useState({
-    warehouse_id: '',
-    prefix: '',
-    aisles: '', // comma-separated pasillos
-    rackFrom: '',
-    rackTo: '',
-    levelFrom: '',
-    levelTo: '',
-    positionFrom: '',
-    positionTo: '',
-    codeFormat: '{aisle}-R{rack}-N{level}-P{position}'
-  })
-
   const load = useCallback(async () => {
     if (!filters.warehouse_id) return
     setLoading(true)
@@ -149,6 +85,14 @@ export function LocationsPanel() {
     setTotal(r.total)
     setStats(r.stats)
     setLoading(false)
+    setLifecycleLoading(true)
+    const results = await Promise.all(r.data.map(async loc => ({ id: loc.id, value: await getLocationLifecycle(loc.id) })))
+    const valid: Record<string, LocationLifecycle> = {}
+    results.forEach(({ id, value }) => {
+      if (!('error' in value)) valid[id] = value
+    })
+    setLifecycles(valid)
+    setLifecycleLoading(false)
   }, [filters])
 
   useEffect(() => {
@@ -163,7 +107,6 @@ export function LocationsPanel() {
       if (res.data.length > 0) {
         setFilters(prev => prev.warehouse_id === res.data[0].id ? prev : { ...prev, warehouse_id: res.data[0].id })
         setForm(prev => prev.warehouse_id === res.data[0].id ? prev : { ...prev, warehouse_id: res.data[0].id })
-        setBulkForm(prev => prev.warehouse_id === res.data[0].id ? prev : { ...prev, warehouse_id: res.data[0].id })
       }
     })
     return () => { active = false }
@@ -185,21 +128,6 @@ export function LocationsPanel() {
       position: '',
       description: '',
       is_active: true
-    })
-  }
-
-  function resetBulkForm() {
-    setBulkForm({
-      warehouse_id: filters.warehouse_id || (warehouses.length > 0 ? warehouses[0].id : ''),
-      prefix: '',
-      aisles: '',
-      rackFrom: '',
-      rackTo: '',
-      levelFrom: '',
-      levelTo: '',
-      positionFrom: '',
-      positionTo: '',
-      codeFormat: '{aisle}-R{rack}-N{level}-P{position}'
     })
   }
 
@@ -234,7 +162,7 @@ export function LocationsPanel() {
       const r = await updateLocation(editLoc.id, {
         code: targetCode,
         name: form.name || undefined,
-        aisle: form.aisle || undefined,
+        aisle: form.aisle.trim().toUpperCase() || undefined,
         rack: form.rack || undefined,
         level: form.level || undefined,
         position: form.position || undefined,
@@ -253,7 +181,7 @@ export function LocationsPanel() {
         warehouse_id: form.warehouse_id,
         code: targetCode,
         name: form.name || undefined,
-        aisle: form.aisle || undefined,
+        aisle: form.aisle.trim().toUpperCase() || undefined,
         rack: form.rack || undefined,
         level: form.level || undefined,
         position: form.position || undefined,
@@ -274,32 +202,12 @@ export function LocationsPanel() {
     load()
   }
 
-  // Handle bulk creation
-  async function handleBulkSubmit(e?: React.FormEvent) {
-    if (e) e.preventDefault()
-    if (!bulkForm.warehouse_id) {
-      showMsg('Debe seleccionar una bodega de destino')
-      return
-    }
-
-    setLoading(true)
-    const r = await createLocationsBulk(bulkForm)
-    setLoading(false)
-
-    if (r.error) {
-      showMsg(r.error)
-      return
-    }
-
-    const res = r as { success: boolean; created: number; skipped_duplicates: number; errors: string[] }
-    const feedback = `Creación masiva terminada. Creadas: ${res.created}, Omitidas duplicadas: ${res.skipped_duplicates}${res.errors.length > 0 ? `, Errores: ${res.errors.length}` : ''}`
-    showMsg(feedback)
-    setView('list')
-    resetBulkForm()
-    load()
-  }
-
   async function handleToggleActive(loc: Location) {
+    const lifecycle = lifecycles[loc.id]
+    if (loc.is_active && lifecycle && !lifecycle.can_deactivate) {
+      showMsg(lifecycleReasons(lifecycle).join(' ') || 'Esta ubicación no puede desactivarse.')
+      return
+    }
     if (!confirm(`¿Desea ${loc.is_active ? 'desactivar' : 'activar'} la ubicación "${loc.code}"?`)) return
     const r = await deactivateLocation(loc.id)
     if (r.error) {
@@ -310,8 +218,26 @@ export function LocationsPanel() {
     load()
   }
 
+  async function handleDelete(loc: Location) {
+    const lifecycle = lifecycles[loc.id]
+    if (!lifecycle?.can_delete) {
+      showMsg(lifecycle ? lifecycleReasons(lifecycle).join(' ') : 'No se pudo verificar si la ubicación puede eliminarse.')
+      return
+    }
+    if (!confirm('Solo pueden eliminarse ubicaciones que nunca han sido utilizadas y no poseen historial operacional. ¿Desea eliminar esta ubicación?')) return
+    const r = await deleteLocation(loc.id)
+    if (r.error) {
+      showMsg(r.error)
+      await load()
+      return
+    }
+    showMsg('Ubicación eliminada')
+    await load()
+  }
+
   function handleEditClick(loc: Location) {
     setEditLoc(loc)
+    setEditLifecycle(lifecycles[loc.id] || null)
     setForm({
       warehouse_id: loc.warehouse_id,
       code: loc.code,
@@ -350,53 +276,22 @@ export function LocationsPanel() {
     }
   }
 
-  // Real-time calculation of bulk combinations and previews
-  const { totalCombinations, previewCodes } = useMemo(() => {
-    const prefix = bulkForm.prefix.trim()
-    
-    // Comma-separated aisles list
-    const rawAisles = bulkForm.aisles
-      .split(',')
-      .map(s => s.trim().toUpperCase())
-      .filter(Boolean)
-    const aisles = rawAisles.length > 0 ? rawAisles : ['']
-    
-    const racks = generateRange(bulkForm.rackFrom.trim(), bulkForm.rackTo.trim())
-    const levels = generateRange(bulkForm.levelFrom.trim(), bulkForm.levelTo.trim())
-    const positions = generateRange(bulkForm.positionFrom.trim(), bulkForm.positionTo.trim())
-
-    const total = aisles.length * racks.length * levels.length * positions.length
-    
-    // Debug log to confirm calculation parameters
-    console.log('[BULK_CALCULATION]', { 
-      rawAisles, 
-      aisles, 
-      racks, 
-      levels, 
-      positions, 
-      total 
-    })
-    
-    const preview: string[] = []
-    
-    for (const aisle of aisles) {
-      for (const rack of racks) {
-        for (const level of levels) {
-          for (const position of positions) {
-            const code = formatCode(bulkForm.codeFormat, prefix, aisle, rack, level, position)
-            if (code && preview.length < 10) {
-              preview.push(code)
-            }
-          }
-        }
-      }
-    }
-
-    return { totalCombinations: total, previewCodes: preview }
-  }, [bulkForm])
-
   const tp = Math.ceil(total / filters.pageSize)
-  const isBulkExceeded = totalCombinations > 2000
+
+  if ((view as string) === 'bulk') {
+    const warehouse = warehouses.find(item => item.id === filters.warehouse_id)
+    return <LocationBulkForm
+      warehouseId={filters.warehouse_id ?? ''}
+      warehouseName={warehouse?.name}
+      warehouseActive={true}
+      onClose={() => setView('list')}
+      onSuccess={async created => {
+        setView('list')
+        showMsg(`${created} ubicaciones creadas correctamente.`)
+        await load()
+      }}
+    />
+  }
 
   // ----------------------------------------------------
   // RENDER SCREEN: CREATION OR EDITING (INLINE FULL PANEL)
@@ -414,9 +309,10 @@ export function LocationsPanel() {
               >
                 <ArrowLeft className="w-5 h-5" />
               </button>
-              <h2 className="text-lg font-bold text-theme-text">
-                {view === 'edit' ? `Editar Ubicación: ${editLoc?.code}` : 'Nueva Ubicación'}
-              </h2>
+               <h2 className="text-lg font-bold text-theme-text">
+                 {view === 'edit' ? `Editar Ubicación: ${editLoc?.code}` : 'Nueva Ubicación'}
+               </h2>
+               {view === 'edit' && editLifecycle && <LocationLifecycleBadges lifecycle={editLifecycle} />}
             </div>
             <div className="flex gap-3">
               <button 
@@ -436,7 +332,12 @@ export function LocationsPanel() {
             </div>
           </div>
           
-          <div className="p-6 lg:p-8 space-y-6">
+           <div className="p-6 lg:p-8 space-y-6">
+             {view === 'edit' && editLifecycle && !editLifecycle.can_edit_structure && (
+               <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-300">
+                 {lifecycleReasons(editLifecycle).join(' ')}
+               </div>
+             )}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5">
               {/* Bodega (disabled on edit) */}
               <div className="space-y-1">
@@ -457,9 +358,10 @@ export function LocationsPanel() {
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-theme-text-muted/70">Código de Ubicación</label>
                 <div className="flex gap-2">
-                  <input 
+                   <input
                     type="text"
-                    value={form.code} 
+                   value={form.code}
+                   disabled={view === 'edit' && editLifecycle !== null && !editLifecycle.can_edit_structure}
                     onChange={e => setForm(p => ({ ...p, code: e.target.value }))}
                     placeholder="Ej: A-01-R02-N03"
                     className="flex-1 h-10 rounded-xl border border-theme-border bg-theme-surface px-3 text-sm font-mono text-theme-text focus:outline-none focus:ring-2 focus:ring-theme-accent/20 transition-all" 
@@ -488,9 +390,9 @@ export function LocationsPanel() {
               </div>
 
               {/* Nombre */}
-              <div className="space-y-1">
+               <div className="space-y-1">
                 <label className="text-xs font-semibold text-theme-text-muted/70">Nombre descriptivo (Opcional)</label>
-                <input 
+                 <input
                   type="text"
                   value={form.name} 
                   onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
@@ -504,7 +406,8 @@ export function LocationsPanel() {
                 <label className="text-xs font-semibold text-theme-text-muted/70">Pasillo (Opcional)</label>
                 <input 
                   type="text"
-                  value={form.aisle} 
+                    value={form.aisle}
+                   disabled={view === 'edit' && editLifecycle !== null && !editLifecycle.can_edit_structure}
                   onChange={e => setForm(p => ({ ...p, aisle: e.target.value }))}
                   placeholder="Ej: A o 1"
                   className="w-full h-10 rounded-xl border border-theme-border bg-theme-surface px-3 text-sm text-theme-text focus:outline-none" 
@@ -514,9 +417,10 @@ export function LocationsPanel() {
               {/* Rack */}
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-theme-text-muted/70">Rack / Estante (Opcional)</label>
-                <input 
+                 <input
                   type="text"
-                  value={form.rack} 
+                   value={form.rack}
+                   disabled={view === 'edit' && editLifecycle !== null && !editLifecycle.can_edit_structure}
                   onChange={e => setForm(p => ({ ...p, rack: e.target.value }))}
                   placeholder="Ej: 01"
                   className="w-full h-10 rounded-xl border border-theme-border bg-theme-surface px-3 text-sm text-theme-text focus:outline-none" 
@@ -526,9 +430,10 @@ export function LocationsPanel() {
               {/* Nivel */}
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-theme-text-muted/70">Nivel (Opcional)</label>
-                <input 
+                 <input
                   type="text"
-                  value={form.level} 
+                   value={form.level}
+                   disabled={view === 'edit' && editLifecycle !== null && !editLifecycle.can_edit_structure}
                   onChange={e => setForm(p => ({ ...p, level: e.target.value }))}
                   placeholder="Ej: 02"
                   className="w-full h-10 rounded-xl border border-theme-border bg-theme-surface px-3 text-sm text-theme-text focus:outline-none" 
@@ -538,9 +443,10 @@ export function LocationsPanel() {
               {/* Posición */}
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-theme-text-muted/70">Posición (Opcional)</label>
-                <input 
+                 <input
                   type="text"
-                  value={form.position} 
+                   value={form.position}
+                   disabled={view === 'edit' && editLifecycle !== null && !editLifecycle.can_edit_structure}
                   onChange={e => setForm(p => ({ ...p, position: e.target.value }))}
                   placeholder="Ej: 03"
                   className="w-full h-10 rounded-xl border border-theme-border bg-theme-surface px-3 text-sm text-theme-text focus:outline-none" 
@@ -552,10 +458,12 @@ export function LocationsPanel() {
                 <div className="flex items-center h-full pt-6">
                   <label className="flex items-center gap-2.5 cursor-pointer select-none">
                     <input 
-                      type="checkbox"
-                      checked={form.is_active}
-                      onChange={e => setForm(p => ({ ...p, is_active: e.target.checked }))}
-                      className="w-5 h-5 accent-theme-accent rounded-lg cursor-pointer transition-all"
+                       type="checkbox"
+                       checked={form.is_active}
+                       disabled={Boolean(editLifecycle && form.is_active && !editLifecycle.can_deactivate)}
+                       onChange={e => setForm(p => ({ ...p, is_active: e.target.checked }))}
+                       title={form.is_active && editLifecycle && !editLifecycle.can_deactivate ? lifecycleReasons(editLifecycle).join(' ') : undefined}
+                       className="w-5 h-5 accent-theme-accent rounded-lg cursor-pointer transition-all disabled:cursor-not-allowed disabled:opacity-40"
                     />
                     <span className="text-sm font-semibold text-theme-text">Ubicación Activa</span>
                   </label>
@@ -950,12 +858,13 @@ export function LocationsPanel() {
                   <td className="py-3 px-4 text-xs font-mono font-bold text-theme-accent">{loc.code}</td>
                   <td className="py-3 px-4 text-xs text-theme-text">{loc.name || '—'}</td>
                   <td className="py-3 px-4 text-xs text-theme-text">{loc.warehouse_name}</td>
-                  <td className="py-3 px-4 text-xs text-theme-text-muted">{loc.aisle || '—'}</td>
+                   <td className="py-3 px-4 text-xs text-theme-text-muted">{loc.aisle?.trim().toUpperCase() || '—'}</td>
                   <td className="py-3 px-4 text-xs text-theme-text-muted">{loc.rack || '—'}</td>
                   <td className="py-3 px-4 text-xs text-theme-text-muted">{loc.level || '—'}</td>
                   <td className="py-3 px-4 text-xs text-theme-text-muted">{loc.position || '—'}</td>
-                  <td className="py-3 px-4">
-                    {loc.is_active ? (
+                   <td className="py-3 px-4">
+                     <div className="mb-1">{lifecycles[loc.id] ? <LocationLifecycleBadges lifecycle={lifecycles[loc.id]} /> : <span className="text-[10px] text-theme-text-muted">{lifecycleLoading ? 'Verificando...' : 'Sin verificar'}</span>}</div>
+                     {loc.is_active ? (
                       <span className="text-[10px] font-semibold px-2 py-0.5 rounded border bg-emerald-500/10 text-emerald-500 border-emerald-500/20">Activa</span>
                     ) : (
                       <span className="text-[10px] font-semibold px-2 py-0.5 rounded border bg-red-500/10 text-red-500 border-red-500/20">Inactiva</span>
@@ -963,19 +872,27 @@ export function LocationsPanel() {
                   </td>
                   <td className="py-3 px-4 text-right">
                     <div className="flex items-center justify-end gap-3">
-                      <button 
-                        onClick={() => handleEditClick(loc)} 
+                       <button
+                         onClick={() => handleEditClick(loc)}
                         className="text-theme-text-muted hover:text-theme-text p-1 rounded transition-colors"
-                        title="Editar"
+                         title={lifecycles[loc.id] && !lifecycles[loc.id].can_edit_structure ? lifecycleReasons(lifecycles[loc.id]).join(' ') : 'Ver / Editar'}
                       >
                         <Edit className="w-3.5 h-3.5" />
                       </button>
-                      <button 
-                        onClick={() => handleToggleActive(loc)} 
-                        className={`text-xs font-semibold ${loc.is_active ? 'text-red-500 hover:text-red-400' : 'text-theme-accent hover:text-theme-accent-hover'}`}
-                      >
-                        {loc.is_active ? 'Desactivar' : 'Activar'}
-                      </button>
+                       <button
+                         onClick={() => handleToggleActive(loc)}
+                         disabled={Boolean(loc.is_active && lifecycles[loc.id] && !lifecycles[loc.id].can_deactivate)}
+                         title={loc.is_active && lifecycles[loc.id] && !lifecycles[loc.id].can_deactivate ? lifecycleReasons(lifecycles[loc.id]).join(' ') : loc.is_active ? 'Desactivar' : 'Activar'}
+                         className={`text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${loc.is_active ? 'text-red-500 hover:text-red-400' : 'text-theme-accent hover:text-theme-accent-hover'}`}
+                       >
+                         {loc.is_active ? 'Desactivar' : 'Activar'}
+                       </button>
+                       <button
+                         onClick={() => handleDelete(loc)}
+                         disabled={!lifecycles[loc.id] || !lifecycles[loc.id].can_delete}
+                         title={lifecycles[loc.id]?.can_delete ? 'Eliminar' : lifecycleReasons(lifecycles[loc.id]).join(' ') || 'Verificando permisos'}
+                         className="text-xs font-semibold text-red-500 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-30"
+                       >Eliminar</button>
                     </div>
                   </td>
                 </tr>

@@ -79,20 +79,15 @@ export async function deactivateAisle(warehouseId: string, aisle: string) {
   const companyId = await getActiveCompanyId()
   if (!companyId) return { error: 'Empresa inactiva' }
 
-  const summaryRes = await getAisleSummary(warehouseId, aisle)
-  if (summaryRes.error) return summaryRes
-  if (summaryRes.data?.hasStock) {
-    return { error: 'No se puede desactivar este pasillo porque tiene ubicaciones con stock activo.' }
-  }
-
-  const db = logDb()
-  const { error } = await db.from('locations')
-    .update({ is_active: false, updated_by: user.id })
-    .eq('warehouse_id', warehouseId)
-    .eq('company_id', companyId)
-    .eq('aisle', aisle)
-
+  const { data, error } = await logDb().rpc('deactivate_locations_by_aisle', {
+    p_company_id: companyId,
+    p_warehouse_id: warehouseId,
+    p_aisle: aisle,
+    p_user_id: user.id,
+  })
   if (error) return { error: error.message }
+  const result = data as { success?: boolean; error?: string }
+  if (!result.success) return { error: result.error || 'No se pudo desactivar el pasillo' }
   return { success: true }
 }
 
@@ -107,43 +102,16 @@ export async function renameAisleIfSafe(warehouseId: string, oldAisle: string, n
   const newAisleTrimmed = newAisle.trim().toUpperCase()
   if (!newAisleTrimmed || oldAisle === newAisleTrimmed) return { error: 'Nombre de pasillo inválido o sin cambios' }
 
-  const summaryRes = await getAisleSummary(warehouseId, oldAisle)
-  if (summaryRes.error) return summaryRes
-  if (summaryRes.data?.hasHistory) {
-    return { error: 'Este pasillo tiene historial o stock asociado. Para mantener trazabilidad, no se puede renombrar el código físico. Puede crear un nuevo pasillo y desactivar el anterior cuando quede sin stock.' }
-  }
-
-  const db = logDb()
-  const { data: locations } = await db.from('locations')
-    .select('id, code, rack, level, position')
-    .eq('warehouse_id', warehouseId)
-    .eq('company_id', companyId)
-    .eq('aisle', oldAisle)
-    
-  if (!locations || locations.length === 0) return { error: 'Pasillo no encontrado' }
-
-  const { data: existingNew } = await db.from('locations')
-    .select('id')
-    .eq('warehouse_id', warehouseId)
-    .eq('company_id', companyId)
-    .eq('aisle', newAisleTrimmed)
-    .limit(1)
-  
-  if (existingNew && existingNew.length > 0) return { error: 'Ya existe un pasillo con el nombre destino' }
-
-  for (const loc of locations) {
-    const rackStr = loc.rack ? `-R${loc.rack}` : ''
-    const levelStr = loc.level ? `-N${loc.level}` : ''
-    const posStr = loc.position ? `-U${loc.position}` : ''
-    const newCode = `P${newAisleTrimmed}${rackStr}${levelStr}${posStr}`
-
-    await db.from('locations').update({
-      aisle: newAisleTrimmed,
-      code: newCode,
-      updated_by: user.id
-    }).eq('id', loc.id)
-  }
-
+  const { data, error } = await logDb().rpc('rename_locations_aisle_if_safe', {
+    p_company_id: companyId,
+    p_warehouse_id: warehouseId,
+    p_old_aisle: oldAisle,
+    p_new_aisle: newAisleTrimmed,
+    p_user_id: user.id,
+  })
+  if (error) return { error: error.message }
+  const result = data as { success?: boolean; error?: string }
+  if (!result.success) return { error: result.error || 'No se pudo renombrar el pasillo' }
   return { success: true }
 }
 

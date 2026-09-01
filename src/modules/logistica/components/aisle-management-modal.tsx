@@ -42,7 +42,8 @@ export function AisleManagementModal({ open, onOpenChange, warehouseId, aisle, o
   async function loadSummary() {
     setLoadingSummary(true)
     try {
-      const res = await getAisleSummary(warehouseId, aisle)
+      const normalizedAisle = aisle.trim().toUpperCase()
+      const res = await getAisleSummary(warehouseId, normalizedAisle)
       if (res.error) {
         toast.error(res.error)
         onOpenChange(false)
@@ -64,19 +65,19 @@ export function AisleManagementModal({ open, onOpenChange, warehouseId, aisle, o
 
       switch (action) {
         case 'add_racks':
-          res = await addRacksToAisle(warehouseId, aisle, quantity)
+           res = await addRacksToAisle(warehouseId, aisle.trim().toUpperCase(), quantity)
           break
         case 'add_levels':
-          res = await addLevelsToAisle(warehouseId, aisle, quantity)
+           res = await addLevelsToAisle(warehouseId, aisle.trim().toUpperCase(), quantity)
           break
         case 'add_positions':
-          res = await addPositionsToAisle(warehouseId, aisle, quantity)
+           res = await addPositionsToAisle(warehouseId, aisle.trim().toUpperCase(), quantity)
           break
         case 'rename':
-          res = await renameAisleIfSafe(warehouseId, aisle, newName)
+           res = await renameAisleIfSafe(warehouseId, aisle.trim().toUpperCase(), newName.trim().toUpperCase())
           break
         case 'deactivate':
-          res = await deactivateAisle(warehouseId, aisle)
+           res = await deactivateAisle(warehouseId, aisle.trim().toUpperCase())
           break
       }
 

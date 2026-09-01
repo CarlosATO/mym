@@ -10,6 +10,7 @@ interface WarehouseVisualOverviewProps {
   warehouses: Warehouse[]
   stats?: WarehouseStats[]
   onWarehouseSelect?: (id: string | null) => void
+  onDataChange?: () => void
 }
 
 export function WarehouseSummary({ warehouses, stats = [] }: { warehouses: Warehouse[]; stats?: WarehouseStats[] }) {
@@ -38,7 +39,7 @@ function Metric({ label, value, valueClassName = 'text-theme-text' }: { label: s
   )
 }
 
-export function WarehouseVisualOverview({ warehouses, stats = [], onWarehouseSelect }: WarehouseVisualOverviewProps) {
+export function WarehouseVisualOverview({ warehouses, stats = [], onWarehouseSelect, onDataChange }: WarehouseVisualOverviewProps) {
   const [selectedWarehouse, setSelectedWarehouse] = useState<Warehouse | null>(null)
 
   const statsByWarehouseId = new Map(stats.map(s => [s.warehouse_id, s]))
@@ -50,7 +51,7 @@ export function WarehouseVisualOverview({ warehouses, stats = [], onWarehouseSel
 
   if (selectedWarehouse) {
     return (
-      <div className="flex flex-col flex-1 h-full w-full animate-in fade-in duration-300">
+      <div className="flex min-h-0 flex-col flex-1 h-full w-full animate-in fade-in duration-300">
         <div className="shrink-0 p-4 border-b border-theme-border bg-theme-surface flex items-center justify-between">
           <button 
             onClick={() => handleSelect(null)}
@@ -64,7 +65,7 @@ export function WarehouseVisualOverview({ warehouses, stats = [], onWarehouseSel
             <span className="text-theme-text-muted text-xs border border-theme-border px-1.5 rounded">{selectedWarehouse.code}</span>
           </div>
         </div>
-        <WarehouseMapView warehouseId={selectedWarehouse.id} warehouseName={selectedWarehouse.name} />
+         <WarehouseMapView warehouseId={selectedWarehouse.id} warehouseName={selectedWarehouse.name} warehouseActive={selectedWarehouse.is_active} onDataChange={onDataChange} />
       </div>
     )
   }

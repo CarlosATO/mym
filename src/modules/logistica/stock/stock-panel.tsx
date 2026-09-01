@@ -50,6 +50,15 @@ function formatCurrency(amount: number | null) {
   return amount.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 })
 }
 
+function physicalLocation(item: StockItem) {
+  return [
+    ['Pasillo', item.aisle],
+    ['Rack', item.rack],
+    ['Nivel', item.level],
+    ['Posición', item.position],
+  ].map(([label, value]) => `${label}: ${value || '—'}`).join(' · ')
+}
+
 export function StockPanel() {
   const [data, setData] = useState<StockItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -391,7 +400,10 @@ export function StockPanel() {
                         {selectedProductDetails.items.map((it, idx) => (
                           <tr key={idx} onClick={() => handleViewKardex(it)} className="hover:bg-theme-text/[0.02] transition-colors group cursor-pointer">
                             <td className="px-5 py-3 font-semibold text-theme-text">{it.warehouse_name}</td>
-                            <td className="px-5 py-3 font-mono font-medium text-theme-text-muted">{it.location_code || '—'}</td>
+                            <td className="px-5 py-3 text-theme-text-muted">
+                              <span className="block font-mono font-medium text-theme-text">{it.location_code || '—'}</span>
+                              <span className="mt-1 block text-[10px]">{it.location_name || '—'} · {physicalLocation(it)}</span>
+                            </td>
                             <td className="px-5 py-3 text-theme-text-muted">
                               {it.lot_number ? (
                                 <div><span className="font-bold text-theme-text">{it.lot_number}</span> {it.expiration_date && <span className="text-[10px] ml-2">V: {new Date(it.expiration_date).toLocaleDateString('es-CL')}</span>}</div>
@@ -524,7 +536,10 @@ export function StockPanel() {
                                 <p className="font-mono text-[10px] font-bold text-theme-accent mb-0.5">{it.product_sku}</p>
                                 <p className="font-semibold text-theme-text max-w-[250px] truncate" title={it.product_description}>{it.product_description}</p>
                               </td>
-                              <td className="px-5 py-3 font-mono font-medium text-theme-text-muted">{it.location_code || '—'}</td>
+                            <td className="px-5 py-3 text-theme-text-muted">
+                              <span className="block font-mono font-medium text-theme-text">{it.location_code || '—'}</span>
+                              <span className="mt-1 block text-[10px]">{it.location_name || '—'} · {physicalLocation(it)}</span>
+                            </td>
                               <td className="px-5 py-3 text-theme-text-muted">
                                 {it.lot_number ? (
                                   <div><span className="font-bold text-theme-text">{it.lot_number}</span> {it.expiration_date && <span className="text-[10px] block mt-0.5">V: {new Date(it.expiration_date).toLocaleDateString('es-CL')}</span>}</div>

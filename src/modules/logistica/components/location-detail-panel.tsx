@@ -1,10 +1,11 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { X, Layers, Package, Calendar, Edit2, Power } from 'lucide-react'
+import { X, Layers, Package, Calendar, Edit2, Power, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getLocationDetail, type LocationDetailItem } from '@/app/actions/logistica/location-layouts'
-import { deactivateLocation } from '@/app/actions/logistica/locations'
+import { deactivateLocation, deleteLocation, getLocationLifecycle, type LocationLifecycle } from '@/app/actions/logistica/locations'
+import { LocationLifecycleBadges, lifecycleReasons } from './location-lifecycle'
 
 interface LocationDetailPanelProps {
   locationId: string
@@ -13,6 +14,7 @@ interface LocationDetailPanelProps {
   onClose: () => void
   onEdit?: () => void
   onStatusChange?: () => void
+  onDelete?: () => void
 }
 
 function formatCurrency(amount: number | null) {
@@ -20,10 +22,12 @@ function formatCurrency(amount: number | null) {
   return amount.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 })
 }
 
-export function LocationDetailPanel({ locationId, locationCode, isActive = true, onClose, onEdit, onStatusChange }: LocationDetailPanelProps) {
+export function LocationDetailPanel({ locationId, locationCode, isActive = true, onClose, onEdit, onStatusChange, onDelete }: LocationDetailPanelProps) {
   const [data, setData] = useState<LocationDetailItem[]>([])
   const [loading, setLoading] = useState(true)
   const [isChangingStatus, setIsChangingStatus] = useState(false)
+  const [lifecycle, setLifecycle] = useState<LocationLifecycle | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let active = true
@@ -34,14 +38,22 @@ export function LocationDetailPanel({ locationId, locationCode, isActive = true,
         setLoading(false)
       }
     })
+    getLocationLifecycle(locationId).then(res => {
+      if (active && !('error' in res)) setLifecycle(res)
+    })
     return () => { active = false }
   }, [locationId])
 
   const handleToggleStatus = async () => {
+    if (isActive && lifecycle && !lifecycle.can_deactivate) {
+      setError(lifecycleReasons(lifecycle).join(' ') || 'Esta ubicación no puede desactivarse.')
+      return
+    }
     if (!confirm(`¿Estás seguro de ${isActive ? 'desactivar' : 'activar'} esta ubicación?`)) return
     setIsChangingStatus(true)
     try {
       const res = await deactivateLocation(locationId)
+      if (res.error) setError(res.error)
       if (res.success && onStatusChange) {
         onStatusChange()
       }
@@ -50,6 +62,24 @@ export function LocationDetailPanel({ locationId, locationCode, isActive = true,
     } finally {
       setIsChangingStatus(false)
     }
+  }
+
+  const handleDelete = async () => {
+    if (!lifecycle?.can_delete) {
+      setError(lifecycleReasons(lifecycle).join(' ') || 'Esta ubicación no puede eliminarse.')
+      return
+    }
+    if (!confirm('Solo pueden eliminarse ubicaciones que nunca han sido utilizadas y no poseen historial operacional. ¿Desea eliminar esta ubicación?')) return
+    setIsChangingStatus(true)
+    const res = await deleteLocation(locationId)
+    if (res.error) {
+      setError(res.error)
+      setIsChangingStatus(false)
+      const fresh = await getLocationLifecycle(locationId)
+      if (!('error' in fresh)) setLifecycle(fresh)
+      return
+    }
+    onDelete?.()
   }
 
   return (
@@ -68,15 +98,18 @@ export function LocationDetailPanel({ locationId, locationCode, isActive = true,
               {!isActive && <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded ml-2">Inactiva</span>}
             </h3>
           </div>
-          <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1">
             {onEdit && (
               <button onClick={onEdit} className="p-1.5 rounded-lg hover:bg-theme-text/10 text-theme-text-muted transition-colors" title="Editar">
                 <Edit2 className="w-4 h-4" />
               </button>
             )}
-            <button disabled={isChangingStatus} onClick={handleToggleStatus} className={`p-1.5 rounded-lg transition-colors ${isActive ? 'hover:bg-red-100 text-theme-text-muted hover:text-red-600' : 'hover:bg-emerald-100 text-theme-text-muted hover:text-emerald-600'}`} title={isActive ? 'Desactivar' : 'Activar'}>
-              <Power className="w-4 h-4" />
-            </button>
+             <button disabled={isChangingStatus || Boolean(isActive && lifecycle && !lifecycle.can_deactivate)} onClick={handleToggleStatus} className={`p-1.5 rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${isActive ? 'hover:bg-red-100 text-theme-text-muted hover:text-red-600' : 'hover:bg-emerald-100 text-theme-text-muted hover:text-emerald-600'}`} title={isActive && lifecycle && !lifecycle.can_deactivate ? lifecycleReasons(lifecycle).join(' ') : isActive ? 'Desactivar' : 'Activar'}>
+               <Power className="w-4 h-4" />
+             </button>
+             <button disabled={isChangingStatus || !lifecycle?.can_delete} onClick={handleDelete} className="p-1.5 rounded-lg text-red-500 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-30" title={lifecycle?.can_delete ? 'Eliminar' : lifecycleReasons(lifecycle).join(' ') || 'Verificando permisos'}>
+               <Trash2 className="w-4 h-4" />
+             </button>
             <div className="w-px h-4 bg-theme-border mx-1" />
             <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-theme-text/10 text-theme-text-muted transition-colors">
               <X className="w-4 h-4" />
@@ -85,6 +118,8 @@ export function LocationDetailPanel({ locationId, locationCode, isActive = true,
         </div>
 
       <div className="flex-1 overflow-y-auto p-5">
+        {error && <div className="mb-4 rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-xs text-red-600">{error}</div>}
+        {lifecycle && <div className="mb-4 space-y-2"><LocationLifecycleBadges lifecycle={lifecycle} /><div className="text-xs text-theme-text-muted">{lifecycle.found ? (isActive ? 'Activa' : 'Inactiva') : 'La ubicación ya no está disponible.'}</div></div>}
         {loading ? (
           <div className="py-8 flex flex-col items-center justify-center">
             <div className="w-6 h-6 border-2 border-theme-accent border-t-transparent rounded-full animate-spin mb-3" />

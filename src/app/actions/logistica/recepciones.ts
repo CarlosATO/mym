@@ -509,6 +509,11 @@ export interface StockItem {
   warehouse_name: string
   location_id: string | null
   location_code: string | null
+  location_name: string | null
+  aisle: string | null
+  rack: string | null
+  level: string | null
+  position: string | null
   lot_number: string | null
   expiration_date: string | null
   quantity: number
@@ -546,12 +551,12 @@ export async function getStockSummary(): Promise<StockItem[]> {
   const [productsRes, warehousesRes, locationsRes] = await Promise.all([
     adq.from('products').select('id, sku, description').in('id', productIds),
     adq.from('warehouses').select('id, name').in('id', warehouseIds),
-    db.from('locations').select('id, code').in('id', locationIds)
+    db.from('locations').select('id, code, name, aisle, rack, level, position').in('id', locationIds)
   ])
 
   const productMap = new Map(productsRes.data?.map(p => [p.id, p]) ?? [])
   const warehouseMap = new Map(warehousesRes.data?.map(w => [w.id, w.name]) ?? [])
-  const locationMap = new Map(locationsRes.data?.map(l => [l.id, l.code]) ?? [])
+  const locationMap = new Map(locationsRes.data?.map(l => [l.id, l]) ?? [])
 
   return stockItems.map(item => {
     const prod = productMap.get(item.product_id)
@@ -562,7 +567,12 @@ export async function getStockSummary(): Promise<StockItem[]> {
       warehouse_id: item.warehouse_id,
       warehouse_name: warehouseMap.get(item.warehouse_id) || 'Almacén Desconocido',
       location_id: item.location_id,
-      location_code: item.location_id ? locationMap.get(item.location_id) || null : null,
+      location_code: item.location_id ? locationMap.get(item.location_id)?.code || null : null,
+      location_name: item.location_id ? locationMap.get(item.location_id)?.name || null : null,
+      aisle: item.location_id ? locationMap.get(item.location_id)?.aisle || null : null,
+      rack: item.location_id ? locationMap.get(item.location_id)?.rack || null : null,
+      level: item.location_id ? locationMap.get(item.location_id)?.level || null : null,
+      position: item.location_id ? locationMap.get(item.location_id)?.position || null : null,
       lot_number: item.lot_number,
       expiration_date: item.expiration_date,
       quantity: Number(item.quantity),

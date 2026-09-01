@@ -271,11 +271,11 @@ export function WarehousesPanel() {
 
        {preview && (<div className="rounded-2xl border border-theme-border bg-theme-surface p-5 space-y-4"><div className="flex items-center justify-between"><h3 className="text-sm font-semibold text-theme-text">Vista previa - {preview.rows.length} filas</h3><div className="flex gap-2"><button onClick={() => setPreview(null)} className="px-3 py-1.5 rounded-lg border border-theme-border text-xs text-theme-text-muted/70 hover:text-theme-text">Cancelar</button>{preview.errors.length === 0 && preview.rows.length > 0 && <button onClick={handleImportConfirm} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-xs text-white font-semibold hover:bg-emerald-500">Confirmar</button>}</div></div>{preview.errors.length > 0 && <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 space-y-1">{preview.errors.map((e, i) => <p key={i} className="text-xs text-red-600 dark:text-red-400">{e}</p>)}</div>}</div>)}
 
-      {loading ? (<div className="rounded-2xl border border-theme-border bg-theme-surface p-10 text-center"><p className="text-theme-text-muted/50 text-sm">Cargando...</p></div>)
+      {loading && !selectedWarehouseId ? (<div className="rounded-2xl border border-theme-border bg-theme-surface p-10 text-center"><p className="text-theme-text-muted/50 text-sm">Cargando...</p></div>)
       : data.length === 0 ? (<div className="rounded-2xl border border-theme-border bg-theme-surface p-10 text-center"><p className="text-theme-text-muted/50 text-sm">No hay bodegas registradas.</p></div>)
       : viewMode === 'visual' ? (
-          <div className={`flex-1 overflow-hidden flex ${selectedWarehouseId ? '' : 'p-4 md:p-5'}`}>
-            <WarehouseVisualOverview warehouses={data} stats={stats} onWarehouseSelect={setSelectedWarehouseId} />
+          <div className={`min-h-0 flex-1 overflow-hidden flex ${selectedWarehouseId ? '' : 'p-4 md:p-5'}`}>
+             <WarehouseVisualOverview warehouses={data} stats={stats} onWarehouseSelect={setSelectedWarehouseId} onDataChange={load} />
           </div>
         )
       : (<div className="min-h-0 flex-1 overflow-auto px-4 pb-4 md:px-5 md:pb-5">
