@@ -1,11 +1,11 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Check, Eye, Loader2, X } from 'lucide-react'
+import { AlertTriangle, Check, Loader2, X } from 'lucide-react'
 import { getReplenishmentDatasetFromBsale } from '@/app/actions/integraciones/bsale-dataset'
 import type { ReplenishmentDataset } from '@/app/actions/integraciones/bsale-dataset'
 import { getReplenishmentFilterCatalog, type ReplenishmentFilterCatalog, type ReplenishmentFilterPair } from '@/app/actions/adquisiciones/replenishment-filter-catalog'
-import { generateReplenishmentPurchaseOrders } from '@/app/actions/adquisiciones/purchase-orders'
+import { prepareReplenishmentPurchaseOrder, type PrepareReplenishmentPurchaseOrderResult } from '@/app/actions/adquisiciones/purchase-orders'
 import { downloadReplenishmentExcelV2, type ReplenishmentExcelRow } from '@/modules/adquisiciones/ordenes-compra/replenishment-excel'
 import { fmt, fmtN } from './replenishment-format'
 import { NO_SUPPLIER, PRODUCT_FALLBACK, getProductName, getPseudoSupplierName, getRealSupplierName } from './replenishment-names'
@@ -36,6 +36,7 @@ import { ReplenishmentTable } from './replenishment-table'
 
 const COMPANY_ID = 'd1000000-0000-0000-0000-000000000001'
 const DEFAULT_PERIOD_IDX = 3
+const REPLENISHMENT_PO_PREPARATION_KEY = 'mym:adquisiciones:replenishment-po-preparation'
 
 const PERIOD_OPTIONS = [
   { label: '7 días (1 bloque)', value: 7 },
@@ -58,7 +59,7 @@ const COVERAGE_OPTIONS = [
 
 interface Props {
   onBack?: () => void
-  onNavigateToPo?: (poId?: string) => void
+  onNavigateToPo?: () => void
 }
 
 export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
@@ -95,10 +96,11 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   const [hoveredRowSku, setHoveredRowSku] = useState<string | null>(null)
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
   const [error, setError] = useState('')
+  const [validationMessage, setValidationMessage] = useState('')
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [creating, setCreating] = useState(false)
   const [downloadingExcel, setDownloadingExcel] = useState(false)
-  const [createResult, setCreateResult] = useState<any>(null)
+  const [prepareResult, setPrepareResult] = useState<PrepareReplenishmentPurchaseOrderResult | null>(null)
 
   const [colWidths, setColWidths] = useState<Record<WidthKey, number>>({
     sku: 80,
@@ -518,57 +520,35 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   const effectiveUnits = useMemo(() => effectiveRows.reduce((a, r) => a + r.confirmedQty, 0), [effectiveRows])
   const effectiveCost = useMemo(() => effectiveRows.reduce((a, r) => a + r.confirmedCost, 0), [effectiveRows])
 
-  const modalGroups = useMemo(() => {
-    if (!showCreateModal) return []
-    const groups = new Map<string, { count: number, units: number, cost: number, hasZeroCost: boolean, hasNoRealSupplier: boolean, unresolved: boolean }>()
-    for (const r of effectiveRows) {
-      const sup = getRealSupplierName(r.sku)
-      const productName = getProductName(r.sku)
-      const unresolved = productName === PRODUCT_FALLBACK
-      const isZeroCost = r.sku.costo_unitario === 0
-      const noRealSupplier = sup === NO_SUPPLIER
-      if (!groups.has(sup)) {
-        groups.set(sup, { count: 0, units: 0, cost: 0, hasZeroCost: false, hasNoRealSupplier: false, unresolved: false })
-      }
-      const g = groups.get(sup)!
-      g.count += 1
-      g.units += r.confirmedQty
-      g.cost += r.confirmedCost
-      if (isZeroCost) g.hasZeroCost = true
-      if (noRealSupplier) g.hasNoRealSupplier = true
-      if (unresolved) g.unresolved = true
-    }
-    return Array.from(groups.entries()).map(([sup, data]) => ({ name: sup, ...data }))
-  }, [showCreateModal, effectiveRows])
-
-  async function handleCreateOrders() {
+  async function handlePreparePurchaseOrder() {
     setCreating(true)
     setError('')
+    setPrepareResult(null)
     try {
-      const itemsToOrder = effectiveRows.map(r => ({
+      const itemsToPrepare = effectiveRows.map(r => ({
         sku: r.sku.SKU,
         product_name: getProductName(r.sku),
-        suggested_qty: r.suggestedQty,
-        confirmed_qty: r.confirmedQty,
-        unit_cost: r.sku.costo_unitario,
-        stock_available: r.sku.cantidad_disponible,
-        avg_per_7: r.avgPer7,
+        quantity: r.confirmedQty,
+        reference_unit_cost: r.sku.costo_unitario,
       }))
-      const res = await generateReplenishmentPurchaseOrders({
-        period_days: periodDays,
-        coverage_weeks: coverageWeeks,
-        items: itemsToOrder,
-      })
-      if (res.error) {
-        setError(res.error)
-      } else {
-        setCreateResult(res)
-        setConfirmedSet(new Set())
+      const res = await prepareReplenishmentPurchaseOrder({ items: itemsToPrepare })
+      if (!res.success) {
+        setPrepareResult(res)
+        return
       }
-    } catch (e: any) {
-      setError(e.message || 'Error inesperado al crear OC')
+      sessionStorage.setItem(REPLENISHMENT_PO_PREPARATION_KEY, JSON.stringify({
+        source: 'REPLENISHMENT',
+        supplier: res.supplier,
+        items: res.items,
+      }))
+      setShowCreateModal(false)
+      onNavigateToPo?.()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error inesperado al preparar la OC')
+      setPrepareResult(null)
+    } finally {
+      setCreating(false)
     }
-    setCreating(false)
   }
 
   // ─── Labels de semanas ───────────────────────────────────────────
@@ -602,23 +582,39 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
 
   // ─── Actualizar cantidad confirmada ──────────────────────────────
   function updateConfirmedQty(sku: string, qty: number) {
+    const normalizedQty = Number.isFinite(qty) ? Math.max(0, qty) : 0
     setRows(prev => {
       const rowIndex = prev.findIndex(row => row.sku.SKU === sku)
       if (rowIndex === -1) return prev
       const next = [...prev]
       const r = { ...next[rowIndex] }
-      r.confirmedQty = Math.max(0, qty)
+      r.confirmedQty = normalizedQty
       r.confirmedCost = r.confirmedQty * r.sku.costo_unitario
       next[rowIndex] = r
       return next
     })
+    if (normalizedQty === 0) {
+      setConfirmedSet(prev => {
+        const next = new Set(prev)
+        next.delete(sku)
+        return next
+      })
+    } else {
+      setValidationMessage('')
+    }
   }
 
   function toggleConfirmed(sku: string) {
+    const row = rows.find(candidate => candidate.sku.SKU === sku)
     setConfirmedSet(prev => {
       const next = new Set(prev)
-      if (next.has(sku)) next.delete(sku)
-      else next.add(sku)
+      if (next.has(sku)) {
+        next.delete(sku)
+      } else if (!row || row.confirmedQty <= 0) {
+        setValidationMessage('Ingresa una cantidad mayor a 0 para incluir este producto en la compra.')
+      } else {
+        next.add(sku)
+      }
       return next
     })
   }
@@ -830,6 +826,15 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
         />
       )}
 
+      {validationMessage && (
+        <div role="alert" className="flex shrink-0 items-center justify-between gap-3 border-b border-amber-500/20 bg-amber-500/10 px-5 py-2 text-xs text-amber-700 dark:text-amber-300">
+          <span>{validationMessage}</span>
+          <button type="button" onClick={() => setValidationMessage('')} className="rounded p-1 text-current transition hover:bg-amber-500/15" aria-label="Cerrar aviso">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
       <div className="relative flex-1 min-h-0 overflow-hidden">
         {error ? (
           <div className="flex h-full items-center justify-center p-8">
@@ -989,13 +994,13 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
         )
       })()}
 
-      {/* Modal de Creación de OC */}
+      {/* Modal de preparación de OC */}
       {showCreateModal && (
         <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="bg-theme-surface border border-theme-border rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-full">
             <div className="px-5 py-4 border-b border-theme-border flex items-center justify-between bg-theme-bg/30">
-              <h3 className="text-lg font-bold text-theme-text">Confirmar creación de Órdenes de Compra</h3>
-              {!creating && !createResult && (
+              <h3 className="text-lg font-bold text-theme-text">Preparar Orden de Compra</h3>
+              {!creating && !prepareResult && (
                 <button onClick={() => setShowCreateModal(false)} className="text-theme-text-muted hover:text-theme-text transition">
                   <X className="w-5 h-5" />
                 </button>
@@ -1003,128 +1008,49 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
             </div>
 
             <div className="p-5 overflow-y-auto">
-              {createResult ? (
-                <div className="space-y-4">
-                  <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-4 text-center">
-                    <Check className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
-                    <h4 className="text-emerald-700 dark:text-emerald-300 font-bold text-lg mb-1">
-                      {createResult.generatedPOs?.length === 1 ? '¡Borrador Creado Exitosamente!' : '¡Borradores Creados Exitosamente!'}
-                    </h4>
-                    <p className="text-sm text-theme-text">
-                      {createResult.generatedPOs?.length === 1
-                        ? 'Se ha generado 1 borrador de orden de compra.'
-                        : `Se han generado ${createResult.generatedPOs?.length} borradores de órdenes de compra.`}
-                    </p>
-                  </div>
-
-                  {createResult.generatedPOs?.length > 0 && (
-                    <div className="mt-4">
-                      <p className="text-sm font-semibold mb-2 text-theme-text-muted uppercase tracking-wide">Órdenes generadas</p>
-                      <ul className="space-y-2">
-                        {createResult.generatedPOs.map((po: any, idx: number) => (
-                          <li key={idx} className="flex justify-between items-center p-3 rounded-lg border border-theme-border bg-theme-bg/50">
-                            <div>
-                              <span className="font-medium text-theme-text block">{po.correlative}</span>
-                              <span className="text-xs text-theme-text-muted">{po.po_id}</span>
-                            </div>
-                            {onNavigateToPo && (
-                              <button
-                                onClick={() => { setShowCreateModal(false); setCreateResult(null); onNavigateToPo(po.po_id) }}
-                                className="px-3 py-1.5 rounded-lg bg-theme-surface border border-theme-border text-xs font-semibold text-theme-accent hover:bg-theme-bg transition"
-                              >
-                                Abrir
-                              </button>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {createResult.blockedNoSupplier?.length > 0 && (
-                    <div className="mt-4 bg-amber-500/10 border border-amber-500/30 p-3 rounded-lg">
-                      <p className="text-xs font-semibold text-amber-700 dark:text-amber-300 mb-1">SKUs ignorados por falta de Proveedor:</p>
-                      <p className="text-[11px] text-amber-600 dark:text-amber-400">{createResult.blockedNoSupplier.join(', ')}</p>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="space-y-5">
-                  <p className="text-sm text-theme-text">Se generará <strong>una Orden de Compra por cada Proveedor</strong> con los productos seleccionados.</p>
-
-                  <div className="space-y-3">
-                    {modalGroups.map((group, idx) => (
-                      <div key={idx} className={`p-3 rounded-lg border ${group.hasNoRealSupplier || group.unresolved ? 'bg-red-500/10 border-red-500/30' : 'bg-theme-bg/50 border-theme-border'}`}>
-                        <div className="flex justify-between items-start mb-1">
-                          <h4 className="font-bold text-sm text-theme-text">{group.name}</h4>
-                          <span className="text-xs font-semibold text-theme-text-muted">{group.count} productos</span>
-                        </div>
-                        <div className="flex gap-4 text-xs text-theme-text-muted mb-2">
-                          <span>Unidades: <strong className="text-theme-text">{fmtN(group.units)}</strong></span>
-                          <span>Total Neto: <strong className="text-theme-text">{fmt(group.cost)}</strong></span>
-                        </div>
-
-                        {(group.hasNoRealSupplier || group.unresolved) && (
-                          <div className="flex items-center gap-1.5 text-[11px] text-red-600 dark:text-red-400 font-medium">
-                            <AlertTriangle className="w-3.5 h-3.5" />
-                            <span>Bloqueado: Estos ítems no se incluirán porque carecen de proveedor o no existen en el catálogo.</span>
-                          </div>
-                        )}
-                        {group.hasZeroCost && (
-                          <div className="flex items-center gap-1.5 text-[11px] text-amber-600 dark:text-amber-400 font-medium mt-1">
-                            <AlertTriangle className="w-3.5 h-3.5" />
-                            <span>Advertencia: Hay productos con costo $0. Podrás corregirlos en la OC en estado Borrador.</span>
-                          </div>
-                        )}
+              <div className="space-y-5">
+                {prepareResult?.success === false ? (
+                  <div className="space-y-4">
+                    <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4">
+                      <div className="flex items-center gap-2 text-red-500">
+                        <AlertTriangle className="h-5 w-5" />
+                        <h4 className="font-bold">No se puede preparar la Orden de Compra</h4>
                       </div>
-                    ))}
+                      <p className="mt-2 text-sm text-theme-text">
+                        {prepareResult.code === 'MULTIPLE_SUPPLIERS'
+                          ? 'Una Orden de Compra solo puede contener productos de un mismo proveedor.'
+                          : 'Estos productos deben tener un proveedor válido antes de preparar la OC.'}
+                      </p>
+                    </div>
+                    {prepareResult.code === 'MULTIPLE_SUPPLIERS' ? prepareResult.suppliers.map(supplier => (
+                      <div key={supplier.supplier_id} className="rounded-lg border border-theme-border bg-theme-bg/50 p-3">
+                        <h4 className="text-sm font-bold text-theme-text">{supplier.supplier_name}</h4>
+                        <ul className="mt-2 space-y-1 text-xs text-theme-text-muted">
+                          {supplier.items.map(item => <li key={item.sku}>• {item.sku} — {item.product_name}</li>)}
+                        </ul>
+                      </div>
+                    )) : (
+                      <ul className="rounded-lg border border-theme-border bg-theme-bg/50 p-3 text-xs text-theme-text-muted">
+                        {prepareResult.items.map(item => <li key={item.sku}>• {item.sku} — {item.product_name}</li>)}
+                      </ul>
+                    )}
                   </div>
-
-                  {modalGroups.length > 1 && (
-                    <div className="bg-theme-accent/10 border border-theme-accent/20 rounded-lg p-3">
-                      <p className="text-xs font-medium text-theme-accent">Seleccionaste productos de distintos proveedores. Se crearán {modalGroups.filter(g => !g.hasNoRealSupplier && !g.unresolved).length} órdenes de compra independientes.</p>
-                    </div>
-                  )}
-
-                  {error && (
-                    <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
-                      <p className="text-sm text-red-500 font-medium text-center">{error}</p>
-                    </div>
-                  )}
-                </div>
-              )}
+                ) : (
+                  <p className="text-sm text-theme-text">Se validará el proveedor real de los productos seleccionados y se abrirá el formulario editable de Nueva orden de compra. No se creará ninguna OC en este paso.</p>
+                )}
+                {error && <p className="rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-center text-sm font-medium text-red-500">{error}</p>}
+              </div>
             </div>
 
             <div className="px-5 py-3 border-t border-theme-border bg-theme-bg/30 flex justify-end gap-3">
-              {createResult ? (
-                <>
-                  <button onClick={() => { setShowCreateModal(false); setCreateResult(null) }} className="px-4 py-2 rounded-lg bg-theme-bg border border-theme-border text-sm font-medium hover:bg-theme-surface transition">
-                    Cerrar
-                  </button>
-                  {onNavigateToPo && createResult.generatedPOs?.length === 1 && (
-                    <button onClick={() => { setShowCreateModal(false); setCreateResult(null); onNavigateToPo(createResult.generatedPOs[0].po_id) }} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-bold shadow-sm hover:bg-emerald-700 transition">
-                      <Eye className="w-4 h-4" />
-                      <span>Abrir y Revisar OC</span>
-                    </button>
-                  )}
-                  {onNavigateToPo && createResult.generatedPOs?.length > 1 && (
-                    <button onClick={() => { setShowCreateModal(false); setCreateResult(null); onNavigateToPo() }} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-bold shadow-sm hover:bg-emerald-700 transition">
-                      <Eye className="w-4 h-4" />
-                      <span>Ir a Órdenes de Compra</span>
-                    </button>
-                  )}
-                </>
-              ) : (
-                <>
-                  <button onClick={() => setShowCreateModal(false)} disabled={creating} className="px-4 py-2 rounded-lg bg-theme-bg border border-theme-border text-sm font-medium hover:bg-theme-surface transition disabled:opacity-50">
-                    Cancelar
-                  </button>
-                  <button onClick={handleCreateOrders} disabled={creating || modalGroups.filter(g => !g.hasNoRealSupplier && !g.unresolved).length === 0}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-bold shadow-sm hover:bg-emerald-700 transition disabled:opacity-50">
-                    {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                    <span>Confirmar Creación</span>
-                  </button>
-                </>
-              )}
+              <button onClick={() => { setShowCreateModal(false); setPrepareResult(null); setError('') }} disabled={creating} className="px-4 py-2 rounded-lg bg-theme-bg border border-theme-border text-sm font-medium hover:bg-theme-surface transition disabled:opacity-50">
+                {prepareResult ? 'Volver al análisis' : 'Cancelar'}
+              </button>
+              {!prepareResult && <button onClick={handlePreparePurchaseOrder} disabled={creating || effectiveSkus === 0}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-bold shadow-sm hover:bg-emerald-700 transition disabled:opacity-50">
+                {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                <span>Preparar Orden de Compra</span>
+              </button>}
             </div>
           </div>
         </div>

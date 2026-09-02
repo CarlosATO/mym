@@ -183,6 +183,120 @@ export async function getProductCatalogBySkus(skus: string[]): Promise<ProductCa
   return rows
 }
 
+export interface PurchaseOrderProductSearchRequest {
+  real_supplier_id: string
+  search?: string
+  page?: number
+  limit?: number
+}
+
+export interface PurchaseOrderProductSearchResult {
+  data: Product[]
+  page: number
+  has_more: boolean
+  total?: number
+  error?: string
+}
+
+export async function searchPurchaseOrderProducts({
+  real_supplier_id,
+  search = '',
+  page = 1,
+  limit = 40,
+}: PurchaseOrderProductSearchRequest): Promise<PurchaseOrderProductSearchResult> {
+  const safePage = Math.max(Number.isFinite(page) ? Math.floor(page) : 1, 1)
+  const safeLimit = Math.min(Math.max(Number.isFinite(limit) ? Math.floor(limit) : 40, 1), 50)
+  const authRes = await verifyPermission('adquisiciones.products.view')
+  if (authRes.error) return { data: [], page: safePage, has_more: false, error: authRes.error }
+
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { data: [], page: safePage, has_more: false, error: 'Proveedor no válido para la empresa activa.' }
+
+  const query = search.trim()
+  const db = adqAdmin()
+
+  const { data: realSupplier } = await db.from('suppliers')
+    .select('id')
+    .eq('id', real_supplier_id)
+    .eq('company_id', companyId)
+    .eq('supplier_kind', 'REAL')
+    .eq('is_active', true)
+    .eq('status', 'ACTIVE')
+    .maybeSingle()
+
+  if (!realSupplier) return { data: [], page: safePage, has_more: false, error: 'Proveedor no válido para la empresa activa.' }
+
+  const { data: operativeSuppliers, error: operativeError } = await db.from('suppliers')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('supplier_kind', 'BSALE_OPERATIVE')
+    .eq('parent_supplier_id', real_supplier_id)
+    .eq('is_active', true)
+    .eq('status', 'ACTIVE')
+
+  if (operativeError) return { data: [], page: safePage, has_more: false, error: operativeError.message }
+
+  const supplierIds = [real_supplier_id, ...(operativeSuppliers ?? []).map(supplier => supplier.id)]
+  const { data: candidateMappings, error: candidateError } = await db.from('product_supplier_mappings')
+    .select('product_id')
+    .eq('company_id', companyId)
+    .eq('is_active', true)
+    .in('supplier_id', supplierIds)
+
+  if (candidateError) return { data: [], page: safePage, has_more: false, error: candidateError.message }
+
+  const candidateProductIds = Array.from(new Set(
+    (candidateMappings ?? []).map(mapping => mapping.product_id).filter(Boolean)
+  ))
+  if (candidateProductIds.length === 0) return { data: [], page: safePage, has_more: false }
+
+  // Resolve the preferred active mapping before the product query is paginated.
+  const { data: activeMappings, error: mappingError } = await db.from('product_supplier_mappings')
+    .select('id, product_id, supplier_id, is_preferred')
+    .eq('company_id', companyId)
+    .eq('is_active', true)
+    .in('product_id', candidateProductIds)
+    .order('is_preferred', { ascending: false })
+    .order('id', { ascending: true })
+
+  if (mappingError) return { data: [], page: safePage, has_more: false, error: mappingError.message }
+
+  const canonicalSupplierIds = new Set(supplierIds)
+  const preferredMappingByProduct = new Map<string, { supplier_id: string; is_preferred: boolean }>()
+  for (const mapping of activeMappings ?? []) {
+    if (!mapping.product_id || preferredMappingByProduct.has(mapping.product_id)) continue
+    preferredMappingByProduct.set(mapping.product_id, mapping)
+  }
+  const canonicalProductIds = Array.from(preferredMappingByProduct.entries())
+    .filter(([, mapping]) => canonicalSupplierIds.has(mapping.supplier_id))
+    .map(([productId]) => productId)
+  if (canonicalProductIds.length === 0) return { data: [], page: safePage, has_more: false }
+
+  let productsQuery = db.from('products')
+    .select('*')
+    .or(`company_id.is.null,company_id.eq.${companyId}`)
+    .eq('is_active', true)
+    .in('id', canonicalProductIds)
+  if (query) {
+    const searchPattern = `%${query}%`
+    productsQuery = productsQuery.or(`sku.ilike.${searchPattern},barcode.ilike.${searchPattern},description.ilike.${searchPattern},brand.ilike.${searchPattern},category.ilike.${searchPattern}`)
+  }
+  const from = (safePage - 1) * safeLimit
+  const { data, error } = await productsQuery
+    .order('description', { ascending: true, nullsFirst: false })
+    .order('sku', { ascending: true, nullsFirst: false })
+    .order('id', { ascending: true })
+    .range(from, from + safeLimit)
+
+  if (error) return { data: [], page: safePage, has_more: false, error: error.message }
+  const rows = (data ?? []) as Product[]
+  return {
+    data: rows.slice(0, safeLimit),
+    page: safePage,
+    has_more: rows.length > safeLimit,
+  }
+}
+
 export async function getProducts(filters: ProductFilters = {}): Promise<{ data: Product[]; total: number; error?: string }> {
   const authRes = await verifyPermission('adquisiciones.products.view')
   if (authRes.error) return { data: [], total: 0, error: authRes.error }

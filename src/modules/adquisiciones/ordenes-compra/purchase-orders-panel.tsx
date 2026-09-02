@@ -6,17 +6,18 @@ import { AuthorizedPersonnelCombobox } from '@/components/ui/authorized-personne
 import {
   getPurchaseOrders, getPurchaseOrderDetail, createPurchaseOrder,
   updatePurchaseOrderStatus, getAuthorizedPersonnel, createAuthorizedPersonnel,
-  createProductFromPO, checkProductDuplicates, getNextCorrelative,
+  getNextCorrelative,
   type PurchaseOrder, type PurchaseOrderDetail, type PurchaseOrderFilters,
   type AuthorizedPersonnel
 } from '@/app/actions/adquisiciones/purchase-orders'
 import { getSuppliers, type Supplier } from '@/app/actions/adquisiciones/suppliers'
-import { getProducts, type Product } from '@/app/actions/adquisiciones/products'
+import { searchPurchaseOrderProducts, type Product } from '@/app/actions/adquisiciones/products'
 import { getWarehouses, type Warehouse } from '@/app/actions/adquisiciones/warehouses'
 import { downloadPOBooklet, generatePdfBlob } from '@/lib/pdf/generate-po-pdf'
 import { getActiveCompany, type Company } from '@/app/actions/companies'
 import { OperationalTableResizeHandle, shouldIgnoreOperationalRowDoubleClick, useOperationalTableWidths, type OperationalTableColumn } from '@/components/ui/operational-table'
 import { ReplenishmentAnalysisPanel } from './replenishment-analysis-panel'
+import { formatCivilDate } from '@/lib/datetime'
 
 const STATUS_BADGES: Record<string, { bg: string; text: string; border: string }> = {
   BORRADOR: { bg: 'bg-gray-500/10', text: 'text-gray-500', border: 'border-gray-500/20' },
@@ -47,6 +48,7 @@ const INVOICE_BADGES: Record<string, { bg: string; text: string; border: string 
 }
 
 const PURCHASE_ORDERS_TABLE_KEY = 'mym:table:adquisiciones:ordenes-compra'
+const REPLENISHMENT_PO_PREPARATION_KEY = 'mym:adquisiciones:replenishment-po-preparation'
 const PURCHASE_ORDER_COLUMNS: OperationalTableColumn[] = [
   { id: 'correlative', defaultWidth: 120, minWidth: 100, maxWidth: 190 },
   { id: 'issueDate', defaultWidth: 105, minWidth: 95, maxWidth: 150 },
@@ -68,7 +70,7 @@ function formatCurrency(amount: number, currency = 'CLP') {
 
 function formatDate(dateStr: string | null | undefined) {
   if (!dateStr) return '—'
-  return new Date(dateStr).toLocaleDateString('es-CL')
+  return formatCivilDate(dateStr) || '—'
 }
 
 function statusLabel(s: string) {
@@ -89,9 +91,9 @@ function Badge({ value, map }: { value: string | null; map: Record<string, { bg:
   return <span className={`inline-flex whitespace-nowrap text-[11px] font-semibold px-2 py-0.5 rounded border ${s.bg} ${s.text} ${s.border}`}>{statusLabel(value)}</span>
 }
 
-const inputClass = "w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30"
-const selectClass = "w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30 appearance-none"
-const textareaClass = "w-full rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30 resize-none"
+const inputClass = "w-full h-9 rounded-lg border border-[#778B96]/30 bg-white px-3 text-xs text-[#28353E] placeholder:text-[#778B96] focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60 focus:border-[#45567D]"
+const selectClass = "w-full h-9 rounded-lg border border-[#778B96]/30 bg-white px-3 text-xs text-[#28353E] focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60 focus:border-[#45567D] appearance-none"
+const textareaClass = "w-full rounded-lg border border-[#778B96]/30 bg-white px-3 py-2 text-xs text-[#28353E] placeholder:text-[#778B96] focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60 focus:border-[#45567D] resize-none"
 
 export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: { initialOpenPoId?: string | null, onInitialOpenConsumed?: () => void }) {
   const [view, setView] = useState<'list' | 'form' | 'detail' | 'analysis'>('list')
@@ -108,25 +110,30 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
   const [detail, setDetail] = useState<PurchaseOrderDetail | null>(null)
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
-  const [products, setProducts] = useState<Product[]>([])
   const [authorizedPersonnel, setAuthorizedPersonnel] = useState<AuthorizedPersonnel[]>([])
   const [productSearch, setProductSearch] = useState('')
   const [productResults, setProductResults] = useState<Product[]>([])
-  const [showProductForm, setShowProductForm] = useState(false)
+  const [productSearchLoading, setProductSearchLoading] = useState(false)
+  const [productDropdownOpen, setProductDropdownOpen] = useState(false)
+  const [productPage, setProductPage] = useState(0)
+  const [productHasMore, setProductHasMore] = useState(false)
+  const [productLoadingMore, setProductLoadingMore] = useState(false)
+  const productSearchCacheRef = useRef(new Map<string, { data: Product[]; has_more: boolean }>())
+  const productSearchRequestSequence = useRef(0)
+  const productSearchTimerRef = useRef<number | null>(null)
+  const productLoadingMoreRef = useRef(false)
   const [showAuthorizerForm, setShowAuthorizerForm] = useState(false)
   const [showFilters, setShowFilters] = useState(false)
-  const [productForm, setProductForm] = useState({
-    sku: '', barcode: '', description: '', brand: '', category: '', unit_of_measure: '', tax_rate: '19',
-  })
   const [authorizerForm, setAuthorizerForm] = useState({
     full_name: '', position: '', email: '', phone: '',
   })
-  const [duplicateWarnings, setDuplicateWarnings] = useState<{ type: string; message: string; product_sku: string }[]>([])
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const previewDetailRef = useRef<any>(null)
   const [supplierSearch, setSupplierSearch] = useState('')
   const [logoBase64, setLogoBase64] = useState<string | undefined>(undefined)
   const [activeCompany, setActiveCompany] = useState<Company | null>(null)
+  const [replenishmentSupplierName, setReplenishmentSupplierName] = useState('')
+  const [isReplenishmentPreparation, setIsReplenishmentPreparation] = useState(false)
 
   useEffect(() => {
     fetch('/logo-transparent.png')
@@ -142,6 +149,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
   }, [])
   const [supplierOpen, setSupplierOpen] = useState(false)
   const supplierRef = useRef<HTMLDivElement>(null)
+  const productRef = useRef<HTMLDivElement>(null)
   const [warehouseSearch, setWarehouseSearch] = useState('')
   const [warehouseOpen, setWarehouseOpen] = useState(false)
   const warehouseRef = useRef<HTMLDivElement>(null)
@@ -170,6 +178,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
     unit: string
     quantity: number
     unit_price: number
+    reference_unit_cost?: number
     discount_percent: number
     tax_rate: number
     warehouse_id: string
@@ -181,6 +190,22 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
 
   const tempIdCounter = useRef(0)
   function newTempId() { tempIdCounter.current += 1; return `ni_${tempIdCounter.current}` }
+
+  interface ReplenishmentPreparationPayload {
+    source: 'REPLENISHMENT'
+    supplier: { id: string; name: string }
+    items: Array<{
+      product_id: string
+      sku: string
+      product_description: string
+      unit: string
+      quantity: number
+      unit_price: number
+      reference_unit_cost: number
+      discount_percent: number
+      tax_rate: number
+    }>
+  }
 
   const totalPages = Math.ceil(total / (filters.pageSize ?? 50))
 
@@ -280,12 +305,10 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
     Promise.all([
       getSuppliers(),
       getWarehouses(),
-      getProducts({ pageSize: 10000 }),
       getAuthorizedPersonnel(),
-    ]).then(([sup, wh, prod, auth]) => {
+    ]).then(([sup, wh, auth]) => {
       setSuppliers(sup)
       setWarehouses(wh.data)
-      setProducts(prod.data)
       setAuthorizedPersonnel(auth)
     })
   }, [])
@@ -294,6 +317,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
     function handleClick(e: MouseEvent) {
       if (supplierRef.current && !supplierRef.current.contains(e.target as Node)) setSupplierOpen(false)
       if (warehouseRef.current && !warehouseRef.current.contains(e.target as Node)) setWarehouseOpen(false)
+      if (productRef.current && !productRef.current.contains(e.target as Node)) setProductDropdownOpen(false)
     }
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
@@ -303,7 +327,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
     if (!form.supplier_id) return
     const supplier = suppliers.find(s => s.id === form.supplier_id)
     if (!supplier) return
-    if (supplier.discount_percent > 0) {
+    if (!isReplenishmentPreparation && supplier.discount_percent > 0) {
       setItems(prev => prev.map(it => ({
         ...it,
         discount_percent: supplier.discount_percent,
@@ -312,9 +336,54 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
     if (supplier.payment_terms) {
       setForm(p => ({ ...p, payment_terms: supplier.payment_terms || p.payment_terms }))
     }
-  }, [form.supplier_id])
+  }, [form.supplier_id, isReplenishmentPreparation, suppliers])
 
   function msg(text: string) { setMessage(text); setTimeout(() => setMessage(''), 3500) }
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || new URLSearchParams(window.location.search).get('prepare') !== 'replenishment') return
+
+    const raw = sessionStorage.getItem(REPLENISHMENT_PO_PREPARATION_KEY)
+    try {
+      const payload = raw ? JSON.parse(raw) as ReplenishmentPreparationPayload : null
+      const valid = payload?.source === 'REPLENISHMENT'
+        && Boolean(payload.supplier?.id && payload.supplier?.name)
+        && Array.isArray(payload.items)
+        && payload.items.length > 0
+        && payload.items.every(item => Boolean(item.product_id && item.sku && item.product_description)
+          && Number.isFinite(item.quantity) && item.quantity > 0
+          && Number.isFinite(item.unit_price) && Number.isFinite(item.reference_unit_cost)
+          && Number.isFinite(item.discount_percent) && Number.isFinite(item.tax_rate))
+      if (!valid) {
+        msg('La preparación de la orden de compra ya no está disponible.')
+        return
+      }
+
+      sessionStorage.removeItem(REPLENISHMENT_PO_PREPARATION_KEY)
+      setForm(prev => ({ ...prev, supplier_id: payload.supplier.id, po_type: 'PRODUCTOS', currency: 'CLP' }))
+      setReplenishmentSupplierName(payload.supplier.name)
+      setIsReplenishmentPreparation(true)
+      setItems(payload.items.map(item => ({
+        tempId: newTempId(),
+        item_type: 'PRODUCT' as const,
+        product_id: item.product_id,
+        sku: item.sku,
+        description: item.product_description,
+        unit: item.unit || 'UNIDAD',
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        reference_unit_cost: item.reference_unit_cost,
+        discount_percent: item.discount_percent ?? 0,
+        tax_rate: item.tax_rate,
+        warehouse_id: '',
+        notes: '',
+      })))
+      setEditId(null)
+      setView('form')
+    } catch {
+      msg('La preparación de la orden de compra ya no está disponible.')
+    }
+  }, [])
 
   function resetForm() {
     setForm({
@@ -333,9 +402,15 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
     setEditId(null)
     setProductSearch('')
     setProductResults([])
-    setShowProductForm(false)
+    setProductDropdownOpen(false)
+    setProductPage(0)
+    setProductHasMore(false)
+    setProductSearchLoading(false)
+    setProductLoadingMore(false)
+    productLoadingMoreRef.current = false
     setShowAuthorizerForm(false)
-    setDuplicateWarnings([])
+    setReplenishmentSupplierName('')
+    setIsReplenishmentPreparation(false)
   }
 
   function editPO(po: PurchaseOrder) {
@@ -415,6 +490,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
       issue_date: form.issue_date,
       required_date: form.required_date,
       supplier_id: form.supplier_id,
+      source_type: isReplenishmentPreparation ? 'REPLENISHMENT' : 'MANUAL',
       warehouse_id: form.warehouse_id,
       payment_terms: form.payment_terms || undefined,
       authorized_by: form.authorized_by || undefined,
@@ -448,16 +524,133 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
     load()
   }
 
+  function handleSupplierChange(supplierId: string) {
+    if (supplierId !== form.supplier_id && form.supplier_id && items.length > 0) {
+      const confirmed = confirm('Cambiar el proveedor eliminará los productos agregados a esta orden.\n¿Deseas continuar?')
+      if (!confirmed) return
+      setItems([])
+    }
+    if (supplierId !== form.supplier_id) {
+      setProductSearch('')
+      setProductResults([])
+      setProductDropdownOpen(false)
+      setProductPage(0)
+      setProductHasMore(false)
+      setProductSearchLoading(false)
+      setProductLoadingMore(false)
+      productLoadingMoreRef.current = false
+      if (productSearchTimerRef.current !== null) window.clearTimeout(productSearchTimerRef.current)
+      productSearchRequestSequence.current += 1
+    }
+    setForm(p => ({ ...p, supplier_id: supplierId }))
+  }
+
+  async function loadProductPage(supplierId: string, query: string, page: number, requestId: number, append: boolean) {
+    const cacheKey = `${supplierId}::${query}::${page}`
+    const cachedPage = productSearchCacheRef.current.get(cacheKey)
+    if (cachedPage) {
+      if (requestId !== productSearchRequestSequence.current) return
+      setProductResults(prev => append
+        ? Array.from(new Map([...prev, ...cachedPage.data].map(product => [product.id, product])).values())
+        : cachedPage.data)
+      setProductPage(page)
+      setProductHasMore(cachedPage.has_more)
+      setProductSearchLoading(false)
+      setProductLoadingMore(false)
+      productLoadingMoreRef.current = false
+      return
+    }
+
+    if (append) {
+      setProductLoadingMore(true)
+      productLoadingMoreRef.current = true
+    } else {
+      setProductSearchLoading(true)
+    }
+
+    try {
+      const response = await searchPurchaseOrderProducts({ real_supplier_id: supplierId, search: query, page, limit: 40 })
+      if (requestId !== productSearchRequestSequence.current) return
+      if (response.error) {
+        setProductResults([])
+        setProductSearchLoading(false)
+        setProductLoadingMore(false)
+        productLoadingMoreRef.current = false
+        msg(response.error)
+        return
+      }
+
+      const pageData = { data: response.data, has_more: response.has_more }
+      productSearchCacheRef.current.set(cacheKey, pageData)
+      if (productSearchCacheRef.current.size > 40) {
+        const oldestKey = productSearchCacheRef.current.keys().next().value
+        if (oldestKey) productSearchCacheRef.current.delete(oldestKey)
+      }
+      setProductResults(prev => append
+        ? Array.from(new Map([...prev, ...pageData.data].map(product => [product.id, product])).values())
+        : pageData.data)
+      setProductPage(page)
+      setProductHasMore(pageData.has_more)
+      setProductSearchLoading(false)
+      setProductLoadingMore(false)
+      productLoadingMoreRef.current = false
+    } catch {
+      if (requestId !== productSearchRequestSequence.current) return
+      setProductResults([])
+      setProductSearchLoading(false)
+      setProductLoadingMore(false)
+      productLoadingMoreRef.current = false
+    }
+  }
+
+  function openProductDropdown() {
+    if (!form.supplier_id) return
+    setProductDropdownOpen(true)
+    if (productPage > 0 || productSearchLoading || productLoadingMore) return
+    const requestId = ++productSearchRequestSequence.current
+    void loadProductPage(form.supplier_id, productSearch.trim().toLowerCase(), 1, requestId, false)
+  }
+
   function handleProductSearch(text: string) {
     setProductSearch(text)
-    if (!text.trim()) { setProductResults([]); return }
-    const lower = text.toLowerCase()
-    const results = products.filter(p =>
-      p.sku.toLowerCase().includes(lower) ||
-      p.description.toLowerCase().includes(lower) ||
-      (p.barcode && p.barcode.toLowerCase().includes(lower))
-    )
-    setProductResults(results.slice(0, 20))
+    setProductDropdownOpen(Boolean(form.supplier_id))
+    if (productSearchTimerRef.current !== null) window.clearTimeout(productSearchTimerRef.current)
+
+    const query = text.trim().toLowerCase()
+    const requestId = ++productSearchRequestSequence.current
+    setProductPage(0)
+    setProductHasMore(false)
+    setProductLoadingMore(false)
+    productLoadingMoreRef.current = false
+    if (!form.supplier_id) {
+      setProductResults([])
+      setProductSearchLoading(false)
+      return
+    }
+
+    const cacheKey = `${form.supplier_id}::${query}::1`
+    const cachedPage = productSearchCacheRef.current.get(cacheKey)
+    if (cachedPage) {
+      setProductResults(cachedPage.data)
+      setProductPage(1)
+      setProductHasMore(cachedPage.has_more)
+      setProductSearchLoading(false)
+      return
+    }
+
+    setProductResults([])
+    setProductSearchLoading(true)
+    productSearchTimerRef.current = window.setTimeout(() => {
+      void loadProductPage(form.supplier_id, query, 1, requestId, false)
+    }, 300)
+  }
+
+  function handleProductDropdownScroll(e: React.UIEvent<HTMLDivElement>) {
+    if (!form.supplier_id || !productHasMore || productLoadingMoreRef.current || productSearchLoading) return
+    const element = e.currentTarget
+    if (element.scrollHeight - element.scrollTop - element.clientHeight > 48) return
+    const requestId = productSearchRequestSequence.current
+    void loadProductPage(form.supplier_id, productSearch.trim().toLowerCase(), productPage + 1, requestId, true)
   }
 
   function addProductToItems(p: Product) {
@@ -478,24 +671,12 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
     }])
     setProductSearch('')
     setProductResults([])
-  }
-
-  function addServiceLine() {
-    setItems(prev => [...prev, {
-      tempId: newTempId(),
-      item_type: 'SERVICE',
-      product_id: '',
-      sku: '',
-      description: '',
-      unit: 'UNIDAD',
-      quantity: 1,
-      unit_price: 0,
-      discount_percent: 0,
-      tax_rate: 19,
-      warehouse_id: form.warehouse_id,
-      notes: '',
-    }])
-    setEditingItem(newTempId())
+    setProductDropdownOpen(false)
+    setProductPage(0)
+    setProductHasMore(false)
+    setProductSearchLoading(false)
+    if (productSearchTimerRef.current !== null) window.clearTimeout(productSearchTimerRef.current)
+    productSearchRequestSequence.current += 1
   }
 
   function updateItem(tempId: string, field: keyof LineItem, value: unknown) {
@@ -521,36 +702,6 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
   }, 0)
   const grandTotal = netTotal - discountTotal + taxTotal
 
-  async function handleCheckDuplicates() {
-    const res = await checkProductDuplicates({
-      sku: productForm.sku || undefined,
-      barcode: productForm.barcode || undefined,
-      description: productForm.description || undefined,
-    })
-    setDuplicateWarnings(res)
-  }
-
-  async function handleCreateProduct() {
-    if (!productForm.sku || !productForm.description) { msg('SKU y descripción son obligatorios'); return }
-    const res = await createProductFromPO({
-      sku: productForm.sku,
-      barcode: productForm.barcode || undefined,
-      description: productForm.description,
-      brand: productForm.brand || undefined,
-      category: productForm.category || undefined,
-      unit_of_measure: productForm.unit_of_measure || undefined,
-      tax_rate: parseFloat(productForm.tax_rate) || 19,
-    })
-    if ('error' in res && res.error) { msg(res.error); return }
-    const reloaded = await getProducts({ pageSize: 10000 })
-    setProducts(reloaded.data)
-    const created = reloaded.data.find(p => p.sku === productForm.sku)
-    if (created) addProductToItems(created)
-    setShowProductForm(false)
-    setProductForm({ sku: '', barcode: '', description: '', brand: '', category: '', unit_of_measure: '', tax_rate: '19' })
-    setDuplicateWarnings([])
-    msg('Producto creado')
-  }
 
   async function handleCreateAuthorizer(e: React.MouseEvent) {
     e.preventDefault()
@@ -744,137 +895,81 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
               <button onClick={() => { URL.revokeObjectURL(previewUrl); setPreviewUrl(null) }} className="px-4 py-1.5 rounded-lg border border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/10 text-xs font-semibold transition-colors">
                 Cerrar
               </button>
-            </div>
-          </div>
+             </div>
+           </div>
           <div className="flex-1 min-h-0">
-            <iframe src={previewUrl} className="w-full h-full" title="Vista previa OC" />
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (showProductForm) {
-    return (
-      <div className="animate-in fade-in zoom-in-95 duration-200">
-        <div className="bg-theme-surface rounded-2xl border border-theme-border shadow-sm overflow-hidden">
-          <div className="px-6 py-4 border-b border-theme-border bg-theme-text/5 flex items-center justify-between sticky top-0 z-10">
-            <div className="flex items-center gap-4">
-              <button type="button" onClick={() => { setShowProductForm(false); setDuplicateWarnings([]) }} className="p-2 rounded-lg hover:bg-theme-text/10 text-theme-text-muted transition-colors">
-                <ArrowLeft className="w-5 h-5" />
-              </button>
-              <h2 className="text-lg font-bold text-theme-text">Nuevo producto</h2>
-            </div>
-            <div className="flex gap-3">
-              <button type="button" onClick={() => { setShowProductForm(false); setDuplicateWarnings([]) }} className="px-4 py-2 rounded-xl border border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/10 text-sm font-semibold transition-colors">
-                Cancelar
-              </button>
-              <button type="button" onClick={handleCreateProduct} className="px-5 py-2 rounded-xl bg-theme-accent hover:bg-theme-accent-hover text-white text-sm font-bold transition-colors shadow-lg shadow-theme-accent/20">
-                Guardar
-              </button>
+               <iframe src={previewUrl} className="w-full h-full" title="Vista previa OC" />
+             </div>
             </div>
           </div>
-          <div className="p-6 lg:p-8">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-5">
-              <div className="space-y-1">
-                <label className="text-xs text-theme-text-muted/70">SKU *</label>
-                <input type="text" value={productForm.sku} onChange={e => setProductForm(p => ({ ...p, sku: e.target.value }))} className={inputClass} />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs text-theme-text-muted/70">Código de barra</label>
-                <input type="text" value={productForm.barcode} onChange={e => setProductForm(p => ({ ...p, barcode: e.target.value }))} className={inputClass} />
-              </div>
-              <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4 space-y-1">
-                <label className="text-xs text-theme-text-muted/70">Descripción *</label>
-                <input type="text" value={productForm.description} onChange={e => setProductForm(p => ({ ...p, description: e.target.value }))} className={inputClass} />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs text-theme-text-muted/70">Marca</label>
-                <input type="text" value={productForm.brand} onChange={e => setProductForm(p => ({ ...p, brand: e.target.value }))} className={inputClass} />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs text-theme-text-muted/70">Categoría</label>
-                <input type="text" value={productForm.category} onChange={e => setProductForm(p => ({ ...p, category: e.target.value }))} className={inputClass} />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs text-theme-text-muted/70">Unidad de medida</label>
-                <input type="text" value={productForm.unit_of_measure} onChange={e => setProductForm(p => ({ ...p, unit_of_measure: e.target.value }))} className={inputClass} />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs text-theme-text-muted/70">IVA %</label>
-                <input type="number" step="0.01" value={productForm.tax_rate} onChange={e => setProductForm(p => ({ ...p, tax_rate: e.target.value }))} className={inputClass} />
-              </div>
-              <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4">
-                <button type="button" onClick={handleCheckDuplicates} className="px-4 py-2 rounded-lg border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors">
-                  Check duplicados
-                </button>
-              </div>
-              {duplicateWarnings.length > 0 && (
-                <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4 bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 space-y-1">
-                  {duplicateWarnings.map((w, i) => <p key={i} className="text-xs text-amber-500">{w.type}: {w.message}</p>)}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-
+     )
+   }
 
   if (view === 'form') {
     return (
-      <div className="flex flex-col h-full overflow-hidden bg-theme-surface animate-in fade-in zoom-in-95 duration-200">
+      <div className="flex flex-col h-full overflow-hidden bg-[#DFEBF7]/30 animate-in fade-in zoom-in-95 duration-200">
         {message && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
         <form onSubmit={handleSubmit} className="flex-1 overflow-auto">
-          <div className="px-6 py-4 border-b border-theme-border bg-theme-text/5 flex items-center justify-between sticky top-0 z-10">
-            <div className="flex items-center gap-4">
-              <button type="button" onClick={() => { setView('list'); resetForm() }} className="p-2 rounded-lg hover:bg-theme-text/10 text-theme-text-muted transition-colors">
+          <div className="px-4 sm:px-6 py-3 border-b border-[#778B96]/25 bg-[#28353E] flex flex-wrap items-center justify-between gap-3 sticky top-0 z-10 shadow-md shadow-[#28353E]/10">
+            <div className="flex items-center gap-3 min-w-0">
+              <button type="button" onClick={() => { setView('list'); resetForm() }} className="p-1.5 rounded-lg text-[#DFEBF7]/75 hover:bg-white/10 hover:text-white transition-colors">
                 <ArrowLeft className="w-5 h-5" />
               </button>
-              <h2 className="text-lg font-bold text-theme-text">{editId ? 'Editar orden de compra' : 'Nueva orden de compra'}</h2>
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#A4C7D5]">Adquisiciones</p>
+                <h2 className="truncate text-base sm:text-lg font-bold text-white">{editId ? 'Editar orden de compra' : 'Nueva orden de compra'}</h2>
+              </div>
             </div>
-            <div className="flex gap-3">
-              <button type="button" onClick={() => { setView('list'); resetForm() }} className="px-4 py-2 rounded-xl border border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/10 text-sm font-semibold transition-colors">
+            <div className="flex w-full sm:w-auto gap-2">
+              <button type="button" onClick={() => { setView('list'); resetForm() }} className="flex-1 sm:flex-none px-3.5 py-1.5 rounded-lg border border-white/20 text-[#DFEBF7]/80 hover:text-white hover:bg-white/10 text-xs font-semibold transition-colors">
                 Cancelar
               </button>
-              <button type="button" onClick={handlePreviewPDF} className="px-4 py-2 rounded-xl border border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/10 text-sm font-semibold transition-colors">
+              <button type="button" onClick={handlePreviewPDF} className="flex-1 sm:flex-none px-3.5 py-1.5 rounded-lg border border-[#A4C7D5]/45 text-[#DFEBF7] hover:bg-[#45567D] text-xs font-semibold transition-colors">
                 Vista previa PDF
               </button>
-              <button type="submit" className="px-5 py-2 rounded-xl bg-theme-accent hover:bg-theme-accent-hover text-white text-sm font-bold transition-colors shadow-lg shadow-theme-accent/20">
+              <button type="submit" className="flex-1 sm:flex-none px-4 py-1.5 rounded-lg bg-[#A4C7D5] hover:bg-[#DFEBF7] text-[#28353E] text-xs font-bold transition-colors shadow-lg shadow-[#A4C7D5]/20">
                 Emitir OC
               </button>
             </div>
           </div>
-          <div className="p-6 lg:p-8 space-y-8">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-5">
+          <div className="p-4 sm:p-5 lg:p-6 space-y-5 sm:space-y-6">
+            <section className="rounded-xl border border-[#778B96]/25 bg-white/70 p-4 sm:p-5 shadow-sm backdrop-blur-sm">
+              <div className="mb-4 flex items-center justify-between border-b border-[#778B96]/20 pb-3">
+                <div>
+                  <h3 className="text-sm font-bold text-[#28353E]">Datos generales</h3>
+                  <p className="mt-0.5 text-[11px] text-[#778B96]">Información principal de la orden</p>
+                </div>
+                <span className="hidden sm:block rounded-full bg-[#DFEBF7] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-[#45567D]">Cabecera OC</span>
+              </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-4 gap-y-3.5">
               <div className="space-y-1">
-                <label className="text-xs text-theme-text-muted/70">Fecha emisión</label>
-                <div className="h-9 rounded-lg border border-theme-border bg-theme-text/5 px-3 flex items-center text-xs text-theme-text-muted">
+                <label className="text-[11px] font-semibold text-[#45567D]">Fecha emisión</label>
+                <div className="h-9 rounded-lg border border-[#778B96]/25 bg-[#DFEBF7]/55 px-3 flex items-center text-xs text-[#45567D]">
                   {new Date().toLocaleDateString('es-CL')}
                 </div>
               </div>
               <div className="space-y-1">
-                <label className="text-xs text-theme-text-muted/70">Fecha requerida</label>
+                <label className="text-[11px] font-semibold text-[#45567D]">Fecha requerida</label>
                 <input type="date" value={form.required_date} onChange={e => setForm(p => ({ ...p, required_date: e.target.value }))} className={inputClass} />
               </div>
               <div ref={supplierRef} className="relative space-y-1">
-                <label className="text-xs text-theme-text-muted/70">Proveedor *</label>
+                 <label className="text-[11px] font-semibold text-[#45567D]">Proveedor *</label>
                 <input
                   type="text"
                   value={
                     !supplierOpen && form.supplier_id && !supplierSearch
-                      ? (suppliers.find(s => s.id === form.supplier_id)?.business_name ?? '')
+                       ? (suppliers.find(s => s.id === form.supplier_id)?.business_name ?? replenishmentSupplierName)
                       : supplierSearch
                   }
-                  onChange={e => { setSupplierSearch(e.target.value); setSupplierOpen(true); if (form.supplier_id) setForm(p => ({ ...p, supplier_id: '' })) }}
-                  onFocus={() => setSupplierOpen(true)}
-                  placeholder="Buscar proveedor..."
-                  required
-                  className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30"
-                />
-                {supplierOpen && (
+                   onChange={e => { if (isReplenishmentPreparation) return; setSupplierSearch(e.target.value); setSupplierOpen(true) }}
+                   onFocus={() => { if (!isReplenishmentPreparation) setSupplierOpen(true) }}
+                   placeholder="Buscar proveedor..."
+                   required
+                   readOnly={isReplenishmentPreparation}
+                    className="w-full h-9 rounded-lg border border-[#778B96]/30 bg-white px-3 text-xs text-[#28353E] placeholder:text-[#778B96] focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60 focus:border-[#45567D]"
+                 />
+                 {isReplenishmentPreparation && <p className="mt-1 text-[10px] text-theme-text-muted">Proveedor definido por los productos seleccionados en Reposición.</p>}
+                 {!isReplenishmentPreparation && supplierOpen && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setSupplierOpen(false)} />
                     <div className="absolute left-0 top-full mt-1 w-full max-h-48 overflow-y-auto bg-theme-surface border border-theme-border rounded-xl shadow-xl z-50 p-1 space-y-0.5">
@@ -894,7 +989,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
                               <button
                                 key={s.id}
                                 type="button"
-                                onClick={() => { setForm(p => ({ ...p, supplier_id: s.id })); setSupplierSearch(''); setSupplierOpen(false) }}
+                                 onClick={() => { handleSupplierChange(s.id); setSupplierSearch(''); setSupplierOpen(false) }}
                                 className="w-full text-left px-3 py-2 text-xs rounded-lg transition-colors text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text"
                               >
                                 <span className="font-medium">{s.business_name}</span>
@@ -907,7 +1002,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
                 )}
               </div>
               <div className="relative space-y-1" ref={warehouseRef}>
-                <label className="text-xs text-theme-text-muted/70">Bodega destino</label>
+                 <label className="text-[11px] font-semibold text-[#45567D]">Bodega destino</label>
                 {warehouses.length === 0 ? (
                   <div className="w-full rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-500 font-semibold">
                     No hay bodegas disponibles. Las bodegas deben ser creadas desde el módulo WMS.
@@ -924,7 +1019,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
                       onChange={e => { setWarehouseSearch(e.target.value); setWarehouseOpen(true); if (form.warehouse_id) setForm(p => ({ ...p, warehouse_id: '' })) }}
                       onFocus={() => setWarehouseOpen(true)}
                       placeholder="Buscar bodega..."
-                      className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30"
+                       className="w-full h-9 rounded-lg border border-[#778B96]/30 bg-white px-3 text-xs text-[#28353E] placeholder:text-[#778B96] focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60 focus:border-[#45567D]"
                     />
                     {warehouseOpen && (
                       <>
@@ -960,7 +1055,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
                 )}
               </div>
               <div className="space-y-1">
-                <label className="text-xs text-theme-text-muted/70">Tipo OC</label>
+                 <label className="text-[11px] font-semibold text-[#45567D]">Tipo OC</label>
                 <select value={form.po_type} onChange={e => setForm(p => ({ ...p, po_type: e.target.value }))} className={selectClass}>
                   <option value="PRODUCTOS" className="bg-white dark:bg-emerald-900">Productos</option>
                   <option value="SERVICIOS" className="bg-white dark:bg-emerald-900">Servicios</option>
@@ -968,7 +1063,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
                 </select>
               </div>
               <div className="space-y-1">
-                <label className="text-xs text-theme-text-muted/70">Moneda</label>
+                 <label className="text-[11px] font-semibold text-[#45567D]">Moneda</label>
                 <select value={form.currency} onChange={e => setForm(p => ({ ...p, currency: e.target.value }))} className={selectClass}>
                   <option value="CLP" className="bg-white dark:bg-emerald-900">CLP</option>
                   <option value="USD" className="bg-white dark:bg-emerald-900">USD</option>
@@ -976,7 +1071,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
                 </select>
               </div>
               <div className="space-y-1">
-                <label className="text-xs text-theme-text-muted/70">Condiciones de pago</label>
+                 <label className="text-[11px] font-semibold text-[#45567D]">Condiciones de pago</label>
                 <input type="text" value={form.payment_terms} onChange={e => setForm(p => ({ ...p, payment_terms: e.target.value }))} placeholder="Ej: 30 días" className={inputClass} />
               </div>
               {showAuthorizerForm ? (
@@ -1021,59 +1116,74 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
                 </div>
               )}
               <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4 space-y-1">
-                <label className="text-xs text-theme-text-muted/70">Notas</label>
-                <textarea value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} rows={2} className={textareaClass} />
-              </div>
-            </div>
+                 <label className="text-[11px] font-semibold text-[#45567D]">Notas</label>
+                  <textarea value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} rows={2} className={`${textareaClass} min-h-16 border-[#778B96]/30 bg-white focus:ring-2 focus:ring-[#A4C7D5]/60`} />
+               </div>
+             </div>
+           </section>
 
-            <div>
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-bold text-theme-text">Líneas de la orden</h3>
-                <div className="flex gap-2">
-                  <button type="button" onClick={addServiceLine} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold">
-                    Agregar servicio
-                  </button>
-                  <button type="button" onClick={() => setShowProductForm(true)} className="px-4 py-2 rounded-xl bg-theme-accent hover:bg-theme-accent-hover text-white text-xs font-bold transition-colors shadow-lg shadow-theme-accent/20">
-                    Agregar producto
-                  </button>
+            <section className="rounded-xl border border-[#778B96]/25 bg-white/75 p-4 sm:p-5 shadow-sm backdrop-blur-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                <div>
+                  <h3 className="text-sm font-bold text-[#28353E]">Líneas de la orden</h3>
+                  <p className="mt-0.5 text-[11px] text-[#778B96]">Productos y servicios incluidos</p>
                 </div>
               </div>
 
-              {productSearch !== undefined && (
-                <div className="mb-4 relative">
+              <div ref={productRef} className="mb-4 relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted/50" />
-                  <input type="text" value={productSearch} onChange={e => handleProductSearch(e.target.value)}
-                    placeholder="Buscar productos por SKU, descripción o código de barra..."
-                    className="w-full h-10 pl-10 pr-4 rounded-xl border border-theme-border bg-theme-surface text-xs text-theme-text placeholder:text-theme-text-muted/40 focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
-                  {productResults.length > 0 && (
-                    <div className="absolute top-full left-0 right-0 mt-1 bg-theme-surface border border-theme-border rounded-xl shadow-xl z-20 max-h-60 overflow-y-auto">
-                      {productResults.map(p => (
+                    <input type="text" value={productSearch} onChange={e => handleProductSearch(e.target.value)}
+                     onFocus={openProductDropdown}
+                     disabled={!form.supplier_id}
+                     placeholder={form.supplier_id ? "Buscar por SKU, descripción o código de barra..." : "Selecciona primero un proveedor"}
+                      className="w-full h-9 pl-10 pr-4 rounded-lg border border-[#778B96]/30 bg-[#DFEBF7]/35 text-xs text-[#28353E] placeholder:text-[#778B96] focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60 focus:bg-white disabled:cursor-not-allowed disabled:opacity-65 disabled:bg-[#E7E7E7]/70" />
+                  {!form.supplier_id && <p className="mt-1.5 text-[10px] text-[#778B96]">Debe seleccionar primero el proveedor para buscar productos.</p>}
+                  {form.supplier_id && productDropdownOpen && (
+                    <div onScroll={handleProductDropdownScroll} className="absolute top-full left-0 right-0 mt-1 bg-theme-surface border border-theme-border rounded-xl shadow-xl z-20 max-h-80 overflow-y-auto">
+                      {productSearchLoading ? <p className="px-4 py-2.5 text-xs text-theme-text-muted/60">Buscando...</p> : productResults.length === 0 ? (
+                        <p className="px-4 py-2.5 text-xs text-theme-text-muted/60">
+                          {productSearch.trim() ? 'No se encontraron productos para este proveedor.' : 'Este proveedor no tiene productos disponibles.'}
+                        </p>
+                      ) : productResults.map(p => (
                         <button key={p.id} type="button" onClick={() => addProductToItems(p)}
                           className="w-full text-left px-4 py-2.5 text-xs text-theme-text hover:bg-theme-text/5 border-b border-theme-border last:border-0 flex items-center justify-between">
                           <span><span className="font-mono font-semibold">{p.sku}</span> — {p.description}</span>
                           <span className="text-theme-text-muted/50">{p.unit_of_measure || '—'}</span>
                         </button>
                       ))}
+                      {productLoadingMore && <p className="border-t border-theme-border px-4 py-2.5 text-center text-[11px] text-theme-text-muted/60">Cargando más productos...</p>}
                     </div>
                   )}
-                </div>
-              )}
+              </div>
 
-              <div className="overflow-x-auto rounded-xl border border-theme-border">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider">
-                      <th className="text-left py-3 px-3 font-medium">#</th>
-                      <th className="text-left py-3 px-3 font-medium">Tipo</th>
-                      <th className="text-left py-3 px-3 font-medium">Producto/Servicio</th>
-                      <th className="text-left py-3 px-3 font-medium">Unidad</th>
-                      <th className="text-right py-3 px-3 font-medium">Cantidad</th>
-                      <th className="text-right py-3 px-3 font-medium">P.Unitario</th>
-                      <th className="text-right py-3 px-3 font-medium">Dto%</th>
-                      <th className="text-right py-3 px-3 font-medium">Descuento</th>
-                      <th className="text-right py-3 px-3 font-medium">IVA%</th>
-                      <th className="text-right py-3 px-3 font-medium">Total</th>
-                      <th className="text-center py-3 px-3 font-medium w-10"></th>
+                <div className="overflow-x-auto rounded-lg border border-[#778B96]/25">
+                 <table className="w-full min-w-[1120px] table-fixed text-sm">
+                   <colgroup>
+                     <col className="w-10" />
+                     <col className="w-24" />
+                     <col />
+                     <col className="w-20" />
+                     <col className="w-24" />
+                     <col className="w-32" />
+                     <col className="w-20" />
+                     <col className="w-32" />
+                     <col className="w-20" />
+                     <col className="w-32" />
+                     <col className="w-12" />
+                   </colgroup>
+                   <thead className="bg-[#28353E]">
+                     <tr className="border-b border-[#45567D] text-[10px] text-[#DFEBF7]/80 uppercase tracking-wider">
+                       <th className="text-center py-2.5 px-3 font-semibold">#</th>
+                       <th className="text-center py-2.5 px-3 font-semibold">Tipo</th>
+                       <th className="text-left py-2.5 px-3 font-semibold">Producto/Servicio</th>
+                       <th className="text-center py-2.5 px-3 font-semibold">Unidad</th>
+                       <th className="text-center py-2.5 px-3 font-semibold">Cantidad</th>
+                       <th className="text-center py-2.5 px-3 font-semibold">P.Unitario</th>
+                       <th className="text-center py-2.5 px-3 font-semibold">Dto%</th>
+                       <th className="text-right py-2.5 px-3 font-semibold">Descuento</th>
+                       <th className="text-center py-2.5 px-3 font-semibold">IVA%</th>
+                       <th className="text-right py-2.5 px-3 font-semibold">Total</th>
+                       <th className="text-center py-2.5 px-3 font-medium">Acción</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1082,31 +1192,32 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
                         <td colSpan={11} className="py-8 text-center text-xs text-theme-text-muted/40">No hay líneas agregadas</td>
                       </tr>
                     ) : items.map((it, idx) => (
-                      <tr key={it.tempId} className="border-b border-theme-border hover:bg-theme-text/5 transition-colors">
-                        <td className="py-2.5 px-3 text-xs text-theme-text-muted/60">{idx + 1}</td>
-                        <td className="py-2.5 px-3">
-                          <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-theme-accent-hover/10 text-theme-text-accent border-theme-accent/20">{it.item_type === 'PRODUCT' ? 'Producto' : 'Servicio'}</span>
+                       <tr key={it.tempId} className="border-b border-[#778B96]/15 odd:bg-white even:bg-[#DFEBF7]/20 hover:bg-[#DFEBF7]/60 transition-colors">
+                         <td className="py-2 px-3 text-center text-xs text-[#778B96]">{idx + 1}</td>
+                         <td className="py-2 px-3 text-center">
+                           <span className="text-[10px] font-semibold px-2 py-0.5 rounded border bg-[#DFEBF7] text-[#45567D] border-[#A4C7D5]/70">{it.item_type === 'PRODUCT' ? 'Producto' : 'Servicio'}</span>
                         </td>
-                        <td className="py-2.5 px-3 text-xs text-theme-text">
+                         <td className="py-2 px-3 text-xs text-[#28353E]">
                           {editingItem === it.tempId ? (
-                            <input type="text" value={it.description} onChange={e => updateItem(it.tempId, 'description', e.target.value)} className="w-full h-8 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                             <input type="text" value={it.description} onChange={e => updateItem(it.tempId, 'description', e.target.value)} className="w-full h-8 rounded-lg border border-[#778B96]/30 bg-white px-2 text-xs text-[#28353E] focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60" />
                           ) : (
                             <span>{it.description || <span className="text-theme-text-muted/40">—</span>}</span>
                           )}
                         </td>
-                        <td className="py-2.5 px-3 text-xs text-theme-text-muted/60">{it.unit}</td>
-                        <td className="py-2.5 px-3">
-                          <input type="number" min="0" step="0.001" value={it.quantity} onChange={e => updateItem(it.tempId, 'quantity', parseFloat(e.target.value) || 0)} className="w-20 h-8 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text text-right focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                         <td className="py-2 px-3 text-center text-xs text-[#778B96]">{it.unit}</td>
+                         <td className="py-2 px-3 text-center">
+                           <input type="number" min="0" step="0.001" value={it.quantity} onChange={e => updateItem(it.tempId, 'quantity', parseFloat(e.target.value) || 0)} className="mx-auto block w-20 h-8 rounded-lg border border-[#778B96]/30 bg-white px-2 text-xs text-[#28353E] text-right focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60" />
                         </td>
-                        <td className="py-2.5 px-3">
-                          <input type="number" min="0" step="1" value={it.unit_price} onChange={e => updateItem(it.tempId, 'unit_price', parseFloat(e.target.value) || 0)} className="w-24 h-8 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text text-right focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                         <td className="py-2 px-3 text-center">
+                            <input type="number" min="0" step="1" value={it.unit_price} onChange={e => updateItem(it.tempId, 'unit_price', parseFloat(e.target.value) || 0)} className="mx-auto block w-24 h-8 rounded-lg border border-[#778B96]/30 bg-white px-2 text-xs text-[#28353E] text-right focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60" />
+                            {it.reference_unit_cost !== undefined && <span className="block mt-0.5 text-[10px] text-[#778B96]">Ref. Bsale {formatCurrency(it.reference_unit_cost, 'CLP')}</span>}
                         </td>
-                        <td className="py-2.5 px-3">
-                          <input type="number" min="0" max="100" step="0.01" value={it.discount_percent} onChange={e => updateItem(it.tempId, 'discount_percent', parseFloat(e.target.value) || 0)} className="w-16 h-8 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text text-right focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                         <td className="py-2 px-3 text-center">
+                           <input type="number" min="0" max="100" step="0.01" value={it.discount_percent} onChange={e => updateItem(it.tempId, 'discount_percent', parseFloat(e.target.value) || 0)} className="mx-auto block w-16 h-8 rounded-lg border border-[#778B96]/30 bg-white px-2 text-xs text-[#28353E] text-right focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60" />
                         </td>
                         <td className="py-2.5 px-3 text-xs text-theme-text-muted/60 text-right">{(it.quantity * it.unit_price * it.discount_percent / 100).toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 })}</td>
-                        <td className="py-2.5 px-3">
-                          <input type="number" min="0" max="100" step="0.01" value={it.tax_rate} onChange={e => updateItem(it.tempId, 'tax_rate', parseFloat(e.target.value) || 0)} className="w-16 h-8 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text text-right focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                         <td className="py-2 px-3 text-center">
+                           <input type="number" min="0" max="100" step="0.01" value={it.tax_rate} onChange={e => updateItem(it.tempId, 'tax_rate', parseFloat(e.target.value) || 0)} className="mx-auto block w-16 h-8 rounded-lg border border-[#778B96]/30 bg-white px-2 text-xs text-[#28353E] text-right focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60" />
                         </td>
                         <td className="py-2.5 px-3 text-xs text-theme-text font-semibold text-right">
                           {(() => {
@@ -1127,11 +1238,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
                 </table>
               </div>
 
-              <div className="flex justify-end mt-4">
-                <div className="w-72 space-y-1.5 text-xs">
-                  <div className="flex justify-between py-1">
-                    <span className="text-theme-text-muted/70">Neto</span>
-                    <span className="text-theme-text font-medium">{formatCurrency(netTotal, form.currency)}</span>
+               <div className="flex justify-end mt-4">
+                 <div className="w-full sm:w-80 rounded-lg border border-[#778B96]/25 bg-[#DFEBF7]/45 p-3.5 space-y-1 text-xs">
+                   <div className="flex justify-between py-1">
+                     <span className="text-[#778B96]">Neto</span>
+                     <span className="text-[#28353E] font-medium">{formatCurrency(netTotal, form.currency)}</span>
                   </div>
                   {discountTotal > 0 && (
                     <div className="flex justify-between py-1">
@@ -1140,19 +1251,19 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
                     </div>
                   )}
                   <div className="flex justify-between py-1">
-                    <span className="text-theme-text-muted/70">IVA</span>
-                    <span className="text-theme-text font-medium">{formatCurrency(taxTotal, form.currency)}</span>
+                       <span className="text-[#778B96]">IVA</span>
+                       <span className="text-[#28353E] font-medium">{formatCurrency(taxTotal, form.currency)}</span>
                   </div>
-                  <div className="flex justify-between py-2 border-t border-theme-border">
-                    <span className="text-theme-text font-bold">Total</span>
-                    <span className="text-theme-text font-bold text-sm">{formatCurrency(grandTotal, form.currency)}</span>
+                   <div className="flex justify-between py-2 mt-1 border-t border-[#778B96]/25">
+                     <span className="text-[#28353E] font-bold">Total</span>
+                     <span className="text-[#45567D] font-bold text-base">{formatCurrency(grandTotal, form.currency)}</span>
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
-        </form>
-      </div>
+              </section>
+             </div>
+         </form>
+       </div>
     )
   }
 
@@ -1292,12 +1403,12 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
               </div>
             </div>
           </div>
-        </div>
-      </div>
-    )
-  }
+         </div>
+       </div>
+     )
+   }
 
-  if (view === 'analysis') {
+   if (view === 'analysis') {
     return (
       <div className="flex flex-col h-full overflow-hidden bg-theme-surface">
         <ReplenishmentAnalysisPanel onBack={() => { setView('list'); load() }} />

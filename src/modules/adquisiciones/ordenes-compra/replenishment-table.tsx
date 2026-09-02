@@ -385,7 +385,7 @@ export function ReplenishmentTable({
             style={{ width: w, minWidth: w, maxWidth: w }}>
             <input
               type="checkbox"
-              checked={confirmedSet.has(s.SKU)}
+              checked={confirmedSet.has(s.SKU) && row.confirmedQty > 0}
               onChange={() => onToggleConfirmed(s.SKU)}
               className="h-3.5 w-3.5 rounded border-theme-border/60 text-theme-accent cursor-pointer"
             />

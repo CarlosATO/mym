@@ -78,10 +78,10 @@ export function ReplenishmentResultsBar({
             id="create-po-button"
             onClick={onCreate}
             disabled={disabled || effectiveSkus === 0}
-            title={effectiveSkus === 0 ? 'Selecciona productos con cantidad mayor a 0 para crear una OC' : 'Crear OC con los productos seleccionados'}
+             title={effectiveSkus === 0 ? 'Selecciona productos con cantidad mayor a 0 para preparar una OC' : 'Preparar OC con los productos seleccionados'}
             className="flex h-7 items-center gap-1 rounded-md bg-emerald-600 px-3 text-[11px] font-bold text-white shadow-sm shadow-emerald-600/15 transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Crear borrador de OC
+             Preparar Orden de Compra
           </button>
 
           <span className="mx-0.5 h-4 w-px bg-theme-border/60" />

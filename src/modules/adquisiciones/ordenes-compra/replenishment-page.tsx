@@ -8,9 +8,7 @@ export function ReplenishmentPage() {
 
   return (
     <ReplenishmentAnalysisPanel
-      onNavigateToPo={poId => {
-        if (poId) router.push(`/dashboard/adquisiciones/ordenes-compra?poId=${encodeURIComponent(poId)}`)
-      }}
+      onNavigateToPo={() => router.push('/dashboard/adquisiciones/ordenes-compra?prepare=replenishment')}
     />
   )
 }

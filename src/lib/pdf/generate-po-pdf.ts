@@ -1,5 +1,6 @@
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import { formatCivilDate, todayInSantiago } from '@/lib/datetime'
 
 interface POItem {
   line_number: number
@@ -83,13 +84,9 @@ function formatCurrency(amount: number): string {
   return `$ ${Math.round(amount).toLocaleString('es-CL')}`
 }
 
-function formatDate(dateStr: string): string {
-  if (!dateStr) return '-'
-  const d = new Date(dateStr)
-  const day = String(d.getDate()).padStart(2, '0')
-  const month = String(d.getMonth() + 1).padStart(2, '0')
-  const year = d.getFullYear()
-  return `${day}/${month}/${year}`
+function formatPdfCivilDate(value?: string | null): string {
+  const formatted = formatCivilDate(value)
+  return formatted ? formatted.replaceAll('-', '/') : '-'
 }
 
 function getStatusColor(status: string): [number, number, number] {
@@ -139,7 +136,7 @@ function drawPageFooter(doc: jsPDF, pageNum: number, totalPages: number, footerT
   }
 
   doc.text(
-    `Documento generado el ${formatDate(new Date().toISOString())} | Página ${pageNum} de ${totalPages}`,
+    `Documento generado el ${formatPdfCivilDate(todayInSantiago())} | Página ${pageNum} de ${totalPages}`,
     pageWidth / 2,
     288.5,
     { align: 'center' },
@@ -358,8 +355,8 @@ export function generatePdfBlob(detail: PODetail, logoBase64?: string): Blob {
   const detailRows: [string, string][] = [
     ['Tipo:', detail.po.po_type || '-'],
     ['Moneda:', detail.po.currency || '-'],
-    ['Fecha Emisión:', formatDate(detail.po.issue_date)],
-    ['Fecha Requerida:', detail.po.required_date ? formatDate(detail.po.required_date) : '-'],
+    ['Fecha Emisión:', formatPdfCivilDate(detail.po.issue_date)],
+    ['Fecha Requerida:', formatPdfCivilDate(detail.po.required_date)],
     ['Bodega Destino:', detail.po.warehouse_name || '-'],
     ['Solicitante:', detail.po.requester_name],
     ['Autorizado por:', detail.po.authorized_name || '-'],

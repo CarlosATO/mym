@@ -18,6 +18,7 @@ export interface PurchaseOrder {
   issue_date: string
   required_date: string | null
   supplier_id: string
+  source_type: 'MANUAL' | 'REPLENISHMENT'
   supplier_name: string
   supplier_rut: string | null
   warehouse_id: string | null
@@ -76,6 +77,7 @@ export interface PurchaseOrderDetail {
     issue_date: string
     required_date: string | null
     supplier_id: string
+    source_type: 'MANUAL' | 'REPLENISHMENT'
     supplier_name: string
     supplier_rut: string | null
     supplier_contact: string | null
@@ -214,6 +216,7 @@ export interface CreatePOData {
   issue_date: string
   required_date?: string
   supplier_id: string
+  source_type?: 'MANUAL' | 'REPLENISHMENT'
   warehouse_id?: string | null
   payment_terms?: string
   authorized_by?: string | null
@@ -236,6 +239,7 @@ export async function createPurchaseOrder(data: CreatePOData) {
       issue_date: data.issue_date,
       required_date: data.required_date || null,
       supplier_id: data.supplier_id,
+      source_type: data.source_type ?? 'MANUAL',
       warehouse_id: data.warehouse_id || null,
       payment_terms: data.payment_terms || null,
       authorized_by: data.authorized_by || null,
@@ -439,6 +443,220 @@ export interface ReplenishmentOrderRequest {
   items: ReplenishmentOrderItem[]
 }
 
+export interface ReplenishmentPurchaseOrderPreparationItem {
+  sku: string
+  product_name: string
+  quantity: number
+  reference_unit_cost: number
+}
+
+export interface PrepareReplenishmentPurchaseOrderRequest {
+  items: ReplenishmentPurchaseOrderPreparationItem[]
+}
+
+export interface PreparedReplenishmentPurchaseOrderItem {
+  product_id: string
+  sku: string
+  product_description: string
+  unit: string
+  quantity: number
+  unit_price: number
+  reference_unit_cost: number
+  discount_percent: 0
+  tax_rate: number
+}
+
+export interface PreparedReplenishmentPurchaseOrder {
+  success: true
+  supplier: { id: string; name: string }
+  items: PreparedReplenishmentPurchaseOrderItem[]
+}
+
+export interface ReplenishmentPurchaseOrderUnresolvedItem {
+  sku: string
+  product_name: string
+}
+
+export type PrepareReplenishmentPurchaseOrderResult =
+  | PreparedReplenishmentPurchaseOrder
+  | {
+      success: false
+      code: 'MULTIPLE_SUPPLIERS'
+      suppliers: Array<{
+        supplier_id: string
+        supplier_name: string
+        items: Array<{ sku: string; product_name: string }>
+      }>
+    }
+  | {
+      success: false
+      code: 'UNRESOLVED_SUPPLIER'
+      items: ReplenishmentPurchaseOrderUnresolvedItem[]
+    }
+
+export async function prepareReplenishmentPurchaseOrder(
+  req: PrepareReplenishmentPurchaseOrderRequest,
+): Promise<PrepareReplenishmentPurchaseOrderResult> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { success: false, code: 'UNRESOLVED_SUPPLIER', items: [] }
+
+  const companyId = await getActiveCompanyId(user)
+  if (!companyId) return { success: false, code: 'UNRESOLVED_SUPPLIER', items: [] }
+
+  const selectedItems = (req.items ?? []).filter(item => Number.isFinite(item.quantity) && item.quantity > 0)
+  if (selectedItems.length === 0) {
+    return { success: false, code: 'UNRESOLVED_SUPPLIER', items: [] }
+  }
+
+  const db = adqAdmin()
+  const skus = Array.from(new Set(selectedItems.map(item => item.sku)))
+  const [{ data: products, error: productsError }, { data: mappings, error: mappingsError }] = await Promise.all([
+    db.from('products')
+      .select('id, sku, description, unit_of_measure, tax_rate')
+      .eq('company_id', companyId)
+      .in('sku', skus),
+    db.from('product_supplier_mappings')
+      .select('id, sku, product_id, supplier_id, is_preferred')
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .in('sku', skus),
+  ])
+
+  if (productsError || mappingsError) {
+    return {
+      success: false,
+      code: 'UNRESOLVED_SUPPLIER',
+      items: selectedItems.map(item => ({ sku: item.sku, product_name: item.product_name })),
+    }
+  }
+
+  const productRows = (products ?? []) as Array<{
+    id: string
+    sku: string
+    description: string | null
+    unit_of_measure: string | null
+    tax_rate: number | null
+  }>
+  const mappingRows = (mappings ?? []) as Array<{
+    id: string
+    sku: string
+    product_id: string | null
+    supplier_id: string | null
+    is_preferred: boolean
+  }>
+  const productsBySku = new Map<string, typeof productRows>()
+  for (const product of productRows) {
+    productsBySku.set(product.sku, [...(productsBySku.get(product.sku) ?? []), product])
+  }
+  const mappingsBySku = new Map<string, typeof mappingRows>()
+  for (const mapping of mappingRows) {
+    mappingsBySku.set(mapping.sku, [...(mappingsBySku.get(mapping.sku) ?? []), mapping])
+  }
+
+  const unresolvedItems: ReplenishmentPurchaseOrderUnresolvedItem[] = []
+  const resolved = new Array<{
+    input: ReplenishmentPurchaseOrderPreparationItem
+    product: (typeof productRows)[number]
+    mapping: (typeof mappingRows)[number]
+    realSupplierId: string
+  }>()
+  const rawSupplierIds = new Set<string>()
+
+  for (const item of selectedItems) {
+    const matchingProducts = productsBySku.get(item.sku) ?? []
+    const product = matchingProducts.length === 1 ? matchingProducts[0] : null
+    const productMappings = product
+      ? (mappingsBySku.get(item.sku) ?? []).filter(mapping => mapping.product_id === product.id)
+      : []
+    const preferredMappings = productMappings.filter(mapping => mapping.is_preferred)
+    const selectedMapping = preferredMappings.length === 1
+      ? preferredMappings[0]
+      : preferredMappings.length === 0 && productMappings.length === 1
+        ? productMappings[0]
+        : null
+    if (!product || !selectedMapping?.product_id || !selectedMapping.supplier_id) {
+      unresolvedItems.push({ sku: item.sku, product_name: item.product_name })
+      continue
+    }
+    rawSupplierIds.add(selectedMapping.supplier_id)
+    resolved.push({ input: item, product, mapping: selectedMapping, realSupplierId: '' })
+  }
+
+  const { data: suppliers } = rawSupplierIds.size > 0
+    ? await db.from('suppliers')
+      .select('id, supplier_kind, business_name, parent_supplier_id')
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .eq('status', 'ACTIVE')
+      .in('id', Array.from(rawSupplierIds))
+    : { data: [] }
+  const supplierById = new Map((suppliers ?? []).map(s => [s.id, s]))
+  const parentIds = Array.from(new Set((suppliers ?? []).map(s => s.parent_supplier_id).filter(Boolean)))
+  const { data: parents } = parentIds.length > 0
+    ? await db.from('suppliers')
+      .select('id, supplier_kind, business_name')
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .eq('status', 'ACTIVE')
+      .in('id', parentIds)
+    : { data: [] }
+  const parentById = new Map((parents ?? []).map(s => [s.id, s]))
+  const realSupplierById = new Map<string, { id: string; name: string }>()
+
+  for (const entry of resolved) {
+    const supplier = supplierById.get(entry.mapping.supplier_id!)
+    const realSupplier = supplier?.supplier_kind === 'REAL'
+      ? supplier
+      : supplier?.supplier_kind === 'BSALE_OPERATIVE' && supplier.parent_supplier_id
+        ? parentById.get(supplier.parent_supplier_id)
+        : null
+    if (!realSupplier || realSupplier.supplier_kind !== 'REAL' || !realSupplier.business_name) {
+      unresolvedItems.push({ sku: entry.input.sku, product_name: entry.input.product_name })
+      continue
+    }
+    entry.realSupplierId = realSupplier.id
+    realSupplierById.set(realSupplier.id, { id: realSupplier.id, name: realSupplier.business_name })
+  }
+
+  if (unresolvedItems.length > 0) {
+    return { success: false, code: 'UNRESOLVED_SUPPLIER', items: unresolvedItems }
+  }
+
+  const groups = new Map<string, typeof resolved>()
+  for (const entry of resolved) {
+    groups.set(entry.realSupplierId, [...(groups.get(entry.realSupplierId) ?? []), entry])
+  }
+  if (groups.size !== 1) {
+    return {
+      success: false,
+      code: 'MULTIPLE_SUPPLIERS',
+      suppliers: Array.from(groups, ([supplierId, entries]) => ({
+        supplier_id: supplierId,
+        supplier_name: realSupplierById.get(supplierId)!.name,
+        items: entries.map(entry => ({ sku: entry.input.sku, product_name: entry.input.product_name })),
+      })),
+    }
+  }
+
+  const [supplierId, entries] = Array.from(groups)[0]
+  return {
+    success: true,
+    supplier: realSupplierById.get(supplierId)!,
+    items: entries.map(entry => ({
+      product_id: entry.product.id,
+      sku: entry.product.sku,
+      product_description: entry.product.description ?? entry.input.product_name,
+      unit: entry.product.unit_of_measure ?? '',
+      quantity: entry.input.quantity,
+      unit_price: entry.input.reference_unit_cost,
+      reference_unit_cost: entry.input.reference_unit_cost,
+      discount_percent: 0,
+      tax_rate: entry.product.tax_rate ?? 19,
+    })),
+  }
+}
+
 export async function generateReplenishmentPurchaseOrders(req: ReplenishmentOrderRequest) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -475,7 +693,7 @@ export async function generateReplenishmentPurchaseOrders(req: ReplenishmentOrde
     suppliersMap = new Map((sups || []).map(s => [s.id, s]))
   }
 
-  const grouped = new Map<string, any[]>()
+  const grouped = new Map<string, Array<ReplenishmentOrderItem & { product_id: string; mapping_id: string }>>()
   const blockedNoSupplier: string[] = []
   const blockedNoProduct: string[] = []
 
@@ -573,7 +791,7 @@ export async function generateReplenishmentPurchaseOrders(req: ReplenishmentOrde
       continue
     }
     
-    const r = rpcRes as any
+    const r = rpcRes as unknown as { success?: boolean; po_id: string; correlative: string } | null
     if (!r?.success) {
       console.error('Error in RPC create_purchase_order', r)
       continue
