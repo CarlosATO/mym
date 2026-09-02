@@ -34,7 +34,12 @@ function padIfNumeric(val: string): string {
   return val
 }
 
-export function LocationsPanel() {
+export function LocationsPanel({ permissions }: { permissions: string[] }) {
+  const canCreate = permissions.includes('logistica.locations.create')
+  const canCreateBulk = permissions.includes('logistica.locations.create_bulk')
+  const canUpdate = permissions.includes('logistica.locations.update')
+  const canDeactivate = permissions.includes('logistica.locations.deactivate')
+  const canDelete = permissions.includes('logistica.locations.delete')
   const [view, setView] = useState<'list' | 'new' | 'edit' | 'bulk'>('list')
   const [data, setData] = useState<Location[]>([])
   const [total, setTotal] = useState(0)
@@ -302,7 +307,7 @@ export function LocationsPanel() {
         <form onSubmit={handleSaveLocation} className="bg-theme-surface rounded-2xl border border-theme-border shadow-sm overflow-hidden flex-shrink-0">
           <div className="px-6 py-4 border-b border-theme-border bg-theme-surface flex items-center justify-between sticky top-0 z-10">
             <div className="flex items-center gap-4">
-              <button 
+                        <button
                 type="button" 
                 onClick={() => { setView('list'); setEditLoc(null); resetForm() }} 
                 className="p-2 rounded-lg hover:bg-theme-text/10 text-theme-text-muted hover:text-theme-text transition-colors"
@@ -315,14 +320,14 @@ export function LocationsPanel() {
                {view === 'edit' && editLifecycle && <LocationLifecycleBadges lifecycle={editLifecycle} />}
             </div>
             <div className="flex gap-3">
-              <button 
+             <button
                 type="button" 
                 onClick={() => { setView('list'); setEditLoc(null); resetForm() }} 
                 className="px-4 py-2 rounded-xl border border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/10 text-sm font-semibold transition-colors"
               >
                 Cancelar
-              </button>
-              <button 
+                       </button>
+                        <button
                 type="button" 
                 onClick={() => handleSaveLocation()}
                 className="px-5 py-2 rounded-xl bg-theme-accent hover:bg-theme-accent-hover text-white text-sm font-bold transition-colors shadow-lg shadow-theme-accent/20"
@@ -375,8 +380,8 @@ export function LocationsPanel() {
                         title="Unir pasillo-rack-nivel-pos"
                       >
                         Simple
-                      </button>
-                      <button
+                       </button>
+                       <button
                         type="button"
                         onClick={() => handleAutogenerateCode('labeled')}
                         className="px-3 h-10 rounded-xl border border-theme-border hover:bg-theme-text/5 text-xs font-bold text-theme-accent transition-colors"
@@ -516,8 +521,8 @@ export function LocationsPanel() {
                 className="px-4 py-2 rounded-xl border border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/10 text-sm font-semibold transition-colors"
               >
                 Cancelar
-              </button>
-              <button 
+             </button>
+             <button
                 type="button" 
                 onClick={() => handleBulkSubmit()}
                 disabled={isBulkExceeded || totalCombinations === 0}
@@ -758,21 +763,21 @@ export function LocationsPanel() {
             </div>
           </div>
           
-          <div className="flex items-center gap-2 shrink-0">
-            <button 
+           <div className="flex items-center gap-2 shrink-0">
+             {canCreate && <button
               onClick={() => { resetForm(); setView('new') }} 
               className="h-10 px-4 rounded-xl bg-theme-accent hover:bg-theme-accent-hover text-white text-xs font-bold transition-all shadow-md shadow-theme-accent/20 flex items-center gap-1.5"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>Nueva ubicación</span>
-            </button>
-            <button 
+             </button>}
+             {canCreateBulk && <button
               onClick={() => { resetBulkForm(); setView('bulk') }} 
               className="h-10 px-4 rounded-xl border border-theme-border bg-theme-surface text-theme-text hover:bg-theme-text/5 text-xs font-bold transition-all shadow-sm flex items-center gap-1.5"
             >
               <Sparkles className="w-3.5 h-3.5 text-theme-accent" />
               <span>Generar masivamente</span>
-            </button>
+             </button>}
           </div>
         </div>
 
@@ -872,27 +877,27 @@ export function LocationsPanel() {
                   </td>
                   <td className="py-3 px-4 text-right">
                     <div className="flex items-center justify-end gap-3">
-                       <button
+                        {canUpdate && <button
                          onClick={() => handleEditClick(loc)}
                         className="text-theme-text-muted hover:text-theme-text p-1 rounded transition-colors"
                          title={lifecycles[loc.id] && !lifecycles[loc.id].can_edit_structure ? lifecycleReasons(lifecycles[loc.id]).join(' ') : 'Ver / Editar'}
                       >
                         <Edit className="w-3.5 h-3.5" />
-                      </button>
-                       <button
+                       </button>}
+                        {canDeactivate && <button
                          onClick={() => handleToggleActive(loc)}
                          disabled={Boolean(loc.is_active && lifecycles[loc.id] && !lifecycles[loc.id].can_deactivate)}
                          title={loc.is_active && lifecycles[loc.id] && !lifecycles[loc.id].can_deactivate ? lifecycleReasons(lifecycles[loc.id]).join(' ') : loc.is_active ? 'Desactivar' : 'Activar'}
                          className={`text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${loc.is_active ? 'text-red-500 hover:text-red-400' : 'text-theme-accent hover:text-theme-accent-hover'}`}
                        >
                          {loc.is_active ? 'Desactivar' : 'Activar'}
-                       </button>
-                       <button
+                        </button>}
+                        {canDelete && <button
                          onClick={() => handleDelete(loc)}
                          disabled={!lifecycles[loc.id] || !lifecycles[loc.id].can_delete}
                          title={lifecycles[loc.id]?.can_delete ? 'Eliminar' : lifecycleReasons(lifecycles[loc.id]).join(' ') || 'Verificando permisos'}
                          className="text-xs font-semibold text-red-500 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-30"
-                       >Eliminar</button>
+                         >Eliminar</button>}
                     </div>
                   </td>
                 </tr>

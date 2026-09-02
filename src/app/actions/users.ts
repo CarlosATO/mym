@@ -159,60 +159,23 @@ export async function updateUser(userId: string, formData: FormData) {
   }
 
   const admin = createAdminClient()
-  const { error } = await admin
-    .from('users')
-    .update({ nombre, apellido, role_id: roleId, is_active: isActive })
-    .eq('id', userId)
-
-  if (error) return { error: error.message }
 
   // Update company access: deactivate removed, add new
-  const coreAdmin = createSupabaseClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { db: { schema: 'core' }, auth: { autoRefreshToken: false, persistSession: false } }
-  )
+  const { error: syncError } = await admin.rpc('sync_user_role_company_access', {
+    p_user_id: userId,
+    p_role_id: roleId,
+    p_company_ids: companyIds,
+    p_is_active: isActive,
+    p_nombre: nombre,
+    p_apellido: apellido,
+    p_updated_by: currentUser.id,
+  })
 
-  // Get existing access
-  const { data: existingAccess } = await coreAdmin
-    .from('user_company_access')
-    .select('company_id')
-    .eq('user_id', userId)
-    .eq('is_active', true)
-
-  const existingIds = new Set((existingAccess ?? []).map((a: any) => a.company_id))
-  const newIds = new Set(companyIds)
-
-  // Deactivate removed companies
-  for (const existingId of existingIds) {
-    if (!newIds.has(existingId)) {
-      await coreAdmin
-        .from('user_company_access')
-        .update({ is_active: false, updated_by: currentUser.id })
-        .eq('user_id', userId)
-        .eq('company_id', existingId)
+  if (syncError) {
+    if (syncError.message === 'USER_ROLE_COMPANY_AMBIGUOUS') {
+      return { error: 'No se puede cambiar el rol: el usuario tiene varias empresas activas y esta pantalla no distingue roles por empresa.' }
     }
-  }
-
-  // Get role name for new entries
-  const roleName = (await supabase.from('roles').select('name').eq('id', roleId).single()).data?.name ?? ''
-
-  // Add new companies
-  let defaultSet = false
-  for (const newId of newIds) {
-    if (!existingIds.has(newId)) {
-      await coreAdmin
-        .from('user_company_access')
-        .insert({
-          user_id: userId,
-          company_id: newId,
-          role: roleName,
-          is_default: !defaultSet,
-          is_active: true,
-          created_by: currentUser.id,
-        })
-      defaultSet = true
-    }
+    return { error: syncError.message }
   }
 
   return { success: true }
@@ -229,7 +192,7 @@ export async function getUserCompanyIds(userId: string): Promise<string[]> {
     .select('company_id')
     .eq('user_id', userId)
     .eq('is_active', true)
-  return (data ?? []).map((a: any) => a.company_id)
+  return (data ?? []).map((a: { company_id: string }) => a.company_id)
 }
 
 export async function getAllActiveCompanies() {

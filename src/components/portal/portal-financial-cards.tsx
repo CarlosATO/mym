@@ -1,6 +1,6 @@
 import type { PortalDailyCollection, PortalCollections } from '@/app/actions/portal/collections'
 import type { PortalDailySales, PortalSales } from '@/app/actions/portal/sales'
-import type { PortalPeriod, PortalPeriodMode } from '@/app/actions/portal/periods'
+import { getPortalDailyPeriod, getPortalPeriod, type PortalPeriod, type PortalPeriodMode } from '@/app/actions/portal/periods'
 
 type FinancialCardProps = {
   error: string | null
@@ -54,8 +54,9 @@ function relevantDays(values: (PortalDailySales | PortalDailyCollection)[], peri
   return days
 }
 
-function DailyBars({ values, title, period, mode }: { values: (PortalDailySales | PortalDailyCollection)[]; title: string; period: PortalPeriod; mode: PortalPeriodMode }) {
-  const allRelevantDays = relevantDays(values, period)
+function DailyBars({ values, title, mode }: { values: (PortalDailySales | PortalDailyCollection)[]; title: string; mode: PortalPeriodMode }) {
+  const dailyPeriod = getPortalDailyPeriod(getPortalPeriod('CALENDAR_MONTH').to)
+  const allRelevantDays = relevantDays(values, dailyPeriod)
   const useFallback = allRelevantDays.length > 14
   const days = useFallback ? allRelevantDays.slice(-14) : allRelevantDays
   const max = Math.max(...days.map(value => Math.abs(value.amount)), 1)
@@ -136,7 +137,6 @@ export function PortalFinancialCard({ error, kind, data, mode, period }: Financi
           <DailyBars
             values={dailyValues}
             title={kind === 'sales' ? 'Ventas diarias · últimos 14 días operativos' : 'Cobros diarios · últimos 14 días operativos'}
-            period={period}
             mode={mode}
           />
         </div>

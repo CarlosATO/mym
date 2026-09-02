@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import { createInventariosClient } from '@/lib/supabase/inventarios'
+import { getActiveCompany } from '@/app/actions/companies'
 import { InventoryModuleShell } from '@/modules/inventarios/components/inventory-module-shell'
 
 const MODULE_VIEW_PERMISSION = 'module.inventarios.view'
@@ -41,9 +42,10 @@ export default async function InventariosLayout({ children }: { children: React.
   }
 
   const profileWithRole = { ...profile, roles: { name: role?.name ?? '' } }
+  const activeCompany = await getActiveCompany()
 
   return (
-    <InventoryModuleShell profile={profileWithRole} permissions={permissionCodes}>
+    <InventoryModuleShell activeCompany={activeCompany} profile={profileWithRole} permissions={permissionCodes}>
       {children}
     </InventoryModuleShell>
   )

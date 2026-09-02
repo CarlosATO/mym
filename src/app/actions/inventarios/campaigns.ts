@@ -122,6 +122,12 @@ export async function getActiveCompanyCampaignDetail(
       const setup = setupResult.data as { indicators?: { zone_count?: number } } | null
       return { ...site, active_zone_count: Number(setup?.indicators?.zone_count ?? 0) }
     }))
+    const nameCollator = new Intl.Collator('es', { numeric: true, sensitivity: 'base' })
+    sites.sort((a, b) =>
+      nameCollator.compare(a.site_name, b.site_name)
+      || nameCollator.compare(a.site_code, b.site_code)
+      || a.campaign_site_id.localeCompare(b.campaign_site_id)
+    )
     return { data: { ...detail, sites }, error: null, companyId }
   } catch (err) {
     console.error('get_inventory_campaign_detail exception:', err)

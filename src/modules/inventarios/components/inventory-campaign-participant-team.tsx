@@ -34,6 +34,15 @@ function fullName(user: { nombre: string; apellido: string | null }): string {
   return user.apellido ? `${user.nombre} ${user.apellido}`.trim() : user.nombre
 }
 
+function initials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(part => part[0]?.toUpperCase() ?? '')
+    .join('')
+}
+
 function newOperationKey(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
@@ -58,7 +67,6 @@ function CampaignParticipantAddForm({
   onBlocked,
 }: CampaignParticipantAddFormProps) {
   const [userSearch, setUserSearch] = useState('')
-  const [userPickerOpen, setUserPickerOpen] = useState(false)
   const [selectedUserId, setSelectedUserId] = useState('')
   const [selectedRole, setSelectedRole] = useState('')
   const [busy, setBusy] = useState(false)
@@ -97,64 +105,68 @@ function CampaignParticipantAddForm({
     }
     keyRef.current = null
     selectionRef.current = ''
-    setSelectedUserId('')
     setSelectedRole('')
     setUserSearch('')
     onAdded()
   }
 
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-3">
+      <div className="relative">
+        <Search className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-theme-text-muted/60" />
+        <input
+          value={userSearch}
+          onChange={e => setUserSearch(e.target.value)}
+          placeholder="Buscar por nombre o email…"
+          aria-label="Buscar participante"
+          className="h-9 w-full rounded-lg border border-theme-border bg-theme-surface pl-8 pr-3 text-sm text-theme-text outline-none placeholder:text-theme-text-muted/70 focus:border-theme-border-accent"
+        />
+      </div>
+
+      <div className="max-h-56 overflow-y-auto rounded-lg border border-theme-border bg-theme-surface/40">
+        {filteredUsers.length === 0 ? (
+          <p className="px-3 py-4 text-center text-xs text-theme-text-muted">Sin resultados.</p>
+        ) : (
+          <ul className="divide-y divide-theme-border/60">
+            {filteredUsers.map(u => {
+              const isActive = activeParticipants.some(participant => participant.userId === u.userId)
+              const isSelected = u.userId === selectedUserId
+              return (
+                <li key={u.userId}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedUserId(u.userId)
+                      setSelectedRole('')
+                    }}
+                    className={`flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-theme-text/5 ${isSelected ? 'bg-theme-accent/[0.07]' : ''}`}
+                  >
+                    <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${isActive ? 'bg-theme-accent/15 text-theme-accent' : 'bg-theme-text/8 text-theme-text-muted'}`}>
+                      {initials(fullName(u))}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-theme-text">{fullName(u)}</span>
+                      <span className="block truncate text-[11px] text-theme-text-muted/75">{u.email}</span>
+                    </span>
+                    <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${isActive ? 'border-theme-accent bg-theme-accent text-white' : 'border-theme-border text-transparent'}`}>
+                      <Check className="h-3 w-3" />
+                    </span>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </div>
+
       <div className="flex flex-col gap-2 sm:flex-row">
-        <div className="relative flex-1">
-          <Search className="absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-theme-text-muted/60" />
-          <input
-            value={userSearch}
-            onChange={e => {
-              setUserSearch(e.target.value)
-              setUserPickerOpen(true)
-              setSelectedUserId('')
-              setSelectedRole('')
-            }}
-            onFocus={() => setUserPickerOpen(true)}
-            placeholder="Buscar usuario por nombre o email…"
-            className="h-9 w-full rounded-lg border border-theme-border bg-theme-surface pl-8 pr-3 text-sm text-theme-text outline-none placeholder:text-theme-text-muted/70 focus:border-theme-border-accent"
-          />
-          {userPickerOpen && (
-            <ul className="absolute z-20 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border border-theme-border bg-theme-surface shadow-lg">
-              {filteredUsers.length === 0 ? (
-                <li className="px-3 py-2 text-xs text-theme-text-muted">Sin resultados.</li>
-              ) : (
-                filteredUsers.map(u => (
-                  <li key={u.userId}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedUserId(u.userId)
-                        setSelectedRole('')
-                        setUserPickerOpen(false)
-                      }}
-                      className="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-theme-text hover:bg-theme-text/5"
-                    >
-                      <span>
-                        {fullName(u)}
-                        <span className="ml-1 text-xs text-theme-text-muted/70">{u.email}</span>
-                      </span>
-                      {u.userId === selectedUserId && <Check className="h-3.5 w-3.5 text-theme-accent" />}
-                    </button>
-                  </li>
-                ))
-              )}
-            </ul>
-          )}
-        </div>
         <select
           value={selectedRole}
           onChange={e => setSelectedRole(e.target.value)}
           aria-label="Rol a agregar"
-          className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-sm text-theme-text outline-none focus:border-theme-border-accent sm:w-40"
+          className="h-9 flex-1 rounded-lg border border-theme-border bg-theme-surface px-2 text-sm text-theme-text outline-none focus:border-theme-border-accent sm:flex-none sm:w-40"
         >
-          <option value="">Rol</option>
+          <option value="">Rol a agregar</option>
           {availableRoles.map(option => (
             <option key={option.value} value={option.value}>
               {option.label}
@@ -168,7 +180,7 @@ function CampaignParticipantAddForm({
           className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-theme-accent px-4 text-sm font-semibold text-white transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
-          {busy ? 'Agregando…' : 'Agregar'}
+          {busy ? 'Agregando…' : 'Agregar rol'}
         </button>
       </div>
       <p className="text-[11px] text-theme-text-muted">Solo aparecen usuarios activos con acceso a esta empresa.</p>
@@ -383,51 +395,70 @@ export function InventoryCampaignParticipantTeam({
 
               {!loadError && (
                 <>
-                  {editable ? (
-                    <CampaignParticipantAddForm
-                      companyId={companyId}
-                      campaignId={campaignId}
-                      users={users}
-                      activeParticipants={activeParticipants}
-                      onAdded={() => {
-                        setNotice('Rol agregado al equipo.')
-                        refreshParticipants()
-                      }}
-                      onBlocked={() => setBlockedByPreparation(true)}
-                    />
-                  ) : (
-                    <div className="rounded-lg border border-theme-border bg-theme-surface/60 px-3 py-2 text-xs text-theme-text-muted">
-                      {blockedByPreparation
-                        ? 'El equipo ya no puede modificarse porque el inventario fue preparado.'
-                        : canManage
-                          ? 'El equipo solo puede modificarse mientras el inventario esté en estado DRAFT.'
-                          : 'No tienes permisos para modificar el equipo de este inventario.'}
+                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+                    <div className="min-w-0 space-y-3">
+                      <div>
+                        <h4 className="text-sm font-semibold text-theme-text">Seleccionar participantes</h4>
+                        <p className="mt-0.5 text-[11px] text-theme-text-muted">Las personas del equipo permanecen visibles y marcadas.</p>
+                      </div>
+                      {editable ? (
+                        <CampaignParticipantAddForm
+                          companyId={companyId}
+                          campaignId={campaignId}
+                          users={users}
+                          activeParticipants={activeParticipants}
+                          onAdded={() => {
+                            setNotice('Rol agregado al equipo.')
+                            refreshParticipants()
+                          }}
+                          onBlocked={() => setBlockedByPreparation(true)}
+                        />
+                      ) : (
+                        <div className="rounded-lg border border-theme-border bg-theme-surface/60 px-3 py-2 text-xs text-theme-text-muted">
+                          {blockedByPreparation
+                            ? 'El equipo ya no puede modificarse porque el inventario fue preparado.'
+                            : canManage
+                              ? 'El equipo solo puede modificarse mientras el inventario esté en estado DRAFT.'
+                              : 'No tienes permisos para modificar el equipo de este inventario.'}
+                        </div>
+                      )}
                     </div>
-                  )}
 
-                  {notice && <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400">{notice}</p>}
-
-                  {groupedByUser.length === 0 ? (
-                    <p className="rounded-lg border border-dashed border-theme-border px-3 py-4 text-center text-xs text-theme-text-muted">
-                      Aún no hay integrantes en el equipo de este inventario.
-                    </p>
-                  ) : (
-                    <div className="overflow-hidden rounded-lg border border-theme-border bg-theme-surface/40">
-                      <ul className="divide-y divide-theme-border">
-                        {groupedByUser.map(row => (
-                          <li key={row[0].userId} className="flex flex-col gap-1.5 px-2.5 py-2 sm:flex-row sm:items-center sm:justify-between">
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-medium text-theme-text">{row[0].userName ?? row[0].email}</p>
-                              <p className="truncate text-xs text-theme-text-muted/80">{row[0].email}</p>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              {row.map(participant => roleBadge(participant, editable))}
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
+                    <div className="min-w-0 space-y-3">
+                      <div>
+                        <h4 className="text-sm font-semibold text-theme-text">Seleccionados ({groupedByUser.length})</h4>
+                        <p className="mt-0.5 text-[11px] text-theme-text-muted">Personas únicas con al menos un rol persistido.</p>
+                      </div>
+                      {notice && <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400">{notice}</p>}
+                      {groupedByUser.length === 0 ? (
+                        <p className="rounded-lg border border-dashed border-theme-border px-3 py-4 text-center text-xs text-theme-text-muted">
+                          Aún no hay integrantes en el equipo de este inventario.
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {groupedByUser.map(row => {
+                            const name = row[0].userName ?? row[0].email ?? 'Usuario'
+                            return (
+                              <div key={row[0].userId} className="rounded-xl border border-theme-border bg-theme-surface/50 p-3">
+                                <div className="flex items-start gap-2.5">
+                                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-theme-accent/15 text-[11px] font-bold text-theme-accent">
+                                    {initials(name)}
+                                  </span>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate text-sm font-semibold text-theme-text">{name}</p>
+                                    <p className="truncate text-[11px] text-theme-text-muted/75">{row[0].email}</p>
+                                    <div className="mt-2 flex flex-wrap gap-1.5">
+                                      {row.map(participant => roleBadge(participant, editable))}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
                     </div>
-                  )}
+                  </div>
 
                   {revokedParticipants.length > 0 && (
                     <div className="border-t border-theme-border pt-2.5">

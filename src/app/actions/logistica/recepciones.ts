@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { getActiveCompanyId } from '@/app/actions/companies'
+import { requireWmsPermission } from './authorization'
 
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
@@ -428,12 +429,7 @@ export interface KardexMovement {
 }
 
 export async function getKardexMovements(productId?: string): Promise<KardexMovement[]> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
-
-  const companyId = await getActiveCompanyId()
-  if (!companyId) return []
+  const { companyId } = await requireWmsPermission('logistica.kardex.view')
 
   const db = logDb()
   let query = db
@@ -521,12 +517,7 @@ export interface StockItem {
 }
 
 export async function getStockSummary(): Promise<StockItem[]> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
-
-  const companyId = await getActiveCompanyId()
-  if (!companyId) return []
+  const { companyId } = await requireWmsPermission('logistica.stock.view')
 
   const db = logDb()
   const { data: stockItems, error } = await db

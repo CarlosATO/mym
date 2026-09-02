@@ -62,6 +62,7 @@ export function InventoryOperationPanel({ companyId, sessionId, initialDetail, c
   const tasks = detail.tasks.filter(t => !t.cancelled_at)
   const activeZones = detail.zones.filter(z => z.is_enabled)
   const activeParticipants = detail.participants.filter(p => !p.revoked_at)
+  const activeParticipantUserCount = new Set(activeParticipants.map(participant => participant.user_id)).size
 
   const zoneRows = activeZones.map(zone => {
     const task = tasks.find(t => t.session_zone_id === zone.id)
@@ -171,7 +172,7 @@ export function InventoryOperationPanel({ companyId, sessionId, initialDetail, c
           </div>
           <div className="rounded-xl border border-theme-border bg-theme-surface p-3 shadow-sm">
             <p className="text-[11px] text-theme-text-muted/60 uppercase tracking-wider">Participantes</p>
-            <p className="text-xl font-bold text-theme-text">{activeParticipants.length}</p>
+            <p className="text-xl font-bold text-theme-text">{activeParticipantUserCount}</p>
           </div>
         </div>
       )}

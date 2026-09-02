@@ -65,7 +65,8 @@ export function InventoryReviewStep({ companyId, sessionId }: ReviewStepProps) {
           <Lock className="h-4 w-4" /> Configuración a punto de bloquearse
         </p>
         <p className="mt-1 text-xs text-amber-700 dark:text-amber-300/80">
-          Al preparar la sección de conteo, la configuración quedará congelada y no podrás editarla.
+          Al preparar la sección se congelará el snapshot y quedará lista para abrir. Las zonas nuevas no se agregan en este paso:
+          mientras la sección esté en PREPARED o En conteo y existan ubicaciones pendientes, podrás crearlas y asignarlas desde Asignación de zonas.
         </p>
       </div>
 

@@ -11,6 +11,8 @@ interface WarehouseVisualOverviewProps {
   stats?: WarehouseStats[]
   onWarehouseSelect?: (id: string | null) => void
   onDataChange?: () => void
+  permissions?: string[]
+  canManageLayout?: boolean
 }
 
 export function WarehouseSummary({ warehouses, stats = [] }: { warehouses: Warehouse[]; stats?: WarehouseStats[] }) {
@@ -39,7 +41,7 @@ function Metric({ label, value, valueClassName = 'text-theme-text' }: { label: s
   )
 }
 
-export function WarehouseVisualOverview({ warehouses, stats = [], onWarehouseSelect, onDataChange }: WarehouseVisualOverviewProps) {
+export function WarehouseVisualOverview({ warehouses, stats = [], onWarehouseSelect, onDataChange, permissions = [], canManageLayout = false }: WarehouseVisualOverviewProps) {
   const [selectedWarehouse, setSelectedWarehouse] = useState<Warehouse | null>(null)
 
   const statsByWarehouseId = new Map(stats.map(s => [s.warehouse_id, s]))
@@ -65,7 +67,7 @@ export function WarehouseVisualOverview({ warehouses, stats = [], onWarehouseSel
             <span className="text-theme-text-muted text-xs border border-theme-border px-1.5 rounded">{selectedWarehouse.code}</span>
           </div>
         </div>
-         <WarehouseMapView warehouseId={selectedWarehouse.id} warehouseName={selectedWarehouse.name} warehouseActive={selectedWarehouse.is_active} onDataChange={onDataChange} />
+         <WarehouseMapView warehouseId={selectedWarehouse.id} warehouseName={selectedWarehouse.name} warehouseActive={selectedWarehouse.is_active} onDataChange={onDataChange} permissions={permissions} canManageLayout={canManageLayout} />
       </div>
     )
   }

@@ -4,7 +4,7 @@ import { getActiveCompanyId } from '@/app/actions/companies'
 import { requirePortalSystemAdmin } from '@/app/actions/portal/authorization'
 import { createClient } from '@/lib/supabase/server'
 import { netAmountForGross, type PortalDocumentMoney } from '@/app/actions/portal/net-monetary'
-import { getPortalPeriod, type PortalPeriodMode } from '@/app/actions/portal/periods'
+import { getPortalDailyPeriod, getPortalPeriod, type PortalPeriodMode } from '@/app/actions/portal/periods'
 
 const AMIMASCOTA_BSALE_CLIENT_ID = 643
 
@@ -42,6 +42,7 @@ async function getPortalCollectionsForModes(modes: PortalPeriodMode[]): Promise<
   if (!companyId) throw new Error('No se encontró empresa activa para el usuario.')
 
   const periods = modes.map(mode => ({ mode, ...getPortalPeriod(mode) }))
+  const dailyPeriod = getPortalDailyPeriod()
   const supabase = await createClient()
 
   const fetchReceivables = async () => {
@@ -69,8 +70,8 @@ async function getPortalCollectionsForModes(modes: PortalPeriodMode[]): Promise<
       .eq('company_id', companyId)
       .or(`client_id.is.null,client_id.neq.${AMIMASCOTA_BSALE_CLIENT_ID}`)
       .gt('amount_applied', 0)
-      .gte('payment_record_date', period.from)
-      .lt('payment_record_date', period.toExclusive))),
+      .gte('payment_record_date', period.from < dailyPeriod.from ? period.from : dailyPeriod.from)
+      .lt('payment_record_date', period.toExclusive > dailyPeriod.toExclusive ? period.toExclusive : dailyPeriod.toExclusive))),
     fetchReceivables(),
   ])
 
@@ -115,9 +116,11 @@ async function getPortalCollectionsForModes(modes: PortalPeriodMode[]): Promise<
       const document = documents.get(Number(row.bsale_document_id))
       if (!document) continue
       const netAmount = netAmountForGross(amount, document)
-      collectedMonth += netAmount
       const date = row.payment_record_date.slice(0, 10)
-      dailyCollections.set(date, (dailyCollections.get(date) ?? 0) + netAmount)
+      if (date >= period.from && date <= period.to) collectedMonth += netAmount
+      if (date >= dailyPeriod.from && date <= dailyPeriod.to) {
+        dailyCollections.set(date, (dailyCollections.get(date) ?? 0) + netAmount)
+      }
     }
     resultByMode[period.mode] = { collected_month: collectedMonth, pending_receivables: pendingReceivables, overdue_receivables: overdueReceivables, daily_collections: Array.from(dailyCollections, ([date, amount]) => ({ date, amount })).sort((a, b) => a.date.localeCompare(b.date)) }
   }

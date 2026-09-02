@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { AccessDenied } from '@/components/access-denied'
 import { LogisticaLayoutClient } from './logistica-layout-client'
 
@@ -15,6 +16,9 @@ export default async function Layout({ children }: { children: React.ReactNode }
     return <AccessDenied />
   }
 
+  const { data: permissions } = await createAdminClient().rpc('get_user_permissions', { p_user_id: user.id })
+  const permissionCodes: string[] = (permissions ?? []).map((permission: { permission_code: string }) => permission.permission_code)
+
   const { data: profile } = await supabase
     .from('users')
     .select('nombre, apellido, email, role_id, roles:role_id(name)')
@@ -26,7 +30,7 @@ export default async function Layout({ children }: { children: React.ReactNode }
     : { nombre: '', apellido: '', email: '', roles: { name: '' } }
 
   return (
-    <LogisticaLayoutClient profile={profileWithRole}>
+    <LogisticaLayoutClient profile={profileWithRole} permissions={permissionCodes}>
       {children}
     </LogisticaLayoutClient>
   )

@@ -8,6 +8,16 @@ export type PortalPeriod = {
   toExclusive: string
 }
 
+/** Returns a sufficiently wide civil-date window ending today for daily charts. */
+export function getPortalDailyPeriod(today = todayInSantiago()): PortalPeriod {
+  const [year, month, day] = today.split('-').map(Number)
+  const start = utcDate(year, month - 1, day)
+  start.setUTCDate(start.getUTCDate() - 31)
+  const endExclusive = utcDate(year, month - 1, day + 1)
+  const end = new Date(endExclusive.getTime() - 86400000)
+  return { from: formatDate(start), to: formatDate(end), toExclusive: formatDate(endExclusive) }
+}
+
 function formatDate(date: Date): string {
   return date.toISOString().slice(0, 10)
 }

@@ -111,9 +111,16 @@ interface WarehouseMapViewProps {
   warehouseName: string
   warehouseActive: boolean
   onDataChange?: () => void
+  permissions: string[]
+  canManageLayout: boolean
 }
 
-export function WarehouseMapView({ warehouseId, warehouseName, warehouseActive, onDataChange }: WarehouseMapViewProps) {
+export function WarehouseMapView({ warehouseId, warehouseName, warehouseActive, onDataChange, permissions, canManageLayout }: WarehouseMapViewProps) {
+  const canCreate = permissions.includes('logistica.locations.create')
+  const canCreateBulk = permissions.includes('logistica.locations.create_bulk')
+  const canUpdate = permissions.includes('logistica.locations.update')
+  const canDeactivate = permissions.includes('logistica.locations.deactivate')
+  const canDelete = permissions.includes('logistica.locations.delete')
   const [locations, setLocations] = useState<LocationWithLayout[]>([])
   const [stock, setStock] = useState<StockByLocation[]>([])
   const [loading, setLoading] = useState(true)
@@ -275,15 +282,15 @@ export function WarehouseMapView({ warehouseId, warehouseName, warehouseActive, 
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <button onClick={() => { setSelectedLocation(null); setPanelMode('create'); }} className="px-3 py-1.5 rounded-lg bg-theme-text text-theme-surface hover:bg-theme-text/80 text-xs font-bold transition-colors flex items-center gap-1.5">
+          {canCreate && <button onClick={() => { setSelectedLocation(null); setPanelMode('create'); }} className="px-3 py-1.5 rounded-lg bg-theme-text text-theme-surface hover:bg-theme-text/80 text-xs font-bold transition-colors flex items-center gap-1.5">
             <Plus className="w-4 h-4" /> Nueva
-          </button>
-          <button onClick={() => { setSelectedLocation(null); setPanelMode('bulk'); }} className="px-3 py-1.5 rounded-lg bg-theme-accent/10 text-theme-accent hover:bg-theme-accent/20 text-xs font-bold transition-colors flex items-center gap-1.5">
+          </button>}
+          {canCreateBulk && <button onClick={() => { setSelectedLocation(null); setPanelMode('bulk'); }} className="px-3 py-1.5 rounded-lg bg-theme-accent/10 text-theme-accent hover:bg-theme-accent/20 text-xs font-bold transition-colors flex items-center gap-1.5">
             <Sparkles className="w-4 h-4" /> Masivo
-          </button>
-          <button onClick={() => setShowLabelPrint(true)} disabled={!warehouseActive} title={!warehouseActive ? 'La bodega está inactiva' : 'Imprimir etiquetas'} className="px-3 py-1.5 rounded-lg border border-theme-border text-theme-text hover:bg-theme-text/5 text-xs font-bold transition-colors flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-40">
+          </button>}
+          {permissions.includes('logistica.locations.layout.view') && <button onClick={() => setShowLabelPrint(true)} disabled={!warehouseActive} title={!warehouseActive ? 'La bodega está inactiva' : 'Imprimir etiquetas'} className="px-3 py-1.5 rounded-lg border border-theme-border text-theme-text hover:bg-theme-text/5 text-xs font-bold transition-colors flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-40">
             <Printer className="w-4 h-4" /> Imprimir etiquetas
-          </button>
+          </button>}
           <div className="w-px h-6 bg-theme-border mx-1" />
           <button onClick={load} className="p-1.5 rounded-lg hover:bg-theme-text/5 text-theme-text-muted transition-colors" title="Actualizar plano">
             <RefreshCw className="w-4 h-4" />
@@ -317,7 +324,7 @@ export function WarehouseMapView({ warehouseId, warehouseName, warehouseActive, 
                       {groupLocations.filter(l => !l.is_active).length > 0 && (
                         <span className="text-red-500/70">Inactivas: {groupLocations.filter(l => !l.is_active).length}</span>
                       )}
-                      {groupLocations[0]?.aisle && (
+                       {canManageLayout && groupLocations[0]?.aisle && (
                         <button
                           onClick={() => setManagingAisle(groupLocations[0].aisle!)}
                           className="ml-2 p-1.5 rounded hover:bg-theme-text/10 text-theme-text-muted transition-colors"
@@ -438,7 +445,10 @@ export function WarehouseMapView({ warehouseId, warehouseName, warehouseActive, 
                     <LocationDetailPanel
               locationId={selectedLocation.id}
               locationCode={selectedLocation.code}
-              isActive={selectedLocation.is_active}
+               isActive={selectedLocation.is_active}
+               canEdit={canUpdate}
+               canDeactivate={canDeactivate}
+               canDelete={canDelete}
               onClose={() => setPanelMode(null)}
               onEdit={() => setPanelMode('edit')}
               onDelete={async () => {

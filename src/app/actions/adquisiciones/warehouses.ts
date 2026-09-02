@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { getActiveCompanyId } from '@/app/actions/companies'
+import { requireWmsPermission } from '@/app/actions/logistica/authorization'
 
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
@@ -26,6 +27,7 @@ export interface WarehouseFilters {
 }
 
 export async function getWarehouses(filters: WarehouseFilters = {}): Promise<{ data: Warehouse[]; total: number }> {
+  await requireWmsPermission('adquisiciones.warehouses.view')
   if (process.env.NODE_ENV === 'development') console.time('getWarehouses_total')
   if (process.env.NODE_ENV === 'development') console.time('getWarehouses_auth_company')
   const supabase = await createClient()
@@ -69,11 +71,12 @@ export async function getWarehouses(filters: WarehouseFilters = {}): Promise<{ d
 }
 
 export async function createWarehouse(formData: FormData) {
+  const authorization = await requireWmsPermission('adquisiciones.warehouses.create')
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'No autorizado' }
 
-  const companyId = await getActiveCompanyId()
+  const companyId = authorization.companyId
   if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
 
   const code = ((formData.get('code') as string) ?? '').trim().toUpperCase()
@@ -105,11 +108,12 @@ export async function createWarehouse(formData: FormData) {
 }
 
 export async function updateWarehouse(whId: string, formData: FormData) {
+  const authorization = await requireWmsPermission('adquisiciones.warehouses.update')
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'No autorizado' }
 
-  const companyId = await getActiveCompanyId()
+  const companyId = authorization.companyId
   if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
 
   const name = ((formData.get('name') as string) ?? '').trim().toUpperCase()
@@ -134,11 +138,12 @@ export async function updateWarehouse(whId: string, formData: FormData) {
 }
 
 export async function deactivateWarehouse(whId: string) {
+  const authorization = await requireWmsPermission('adquisiciones.warehouses.update')
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'No autorizado' }
 
-  const companyId = await getActiveCompanyId()
+  const companyId = authorization.companyId
   if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
 
   const d = db()
@@ -150,11 +155,12 @@ export async function deactivateWarehouse(whId: string) {
 }
 
 export async function importWarehouses(rows: Record<string, unknown>[]) {
+  const authorization = await requireWmsPermission('adquisiciones.warehouses.create')
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'No autorizado' }
 
-  const companyId = await getActiveCompanyId()
+  const companyId = authorization.companyId
   if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
 
   const d = db()

@@ -8,12 +8,11 @@ interface WmsShellProps {
   profile: { nombre: string; apellido: string; email: string; roles: { name: string } }
   pageTitle: string
   breadcrumb: string[]
+  permissions: string[]
   compactSurface?: boolean
 }
 
-export function WmsShell({ children, profile, pageTitle, breadcrumb, compactSurface = false }: WmsShellProps) {
-  const permissions = profile.roles?.name === 'SUPER_USUARIO' ? ['usuarios.view', 'roles.view', 'audit.view', 'security.view'] : []
-
+export function WmsShell({ children, profile, permissions, pageTitle, breadcrumb, compactSurface = false }: WmsShellProps) {
   return (
     <ModuleShell
       identity={{ id: 'logistica', label: 'WMS', subtitle: 'Gestión de Bodega' }}

@@ -70,6 +70,7 @@ export function InventoryOperationActions({ companyId, sessionId, detail, canClo
         </button>
         <p className="text-xs text-theme-text-muted">
           Al abrir, las zonas configuradas quedan disponibles para operar. Las tareas no se inician automáticamente.
+          Mientras queden ubicaciones pendientes, podrás agregar y asignar nuevas zonas desde Asignación de zonas sin volver a abrir la sección.
         </p>
 
         {confirm === 'start' && (
@@ -81,7 +82,8 @@ export function InventoryOperationActions({ companyId, sessionId, detail, canClo
                <p className="mt-2 text-sm text-theme-text-muted">
                  La sección pasará a estado <strong>En conteo</strong>. Abrirla <strong>no inicia automáticamente las tareas</strong>.
                  Las zonas ya configuradas quedarán disponibles para operar. Mientras haya ubicaciones pendientes, podrás
-                 agregar nuevas zonas desde <strong>Asignación de zonas</strong>. Al cerrar la sección ya no podrás agregar zonas.
+                 agregar y asignar nuevas zonas desde <strong>Asignación de zonas</strong> sin volver a abrir la sección.
+                 Cuando la sección pase a <strong>En revisión</strong>, ya no se podrán agregar nuevas zonas.
                </p>
               <div className="mt-4 flex justify-end gap-2">
                 <button

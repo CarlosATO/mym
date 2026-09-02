@@ -92,9 +92,10 @@ const pageHeaders: Record<string, { title: string; breadcrumb: string[]; descrip
 interface LogisticaLayoutClientProps {
   children: React.ReactNode
   profile: { nombre: string; apellido: string; email: string; roles: { name: string } }
+  permissions: string[]
 }
 
-export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClientProps) {
+export function LogisticaLayoutClient({ children, profile, permissions }: LogisticaLayoutClientProps) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const isReceiptRoute = pathname.startsWith('/dashboard/logistica/recepciones/')
@@ -119,9 +120,9 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
     )
   } else if (activeTab === 'catalogos') {
     if (activeActionId === 'ubicaciones') {
-      content = <LocationsPanel />
+      content = <LocationsPanel permissions={permissions} />
     } else if (activeActionId === 'bodegas') {
-      content = <WarehousesPanel />
+      content = <WarehousesPanel permissions={permissions} />
     } else if (activeActionId === 'productos') {
       content = <ProductsPanel />
     } else if (activeActionId === 'calendario_despacho') {
@@ -201,6 +202,7 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
         pageTitle={isReceiptRoute ? 'Recepción' : 'Guías de Ruta'}
         breadcrumb={isReceiptRoute ? ['WMS', 'Movimientos', 'Recepciones'] : ['WMS', 'Movimientos', 'Guías de Ruta']}
         profile={profile}
+        permissions={permissions}
       >
         {children}
       </WmsShell>
@@ -210,7 +212,7 @@ export function LogisticaLayoutClient({ children, profile }: LogisticaLayoutClie
   const currentPage = pageHeaders[activeActionId] ?? pageHeaders.resumen
 
   return (
-    <WmsShell pageTitle={currentPage.title} breadcrumb={currentPage.breadcrumb} profile={profile} compactSurface={activeActionId === 'calendario_despacho'}>
+    <WmsShell pageTitle={currentPage.title} breadcrumb={currentPage.breadcrumb} profile={profile} permissions={permissions} compactSurface={activeActionId === 'calendario_despacho'}>
       {content}
     </WmsShell>
   )

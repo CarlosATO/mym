@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { getActiveCompanyId } from '@/app/actions/companies'
+import { requireWmsPermission } from './authorization'
 
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
@@ -56,11 +57,12 @@ export interface LocationLifecycle {
 }
 
 export async function getLocationLifecycle(locId: string): Promise<LocationLifecycle | { error: string }> {
+  const authorization = await requireWmsPermission('logistica.locations.view')
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'No autorizado' }
 
-  const companyId = await getActiveCompanyId()
+  const companyId = authorization.companyId
   if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
 
   const { data, error } = await logDb().rpc('evaluate_location_lifecycle', {
@@ -76,11 +78,12 @@ export async function getLocations(filters: LocationFilters = {}): Promise<{
   total: number
   stats: { total: number; active: number; inactive: number }
 }> {
+  const authorization = await requireWmsPermission('logistica.locations.view')
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { data: [], total: 0, stats: { total: 0, active: 0, inactive: 0 } }
 
-  const companyId = await getActiveCompanyId()
+  const companyId = authorization.companyId
   if (!companyId) return { data: [], total: 0, stats: { total: 0, active: 0, inactive: 0 } }
 
   const d = logDb()
@@ -108,7 +111,7 @@ export async function getLocations(filters: LocationFilters = {}): Promise<{
     })
   }
 
-  let filteredData = (data ?? []).map((loc: any) => ({
+  const filteredData = (data ?? []).map(loc => ({
     ...loc,
     warehouse_name: whMap.get(loc.warehouse_id) || 'Bodega Desconocida'
   })) as Location[]
@@ -158,11 +161,12 @@ export async function createLocation(data: {
   position?: string
   description?: string
 }) {
+  const authorization = await requireWmsPermission('logistica.locations.create')
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'No autorizado' }
 
-  const companyId = await getActiveCompanyId()
+  const companyId = authorization.companyId
   if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
 
   const code = (data.code ?? '').trim().toUpperCase()
@@ -219,11 +223,12 @@ export async function createLocation(data: {
 }
 
 export async function deactivateLocation(locId: string) {
+  const authorization = await requireWmsPermission('logistica.locations.deactivate')
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'No autorizado' }
 
-  const companyId = await getActiveCompanyId()
+  const companyId = authorization.companyId
   if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
 
   const { data, error } = await logDb().rpc('toggle_location_lifecycle', {
@@ -373,7 +378,20 @@ async function createLocationsBulkLegacy(data: {
 
   const existingCodesSet = new Set((existingLocs ?? []).map(l => l.code.toUpperCase()))
 
-  const toInsert: any[] = []
+  const toInsert: Array<{
+    company_id: string
+    warehouse_id: string
+    code: string
+    name: string
+    aisle: string | null
+    rack: string | null
+    level: string | null
+    position: string | null
+    description: string
+    is_active: boolean
+    created_by: string
+    updated_by: string
+  }> = []
   let skippedDuplicates = 0
   const errors: string[] = []
 
@@ -518,10 +536,11 @@ function normalizeLocationBulkRequest(data: LocationBulkInput): LocationBulkRequ
 }
 
 export async function previewLocationsBulk(data: LocationBulkInput) {
+  const authorization = await requireWmsPermission('logistica.locations.create_bulk')
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'No autorizado' }
-  const companyId = await getActiveCompanyId()
+  const companyId = authorization.companyId
   if (!companyId) return { success: false, error: 'No se ha seleccionado una empresa activa' }
 
   const request = normalizeLocationBulkRequest(data)
@@ -535,10 +554,11 @@ export async function previewLocationsBulk(data: LocationBulkInput) {
 
 /** Compatibility wrapper: both existing forms are normalized to the canonical request. */
 export async function createLocationsBulk(data: LocationBulkInput) {
+  const authorization = await requireWmsPermission('logistica.locations.create_bulk')
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { success: false, error: 'No autorizado' }
-  const companyId = await getActiveCompanyId()
+  const companyId = authorization.companyId
   if (!companyId) return { success: false, error: 'No se ha seleccionado una empresa activa' }
 
   const request = normalizeLocationBulkRequest(data)
@@ -570,11 +590,12 @@ export async function updateLocation(
     is_active?: boolean
   }
 ) {
+  const authorization = await requireWmsPermission('logistica.locations.update')
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'No autorizado' }
 
-  const companyId = await getActiveCompanyId()
+  const companyId = authorization.companyId
   if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
 
   const code = (data.code ?? '').trim().toUpperCase()
@@ -601,11 +622,12 @@ export async function updateLocation(
 }
 
 export async function deleteLocation(locId: string) {
+  const authorization = await requireWmsPermission('logistica.locations.delete')
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'No autorizado' }
 
-  const companyId = await getActiveCompanyId()
+  const companyId = authorization.companyId
   if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
 
   const { data, error } = await logDb().rpc('delete_location_lifecycle', {

@@ -2,7 +2,7 @@
 
 import { getActiveCompanyId } from '@/app/actions/companies'
 import { requirePortalSystemAdmin } from '@/app/actions/portal/authorization'
-import { getPortalPeriod, type PortalPeriodMode } from '@/app/actions/portal/periods'
+import { getPortalDailyPeriod, getPortalPeriod, type PortalPeriodMode } from '@/app/actions/portal/periods'
 import { createClient } from '@/lib/supabase/server'
 
 const AMIMASCOTA_BSALE_CLIENT_ID = 643
@@ -30,7 +30,10 @@ export async function getPortalSales(mode: PortalPeriodMode = 'CALENDAR_MONTH'):
   const companyId = await getActiveCompanyId()
   if (!companyId) throw new Error('No se encontró empresa activa para el usuario.')
 
-  const { from, toExclusive } = getPortalPeriod(mode)
+  const selectedPeriod = getPortalPeriod(mode)
+  const dailyPeriod = getPortalDailyPeriod()
+  const from = selectedPeriod.from < dailyPeriod.from ? selectedPeriod.from : dailyPeriod.from
+  const toExclusive = selectedPeriod.toExclusive > dailyPeriod.toExclusive ? selectedPeriod.toExclusive : dailyPeriod.toExclusive
 
   const supabase = await createClient()
   const { data, error } = await supabase
@@ -56,10 +59,13 @@ export async function getPortalSales(mode: PortalPeriodMode = 'CALENDAR_MONTH'):
 
     const sign = Number(row.document_type_id) === 2 ? -1 : 1
     const signedAmount = sign * amount
-    salesMonth += signedAmount
-    dailySales.set(row.emission_date, (dailySales.get(row.emission_date) ?? 0) + signedAmount)
+    const date = row.emission_date.slice(0, 10)
+    if (date >= selectedPeriod.from && date <= selectedPeriod.to) salesMonth += signedAmount
+    if (date >= dailyPeriod.from && date <= dailyPeriod.to) {
+      dailySales.set(date, (dailySales.get(date) ?? 0) + signedAmount)
+    }
 
-    if (Number(row.document_type_id) === 5) invoicesCount += 1
+    if (Number(row.document_type_id) === 5 && date >= selectedPeriod.from && date <= selectedPeriod.to) invoicesCount += 1
   }
 
   return {

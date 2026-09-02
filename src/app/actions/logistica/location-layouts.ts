@@ -2,7 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
-import { getActiveCompanyId } from '@/app/actions/companies'
+import { requireWmsPermission } from './authorization'
 
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
@@ -57,11 +57,16 @@ export interface WarehouseStats {
 }
 
 export async function getWarehouseLocationStats(): Promise<WarehouseStats[]> {
+  const authorization = await requireWmsPermission([
+    'adquisiciones.warehouses.view',
+    'logistica.locations.view',
+    'logistica.locations.layout.view',
+  ])
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return []
 
-  const companyId = await getActiveCompanyId()
+  const companyId = authorization.companyId
   if (!companyId) return []
 
   const logDatabase = logDb()
@@ -118,11 +123,16 @@ export async function getWarehouseLocationStats(): Promise<WarehouseStats[]> {
 }
 
 export async function getWarehouseVisualData(warehouseId: string) {
+  const authorization = await requireWmsPermission([
+    'adquisiciones.warehouses.view',
+    'logistica.locations.view',
+    'logistica.locations.layout.view',
+  ])
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
 
-  const companyId = await getActiveCompanyId()
+  const companyId = authorization.companyId
   if (!companyId) return null
 
   const logDatabase = logDb()
@@ -172,11 +182,12 @@ export async function saveLocationLayout(
   warehouseId: string, 
   layouts: Omit<LocationLayout, 'id' | 'company_id' | 'warehouse_id'>[]
 ) {
+  const authorization = await requireWmsPermission('logistica.locations.layout.manage')
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('No autorizado')
 
-  const companyId = await getActiveCompanyId()
+  const companyId = authorization.companyId
   if (!companyId) throw new Error('Empresa inactiva')
 
   const db = logDb()
@@ -218,11 +229,15 @@ export interface StockByLocation {
 
 // Usamos la nueva vista SQL optimizada
 export async function getStockByLocation(warehouseId: string): Promise<StockByLocation[]> {
+  const authorization = await requireWmsPermission([
+    'logistica.locations.view',
+    'logistica.locations.layout.view',
+  ])
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return []
 
-  const companyId = await getActiveCompanyId()
+  const companyId = authorization.companyId
   if (!companyId) return []
 
   const db = logDb()
@@ -251,11 +266,12 @@ export interface LocationDetailItem {
 }
 
 export async function getLocationDetail(locationId: string): Promise<LocationDetailItem[]> {
+  const authorization = await requireWmsPermission('logistica.locations.view')
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return []
 
-  const companyId = await getActiveCompanyId()
+  const companyId = authorization.companyId
   if (!companyId) return []
 
   const db = logDb()

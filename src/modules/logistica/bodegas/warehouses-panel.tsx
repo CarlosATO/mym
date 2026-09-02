@@ -8,7 +8,11 @@ import * as XLSX from 'xlsx'
 import { ArrowLeft, Download, FileSpreadsheet, Filter, Grid2X2, List, MoreHorizontal, Plus, Search, Upload, X } from 'lucide-react'
 import { WarehouseSummary, WarehouseVisualOverview } from '../components/warehouse-visual-overview'
 
-export function WarehousesPanel() {
+export function WarehousesPanel({ permissions }: { permissions: string[] }) {
+  const canCreate = permissions.includes('adquisiciones.warehouses.create')
+  const canUpdate = permissions.includes('adquisiciones.warehouses.update')
+  const canViewLayout = permissions.includes('logistica.locations.layout.view')
+  const canManageLayout = permissions.includes('logistica.locations.layout.manage')
   const [data, setData] = useState<Warehouse[]>([])
   const [stats, setStats] = useState<WarehouseStats[]>([])
   const [total, setTotal] = useState(0)
@@ -238,7 +242,7 @@ export function WarehousesPanel() {
                     <button onClick={() => { setViewMode('table'); setSelectedWarehouseId(null) }} className={`flex h-8 items-center justify-center rounded-lg px-2.5 text-xs font-semibold transition-all ${viewMode === 'table' ? 'bg-theme-surface text-theme-text shadow-sm ring-1 ring-theme-border/60' : 'text-theme-text-muted/80 hover:text-theme-text'}`} title="Vista tabla"><List className="h-4 w-4 sm:mr-1.5" /><span className="hidden sm:inline">Tabla</span></button>
                     <button onClick={() => setViewMode('visual')} className={`flex h-8 items-center justify-center rounded-lg px-2.5 text-xs font-semibold transition-all ${viewMode === 'visual' ? 'bg-theme-surface text-theme-text shadow-sm ring-1 ring-theme-border/60' : 'text-theme-text-muted/80 hover:text-theme-text'}`} title="Vista operativa"><Grid2X2 className="h-4 w-4 sm:mr-1.5" /><span className="hidden sm:inline">Operativa</span></button>
                   </div>
-                  <button onClick={() => { resetForm(); setShowForm(true) }} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-theme-accent px-3.5 text-sm font-semibold text-white shadow-sm shadow-theme-accent/20 transition-colors hover:bg-theme-accent-hover"><Plus className="h-4 w-4" /><span>Nueva</span></button>
+                   {canCreate && <button onClick={() => { resetForm(); setShowForm(true) }} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-theme-accent px-3.5 text-sm font-semibold text-white shadow-sm shadow-theme-accent/20 transition-colors hover:bg-theme-accent-hover"><Plus className="h-4 w-4" /><span>Nueva</span></button>}
                   <div className="relative">
                     <button onClick={() => setShowExport(!showExport)} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-theme-border bg-theme-surface px-3 text-sm font-semibold text-theme-text-muted transition-all hover:bg-theme-text/5 hover:text-theme-text"><MoreHorizontal className="h-4 w-4" /><span className="hidden lg:inline">Opciones</span></button>
                     {showExport && (<><div className="fixed inset-0 z-40" onClick={() => setShowExport(false)} /><div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-2xl border border-theme-border bg-theme-surface p-2 shadow-xl"><button onClick={downloadTemplate} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-xs font-medium text-theme-text-muted transition-colors hover:bg-theme-text/5 hover:text-theme-text"><FileSpreadsheet className="h-4 w-4" /> Descargar plantilla</button><label className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-xs font-medium text-theme-text-muted transition-colors hover:bg-theme-text/5 hover:text-theme-text"><Upload className="h-4 w-4" /> Importar<input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={handleFile} className="hidden" /></label><div className="my-1 h-px bg-theme-border" /><button onClick={handleExportAll} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-xs font-medium text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text"><Download className="h-4 w-4" /> Exportar todas</button><button onClick={handleExportFiltered} className="w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text">Exportar filtradas</button><button onClick={handleExportSelected} disabled={selected.size === 0} className="w-full rounded-lg px-3 py-2.5 text-left text-xs font-medium text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text disabled:cursor-not-allowed disabled:opacity-40">Seleccionadas {selected.size > 0 && `(${selected.size})`}</button></div></>)}
@@ -275,7 +279,7 @@ export function WarehousesPanel() {
       : data.length === 0 ? (<div className="rounded-2xl border border-theme-border bg-theme-surface p-10 text-center"><p className="text-theme-text-muted/50 text-sm">No hay bodegas registradas.</p></div>)
       : viewMode === 'visual' ? (
           <div className={`min-h-0 flex-1 overflow-hidden flex ${selectedWarehouseId ? '' : 'p-4 md:p-5'}`}>
-             <WarehouseVisualOverview warehouses={data} stats={stats} onWarehouseSelect={setSelectedWarehouseId} onDataChange={load} />
+              <WarehouseVisualOverview warehouses={data} stats={stats} onWarehouseSelect={setSelectedWarehouseId} onDataChange={load} permissions={canViewLayout ? permissions : []} canManageLayout={canManageLayout} />
           </div>
         )
       : (<div className="min-h-0 flex-1 overflow-auto px-4 pb-4 md:px-5 md:pb-5">
@@ -318,8 +322,8 @@ export function WarehousesPanel() {
                       <td className="px-3 py-2 text-center">{w.is_active ? <span className="inline-flex items-center rounded-md border border-theme-accent/25 bg-theme-accent/10 px-2 py-0.5 text-[10px] font-semibold text-theme-text-accent">Activa</span> : <span className="inline-flex items-center rounded-md border border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-500">Inactiva</span>}</td>
                       <td className="px-4 py-2 text-right whitespace-nowrap">
                         <div className="inline-flex items-center gap-1 rounded-lg border border-theme-border/70 bg-theme-surface px-1 py-0.5 opacity-80 transition-all group-hover:border-theme-border group-hover:opacity-100">
-                          <button onClick={() => openEdit(w)} className="rounded-md px-2 py-1 text-xs font-medium text-theme-text-muted hover:bg-theme-accent/10 hover:text-theme-text-accent">Editar</button>
-                          <button onClick={() => handleDeactivate(w)} className={`rounded-md px-2 py-1 text-xs font-medium ${w.is_active ? 'text-red-500/80 hover:bg-red-500/10 hover:text-red-500' : 'text-theme-text-muted hover:bg-theme-accent/10 hover:text-theme-text-accent'}`}>{w.is_active ? 'Desactivar' : 'Activar'}</button>
+                           {canUpdate && <button onClick={() => openEdit(w)} className="rounded-md px-2 py-1 text-xs font-medium text-theme-text-muted hover:bg-theme-accent/10 hover:text-theme-text-accent">Editar</button>}
+                           {canUpdate && <button onClick={() => handleDeactivate(w)} className={`rounded-md px-2 py-1 text-xs font-medium ${w.is_active ? 'text-red-500/80 hover:bg-red-500/10 hover:text-red-500' : 'text-theme-text-muted hover:bg-theme-accent/10 hover:text-theme-text-accent'}`}>{w.is_active ? 'Desactivar' : 'Activar'}</button>}
                         </div>
                       </td>
                     </tr>

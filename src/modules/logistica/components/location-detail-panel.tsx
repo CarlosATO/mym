@@ -15,6 +15,9 @@ interface LocationDetailPanelProps {
   onEdit?: () => void
   onStatusChange?: () => void
   onDelete?: () => void
+  canEdit?: boolean
+  canDeactivate?: boolean
+  canDelete?: boolean
 }
 
 function formatCurrency(amount: number | null) {
@@ -22,7 +25,7 @@ function formatCurrency(amount: number | null) {
   return amount.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 })
 }
 
-export function LocationDetailPanel({ locationId, locationCode, isActive = true, onClose, onEdit, onStatusChange, onDelete }: LocationDetailPanelProps) {
+export function LocationDetailPanel({ locationId, locationCode, isActive = true, onClose, onEdit, onStatusChange, onDelete, canEdit = true, canDeactivate = true, canDelete = true }: LocationDetailPanelProps) {
   const [data, setData] = useState<LocationDetailItem[]>([])
   const [loading, setLoading] = useState(true)
   const [isChangingStatus, setIsChangingStatus] = useState(false)
@@ -99,17 +102,17 @@ export function LocationDetailPanel({ locationId, locationCode, isActive = true,
             </h3>
           </div>
             <div className="flex items-center gap-1">
-            {onEdit && (
+            {canEdit && onEdit && (
               <button onClick={onEdit} className="p-1.5 rounded-lg hover:bg-theme-text/10 text-theme-text-muted transition-colors" title="Editar">
                 <Edit2 className="w-4 h-4" />
               </button>
             )}
-             <button disabled={isChangingStatus || Boolean(isActive && lifecycle && !lifecycle.can_deactivate)} onClick={handleToggleStatus} className={`p-1.5 rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${isActive ? 'hover:bg-red-100 text-theme-text-muted hover:text-red-600' : 'hover:bg-emerald-100 text-theme-text-muted hover:text-emerald-600'}`} title={isActive && lifecycle && !lifecycle.can_deactivate ? lifecycleReasons(lifecycle).join(' ') : isActive ? 'Desactivar' : 'Activar'}>
+             {canDeactivate && <button disabled={isChangingStatus || Boolean(isActive && lifecycle && !lifecycle.can_deactivate)} onClick={handleToggleStatus} className={`p-1.5 rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${isActive ? 'hover:bg-red-100 text-theme-text-muted hover:text-red-600' : 'hover:bg-emerald-100 text-theme-text-muted hover:text-emerald-600'}`} title={isActive && lifecycle && !lifecycle.can_deactivate ? lifecycleReasons(lifecycle).join(' ') : isActive ? 'Desactivar' : 'Activar'}>
                <Power className="w-4 h-4" />
-             </button>
-             <button disabled={isChangingStatus || !lifecycle?.can_delete} onClick={handleDelete} className="p-1.5 rounded-lg text-red-500 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-30" title={lifecycle?.can_delete ? 'Eliminar' : lifecycleReasons(lifecycle).join(' ') || 'Verificando permisos'}>
+              </button>}
+              {canDelete && <button disabled={isChangingStatus || !lifecycle?.can_delete} onClick={handleDelete} className="p-1.5 rounded-lg text-red-500 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-30" title={lifecycle?.can_delete ? 'Eliminar' : lifecycleReasons(lifecycle).join(' ') || 'Verificando permisos'}>
                <Trash2 className="w-4 h-4" />
-             </button>
+              </button>}
             <div className="w-px h-4 bg-theme-border mx-1" />
             <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-theme-text/10 text-theme-text-muted transition-colors">
               <X className="w-4 h-4" />
