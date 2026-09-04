@@ -316,6 +316,7 @@ function parseCampaignSheet(ws: XLSX.WorkSheet, scope: CampaignImportScope): Cam
           rowNumber,
         })
       } else if (parsed.value === 0) {
+        unitCost = parsed.value
         issues.push({
           level: 'WARNING',
           code: 'ZERO_COST',

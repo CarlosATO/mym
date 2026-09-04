@@ -716,7 +716,7 @@ export async function getCampaignStockImport(importId: string): Promise<{
   if (!companyId) return { data: null, error: 'No tienes una empresa activa seleccionada.' }
   try {
     const db = await inventariosDb()
-    const { data, error } = await db.rpc('get_campaign_stock_import', {
+    const { data, error } = await db.rpc('get_campaign_stock_import_current', {
       p_company_id: companyId,
       p_import_id: importId,
     })
@@ -935,7 +935,8 @@ export async function finalizeCampaignStockImport(params: {
 
     const detail = detailData as { import: CampaignStockImportDetail['import']; campaign: CampaignStockImportDetail['campaign'] }
     const campaignImport = detail.import
-    if (campaignImport.status !== 'DRAFT') {
+    const isValidatedReprocess = campaignImport.status === 'VALIDATED'
+    if (campaignImport.status !== 'DRAFT' && !isValidatedReprocess) {
       return { data: null, error: 'La importación de campaña no admite finalización en su estado actual.' }
     }
     if (detail.campaign.status !== 'DRAFT') {
@@ -1041,7 +1042,19 @@ export async function finalizeCampaignStockImport(params: {
     }
 
     const resolvedImportId = validation?.data?.import_id ?? params.importId
-    const { data: finalDetail, error: finalDetailErr } = await db.rpc('get_campaign_stock_import', {
+    if (isValidatedReprocess) {
+      const { error: materializationError } = await db.rpc('materialize_campaign_global_stock', {
+        p_company_id: companyId,
+        p_campaign_id: campaignImport.campaign_id,
+        p_import_id: resolvedImportId,
+        p_idempotency_key: params.idempotencyKey,
+      })
+      if (materializationError) {
+        console.error('materialize_campaign_global_stock error:', materializationError.message)
+        return { data: null, error: safeRpcError(materializationError.message) }
+      }
+    }
+    const { data: finalDetail, error: finalDetailErr } = await db.rpc('get_campaign_stock_import_current', {
       p_company_id: companyId,
       p_import_id: resolvedImportId,
     })
