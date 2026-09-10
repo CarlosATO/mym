@@ -129,6 +129,7 @@ export interface CampaignReviewSummary {
 }
 
 export interface CampaignBreakdownContribution {
+  count_entry_id: string
   session_id: string
   session_name: string
   session_status: string
@@ -144,6 +145,7 @@ export interface CampaignBreakdownContribution {
   captured_at: string | null
   contribution_source: string | null
   task_cycle: number | null
+  evidence_files: Array<{ evidence_id: string; bucket: string; path: string; mime_type: string | null; captured_at: string | null; sync_status: string | null }>
 }
 
 export interface CampaignBreakdown {

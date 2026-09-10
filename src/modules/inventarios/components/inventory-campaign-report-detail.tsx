@@ -1,12 +1,13 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { AlertTriangle, Loader2, X } from 'lucide-react'
+import { AlertTriangle, Camera, Loader2, X } from 'lucide-react'
 import {
   getActiveCompanyCampaignBreakdown,
   type CampaignBreakdown,
   type CampaignBreakdownContribution,
 } from '@/app/actions/inventarios/campaign-report'
+import { getActiveCompanyBarcodeEvidence } from '@/app/actions/inventarios/campaign-report'
 import { formatCLP, formatDateTimeChile, formatQuantity, formatSignedQuantity } from '@/modules/inventarios/lib/format'
 
 const VARIANCE_LABELS: Record<string, string> = {
@@ -43,6 +44,13 @@ export function InventoryCampaignReportDetail({ campaignId, bsaleVariantId, onCl
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<CampaignBreakdown | null>(null)
+  const [photo, setPhoto] = useState<{ item: CampaignBreakdownContribution; url: string | null; loading: boolean } | null>(null)
+
+  const openPhoto = async (item: CampaignBreakdownContribution, evidenceId: string) => {
+    setPhoto({ item, url: null, loading: true })
+    const result = await getActiveCompanyBarcodeEvidence(campaignId, evidenceId)
+    setPhoto({ item, url: result.data?.signed_url ?? null, loading: false })
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -201,6 +209,7 @@ export function InventoryCampaignReportDetail({ campaignId, bsaleVariantId, onCl
                         <th className="px-3 py-2">Método</th>
                         <th className="px-3 py-2">Código escaneado</th>
                         <th className="px-3 py-2">Fecha / hora</th>
+                        <th className="px-3 py-2">Foto</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -216,6 +225,13 @@ export function InventoryCampaignReportDetail({ campaignId, bsaleVariantId, onCl
                           </td>
                           <td className="px-3 py-1.5 font-mono text-theme-text-muted">{c.scanned_code ?? '—'}</td>
                           <td className="whitespace-nowrap px-3 py-1.5 text-theme-text-muted">{formatDateTimeChile(c.captured_at)}</td>
+                          <td className="px-3 py-1.5">
+                            {c.evidence_files?.length ? c.evidence_files.map(file => (
+                              <button key={file.evidence_id} type="button" onClick={() => void openPhoto(c, file.evidence_id)} className="inline-flex h-6 items-center gap-1 rounded-md border border-sky-500/25 bg-sky-500/10 px-1.5 text-[11px] font-medium text-sky-700 hover:bg-sky-500/20 dark:text-sky-300">
+                                <Camera className="h-3 w-3" /> Ver foto
+                              </button>
+                            )) : <span className="text-[11px] text-theme-text-muted/50">Sin foto</span>}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -226,6 +242,14 @@ export function InventoryCampaignReportDetail({ campaignId, bsaleVariantId, onCl
           )}
         </div>
       </div>
+      {photo && (
+        <div className="fixed inset-0 z-[1300] flex items-center justify-center bg-black/70 p-4" onClick={() => setPhoto(null)}>
+          <div className="relative flex max-h-[90vh] max-w-5xl items-center justify-center rounded-xl bg-theme-surface p-3" onClick={event => event.stopPropagation()}>
+            <button type="button" onClick={() => setPhoto(null)} aria-label="Cerrar foto" className="absolute right-2 top-2 z-10 rounded-lg border border-theme-border bg-theme-surface p-1.5 text-theme-text-muted hover:text-theme-text"><X className="h-4 w-4" /></button>
+            {photo.loading ? <Loader2 className="h-7 w-7 animate-spin text-theme-accent" /> : photo.url ? <img src={photo.url} alt="Evidencia fotográfica del conteo" className="max-h-[84vh] max-w-full rounded-lg object-contain" /> : <p className="p-8 text-sm text-theme-text-muted">No se pudo acceder a la foto.</p>}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
