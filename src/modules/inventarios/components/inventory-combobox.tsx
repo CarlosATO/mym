@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -15,6 +15,9 @@ interface InventoryComboboxProps {
   onSelect: (value: string) => void
   placeholder: string
   ariaLabel: string
+  disabled?: boolean
+  emptyText?: string
+  size?: 'compact' | 'comfortable'
   className?: string
 }
 
@@ -25,8 +28,9 @@ function normalize(value: string): string {
     .toLowerCase()
 }
 
-export function InventoryCombobox({ options, value, onSelect, placeholder, ariaLabel, className }: InventoryComboboxProps) {
+export function InventoryCombobox({ options, value, onSelect, placeholder, ariaLabel, disabled = false, emptyText = 'Sin resultados', size = 'compact', className }: InventoryComboboxProps) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const listboxId = useId()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
@@ -79,38 +83,49 @@ export function InventoryCombobox({ options, value, onSelect, placeholder, ariaL
 
   return (
     <div ref={containerRef} className={cn('relative', className)}>
-      <div className="flex h-7 items-center gap-1 rounded-md border border-theme-border/50 bg-transparent px-1.5 text-xs outline-none focus-within:border-theme-border-accent">
+        <div className={cn(
+          'flex items-center gap-1 rounded-md border border-theme-border/50 bg-transparent px-1.5 outline-none focus-within:border-theme-border-accent',
+          size === 'comfortable' ? 'h-10 text-sm' : 'h-7 text-xs'
+        )}>
         <Search className="h-3.5 w-3.5 shrink-0 text-theme-text-muted/50" />
         <input
           role="combobox"
           aria-expanded={open}
+          aria-controls={listboxId}
           aria-autocomplete="list"
           aria-label={ariaLabel}
           value={open ? query : (selected?.label ?? '')}
           placeholder={placeholder}
           onFocus={() => {
+            if (disabled) return
             setQuery('')
             setOpen(true)
             setActiveIndex(0)
           }}
           onChange={event => {
+            if (disabled) return
             setQuery(event.target.value)
             setOpen(true)
             setActiveIndex(0)
           }}
           onKeyDown={handleKeyDown}
-          className="h-full w-full min-w-0 bg-transparent text-xs text-theme-text outline-none placeholder:text-theme-text-muted/50"
+          disabled={disabled}
+          className={cn(
+            'h-full w-full min-w-0 bg-transparent text-theme-text outline-none placeholder:text-theme-text-muted/50 disabled:cursor-not-allowed disabled:opacity-50',
+            size === 'comfortable' ? 'text-sm' : 'text-xs'
+          )}
         />
         <ChevronDown className={cn('h-3 w-3 shrink-0 text-theme-text-muted/50 transition-transform', open && 'rotate-180')} />
       </div>
 
       {open && (
         <ul
+          id={listboxId}
           role="listbox"
           className="absolute left-0 right-0 top-full z-30 mt-1 max-h-56 overflow-y-auto rounded-lg border border-theme-border bg-theme-surface py-1 shadow-lg"
         >
           {filtered.length === 0 ? (
-            <li className="px-2 py-1.5 text-xs text-theme-text-muted">Sin resultados</li>
+            <li className="px-2 py-1.5 text-xs text-theme-text-muted">{emptyText}</li>
           ) : (
             filtered.map((option, index) => (
               <li key={option.value} role="option" aria-selected={option.value === value}>

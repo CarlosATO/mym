@@ -15,6 +15,12 @@ import { formatDateChile } from '@/modules/inventarios/lib/format'
 import { getLatestCampaignStockImport, type CampaignStockImportDetail } from '@/app/actions/inventarios/imports'
 import { getActiveCompanyCampaignLogisticsReconciliation } from '@/app/actions/inventarios/logistics-reconciliation'
 import { InventoryClosedStamp } from '@/modules/inventarios/components/inventory-closed-stamp'
+import { InventoryCampaignSupplementalFindings } from '@/modules/inventarios/components/inventory-campaign-supplemental-findings'
+import {
+  getActiveCompanySupplementalFindingAccess,
+  getActiveCompanySupplementalBatches,
+  getActiveCompanySupplementalFindings,
+} from '@/app/actions/inventarios/supplemental-findings'
 
 const CAMPAIGN_TYPE_LABELS: Record<string, string> = {
   GENERAL: 'General',
@@ -78,6 +84,11 @@ export default async function InventariosCampanaDetallePage({ params, searchPara
   const reconciliationFetch = campaign.status === 'APPROVED'
     ? await getActiveCompanyCampaignLogisticsReconciliation(campaign.id)
     : { data: null, error: null }
+
+  const supplementalAccess = campaign.status === 'IN_PROGRESS' ? await getActiveCompanySupplementalFindingAccess() : { canManage: false, companyId, error: null }
+  const canManageSupplemental = campaign.status === 'IN_PROGRESS' && supplementalAccess.canManage === true && !supplementalAccess.error
+  const initialFindings = canManageSupplemental ? ((await getActiveCompanySupplementalFindings(campaign.id)).data ?? []) : []
+  const initialBatches = canManageSupplemental ? ((await getActiveCompanySupplementalBatches(campaign.id)).data?.batches ?? []) : []
 
   const tabs: InventoryTab[] = [
     { id: 'resumen', label: 'Resumen' },
@@ -210,6 +221,20 @@ export default async function InventariosCampanaDetallePage({ params, searchPara
               </>
             )}
           </section>
+
+          {canManageSupplemental && (
+            <InventoryCampaignSupplementalFindings
+              campaignId={campaign.id}
+              sites={detail.sites.map(site => ({
+                site_id: site.site_id,
+                site_name: site.site_name,
+                site_code: site.site_code,
+                location_scope: site.location_scope,
+              }))}
+              initialFindings={initialFindings}
+              initialBatches={initialBatches}
+            />
+          )}
         </div>
       )}
     </div>
