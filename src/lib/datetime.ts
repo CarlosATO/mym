@@ -51,14 +51,18 @@ export function formatInstantInSantiago(value: string | null | undefined, option
   const instant = new globalThis.Date(value)
   if (Number.isNaN(instant.getTime())) return value
 
-  return new Intl.DateTimeFormat('es-CL', {
-    timeZone: OPERATIONAL_TIME_ZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-    ...options,
-  }).format(instant)
+  const formatterOptions: Intl.DateTimeFormatOptions = options?.dateStyle || options?.timeStyle
+    ? { timeZone: OPERATIONAL_TIME_ZONE, ...options }
+    : {
+        timeZone: OPERATIONAL_TIME_ZONE,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+        ...options,
+      }
+
+  return new Intl.DateTimeFormat('es-CL', formatterOptions).format(instant)
 }
