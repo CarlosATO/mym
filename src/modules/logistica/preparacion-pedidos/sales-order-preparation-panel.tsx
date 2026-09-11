@@ -1,13 +1,11 @@
 'use client'
 
 import { useEffect, useState, useMemo } from 'react'
-import { Search, SlidersHorizontal, KanbanSquare, Loader2, RotateCcw, Lock } from 'lucide-react'
+import { Search, SlidersHorizontal, KanbanSquare, Loader2, RotateCcw, Lock, RefreshCw } from 'lucide-react'
 import { 
   getSalesOrderPreparationBoard, 
   getSalesOrderPreparationItems,
-  getSalesOrderPreparationTrace,
-  previewNextRouteCandidates,
-  PreviewNextRouteResult,
+  syncOperationalBsaleSalesOrders,
   SalesOrderPreparationCardInfo,
   SalesOrderPreparationItem,
 } from '@/app/actions/logistica/sales-order-preparation'
@@ -17,7 +15,6 @@ import { SalesOrderDrawer } from './sales-order-drawer'
 import { DndContext, DragEndEvent, DragStartEvent, DragOverlay, useDroppable, useSensor, useSensors, PointerSensor } from '@dnd-kit/core'
 import { getMovementRule } from './movement-rules'
 import { MovementObservationDialog } from './movement-observation-dialog'
-import { RouteExceptionDialog } from './route-exception-dialog'
 import { moveSalesOrderPreparationCard } from '@/app/actions/logistica/sales-order-preparation'
 import { toast } from 'sonner'
 
@@ -34,7 +31,7 @@ type KanbanColumn = {
 const COLUMNS: KanbanColumn[] = [
   {
     id: 'PENDING_ROUTE_PREP',
-    title: 'Pendiente / Próxima Ruta',
+    title: 'Pendiente',
     colorHeader: 'bg-theme-base border-slate-300 dark:border-theme-border/80',
     colorBody: 'bg-theme-base/30',
     badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
@@ -127,11 +124,7 @@ export function SalesOrderPreparationPanel() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   
-  const [previewInfo, setPreviewInfo] = useState<PreviewNextRouteResult | null>(null)
-  const [loadingPreview, setLoadingPreview] = useState(true)
-  const [previewError, setPreviewError] = useState<string | null>(null)
   const [syncHealth, setSyncHealth] = useState<BsaleSalesSyncHealth | null>(null)
-  const [preparationTrace, setPreparationTrace] = useState<{ materialized: number; existing: number; outOfCutoff: number; completedAt: string | null } | null>(null)
 
   // Drawer state
   const [selectedCard, setSelectedCard] = useState<SalesOrderPreparationCardInfo | null>(null)
@@ -148,7 +141,26 @@ export function SalesOrderPreparationPanel() {
   const [activeCard, setActiveCard] = useState<SalesOrderPreparationCardInfo | null>(null)
   const [pendingMovement, setPendingMovement] = useState<{ card: SalesOrderPreparationCardInfo, fromStatus: string, toStatus: string, label: string } | null>(null)
   const [isMoving, setIsMoving] = useState(false)
-  const [isExceptionDialogOpen, setIsExceptionDialogOpen] = useState(false)
+  const [isSyncing, setIsSyncing] = useState(false)
+
+  const handleSyncBsale = async () => {
+    setIsSyncing(true)
+    try {
+      const res = await syncOperationalBsaleSalesOrders()
+      if (!res.ok) {
+        toast.error(res.error || 'Error al actualizar Notas de Venta')
+      } else {
+        const { new_cards = 0, refresh = 0, skipped_invoiced = 0, detail_errors = 0 } = res.data || {}
+        const suffix = detail_errors > 0 ? ` · ${detail_errors} con error de detalles` : ''
+        toast.success(`Notas de Venta actualizadas · ${new_cards} nuevas · ${refresh} revisadas · ${skipped_invoiced} omitidas por factura${suffix}`)
+        await loadBoard()
+      }
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Error al actualizar Notas de Venta')
+    } finally {
+      setIsSyncing(false)
+    }
+  }
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -170,28 +182,8 @@ export function SalesOrderPreparationPanel() {
     }
     setLoading(false)
     
-    setLoadingPreview(true)
-    setPreviewError(null)
-    try {
-      const prevRes = await previewNextRouteCandidates()
-      if (prevRes.error) {
-        setPreviewError(prevRes.error)
-      } else if (prevRes.data) {
-        setPreviewInfo(prevRes.data)
-      } else {
-        setPreviewError('Respuesta nula del servidor')
-      }
-    } catch (err: any) {
-      setPreviewError(err.message || 'Error desconocido')
-    } finally {
-      setLoadingPreview(false)
-    }
-
-    const [syncResult, traceResult] = await Promise.all([getBsaleSalesSyncHealth(), getSalesOrderPreparationTrace()])
+    const [syncResult] = await Promise.all([getBsaleSalesSyncHealth()])
     setSyncHealth(syncResult)
-    if (!traceResult.error && traceResult.data) {
-      setPreparationTrace(traceResult.data)
-    }
   }
 
   useEffect(() => {
@@ -286,8 +278,6 @@ export function SalesOrderPreparationPanel() {
 
   const hasFilters = searchTerm || filterCity || filterSeller
   const clearFilters = () => { setSearchTerm(''); setFilterCity(''); setFilterSeller('') }
-  const routeCities = previewInfo?.cities || []
-  const routeCitiesLabel = routeCities.length <= 4 ? routeCities.join(', ') : `${routeCities.length} comunas`
   const syncRun = syncHealth?.latestSuccessfulRun
   const syncTrigger = syncRun?.trigger === 'SCHEDULED' ? 'SCHED' : syncRun?.trigger === 'MANUAL' ? 'MANUAL' : syncRun?.trigger || 'INIT'
   const syncTime = syncRun?.completed_at || syncRun?.started_at
@@ -301,71 +291,33 @@ export function SalesOrderPreparationPanel() {
           <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
             <div className="flex items-center gap-1.5 shrink-0">
               <KanbanSquare className="w-4 h-4 text-theme-accent shrink-0" />
-              <h1 className="text-sm font-bold text-theme-text">Próxima ruta</h1>
+            <h1 className="text-sm font-bold text-theme-text">Preparación de Pedidos</h1>
               <span className="px-1.5 py-0.5 rounded bg-theme-base text-theme-text-muted text-[10px] font-bold border border-theme-border/50 shrink-0">
                 {filteredCards.length}
               </span>
             </div>
 
-            {loadingPreview ? (
-              <div className="text-[11px] text-theme-text-muted flex gap-1.5 items-center font-medium">
-                <Loader2 className="w-3 h-3 animate-spin" />
-                Buscando...
-              </div>
-            ) : previewError ? (
-              <div className="text-[11px] text-red-500 flex gap-1 items-center font-medium">
-                <span>Error de ruta</span>
-                <span className="opacity-80 truncate max-w-[150px]">({previewError})</span>
-              </div>
-            ) : previewInfo && previewInfo.has_route ? (
-              <div className="flex items-center gap-2 min-w-0 overflow-hidden text-[10px] text-theme-text">
-                <div className="flex items-center gap-1.5 shrink-0 bg-theme-base px-2 py-1 rounded border border-theme-border/50" title="Fecha de despacho de la ruta activa">
-                  <span className="font-bold">
-                    {previewInfo.route_date ? (() => { const [y,m,d] = previewInfo.route_date.split('-'); return `${d}-${m}-${y}`; })() : ''}
-                  </span>
-                  <span className="font-medium" title={routeCities.join(', ')}>
-                    {routeCitiesLabel}
-                  </span>
-                </div>
-
-                <span className="shrink-0 text-theme-text-muted" title="Hora de corte de la ruta activa">
-                  Corte <b className="text-theme-text">
-                    {previewInfo.cutoff_at_chile ? (() => {
-                      const [datePart, timePart] = previewInfo.cutoff_at_chile.split(' ')
-                      const [y,m,d] = datePart.split('-')
-                      return `${d}-${m}-${y} ${timePart.substring(0,5)}`
-                    })() : previewInfo.cutoff_at ? new Date(previewInfo.cutoff_at).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
-                  </b>
-                </span>
-
-                <span className="shrink-0 text-theme-text-muted" title="Tarjetas creadas por la última materialización automática">Mat. <b className="text-theme-text">{preparationTrace?.materialized ?? 0}</b></span>
-                <span className="shrink-0 text-theme-text-muted" title="Candidatas fuera del horario de corte">F/C <b className="text-theme-text">{previewInfo.counts?.out_cutoff ?? 0}</b></span>
-                <span className="shrink-0 text-theme-text-muted" title="Último sync de ventas y documentos Bsale">
-                  Sync <b className="text-theme-text">{syncRun ? `OK · ${syncTrigger} ${syncTime ? new Date(syncTime).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : ''}` : 'sin evidencia'}</b>
-                </span>
-                <span className="shrink-0 text-theme-text-muted" title={`Preparación: ${preparationTrace?.materialized ?? 0} materializadas · ${preparationTrace?.existing ?? 0} existentes · ${preparationTrace?.outOfCutoff ?? 0} fuera de corte`}>
-                  Prep <b className="text-theme-text">{preparationTrace ? `${preparationTrace.materialized} mat · ${preparationTrace.existing} exis · ${preparationTrace.outOfCutoff} F/C` : 'sin rastro'}</b>
-                </span>
-                {(previewInfo.counts?.out_cutoff ?? 0) > 0 && (
-                  <button
-                    onClick={() => setIsExceptionDialogOpen(true)}
-                    className="shrink-0 text-[10px] bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20 px-2 py-0.5 rounded transition-colors font-semibold"
-                  >
-                    Incluir F/C
-                  </button>
-                )}
-                {(previewInfo.counts?.exceptions ?? 0) > 0 && <span className="shrink-0 text-theme-text-muted" title="Excepciones autorizadas">Exc. <b className="text-theme-text">{previewInfo.counts?.exceptions}</b></span>}
-              </div>
-            ) : previewInfo && !previewInfo.has_route ? (
-              <div className="text-[11px] text-theme-text-muted font-medium">
-                No hay rutas futuras configuradas.
-              </div>
-            ) : null}
+            <div className="text-[11px] text-theme-text-muted font-medium">
+              {syncRun ? `Último sync: OK · ${syncTrigger} ${syncTime ? new Date(syncTime).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : ''}` : 'Sin evidencia de sync'}
+            </div>
           </div>
           
           {/* Controls */}
           <div className="flex items-center gap-2 shrink-0">
-            <div className="relative w-40">
+            <button
+              onClick={handleSyncBsale}
+              disabled={isSyncing}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-bold border transition-colors ${
+                isSyncing
+                  ? 'bg-theme-base border-theme-border text-theme-text-muted opacity-80 cursor-not-allowed'
+                  : 'bg-theme-accent text-white hover:bg-theme-accent/90 border-transparent shadow-sm'
+              }`}
+            >
+              {isSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+              {isSyncing ? 'ACTUALIZANDO...' : 'ACTUALIZAR NOTAS DE VENTA'}
+            </button>
+
+            <div className="relative w-40 ml-2">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-text-muted" />
               <input
                 type="text"
@@ -470,15 +422,6 @@ export function SalesOrderPreparationPanel() {
         isMoving={isMoving}
       />
 
-      <RouteExceptionDialog
-        open={isExceptionDialogOpen}
-        onOpenChange={setIsExceptionDialogOpen}
-        outOfCutoffCandidates={previewInfo?.out_of_cutoff || []}
-        routeDate={previewInfo?.route_date || null}
-        onSuccess={() => {
-          loadBoard()
-        }}
-      />
     </div>
   )
 }

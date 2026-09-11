@@ -9,6 +9,7 @@ import { createClient as createServerSessionClient } from '@/lib/supabase/server
 import crypto from 'crypto'
 
 const BSALE_API_BASE = process.env.BSALE_API_BASE_URL || 'https://api.bsale.cl/v1'
+const WAREHOUSE_PREP_SYNC_TRIGGER = 'WAREHOUSE_PREP'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -38,6 +39,64 @@ interface SyncRun {
   id: string
   company_id: string
   started_at?: string
+}
+
+type BsalePreparationDocument = {
+  id: number
+  number?: number | null
+  documentTypeId?: number | null
+  document_type?: { id?: number | string | null } | null
+  state?: number | string | null
+  emissionDate?: number | null
+  generationDate?: number | null
+  totalAmount?: number | string | null
+  netAmount?: number | string | null
+  taxAmount?: number | string | null
+  exemptAmount?: number | string | null
+  client?: { id?: number | string | null } | null
+  clientId?: number | string | null
+  office?: { id?: number | string | null } | null
+  officeId?: number | string | null
+  trackingNumber?: string | null
+  urlPdf?: string | null
+}
+
+type BsalePreparationReference = {
+  id: number
+  referenceDocumentId?: number | string | null
+  number?: number | string | null
+  referenceDocumentTypeId?: number | string | null
+  referenceCode?: string | null
+  reason?: string | null
+  date?: number | null
+}
+
+type BsalePreparationDetail = {
+  id: number
+  lineNumber?: number | null
+  quantity?: number | string | null
+  netUnitValue?: number | string | null
+  netUnitValueRaw?: number | string | null
+  totalUnitValue?: number | string | null
+  netAmount?: number | string | null
+  taxAmount?: number | string | null
+  totalAmount?: number | string | null
+  netDiscount?: number | string | null
+  variant?: { id?: number | string | null; code?: string | null; description?: string | null } | null
+}
+
+type BsalePreparationCard = { nv_bsale_id: number | string | null }
+
+function isBsalePreparationDocument(value: unknown): value is BsalePreparationDocument {
+  return typeof value === 'object' && value !== null && typeof (value as { id?: unknown }).id === 'number'
+}
+
+function isBsalePreparationReference(value: unknown): value is BsalePreparationReference {
+  return typeof value === 'object' && value !== null && typeof (value as { id?: unknown }).id === 'number'
+}
+
+function isBsalePreparationDetail(value: unknown): value is BsalePreparationDetail {
+  return typeof value === 'object' && value !== null && typeof (value as { id?: unknown }).id === 'number'
 }
 
 type BsaleDocumentForSellerSync = {
@@ -1483,6 +1542,7 @@ async function fetchAndUpsertDirectedDetails(companyId: string, runId: string, d
     ignoreDuplicates: false,
   })
   if (error) throw error
+
   return records.length
 }
 
@@ -2135,18 +2195,13 @@ export async function releaseSyncLock(companyId: string, lockName: string, runId
 async function materializePreparationAfterSalesSync(companyId: string) {
   const { data, error } = await integrDb()
     .schema('logistica')
-    .rpc('materialize_next_route_preparation_cards', {
-      p_company_id: companyId,
-      p_source: 'AUTO_SYNC',
-    })
+    .rpc('materialize_bodega_preparation_cards', { p_company_id: companyId })
 
   if (error) throw new Error(`Error materializando preparación: ${error.message}`)
   return data as {
-    materialized?: number
-    existing?: number
-    out_of_cutoff?: number
-    route_date?: string
-    cities?: string[]
+    discovered?: number
+    skipped_invoiced?: number
+    created?: number
   }
 }
 
@@ -2238,7 +2293,7 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
     // 2. Sync Sales (14 days)
     console.log('[runReplenishmentBsaleSync] Iniciando syncBsaleSales (14 days)...');
     const salesRes = await syncBsaleSales(companyId, { days: 14 });
-    
+
     if (!salesRes.success) {
       finalStatus = 'FAILED';
       commercialSyncConsistent = false;
@@ -2254,7 +2309,7 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
     if (finalStatus !== 'FAILED') {
       try {
         preparationResult = await materializePreparationAfterSalesSync(companyId);
-        console.log(`[runReplenishmentBsaleSync] Preparation: materialized=${preparationResult.materialized || 0} existing=${preparationResult.existing || 0}`);
+        console.log(`[runReplenishmentBsaleSync] Preparation: created=${preparationResult.created || 0} discovered=${preparationResult.discovered || 0}`);
       } catch (preparationErr: unknown) {
         finalStatus = 'PARTIAL';
         errorMessage += (errorMessage ? ' | ' : '') + 'Preparation: ' + (preparationErr instanceof Error ? preparationErr.message : String(preparationErr));
@@ -2373,5 +2428,292 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
        await releaseSyncLock(companyId, lockName, run.id);
     }
     return { success: false, status: 'FAILED', error: err.message, duration: Date.now() - startTime };
+  }
+}
+
+export async function syncBsaleSalesOrdersForPreparation(companyId: string): Promise<{
+  success: boolean
+  counts?: { discovery: number, refresh: number, details: number, detail_errors: number, reference_errors: number, missing_details: number, new_cards: number, skipped_invoiced: number }
+  error?: string
+}> {
+  if (!companyId) return { success: false, error: 'company_id es requerido' }
+  const runTrigger = WAREHOUSE_PREP_SYNC_TRIGGER
+  const lockName = 'bsale_operational_prep_sync'
+  let run: SyncRun | null = null
+
+  try {
+    run = await createSyncRun(companyId, runTrigger)
+    const runId = run.id
+
+    const acquired = await acquireSyncLock(companyId, lockName, runId, 10)
+    if (!acquired) {
+      await finishSyncRun(runId, 'FAILED', {}, 'SKIPPED_LOCKED: Sync already running')
+      return { success: false, error: 'Ya existe una actualización de Notas de Venta en curso.' }
+    }
+
+    const db = integrDb()
+    const admin = await createServerSessionClient()
+
+    // 1. Descubrimiento incremental. Only a completed WAREHOUSE_PREP run is a
+    // valid checkpoint; failed or partial runs are intentionally ignored.
+    const { data: checkpoint } = await db.from('bsale_sync_runs')
+      .select('completed_at')
+      .eq('company_id', companyId)
+      .eq('trigger', WAREHOUSE_PREP_SYNC_TRIGGER)
+      .eq('status', 'COMPLETED')
+      .not('completed_at', 'is', null)
+      .order('completed_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    const { data: localLatest } = await db.from('bsale_documents')
+      .select('generation_date')
+      .eq('company_id', companyId)
+      .eq('document_type_id', 23)
+      .not('generation_date', 'is', null)
+      .order('generation_date', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    const dateTo = new Date()
+    const checkpointDate = checkpoint?.completed_at
+      ? new Date(checkpoint.completed_at)
+      : localLatest?.generation_date
+        ? new Date(localLatest.generation_date)
+        : new Date(dateTo.getTime() - 2 * 86400000)
+    const dateFrom = new Date(checkpointDate.getTime() - 10 * 60000)
+    const rangeEncoded = encodeURIComponent(`[${Math.floor(dateFrom.getTime() / 1000)},${Math.floor(dateTo.getTime() / 1000)}]`)
+
+    const { error: windowError } = await db.from('bsale_sync_runs').update({
+      date_from: dateFrom.toISOString().slice(0, 10),
+      date_to: dateTo.toISOString().slice(0, 10),
+    }).eq('id', runId)
+    if (windowError) throw new Error(`Error guardando ventana de sync: ${windowError.message}`)
+
+    let offset = 0
+    const bsaleDocsMap = new Map<number, BsalePreparationDocument>()
+
+    while (true) {
+      const url = `${BSALE_API_BASE}/documents.json?documenttypeid=23&limit=50&offset=${offset}&generationdaterange=${rangeEncoded}`
+      const response = await fetch(url, { headers: getBsaleHeaders(), signal: AbortSignal.timeout(30000) })
+      if (!response.ok) throw new Error(`Bsale discovery error ${response.status}`)
+      const data = await response.json() as { items?: unknown[] }
+      if (!Array.isArray(data.items)) throw new Error('Bsale discovery response missing items')
+      const items = data.items.filter(isBsalePreparationDocument)
+      items.forEach((doc) => {
+        const documentTypeId = Number(doc.documentTypeId ?? doc.document_type?.id)
+        if (documentTypeId === 23 && Number(doc.state) === 0) bsaleDocsMap.set(doc.id, doc)
+      })
+      if (items.length < 50) break
+      offset += 50
+    }
+    const discoveryCount = bsaleDocsMap.size
+
+    // 2. Refresco: NV activas en Preparación (no finalizadas)
+    const { data: activeCards } = await admin.schema('logistica').from('sales_order_preparation_cards')
+      .select('nv_bsale_id')
+      .eq('company_id', companyId)
+      .in('status', ['PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT'])
+
+    const activeNvIds = [...new Set((activeCards || []).map((c: BsalePreparationCard) => Number(c.nv_bsale_id)).filter(Number.isFinite))]
+      .filter(id => !bsaleDocsMap.has(id))
+
+    for (const bsaleId of activeNvIds) {
+       const url = `${BSALE_API_BASE}/documents/${bsaleId}.json`
+       const response = await fetch(url, { headers: getBsaleHeaders(), signal: AbortSignal.timeout(15000) })
+       if (response.ok) {
+         const doc = await response.json() as unknown
+         if (isBsalePreparationDocument(doc)) bsaleDocsMap.set(doc.id, doc)
+       }
+    }
+    const refreshCount = activeNvIds.length
+
+    // Refresh invoice references before materializing. This closes the race
+    // where an invoice is issued before Bodega discovers the NV.
+    let referenceErrors = 0
+    let invoiceOffset = 0
+    while (true) {
+      const url = `${BSALE_API_BASE}/documents.json?documenttypeid=5&limit=50&offset=${invoiceOffset}&generationdaterange=${rangeEncoded}`
+      const response = await fetch(url, { headers: getBsaleHeaders(), signal: AbortSignal.timeout(30000) })
+      if (!response.ok) throw new Error(`Bsale invoice discovery error ${response.status}`)
+      const data = await response.json() as { items?: unknown[] }
+      if (!Array.isArray(data.items)) throw new Error('Bsale invoice discovery response missing items')
+
+      for (const invoice of data.items.filter(isBsalePreparationDocument)) {
+        try {
+          const refsResponse = await fetch(`${BSALE_API_BASE}/documents/${invoice.id}/references.json`, {
+            headers: getBsaleHeaders(),
+            signal: AbortSignal.timeout(15000),
+          })
+          if (!refsResponse.ok) throw new Error(`HTTP ${refsResponse.status}`)
+          const refsData = await refsResponse.json() as { items?: unknown[] }
+          const refs = Array.isArray(refsData.items) ? refsData.items.filter(isBsalePreparationReference) : []
+          if (refs.length === 0) continue
+
+          const refRecords = refs.map((ref) => ({
+            company_id: companyId,
+            source_key: `invoice:${invoice.id}:reference:${ref.id}`,
+            bsale_id: ref.id,
+            bsale_document_id: invoice.id,
+            source_document_type_id: 5,
+            source_document_number: invoice.number ?? null,
+            referenced_document_id: ref.referenceDocumentId ?? null,
+            referenced_document_number: ref.number ?? null,
+            referenced_document_type_id: ref.referenceDocumentTypeId ?? null,
+            reference_code: ref.referenceCode ?? null,
+            reference_reason: ref.reason ?? null,
+            reference_date: ref.date ? new Date(ref.date * 1000).toISOString() : null,
+            raw_json: ref,
+            bsale_sync_run_id: runId,
+            synced_at: new Date().toISOString(),
+          }))
+          const { error: refsError } = await db.from('bsale_document_references').upsert(refRecords, {
+            onConflict: 'company_id,source_key',
+          })
+          if (refsError) throw new Error(refsError.message)
+        } catch (error) {
+          referenceErrors++
+          console.error(`[syncBsaleSalesOrdersForPreparation] Invoice references error for ${invoice.id}:`, error instanceof Error ? error.message : error)
+        }
+      }
+
+      if (data.items.length < 50) break
+      invoiceOffset += 50
+    }
+
+    const allDocs = Array.from(bsaleDocsMap.values())
+
+    let detailErrors = 0
+    let detailsCount = 0
+    let documentErrors = 0
+
+    if (allDocs.length > 0) {
+      // Upsert documentos
+      for (let i = 0; i < allDocs.length; i += 50) {
+        const batch = allDocs.slice(i, i + 50)
+        const records = batch.map((d) => ({
+          company_id: companyId,
+          bsale_id: d.id,
+          number: d.number ?? null,
+          emission_date: d.emissionDate ? new Date(d.emissionDate * 1000).toISOString().slice(0, 10) : null,
+          generation_date: d.generationDate ? new Date(d.generationDate * 1000).toISOString() : null,
+          total_amount: d.totalAmount ?? null,
+          net_amount: d.netAmount ?? null,
+          tax_amount: d.taxAmount ?? null,
+          exempt_amount: d.exemptAmount ?? null,
+          document_type_id: d.documentTypeId ?? d.document_type?.id ?? null,
+          client_id: d.client?.id ?? d.clientId ?? null,
+          office_id: d.office?.id ?? d.officeId ?? null,
+          state: d.state ?? null,
+          tracking_number: d.trackingNumber || null,
+          url_pdf: d.urlPdf || null,
+          raw_json: d,
+          bsale_sync_run_id: runId,
+          synced_at: new Date().toISOString(),
+        }))
+         const { error } = await db.from('bsale_documents').upsert(records, { onConflict: 'company_id, bsale_id', ignoreDuplicates: false })
+         if (error) {
+           documentErrors += records.length
+           console.error(`[syncBsaleSalesOrdersForPreparation] Document upsert error:`, error.message)
+         }
+      }
+
+      const sellerSync = await syncDocumentSellersForDocuments(companyId, allDocs)
+      detailErrors += sellerSync.errors
+
+      // Detalles y reconciliación. Deletes are only allowed after every page
+      // completed successfully and the complete Bsale set is available.
+      for (const doc of allDocs) {
+         try {
+           const details: BsalePreparationDetail[] = []
+           let detailOffset = 0
+           const detailLimit = 50
+
+           while (true) {
+             const url = `${BSALE_API_BASE}/documents/${doc.id}/details.json?limit=${detailLimit}&offset=${detailOffset}`
+             const response = await fetch(url, { headers: getBsaleHeaders(), signal: AbortSignal.timeout(20000) })
+             if (!response.ok) throw new Error(`Detalles Bsale HTTP ${response.status}`)
+             const data = await response.json() as { items?: unknown[] }
+             if (!Array.isArray(data.items)) throw new Error('Respuesta de detalles Bsale sin items')
+             details.push(...data.items.filter(isBsalePreparationDetail))
+             if (data.items.length < detailLimit) break
+             detailOffset += detailLimit
+           }
+
+           const detailRecords = details.map((detail, idx) => ({
+             company_id: companyId,
+            bsale_id: detail.id,
+            bsale_document_id: doc.id,
+            line_number: detail.lineNumber ?? idx,
+            quantity: detail.quantity ?? 0,
+            net_unit_value: detail.netUnitValue ?? detail.netUnitValueRaw ?? 0,
+            total_unit_value: detail.totalUnitValue ?? 0,
+            net_amount: detail.netAmount ?? 0,
+            tax_amount: detail.taxAmount ?? 0,
+            total_amount: detail.totalAmount ?? 0,
+            net_discount: detail.netDiscount ?? 0,
+            variant_id: toNumber(detail.variant?.id),
+            variant_code: detail.variant?.code ? normalizeSku(detail.variant.code) : null,
+            variant_description: detail.variant?.description || null,
+            raw_json: detail,
+            bsale_sync_run_id: runId,
+            synced_at: new Date().toISOString(),
+           }))
+           if (detailRecords.length > 0) {
+             const { error: upsertError } = await db.from('bsale_document_details').upsert(detailRecords, { onConflict: 'company_id,bsale_id', ignoreDuplicates: false })
+             if (upsertError) throw new Error(`Detalle DB: ${upsertError.message}`)
+           }
+
+           // An empty, successfully paged response is a valid zero-line NV.
+           const fetchedIds = detailRecords.map((r) => r.bsale_id)
+           const deleteQuery = db.from('bsale_document_details').delete()
+             .eq('company_id', companyId)
+             .eq('bsale_document_id', doc.id)
+           const { error: deleteError } = fetchedIds.length > 0
+             ? await deleteQuery.not('bsale_id', 'in', `(${fetchedIds.join(',')})`)
+             : await deleteQuery
+           if (deleteError) throw new Error(`Detalle delete: ${deleteError.message}`)
+           detailsCount += detailRecords.length
+         } catch (error) {
+           detailErrors++
+           console.error(`[syncBsaleSalesOrdersForPreparation] Details error for ${doc.id}:`, error instanceof Error ? error.message : error)
+           // No delete occurs on any fetch, parse, pagination, upsert, or delete failure.
+         }
+      }
+    }
+
+    // Materialization is the existing single preparation projection step.
+    const preparationResult = await materializePreparationAfterSalesSync(companyId)
+    const finalStatus = documentErrors > 0 || detailErrors > 0 || referenceErrors > 0 ? 'PARTIAL' : 'COMPLETED'
+    await finishSyncRun(runId, finalStatus, {
+      documents: allDocs.length - documentErrors,
+      document_errors: documentErrors,
+      detail_errors: detailErrors,
+      document_details_count: detailsCount,
+    }, detailErrors > 0 || documentErrors > 0 || referenceErrors > 0
+      ? `Operational sync partial: document_errors=${documentErrors} detail_errors=${detailErrors} reference_errors=${referenceErrors}`
+      : undefined)
+    await releaseSyncLock(companyId, lockName, runId)
+
+    return {
+      success: true,
+      counts: {
+        discovery: discoveryCount,
+        refresh: refreshCount,
+        details: detailsCount,
+        detail_errors: detailErrors,
+        reference_errors: referenceErrors,
+        missing_details: detailErrors,
+        new_cards: preparationResult?.created || 0,
+        skipped_invoiced: preparationResult?.skipped_invoiced || 0,
+      },
+    }
+  } catch (err: unknown) {
+    if (run?.id) {
+      const message = err instanceof Error ? err.message : String(err)
+      await finishSyncRun(run.id, 'FAILED', {}, message)
+      await releaseSyncLock(companyId, lockName, run.id).catch(() => {})
+    }
+    return { success: false, error: err instanceof Error ? err.message : String(err) }
   }
 }

@@ -150,40 +150,12 @@ export async function getSalesOrderPreparationBoard(companyId: string) {
   const { supabase, error: permissionError } = await requireLogisticaView()
   if (permissionError) return { data: [], error: permissionError }
 
-  const admin = await createAdminClient()
-
-  // 1. Obtener contexto de la próxima ruta
-  const { data: routeCtxData, error: routeErr } = await (admin as any)
-    .schema('logistica')
-    .rpc('get_next_dispatch_route_context', {
-      p_company_id: companyId
-    })
-
-  if (routeErr) {
-    console.error('getSalesOrderPreparationBoard route error:', routeErr)
-    return { data: [], error: routeErr.message }
-  }
-
-  const routeCtx = routeCtxData?.[0]
-  if (!routeCtx || !routeCtx.route_date) {
-    // Si no hay próxima ruta, devolvemos tablero vacío
-    return { data: [], error: null }
-  }
-
-  const activeRouteDate = routeCtx.route_date
-  const activeCities = routeCtx.normalized_cities || []
-
-  // 2. Filtrar tarjetas por la ruta activa
-  let query = supabase
+  // Preparation is an operational queue; visibility does not depend on routes.
+  const query = supabase
     .schema('logistica')
     .from('vw_sales_order_preparation_board')
     .select('*')
     .eq('company_id', companyId)
-    .eq('route_date', activeRouteDate)
-
-  if (activeCities.length > 0) {
-    query = query.in('normalized_city', activeCities)
-  }
 
   const { data, error } = await query
     .order('priority', { ascending: false })
@@ -635,4 +607,47 @@ export async function authorizeSalesOrderRouteException(params: {
   }
 
   return data as any
+}
+
+type OperationalBsaleSyncCounts = {
+  discovery: number
+  refresh: number
+  details: number
+  detail_errors: number
+  reference_errors: number
+  missing_details: number
+  new_cards: number
+  skipped_invoiced: number
+}
+
+export async function syncOperationalBsaleSalesOrders(): Promise<{ ok: boolean, data?: OperationalBsaleSyncCounts, error?: string }> {
+  try {
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { ok: false, error: 'No autorizado' }
+    }
+
+    const { data: allowed, error: permissionError } = await supabase.rpc('has_permission', {
+      p_permission_code: 'logistica.preparation.manage',
+    })
+
+    if (permissionError || allowed !== true) {
+      return { ok: false, error: 'No tienes permiso para gestionar la preparación de pedidos.' }
+    }
+
+    const companyId = await getActiveCompanyId()
+    if (!companyId) return { ok: false, error: 'No se pudo determinar la empresa activa' }
+    const { syncBsaleSalesOrdersForPreparation } = await import('@/app/actions/integraciones/bsale-sync')
+
+    const result = await syncBsaleSalesOrdersForPreparation(companyId)
+    if (!result.success) {
+      return { ok: false, error: result.error }
+    }
+    return { ok: true, data: result.counts }
+  } catch (err: unknown) {
+    console.error('[syncOperationalBsaleSalesOrders] Exception:', err)
+    return { ok: false, error: err instanceof Error ? err.message : 'Error desconocido' }
+  }
 }
