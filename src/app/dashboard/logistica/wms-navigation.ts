@@ -1,5 +1,5 @@
 import type { ActiveMatcher, ModuleNavigation, NavigationLocation } from '@/components/layout/module-shell-types'
-import { ArrowLeftRight, CalendarDays, ChartNoAxesCombined, ClipboardList, GitMerge, History, House, Layers3, Map, Package, PackageOpen, SlidersHorizontal, Warehouse } from 'lucide-react'
+import { ArrowLeftRight, CalendarDays, ChartNoAxesCombined, ClipboardList, GitMerge, History, House, Layers3, Map, Package, PackageOpen, SlidersHorizontal, Warehouse, Trash2 } from 'lucide-react'
 
 const logisticaPath = '/dashboard/logistica'
 const actionIds = new Set(['resumen', 'bodegas', 'ubicaciones', 'productos', 'calendario_despacho', 'preparacion_pedidos', 'recepciones', 'traspasos', 'ajustes', 'guias_ruta', 'stock', 'kardex', 'trazabilidad', 'reportes_log'])
@@ -50,6 +50,7 @@ export const wmsNavigation: ModuleNavigation = {
         { id: 'traspasos', label: 'Traspasos', icon: ArrowLeftRight, target: actionTarget('movimientos', 'traspasos'), active: actionMatcher('traspasos'), visibility: { allOf: ['system.admin'] } },
         { id: 'ajustes', label: 'Ajustes', icon: SlidersHorizontal, target: actionTarget('movimientos', 'ajustes'), active: actionMatcher('ajustes'), visibility: { allOf: ['system.admin'] } },
         { id: 'guias_ruta', label: 'Guías de Ruta', icon: Map, target: actionTarget('movimientos', 'guias_ruta'), active: ({ pathname, searchParams }: NavigationLocation) => pathname === '/dashboard/logistica/guias-ruta' && !searchParams.has('action') || searchParams.get('action') === 'guias_ruta', visibility: { allOf: ['logistica.route_guides.view'] } },
+        { id: 'mermas', label: 'Mermas', icon: Trash2, target: { href: '/dashboard/logistica/mermas' }, active: ({ pathname }: NavigationLocation) => pathname.startsWith('/dashboard/logistica/mermas'), visibility: { allOf: ['logistica.mermas.view'] } },
       ],
     },
     {

@@ -100,6 +100,7 @@ export function LogisticaLayoutClient({ children, profile, permissions }: Logist
   const searchParams = useSearchParams()
   const isReceiptRoute = pathname.startsWith('/dashboard/logistica/recepciones/')
   const isRouteGuidesRoute = pathname === '/dashboard/logistica/guias-ruta'
+  const isMermasRoute = pathname.startsWith('/dashboard/logistica/mermas')
 
   const activeTab = searchParams.get('tab') ?? 'inicio'
   const activeActionId = searchParams.get('action') ?? 'resumen'
@@ -196,11 +197,11 @@ export function LogisticaLayoutClient({ children, profile, permissions }: Logist
     )
   }
 
-  if (isReceiptRoute || isRouteGuidesRoute) {
+  if (isReceiptRoute || isRouteGuidesRoute || isMermasRoute) {
     return (
       <WmsShell
-        pageTitle={isReceiptRoute ? 'Recepción' : 'Guías de Ruta'}
-        breadcrumb={isReceiptRoute ? ['WMS', 'Movimientos', 'Recepciones'] : ['WMS', 'Movimientos', 'Guías de Ruta']}
+        pageTitle={isReceiptRoute ? 'Recepción' : isRouteGuidesRoute ? 'Guías de Ruta' : 'Mermas'}
+        breadcrumb={isReceiptRoute ? ['WMS', 'Movimientos', 'Recepciones'] : isRouteGuidesRoute ? ['WMS', 'Movimientos', 'Guías de Ruta'] : ['WMS', 'Movimientos', 'Mermas']}
         profile={profile}
         permissions={permissions}
       >

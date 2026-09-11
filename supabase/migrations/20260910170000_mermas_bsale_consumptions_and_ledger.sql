@@ -1,0 +1,347 @@
+-- Corte vertical 2: consumos Bsale tipo Mermas y ledger interno.
+-- La activacion se fija en la migracion y no es editable desde la UI.
+
+ALTER TABLE mermas.requests DROP CONSTRAINT IF EXISTS requests_status_check;
+ALTER TABLE mermas.requests ADD CONSTRAINT requests_status_check
+  CHECK (status IN ('PENDIENTE', 'PARCIAL', 'CUMPLIDA', 'CANCELADA'));
+
+CREATE TABLE mermas.sync_state (
+  company_id uuid PRIMARY KEY REFERENCES core.companies(id) ON DELETE CASCADE,
+  activation_date date NOT NULL DEFAULT DATE '2026-09-10',
+  high_watermark bigint NOT NULL DEFAULT 0 CHECK (high_watermark >= 0),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE mermas.bsale_consumptions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL REFERENCES core.companies(id) ON DELETE CASCADE,
+  consumption_id bigint NOT NULL,
+  consumption_date timestamptz,
+  note text,
+  consumption_type_id integer NOT NULL,
+  office_id integer,
+  user_id integer,
+  raw_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  detected_at timestamptz NOT NULL DEFAULT now(),
+  processed_at timestamptz,
+  request_id uuid REFERENCES mermas.requests(id),
+  match_method text,
+  UNIQUE (company_id, consumption_id)
+);
+
+CREATE TABLE mermas.bsale_consumption_details (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL REFERENCES core.companies(id) ON DELETE CASCADE,
+  consumption_id bigint NOT NULL,
+  detail_id bigint NOT NULL,
+  variant_id integer NOT NULL,
+  quantity numeric(14,3) NOT NULL CHECK (quantity > 0),
+  cost numeric(14,3),
+  variant_stock numeric(14,3),
+  raw_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (company_id, consumption_id, detail_id),
+  FOREIGN KEY (company_id, consumption_id)
+    REFERENCES mermas.bsale_consumptions(company_id, consumption_id) ON DELETE CASCADE
+);
+
+-- Una linea externa puede distribuirse entre varias lineas/partidas Petgroup.
+CREATE TABLE mermas.bsale_detail_allocations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL REFERENCES core.companies(id) ON DELETE CASCADE,
+  consumption_detail_id uuid NOT NULL REFERENCES mermas.bsale_consumption_details(id) ON DELETE CASCADE,
+  request_line_id uuid REFERENCES mermas.request_lines(id),
+  request_id uuid REFERENCES mermas.requests(id),
+  quantity numeric(14,3) NOT NULL CHECK (quantity > 0),
+  expiration_date date,
+  lot text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (company_id, consumption_detail_id, request_line_id)
+);
+
+CREATE TABLE mermas.movements (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL REFERENCES core.companies(id) ON DELETE CASCADE,
+  movement_type text NOT NULL CHECK (movement_type IN ('ENTRADA_BSALE', 'VENTA_INTERNA', 'ELIMINACION', 'REVERSA')),
+  variant_id integer NOT NULL,
+  quantity numeric(14,3) NOT NULL CHECK (quantity <> 0),
+  expiration_date date,
+  lot text,
+  consumption_id bigint,
+  detail_id bigint,
+  allocation_id uuid REFERENCES mermas.bsale_detail_allocations(id),
+  request_id uuid REFERENCES mermas.requests(id),
+  request_line_id uuid REFERENCES mermas.request_lines(id),
+  source text NOT NULL DEFAULT 'BSALE',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX mermas_movements_bsale_allocation_uq
+  ON mermas.movements(company_id, detail_id, allocation_id)
+  WHERE movement_type = 'ENTRADA_BSALE' AND allocation_id IS NOT NULL;
+CREATE UNIQUE INDEX mermas_movements_bsale_direct_uq
+  ON mermas.movements(company_id, detail_id)
+  WHERE movement_type = 'ENTRADA_BSALE' AND allocation_id IS NULL;
+
+CREATE INDEX mermas_consumptions_company_date_idx
+  ON mermas.bsale_consumptions(company_id, consumption_date DESC);
+CREATE INDEX mermas_details_variant_idx
+  ON mermas.bsale_consumption_details(company_id, variant_id);
+CREATE INDEX mermas_movements_stock_idx
+  ON mermas.movements(company_id, variant_id, expiration_date);
+
+CREATE VIEW mermas.stock_current AS
+SELECT company_id, variant_id, expiration_date, lot,
+  sum(quantity) AS available,
+  min(source) AS source,
+  request_id,
+  min(created_at) AS entered_at
+FROM mermas.movements
+GROUP BY company_id, variant_id, expiration_date, lot, request_id
+HAVING sum(quantity) <> 0;
+
+ALTER TABLE mermas.sync_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mermas.bsale_consumptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mermas.bsale_consumption_details ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mermas.bsale_detail_allocations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mermas.movements ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY mermas_sync_state_select ON mermas.sync_state FOR SELECT TO authenticated
+  USING (core.has_company_access(auth.uid(), company_id) AND portal.has_permission('logistica.mermas.view'));
+CREATE POLICY mermas_consumptions_select ON mermas.bsale_consumptions FOR SELECT TO authenticated
+  USING (core.has_company_access(auth.uid(), company_id) AND portal.has_permission('logistica.mermas.view'));
+CREATE POLICY mermas_details_select ON mermas.bsale_consumption_details FOR SELECT TO authenticated
+  USING (core.has_company_access(auth.uid(), company_id) AND portal.has_permission('logistica.mermas.view'));
+CREATE POLICY mermas_allocations_select ON mermas.bsale_detail_allocations FOR SELECT TO authenticated
+  USING (core.has_company_access(auth.uid(), company_id) AND portal.has_permission('logistica.mermas.view'));
+CREATE POLICY mermas_movements_select ON mermas.movements FOR SELECT TO authenticated
+  USING (core.has_company_access(auth.uid(), company_id) AND portal.has_permission('logistica.mermas.view'));
+
+GRANT SELECT ON mermas.sync_state, mermas.bsale_consumptions, mermas.bsale_consumption_details,
+  mermas.bsale_detail_allocations, mermas.movements, mermas.stock_current TO authenticated;
+GRANT ALL ON mermas.sync_state, mermas.bsale_consumptions, mermas.bsale_consumption_details,
+  mermas.bsale_detail_allocations, mermas.movements TO service_role;
+GRANT SELECT ON mermas.stock_current TO service_role;
+
+INSERT INTO portal.permissions (code, name, description, module_id, is_active)
+SELECT permission.code, permission.name, permission.description, m.id, true
+FROM portal.modules m
+CROSS JOIN (VALUES
+  ('logistica.mermas.sync', 'Sincronizar Mermas Bsale', 'Importar consumos tipo Mermas desde Bsale.'),
+  ('logistica.mermas.warehouse.view', 'Ver Bodega de Mermas', 'Consultar el ledger de entradas de Mermas.')
+) AS permission(code, name, description)
+WHERE m.code = 'logistica'
+ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, module_id = EXCLUDED.module_id, is_active = true;
+
+INSERT INTO portal.role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM portal.roles r CROSS JOIN portal.permissions p
+WHERE r.name IN ('SUPER_USUARIO', 'GERENCIA', 'BODEGA')
+  AND p.code IN ('logistica.mermas.warehouse.view') AND p.is_active
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+INSERT INTO portal.role_permissions (role_id, permission_id)
+SELECT r.id, p.id FROM portal.roles r CROSS JOIN portal.permissions p
+WHERE r.name IN ('SUPER_USUARIO', 'GERENCIA')
+  AND p.code = 'logistica.mermas.sync' AND p.is_active
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+
+CREATE OR REPLACE FUNCTION mermas.process_bsale_consumption(
+  p_company_id uuid, p_user_id uuid, p_header jsonb, p_details jsonb
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public, core, portal, integraciones, mermas
+AS $$
+DECLARE
+  v_consumption_id bigint := (p_header->>'id')::bigint;
+  v_type integer := (p_header->>'consumptionTypeId')::integer;
+  v_consumption mermas.bsale_consumptions%ROWTYPE;
+  v_detail_id bigint;
+  v_variant_id integer;
+  v_quantity numeric;
+  v_new_details integer := 0;
+  v_request_id uuid;
+  v_candidate uuid;
+  v_candidate_count integer := 0;
+  v_method text := NULL;
+  v_reference text;
+  v_mismatch boolean;
+  v_remaining numeric;
+  v_allocated numeric;
+  v_piece numeric;
+  v_line record;
+  v_detail record;
+  v_all_complete boolean;
+  v_movements_before integer;
+  v_new_movements integer;
+  v_previous_status text;
+BEGIN
+  IF NOT core.has_company_access(p_user_id, p_company_id)
+     OR NOT core.has_permission_for_company(p_user_id, p_company_id, 'logistica.mermas.sync') THEN
+    RAISE EXCEPTION 'No autorizado para sincronizar Mermas';
+  END IF;
+  IF v_consumption_id IS NULL OR v_type IS DISTINCT FROM 2 THEN
+    RETURN jsonb_build_object('accepted', false, 'new_details', 0, 'movements', 0);
+  END IF;
+
+  INSERT INTO mermas.bsale_consumptions (
+    company_id, consumption_id, consumption_date, note, consumption_type_id,
+    office_id, user_id, raw_json, processed_at
+  ) VALUES (
+    p_company_id, v_consumption_id,
+    CASE WHEN NULLIF(p_header->>'consumptionDate', '') IS NULL THEN NULL
+      ELSE to_timestamp((p_header->>'consumptionDate')::numeric) END,
+    p_header->>'note', v_type,
+    NULLIF(p_header->'office'->>'id', '')::integer,
+    NULLIF(p_header->'user'->>'id', '')::integer,
+    p_header, now()
+  ) ON CONFLICT (company_id, consumption_id) DO UPDATE SET
+    note = EXCLUDED.note, raw_json = EXCLUDED.raw_json, processed_at = now()
+  RETURNING * INTO v_consumption;
+
+  FOR v_detail IN SELECT value AS payload FROM jsonb_array_elements(COALESCE(p_details, '[]'::jsonb)) LOOP
+    v_detail_id := (v_detail.payload->>'id')::bigint;
+    v_variant_id := COALESCE(NULLIF(v_detail.payload->'variant'->>'id', '')::integer,
+      NULLIF(v_detail.payload->>'variant_id', '')::integer);
+    v_quantity := NULLIF(v_detail.payload->>'quantity', '')::numeric;
+    IF v_detail_id IS NULL OR v_variant_id IS NULL OR v_quantity IS NULL OR v_quantity <= 0 THEN CONTINUE; END IF;
+    INSERT INTO mermas.bsale_consumption_details (
+      company_id, consumption_id, detail_id, variant_id, quantity, cost, variant_stock, raw_json
+    ) VALUES (
+      p_company_id, v_consumption_id, v_detail_id, v_variant_id, v_quantity,
+      NULLIF(v_detail.payload->>'cost', '')::numeric,
+      NULLIF(v_detail.payload->>'variantStock', '')::numeric,
+      v_detail.payload
+    ) ON CONFLICT (company_id, consumption_id, detail_id) DO NOTHING;
+    IF FOUND THEN v_new_details := v_new_details + 1; END IF;
+  END LOOP;
+
+  -- La referencia explicita se prueba primero, pero solo si el multiset coincide.
+  SELECT (regexp_match(upper(COALESCE(v_consumption.note, '')), '(MER-[0-9]{4}-[0-9]{6})'))[1]
+    INTO v_reference;
+  IF v_reference IS NOT NULL THEN
+    SELECT r.id INTO v_candidate FROM mermas.requests r
+    WHERE r.company_id = p_company_id AND r.request_code = v_reference
+      AND r.status IN ('PENDIENTE', 'PARCIAL');
+    IF v_candidate IS NOT NULL THEN
+      SELECT EXISTS (
+        SELECT 1 FROM (
+          SELECT bsale_variant_id AS variant_id, sum(quantity) AS qty
+          FROM mermas.request_lines WHERE request_id = v_candidate GROUP BY bsale_variant_id
+        ) rq FULL JOIN (
+          SELECT variant_id, sum(quantity) AS qty
+          FROM mermas.bsale_consumption_details
+          WHERE company_id = p_company_id AND consumption_id = v_consumption_id GROUP BY variant_id
+        ) bs USING (variant_id)
+        WHERE COALESCE(rq.qty, 0) <> COALESCE(bs.qty, 0)
+      ) INTO v_mismatch;
+      IF NOT v_mismatch THEN v_request_id := v_candidate; v_method := 'MATCH_MER_EXACT'; END IF;
+    END IF;
+  END IF;
+
+  IF v_request_id IS NULL THEN
+    FOR v_line IN SELECT r.id FROM mermas.requests r
+      WHERE r.company_id = p_company_id AND r.status IN ('PENDIENTE', 'PARCIAL') LOOP
+      SELECT EXISTS (
+        SELECT 1 FROM (
+          SELECT bsale_variant_id AS variant_id, sum(quantity) AS qty
+          FROM mermas.request_lines WHERE request_id = v_line.id GROUP BY bsale_variant_id
+        ) rq FULL JOIN (
+          SELECT variant_id, sum(quantity) AS qty
+          FROM mermas.bsale_consumption_details
+          WHERE company_id = p_company_id AND consumption_id = v_consumption_id GROUP BY variant_id
+        ) bs USING (variant_id)
+        WHERE COALESCE(rq.qty, 0) <> COALESCE(bs.qty, 0)
+      ) INTO v_mismatch;
+      IF NOT v_mismatch THEN
+        v_candidate := v_line.id; v_candidate_count := v_candidate_count + 1;
+      END IF;
+    END LOOP;
+    IF v_candidate_count = 1 THEN v_request_id := v_candidate; v_method := 'AUTO_MATCH_EXACT'; END IF;
+  END IF;
+
+  IF v_request_id IS NULL THEN v_method := 'DIRECTO_BSALE'; END IF;
+  SELECT count(*)::integer INTO v_movements_before FROM mermas.movements
+    WHERE company_id = p_company_id AND consumption_id = v_consumption_id;
+  UPDATE mermas.bsale_consumptions SET request_id = v_request_id, match_method = v_method, processed_at = now()
+    WHERE company_id = p_company_id AND consumption_id = v_consumption_id;
+
+  IF v_new_details > 0 THEN
+    INSERT INTO portal.audit_logs(table_name, record_id, action, new_data, performed_by)
+    VALUES ('mermas.bsale_consumptions', v_consumption.id, 'BSale consumption detected',
+      jsonb_build_object('consumption_id', v_consumption_id, 'type_id', v_type, 'new_details', v_new_details), p_user_id);
+  END IF;
+
+  -- Solo crea movimientos para detalles que aun no tienen entrada.
+  FOR v_detail IN SELECT d.* FROM mermas.bsale_consumption_details d
+    WHERE d.company_id = p_company_id AND d.consumption_id = v_consumption_id LOOP
+    IF v_request_id IS NULL THEN
+      INSERT INTO mermas.movements(company_id, movement_type, variant_id, quantity, detail_id, consumption_id, source)
+      VALUES (p_company_id, 'ENTRADA_BSALE', v_detail.variant_id, v_detail.quantity,
+        v_detail.detail_id, v_consumption_id, 'BSALE')
+      ON CONFLICT DO NOTHING;
+    ELSE
+      v_remaining := v_detail.quantity;
+      FOR v_line IN SELECT rl.* FROM mermas.request_lines rl
+        WHERE rl.request_id = v_request_id AND rl.bsale_variant_id = v_detail.variant_id ORDER BY rl.created_at, rl.id LOOP
+        SELECT COALESCE(sum(a.quantity), 0) INTO v_allocated
+          FROM mermas.bsale_detail_allocations a WHERE a.request_line_id = v_line.id;
+        v_piece := LEAST(v_remaining, GREATEST(v_line.quantity - v_allocated, 0));
+        IF v_piece > 0 THEN
+          INSERT INTO mermas.bsale_detail_allocations(company_id, consumption_detail_id, request_line_id, request_id, quantity, expiration_date, lot)
+          VALUES (p_company_id, v_detail.id, v_line.id, v_request_id, v_piece, v_line.expiration_date, v_line.lot)
+          ON CONFLICT (company_id, consumption_detail_id, request_line_id) DO NOTHING;
+          INSERT INTO mermas.movements(company_id, movement_type, variant_id, quantity, expiration_date, lot,
+            consumption_id, detail_id, allocation_id, request_id, request_line_id, source)
+          SELECT p_company_id, 'ENTRADA_BSALE', v_detail.variant_id, v_piece, v_line.expiration_date, v_line.lot,
+            v_consumption_id, v_detail.detail_id, a.id, v_request_id, v_line.id, 'BSALE'
+          FROM mermas.bsale_detail_allocations a
+          WHERE a.company_id = p_company_id AND a.consumption_detail_id = v_detail.id AND a.request_line_id = v_line.id
+          ON CONFLICT DO NOTHING;
+          v_remaining := v_remaining - v_piece;
+        END IF;
+        EXIT WHEN v_remaining <= 0;
+      END LOOP;
+      IF v_remaining > 0 THEN
+        INSERT INTO mermas.movements(company_id, movement_type, variant_id, quantity, detail_id, consumption_id, request_id, source)
+        VALUES (p_company_id, 'ENTRADA_BSALE', v_detail.variant_id, v_remaining, v_detail.detail_id, v_consumption_id, v_request_id, 'BSALE')
+        ON CONFLICT DO NOTHING;
+      END IF;
+    END IF;
+  END LOOP;
+
+  IF v_request_id IS NOT NULL THEN
+    SELECT status INTO v_previous_status FROM mermas.requests WHERE id = v_request_id;
+    SELECT NOT EXISTS (
+      SELECT 1 FROM mermas.request_lines rl
+      WHERE rl.request_id = v_request_id
+        AND COALESCE((SELECT sum(a.quantity) FROM mermas.bsale_detail_allocations a WHERE a.request_line_id = rl.id), 0) < rl.quantity
+    ) INTO v_all_complete;
+    UPDATE mermas.requests SET status = CASE WHEN v_all_complete THEN 'CUMPLIDA' ELSE 'PARCIAL' END, updated_at = now()
+      WHERE id = v_request_id AND status IN ('PENDIENTE', 'PARCIAL');
+    IF v_all_complete AND v_previous_status IS DISTINCT FROM 'CUMPLIDA' THEN
+      INSERT INTO portal.audit_logs(table_name, record_id, action, old_data, new_data, performed_by)
+      VALUES ('mermas.requests', v_request_id, 'STATUS_CHANGE',
+        jsonb_build_object('status', v_previous_status), jsonb_build_object('status', 'CUMPLIDA'), p_user_id);
+    END IF;
+    IF v_new_details > 0 THEN
+      INSERT INTO portal.audit_logs(table_name, record_id, action, old_data, new_data, performed_by)
+      VALUES ('mermas.requests', v_request_id, 'MATCH_BSALE',
+        jsonb_build_object('status', v_previous_status),
+        jsonb_build_object('method', v_method, 'consumption_id', v_consumption_id), p_user_id);
+    END IF;
+  END IF;
+
+  SELECT GREATEST((SELECT count(*)::integer FROM mermas.movements WHERE company_id = p_company_id AND consumption_id = v_consumption_id) - v_movements_before, 0)
+    INTO v_new_movements;
+  IF v_new_movements > 0 THEN
+    INSERT INTO portal.audit_logs(table_name, record_id, action, new_data, performed_by)
+    VALUES ('mermas.movements', gen_random_uuid(), 'ENTRADA_BSALE',
+      jsonb_build_object('consumption_id', v_consumption_id, 'new_movements', v_new_movements, 'request_id', v_request_id), p_user_id);
+  END IF;
+  RETURN jsonb_build_object('accepted', true, 'new_details', v_new_details,
+    'request_id', v_request_id, 'match_method', v_method,
+    'new_movements', v_new_movements,
+    'request_status', (SELECT status FROM mermas.requests WHERE id = v_request_id));
+END;
+$$;
+
+REVOKE ALL ON FUNCTION mermas.process_bsale_consumption(uuid, uuid, jsonb, jsonb) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION mermas.process_bsale_consumption(uuid, uuid, jsonb, jsonb) TO service_role;
