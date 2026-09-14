@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   CheckCircle2,
@@ -14,9 +14,9 @@ import {
 } from "lucide-react";
 import {
   createInternalSale,
+  getInternalSaleCatalog,
   getInternalSaleWorkerContext,
   searchInternalSaleEmployees,
-  searchInternalSaleProducts,
   type InternalSaleEmployee,
   type InternalSaleProduct,
   type InternalSaleWorkerContext,
@@ -94,8 +94,8 @@ export function InternalSalePanel() {
     useState<InternalSaleWorkerContext | null>(null);
   const [employeeError, setEmployeeError] = useState("");
   const [productSearch, setProductSearch] = useState("");
-  const [products, setProducts] = useState<InternalSaleProduct[]>([]);
-  const [productLoading, setProductLoading] = useState(false);
+  const [catalog, setCatalog] = useState<InternalSaleProduct[]>([]);
+  const [productLoading, setProductLoading] = useState(true);
   const [productError, setProductError] = useState("");
   const [cart, setCart] = useState<CartLine[]>([]);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -104,7 +104,6 @@ export function InternalSalePanel() {
   const [error, setError] = useState("");
   const [result, setResult] = useState<SaleResult | null>(null);
   const [printError, setPrintError] = useState("");
-  const productRequestId = useRef(0);
 
   useEffect(() => {
     const timer = window.setTimeout(async () => {
@@ -124,41 +123,35 @@ export function InternalSalePanel() {
   }, [employeeSearch]);
 
   useEffect(() => {
-    const timer = window.setTimeout(async () => {
-      const requestId = ++productRequestId.current;
-      setProductLoading(true);
-      setProductError("");
-      try {
-        const response = await searchInternalSaleProducts(productSearch);
-        if (requestId !== productRequestId.current) return;
-        setProducts(response.data);
-        setCart((current) =>
-          current.map((line) => {
-            const refreshedProduct = response.data.find(
-              (product) =>
-                product.bsale_variant_id === line.product.bsale_variant_id,
-            );
-            return refreshedProduct
-              ? {
-                  ...line,
-                  product: {
-                    ...refreshedProduct,
-                    worker_unit_price: line.unitPrice ?? refreshedProduct.worker_unit_price,
-                  },
-                }
-              : line;
-          }),
-        );
+    let cancelled = false;
+    void getInternalSaleCatalog()
+      .then((response) => {
+        if (cancelled) return;
+        setCatalog(response.data);
         if (response.error) setProductError(response.error);
-      } catch (loadError) {
-        if (requestId !== productRequestId.current) return;
-        setProductError(readableError(loadError));
-      } finally {
-        if (requestId === productRequestId.current) setProductLoading(false);
-      }
-    }, 220);
-    return () => window.clearTimeout(timer);
-  }, [productSearch]);
+      })
+      .catch((loadError) => {
+        if (!cancelled) setProductError(readableError(loadError));
+      })
+      .finally(() => {
+        if (!cancelled) setProductLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const products = useMemo(() => {
+    const normalized = productSearch.trim().toLocaleLowerCase("es-CL");
+    return catalog
+      .filter((product) =>
+        !normalized ||
+        `${product.sku} ${product.product_name}`
+          .toLocaleLowerCase("es-CL")
+          .includes(normalized),
+      )
+      .slice(0, 50);
+  }, [catalog, productSearch]);
 
   const total = useMemo(
     () =>
@@ -350,57 +343,58 @@ export function InternalSalePanel() {
   }
 
   async function refreshAfterConflict() {
-    const requestId = ++productRequestId.current;
-    const [productsResponse, contextResponse] = await Promise.all([
-      searchInternalSaleProducts(productSearch),
-      selectedEmployee
-        ? getInternalSaleWorkerContext(selectedEmployee.id)
-        : Promise.resolve({ data: null }),
-    ]);
-    if (requestId !== productRequestId.current) return;
-    setProducts(productsResponse.data);
-    setCart((current) =>
-      current.map((line) => {
-        const refreshedProduct = productsResponse.data.find(
-          (product) =>
-            product.bsale_variant_id === line.product.bsale_variant_id,
-        );
-        return refreshedProduct
-          ? {
-              ...line,
-              product: {
-                ...refreshedProduct,
-                    worker_unit_price: line.unitPrice ?? refreshedProduct.worker_unit_price,
-              },
-            }
-          : line;
-      }),
-    );
-    if (contextResponse.data) setWorkerContext(contextResponse.data);
-  }
-
-  async function refreshAfterSale() {
-    const requestId = ++productRequestId.current;
-    setProducts([]);
     setProductLoading(true);
-    setProductError("");
     try {
-      const [productsResponse, contextResponse] = await Promise.all([
-        searchInternalSaleProducts(productSearch),
+      const [catalogResponse, contextResponse] = await Promise.all([
+        getInternalSaleCatalog(),
         selectedEmployee
           ? getInternalSaleWorkerContext(selectedEmployee.id)
           : Promise.resolve({ data: null }),
       ]);
-      if (requestId !== productRequestId.current) return;
-      setProducts(productsResponse.data);
+      setCatalog(catalogResponse.data);
+      setCart((current) =>
+        current.map((line) => {
+          const refreshedProduct = catalogResponse.data.find(
+            (product) =>
+              product.bsale_variant_id === line.product.bsale_variant_id,
+          );
+          return refreshedProduct
+            ? {
+                ...line,
+                product: {
+                  ...refreshedProduct,
+                  worker_unit_price: line.unitPrice ?? refreshedProduct.worker_unit_price,
+                },
+              }
+            : line;
+        }),
+      );
       if (contextResponse.data) setWorkerContext(contextResponse.data);
-      if (productsResponse.error) setProductError(productsResponse.error);
+      if (catalogResponse.error) setProductError(catalogResponse.error);
     } catch (loadError) {
-      if (requestId === productRequestId.current) {
-        setProductError(readableError(loadError));
-      }
+      setProductError(readableError(loadError));
     } finally {
-      if (requestId === productRequestId.current) setProductLoading(false);
+      setProductLoading(false);
+    }
+  }
+
+  async function refreshAfterSale() {
+    setProductLoading(true);
+    setProductError("");
+    try {
+      const [catalogResponse, contextResponse] = await Promise.all([
+        getInternalSaleCatalog(),
+        selectedEmployee
+          ? getInternalSaleWorkerContext(selectedEmployee.id)
+          : Promise.resolve({ data: null }),
+      ]);
+      setCatalog(catalogResponse.data);
+      if (contextResponse.data) setWorkerContext(contextResponse.data);
+      if (catalogResponse.error) setProductError(catalogResponse.error);
+    } catch (loadError) {
+      setProductError(readableError(loadError));
+    } finally {
+      setProductLoading(false);
     }
   }
 
@@ -637,6 +631,11 @@ export function InternalSalePanel() {
                 <p className="mt-1 text-xs text-theme-text-muted">
                   Precios de trabajador y stock actualizado.
                 </p>
+                {productLoading && catalog.length > 0 && (
+                  <p className="mt-1 inline-flex items-center gap-1 text-[10px] text-theme-text-muted">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Actualizando stock...
+                  </p>
+                )}
               </div>
               <div className="relative w-full sm:max-w-xs">
                 <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-theme-text-muted" />
@@ -652,7 +651,7 @@ export function InternalSalePanel() {
               <p className="mt-3 text-xs text-red-600">{productError}</p>
             )}
             <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {productLoading && (
+              {productLoading && catalog.length === 0 && (
                 <div className="col-span-full flex items-center gap-2 rounded-xl border border-dashed border-theme-border px-3 py-8 text-xs text-theme-text-muted">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Cargando stock elegible...

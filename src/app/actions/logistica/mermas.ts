@@ -325,102 +325,40 @@ export async function getInternalSaleWorkerContext(employeeId: string): Promise<
   };
 }
 
-export async function searchInternalSaleProducts(search: string): Promise<{
+export async function getInternalSaleCatalog(): Promise<{
   data: InternalSaleProduct[];
   error?: string;
 }> {
   const authorization = await requireWmsPermission("logistica.mermas.internal_sale.create");
   const todayPlusFive = addCivilDays(todayInSantiago(), 5);
-  const normalized = search.trim().toLocaleLowerCase("es-CL");
-  const [stockResult, settingsResult] = await Promise.all([
-    db("mermas")
-      .from("stock_current")
-      .select("variant_id, expiration_date, available")
-      .eq("company_id", authorization.companyId)
-      .gte("expiration_date", todayPlusFive)
-      .gt("available", 0)
-      .limit(5000),
-    db("mermas")
-      .from("internal_sale_settings")
-      .select("worker_markup_percent")
-      .eq("company_id", authorization.companyId)
-      .maybeSingle(),
-  ]);
-  if (stockResult.error || settingsResult.error) {
-    return { data: [], error: "No se pudo cargar el stock elegible para venta." };
-  }
-  const markup = settingsResult.data?.worker_markup_percent == null
-    ? null
-    : Number(settingsResult.data.worker_markup_percent);
-  if (markup === null) return { data: [], error: "La configuración de venta a trabajadores está incompleta." };
-
-  const stockByVariant = new Map<number, { available: number; nextExpiration: string }>();
-  for (const row of stockResult.data ?? []) {
-    const variantId = Number(row.variant_id);
-    const available = Number(row.available ?? 0);
-    const expiration = String(row.expiration_date);
-    if (!Number.isFinite(variantId) || available <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(expiration)) continue;
-    const current = stockByVariant.get(variantId);
-    stockByVariant.set(variantId, {
-      available: (current?.available ?? 0) + available,
-      nextExpiration: current && current.nextExpiration < expiration ? current.nextExpiration : expiration,
-    });
-  }
-  const variantIds = [...stockByVariant.keys()];
-  if (variantIds.length === 0) return { data: [] };
-  const integrationDb = db("integraciones");
-  const [variantsResult, costsResult] = await Promise.all([
-    integrationDb
-      .from("bsale_variants")
-      .select("bsale_id, code, bsale_product_id")
-      .eq("company_id", authorization.companyId)
-      .eq("state", 0)
-      .in("bsale_id", variantIds),
-    integrationDb
-      .from("bsale_variant_costs")
-      .select("variant_id, average_cost")
-      .eq("company_id", authorization.companyId)
-      .in("variant_id", variantIds),
-  ]);
-  if (variantsResult.error || costsResult.error) return { data: [], error: "No se pudo cargar el catálogo Bsale." };
-  const variants = variantsResult.data ?? [];
-  const productIds = [...new Set(variants.map((variant) => Number(variant.bsale_product_id)))];
-  const { data: products, error: productsError } = productIds.length
-    ? await integrationDb
-      .from("bsale_products")
-      .select("bsale_id, name")
-      .eq("company_id", authorization.companyId)
-      .in("bsale_id", productIds)
-    : { data: [], error: null };
-  if (productsError) return { data: [], error: "No se pudo cargar el catálogo Bsale." };
-  const productNames = new Map((products ?? []).map((product) => [Number(product.bsale_id), String(product.name ?? "Producto Bsale")]));
-  const costs = new Map((costsResult.data ?? []).map((cost) => [Number(cost.variant_id), Number(cost.average_cost)]));
-
+  const { data, error } = await db("mermas").rpc("get_internal_sale_catalog", {
+    p_company_id: authorization.companyId,
+    p_user_id: authorization.user.id,
+    p_today_plus_five: todayPlusFive,
+  });
+  if (error) return { data: [], error: "No se pudo cargar el catálogo elegible para venta." };
   return {
-    data: variants
-      .map((variant) => {
-        const id = Number(variant.bsale_id);
-        const stock = stockByVariant.get(id);
-        const cost = costs.get(id);
-        const price = calculateWorkerPrice(cost, markup);
-        if (!stock || price === null || cost === undefined) return null;
-        const productName = productNames.get(Number(variant.bsale_product_id)) ?? "Producto Bsale";
-        return {
-          bsale_variant_id: id,
-          sku: String(variant.code ?? id),
-          product_name: productName,
-          average_cost: cost,
-          cost_with_vat: calculateCostWithVat(cost)!,
-          default_markup_percent: markup,
-          eligible_stock: stock.available,
-          worker_unit_price: price,
-          next_eligible_expiration: stock.nextExpiration,
-        } satisfies InternalSaleProduct;
-      })
-      .filter((product): product is InternalSaleProduct => product !== null)
-      .filter((product) => !normalized || `${product.sku} ${product.product_name}`.toLocaleLowerCase("es-CL").includes(normalized))
-      .sort((a, b) => `${a.product_name} ${a.sku}`.localeCompare(`${b.product_name} ${b.sku}`, "es", { sensitivity: "base" }))
-      .slice(0, 50),
+    data: (data as Array<{
+      bsale_variant_id: number;
+      sku: string | null;
+      product_name: string | null;
+      average_cost: number;
+      cost_with_vat: number;
+      default_markup_percent: number;
+      eligible_stock: number;
+      worker_unit_price: number;
+      next_eligible_expiration: string;
+    }> | null ?? []).map((product) => ({
+      bsale_variant_id: Number(product.bsale_variant_id),
+      sku: String(product.sku ?? product.bsale_variant_id),
+      product_name: String(product.product_name ?? "Producto Bsale"),
+      average_cost: Number(product.average_cost),
+      cost_with_vat: Number(product.cost_with_vat),
+      default_markup_percent: Number(product.default_markup_percent),
+      eligible_stock: Number(product.eligible_stock),
+      worker_unit_price: Number(product.worker_unit_price),
+      next_eligible_expiration: String(product.next_eligible_expiration),
+    } satisfies InternalSaleProduct)),
   };
 }
 
