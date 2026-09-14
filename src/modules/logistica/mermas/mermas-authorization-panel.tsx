@@ -6,43 +6,28 @@ import {
   authorizeMermaMovement,
   rejectMermaMovement,
   getMermaMovementReview,
-  getMermasAuthorizationPending,
   type MermaAuthorizationRow,
   type MermaEvidence,
 } from "@/app/actions/logistica/mermas";
 import { formatCivilDate } from "@/lib/datetime";
 import { MermaEvidenceViewer } from "./mermas-evidence-viewer";
+import { useMermasModule } from "./mermas-module-provider";
 
 export function MermasAuthorizationPanel() {
-  const [rows, setRows] = useState<MermaAuthorizationRow[]>([]);
+  const { authorization, ensureAuthorizationLoaded, invalidateMermaMovementViews } = useMermasModule();
+  const rows = authorization.data;
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<{
     movement: MermaAuthorizationRow;
     evidence: MermaEvidence[];
   } | null>(null);
-  const [loading, setLoading] = useState(true);
+  const loading = !authorization.loaded;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [rejectionReason, setRejectionReason] = useState("");
-
-  async function load() {
-    setLoading(true);
-    try {
-      const result = await getMermasAuthorizationPending();
-      setRows(result.data);
-      setError(result.error ?? "");
-    } catch (loadError) {
-      setError(
-        loadError instanceof Error
-          ? loadError.message
-          : "No autorizado para revisar entradas",
-      );
-    }
-    setLoading(false);
-  }
   useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 0);
-    return () => window.clearTimeout(timer);
+    void ensureAuthorizationLoaded();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function review(id: string) {
@@ -76,7 +61,8 @@ export function MermasAuthorizationPanel() {
     else {
       setSelected(null);
       setRejectionReason("");
-      await load();
+      await invalidateMermaMovementViews();
+      await ensureAuthorizationLoaded(true);
     }
     setBusy(false);
   }
@@ -87,7 +73,8 @@ export function MermasAuthorizationPanel() {
     if ("error" in result && result.error) setError(result.error);
     else {
       setSelected(null);
-      await load();
+      await invalidateMermaMovementViews();
+      await ensureAuthorizationLoaded(true);
     }
     setBusy(false);
   }
@@ -97,8 +84,8 @@ export function MermasAuthorizationPanel() {
       .includes(search.toLowerCase().trim()),
   );
   return (
-    <section className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
+    <section className="space-y-4">
+      <div className="flex flex-col gap-3 rounded-2xl border border-theme-border bg-theme-bg p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-sm font-semibold text-theme-text">
             Pendientes de autorización
@@ -107,13 +94,13 @@ export function MermasAuthorizationPanel() {
             Las entradas físicas no están disponibles hasta ser autorizadas.
           </p>
         </div>
-        <div className="relative w-64 max-w-full">
+        <div className="relative w-full max-w-sm">
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-theme-text-muted/50" />
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Buscar SKU o MER..."
-            className="h-9 w-full rounded-lg border border-theme-border bg-theme-surface pl-9 pr-3 text-xs text-theme-text"
+            className="h-10 w-full rounded-xl border border-theme-border bg-theme-surface pl-9 pr-3 text-xs text-theme-text outline-none focus:border-theme-accent focus:ring-2 focus:ring-theme-accent/15"
           />
         </div>
       </div>
@@ -127,9 +114,9 @@ export function MermasAuthorizationPanel() {
           <Loader2 className="h-5 w-5 animate-spin text-theme-text-muted" />
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-theme-border">
+        <div className="overflow-x-auto rounded-2xl border border-theme-border bg-theme-surface shadow-sm">
           <table className="w-full min-w-[900px] text-sm">
-            <thead className="bg-theme-text/[0.025] text-left text-[10px] uppercase tracking-wider text-theme-text-muted">
+            <thead className="bg-theme-bg text-left text-[10px] uppercase tracking-wider text-theme-text-muted">
               <tr>
                 {[
                   "MER/origen",
@@ -152,7 +139,7 @@ export function MermasAuthorizationPanel() {
               {visible.map((row) => (
                 <tr
                   key={row.movement_id}
-                  className="border-t border-theme-border/70"
+                  className="border-t border-theme-border/70 transition-colors hover:bg-theme-accent/[0.035]"
                 >
                   <td className="px-3 py-3 font-mono text-theme-text">
                     {row.request_code ?? row.origin}

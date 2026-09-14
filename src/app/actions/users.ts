@@ -24,10 +24,29 @@ async function getRoleName(roleId: string): Promise<string> {
   return data?.name ?? ''
 }
 
-export async function createUser(formData: FormData) {
+async function requireUserManagementAccess(targetUserId?: string) {
   const supabase = await createClient()
-  const { data: { user: currentUser } } = await supabase.auth.getUser()
-  if (!currentUser) return { error: 'No autorizado' }
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado' as const }
+  if (targetUserId && targetUserId === user.id) {
+    return { error: 'No puedes modificar tu propio rol' as const }
+  }
+
+  const { data: canAssign } = await supabase.rpc('has_permission', {
+    p_permission_code: 'roles.assign',
+  })
+  const { data: isAdmin } = canAssign
+    ? { data: true }
+    : await supabase.rpc('has_permission', { p_permission_code: 'system.admin' })
+
+  if (!canAssign && !isAdmin) return { error: 'No autorizado' as const }
+  return { supabase, user }
+}
+
+export async function createUser(formData: FormData) {
+  const access = await requireUserManagementAccess()
+  if ('error' in access) return { error: access.error }
+  const { user: currentUser } = access
 
   const email = formData.get('email') as string
   const nombre = normalizePersonName((formData.get('nombre') as string) || '')
@@ -143,9 +162,9 @@ export async function updateMyProfile(formData: FormData) {
 }
 
 export async function updateUser(userId: string, formData: FormData) {
-  const supabase = await createClient()
-  const { data: { user: currentUser } } = await supabase.auth.getUser()
-  if (!currentUser) return { error: 'No autorizado' }
+  const access = await requireUserManagementAccess(userId)
+  if ('error' in access) return access
+  const { user: currentUser } = access
 
   const nombre = formData.get('nombre') as string
   const apellido = formData.get('apellido') as string
@@ -195,6 +214,21 @@ export async function getUserCompanyIds(userId: string): Promise<string[]> {
   return (data ?? []).map((a: { company_id: string }) => a.company_id)
 }
 
+export async function getUserCompanyAccess(userId: string) {
+  const coreAdmin = createSupabaseClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { db: { schema: 'core' }, auth: { autoRefreshToken: false, persistSession: false } }
+  )
+  const { data } = await coreAdmin
+    .from('user_company_access')
+    .select('company_id, role, is_default')
+    .eq('user_id', userId)
+    .eq('is_active', true)
+    .order('is_default', { ascending: false })
+  return data ?? []
+}
+
 export async function getAllActiveCompanies() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -214,6 +248,8 @@ export async function getAllActiveCompanies() {
 }
 
 export async function toggleUserStatus(userId: string, activate: boolean) {
+  const access = await requireUserManagementAccess(userId)
+  if ('error' in access) return access
   const admin = createAdminClient()
   const { error } = await admin
     .from('users')

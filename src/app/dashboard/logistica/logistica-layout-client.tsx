@@ -13,6 +13,7 @@ import { AdjustmentsPanel } from '@/modules/logistica/ajustes/adjustments-panel'
 import { SalesOrderPreparationPanel } from '@/modules/logistica/preparacion-pedidos/sales-order-preparation-panel'
 import { RouteGuidesPanel } from '@/modules/logistica/guias-ruta/route-guides-panel'
 import { DispatchCalendarSettings } from '@/modules/logistica/parametros/dispatch-calendar-settings'
+import { AccessDenied } from '@/components/access-denied'
 
 // pageHeaders are only used in 'contained' mode views (e.g. Inicio).
 // Workspace/operational panels do NOT render these headers — they manage their own title area.
@@ -105,9 +106,31 @@ export function LogisticaLayoutClient({ children, profile, permissions }: Logist
   const activeTab = searchParams.get('tab') ?? 'inicio'
   const activeActionId = searchParams.get('action') ?? 'resumen'
 
+  const actionPermissions: Record<string, string> = {
+    bodegas: 'adquisiciones.warehouses.view',
+    ubicaciones: 'logistica.locations.view',
+    productos: 'adquisiciones.products.view',
+    calendario_despacho: 'system.admin',
+    preparacion_pedidos: 'logistica.preparation.manage',
+    recepciones: 'adquisiciones.po.view',
+    traspasos: 'system.admin',
+    ajustes: 'system.admin',
+    guias_ruta: 'logistica.route_guides.view',
+    stock: 'logistica.stock.view',
+    kardex: 'logistica.kardex.view',
+    trazabilidad: 'system.admin',
+    reportes_log: 'system.admin',
+  }
+  const requiredPermission = actionPermissions[activeActionId]
+  const canViewAction = !requiredPermission
+    || permissions.includes('system.admin')
+    || permissions.includes(requiredPermission)
+
   let content = null
 
-  if (activeTab === 'inicio') {
+  if (!canViewAction) {
+    content = <AccessDenied />
+  } else if (activeTab === 'inicio') {
     content = (
       <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px]">
         <div className="max-w-xl">

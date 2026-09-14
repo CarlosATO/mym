@@ -6,9 +6,21 @@ import { getActiveCompany, getActiveCompanyId } from "@/app/actions/companies";
 import { requireWmsPermission } from "./authorization";
 import { syncBsaleMermas } from "@/lib/integraciones/bsale-mermas-sync";
 import { createHmac, randomUUID, timingSafeEqual } from "crypto";
+import {
+  calculateCostWithVat,
+  calculateWorkerPrice,
+} from "@/modules/logistica/mermas/worker-pricing";
+import { todayInSantiago } from "@/lib/datetime";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+const MERMA_WORKER_PAYMENT_BUCKET = "mermas-worker-payments";
+const MERMA_WORKER_PAYMENT_MAX_SIZE = 10 * 1024 * 1024;
+const MERMA_WORKER_PAYMENT_MIME_TYPES = new Set([
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+]);
 
 function db(schema: string) {
   return createSupabaseClient(url, serviceKey, {
@@ -28,11 +40,800 @@ export type MermaProduct = {
   stock_last_synced_at: string | null;
 };
 
+export type MermaPricingSettings = {
+  id: string | null;
+  worker_markup_percent: number | null;
+  worker_monthly_limit_amount: number | null;
+  updated_at: string | null;
+  updated_by: string | null;
+  can_edit: boolean;
+};
+
+export type MermasBootstrap = {
+  userId: string;
+  companyId: string;
+  companyName: string;
+  canView: boolean;
+  canCreate: boolean;
+  canCreateRequest: boolean;
+  canAuthorize: boolean;
+  canSync: boolean;
+  canUseInternalSale: boolean;
+  isSuperUser: boolean;
+  canReviewPayments: boolean;
+  canViewAccounts: boolean;
+  canEditSettings: boolean;
+  canViewWarehouse: boolean;
+  canViewPendingCount: boolean;
+  pricingSettings: MermaPricingSettings;
+  pendingCount: number;
+};
+
+export type InternalSaleEmployee = {
+  id: string;
+  rut: string;
+  display_name: string;
+  cargo: string | null;
+};
+
+export type InternalSaleWorkerContext = {
+  employee: InternalSaleEmployee;
+  monthly_limit: number | null;
+  monthly_used: number;
+  monthly_available: number | null;
+};
+
+export type InternalSaleProduct = {
+  bsale_variant_id: number;
+  sku: string;
+  product_name: string;
+  average_cost: number;
+  cost_with_vat: number;
+  default_markup_percent: number;
+  eligible_stock: number;
+  worker_unit_price: number;
+  next_eligible_expiration: string;
+};
+
+export type WorkerAccount = {
+  employee_id: string;
+  employee_name: string;
+  rut: string;
+  employee_status: "ACTIVO" | "INACTIVO";
+  total_charges: number;
+  approved_payments: number;
+  pending_review_payments: number;
+  official_balance: number;
+  projected_balance: number;
+  last_sale_at: string | null;
+  last_payment_at: string | null;
+};
+
+export type WorkerAccountDetail = {
+  employee: {
+    id: string;
+    name: string;
+    rut: string;
+    status: "ACTIVO" | "INACTIVO";
+  };
+  summary: {
+    total_charges: number;
+    approved_payments: number;
+    pending_review_payments: number;
+    official_balance: number;
+    projected_balance: number;
+  };
+  movements: Array<{
+    movement_type: "SALE" | "PAYMENT";
+    label: string;
+    reference_number: string;
+    amount: number;
+    status: string;
+    occurred_at: string;
+  }>;
+};
+
+export type WorkerPaymentUpload = {
+  upload_id: string;
+  upload_token: string;
+  validation_token: string;
+  storage_path: string;
+  signed_upload_url: string;
+  original_filename: string;
+  mime_type: string;
+  size_bytes: number;
+};
+
+export type WorkerPaymentReview = {
+  payment_id: string;
+  payment_number: string;
+  employee_id: string;
+  employee_name: string;
+  rut: string;
+  amount: number;
+  submitted_at: string;
+  submitted_by: string;
+  status: string;
+  original_filename: string;
+  mime_type: string;
+  size_bytes: number;
+};
+
+export type WorkerPaymentReviewDetail = {
+  payment: {
+    id: string;
+    payment_number: string;
+    amount: number;
+    status: string;
+    submitted_at: string;
+    submitted_by: string;
+  };
+  employee: { id: string; name: string; rut: string };
+  summary: WorkerAccountDetail["summary"];
+  evidence: { original_filename: string; mime_type: string; size_bytes: number };
+};
+
+type InternalSaleEmployeeRpcRow = {
+  employee_id: string;
+  rut: string;
+  nombres: string;
+  apellido_paterno: string;
+  apellido_materno: string | null;
+  cargo: string | null;
+};
+
+function addCivilDays(value: string, days: number) {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + days, 12));
+  return [date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate()]
+    .map((part) => String(part).padStart(2, "0"))
+    .join("-");
+}
+
+function monthKeyInSantiago(value: string) {
+  const parts = new Intl.DateTimeFormat("en", {
+    timeZone: "America/Santiago",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(new Date(value));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}`;
+}
+
+function internalSaleErrorMessage(message: string) {
+  const normalized = message.toLocaleLowerCase("es-CL");
+  if (normalized.includes("no autorizado") || normalized.includes("usuario inválido")) {
+    return "No estás autorizado para realizar ventas internas de Mermas.";
+  }
+  if (normalized.includes("trabajador no está activo")) return "El trabajador seleccionado no está ACTIVO.";
+  if (normalized.includes("trabajador no encontrado")) return "El trabajador seleccionado ya no está disponible.";
+  if (normalized.includes("sin costo") || normalized.includes("costo promedio")) {
+    return "Uno de los productos no tiene un costo Bsale válido.";
+  }
+  if (normalized.includes("stock elegible insuficiente")) {
+    return "El stock elegible cambió y ya no alcanza para la cantidad solicitada. Actualiza la disponibilidad.";
+  }
+  if (normalized.includes("tope mensual excedido")) {
+    return "El tope mensual del trabajador sería excedido con esta venta.";
+  }
+  if (normalized.includes("configurar porcentaje") || normalized.includes("configuración")) {
+    return "La configuración de venta a trabajadores está incompleta.";
+  }
+  if (normalized.includes("producto") && normalized.includes("catálogo")) {
+    return "Uno de los productos ya no está disponible en el catálogo.";
+  }
+  return "No se pudo registrar la venta. Actualiza la disponibilidad e inténtalo nuevamente.";
+}
+
+export async function getMermasInternalSaleAccess() {
+  const authorization = await requireWmsPermission("logistica.mermas.internal_sale.create");
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("has_permission", {
+    p_permission_code: "logistica.mermas.internal_sale.create",
+  });
+  return {
+    canCreate: !error && data === true,
+    companyId: authorization.companyId,
+  };
+}
+
+export async function searchInternalSaleEmployees(search: string): Promise<{
+  data: InternalSaleEmployee[];
+  error?: string;
+}> {
+  const authorization = await requireWmsPermission("logistica.mermas.internal_sale.create");
+  const { data, error } = await db("mermas").rpc("search_active_employees_for_internal_sale", {
+    p_company_id: authorization.companyId,
+    p_user_id: authorization.user.id,
+    p_search: search.trim() || null,
+    p_limit: 20,
+    p_employee_id: null,
+  });
+  if (error) {
+    console.error("[MERMAS] search_active_employees_for_internal_sale failed", error);
+    return { data: [], error: "No se pudo cargar trabajadores activos." };
+  }
+
+  const employees = (data as InternalSaleEmployeeRpcRow[] | null ?? []).map((employee) => ({
+      id: employee.employee_id as string,
+      rut: employee.rut as string,
+      display_name: [employee.nombres, employee.apellido_paterno, employee.apellido_materno]
+        .filter(Boolean)
+        .join(" ")
+        .trim()
+        .toLocaleUpperCase("es-CL"),
+      cargo: (employee.cargo as string | null) ?? null,
+    }));
+  return { data: employees };
+}
+
+export async function getInternalSaleWorkerContext(employeeId: string): Promise<{
+  data: InternalSaleWorkerContext | null;
+  error?: string;
+}> {
+  const authorization = await requireWmsPermission("logistica.mermas.internal_sale.create");
+  if (!/^[0-9a-f-]{36}$/i.test(employeeId)) return { data: null, error: "Trabajador inválido." };
+
+  const [employeeResult, settingsResult, salesResult] = await Promise.all([
+    db("mermas").rpc("search_active_employees_for_internal_sale", {
+      p_company_id: authorization.companyId,
+      p_user_id: authorization.user.id,
+      p_search: null,
+      p_limit: 1,
+      p_employee_id: employeeId,
+    }),
+    db("mermas")
+      .from("internal_sale_settings")
+      .select("worker_monthly_limit_amount")
+      .eq("company_id", authorization.companyId)
+      .maybeSingle(),
+    db("mermas")
+      .from("internal_sales")
+      .select("total_amount, status, created_at")
+      .eq("company_id", authorization.companyId)
+      .eq("employee_id", employeeId)
+      .neq("status", "REVERSED")
+      .limit(10000),
+  ]);
+  if (employeeResult.error || !employeeResult.data?.[0]) {
+    return { data: null, error: "El trabajador seleccionado no está ACTIVO." };
+  }
+  if (settingsResult.error || salesResult.error) {
+    return { data: null, error: "No se pudo cargar el cupo mensual." };
+  }
+
+  const employee = employeeResult.data[0];
+  const displayName = [employee.nombres, employee.apellido_paterno, employee.apellido_materno]
+    .filter(Boolean)
+    .join(" ")
+    .trim()
+    .toLocaleUpperCase("es-CL");
+  const currentMonth = todayInSantiago().slice(0, 7);
+  const used = (salesResult.data ?? [])
+    .filter((sale) => monthKeyInSantiago(sale.created_at as string) === currentMonth)
+    .reduce((sum, sale) => sum + Number(sale.total_amount ?? 0), 0);
+  const limit = settingsResult.data?.worker_monthly_limit_amount == null
+    ? null
+    : Number(settingsResult.data.worker_monthly_limit_amount);
+  return {
+    data: {
+      employee: { id: employee.employee_id, rut: employee.rut, display_name: displayName, cargo: employee.cargo },
+      monthly_limit: limit,
+      monthly_used: used,
+      monthly_available: limit === null ? null : Math.max(limit - used, 0),
+    },
+  };
+}
+
+export async function searchInternalSaleProducts(search: string): Promise<{
+  data: InternalSaleProduct[];
+  error?: string;
+}> {
+  const authorization = await requireWmsPermission("logistica.mermas.internal_sale.create");
+  const todayPlusFive = addCivilDays(todayInSantiago(), 5);
+  const normalized = search.trim().toLocaleLowerCase("es-CL");
+  const [stockResult, settingsResult] = await Promise.all([
+    db("mermas")
+      .from("stock_current")
+      .select("variant_id, expiration_date, available")
+      .eq("company_id", authorization.companyId)
+      .gte("expiration_date", todayPlusFive)
+      .gt("available", 0)
+      .limit(5000),
+    db("mermas")
+      .from("internal_sale_settings")
+      .select("worker_markup_percent")
+      .eq("company_id", authorization.companyId)
+      .maybeSingle(),
+  ]);
+  if (stockResult.error || settingsResult.error) {
+    return { data: [], error: "No se pudo cargar el stock elegible para venta." };
+  }
+  const markup = settingsResult.data?.worker_markup_percent == null
+    ? null
+    : Number(settingsResult.data.worker_markup_percent);
+  if (markup === null) return { data: [], error: "La configuración de venta a trabajadores está incompleta." };
+
+  const stockByVariant = new Map<number, { available: number; nextExpiration: string }>();
+  for (const row of stockResult.data ?? []) {
+    const variantId = Number(row.variant_id);
+    const available = Number(row.available ?? 0);
+    const expiration = String(row.expiration_date);
+    if (!Number.isFinite(variantId) || available <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(expiration)) continue;
+    const current = stockByVariant.get(variantId);
+    stockByVariant.set(variantId, {
+      available: (current?.available ?? 0) + available,
+      nextExpiration: current && current.nextExpiration < expiration ? current.nextExpiration : expiration,
+    });
+  }
+  const variantIds = [...stockByVariant.keys()];
+  if (variantIds.length === 0) return { data: [] };
+  const integrationDb = db("integraciones");
+  const [variantsResult, costsResult] = await Promise.all([
+    integrationDb
+      .from("bsale_variants")
+      .select("bsale_id, code, bsale_product_id")
+      .eq("company_id", authorization.companyId)
+      .eq("state", 0)
+      .in("bsale_id", variantIds),
+    integrationDb
+      .from("bsale_variant_costs")
+      .select("variant_id, average_cost")
+      .eq("company_id", authorization.companyId)
+      .in("variant_id", variantIds),
+  ]);
+  if (variantsResult.error || costsResult.error) return { data: [], error: "No se pudo cargar el catálogo Bsale." };
+  const variants = variantsResult.data ?? [];
+  const productIds = [...new Set(variants.map((variant) => Number(variant.bsale_product_id)))];
+  const { data: products, error: productsError } = productIds.length
+    ? await integrationDb
+      .from("bsale_products")
+      .select("bsale_id, name")
+      .eq("company_id", authorization.companyId)
+      .in("bsale_id", productIds)
+    : { data: [], error: null };
+  if (productsError) return { data: [], error: "No se pudo cargar el catálogo Bsale." };
+  const productNames = new Map((products ?? []).map((product) => [Number(product.bsale_id), String(product.name ?? "Producto Bsale")]));
+  const costs = new Map((costsResult.data ?? []).map((cost) => [Number(cost.variant_id), Number(cost.average_cost)]));
+
+  return {
+    data: variants
+      .map((variant) => {
+        const id = Number(variant.bsale_id);
+        const stock = stockByVariant.get(id);
+        const cost = costs.get(id);
+        const price = calculateWorkerPrice(cost, markup);
+        if (!stock || price === null || cost === undefined) return null;
+        const productName = productNames.get(Number(variant.bsale_product_id)) ?? "Producto Bsale";
+        return {
+          bsale_variant_id: id,
+          sku: String(variant.code ?? id),
+          product_name: productName,
+          average_cost: cost,
+          cost_with_vat: calculateCostWithVat(cost)!,
+          default_markup_percent: markup,
+          eligible_stock: stock.available,
+          worker_unit_price: price,
+          next_eligible_expiration: stock.nextExpiration,
+        } satisfies InternalSaleProduct;
+      })
+      .filter((product): product is InternalSaleProduct => product !== null)
+      .filter((product) => !normalized || `${product.sku} ${product.product_name}`.toLocaleLowerCase("es-CL").includes(normalized))
+      .sort((a, b) => `${a.product_name} ${a.sku}`.localeCompare(`${b.product_name} ${b.sku}`, "es", { sensitivity: "base" }))
+      .slice(0, 50),
+  };
+}
+
+export async function getWorkerAccounts(search = ""): Promise<{
+  data: WorkerAccount[];
+  error?: string;
+}> {
+  const authorization = await requireWmsPermission("logistica.mermas.account.view");
+  const { data, error } = await db("mermas").rpc("get_worker_accounts", {
+    p_company_id: authorization.companyId,
+    p_user_id: authorization.user.id,
+    p_search: search.trim() || null,
+  });
+  if (error) {
+    console.error("[MERMAS] get_worker_accounts failed", error);
+    return { data: [], error: "No se pudo cargar la cuenta corriente." };
+  }
+  return {
+    data: (data as Array<WorkerAccount> | null ?? []).map((row: WorkerAccount) => ({
+      ...row,
+      total_charges: Number(row.total_charges ?? 0),
+      approved_payments: Number(row.approved_payments ?? 0),
+      pending_review_payments: Number(row.pending_review_payments ?? 0),
+      official_balance: Number(row.official_balance ?? 0),
+      projected_balance: Number(row.projected_balance ?? 0),
+    })) as WorkerAccount[],
+  };
+}
+
+export async function getWorkerAccountDetail(employeeId: string): Promise<{
+  data: WorkerAccountDetail | null;
+  error?: string;
+}> {
+  const authorization = await requireWmsPermission("logistica.mermas.account.view");
+  if (!/^[0-9a-f-]{36}$/i.test(employeeId)) return { data: null, error: "Trabajador inválido." };
+  const { data, error } = await db("mermas").rpc("get_worker_account_detail", {
+    p_company_id: authorization.companyId,
+    p_user_id: authorization.user.id,
+    p_employee_id: employeeId,
+  });
+  if (error) {
+    console.error("[MERMAS] get_worker_account_detail failed", error);
+    return { data: null, error: "No se pudo cargar el detalle de la cuenta corriente." };
+  }
+  return { data: data as WorkerAccountDetail | null };
+}
+
+export async function prepareWorkerPaymentUpload(file: {
+  employee_id: string;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+}): Promise<{ data?: WorkerPaymentUpload; error?: string }> {
+  try {
+    const authorization = await requireWmsPermission("logistica.mermas.create");
+    const supabase = await createClient();
+    const { data: auth } = await supabase.auth.getUser();
+    if (!auth.user) return { error: "No autorizado" };
+    if (!/^[0-9a-f-]{36}$/i.test(file.employee_id)) return { error: "Trabajador inválido." };
+    if (!MERMA_WORKER_PAYMENT_MIME_TYPES.has(file.mime_type)) return { error: "El comprobante debe ser PDF, JPG o PNG." };
+    if (!Number.isInteger(file.size_bytes) || file.size_bytes <= 0 || file.size_bytes > MERMA_WORKER_PAYMENT_MAX_SIZE) return { error: "El comprobante debe pesar entre 1 byte y 10 MB." };
+    const safeName = file.file_name.replace(/[^a-zA-Z0-9._-]/g, "_") || "comprobante";
+    const uploadId = randomUUID();
+    const storagePath = `${authorization.companyId}/${file.employee_id}/pending/${uploadId}/${safeName}`;
+    const { data, error } = await db("mermas").storage.from(MERMA_WORKER_PAYMENT_BUCKET).createSignedUploadUrl(storagePath);
+    if (error || !data?.signedUrl || !data.token) throw new Error("No se pudo preparar una carga segura.");
+    return {
+      data: {
+        upload_id: uploadId,
+        upload_token: data.token,
+        validation_token: signMermaEvidenceSession(authorization.companyId, auth.user.id, uploadId, [storagePath]),
+        storage_path: storagePath,
+        signed_upload_url: data.signedUrl,
+        original_filename: safeName,
+        mime_type: file.mime_type,
+        size_bytes: file.size_bytes,
+      },
+    };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo preparar el comprobante." };
+  }
+}
+
+export async function cleanupWorkerPaymentUpload(upload: {
+  upload_id: string;
+  validation_token: string;
+  storage_path: string;
+}): Promise<{ success?: boolean; error?: string }> {
+  try {
+    const authorization = await requireWmsPermission("logistica.mermas.create");
+    const supabase = await createClient();
+    const { data: auth } = await supabase.auth.getUser();
+    const expected = signMermaEvidenceSession(authorization.companyId, auth.user?.id ?? "", upload.upload_id, [upload.storage_path]);
+    if (!auth.user || !hasValidMermaEvidenceSignature(upload.validation_token, expected) || !upload.storage_path.startsWith(`${authorization.companyId}/`)) return { error: "No autorizado" };
+    await db("mermas").storage.from(MERMA_WORKER_PAYMENT_BUCKET).remove([upload.storage_path]);
+    return { success: true };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo limpiar el comprobante." };
+  }
+}
+
+export async function submitWorkerPayment(input: {
+  employee_id: string;
+  amount: number;
+  upload_id: string;
+  validation_token: string;
+  storage_path: string;
+  original_filename: string;
+  mime_type: string;
+  size_bytes: number;
+}): Promise<{ success: boolean; data?: { payment_id: string; payment_number: string; amount: number }; error?: string }> {
+  let uploadedPath: string | null = null;
+  try {
+    const authorization = await requireWmsPermission("logistica.mermas.create");
+    const supabase = await createClient();
+    const { data: auth } = await supabase.auth.getUser();
+    if (!auth.user) return { success: false, error: "No autorizado" };
+    if (!/^[0-9a-f-]{36}$/i.test(input.employee_id) || !/^[0-9a-f-]{36}$/i.test(input.upload_id)) return { success: false, error: "Datos del pago inválidos." };
+    const expectedToken = signMermaEvidenceSession(authorization.companyId, auth.user.id, input.upload_id, [input.storage_path]);
+    const expectedPrefix = `${authorization.companyId}/${input.employee_id}/pending/${input.upload_id}/`;
+    if (!hasValidMermaEvidenceSignature(input.validation_token, expectedToken) || !input.storage_path.startsWith(expectedPrefix)) return { success: false, error: "El comprobante no es válido para esta operación." };
+    uploadedPath = input.storage_path;
+    const cleanup = async () => { await db("mermas").storage.from(MERMA_WORKER_PAYMENT_BUCKET).remove([input.storage_path]); };
+    if (!MERMA_WORKER_PAYMENT_MIME_TYPES.has(input.mime_type) || !Number.isInteger(input.size_bytes) || input.size_bytes <= 0 || input.size_bytes > MERMA_WORKER_PAYMENT_MAX_SIZE) { await cleanup(); return { success: false, error: "El comprobante no cumple los requisitos." }; }
+    const object = await db("mermas").storage.from(MERMA_WORKER_PAYMENT_BUCKET).info(input.storage_path);
+    const metadata = object.data as { size?: number | string; contentType?: string } | null;
+    if (object.error || !metadata || Number(metadata.size) !== input.size_bytes || metadata.contentType !== input.mime_type) { await cleanup(); return { success: false, error: "No se pudo validar el comprobante subido." }; }
+    const { data, error } = await db("mermas").rpc("submit_worker_payment", {
+      p_company_id: authorization.companyId,
+      p_user_id: auth.user.id,
+      p_employee_id: input.employee_id,
+      p_amount: input.amount,
+      p_upload_id: input.upload_id,
+      p_storage_path: input.storage_path,
+      p_original_filename: input.original_filename,
+      p_mime_type: input.mime_type,
+      p_size_bytes: input.size_bytes,
+    });
+    if (error) { await cleanup(); return { success: false, error: error.message.includes("saldo disponible") ? "El saldo disponible cambió. Actualiza la cuenta e inténtalo nuevamente." : error.message }; }
+    return { success: true, data: data as { payment_id: string; payment_number: string; amount: number } };
+  } catch (error) {
+    if (uploadedPath) await db("mermas").storage.from(MERMA_WORKER_PAYMENT_BUCKET).remove([uploadedPath]);
+    return { success: false, error: error instanceof Error ? error.message : "No se pudo enviar el pago a revisión." };
+  }
+}
+
+async function requireWorkerPaymentReviewer() {
+  return requireMermasSuperUser();
+}
+
+async function requireMermasSuperUser() {
+  const authorization = await requireWmsPermission("logistica.mermas.view");
+  const { data, error } = await db("portal").rpc("is_super_usuario", { p_user_id: authorization.user.id });
+  if (error || data !== true) throw new Error("Se requiere rol SUPER_USUARIO.");
+  return authorization;
+}
+
+export async function getWorkerPaymentReviewAccess() {
+  try {
+    await requireWorkerPaymentReviewer();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function getMermasBootstrap(): Promise<MermasBootstrap> {
+  const authorization = await requireWmsPermission("logistica.mermas.view");
+  const supabase = await createClient();
+  const permissionCodes = [
+    "logistica.mermas.create",
+    "logistica.mermas.request.create",
+    "logistica.mermas.account.view",
+    "logistica.mermas.internal_sale.create",
+    "logistica.mermas.authorize",
+    "logistica.mermas.sync",
+    "logistica.mermas.warehouse.view",
+    "logistica.mermas.pending.view",
+  ] as const;
+  const permissionResults = await Promise.all(
+    permissionCodes.map(async (permissionCode) => {
+      const { data, error } = await supabase.rpc("has_permission", {
+        p_permission_code: permissionCode,
+      });
+      return [permissionCode, !error && data === true] as const;
+    }),
+  );
+  const permissions = Object.fromEntries(permissionResults) as Record<
+    (typeof permissionCodes)[number],
+    boolean
+  >;
+  const [{ data: isSuperUser, error: superUserError }, { data: setting, error: settingError }] =
+    await Promise.all([
+      db("portal").rpc("is_super_usuario", { p_user_id: authorization.user.id }),
+      db("mermas")
+        .from("internal_sale_settings")
+        .select("id, worker_markup_percent, worker_monthly_limit_amount, updated_at, updated_by")
+        .eq("company_id", authorization.companyId)
+        .maybeSingle(),
+    ]);
+  const superUser = !superUserError && isSuperUser === true;
+  const canViewPendingCount = permissions["logistica.mermas.pending.view"];
+  const { count: pendingCount } = canViewPendingCount
+    ? await db("mermas")
+        .from("requests")
+        .select("id", { count: "exact", head: true })
+        .eq("company_id", authorization.companyId)
+        .eq("status", "PENDIENTE")
+    : { count: 0 };
+  const pricingSettings: MermaPricingSettings = {
+    id: setting?.id ?? null,
+    worker_markup_percent: setting?.worker_markup_percent == null ? null : Number(setting.worker_markup_percent),
+    worker_monthly_limit_amount: setting?.worker_monthly_limit_amount == null ? null : Number(setting.worker_monthly_limit_amount),
+    updated_at: setting?.updated_at ?? null,
+    updated_by: setting?.updated_by ?? null,
+    can_edit: superUser && !settingError,
+  };
+  return {
+    userId: authorization.user.id,
+    companyId: authorization.companyId,
+    companyName: authorization.companyName,
+    canView: true,
+    canCreate: permissions["logistica.mermas.create"],
+    canCreateRequest: permissions["logistica.mermas.request.create"],
+    canAuthorize: permissions["logistica.mermas.authorize"],
+    canSync: permissions["logistica.mermas.sync"],
+    canUseInternalSale: permissions["logistica.mermas.internal_sale.create"],
+    isSuperUser: superUser,
+    canReviewPayments: superUser,
+    canViewAccounts: permissions["logistica.mermas.account.view"],
+    canEditSettings: superUser && !settingError,
+    canViewWarehouse: permissions["logistica.mermas.warehouse.view"],
+    canViewPendingCount,
+    pricingSettings,
+    pendingCount: pendingCount ?? 0,
+  };
+}
+
+export async function getWorkerPaymentsForReview(): Promise<{ data: WorkerPaymentReview[]; error?: string }> {
+  try {
+    const authorization = await requireWorkerPaymentReviewer();
+    const { data, error } = await db("mermas").rpc("get_worker_payments_for_review", {
+      p_company_id: authorization.companyId,
+      p_user_id: authorization.user.id,
+      p_status: "PENDING_REVIEW",
+    });
+    if (error) throw error;
+    return { data: (data ?? []).map((row: WorkerPaymentReview) => ({ ...row, amount: Number(row.amount), size_bytes: Number(row.size_bytes) })) };
+  } catch (error) {
+    console.error("[MERMAS] get_worker_payments_for_review failed", error);
+    return { data: [], error: error instanceof Error ? error.message : "No se pudo cargar la revisión de pagos." };
+  }
+}
+
+export async function getWorkerPaymentReviewDetail(paymentId: string): Promise<{ data: WorkerPaymentReviewDetail | null; error?: string }> {
+  try {
+    const authorization = await requireWorkerPaymentReviewer();
+    if (!/^[0-9a-f-]{36}$/i.test(paymentId)) return { data: null, error: "Pago inválido." };
+    const { data, error } = await db("mermas").rpc("get_worker_payment_review_detail", {
+      p_company_id: authorization.companyId,
+      p_user_id: authorization.user.id,
+      p_payment_id: paymentId,
+    });
+    if (error) throw error;
+    return { data: data as WorkerPaymentReviewDetail | null };
+  } catch (error) {
+    return { data: null, error: error instanceof Error ? error.message : "No se pudo cargar el detalle del pago." };
+  }
+}
+
+export async function getWorkerPaymentEvidenceUrl(paymentId: string): Promise<{ url?: string; error?: string }> {
+  try {
+    const authorization = await requireWorkerPaymentReviewer();
+    if (!/^[0-9a-f-]{36}$/i.test(paymentId)) return { error: "Pago inválido." };
+    const { data: evidence, error } = await db("mermas").from("worker_payment_evidence")
+      .select("storage_path").eq("company_id", authorization.companyId).eq("payment_id", paymentId).maybeSingle();
+    if (error || !evidence) return { error: "Comprobante no encontrado." };
+    const { data: signed, error: signedError } = await db("mermas").storage.from(MERMA_WORKER_PAYMENT_BUCKET).createSignedUrl(evidence.storage_path, 300);
+    if (signedError || !signed?.signedUrl) return { error: "No se pudo generar el acceso temporal al comprobante." };
+    return { url: signed.signedUrl };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo abrir el comprobante." };
+  }
+}
+
+export async function approveWorkerPayment(paymentId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const authorization = await requireWorkerPaymentReviewer();
+    const { error } = await db("mermas").rpc("approve_worker_payment", {
+      p_company_id: authorization.companyId, p_user_id: authorization.user.id, p_payment_id: paymentId,
+    });
+    if (error) throw error;
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : "No se pudo aprobar el pago." };
+  }
+}
+
+export async function rejectWorkerPayment(paymentId: string, reason: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const authorization = await requireWorkerPaymentReviewer();
+    const cleanReason = reason.trim();
+    if (!cleanReason) return { success: false, error: "El motivo del rechazo es obligatorio." };
+    const { error } = await db("mermas").rpc("reject_worker_payment", {
+      p_company_id: authorization.companyId, p_user_id: authorization.user.id, p_payment_id: paymentId, p_reason: cleanReason,
+    });
+    if (error) throw error;
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : "No se pudo rechazar el pago." };
+  }
+}
+
+export async function createInternalSale(
+  employeeId: string,
+  items: Array<{ bsale_variant_id: number; quantity: number; unit_price?: number | null }>,
+): Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }> {
+  try {
+    const authorization = await requireWmsPermission("logistica.mermas.internal_sale.create");
+    if (!/^[0-9a-f-]{36}$/i.test(employeeId) || !Array.isArray(items) || items.length === 0) {
+      return { success: false, error: "Selecciona un trabajador y al menos un producto." };
+    }
+    const cleanItems = items.map((item) => ({
+      bsale_variant_id: Number(item.bsale_variant_id),
+      quantity: Number(item.quantity),
+      unit_price: item.unit_price == null ? null : Number(item.unit_price),
+    }));
+    if (cleanItems.some((item) => !Number.isInteger(item.bsale_variant_id) || item.bsale_variant_id <= 0 || !Number.isFinite(item.quantity) || item.quantity <= 0 || (item.unit_price !== null && (!Number.isInteger(item.unit_price) || item.unit_price <= 0)))) {
+      return { success: false, error: "Revisa las cantidades y precios unitarios ingresados." };
+    }
+    const { data, error } = await db("mermas").rpc("create_internal_sale", {
+      p_company_id: authorization.companyId,
+      p_user_id: authorization.user.id,
+      p_employee_id: employeeId,
+      p_items: cleanItems,
+    });
+    if (error) return { success: false, error: internalSaleErrorMessage(error.message) };
+    return { success: true, data: (data ?? {}) as Record<string, unknown> };
+  } catch (error) {
+    return { success: false, error: internalSaleErrorMessage(error instanceof Error ? error.message : "") };
+  }
+}
+
+export async function getMermasPricingSettings(): Promise<{
+  data: MermaPricingSettings;
+  error?: string;
+}> {
+  const authorization = await requireMermasSuperUser();
+  const { data: setting, error } = await db("mermas")
+    .from("internal_sale_settings")
+    .select("id, worker_markup_percent, worker_monthly_limit_amount, updated_at, updated_by")
+    .eq("company_id", authorization.companyId)
+    .maybeSingle();
+  if (error) {
+    return {
+      data: { id: null, worker_markup_percent: null, worker_monthly_limit_amount: null, updated_at: null, updated_by: null, can_edit: false },
+      error: "No se pudo cargar la configuración de precio",
+    };
+  }
+  return {
+    data: {
+      id: setting?.id ?? null,
+      worker_markup_percent: setting?.worker_markup_percent === null || setting?.worker_markup_percent === undefined ? null : Number(setting.worker_markup_percent),
+      worker_monthly_limit_amount: setting?.worker_monthly_limit_amount === null || setting?.worker_monthly_limit_amount === undefined ? null : Number(setting.worker_monthly_limit_amount),
+      updated_at: setting?.updated_at ?? null,
+      updated_by: setting?.updated_by ?? null,
+       can_edit: true,
+    },
+  };
+}
+
+export async function saveMermasPricingSettings(
+  value: number | string | null,
+  monthlyLimit: number | string | null,
+): Promise<{
+  success: boolean;
+  data?: MermaPricingSettings;
+  error?: string;
+}> {
+  const authorization = await requireMermasSuperUser();
+  const markup = value === null || value === "" ? null : Number(value);
+  const limit = monthlyLimit === null || monthlyLimit === "" ? null : Number(monthlyLimit);
+  if (markup !== null && (!Number.isFinite(markup) || markup < 0)) {
+    return { success: false, error: "Ingresa un porcentaje válido igual o mayor que 0." };
+  }
+  if (limit !== null && (!Number.isInteger(limit) || limit <= 0)) {
+    return { success: false, error: "El tope mensual debe ser un monto entero mayor que 0." };
+  }
+  const { data, error } = await db("mermas").rpc("save_internal_sale_settings", {
+    p_company_id: authorization.companyId,
+    p_user_id: authorization.user.id,
+    p_worker_markup_percent: markup,
+    p_worker_monthly_limit_amount: limit,
+  });
+  if (error) return { success: false, error: error.message };
+  return {
+    success: true,
+    data: {
+      id: data.id,
+      worker_markup_percent: data.worker_markup_percent === null ? null : Number(data.worker_markup_percent),
+      worker_monthly_limit_amount: data.worker_monthly_limit_amount === null ? null : Number(data.worker_monthly_limit_amount),
+      updated_at: data.updated_at,
+      updated_by: data.updated_by,
+      can_edit: true,
+    },
+  };
+}
+
 export async function getMermasProductsCatalog(): Promise<{
   data: MermaProduct[];
   error?: string;
 }> {
-  const authorization = await requireWmsPermission("logistica.mermas.create");
+  const authorization = await requireWmsPermission("logistica.mermas.request.create");
   const integrationDb = db("integraciones");
   const variants: Array<{
     id: string;
@@ -332,7 +1133,7 @@ export async function getMermasContext() {
 export async function searchMermasProducts(
   search: string,
 ): Promise<{ data: MermaProduct[]; error?: string }> {
-  const authorization = await requireWmsPermission("logistica.mermas.create");
+  const authorization = await requireWmsPermission("logistica.mermas.request.create");
   const term = search.trim();
   if (term.length < 2) return { data: [] };
   const query = db("integraciones")
@@ -635,7 +1436,7 @@ export async function getMermasBsaleIncidents(): Promise<{
   data: MermaBsaleIncident[];
   error?: string;
 }> {
-  const authorization = await requireWmsPermission("logistica.mermas.view");
+  const authorization = await requireWmsPermission("logistica.mermas.create");
   const database = db("mermas");
   const { data: syncState, error: syncStateError } = await database
     .from("sync_state")
@@ -973,6 +1774,9 @@ export type MermaWarehouseProduct = {
   sku: string;
   product_name: string;
   available: number;
+  average_cost: number | null;
+  cost_with_vat: number | null;
+  worker_price: number | null;
   next_expiration: string | null;
   expiration_status: "VENCIDO" | "POR VENCER" | "VIGENTE";
   lot_count: number;
@@ -980,6 +1784,48 @@ export type MermaWarehouseProduct = {
   lots: MermaWarehouseLot[];
   history: MermaWarehouseHistoryEntry[];
 };
+
+export type MermaWarehouseListProduct = Omit<MermaWarehouseProduct, "lots" | "history">;
+
+export async function getMermaWarehouseEvidence(variantId: number): Promise<{
+  data: Array<{ movement_id: string; evidence: MermaEvidence[] }>;
+  error?: string;
+}> {
+  const authorization = await requireWmsPermission("logistica.mermas.warehouse.view");
+  if (!Number.isInteger(variantId) || variantId <= 0) return { data: [], error: "Producto inválido" };
+  const database = db("mermas");
+  const { data: movements, error: movementsError } = await database
+    .from("movements")
+    .select("id, request_line_id")
+    .eq("company_id", authorization.companyId)
+    .eq("variant_id", variantId)
+    .not("request_line_id", "is", null);
+  if (movementsError) return { data: [], error: "No se pudo cargar la evidencia de Bodega" };
+  const lineIds = [...new Set((movements ?? []).map((movement) => movement.request_line_id).filter(Boolean))];
+  if (!lineIds.length) return { data: [] };
+  const { data: evidenceRows, error: evidenceError } = await database
+    .from("evidence")
+    .select("id, request_line_id, file_name, mime_type, storage_path")
+    .eq("company_id", authorization.companyId)
+    .in("request_line_id", lineIds);
+  if (evidenceError) return { data: [], error: "No se pudo cargar la evidencia de Bodega" };
+  const evidenceByLine = new Map<string, MermaEvidence[]>();
+  for (const row of evidenceRows ?? []) {
+    const { data: signed } = await database.storage
+      .from("mermas-evidence")
+      .createSignedUrl(row.storage_path, 300);
+    if (!signed?.signedUrl) continue;
+    const current = evidenceByLine.get(row.request_line_id) ?? [];
+    current.push({ id: row.id, file_name: row.file_name, mime_type: row.mime_type, signed_url: signed.signedUrl });
+    evidenceByLine.set(row.request_line_id, current);
+  }
+  return {
+    data: (movements ?? []).map((movement) => ({
+      movement_id: movement.id,
+      evidence: evidenceByLine.get(movement.request_line_id) ?? [],
+    })),
+  };
+}
 
 export type MermaAuthorizationRow = MermaWarehouseRow & {
   movement_id: string;
@@ -1011,9 +1857,7 @@ export async function getMermasAuthorizationPending(): Promise<{
   data: MermaAuthorizationRow[];
   error?: string;
 }> {
-  const authorization = await requireWmsPermission(
-    "logistica.mermas.authorize",
-  );
+  const authorization = await requireWmsPermission("logistica.mermas.authorize");
   const database = db("mermas");
   const { data: movements, error } = await database
     .from("movements")
@@ -1035,38 +1879,33 @@ export async function getMermasAuthorizationPending(): Promise<{
       (movements ?? []).map((item) => item.request_id).filter(Boolean),
     ),
   ];
-  const { data: lines } = lineIds.length
-    ? await database
-        .from("request_lines")
-        .select("id, reason, request_id")
-        .in("id", lineIds)
-    : { data: [] as { id: string; reason: string; request_id: string }[] };
-  const { data: requests } = requestIds.length
-    ? await database
-        .from("requests")
-        .select("id, request_code, created_at, created_by")
-        .in("id", requestIds)
-    : {
-        data: [] as {
-          id: string;
-          request_code: string;
-          created_at: string;
-          created_by: string;
-        }[],
-      };
+  const variants = [
+    ...new Set((movements ?? []).map((item) => Number(item.variant_id))),
+  ];
+  const [{ data: lines }, { data: requests }, { data: evidence }, { data: variantRows }] = await Promise.all([
+    lineIds.length
+      ? database.from("request_lines").select("id, reason").in("id", lineIds)
+      : Promise.resolve({ data: [] as { id: string; reason: string }[] }),
+    requestIds.length
+      ? database.from("requests").select("id, request_code, created_at, created_by").in("id", requestIds)
+      : Promise.resolve({ data: [] as { id: string; request_code: string; created_at: string; created_by: string }[] }),
+    lineIds.length
+      ? database.from("evidence").select("request_line_id").in("request_line_id", lineIds)
+      : Promise.resolve({ data: [] as { request_line_id: string }[] }),
+    variants.length
+      ? db("integraciones").from("bsale_variants").select("bsale_id, code, bsale_product_id").eq("company_id", authorization.companyId).in("bsale_id", variants)
+      : Promise.resolve({ data: [] as { bsale_id: number; code: string; bsale_product_id: number }[] }),
+  ]);
   const userIds = [...new Set((requests ?? []).map((item) => item.created_by))];
-  const { data: users } = userIds.length
-    ? await db("portal")
-        .from("users")
-        .select("id, nombre, apellido")
-        .in("id", userIds)
-    : { data: [] as { id: string; nombre: string; apellido: string }[] };
-  const evidence = lineIds.length
-    ? await database
-        .from("evidence")
-        .select("request_line_id")
-        .in("request_line_id", lineIds)
-    : { data: [] as { request_line_id: string }[] };
+  const productIds = [...new Set((variantRows ?? []).map((item) => item.bsale_product_id))];
+  const [{ data: users }, { data: products }] = await Promise.all([
+    userIds.length
+      ? db("portal").from("users").select("id, nombre, apellido").in("id", userIds)
+      : Promise.resolve({ data: [] as { id: string; nombre: string; apellido: string }[] }),
+    productIds.length
+      ? db("integraciones").from("bsale_products").select("bsale_id, name").eq("company_id", authorization.companyId).in("bsale_id", productIds)
+      : Promise.resolve({ data: [] as { bsale_id: number; name: string }[] }),
+  ]);
   const lineMap = new Map((lines ?? []).map((item) => [item.id, item]));
   const requestMap = new Map((requests ?? []).map((item) => [item.id, item]));
   const userMap = new Map(
@@ -1076,37 +1915,11 @@ export async function getMermasAuthorizationPending(): Promise<{
     ]),
   );
   const evidenceCount = new Map<string, number>();
-  for (const item of evidence.data ?? [])
+  for (const item of evidence ?? [])
     evidenceCount.set(
       item.request_line_id,
       (evidenceCount.get(item.request_line_id) ?? 0) + 1,
     );
-  const variants = [
-    ...new Set((movements ?? []).map((item) => Number(item.variant_id))),
-  ];
-  const { data: variantRows } = variants.length
-    ? await db("integraciones")
-        .from("bsale_variants")
-        .select("bsale_id, code, bsale_product_id")
-        .eq("company_id", authorization.companyId)
-        .in("bsale_id", variants)
-    : {
-        data: [] as {
-          bsale_id: number;
-          code: string;
-          bsale_product_id: number;
-        }[],
-      };
-  const productIds = [
-    ...new Set((variantRows ?? []).map((item) => item.bsale_product_id)),
-  ];
-  const { data: products } = productIds.length
-    ? await db("integraciones")
-        .from("bsale_products")
-        .select("bsale_id, name")
-        .eq("company_id", authorization.companyId)
-        .in("bsale_id", productIds)
-    : { data: [] as { bsale_id: number; name: string }[] };
   const variantMap = new Map(
     (variantRows ?? []).map((item) => [item.bsale_id, item]),
   );
@@ -1148,41 +1961,75 @@ export async function getMermaMovementReview(movementId: string): Promise<{
   data: { movement: MermaAuthorizationRow; evidence: MermaEvidence[] } | null;
   error?: string;
 }> {
-  const authorization = await requireWmsPermission(
-    "logistica.mermas.authorize",
-  );
-  const pending = await getMermasAuthorizationPending();
-  const movement = pending.data.find((item) => item.movement_id === movementId)
-    ?? (await getMermasRejected()).data.find((item) => item.movement_id === movementId);
-  if (!movement)
+  const authorization = await requireWmsPermission("logistica.mermas.view");
+  const database = db("mermas");
+  const { data: rawMovement, error: movementError } = await database
+    .from("movements")
+    .select("id, variant_id, quantity, expiration_date, lot, source, request_id, request_line_id, consumption_id, created_at, authorization_status, rejected_by, rejected_at, rejection_reason")
+    .eq("company_id", authorization.companyId)
+    .eq("id", movementId)
+    .maybeSingle();
+  if (movementError || !rawMovement)
     return { data: null, error: "Entrada no encontrada o ya autorizada" };
-  const rows = movement.request_line_id
-    ? await db("mermas")
-        .from("evidence")
-        .select("id, storage_path, file_name, mime_type")
-        .eq("company_id", authorization.companyId)
-        .eq("request_line_id", movement.request_line_id)
-    : {
-        data: [] as {
-          id: string;
-          storage_path: string;
-          file_name: string;
-          mime_type: string;
-        }[],
-      };
-  const evidence: MermaEvidence[] = [];
-  for (const row of rows.data ?? []) {
-    const signed = await db("mermas")
-      .storage.from("mermas-evidence")
-      .createSignedUrl(row.storage_path, 300);
-    if (signed.data?.signedUrl)
-      evidence.push({
-        id: row.id,
-        file_name: row.file_name,
-        mime_type: row.mime_type,
-        signed_url: signed.data.signedUrl,
-      });
+  if (rawMovement.authorization_status === "PENDIENTE_AUTORIZACION") {
+    await requireWmsPermission("logistica.mermas.authorize");
   }
+
+  const [{ data: line }, { data: request }, { data: variant }, { data: evidenceRows }, { data: consumption }] = await Promise.all([
+    rawMovement.request_line_id
+      ? database.from("request_lines").select("id, reason").eq("id", rawMovement.request_line_id).maybeSingle()
+      : Promise.resolve({ data: null as { id: string; reason: string | null } | null }),
+    rawMovement.request_id
+      ? database.from("requests").select("id, request_code, created_at, created_by").eq("id", rawMovement.request_id).maybeSingle()
+      : Promise.resolve({ data: null as { id: string; request_code: string | null; created_at: string | null; created_by: string } | null }),
+    db("integraciones").from("bsale_variants").select("bsale_id, code, bsale_product_id").eq("company_id", authorization.companyId).eq("bsale_id", Number(rawMovement.variant_id)).maybeSingle(),
+    rawMovement.request_line_id
+      ? database.from("evidence").select("id, storage_path, file_name, mime_type").eq("company_id", authorization.companyId).eq("request_line_id", rawMovement.request_line_id)
+      : Promise.resolve({ data: [] as { id: string; storage_path: string; file_name: string; mime_type: string }[] }),
+    rawMovement.consumption_id
+      ? database.from("bsale_consumptions").select("consumption_id, consumption_date, note").eq("consumption_id", rawMovement.consumption_id).maybeSingle()
+      : Promise.resolve({ data: null as { consumption_id: number; consumption_date: string | null; note: string | null } | null }),
+  ]);
+  const [{ data: product }, { data: users }] = await Promise.all([
+    variant?.bsale_product_id
+      ? db("integraciones").from("bsale_products").select("bsale_id, name").eq("company_id", authorization.companyId).eq("bsale_id", variant.bsale_product_id).maybeSingle()
+      : Promise.resolve({ data: null as { bsale_id: number; name: string | null } | null }),
+    request || rawMovement.rejected_by
+      ? db("portal").from("users").select("id, nombre, apellido").in("id", [request?.created_by, rawMovement.rejected_by].filter(Boolean))
+      : Promise.resolve({ data: [] as { id: string; nombre: string | null; apellido: string | null }[] }),
+  ]);
+  const userMap = new Map((users ?? []).map((item) => [item.id, `${item.nombre ?? ""} ${item.apellido ?? ""}`.trim()]));
+  const evidence = (await Promise.all((evidenceRows ?? []).map(async (row) => {
+    const { data: signed } = await database.storage.from("mermas-evidence").createSignedUrl(row.storage_path, 300);
+    return signed?.signedUrl
+      ? { id: row.id, file_name: row.file_name, mime_type: row.mime_type, signed_url: signed.signedUrl }
+      : null;
+  }))).filter((item): item is MermaEvidence => item !== null);
+  const movement = {
+    movement_id: rawMovement.id,
+    id: rawMovement.id,
+    request_line_id: rawMovement.request_line_id,
+    consumption_id: rawMovement.consumption_id,
+    sku: variant?.code ?? `BS-${rawMovement.variant_id}`,
+    product_name: product?.name ?? "Producto Bsale",
+    available: Number(rawMovement.quantity),
+    expiration_date: rawMovement.expiration_date,
+    lot: rawMovement.lot,
+    origin: rawMovement.source,
+    request_code: request?.request_code ?? null,
+    entered_at: rawMovement.created_at,
+    reason: line?.reason ?? null,
+    requester_name: request ? (userMap.get(request.created_by) ?? "Usuario") : null,
+    request_date: request?.created_at ?? null,
+    evidence_count: evidence.length,
+    authorization_status: rawMovement.authorization_status,
+    rejection_reason: rawMovement.rejection_reason ?? "",
+    rejected_by_name: rawMovement.rejected_by ? userMap.get(rawMovement.rejected_by) ?? null : null,
+    rejected_at: rawMovement.rejected_at ?? "",
+    consumption_date: consumption?.consumption_date ?? null,
+    note: consumption?.note ?? null,
+    original_reason: line?.reason ?? null,
+  } as MermaAuthorizationRow;
   return { data: { movement, evidence } };
 }
 
@@ -1235,65 +2082,53 @@ export async function getMermasRejected(): Promise<{
     .order("rejected_at", { ascending: false });
   if (error)
     return { data: [], error: "No se pudieron cargar las entradas archivadas" };
-  const lineIds = [...new Set((movements ?? []).map((item) => item.request_line_id).filter(Boolean))];
   const requestIds = [...new Set((movements ?? []).map((item) => item.request_id).filter(Boolean))];
-  const consumptionIds = [...new Set((movements ?? []).map((item) => item.consumption_id).filter(Boolean))];
   const variantIds = [...new Set((movements ?? []).map((item) => Number(item.variant_id)))];
-  const [{ data: lines }, { data: requests }, { data: consumptions }, { data: evidence }] = await Promise.all([
-    lineIds.length ? database.from("request_lines").select("id, reason").in("id", lineIds) : Promise.resolve({ data: [] as { id: string; reason: string }[] }),
+  const [{ data: requests }, { data: variantRows }] = await Promise.all([
     requestIds.length ? database.from("requests").select("id, request_code, created_at, created_by").in("id", requestIds) : Promise.resolve({ data: [] as { id: string; request_code: string; created_at: string; created_by: string }[] }),
-    consumptionIds.length ? database.from("bsale_consumptions").select("consumption_id, consumption_date, note").in("consumption_id", consumptionIds) : Promise.resolve({ data: [] as { consumption_id: number; consumption_date: string | null; note: string | null }[] }),
-    lineIds.length ? database.from("evidence").select("request_line_id").in("request_line_id", lineIds) : Promise.resolve({ data: [] as { request_line_id: string }[] }),
+    variantIds.length ? db("integraciones").from("bsale_variants").select("bsale_id, code, bsale_product_id").eq("company_id", authorization.companyId).in("bsale_id", variantIds) : Promise.resolve({ data: [] as { bsale_id: number; code: string | null; bsale_product_id: number }[] }),
   ]);
   const userIds = [...new Set((requests ?? []).map((item) => item.created_by).concat((movements ?? []).map((item) => item.rejected_by).filter(Boolean)))];
-  const { data: users } = userIds.length
-    ? await db("portal").from("users").select("id, nombre, apellido").in("id", userIds)
-    : { data: [] as { id: string; nombre: string | null; apellido: string | null }[] };
-  const integrationDb = db("integraciones");
-  const { data: variantRows } = variantIds.length
-    ? await integrationDb.from("bsale_variants").select("bsale_id, code, bsale_product_id").eq("company_id", authorization.companyId).in("bsale_id", variantIds)
-    : { data: [] as { bsale_id: number; code: string | null; bsale_product_id: number }[] };
   const productIds = [...new Set((variantRows ?? []).map((item) => item.bsale_product_id))];
-  const { data: products } = productIds.length
-    ? await integrationDb.from("bsale_products").select("bsale_id, name").eq("company_id", authorization.companyId).in("bsale_id", productIds)
-    : { data: [] as { bsale_id: number; name: string | null }[] };
-  const lineMap = new Map((lines ?? []).map((item) => [item.id, item]));
+  const [{ data: users }, { data: products }] = await Promise.all([
+    userIds.length
+      ? db("portal").from("users").select("id, nombre, apellido").in("id", userIds)
+      : Promise.resolve({ data: [] as { id: string; nombre: string | null; apellido: string | null }[] }),
+    productIds.length
+      ? db("integraciones").from("bsale_products").select("bsale_id, name").eq("company_id", authorization.companyId).in("bsale_id", productIds)
+      : Promise.resolve({ data: [] as { bsale_id: number; name: string | null }[] }),
+  ]);
   const requestMap = new Map((requests ?? []).map((item) => [item.id, item]));
-  const consumptionMap = new Map((consumptions ?? []).map((item) => [item.consumption_id, item]));
   const userMap = new Map((users ?? []).map((item) => [item.id, `${item.nombre ?? ""} ${item.apellido ?? ""}`.trim()]));
   const variantMap = new Map((variantRows ?? []).map((item) => [item.bsale_id, item]));
   const productMap = new Map((products ?? []).map((item) => [item.bsale_id, item.name]));
-  const evidenceCount = new Map<string, number>();
-  for (const item of evidence ?? []) evidenceCount.set(item.request_line_id, (evidenceCount.get(item.request_line_id) ?? 0) + 1);
   return {
     data: (movements ?? []).map((item) => {
-      const line = lineMap.get(item.request_line_id);
-      const request = requestMap.get(item.request_id);
-      const variant = variantMap.get(Number(item.variant_id));
-      const consumption = consumptionMap.get(Number(item.consumption_id));
+       const request = requestMap.get(item.request_id);
+       const variant = variantMap.get(Number(item.variant_id));
       return {
         movement_id: item.id,
         id: item.id,
         request_line_id: item.request_line_id,
         consumption_id: item.consumption_id,
         sku: variant?.code ?? `BS-${item.variant_id}`,
-        product_name: productMap.get(variant?.bsale_product_id ?? 0) ?? "Producto Bsale",
+         product_name: productMap.get(variant?.bsale_product_id ?? 0) ?? "Producto Bsale",
         available: Number(item.quantity),
         expiration_date: item.expiration_date,
         lot: item.lot,
         origin: item.source,
         request_code: request?.request_code ?? null,
         entered_at: item.created_at,
-        reason: line?.reason ?? null,
+         reason: null,
         requester_name: request ? (userMap.get(request.created_by) ?? "Usuario") : null,
         request_date: request?.created_at ?? null,
-        evidence_count: evidenceCount.get(item.request_line_id) ?? 0,
+         evidence_count: 0,
         rejection_reason: item.rejection_reason,
         rejected_by_name: item.rejected_by ? userMap.get(item.rejected_by) ?? null : null,
         rejected_at: item.rejected_at,
-        consumption_date: consumption?.consumption_date ?? null,
-        note: consumption?.note ?? null,
-        original_reason: line?.reason ?? null,
+         consumption_date: null,
+         note: null,
+         original_reason: null,
       };
     }) as MermaRejectedRow[],
   };
@@ -1309,6 +2144,75 @@ export async function syncMermasFromBsale() {
 }
 
 export async function getMermasWarehouse(): Promise<{
+  data: MermaWarehouseListProduct[];
+  error?: string;
+}> {
+  const authorization = await requireWmsPermission("logistica.mermas.warehouse.view");
+  const database = db("mermas");
+  const { data: stockRows, error } = await database
+    .from("stock_current")
+    .select("variant_id, available, expiration_date, entered_at")
+    .eq("company_id", authorization.companyId)
+    .order("entered_at", { ascending: false });
+  if (error) return { data: [], error: "No se pudo cargar la Bodega de Mermas" };
+  const variantIds = [...new Set((stockRows ?? []).map((row) => Number(row.variant_id)))];
+  const integrationDb = db("integraciones");
+  const [{ data: variants }, { data: costRows }, { data: setting }] = await Promise.all([
+    variantIds.length
+      ? integrationDb.from("bsale_variants").select("bsale_id, code, bsale_product_id").eq("company_id", authorization.companyId).in("bsale_id", variantIds)
+      : Promise.resolve({ data: [] as { bsale_id: number; code: string | null; bsale_product_id: number }[] }),
+    variantIds.length
+      ? integrationDb.from("bsale_variant_costs").select("variant_id, average_cost").eq("company_id", authorization.companyId).in("variant_id", variantIds)
+      : Promise.resolve({ data: [] as { variant_id: number; average_cost: number | null }[] }),
+    database.from("internal_sale_settings").select("worker_markup_percent").eq("company_id", authorization.companyId).maybeSingle(),
+  ]);
+  const productIds = [...new Set((variants ?? []).map((variant) => variant.bsale_product_id))];
+  const { data: productRows } = productIds.length
+    ? await integrationDb.from("bsale_products").select("bsale_id, name").eq("company_id", authorization.companyId).in("bsale_id", productIds)
+    : { data: [] as { bsale_id: number; name: string | null }[] };
+  const variantMap = new Map((variants ?? []).map((variant) => [Number(variant.bsale_id), variant]));
+  const costMap = new Map((costRows ?? []).map((row) => {
+    const cost = Number(row.average_cost);
+    return [Number(row.variant_id), Number.isFinite(cost) && cost > 0 ? cost : null] as const;
+  }));
+  const productMap = new Map((productRows ?? []).map((product) => [Number(product.bsale_id), product.name]));
+  const today = new Date().toISOString().slice(0, 10);
+  const warningDate = new Date(`${today}T00:00:00Z`);
+  warningDate.setUTCDate(warningDate.getUTCDate() + 30);
+  const getExpirationStatus = (date: string | null): MermaWarehouseListProduct["expiration_status"] => {
+    if (date && date < today) return "VENCIDO";
+    if (date && date <= warningDate.toISOString().slice(0, 10)) return "POR VENCER";
+    return "VIGENTE";
+  };
+  const products = new Map<number, MermaWarehouseListProduct>();
+  for (const stock of stockRows ?? []) {
+    if (Number(stock.available) <= 0) continue;
+    const variantId = Number(stock.variant_id);
+    const variant = variantMap.get(variantId);
+    const current = products.get(variantId) ?? {
+      variant_id: variantId,
+      sku: variant?.code ?? `BS-${variantId}`,
+      product_name: productMap.get(Number(variant?.bsale_product_id)) ?? "Producto Bsale",
+      available: 0,
+      average_cost: costMap.get(variantId) ?? null,
+      cost_with_vat: calculateCostWithVat(costMap.get(variantId)),
+      worker_price: calculateWorkerPrice(costMap.get(variantId), setting?.worker_markup_percent == null ? null : Number(setting.worker_markup_percent)),
+      next_expiration: null,
+      expiration_status: "VIGENTE" as const,
+      lot_count: 0,
+      last_entry_at: null,
+    };
+    current.available += Number(stock.available);
+    current.lot_count += 1;
+    if (stock.expiration_date && (!current.next_expiration || stock.expiration_date < current.next_expiration)) current.next_expiration = stock.expiration_date;
+    if (!current.last_entry_at || stock.entered_at > current.last_entry_at) current.last_entry_at = stock.entered_at;
+    current.expiration_status = getExpirationStatus(current.next_expiration);
+    products.set(variantId, current);
+  }
+  return { data: [...products.values()] };
+}
+
+async function getMermasWarehouseTraceData(variantId: number): Promise<{
   data: MermaWarehouseProduct[];
   error?: string;
 }> {
@@ -1322,6 +2226,7 @@ export async function getMermasWarehouse(): Promise<{
       "variant_id, available, expiration_date, lot, request_id, entered_at, source",
     )
     .eq("company_id", authorization.companyId)
+    .eq("variant_id", variantId)
     .order("entered_at", { ascending: false });
   if (error)
     return { data: [], error: "No se pudo cargar la Bodega de Mermas" };
@@ -1332,6 +2237,7 @@ export async function getMermasWarehouse(): Promise<{
       "id, movement_type, variant_id, quantity, expiration_date, lot, consumption_id, detail_id, request_id, request_line_id, source, authorization_status, authorized_by, authorized_at, created_at",
     )
     .eq("company_id", authorization.companyId)
+    .eq("variant_id", variantId)
     .order("created_at", { ascending: true });
   if (movementError)
     return { data: [], error: "No se pudo cargar la trazabilidad de Bodega" };
@@ -1356,19 +2262,20 @@ export async function getMermasWarehouse(): Promise<{
     ),
   ];
   const integrationDb = db("integraciones");
-  const { data: variants } = variantIds.length
-    ? await integrationDb
-        .from("bsale_variants")
-        .select("bsale_id, code, bsale_product_id")
-        .eq("company_id", authorization.companyId)
-        .in("bsale_id", variantIds)
-    : {
-        data: [] as {
-          bsale_id: number;
-          code: string | null;
-          bsale_product_id: number;
-        }[],
-      };
+  const [{ data: variants }, { data: costRows }, { data: setting }] = await Promise.all([
+    variantIds.length
+      ? integrationDb.from("bsale_variants").select("bsale_id, code, bsale_product_id").eq("company_id", authorization.companyId).in("bsale_id", variantIds)
+      : Promise.resolve({ data: [] as { bsale_id: number; code: string | null; bsale_product_id: number }[] }),
+    variantIds.length
+      ? integrationDb.from("bsale_variant_costs").select("variant_id, average_cost").eq("company_id", authorization.companyId).in("variant_id", variantIds)
+      : Promise.resolve({ data: [] as { variant_id: number; average_cost: number | null }[] }),
+    database.from("internal_sale_settings").select("worker_markup_percent").eq("company_id", authorization.companyId).maybeSingle(),
+  ]);
+  const markupPercent = setting?.worker_markup_percent === null || setting?.worker_markup_percent === undefined ? null : Number(setting.worker_markup_percent);
+  const costMap = new Map((costRows ?? []).map((row) => {
+    const cost = Number(row.average_cost);
+    return [Number(row.variant_id), Number.isFinite(cost) && cost > 0 ? cost : null] as const;
+  }));
   const productIds = [
     ...new Set((variants ?? []).map((variant) => variant.bsale_product_id)),
   ];
@@ -1379,7 +2286,7 @@ export async function getMermasWarehouse(): Promise<{
         .eq("company_id", authorization.companyId)
         .in("bsale_id", productIds)
     : { data: [] as { bsale_id: number; name: string | null }[] };
-  const [{ data: requests }, { data: lines }, { data: evidenceRows }] = await Promise.all([
+  const [{ data: requests }, { data: lines }] = await Promise.all([
     requestIds.length
     ? database
         .from("requests")
@@ -1394,13 +2301,6 @@ export async function getMermasWarehouse(): Promise<{
           .eq("company_id", authorization.companyId)
           .in("id", lineIds)
       : Promise.resolve({ data: [] as { id: string; request_id: string; reason: string | null }[] }),
-    lineIds.length
-      ? database
-          .from("evidence")
-          .select("id, request_line_id, file_name, mime_type, storage_path")
-          .eq("company_id", authorization.companyId)
-          .in("request_line_id", lineIds)
-      : Promise.resolve({ data: [] as { id: string; request_line_id: string; file_name: string; mime_type: string; storage_path: string }[] }),
   ]);
   const userIds = [
     ...new Set(
@@ -1415,20 +2315,6 @@ export async function getMermasWarehouse(): Promise<{
         .select("id, nombre, apellido")
         .in("id", userIds)
     : { data: [] as { id: string; nombre: string | null; apellido: string | null }[] };
-  const signedEvidence = new Map<string, MermaEvidence>();
-  for (const evidence of evidenceRows ?? []) {
-    const { data: signed } = await database.storage
-      .from("mermas-evidence")
-      .createSignedUrl(evidence.storage_path, 300);
-    if (signed?.signedUrl) {
-      signedEvidence.set(evidence.id, {
-        id: evidence.id,
-        file_name: evidence.file_name,
-        mime_type: evidence.mime_type,
-        signed_url: signed.signedUrl,
-      });
-    }
-  }
   const variantMap = new Map(
     (variants ?? []).map((variant) => [variant.bsale_id, variant]),
   );
@@ -1445,15 +2331,6 @@ export async function getMermasWarehouse(): Promise<{
       `${user.nombre ?? ""} ${user.apellido ?? ""}`.trim() || "Usuario",
     ]),
   );
-  const evidenceByLine = new Map<string, MermaEvidence[]>();
-  for (const evidence of evidenceRows ?? []) {
-    const signed = signedEvidence.get(evidence.id);
-    if (signed) {
-      const current = evidenceByLine.get(evidence.request_line_id) ?? [];
-      current.push(signed);
-      evidenceByLine.set(evidence.request_line_id, current);
-    }
-  }
   const today = new Date().toISOString().slice(0, 10);
   const warningDate = new Date(`${today}T00:00:00Z`);
   warningDate.setUTCDate(warningDate.getUTCDate() + 30);
@@ -1472,6 +2349,9 @@ export async function getMermasWarehouse(): Promise<{
       sku: variant?.code ?? `BS-${variantId}`,
       product_name: productMap.get(variant?.bsale_product_id ?? 0) ?? "Producto Bsale",
       available: 0,
+      average_cost: costMap.get(variantId) ?? null,
+      cost_with_vat: calculateCostWithVat(costMap.get(variantId)),
+      worker_price: calculateWorkerPrice(costMap.get(variantId), markupPercent),
       next_expiration: null,
       expiration_status: "VIGENTE" as const,
       lot_count: 0,
@@ -1514,10 +2394,20 @@ export async function getMermasWarehouse(): Promise<{
     product.history.push({
       id: movement.id,
       occurred_at: movement.authorized_at ?? movement.created_at,
-      movement_type: movement.movement_type === "ENTRADA_BSALE" ? "INGRESO A BODEGA" : movement.movement_type,
+      movement_type:
+        movement.movement_type === "ENTRADA_BSALE"
+          ? "INGRESO A BODEGA"
+          : movement.movement_type === "STOCK_INICIAL"
+            ? "STOCK INICIAL / APERTURA"
+            : movement.movement_type,
       quantity,
       balance,
-      origin: movement.consumption_id ? `Bsale #${movement.consumption_id}` : movement.source,
+      origin:
+        movement.consumption_id
+          ? `Bsale #${movement.consumption_id}`
+          : movement.source === "APERTURA"
+            ? "Apertura de Bodega"
+            : movement.source,
       reference: request?.request_code ?? null,
       user_name: userMap.get(movement.authorized_by) ?? userMap.get(request?.created_by ?? "") ?? "Usuario",
       consumption_id: movement.consumption_id,
@@ -1526,10 +2416,19 @@ export async function getMermasWarehouse(): Promise<{
       reason: line?.reason ?? null,
       expiration_date: movement.expiration_date,
       lot: movement.lot,
-      evidence: line ? evidenceByLine.get(line.id) ?? [] : [],
+        evidence: [],
     });
   }
   return { data: [...products.values()] };
+}
+
+export async function getMermasWarehouseTrace(variantId: number): Promise<{
+  data: MermaWarehouseProduct | null;
+  error?: string;
+}> {
+  if (!Number.isInteger(variantId) || variantId <= 0) return { data: null, error: "Producto inválido" };
+  const result = await getMermasWarehouseTraceData(variantId);
+  return { data: result.data[0] ?? null, error: result.error };
 }
 
 type MermaRequestLineInput = {
@@ -1654,7 +2553,7 @@ export async function prepareMermaEvidenceUploads(
   files: Array<Omit<MermaEvidenceMetadata, "storage_path">>,
 ): Promise<{ data?: { session_id: string; session_token: string; finalize_token: string; uploads: MermaEvidenceUpload[] }; error?: string }> {
   try {
-    const authorization = await requireWmsPermission("logistica.mermas.create");
+    const authorization = await requireWmsPermission("logistica.mermas.request.create");
     const supabase = await createClient();
     const { data: auth } = await supabase.auth.getUser();
     if (!auth.user) return { error: "No autorizado" };
@@ -1686,7 +2585,7 @@ export async function cleanupMermaEvidenceUploads(
   paths: string[],
 ): Promise<{ success?: boolean; error?: string }> {
   try {
-    const authorization = await requireWmsPermission("logistica.mermas.create");
+    const authorization = await requireWmsPermission("logistica.mermas.request.create");
     const supabase = await createClient();
     const { data: auth } = await supabase.auth.getUser();
     if (!auth.user || !hasValidMermaEvidenceSignature(sessionToken, signMermaEvidenceSession(authorization.companyId, auth.user.id, sessionId))) return { error: "No autorizado" };
@@ -1706,7 +2605,7 @@ export async function createMermaRequest(
   sessionToken = "",
   finalizeToken = "",
 ): Promise<{ success?: boolean; request_id?: string; request_code?: string; status?: string; error?: string }> {
-  const authorization = await requireWmsPermission("logistica.mermas.create");
+  const authorization = await requireWmsPermission("logistica.mermas.request.create");
   const supabase = await createClient();
   const { data: auth } = await supabase.auth.getUser();
   if (!auth.user) return { error: "No autorizado" };

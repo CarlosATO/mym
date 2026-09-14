@@ -4,33 +4,28 @@ import { useEffect, useState } from "react";
 import { Loader2, Search, X } from "lucide-react";
 import {
   getMermaMovementReview,
-  getMermasRejected,
   type MermaEvidence,
   type MermaRejectedRow,
 } from "@/app/actions/logistica/mermas";
 import { formatCivilDate } from "@/lib/datetime";
+import { useMermasModule } from "./mermas-module-provider";
 
 export function MermasArchivedPanel() {
-  const [rows, setRows] = useState<MermaRejectedRow[]>([]);
+  const { archived, ensureArchivedLoaded } = useMermasModule();
+  const rows = archived.data;
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<{
     movement: MermaRejectedRow;
     evidence: MermaEvidence[];
   } | null>(null);
-  const [loading, setLoading] = useState(true);
+  const loading = !archived.loaded;
   const [error, setError] = useState("");
   const [sort, setSort] = useState<keyof MermaRejectedRow>("rejected_at");
   const [descending, setDescending] = useState(true);
 
   useEffect(() => {
-    getMermasRejected().then((result) => {
-      setRows(result.data);
-      setError(result.error ?? "");
-      setLoading(false);
-    }).catch(() => {
-      setError("No se pudieron cargar las entradas archivadas");
-      setLoading(false);
-    });
+    void ensureArchivedLoaded();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const visible = rows
@@ -53,25 +48,25 @@ export function MermasArchivedPanel() {
   }
 
   return (
-    <section className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
+    <section className="space-y-4">
+      <div className="flex flex-col gap-3 rounded-2xl border border-theme-border bg-theme-bg p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-sm font-semibold text-theme-text">Archivadas</h2>
           <p className="mt-1 text-xs text-theme-text-muted">Entradas rechazadas, conservadas para trazabilidad.</p>
         </div>
-        <div className="relative w-64 max-w-full">
+        <div className="relative w-full max-w-sm">
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-theme-text-muted/50" />
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar SKU o MER..." className="h-9 w-full rounded-lg border border-theme-border bg-theme-surface pl-9 pr-3 text-xs text-theme-text" />
         </div>
       </div>
       {error && <p className="rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-600">{error}</p>}
       {loading ? <div className="flex justify-center py-12"><Loader2 className="h-5 w-5 animate-spin text-theme-text-muted" /></div> : (
-        <div className="overflow-x-auto rounded-xl border border-theme-border">
+        <div className="overflow-x-auto rounded-2xl border border-theme-border bg-theme-surface shadow-sm">
           <table className="w-full min-w-[1050px] text-sm">
-            <thead className="bg-theme-text/[0.025] text-left text-[10px] uppercase tracking-wider text-theme-text-muted">
+            <thead className="bg-theme-bg text-left text-[10px] uppercase tracking-wider text-theme-text-muted">
               <tr>{([["MER / Origen", "request_code"], ["SKU", "sku"], ["Producto", "product_name"], ["Cantidad", "available"], ["Vencimiento", "expiration_date"], ["Resultado", "authorization_status"], ["Motivo rechazo", "rejection_reason"], ["Revisado por", "rejected_by_name"], ["Fecha revisión", "rejected_at"]] as const).map(([label, column]) => <th key={label} className="px-3 py-3"><button type="button" onClick={() => orderBy(column)}>{label}</button></th>)}</tr>
             </thead>
-            <tbody>{visible.map((row) => <tr key={row.movement_id} className="border-t border-theme-border/70">
+            <tbody>{visible.map((row) => <tr key={row.movement_id} className="border-t border-theme-border/70 transition-colors hover:bg-theme-accent/[0.035]">
               <td className="px-3 py-3 font-mono text-theme-text"><button type="button" onClick={() => void review(row)} className="font-semibold text-theme-text-accent hover:underline">{row.request_code ?? row.origin}</button></td>
               <td className="px-3 py-3 font-mono font-semibold text-theme-text">{row.sku}</td>
               <td className="px-3 py-3 text-theme-text-muted">{row.product_name}</td>

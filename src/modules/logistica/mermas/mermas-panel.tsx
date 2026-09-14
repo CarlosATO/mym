@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
   ArrowDown,
@@ -12,7 +12,6 @@ import {
   CheckCircle2,
   Loader2,
   Plus,
-  RefreshCw,
   Search,
   Trash2,
   X,
@@ -22,14 +21,14 @@ import {
   cancelMermaRequest,
   authorizeMermaRequestWithConsumption,
   getMermasBsaleCandidates,
-  getMermasBsaleIncidents,
   getMermasContext,
   getMermasRequest,
   getMermasRequests,
-  getMermasWarehouse,
+  getMermaWarehouseEvidence,
+  getMermasWarehouseTrace,
   getPendingMermasCount,
   searchMermasProducts,
-  syncMermasFromBsale,
+  saveMermasPricingSettings,
   cleanupMermaEvidenceUploads,
   prepareMermaIncidentEvidenceUploads,
   regularizeMermaBsaleIncident,
@@ -39,6 +38,8 @@ import {
   type MermaRequest,
   type MermaBsaleIncident,
   type MermaWarehouseProduct,
+  type MermaWarehouseListProduct,
+  type MermaPricingSettings,
 } from "@/app/actions/logistica/mermas";
 import { NewMermaForm } from "./new-merma-form";
 import { uploadMermaEvidence } from "./new-merma-form-with-evidence";
@@ -46,6 +47,7 @@ import { MermasAuthorizationPanel } from "./mermas-authorization-panel";
 import { MermasArchivedPanel } from "./mermas-archived-panel";
 import { MermaEvidenceViewer } from "./mermas-evidence-viewer";
 import { formatCivilDate, formatInstantInSantiago } from "@/lib/datetime";
+import { useMermasModule } from "./mermas-module-provider";
 
 type Mode = "list" | "new" | "detail";
 type DraftLine = {
@@ -94,8 +96,10 @@ export function MermasPanel({
   mode: Mode;
   requestId?: string;
 }) {
+  const { bootstrap } = useMermasModule();
   if (mode === "new") return <NewMermaForm />;
   if (mode === "detail") return <MermaDetail requestId={requestId!} />;
+  if (!bootstrap.canView) return null;
   return <MermaOperations />;
 }
 
@@ -121,28 +125,42 @@ function PanelHeader({
 
 function MermaOperations() {
   const router = useRouter();
-  const [tab, setTab] = useState<"requests" | "warehouse" | "authorization" | "archived">(
+  const searchParams = useSearchParams();
+  const {
+    bootstrap,
+    requests: requestCache,
+    warehouse: warehouseCache,
+    bsaleIncidents: incidentsCache,
+    pendingCount: pending,
+    ensureRequestsLoaded,
+    ensureWarehouseLoaded,
+    invalidateRequests,
+    invalidateWarehouse,
+  } = useMermasModule();
+  const [tab, setTab] = useState<"requests" | "warehouse" | "authorization" | "archived" | "configuration">(
     "requests",
   );
-  const [requests, setRequests] = useState<MermaRequest[]>([]);
-  const [warehouse, setWarehouse] = useState<
-    Awaited<ReturnType<typeof getMermasWarehouse>>["data"]
-  >([]);
   const [search, setSearch] = useState("");
-  const [pending, setPending] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
   const [requestSort, setRequestSort] = useState("created_at");
   const [warehouseSort, setWarehouseSort] = useState("entered_at");
   const [descending, setDescending] = useState(true);
   const [warehouseDescending, setWarehouseDescending] = useState(false);
   const [warehouseSearch, setWarehouseSearch] = useState("");
-  const [selectedWarehouseProduct, setSelectedWarehouseProduct] = useState<MermaWarehouseProduct | null>(null);
-  const [bsaleIncidents, setBsaleIncidents] = useState<MermaBsaleIncident[]>([]);
+  const [selectedWarehouseProduct, setSelectedWarehouseProduct] = useState<MermaWarehouseListProduct | null>(null);
   const [incidentsOpen, setIncidentsOpen] = useState(false);
-  const sortedRequests = [...requests].sort(
+  const [pricingSettings, setPricingSettings] = useState<MermaPricingSettings | null>(bootstrap.pricingSettings);
+  const requestedTab = searchParams.get("view");
+  useEffect(() => {
+    if (requestedTab === "warehouse" || requestedTab === "authorization" || requestedTab === "archived" || requestedTab === "configuration") {
+      // The URL is the source of truth when navigating from the persistent shell.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setTab(requestedTab);
+    } else if (!requestedTab || requestedTab === "requests") {
+      setTab("requests");
+    }
+  }, [requestedTab]);
+  const sortedRequests = [...requestCache.data].sort(
     (a, b) =>
       (descending ? -1 : 1) *
       String(a[requestSort as keyof MermaRequest] ?? "").localeCompare(
@@ -152,7 +170,7 @@ function MermaOperations() {
       ),
   );
   const normalizedWarehouseSearch = warehouseSearch.trim().toLocaleLowerCase("es-CL");
-  const filteredWarehouse = warehouse.filter((row) =>
+  const filteredWarehouse = warehouseCache.data.filter((row) =>
     `${row.sku} ${row.product_name}`.toLocaleLowerCase("es-CL").includes(normalizedWarehouseSearch),
   );
   const sortedWarehouse = [...filteredWarehouse].sort((a, b) => {
@@ -172,123 +190,39 @@ function MermaOperations() {
     return (warehouseDescending ? -1 : 1) * comparison;
   });
 
-  async function load() {
-    setLoading(true);
-    setError("");
-    const incidentsResult = await getMermasBsaleIncidents();
-    setBsaleIncidents(incidentsResult.data);
-    if (incidentsResult.error) setError(incidentsResult.error);
-    if (tab === "requests") {
-      const [result, count] = await Promise.all([
-        getMermasRequests(search),
-        getPendingMermasCount(),
-      ]);
-      setRequests(result.data);
-      setPending(count);
-      setError(result.error ?? incidentsResult.error ?? "");
-    } else if (tab === "warehouse") {
-      const result = await getMermasWarehouse();
-      setWarehouse(result.data);
-      setError(result.error ?? incidentsResult.error ?? "");
-    }
-    setLoading(false);
-  }
-
-  // The effect refreshes the server-backed operational view when filters change.
   useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 0);
-    return () => window.clearTimeout(timer);
+    if (tab === "requests") void ensureRequestsLoaded(search);
+    if (tab === "warehouse") void ensureWarehouseLoaded();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, search]);
+  }, [requestCache.invalidated, tab, search]);
 
-  async function sync() {
-    setSyncing(true);
-    setMessage("");
-    setError("");
-    try {
-      const result = await syncMermasFromBsale();
-      if (!result.success)
-        setError(result.error ?? "No se pudo sincronizar Mermas Bsale");
-      else {
-        setMessage(
-          `${result.newDetails} detalles Bsale ingeridos · disponibles para asociación manual`,
-        );
-        await load();
-      }
-    } catch (syncError) {
-      setError(
-        syncError instanceof Error
-          ? syncError.message
-          : "No se pudo sincronizar Mermas Bsale",
-      );
-    } finally {
-      setSyncing(false);
-    }
-  }
+  useEffect(() => {
+    const routes = [
+      "/dashboard/logistica/mermas/nueva",
+      ...(bootstrap.canViewAccounts ? ["/dashboard/logistica/mermas/cuenta-corriente"] : []),
+    ];
+    if (bootstrap.canUseInternalSale) routes.push("/dashboard/logistica/mermas/venta-trabajadores");
+    if (bootstrap.canReviewPayments) routes.push("/dashboard/logistica/mermas/revision-pagos");
+    routes.forEach((route) => router.prefetch(route));
+  }, [bootstrap.canReviewPayments, bootstrap.canUseInternalSale, bootstrap.canViewAccounts, router]);
 
   return (
-    <div className="min-h-[calc(100vh-7.5rem)] bg-theme-surface">
-      <PanelHeader
-        title="Mermas"
-        description="Solicitudes y Bodega de Mermas"
-        action={
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => void sync()}
-              disabled={syncing}
-              className="inline-flex items-center gap-2 rounded-xl border border-theme-border px-3 py-2.5 text-xs font-semibold text-theme-text-muted hover:bg-theme-text/5 disabled:opacity-50"
-            >
-              <RefreshCw
-                className={syncing ? "h-4 w-4 animate-spin" : "h-4 w-4"}
-              />{" "}
-              Sincronizar Bsale
-            </button>
-            {tab === "requests" && (
-              <button
-                onClick={() => router.push("/dashboard/logistica/mermas/nueva")}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-theme-accent px-4 py-2.5 text-xs font-semibold text-white hover:bg-theme-accent-hover"
-              >
-                <Plus className="h-4 w-4" /> Nueva solicitud
-              </button>
-            )}
-          </div>
-        }
-      />
-      <div className="space-y-4 p-5">
-        <nav
-          className="flex border-b border-theme-border"
-          aria-label="Vistas de Mermas"
-        >
-          {(
-            [
-              ["requests", "Solicitudes"],
-              ["warehouse", "Bodega de Mermas"],
-              ["authorization", "Pendientes de autorización"],
-              ["archived", "Archivadas"],
-            ] as const
-          ).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setTab(value)}
-              className={`border-b-2 px-4 py-2.5 text-xs font-semibold ${tab === value ? "border-theme-accent text-theme-text-accent" : "border-transparent text-theme-text-muted hover:text-theme-text"}`}
-            >
-              {label}
-            </button>
-          ))}
-        </nav>
+    <div className="space-y-4 p-4 sm:p-5">
+        {tab === "configuration" && pricingSettings?.can_edit && (
+          <MermasPricingSettingsPanel
+            settings={pricingSettings}
+            onSaved={(settings) => {
+              setPricingSettings(settings);
+              invalidateWarehouse();
+            }}
+          />
+        )}
         {message && (
           <p className="rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">
             {message}
           </p>
         )}
-        {error && (
-          <p className="rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-600">
-            {error}
-          </p>
-        )}
-        {bsaleIncidents.length > 0 && (
+        {tab === "requests" && incidentsCache.data.length > 0 && (
           <button
             type="button"
             onClick={() => setIncidentsOpen(true)}
@@ -297,7 +231,7 @@ function MermaOperations() {
             <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
             <span>
               <strong className="block text-sm uppercase tracking-wide">
-                {bsaleIncidents.length} consumo{bsaleIncidents.length === 1 ? "" : "s"} de merma en Bsale sin solicitud Petgroup
+                {incidentsCache.data.length} consumo{incidentsCache.data.length === 1 ? "" : "s"} de merma en Bsale sin solicitud Petgroup
               </strong>
               <span className="mt-0.5 block text-xs opacity-85">
                 Requieren regularización antes de ingresar a Bodega de Mermas.
@@ -305,7 +239,7 @@ function MermaOperations() {
             </span>
           </button>
         )}
-        {tab === "requests" && (
+         {(tab === "requests" || (tab === "authorization" && !bootstrap.canAuthorize)) && (
           <>
             {pending > 0 && (
               <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
@@ -329,15 +263,15 @@ function MermaOperations() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Buscar por correlativo MER..."
-                className="h-10 w-full rounded-xl border border-theme-border bg-theme-surface pl-10 pr-3 text-sm text-theme-text outline-none focus:border-theme-accent"
+                 className="h-10 w-full rounded-xl border border-theme-border bg-theme-bg pl-10 pr-3 text-sm text-theme-text outline-none transition focus:border-theme-accent focus:ring-2 focus:ring-theme-accent/15"
               />
             </div>
-            {loading ? (
+            {!requestCache.loaded ? (
               <Loading />
             ) : (
-              <div className="overflow-x-auto rounded-xl border border-theme-border">
+               <div className="overflow-x-auto rounded-2xl border border-theme-border shadow-sm">
                 <table className="w-full min-w-[720px] text-sm">
-                  <thead className="bg-theme-text/[0.025] text-left text-[10px] uppercase tracking-wider text-theme-text-muted">
+                   <thead className="bg-theme-bg text-left text-[10px] uppercase tracking-wider text-theme-text-muted">
                     <tr>
                       {(
                         [
@@ -371,7 +305,7 @@ function MermaOperations() {
                     {sortedRequests.map((request) => (
                       <tr
                         key={request.id}
-                        className={`border-t border-theme-border/70 ${request.status === "CANCELADA" ? "bg-red-500/[0.035]" : ""}`}
+                         className={`border-t border-theme-border/70 transition-colors hover:bg-theme-accent/[0.035] ${request.status === "CANCELADA" ? "bg-red-500/[0.035]" : ""}`}
                       >
                         <td className="px-4 py-3 font-mono font-semibold text-theme-text">
                           {request.request_code}
@@ -413,13 +347,13 @@ function MermaOperations() {
             )}
           </>
         )}
-        {tab === "authorization" ? (
+         {tab === "authorization" && bootstrap.canAuthorize ? (
           <MermasAuthorizationPanel />
         ) : tab === "archived" ? (
           <MermasArchivedPanel />
         ) : (
           tab === "warehouse" &&
-          (loading ? (
+          (!warehouseCache.loaded ? (
             <Loading />
           ) : (
             <section className="space-y-3">
@@ -433,20 +367,23 @@ function MermaOperations() {
                     value={warehouseSearch}
                     onChange={(event) => setWarehouseSearch(event.target.value)}
                     placeholder="Buscar SKU o producto..."
-                    className="h-9 w-full rounded-lg border border-theme-border bg-theme-surface pl-9 pr-3 text-xs text-theme-text outline-none focus:border-theme-accent"
+                           className="h-9 w-full rounded-xl border border-theme-border bg-theme-bg pl-9 pr-3 text-xs text-theme-text outline-none focus:border-theme-accent"
                   />
                 </div>
               </div>
-              <div className="overflow-x-auto rounded-xl border border-theme-border">
+               <div className="overflow-x-auto rounded-2xl border border-theme-border shadow-sm">
                 <table className="w-full min-w-[900px] text-sm">
-                <thead className="bg-theme-text/[0.025] text-left text-[10px] uppercase tracking-wider text-theme-text-muted">
+                <thead className="bg-theme-bg text-left text-[10px] uppercase tracking-wider text-theme-text-muted">
                   <tr>
                     {(
                       [
                         ["SKU", "sku"],
                         ["Producto", "product_name"],
-                        ["Disponible", "available"],
-                        ["Próx. vencimiento", "next_expiration"],
+                       ["Disponible", "available"],
+                         ["Costo neto", "average_cost"],
+                         ["Costo c/IVA", "cost_with_vat"],
+                          ["Precio sugerido", "worker_price"],
+                         ["Próx. vencimiento", "next_expiration"],
                         ["Estado vencimiento", "expiration_status"],
                         ["Partidas", "lot_count"],
                         ["Último ingreso", "last_entry_at"],
@@ -486,7 +423,7 @@ function MermaOperations() {
                       <tr
                         key={row.variant_id}
                         onDoubleClick={() => setSelectedWarehouseProduct(row)}
-                        className="cursor-pointer border-t border-theme-border/70 transition-colors hover:bg-theme-text/[0.025]"
+                        className="cursor-pointer border-t border-theme-border/70 transition-colors hover:bg-theme-accent/[0.035]"
                       >
                         <td className="px-3 py-2 font-mono font-semibold text-theme-text">
                           {row.sku}
@@ -494,9 +431,22 @@ function MermaOperations() {
                         <td className="px-3 py-2 text-theme-text-muted">
                           {row.product_name}
                         </td>
-                        <td className="px-3 py-2 tabular-nums font-semibold text-theme-text">
-                          {row.available}
-                        </td>
+                         <td className="px-3 py-2 tabular-nums font-semibold text-theme-text">
+                           {row.available}
+                         </td>
+                          <td className="px-3 py-2 tabular-nums text-theme-text">
+                            {row.average_cost === null ? <span className="text-red-600">SIN COSTO</span> : formatClp(row.average_cost)}
+                          </td>
+                          <td className="px-3 py-2 tabular-nums text-theme-text">
+                            {row.cost_with_vat === null ? <span className="text-red-600">SIN COSTO</span> : formatClp(row.cost_with_vat)}
+                          </td>
+                         <td className="px-3 py-2 tabular-nums text-theme-text">
+                           {row.worker_price !== null
+                             ? formatClp(row.worker_price)
+                             : row.average_cost === null
+                               ? <span className="text-theme-text-muted">NO DISPONIBLE</span>
+                               : <span className="text-theme-text-muted">NO CONFIGURADO</span>}
+                         </td>
                         <td className="px-3 py-2 text-theme-text-muted">
                           {row.next_expiration ? formatCivilDate(row.next_expiration) : "-"}
                         </td>
@@ -534,27 +484,25 @@ function MermaOperations() {
             </section>
           ))
         )}
-      </div>
       {selectedWarehouseProduct && (
         <MermaWarehouseTraceabilityDialog
+          key={selectedWarehouseProduct.variant_id}
           product={selectedWarehouseProduct}
           onClose={() => setSelectedWarehouseProduct(null)}
         />
       )}
         {incidentsOpen && (
           <MermaBsaleIncidentsDialog
-            incidents={bsaleIncidents}
+            incidents={incidentsCache.data}
             onClose={() => setIncidentsOpen(false)}
             onCreated={(requestCode) => {
               setIncidentsOpen(false);
               setMessage(`${requestCode} creada correctamente.`);
-              void load();
-              router.push("/dashboard/logistica/mermas");
-              router.refresh();
+              void invalidateRequests().then(() => ensureRequestsLoaded(search, true));
             }}
-          />
-        )}
-    </div>
+           />
+         )}
+        </div>
   );
 }
 
@@ -564,6 +512,97 @@ function Loading() {
       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
       Cargando...
     </div>
+  );
+}
+
+function formatClp(value: number) {
+  return new Intl.NumberFormat("es-CL", {
+    style: "currency",
+    currency: "CLP",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function MermasPricingSettingsPanel({
+  settings,
+  onSaved,
+}: {
+  settings: MermaPricingSettings;
+  onSaved: (settings: MermaPricingSettings) => void;
+}) {
+  const [value, setValue] = useState(
+    settings.worker_markup_percent === null ? "" : String(settings.worker_markup_percent),
+  );
+  const [monthlyLimit, setMonthlyLimit] = useState(
+    settings.worker_monthly_limit_amount === null ? "" : String(settings.worker_monthly_limit_amount),
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  async function save() {
+    setSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await saveMermasPricingSettings(value, monthlyLimit);
+      if (!result.success || !result.data) {
+        setError(result.error ?? "No se pudo guardar la configuración");
+        return;
+      }
+      onSaved(result.data);
+      setValue(result.data.worker_markup_percent === null ? "" : String(result.data.worker_markup_percent));
+      setMonthlyLimit(result.data.worker_monthly_limit_amount === null ? "" : String(result.data.worker_monthly_limit_amount));
+      setMessage("Configuración guardada.");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "No se pudo guardar la configuración");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="space-y-3">
+      <div>
+        <h2 className="text-base font-semibold text-theme-text">Configuración</h2>
+        <p className="mt-1 text-xs text-theme-text-muted">Parámetros administrativos para futuras ventas internas de Mermas.</p>
+      </div>
+      <div className="grid gap-3 lg:grid-cols-2">
+        <div className="rounded-xl border border-theme-border bg-theme-text/[0.018] p-4">
+          <h3 className="text-sm font-semibold text-theme-text">Precio venta trabajadores</h3>
+          <p className="mt-1 text-xs text-theme-text-muted">Porcentaje usado para calcular el precio sugerido sobre el costo con IVA incluido.</p>
+          <div className="mt-4 flex items-end gap-2">
+            <label className="text-xs font-medium text-theme-text-muted">
+                Porcentaje para precio sugerido
+              <div className="mt-1 flex items-center gap-2">
+                <input aria-label="Porcentaje de precio venta trabajadores" type="number" min="0" step="0.001" value={value} onChange={(event) => setValue(event.target.value)} placeholder="No configurado" className="h-9 w-32 rounded-lg border border-theme-border bg-theme-surface px-2 text-sm text-theme-text outline-none focus:border-theme-accent" />
+                <span className="text-sm text-theme-text">%</span>
+              </div>
+            </label>
+            <button type="button" onClick={() => void save()} disabled={saving} className="h-9 rounded-lg bg-theme-accent px-3 text-xs font-semibold text-white hover:bg-theme-accent-hover disabled:opacity-50">{saving ? "GUARDANDO..." : "GUARDAR"}</button>
+          </div>
+        </div>
+        <div className="rounded-xl border border-theme-border bg-theme-text/[0.018] p-4">
+          <h3 className="text-sm font-semibold text-theme-text">Límite mensual</h3>
+          <p className="mt-1 text-xs text-theme-text-muted">Monto máximo acumulado que un trabajador podrá comprar en productos de Mermas durante un mes calendario.</p>
+          <div className="mt-4 flex items-end gap-2">
+            <label className="text-xs font-medium text-theme-text-muted">
+              Tope mensual por trabajador
+              <div className="mt-1 flex items-center gap-2">
+                <span className="text-sm text-theme-text">$</span>
+                <input aria-label="Tope mensual por trabajador" type="number" min="1" step="1" value={monthlyLimit} onChange={(event) => setMonthlyLimit(event.target.value)} placeholder="No configurado" className="h-9 w-36 rounded-lg border border-theme-border bg-theme-surface px-2 text-sm text-theme-text outline-none focus:border-theme-accent" />
+              </div>
+            </label>
+            <button type="button" onClick={() => void save()} disabled={saving} className="h-9 rounded-lg bg-theme-accent px-3 text-xs font-semibold text-white hover:bg-theme-accent-hover disabled:opacity-50">{saving ? "GUARDANDO..." : "GUARDAR"}</button>
+          </div>
+        </div>
+      </div>
+      {(error || message) && (
+        <p className={`mt-2 text-xs ${error ? "text-red-600" : "text-emerald-700 dark:text-emerald-300"}`}>
+          {error || message}
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -807,9 +846,44 @@ function MermaWarehouseTraceabilityDialog({
   product,
   onClose,
 }: {
-  product: MermaWarehouseProduct;
+  product: MermaWarehouseListProduct;
   onClose: () => void;
 }) {
+  const [traceProduct, setTraceProduct] = useState<MermaWarehouseProduct | null>(null);
+  const [history, setHistory] = useState<MermaWarehouseProduct["history"]>([]);
+  const [traceLoading, setTraceLoading] = useState(true);
+  const [traceError, setTraceError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    getMermasWarehouseTrace(product.variant_id).then(async (traceResult) => {
+      if (!active) return;
+      if (traceResult.error || !traceResult.data) {
+        setTraceError(traceResult.error ?? "No se pudo cargar la trazabilidad.");
+        return;
+      }
+      setTraceProduct(traceResult.data);
+      const evidenceResult = await getMermaWarehouseEvidence(product.variant_id);
+      if (!active) return;
+      if (evidenceResult.error) {
+        setTraceError(evidenceResult.error);
+        return;
+      }
+      const evidenceByMovement = new Map(evidenceResult.data.map((item) => [item.movement_id, item.evidence]));
+      setHistory(traceResult.data.history.map((entry) => ({
+        ...entry,
+        evidence: evidenceByMovement.get(entry.id) ?? [],
+      })));
+    }).catch((error) => {
+      if (active) setTraceError(error instanceof Error ? error.message : "No se pudo cargar la trazabilidad.");
+    }).finally(() => {
+      if (active) setTraceLoading(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, [product]);
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-3 sm:p-6"
@@ -839,6 +913,8 @@ function MermaWarehouseTraceabilityDialog({
           </button>
         </div>
         <div className="overflow-y-auto p-4">
+          {traceLoading && <p className="mb-3 text-xs text-theme-text-muted">Cargando trazabilidad...</p>}
+          {traceError && <p className="mb-3 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-600">{traceError}</p>}
           <section>
             <h3 className="text-xs font-bold uppercase tracking-wide text-theme-text-muted">Partidas disponibles</h3>
             <div className="mt-2 overflow-x-auto rounded-lg border border-theme-border">
@@ -854,7 +930,7 @@ function MermaWarehouseTraceabilityDialog({
                   </tr>
                 </thead>
                 <tbody>
-                  {product.lots.map((lot) => (
+                  {(traceProduct?.lots ?? []).map((lot) => (
                     <tr key={lot.id} className="border-t border-theme-border/70">
                       <td className="px-3 py-2 tabular-nums font-semibold text-theme-text">{lot.available}</td>
                       <td className="px-3 py-2 text-theme-text-muted">{lot.expiration_date ? formatCivilDate(lot.expiration_date) : "-"}</td>
@@ -885,7 +961,7 @@ function MermaWarehouseTraceabilityDialog({
                   </tr>
                 </thead>
                 <tbody>
-                  {product.history.map((entry) => (
+                   {history.map((entry) => (
                     <tr key={entry.id} className="border-t border-theme-border/70 align-top">
                       <td className="whitespace-nowrap px-3 py-2 text-theme-text-muted">{formatStoredDate(entry.occurred_at)}</td>
                       <td className="px-3 py-2 font-semibold text-theme-text">{entry.movement_type}</td>
@@ -947,7 +1023,7 @@ function MermaList() {
     <div className="min-h-[calc(100vh-7.5rem)] bg-theme-surface">
       <PanelHeader
         title="Mermas"
-        description="Solicitudes pendientes de gestión Bsale"
+        description="Solicitudes de traspaso a Mermas pendientes de gestión Bsale"
         action={
           <button
             onClick={() => router.push("/dashboard/logistica/mermas/nueva")}
@@ -965,7 +1041,7 @@ function MermaList() {
             </span>
             <div>
               <p className="font-semibold">
-                Solicitudes pendientes de gestionar en Bsale
+                Solicitudes de traspaso a Mermas pendientes de gestionar en Bsale
               </p>
               <p className="mt-0.5 text-xs opacity-80">
                 Estas solicitudes están listas para ser revisadas y replicadas

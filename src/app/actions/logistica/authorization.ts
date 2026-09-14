@@ -7,6 +7,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 export type WmsAuthorization = {
   user: { id: string }
   companyId: string
+  companyName: string
 }
 
 export async function requireWmsPermission(permissionCode: string | string[]): Promise<WmsAuthorization> {
@@ -32,7 +33,7 @@ export async function requireWmsPermission(permissionCode: string | string[]): P
   const { data: company, error: companyError } = await createAdminClient()
     .schema('core')
     .from('companies')
-    .select('id, is_active')
+    .select('id, is_active, trade_name, business_name')
     .eq('id', companyId)
     .maybeSingle()
 
@@ -60,5 +61,9 @@ export async function requireWmsPermission(permissionCode: string | string[]): P
     }
   }
 
-  return { user: { id: user.id }, companyId }
+  return {
+    user: { id: user.id },
+    companyId,
+    companyName: company.trade_name || company.business_name || 'Empresa activa',
+  }
 }

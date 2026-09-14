@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { AccessDenied } from '@/components/access-denied'
 import { ReceiptWorksheet } from '@/modules/logistica/recepciones/receipt-worksheet'
 
 interface PageProps {
@@ -11,6 +12,11 @@ export default async function Page({ params }: PageProps) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
+
+  const { data: allowed } = await supabase.rpc('has_permission', {
+    p_permission_code: 'adquisiciones.po.view',
+  })
+  if (allowed !== true) return <AccessDenied />
 
   const { data: profile } = await supabase
     .from('users')

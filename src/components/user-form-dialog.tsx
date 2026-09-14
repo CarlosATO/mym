@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { createUser, updateUser, getUserCompanyIds, getAllActiveCompanies } from '@/app/actions/users'
+import { createUser, updateUser, getUserCompanyIds, getUserCompanyAccess, getAllActiveCompanies } from '@/app/actions/users'
 import type { Profile, Rol } from '@/lib/types'
 
 interface CompanyOption {
@@ -30,20 +30,25 @@ export function UserFormDialog({ open, onOpenChange, roles, userToEdit }: UserFo
   const [pending, setPending] = useState(false)
   const [companies, setCompanies] = useState<CompanyOption[]>([])
   const [selectedCompanies, setSelectedCompanies] = useState<string[]>([])
+  const [companyRoles, setCompanyRoles] = useState<Record<string, string>>({})
   const [loadingCompanies, setLoadingCompanies] = useState(true)
 
   useEffect(() => {
     if (open) {
+      // Reset the dialog state before loading the selected user's access.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLoadingCompanies(true)
       setSelectedCompanies([])
+      setCompanyRoles({})
       getAllActiveCompanies().then(list => {
         setCompanies(list as unknown as CompanyOption[])
         setLoadingCompanies(false)
       })
 
       if (userToEdit) {
-        getUserCompanyIds(userToEdit.id).then(ids => {
+        Promise.all([getUserCompanyIds(userToEdit.id), getUserCompanyAccess(userToEdit.id)]).then(([ids, access]) => {
           setSelectedCompanies(ids)
+          setCompanyRoles(Object.fromEntries(access.map(item => [item.company_id, item.role])))
         })
       }
     }
@@ -158,7 +163,12 @@ export function UserFormDialog({ open, onOpenChange, roles, userToEdit }: UserFo
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="roleId">Rol</Label>
+                <Label htmlFor="roleId">Rol global</Label>
+                {userToEdit && Object.keys(companyRoles).length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    El rol global se sincroniza con las empresas seleccionadas. Roles actuales por empresa: {Object.values(companyRoles).join(', ')}.
+                  </p>
+                )}
               <select
                 id="roleId"
                 name="roleId"
