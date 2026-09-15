@@ -383,10 +383,10 @@ export function InventoryCampaignSupplementalFindings({
           <span className="font-semibold">Lotes supplemental:</span>
           {batches.map(batch => (
             <span key={batch.supplemental_session_id} className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 px-2 py-0.5">
-              {batch.site_name} · {batch.recorded_count} hallazgo(s) · {batch.session_status === 'UNDER_REVIEW' ? 'En revisión' : 'Proceso pendiente'}
+              {batch.site_name} · {batch.recorded_count} hallazgo(s) · {batch.session_status === 'UNDER_REVIEW' ? 'Sincronizado' : 'Proceso pendiente'}
             </span>
           ))}
-          <span className="text-emerald-700/80 dark:text-emerald-200/80">Los lotes en revisión no requieren otra sincronización.</span>
+          <span className="text-emerald-700/80 dark:text-emerald-200/80">Los hallazgos sincronizados ya fueron incorporados al conteo del inventario.</span>
         </div>
       )}
 
@@ -436,7 +436,7 @@ export function InventoryCampaignSupplementalFindings({
                      <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${classificationTone(finding.classification)}`}>
                          {finding.status === 'DRAFT'
                           ? (isSyncableClassification(finding.classification) ? 'Pendiente de sincronizar' : 'Requiere revisión')
-                         : finding.status === 'UNDER_REVIEW' ? 'En revisión' : 'Procesado'}
+                          : finding.status === 'UNDER_REVIEW' ? 'Sincronizado' : 'Procesado'}
                      </span>
                    </td>
                    <td className="whitespace-nowrap px-3 py-1.5 text-right">
@@ -862,7 +862,7 @@ export function InventoryCampaignSupplementalFindings({
         <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-xl border border-theme-border bg-theme-surface p-5 shadow-2xl">
             <h3 className="text-base font-bold text-theme-text">Sincronizar hallazgos</h3>
-            <p className="mt-1 text-sm text-theme-text-muted">Se procesarán los hallazgos pendientes y se incorporarán al conteo del inventario. Al finalizar, los lotes procesados quedarán listos para revisión.</p>
+            <p className="mt-1 text-sm text-theme-text-muted">Se procesarán los hallazgos pendientes y se incorporarán al conteo del inventario. Al finalizar, los lotes procesados quedarán sincronizados.</p>
             <dl className="mt-4 grid grid-cols-2 gap-2 text-sm">
               <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-3 py-2"><dt className="text-xs text-theme-text-muted">Hallazgos pendientes elegibles</dt><dd className="mt-0.5 font-semibold text-theme-text">{eligibleFindings.length}</dd></div>
               <div className="rounded-lg border border-theme-border px-3 py-2"><dt className="text-xs text-theme-text-muted">Cantidad física pendiente</dt><dd className="mt-0.5 font-semibold text-theme-text">{formatQuantity(pendingQuantity)} unidades</dd></div>
