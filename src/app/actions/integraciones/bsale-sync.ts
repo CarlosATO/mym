@@ -507,12 +507,89 @@ async function syncStock(companyId: string, runId: string): Promise<number> {
         onConflict: 'company_id, variant_id, office_id',
         ignoreDuplicates: false,
       })
-      if (error) console.error(`[syncStock] page ${page} error:`, error.message)
+      if (error) throw new Error(`Error guardando stock en página ${page}: ${error.message}`)
       count += records.length
     },
   })
 
   return count
+}
+
+async function captureDailyStockSnapshot(companyId: string, runId: string): Promise<number> {
+  const db = integrDb()
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Santiago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date())
+  const part = (type: string) => parts.find(({ type: currentType }) => currentType === type)?.value
+  const snapshotDate = `${part('year')}-${part('month')}-${part('day')}`
+  const capturedAt = new Date().toISOString()
+
+  const stocks: any[] = []
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await db
+      .from('bsale_stock_current')
+      .select('variant_id, variant_code, quantity, quantity_reserved, quantity_available, office_id')
+      .eq('company_id', companyId)
+      .eq('office_id', 1)
+      .eq('bsale_sync_run_id', runId)
+      .range(offset, offset + 999)
+
+    if (error) throw new Error(`Error leyendo stock para snapshot: ${error.message}`)
+    stocks.push(...(data || []))
+    if (!data || data.length < 1000) break
+  }
+
+  const variantIds = [...new Set(stocks.map((stock: any) => stock.variant_id).filter(Boolean))]
+  const variants: any[] = []
+  for (let offset = 0; offset < variantIds.length; offset += 100) {
+    const { data, error } = await db
+      .from('bsale_variants')
+      .select('bsale_id, code')
+      .eq('company_id', companyId)
+      .in('bsale_id', variantIds.slice(offset, offset + 100))
+    if (error) throw new Error(`Error resolviendo SKU para snapshot: ${error.message}`)
+    variants.push(...(data || []))
+  }
+  const codeMap = new Map(variants.map((variant: any) => [variant.bsale_id, variant.code]))
+  const unresolved = stocks.filter((stock: any) => !stock.variant_code && !codeMap.get(stock.variant_id)).length
+  if (unresolved > 0) {
+    console.warn(`[captureDailyStockSnapshot] Variantes sin SKU resoluble: ${unresolved}`)
+  }
+
+  const records = stocks.map((stock: any) => ({
+    company_id: companyId,
+    office_id: 1,
+    variant_id: stock.variant_id,
+    variant_code: stock.variant_code || codeMap.get(stock.variant_id) || null,
+    quantity: stock.quantity,
+    quantity_reserved: stock.quantity_reserved,
+    quantity_available: stock.quantity_available,
+    snapshot_date: snapshotDate,
+    captured_at: capturedAt,
+    bsale_sync_run_id: runId,
+  }))
+
+  if (records.length === 0) return 0
+
+  const { error: upsertError } = await db
+    .from('bsale_stock_daily_snapshots')
+    .upsert(records, { onConflict: 'company_id, office_id, variant_id, snapshot_date' })
+
+  if (upsertError) throw new Error(`Error guardando snapshot diario: ${upsertError.message}`)
+
+  const { error: cleanupError } = await db
+    .from('bsale_stock_daily_snapshots')
+    .delete()
+    .eq('company_id', companyId)
+    .eq('office_id', 1)
+    .eq('snapshot_date', snapshotDate)
+    .neq('bsale_sync_run_id', runId)
+
+  if (cleanupError) throw new Error(`Error reemplazando snapshot diario anterior: ${cleanupError.message}`)
+  return records.length
 }
 
 // ─── Sync Costs ────────────────────────────────────────────────────
@@ -2412,6 +2489,10 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       console.log('[runReplenishmentBsaleSync] Iniciando syncStock...');
       try {
          stockCount = await syncStock(companyId, runId);
+         if (finalStatus === 'COMPLETED') {
+           const snapshotCount = await captureDailyStockSnapshot(companyId, runId)
+           console.log(`[runReplenishmentBsaleSync] Snapshot diario CASA MATRIZ: ${snapshotCount} SKUs`)
+         }
       } catch (stockErr: any) {
          console.error('[runReplenishmentBsaleSync] Error en stock:', stockErr);
          finalStatus = 'PARTIAL';

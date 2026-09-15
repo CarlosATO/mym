@@ -9,7 +9,7 @@ import { prepareReplenishmentPurchaseOrder, type PrepareReplenishmentPurchaseOrd
 import { downloadReplenishmentExcelV2, type ReplenishmentExcelRow } from '@/modules/adquisiciones/ordenes-compra/replenishment-excel'
 import { fmt, fmtN } from './replenishment-format'
 import { NO_SUPPLIER, PRODUCT_FALLBACK, getProductName, getPseudoSupplierName, getRealSupplierName } from './replenishment-names'
-import { deriveRows, type SkuRow } from './replenishment-derive'
+import { buildDailySalesIndex, deriveRows, type DailySalesIndex, type SkuRow } from './replenishment-derive'
 import {
   ALL_COLUMNS,
   FIXED_COLUMNS,
@@ -36,6 +36,7 @@ import { ReplenishmentTable } from './replenishment-table'
 
 const COMPANY_ID = 'd1000000-0000-0000-0000-000000000001'
 const DEFAULT_PERIOD_IDX = 3
+const INITIAL_DATASET_DAYS = 60
 const REPLENISHMENT_PO_PREPARATION_KEY = 'mym:adquisiciones:replenishment-po-preparation'
 
 const PERIOD_OPTIONS = [
@@ -65,6 +66,7 @@ interface Props {
 export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   // ─── Dataset / filas ─────────────────────────────────────────────
   const [rows, setRows] = useState<SkuRow[]>([])
+  const [activeDataset, setActiveDataset] = useState<ReplenishmentDataset | null>(null)
   const [filterCatalog, setFilterCatalog] = useState<ReplenishmentFilterCatalog>({ suppliers: [], pairs: [] })
   const [catalogError, setCatalogError] = useState('')
   const datasetCache = useRef(new Map<number, ReplenishmentDataset>())
@@ -148,6 +150,24 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   useEffect(() => { periodIdxRef.current = periodIdx }, [periodIdx])
   useEffect(() => { coverageIdxRef.current = coverageIdx }, [coverageIdx])
 
+  const findSuitableDataset = useCallback((requiredDays: number): ReplenishmentDataset | undefined => {
+    let suitable: ReplenishmentDataset | undefined
+    let suitableDays = Infinity
+    for (const [days, data] of datasetCache.current.entries()) {
+      if (days >= requiredDays && days < suitableDays) {
+        suitable = data
+        suitableDays = days
+      }
+    }
+    return suitable
+  }, [])
+
+  const dailySalesBySku: DailySalesIndex = useMemo(
+    () => activeDataset ? buildDailySalesIndex(activeDataset, INITIAL_DATASET_DAYS) : new Map(),
+    [activeDataset],
+  )
+  void dailySalesBySku
+
   // ─── Consulta presente: ausencia de filtros ≠ mostrar todos ──────
   const hasQuery = useMemo(() => {
     if (showAll) return true
@@ -190,18 +210,19 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   const fetchDataset = useCallback((periodDays: number, force = false): Promise<ReplenishmentDataset> => {
     // 1. Revisar caché existente
     if (!force) {
-      let suitable: ReplenishmentDataset | undefined
-      for (const [days, data] of datasetCache.current.entries()) {
-        if (days >= periodDays) { suitable = data; break }
-      }
+      const suitable = findSuitableDataset(periodDays)
       if (suitable) return Promise.resolve(suitable)
     }
 
     // 2. Revisar promesas en vuelo
     if (!force) {
       let suitablePromise: Promise<ReplenishmentDataset> | undefined
+      let suitableDays = Infinity
       for (const [days, promise] of promisesCache.current.entries()) {
-        if (days >= periodDays) { suitablePromise = promise; break }
+        if (days >= periodDays && days < suitableDays) {
+          suitablePromise = promise
+          suitableDays = days
+        }
       }
       if (suitablePromise) return suitablePromise
     }
@@ -221,9 +242,9 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
 
     promisesCache.current.set(periodDays, promise)
     return promise
-  }, [])
+  }, [findSuitableDataset])
 
-  // Calienta el período por defecto y el catálogo de filtros
+  // Carga la capacidad histórica mínima y el catálogo de filtros
   useEffect(() => {
     let cancelled = false
     const period = PERIOD_OPTIONS[DEFAULT_PERIOD_IDX].value
@@ -242,24 +263,15 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
         if (!cancelled) setCatalogError(e instanceof Error ? e.message : 'Error')
       })
 
-    // 2. Cargar análisis 28 días
-    fetchDataset(period)
+    // 2. Cargar capacidad histórica mínima y derivar el análisis de 28 días
+    fetchDataset(INITIAL_DATASET_DAYS)
       .then(dataset => {
         if (cancelled) return
+        setActiveDataset(dataset)
         const { rows: newRows, dayAfterEnd } = deriveRows(dataset, period, COVERAGE_OPTIONS[coverageIdxRef.current].value)
         setRows(newRows)
         setEffectiveEndDate(dayAfterEnd)
         setInitialLoading(false)
-
-        // BACKGROUND WARMUP SILENCIOSO (solo afecta caché y dataset, NO catálogo)
-        const maxPeriod = PERIOD_OPTIONS[PERIOD_OPTIONS.length - 1].value
-        if (period < maxPeriod) {
-          setTimeout(() => {
-            if (!cancelled) {
-              fetchDataset(maxPeriod).catch(() => { /* falla silenciosa */ })
-            }
-          }, 500)
-        }
       })
       .catch(() => {
         if (!cancelled) setInitialLoading(false)
@@ -280,16 +292,11 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
     const targetPeriod = PERIOD_OPTIONS[i].value
 
     // Buscar dataset en caché que cubra el período solicitado (deriveRows recorta localmente)
-    let suitableDataset: ReplenishmentDataset | undefined
-    for (const [days, data] of datasetCache.current.entries()) {
-      if (days >= targetPeriod) {
-        suitableDataset = data
-        break
-      }
-    }
+    const suitableDataset = findSuitableDataset(targetPeriod)
 
     if (suitableDataset) {
       periodRequestRef.current += 1
+      setActiveDataset(suitableDataset)
       applyDerive(suitableDataset, targetPeriod, COVERAGE_OPTIONS[coverageIdxRef.current].value)
       setPeriodIdx(i)
       return
@@ -300,6 +307,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
     fetchDataset(targetPeriod)
       .then(dataset => {
         if (reqId !== periodRequestRef.current) return
+        setActiveDataset(dataset)
         applyDerive(dataset, targetPeriod, COVERAGE_OPTIONS[coverageIdxRef.current].value)
         setPeriodIdx(i)
       })
@@ -310,30 +318,33 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
       .finally(() => {
         if (reqId === periodRequestRef.current) setLoading(false)
       })
-  }, [fetchDataset, applyDerive])
+  }, [fetchDataset, findSuitableDataset, applyDerive])
 
   const handleCoverageChange = useCallback((i: number) => {
     const period = PERIOD_OPTIONS[periodIdxRef.current].value
-    const dataset = datasetCache.current.get(period)
+    const dataset = findSuitableDataset(period)
     if (dataset) {
       periodRequestRef.current += 1
+      setActiveDataset(dataset)
       const { rows: newRows, dayAfterEnd } = deriveRows(dataset, period, COVERAGE_OPTIONS[i].value)
       setRows(newRows)
       setEffectiveEndDate(dayAfterEnd)
     }
     setCoverageIdx(i)
-  }, [])
+  }, [findSuitableDataset])
 
   const handleRefresh = useCallback(async () => {
     if (loading) return
     const appliedPeriod = PERIOD_OPTIONS[periodIdxRef.current].value
+    const requiredDatasetDays = Math.max(INITIAL_DATASET_DAYS, appliedPeriod)
     const cov = COVERAGE_OPTIONS[coverageIdxRef.current].value
     const reqId = ++periodRequestRef.current
     setLoading(true)
     setError('')
     try {
-      const dataset = await fetchDataset(appliedPeriod, true)
+      const dataset = await fetchDataset(requiredDatasetDays, true)
       if (reqId !== periodRequestRef.current) return
+      setActiveDataset(dataset)
       applyDerive(dataset, appliedPeriod, cov)
     } catch (e) {
       if (reqId !== periodRequestRef.current) return
@@ -859,9 +870,11 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
               bucketLabels={bucketLabels}
               colWidths={colWidths}
               onResizeCommit={updateColWidth}
-              bucketColWidth={bucketColWidth}
-              onResizeBucketCommit={updateBucketColWidth}
-              sortConfig={sortConfig}
+               bucketColWidth={bucketColWidth}
+               onResizeBucketCommit={updateBucketColWidth}
+               dailySalesBySku={dailySalesBySku}
+               dailySalesDateTo={activeDataset?.dateTo ?? ''}
+               sortConfig={sortConfig}
               onSort={handleSort}
               confirmedSet={confirmedSet}
               onToggleConfirmed={toggleConfirmed}

@@ -72,7 +72,7 @@ export async function bsaleFetch<T>(options: BsaleFetchOptions): Promise<BsaleRe
 export async function bsaleFetchAll<T>(
   path: string,
   params?: Record<string, string | number | undefined>,
-  options?: { signal?: AbortSignal; onPage?: (page: number, items: T[]) => void }
+  options?: { signal?: AbortSignal; onPage?: (page: number, items: T[]) => void | Promise<void> }
 ): Promise<T[]> {
   const LIMIT = 50
   let offset = 0
@@ -94,14 +94,21 @@ export async function bsaleFetchAll<T>(
     page++
 
     if (options?.onPage) {
-      options.onPage(page, items)
+      await options.onPage(page, items)
     }
 
     if (items.length < LIMIT) {
+      if (allItems.length < totalCount) {
+        throw new Error(`Respuesta incompleta de Bsale para ${path}: recibidos ${allItems.length} de ${totalCount}`)
+      }
       break
     }
 
     offset += LIMIT
+  }
+
+  if (totalCount !== null && allItems.length < totalCount) {
+    throw new Error(`Respuesta incompleta de Bsale para ${path}: recibidos ${allItems.length} de ${totalCount}`)
   }
 
   return allItems

@@ -14,6 +14,48 @@ export interface SkuRow {
   estadoTendencia: string
 }
 
+export interface DailySalesPoint {
+  date: string
+  units: number
+}
+
+export type DailySalesIndex = Map<string, DailySalesPoint[]>
+
+export function buildDailySalesIndex(
+  dataset: ReplenishmentDataset,
+  days = 60,
+): DailySalesIndex {
+  const dateTo = new Date(dataset.dateTo + 'T00:00:00Z')
+  const startDate = new Date(dateTo)
+  startDate.setUTCDate(startDate.getUTCDate() - (days - 1))
+  const endDateExclusive = new Date(dateTo)
+  endDateExclusive.setUTCDate(endDateExclusive.getUTCDate() + 1)
+
+  const grouped = new Map<string, Map<string, number>>()
+  for (const sale of dataset.sales) {
+    const date = sale.fechaStr || sale.fecha.toISOString().split('T')[0]
+    const saleDate = new Date(date + 'T00:00:00Z')
+    if (saleDate < startDate || saleDate >= endDateExclusive) continue
+
+    const units = Number(sale.cantidad) || 0
+    if (units === 0) continue
+
+    if (!grouped.has(sale.SKU)) grouped.set(sale.SKU, new Map())
+    const byDate = grouped.get(sale.SKU)!
+    byDate.set(date, (byDate.get(date) || 0) + units)
+  }
+
+  return new Map(
+    [...grouped.entries()].map(([sku, byDate]) => [
+      sku,
+      [...byDate.entries()]
+        .filter(([, units]) => units !== 0)
+        .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
+        .map(([date, units]) => ({ date, units })),
+    ]),
+  )
+}
+
 // Derivación pura: recibe un dataset ya obtenido y construye las filas SkuRow
 // con la MISMA fórmula del motor existente (buildSkuSummary + classifySkus +
 // buckets semanales). No depende de estado del componente.
@@ -30,18 +72,19 @@ export function deriveRows(
   const dayAfterEnd = new Date(periodEnd.getTime() + 86400000)
   const startDate = new Date(Math.max(dayAfterEnd.getTime() - periodDays * 86400000, periodStart.getTime()))
 
-  const raw = buildSkuSummary(sales, stock, dayAfterEnd, startDate, dayAfterEnd, coverageWeeks)
+  // Keep the selected period's historical scope when the dataset also carries
+  // extra days reserved for the daily sales index.
+  const salesForPeriod = sales.filter(s => s.fecha >= startDate && s.fecha < dayAfterEnd)
+  const raw = buildSkuSummary(salesForPeriod, stock, dayAfterEnd, startDate, dayAfterEnd, coverageWeeks)
   const classified = classifySkus(raw)
 
   const bucketEnd = dayAfterEnd.getTime()
   const bucketSize = 7 * 86400000
 
   const salesBySku = new Map<string, NormalizedSale[]>()
-  for (const s of sales) {
-    if (s.fecha >= startDate && s.fecha < dayAfterEnd) {
-      if (!salesBySku.has(s.SKU)) salesBySku.set(s.SKU, [])
-      salesBySku.get(s.SKU)!.push(s)
-    }
+  for (const s of salesForPeriod) {
+    if (!salesBySku.has(s.SKU)) salesBySku.set(s.SKU, [])
+    salesBySku.get(s.SKU)!.push(s)
   }
 
   const rows: SkuRow[] = classified.map(sku => {
