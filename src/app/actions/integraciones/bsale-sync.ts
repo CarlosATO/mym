@@ -2205,6 +2205,24 @@ async function materializePreparationAfterSalesSync(companyId: string) {
   }
 }
 
+type WorkerBsaleBoletaReconciliation = {
+  scanned: number
+  created: number
+  already_exists: number
+  unmatched: number
+  ambiguous: number
+  invalid: number
+}
+
+async function reconcileWorkerBsaleBoletas(companyId: string): Promise<WorkerBsaleBoletaReconciliation> {
+  const { data, error } = await integrDb()
+    .schema('mermas')
+    .rpc('reconcile_worker_bsale_boletas', { p_company_id: companyId })
+
+  if (error) throw new Error(`Error reconciliando Boletas Bsale de trabajadores: ${error.message}`)
+  return data as WorkerBsaleBoletaReconciliation
+}
+
 async function refreshClientMetricsSnapshot(companyId: string) {
   const startedAt = Date.now()
   console.log(`[runReplenishmentBsaleSync] Iniciando refresh client_metrics_snapshot para ${companyId}`)
@@ -2363,6 +2381,22 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       errorMessage += (errorMessage ? ' | ' : '') + `Orphans: errors=${orphanResult.errors}`;
     }
 
+    let workerAccountReconciliation: WorkerBsaleBoletaReconciliation | null = null;
+    const salesMirrorReady = salesRes.success
+      && (salesRes.counts?.document_errors || 0) === 0
+      && clientStats.errorCount === 0
+      && orphanResult.errors === 0;
+    if (salesMirrorReady && finalStatus !== 'FAILED') {
+      try {
+        workerAccountReconciliation = await reconcileWorkerBsaleBoletas(companyId);
+        console.log('[runReplenishmentBsaleSync] Worker account Boleta reconciliation:', workerAccountReconciliation);
+      } catch (reconciliationErr: unknown) {
+        finalStatus = 'PARTIAL';
+        errorMessage += (errorMessage ? ' | ' : '') + 'Worker account Boletas: ' + (reconciliationErr instanceof Error ? reconciliationErr.message : String(reconciliationErr));
+        console.error('[runReplenishmentBsaleSync] Error reconciliando Boletas de trabajadores:', reconciliationErr);
+      }
+    }
+
     if (canRefreshClientMetricsSnapshot(commercialSyncConsistent) && finalStatus !== 'FAILED') {
       try {
         await refreshClientMetricsSnapshot(companyId);
@@ -2395,6 +2429,7 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       payment_types: paymentTypesResult,
       preparation: preparationResult,
       orphans: orphanResult,
+      worker_account_boletas: workerAccountReconciliation,
       stocks: stockCount
     };
 
