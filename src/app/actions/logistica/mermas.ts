@@ -124,12 +124,14 @@ export type WorkerAccountDetail = {
     projected_balance: number;
   };
   movements: Array<{
-    movement_type: "SALE" | "PAYMENT";
+    movement_type: "CHARGE" | "PAYMENT";
     label: string;
     reference_number: string;
     amount: number;
     status: string;
     occurred_at: string;
+    source_type?: string | null;
+    charge_id?: string | null;
   }>;
 };
 

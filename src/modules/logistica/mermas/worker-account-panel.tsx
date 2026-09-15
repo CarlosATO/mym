@@ -30,8 +30,8 @@ function formatDate(value: string | null) {
   return value ? formatInstantInSantiago(value) : "Sin pagos";
 }
 
-function displayStatus(status: string, movementType: "SALE" | "PAYMENT") {
-  if (status === "PENDING_RENDITION" && movementType === "SALE") return "Pendiente de rendición";
+function displayStatus(status: string, movementType: "CHARGE" | "PAYMENT") {
+  if (status === "PENDING_RENDITION" && movementType === "CHARGE") return "Pendiente de rendición";
   if (status === "PENDING_REVIEW" && movementType === "PAYMENT") return "Pendiente de revisión";
   if (status === "APPROVED") return "Aprobado";
   if (status === "REJECTED") return "Rechazado";
@@ -101,7 +101,7 @@ export function WorkerAccountPanel() {
           <Link href="/dashboard/logistica/mermas" className="text-xs font-semibold text-theme-text-accent hover:underline">← Volver a Mermas</Link>
           <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.22em] text-theme-accent">Mermas · Cuenta corriente</p>
           <h1 className="mt-1 text-base font-semibold text-theme-text">Cuenta corriente de trabajadores</h1>
-          <p className="mt-1 text-xs text-theme-text-muted">Cargos originados en ventas internas y pagos futuros aprobados.</p>
+          <p className="mt-1 text-xs text-theme-text-muted">Cargos de distintas fuentes y pagos aprobados.</p>
         </header>
         <div className="space-y-4 p-4 sm:p-5">
           <div className="relative max-w-md">
