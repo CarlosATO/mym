@@ -135,6 +135,103 @@ export type WorkerAccountDetail = {
   }>;
 };
 
+export type WorkerAccountV2 = {
+  employee_id: string;
+  employee_name: string;
+  rut: string;
+  employee_status: "ACTIVO" | "INACTIVO";
+  approved_payments: number;
+  official_balance: number;
+  projected_balance: number;
+  pending_review_payments: number;
+  merma_balance: number;
+  bsale_boleta_balance: number;
+  active_charge_count: number;
+  open_charge_count: number;
+  last_charge_at: string | null;
+  last_payment_at: string | null;
+};
+
+export type WorkerAccountChargeItemV2 = {
+  bsale_variant_id: number | null;
+  variant_id?: number | null;
+  sku: string | null;
+  variant_code?: string | null;
+  product_name: string | null;
+  variant_description?: string | null;
+  quantity: number | null;
+  unit_price: number | null;
+  line_total: number | null;
+};
+
+export type WorkerAccountAllocationV2 = {
+  payment_id: string;
+  payment_number: string | null;
+  payment_date: string;
+  amount: number;
+};
+
+export type WorkerAccountChargeV2 = {
+  charge_id: string;
+  source_type: "MERMA" | "BSALE_BOLETA" | "BSALE_NOTA_CREDITO";
+  source_label: string;
+  source_id: string;
+  document_type: string | null;
+  document_number: string | null;
+  document_date: string | null;
+  original_amount: number;
+  approved_paid_amount: number;
+  outstanding_amount: number;
+  status: "ACTIVE" | "REVERSED";
+  items: WorkerAccountChargeItemV2[];
+  allocations: WorkerAccountAllocationV2[];
+};
+
+export type WorkerAccountPaymentV2 = {
+  payment_id: string;
+  payment_number: string | null;
+  amount: number;
+  status: "PENDING_REVIEW" | "APPROVED" | "REJECTED" | "REVERSED";
+  submitted_at: string;
+  reviewed_at: string | null;
+  allocations: Array<{
+    charge_id: string;
+    source_type: WorkerAccountChargeV2["source_type"];
+    document_number: string | null;
+    amount: number;
+  }>;
+};
+
+export type WorkerAccountDetailV2 = {
+  employee: { id: string; name: string; rut: string; status: "ACTIVO" | "INACTIVO" };
+  summary: {
+    total_original_charges: number;
+    approved_payments: number;
+    pending_review_payments: number;
+    official_balance: number;
+    projected_balance: number;
+    merma_original: number;
+    merma_balance: number;
+    bsale_boleta_original: number;
+    bsale_boleta_balance: number;
+    charge_count: number;
+    open_charge_count: number;
+    paid_charge_count: number;
+  };
+  charges: WorkerAccountChargeV2[];
+  payments: WorkerAccountPaymentV2[];
+  movements: Array<{
+    movement_type: "CHARGE" | "PAYMENT";
+    charge_id: string | null;
+    payment_id: string | null;
+    source_type: WorkerAccountChargeV2["source_type"] | null;
+    reference_number: string;
+    amount: number;
+    status: string;
+    occurred_at: string;
+  }>;
+};
+
 export type WorkerPaymentUpload = {
   upload_id: string;
   upload_token: string;
@@ -406,6 +503,53 @@ export async function getWorkerAccountDetail(employeeId: string): Promise<{
     return { data: null, error: "No se pudo cargar el detalle de la cuenta corriente." };
   }
   return { data: data as WorkerAccountDetail | null };
+}
+
+export async function getWorkerAccountsV2(search = ""): Promise<{
+  data: WorkerAccountV2[];
+  error?: string;
+}> {
+  const authorization = await requireWmsPermission("logistica.mermas.account.view");
+  const { data, error } = await db("mermas").rpc("get_worker_accounts_v2", {
+    p_company_id: authorization.companyId,
+    p_user_id: authorization.user.id,
+    p_search: search.trim() || null,
+  });
+  if (error) {
+    console.error("[MERMAS] get_worker_accounts_v2 failed", error);
+    return { data: [], error: "No se pudo cargar la cuenta corriente V2." };
+  }
+  return {
+    data: (data as Array<WorkerAccountV2> | null ?? []).map((row) => ({
+      ...row,
+      approved_payments: Number(row.approved_payments ?? 0),
+      official_balance: Number(row.official_balance ?? 0),
+      projected_balance: Number(row.projected_balance ?? 0),
+      pending_review_payments: Number(row.pending_review_payments ?? 0),
+      merma_balance: Number(row.merma_balance ?? 0),
+      bsale_boleta_balance: Number(row.bsale_boleta_balance ?? 0),
+      active_charge_count: Number(row.active_charge_count ?? 0),
+      open_charge_count: Number(row.open_charge_count ?? 0),
+    })),
+  };
+}
+
+export async function getWorkerAccountDetailV2(employeeId: string): Promise<{
+  data: WorkerAccountDetailV2 | null;
+  error?: string;
+}> {
+  const authorization = await requireWmsPermission("logistica.mermas.account.view");
+  if (!/^[0-9a-f-]{36}$/i.test(employeeId)) return { data: null, error: "Trabajador inválido." };
+  const { data, error } = await db("mermas").rpc("get_worker_account_detail_v2", {
+    p_company_id: authorization.companyId,
+    p_user_id: authorization.user.id,
+    p_employee_id: employeeId,
+  });
+  if (error) {
+    console.error("[MERMAS] get_worker_account_detail_v2 failed", error);
+    return { data: null, error: "No se pudo cargar el detalle V2 de la cuenta corriente." };
+  }
+  return { data: data as WorkerAccountDetailV2 | null };
 }
 
 export async function prepareWorkerPaymentUpload(file: {
