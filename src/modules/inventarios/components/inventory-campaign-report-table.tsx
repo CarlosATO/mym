@@ -152,6 +152,7 @@ export function InventoryCampaignReportTable({ items, campaignId, onSelect, sort
             ))}
             <th className="px-2 py-1.5">Código Bsale</th>
             <th className="px-2 py-1.5">Códigos adicionales</th>
+            <th className="px-2 py-1.5 text-center">Foto</th>
             <th className="px-2 py-1.5 text-right">Acción</th>
           </tr>
         </thead>
@@ -203,20 +204,25 @@ export function InventoryCampaignReportTable({ items, campaignId, onSelect, sort
                 <td className="max-w-[180px] px-2 py-1 font-mono text-theme-text">
                   {(item.approved_barcodes ?? []).length > 0 ? (item.approved_barcodes ?? []).join(', ') : '—'}
                 </td>
+                <td className="px-2 py-1 text-center">
+                  {item.has_evidence && item.evidence_id ? (
+                    <button
+                      type="button"
+                      onClick={() => openEvidence(item)}
+                      title="Ver evidencia fotográfica"
+                      className="inline-flex h-6 items-center gap-1 rounded-md border border-sky-500/25 bg-sky-500/10 px-2 text-[11px] font-medium text-sky-700 transition-colors hover:bg-sky-500/20 dark:text-sky-300"
+                    >
+                      <Camera className="h-3 w-3" />
+                      Sí
+                    </button>
+                  ) : (
+                    <span className="inline-flex h-6 items-center rounded-md border border-transparent px-2 text-[11px] font-medium text-theme-text-muted/60">
+                      No
+                    </span>
+                  )}
+                </td>
                 <td className="px-2 py-1 text-right">
                   <div className="flex items-center justify-end gap-1">
-                    {item.has_evidence && item.evidence_id && (
-                      <button
-                        type="button"
-                        onClick={() => openEvidence(item)}
-                        title="Ver evidencia fotográfica del producto"
-                        aria-label={`Ver evidencia de ${item.name ?? item.sku}`}
-                        className="inline-flex h-6 items-center gap-1 rounded-md border border-sky-500/25 bg-sky-500/10 px-1.5 text-[11px] font-medium text-sky-700 transition-colors hover:bg-sky-500/20 dark:text-sky-300"
-                      >
-                        <Camera className="h-3 w-3" />
-                        Foto
-                      </button>
-                    )}
                     <button
                       type="button"
                       onClick={() => onSelect(item.bsale_variant_id)}

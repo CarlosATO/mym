@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState, useTransition } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { Barcode, ClipboardCheck, FileSpreadsheet, Loader2, RefreshCw, ShieldAlert, ShieldCheck, X } from 'lucide-react'
 import { notifyInventoryNavigation } from '@/modules/inventarios/components/inventory-navigation-feedback'
@@ -12,13 +12,12 @@ import {
   getCampaignAllProducts,
   getAllCampaignVariances,
   getCampaignExport,
-  getCampaignVariances,
   type BarcodeIncidentSummaryResult,
   type CampaignCloseReadiness,
   type CampaignReviewSummary,
   type CampaignSortBy,
   type CampaignSortDirection,
-  type CampaignVariancesResult,
+  type CampaignVarianceItem,
 } from '@/app/actions/inventarios/campaign-report'
 import { downloadCampaignReportExcel, type CampaignReportExcelContribRow } from '@/modules/inventarios/lib/campaign-report-excel'
 import { InventoryCampaignReportTable } from '@/modules/inventarios/components/inventory-campaign-report-table'
@@ -26,22 +25,6 @@ import { InventoryCampaignReportDetail } from '@/modules/inventarios/components/
 import { InventoryCampaignCloseDialog } from '@/modules/inventarios/components/inventory-campaign-close-dialog'
 import { InventoryKpiDetailDialog } from '@/modules/inventarios/components/inventory-kpi-detail-dialog'
 import { formatCLP, formatDateTimeChile, formatQuantity } from '@/modules/inventarios/lib/format'
-
-// TTL del cache de consultas del Informe (ms). El Inventario sigue en captura y
-// sus datos pueden cambiar, por lo que el cache es de muy corta vida (12s).
-const CACHE_TTL_MS = 12_000
-// Refresco periódico silencioso mientras la pestaña está visible (ms).
-const PERIODIC_REFRESH_MS = 30_000
-
-interface CacheEntry<T> {
-  data: T
-  fetchedAt: number
-}
-
-function isCacheFresh(entry: CacheEntry<unknown> | undefined): boolean {
-  if (!entry) return false
-  return Date.now() - entry.fetchedAt < CACHE_TTL_MS
-}
 
 const VARIANCE_OPTIONS = [
   { value: '', label: 'Todos los resultados' },
@@ -56,19 +39,6 @@ const COVERAGE_OPTIONS = [
   { value: 'NOT_COUNTED', label: 'No contados' },
   { value: 'OUT_OF_SNAPSHOT', label: 'No incluidos para conteo' },
 ]
-
-interface QueryKey {
-  search: string
-  variance: string
-  coverage: string
-  page: number
-  sort_by: CampaignSortBy | ''
-  sort_direction: CampaignSortDirection | ''
-}
-
-function queryKeyString(k: QueryKey): string {
-  return [k.search, k.variance, k.coverage, k.page, k.sort_by, k.sort_direction].join('|')
-}
 
 interface InventoryCampaignReportClientProps {
   campaignId: string
@@ -94,11 +64,11 @@ export function InventoryCampaignReportClient({
   const [page, setPage] = useState(1)
   const [sortBy, setSortBy] = useState<CampaignSortBy | ''>('')
   const [sortDir, setSortDir] = useState<CampaignSortDirection | ''>('')
-  const [showAll, setShowAll] = useState(false)
+  const [showAll, setShowAll] = useState(true)
 
   const [summary, setSummary] = useState<CampaignReviewSummary | null>(initialSummary)
   const [readiness, setReadiness] = useState<CampaignCloseReadiness | null>(initialReadiness)
-  const [variances, setVariances] = useState<CampaignVariancesResult | null>(null)
+  const [allVariances, setAllVariances] = useState<CampaignVarianceItem[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [pending, startTransition] = useTransition()
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -109,10 +79,8 @@ export function InventoryCampaignReportClient({
   const [barcodeSummary, setBarcodeSummary] = useState<BarcodeIncidentSummaryResult | null>(null)
   const [exporting, setExporting] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
-  // Se incrementa para forzar revalidación (ignorando cache): focus, refresh
-  // periódico, botón Actualizar y reintento manual.
+  // Se incrementa para forzar revalidación y saltar cache interno.
   const [revision, setRevision] = useState(0)
-  const cacheRef = useRef<Map<string, CacheEntry<CampaignVariancesResult>>>(new Map())
   // Marca si hay un request de variances en vuelo para evitar solapamientos.
   const variancesInFlight = useRef(false)
 
@@ -138,45 +106,97 @@ export function InventoryCampaignReportClient({
     if (barcodeResult.data) setBarcodeSummary(barcodeResult.data)
   }, [companyId, campaignId])
 
-  // Fetch de variances con cache TTL. `force` ignora el cache vigente.
+  // Fetch de todos los productos (se ejecuta una vez y se hace client-side filter)
   const fetchVariances = useCallback(
     (opts: { force?: boolean } = {}) => {
       if (!companyId || !hasCriterion) return
       if (variancesInFlight.current) return
-      const key: QueryKey = { search: debouncedSearch, variance, coverage, page, sort_by: sortBy, sort_direction: sortDir }
-      const cacheKey = queryKeyString(key)
-      const cached = cacheRef.current.get(cacheKey)
-      if (!opts.force && cached && isCacheFresh(cached)) {
-        setVariances(cached.data)
-        setError(null)
-        return
-      }
+      if (!opts.force && allVariances !== null) return
+
       variancesInFlight.current = true
       startTransition(async () => {
         try {
-          const result = await getCampaignVariances(companyId, campaignId, {
-            search: debouncedSearch,
-            variance_status: variance,
-            coverage_status: coverage,
-            page,
-            page_size: 50,
-            sort_by: sortBy || undefined,
-            sort_direction: sortDir || undefined,
-          })
-          if (result.error || !result.data) {
+          const result = await getAllCampaignVariances(companyId, campaignId)
+          if (result.error || !result.items) {
             setError(result.error ?? 'No fue posible actualizar el informe.')
             return
           }
-          cacheRef.current.set(cacheKey, { data: result.data, fetchedAt: Date.now() })
-          setVariances(result.data)
+          setAllVariances(result.items)
           setError(null)
         } finally {
           variancesInFlight.current = false
         }
       })
     },
-    [companyId, campaignId, hasCriterion, debouncedSearch, variance, coverage, page, sortBy, sortDir]
+    [companyId, campaignId, hasCriterion, allVariances]
   )
+
+  const filteredVariances = useMemo(() => {
+    if (!allVariances) return null
+    let items = [...allVariances]
+
+    if (debouncedSearch) {
+      const q = debouncedSearch.toLowerCase()
+      items = items.filter(
+        i =>
+          (i.sku && i.sku.toLowerCase().includes(q)) ||
+          (i.name && i.name.toLowerCase().includes(q)) ||
+          (i.barcode && i.barcode.toLowerCase().includes(q)) ||
+          (i.approved_barcodes && i.approved_barcodes.some(b => b.toLowerCase().includes(q)))
+      )
+    }
+
+    if (variance) {
+      items = items.filter(i => i.variance_status === variance)
+    }
+
+    if (coverage) {
+      items = items.filter(i => i.coverage_status === coverage)
+    }
+
+    if (sortBy) {
+      items.sort((a, b) => {
+        let valA: string | number | null | undefined
+        let valB: string | number | null | undefined
+
+        if (sortBy === 'SKU') { valA = a.sku; valB = b.sku }
+        if (sortBy === 'NAME') { valA = a.name; valB = b.name }
+        if (sortBy === 'THEORETICAL') { valA = a.theoretical_quantity; valB = b.theoretical_quantity }
+        if (sortBy === 'PHYSICAL') { valA = a.physical_quantity; valB = b.physical_quantity }
+        if (sortBy === 'DIFFERENCE') { valA = a.difference_quantity; valB = b.difference_quantity }
+        if (sortBy === 'VARIANCE_STATUS') { valA = a.variance_status; valB = b.variance_status }
+        if (sortBy === 'COVERAGE_STATUS') { valA = a.coverage_status; valB = b.coverage_status }
+        if (sortBy === 'UNIT_COST') { valA = a.unit_cost; valB = b.unit_cost }
+        if (sortBy === 'DIFFERENCE_VALUE') { valA = a.difference_value; valB = b.difference_value }
+
+        if (valA === valB) return 0
+        if (valA === null || valA === undefined) return 1
+        if (valB === null || valB === undefined) return -1
+
+        const cmp = valA < valB ? -1 : 1
+        return sortDir === 'ASC' ? cmp : -cmp
+      })
+    }
+
+    return items
+  }, [allVariances, debouncedSearch, variance, coverage, sortBy, sortDir])
+
+  const paginatedVariances = useMemo(() => {
+    if (!filteredVariances) return null
+    return filteredVariances.slice((page - 1) * 50, page * 50)
+  }, [filteredVariances, page])
+
+  const variances = useMemo(() => {
+    if (!filteredVariances || !paginatedVariances) return null
+    return {
+      items: paginatedVariances,
+      total: filteredVariances.length,
+      page,
+      page_size: 50,
+      has_more: page * 50 < filteredVariances.length,
+      is_final: summary?.is_final ?? false,
+    }
+  }, [filteredVariances, paginatedVariances, page, summary])
 
   // Consulta inicial / cambios de filtro / revisiones.
   useEffect(() => {
@@ -190,40 +210,6 @@ export function InventoryCampaignReportClient({
       if (result.data) setBarcodeSummary(result.data)
     })
   }, [companyId, campaignId])
-
-  // Revalidación al recuperar foco / visibilidad (ignora cache stale).
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState !== 'visible') return
-      setRevision(r => r + 1)
-      void revalidateMeta()
-    }
-    const onFocus = () => {
-      setRevision(r => r + 1)
-      void revalidateMeta()
-    }
-    window.addEventListener('focus', onFocus)
-    document.addEventListener('visibilitychange', onVisible)
-    return () => {
-      window.removeEventListener('focus', onFocus)
-      document.removeEventListener('visibilitychange', onVisible)
-    }
-  }, [revalidateMeta])
-
-  // Refresco periódico silencioso mientras hay criterio y la pestaña está visible.
-  useEffect(() => {
-    const onTick = () => {
-      if (document.visibilityState !== 'visible') return
-      if (!hasCriterion) {
-        void revalidateMeta()
-        return
-      }
-      setRevision(r => r + 1)
-      void revalidateMeta()
-    }
-    const timer = setInterval(onTick, PERIODIC_REFRESH_MS)
-    return () => clearInterval(timer)
-  }, [hasCriterion, revalidateMeta])
 
   const isFinal = Boolean(variances?.is_final ?? summary?.is_final)
   const isCampaignApproved = readiness?.campaign_status === 'APPROVED'
@@ -275,9 +261,8 @@ export function InventoryCampaignReportClient({
     setCoverage('')
     setSortBy('')
     setSortDir('')
-    setShowAll(false)
+    setShowAll(true)
     setPage(1)
-    setVariances(null)
     setError(null)
   }, [])
 
@@ -292,13 +277,11 @@ export function InventoryCampaignReportClient({
 
   const handleRefresh = useCallback(() => {
     setRefreshing(true)
-    cacheRef.current.clear()
     setRevision(r => r + 1)
     void revalidateMeta().finally(() => setRefreshing(false))
   }, [revalidateMeta])
 
   const handleRetry = useCallback(() => {
-    cacheRef.current.clear()
     setError(null)
     setRevision(r => r + 1)
     void revalidateMeta()
@@ -306,7 +289,6 @@ export function InventoryCampaignReportClient({
 
   const handleClosed = useCallback(() => {
     setCloseOpen(false)
-    cacheRef.current.clear()
     setRevision(r => r + 1)
     void revalidateMeta()
   }, [revalidateMeta])
@@ -752,6 +734,15 @@ export function InventoryCampaignReportClient({
           className="inline-flex h-7 items-center rounded-lg bg-theme-accent px-2.5 text-xs font-semibold text-white transition-colors hover:bg-theme-accent-hover"
         >
           Mostrar todos
+        </button>
+        <button
+          type="button"
+          onClick={handleRefresh}
+          disabled={refreshing}
+          className="inline-flex h-7 items-center gap-1 rounded-lg border border-theme-border bg-theme-surface px-2.5 text-xs font-medium text-theme-text-muted transition-colors hover:bg-theme-text/5 hover:text-theme-text disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+          {refreshing ? 'Actualizando…' : 'Actualizar'}
         </button>
         <button
           type="button"
