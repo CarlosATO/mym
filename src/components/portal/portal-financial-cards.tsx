@@ -101,7 +101,7 @@ function shortDate(value: string) {
 export function PortalFinancialCard({ error, kind, data, mode, period }: FinancialCardProps) {
   const sales = kind === 'sales' ? data as PortalSales | null : null
   const collections = kind === 'collections' ? data as PortalCollections | null : null
-  const title = kind === 'sales' ? 'Ventas' : 'Cobranzas'
+  const title = kind === 'sales' ? 'Ventas a clientes (sin considerar Amimascotas)' : 'Cobranzas'
   const subtitle = mode === 'COMMISSIONABLE' ? 'Período comisionable' : 'Mes actual'
   const dailyValues = sales?.daily_sales ?? collections?.daily_collections ?? []
 
@@ -119,10 +119,13 @@ export function PortalFinancialCard({ error, kind, data, mode, period }: Financi
         <div className="flex flex-1 items-center justify-center px-5 py-8 text-center text-xs text-theme-text-muted/75">No se pudo cargar {title.toLowerCase()}.</div>
       ) : (
         <div className="flex flex-1 flex-col gap-3 p-4">
-          <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
+          <div className={`grid grid-cols-2 gap-x-4 gap-y-2 ${kind === 'sales' && mode !== 'COMMISSIONABLE' ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
             {kind === 'sales' ? (
               <>
-                <Metric label="Ventas del mes" value={sales?.sales_month ?? 0} />
+                <Metric label={mode === 'COMMISSIONABLE' ? "Ventas comisionables" : "Ventas del mes"} value={sales?.sales_month ?? 0} />
+                {mode !== 'COMMISSIONABLE' && (
+                  <Metric label="Total (con Amimascotas)" value={sales?.total_sales_month ?? 0} />
+                )}
                 <Metric label="Facturas" value={sales?.invoices_count ?? 0} format="number" />
                 <Metric label="Ticket promedio" value={sales?.average_ticket ?? 0} />
               </>

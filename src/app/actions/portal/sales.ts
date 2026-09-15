@@ -14,6 +14,7 @@ export interface PortalDailySales {
 
 export interface PortalSales {
   sales_month: number
+  total_sales_month: number
   invoices_count: number
   average_ticket: number
   daily_sales: PortalDailySales[]
@@ -23,6 +24,7 @@ type SalesDocumentRow = {
   document_type_id: number | string | null
   net_amount: number | string | null
   emission_date: string | null
+  client_id: number | string | null
 }
 
 export async function getPortalSales(mode: PortalPeriodMode = 'CALENDAR_MONTH'): Promise<PortalSales> {
@@ -39,11 +41,10 @@ export async function getPortalSales(mode: PortalPeriodMode = 'CALENDAR_MONTH'):
   const { data, error } = await supabase
     .schema('integraciones')
     .from('bsale_documents')
-      .select('document_type_id, net_amount, emission_date')
+      .select('document_type_id, net_amount, emission_date, client_id')
     .eq('company_id', companyId)
     .eq('state', 0)
     .in('document_type_id', [2, 5])
-    .or(`client_id.is.null,client_id.neq.${AMIMASCOTA_BSALE_CLIENT_ID}`)
     .gte('emission_date', from)
     .lt('emission_date', toExclusive)
 
@@ -51,6 +52,7 @@ export async function getPortalSales(mode: PortalPeriodMode = 'CALENDAR_MONTH'):
 
   const dailySales = new Map<string, number>()
   let salesMonth = 0
+  let totalSalesMonth = 0
   let invoicesCount = 0
 
   for (const row of (data ?? []) as SalesDocumentRow[]) {
@@ -60,16 +62,25 @@ export async function getPortalSales(mode: PortalPeriodMode = 'CALENDAR_MONTH'):
     const sign = Number(row.document_type_id) === 2 ? -1 : 1
     const signedAmount = sign * amount
     const date = row.emission_date.slice(0, 10)
-    if (date >= selectedPeriod.from && date <= selectedPeriod.to) salesMonth += signedAmount
-    if (date >= dailyPeriod.from && date <= dailyPeriod.to) {
-      dailySales.set(date, (dailySales.get(date) ?? 0) + signedAmount)
-    }
+    const isAmimascota = Number(row.client_id) === AMIMASCOTA_BSALE_CLIENT_ID
 
-    if (Number(row.document_type_id) === 5 && date >= selectedPeriod.from && date <= selectedPeriod.to) invoicesCount += 1
+    if (date >= selectedPeriod.from && date <= selectedPeriod.to) {
+      totalSalesMonth += signedAmount
+      if (!isAmimascota) {
+        salesMonth += signedAmount
+        if (Number(row.document_type_id) === 5) invoicesCount += 1
+      }
+    }
+    if (date >= dailyPeriod.from && date <= dailyPeriod.to) {
+      if (!isAmimascota) {
+        dailySales.set(date, (dailySales.get(date) ?? 0) + signedAmount)
+      }
+    }
   }
 
   return {
     sales_month: salesMonth,
+    total_sales_month: totalSalesMonth,
     invoices_count: invoicesCount,
     average_ticket: invoicesCount === 0 ? 0 : salesMonth / invoicesCount,
     daily_sales: Array.from(dailySales, ([date, amount]) => ({ date, amount }))

@@ -35,11 +35,14 @@ export function getPortalPeriod(
   const currentMonth = utcDate(year, month - 1, 1)
 
   if (mode === 'COMMISSIONABLE') {
-    const periodMonth = day <= 25
-      ? utcDate(year, month - 2, 1)
-      : currentMonth
-    const start = utcDate(periodMonth.getUTCFullYear(), periodMonth.getUTCMonth() - 1, 26)
-    const endExclusive = utcDate(periodMonth.getUTCFullYear(), periodMonth.getUTCMonth(), 26)
+    const start = day <= 25
+      ? utcDate(year, month - 2, 26)
+      : utcDate(year, month - 1, 26)
+
+    const endExclusive = day <= 25
+      ? utcDate(year, month - 1, 26)
+      : utcDate(year, month, 26)
+
     const end = new Date(endExclusive.getTime() - 86400000)
     return { from: formatDate(start), to: formatDate(end), toExclusive: formatDate(endExclusive) }
   }
