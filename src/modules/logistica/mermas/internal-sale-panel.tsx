@@ -28,9 +28,6 @@ import {
   MAX_INTERNAL_SALE_PRINT_LINES,
   type InternalSalePrintDraft,
 } from "./internal-sale-print-document";
-import {
-  calculateMinimumUnitPrice,
-} from "./worker-pricing";
 
 type CartLine = {
   product: InternalSaleProduct;
@@ -74,12 +71,9 @@ function isValidQuantity(
 function isValidUnitPrice(
   line: CartLine,
 ): line is CartLine & { unitPrice: number } {
-  const minimum = calculateMinimumUnitPrice(line.product.average_cost);
   return line.unitPrice !== null
     && Number.isInteger(line.unitPrice)
-    && line.unitPrice > 0
-    && minimum !== null
-    && line.unitPrice >= minimum;
+    && line.unitPrice > 0;
 }
 
 export function InternalSalePanel() {
@@ -749,7 +743,6 @@ export function InternalSalePanel() {
             )}
             {cart.map((line) => {
               const validQuantity = isValidQuantity(line);
-              const minimumUnitPrice = calculateMinimumUnitPrice(line.product.average_cost);
               const validUnitPrice = isValidUnitPrice(line);
               return (
                 <div
@@ -816,7 +809,7 @@ export function InternalSalePanel() {
                         Precio unitario
                         <input
                           type="number"
-                          min={minimumUnitPrice ?? undefined}
+                          min="1"
                           step="1"
                           value={line.unitPrice ?? ""}
                           inputMode="numeric"
@@ -825,9 +818,6 @@ export function InternalSalePanel() {
                           className={`mt-1 block w-28 rounded-lg border bg-theme-bg px-2 py-1.5 text-right text-xs text-theme-text outline-none ${validUnitPrice ? "border-theme-border" : "border-red-500"}`}
                         />
                       </label>
-                      <p className="mt-1 text-[10px] text-theme-text-muted">
-                        Mínimo: {minimumUnitPrice === null ? "-" : formatMoney(minimumUnitPrice)}
-                      </p>
                       <p className="text-[10px] text-theme-text-muted">
                         Sugerido: {formatMoney(line.product.worker_unit_price)}
                       </p>
@@ -838,7 +828,7 @@ export function InternalSalePanel() {
                       </p>
                       {!validUnitPrice && (
                         <p className="mt-1 max-w-28 text-[10px] font-medium normal-case text-red-600">
-                          El precio mínimo permitido es {minimumUnitPrice === null ? "-" : formatMoney(minimumUnitPrice)}.
+                          El precio debe ser un peso entero mayor a $0.
                         </p>
                       )}
                     </div>
@@ -888,7 +878,7 @@ export function InternalSalePanel() {
             )}
             {cartHasInvalidUnitPrice && (
               <p className="mt-3 rounded-lg bg-red-500/10 px-3 py-2 text-xs font-medium text-red-700 dark:text-red-300">
-                Corrige los precios unitarios: deben ser pesos enteros iguales o superiores al mínimo.
+                Corrige los precios unitarios: deben ser pesos enteros mayores a $0.
               </p>
             )}
             {error && (
