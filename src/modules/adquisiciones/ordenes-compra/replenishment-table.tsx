@@ -14,7 +14,7 @@ import {
   type SortKey,
   type WidthKey,
 } from './replenishment-columns'
-import type { SkuRow } from './replenishment-derive'
+import { getBreakSummary, type BreakSummaryIndex, type SkuRow } from './replenishment-derive'
 import type { DailySalesIndex } from './replenishment-derive'
 import { ReplenishmentSalesHoverChart } from './replenishment-sales-hover-chart'
 
@@ -150,6 +150,7 @@ interface ReplenishmentTableProps {
   bucketColWidth: number
   onResizeBucketCommit: (width: number) => void
   dailySalesBySku: DailySalesIndex
+  breakSummaryByVariantId: BreakSummaryIndex
   dailySalesDateTo: string
   sortConfig: SortConfig | null
   onSort: (key: SortKey) => void
@@ -176,6 +177,7 @@ export function ReplenishmentTable({
   bucketColWidth,
   onResizeBucketCommit,
   dailySalesBySku,
+  breakSummaryByVariantId,
   dailySalesDateTo,
   sortConfig,
   onSort,
@@ -651,6 +653,7 @@ export function ReplenishmentTable({
               sparseSeries={dailySalesBySku.get(chartRow.sku.SKU)}
               dateTo={dailySalesDateTo}
               stockActual={chartRow.sku.cantidad_disponible}
+              breakSummary={getBreakSummary(breakSummaryByVariantId, chartRow.variantId)}
             />
           </div>
         )

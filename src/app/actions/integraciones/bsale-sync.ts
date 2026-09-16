@@ -5,6 +5,7 @@ import { bsaleFetchAll, normalizeSku, getBsaleHeaders } from '@/lib/bsale/client
 import { syncBsaleClients } from '@/lib/integraciones/bsale-clients-sync'
 import { runCatalogAutoSyncStep } from '@/lib/integraciones/bsale-catalog-auto-sync'
 import { canRefreshClientMetricsSnapshot } from '@/lib/integraciones/client-metrics-refresh-policy'
+import { syncBsaleStockKardex } from '@/lib/integraciones/bsale-stock-kardex'
 import { createClient as createServerSessionClient } from '@/lib/supabase/server'
 import crypto from 'crypto'
 
@@ -2485,6 +2486,7 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
 
     // 6. Sync Stock
     let stockCount = 0;
+    let kardexResult: Awaited<ReturnType<typeof syncBsaleStockKardex>> | null = null;
     if (finalStatus !== 'FAILED') {
       console.log('[runReplenishmentBsaleSync] Iniciando syncStock...');
       try {
@@ -2497,6 +2499,28 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
          console.error('[runReplenishmentBsaleSync] Error en stock:', stockErr);
          finalStatus = 'PARTIAL';
          errorMessage += (errorMessage ? ' | ' : '') + 'Error en stock: ' + stockErr.message;
+      }
+    }
+
+    if (finalStatus !== 'FAILED') {
+      try {
+        const kardexTo = new Date()
+        const kardexFrom = new Date(kardexTo)
+        kardexFrom.setUTCDate(kardexFrom.getUTCDate() - 1)
+        kardexResult = await syncBsaleStockKardex({
+          companyId,
+          officeId: 1,
+          dateFrom: kardexFrom.toISOString().slice(0, 10),
+          dateTo: kardexTo.toISOString().slice(0, 10),
+          bsaleSyncRunId: runId,
+        })
+        if (!kardexResult.success) {
+          finalStatus = 'PARTIAL'
+          errorMessage += (errorMessage ? ' | ' : '') + `Kardex: ${kardexResult.error || `${kardexResult.errors} errores`}`
+        }
+      } catch (kardexErr: unknown) {
+        finalStatus = 'PARTIAL'
+        errorMessage += (errorMessage ? ' | ' : '') + 'Error en Kardex: ' + (kardexErr instanceof Error ? kardexErr.message : String(kardexErr))
       }
     }
 
@@ -2525,7 +2549,8 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
        document_details_count: salesRes.counts?.details || 0,
        detail_errors: salesRes.counts?.detail_errors || 0,
        orphans_hydrated: orphanResult.hydrated,
-       stocks: stockCount
+       stocks: stockCount,
+        kardex: kardexResult?.events || 0
     }, errorMessage || undefined);
 
     await releaseSyncLock(companyId, lockName, runId);

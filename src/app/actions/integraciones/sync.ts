@@ -10,6 +10,7 @@ import { syncBsaleReceptions } from '@/lib/integraciones/bsale-receptions-sync'
 import { getSyncStatus as getStatus } from '@/lib/integraciones/sync-core'
 import { runReplenishmentBsaleSync } from '@/app/actions/integraciones/bsale-sync'
 import { createClient } from '@supabase/supabase-js'
+import { syncBsaleStockKardex } from '@/lib/integraciones/bsale-stock-kardex'
 
 async function requireSuperUsuario() {
   const supabase = await createServerClient()
@@ -113,6 +114,28 @@ export async function forceSyncBsaleReceptions(params?: { dateFrom?: string; dat
     dateTo,
     allowLargeBackfill: Boolean(params?.allowLargeBackfill),
   })
+}
+
+export async function forceSyncBsaleStockKardex(params?: { dateFrom?: string; dateTo?: string; allowLargeBackfill?: boolean }) {
+  await requireSuperUsuario()
+  const companyId = await getActiveCompanyId()
+  if (!companyId) throw new Error('Empresa no activa')
+
+  const today = new Date()
+  const defaultTo = isoDate(today)
+  const defaultFromDate = new Date(today)
+  defaultFromDate.setUTCDate(defaultFromDate.getUTCDate() - 59)
+  const defaultFrom = isoDate(defaultFromDate)
+  const dateFrom = params?.dateFrom || defaultFrom
+  const dateTo = params?.dateTo || defaultTo
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
+    throw new Error('dateFrom/dateTo deben venir en formato YYYY-MM-DD')
+  }
+  if (dateFrom > dateTo) throw new Error('dateFrom no puede ser mayor que dateTo')
+  if (daysBetween(dateFrom, dateTo) > 60 && !params?.allowLargeBackfill) {
+    throw new Error('El rango máximo permitido sin allowLargeBackfill es de 60 días')
+  }
+  return syncBsaleStockKardex({ companyId, dateFrom, dateTo, officeId: 1 })
 }
 
 export async function getSyncStatus(provider: string, entity: string) {

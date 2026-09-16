@@ -36,6 +36,7 @@ export interface NormalizedSale {
 }
 
 export interface NormalizedStock {
+  variant_id?: number
   SKU: string
   producto: string
   variante: string
@@ -54,6 +55,7 @@ export interface NormalizedStock {
 // ─── Interfaz principal por SKU ────────────────────────────────────────────────
 
 export interface SkuSummary {
+  variant_id?: number
   SKU: string
   producto: string
   variante: string
@@ -476,6 +478,7 @@ export function buildSkuSummary(
     const suggested_quantity = Math.max(0, stock_objetivo - cantidad_disponible)
 
     result.push({
+      variant_id: stockData?.variant_id,
       SKU: sku, producto, variante, tipo_producto, marca, linea_tema,
       real_supplier_name, pseudo_supplier_name,
       venta_6m, unidades_6m, margen_6m, documentos,

@@ -26,6 +26,7 @@ function intDb() {
 export interface ReplenishmentDataset {
   sales: NormalizedSale[]
   stock: NormalizedStock[]
+  breakSummary60d: Record<string, BreakSummary60d>
   productsCount: number
   variantsCount: number
   docsCount: number
@@ -33,6 +34,15 @@ export interface ReplenishmentDataset {
   dateFrom: string
   dateTo: string
   diagnostics: Record<string, any>
+}
+
+export interface BreakSummary60d {
+  breakDays: number
+  breakCount: number
+  daysWithoutStock: number
+  daysWithStock: number
+  stockoutRanges: Array<{ from: string; to: string }>
+  lastBreakDate: string | null
 }
 
 export interface ReplenishmentOptions {
@@ -49,6 +59,42 @@ interface CatalogProductRow {
   bsale_variant_id: number | string | null
   bsale_product_type_name: string | null
   product_type: string | null
+}
+
+async function getBreakSummary60d(companyId: string, officeId: number): Promise<{ data: Record<string, BreakSummary60d>; elapsedMs: number; payloadBytes: number }> {
+  const started = performance.now()
+  const { data, error } = await intDb().rpc('get_bsale_stock_break_summary_60d', {
+    p_company_id: companyId,
+    p_office_id: officeId,
+  })
+  if (error) throw new Error(`Error fetching break summary 60d: ${error.message}`)
+
+  const raw = data && typeof data === 'object' ? data as Record<string, { breakDays?: unknown; breakCount?: unknown; daysWithoutStock?: unknown; daysWithStock?: unknown; stockoutRanges?: unknown; lastBreakDate?: unknown }> : {}
+  const normalized: Record<string, BreakSummary60d> = {}
+  for (const [variantId, value] of Object.entries(raw)) {
+    const breakDays = Number(value?.breakDays)
+    if (!Number.isFinite(breakDays)) continue
+    const breakCount = Number(value?.breakCount)
+    const daysWithoutStock = Number(value?.daysWithoutStock)
+    const daysWithStock = Number(value?.daysWithStock)
+    const stockoutRanges = Array.isArray(value?.stockoutRanges)
+      ? value.stockoutRanges.filter((range): range is { from: string; to: string } => typeof range?.from === 'string' && typeof range?.to === 'string')
+      : []
+    normalized[variantId] = {
+      breakDays,
+      breakCount: Number.isFinite(breakCount) ? breakCount : 0,
+      daysWithoutStock: Number.isFinite(daysWithoutStock) ? daysWithoutStock : 0,
+      daysWithStock: Number.isFinite(daysWithStock) ? daysWithStock : 0,
+      stockoutRanges,
+      lastBreakDate: typeof value?.lastBreakDate === 'string' ? value.lastBreakDate : null,
+    }
+  }
+
+  return {
+    data: normalized,
+    elapsedMs: Math.round(performance.now() - started),
+    payloadBytes: Buffer.byteLength(JSON.stringify(normalized)),
+  }
 }
 
 interface ProductSupplierMappingRow {
@@ -202,6 +248,7 @@ export async function getReplenishmentDatasetFromBsale(
   const diag: Record<string, any> = {}
 
   try {
+    const breakSummaryPromise = getBreakSummary60d(companyId, 1)
     // ── 1. Obtener productos ──
     const products = await fetchAll('integraciones', 'bsale_products',
       'bsale_id, name, product_type_id')
@@ -218,6 +265,11 @@ export async function getReplenishmentDatasetFromBsale(
     // ── 3. & 4. Ventas: Bsale Mirror Logístico ──
     const mirrorSales = await getReplenishmentSalesFromBsaleMirror(companyId, dateFrom, dateTo)
     diag.mirror_sales_rows = mirrorSales.length
+    const breakSummaryResult = await breakSummaryPromise
+    const breakSummary60d = breakSummaryResult.data
+    diag.break_summary_60d_variants = Object.keys(breakSummary60d).length
+    diag.break_summary_60d_elapsed_ms = breakSummaryResult.elapsedMs
+    diag.break_summary_60d_payload_bytes = breakSummaryResult.payloadBytes
 
     // Mocks for diagnostic block to prevent TS errors since we removed the old fetching logic
     const docs: any[] = []
@@ -429,6 +481,7 @@ export async function getReplenishmentDatasetFromBsale(
         existing.costo_total = existing.cantidad_disponible * existing.costo_unitario
       } else {
         stockMapNormalized.set(code, {
+          variant_id: Number(s.variant_id),
           SKU: code,
           producto: productName,
           variante: desc,
@@ -934,6 +987,7 @@ export async function getReplenishmentDatasetFromBsale(
       data: {
         sales,
         stock: [...stockMapNormalized.values()],
+        breakSummary60d,
         productsCount: products.length,
         variantsCount: variants.length,
         docsCount: docs.length,

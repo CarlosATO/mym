@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState, type MouseEvent } from 'react'
+import type { BreakSummary60d } from '@/app/actions/integraciones/bsale-dataset'
 import type { DailySalesPoint } from './replenishment-derive'
 
 interface ReplenishmentSalesHoverChartProps {
@@ -9,6 +10,7 @@ interface ReplenishmentSalesHoverChartProps {
   sparseSeries: DailySalesPoint[] | undefined
   dateTo: string
   stockActual: number
+  breakSummary: BreakSummary60d
 }
 
 const CHART_WIDTH = 336
@@ -24,6 +26,10 @@ function formatDate(date: string) {
 
 function formatDecimal(value: number) {
   return new Intl.NumberFormat('es-CL', { maximumFractionDigits: 2 }).format(value)
+}
+
+function formatBreakDate(date: string) {
+  return new Intl.DateTimeFormat('es-CL', { day: '2-digit', month: '2-digit', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00Z`))
 }
 
 function completeSeries(sparseSeries: DailySalesPoint[] | undefined, dateTo: string) {
@@ -47,6 +53,7 @@ export function ReplenishmentSalesHoverChart({
   sparseSeries,
   dateTo,
   stockActual,
+  breakSummary,
 }: ReplenishmentSalesHoverChartProps) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
   const series = useMemo(() => completeSeries(sparseSeries, dateTo), [sparseSeries, dateTo])
@@ -127,6 +134,22 @@ export function ReplenishmentSalesHoverChart({
           <p className="text-xs font-semibold tabular-nums">
             {stockActual < 0 ? 'No calculable' : coverageDays == null ? 'Sin ritmo' : `~${coverageDays} días`}
           </p>
+        </div>
+        <div
+          className={`col-span-2 rounded-md border px-2 py-1.5 ${breakSummary.daysWithoutStock > 0
+            ? 'border-amber-400/70 bg-amber-100/80 dark:border-amber-300/40 dark:bg-amber-400/15'
+            : 'border-theme-border/40 bg-theme-surface/40'}`}
+          title="Días calendario dentro de los últimos 60 en que el stock físico permaneció en 0 o menos. El período termina cuando cualquier movimiento deja nuevamente el stock sobre 0. Los quiebres indican cuántas veces el stock llegó a 0 o menos."
+        >
+          <p className={`text-[9px] font-semibold uppercase tracking-[0.08em] ${breakSummary.daysWithoutStock > 0 ? 'text-amber-800 dark:text-amber-200' : 'text-theme-text-muted'}`}>Días sin stock 60d</p>
+          <p className={`text-sm font-bold tabular-nums ${breakSummary.daysWithoutStock > 0 ? 'text-amber-800 dark:text-amber-200' : ''}`}>
+            {breakSummary.daysWithoutStock} días
+          </p>
+          {breakSummary.breakCount > 0 && (
+            <p className={`text-[9px] ${breakSummary.daysWithoutStock > 0 ? 'text-amber-900/80 dark:text-amber-100/90' : 'text-amber-700 dark:text-amber-300'}`}>
+              {breakSummary.breakCount} {breakSummary.breakCount === 1 ? 'quiebre' : 'quiebres'}{breakSummary.lastBreakDate ? ` · último ${formatBreakDate(breakSummary.lastBreakDate)}` : ''}
+            </p>
+          )}
         </div>
       </div>
 

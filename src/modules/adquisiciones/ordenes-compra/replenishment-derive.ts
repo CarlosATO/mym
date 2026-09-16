@@ -1,9 +1,10 @@
 import { buildSkuSummary, classifySkus } from '@/modules/adquisiciones/analisis-ventas/utils/analytics'
 import type { NormalizedSale, SkuSummary } from '@/modules/adquisiciones/analisis-ventas/utils/analytics'
-import type { ReplenishmentDataset } from '@/app/actions/integraciones/bsale-dataset'
+import type { BreakSummary60d, ReplenishmentDataset } from '@/app/actions/integraciones/bsale-dataset'
 
 export interface SkuRow {
   sku: SkuSummary
+  variantId: number | null
   buckets: number[]
   totalUnits: number
   avgPer7: number
@@ -20,6 +21,19 @@ export interface DailySalesPoint {
 }
 
 export type DailySalesIndex = Map<string, DailySalesPoint[]>
+
+export type BreakSummaryIndex = Map<number, BreakSummary60d>
+
+export function buildBreakSummaryIndex(dataset: ReplenishmentDataset): BreakSummaryIndex {
+  return new Map(
+    Object.entries(dataset.breakSummary60d).map(([variantId, summary]) => [Number(variantId), summary]),
+  )
+}
+
+export function getBreakSummary(index: BreakSummaryIndex, variantId: number | null | undefined): BreakSummary60d {
+  // Missing read-model rows mean no confirmed break, not missing historical data.
+  return (variantId !== null && variantId !== undefined ? index.get(variantId) : undefined) || { breakDays: 0, breakCount: 0, daysWithoutStock: 0, daysWithStock: 0, stockoutRanges: [], lastBreakDate: null }
+}
 
 export function buildDailySalesIndex(
   dataset: ReplenishmentDataset,
@@ -120,6 +134,7 @@ export function deriveRows(
 
     return {
       sku,
+      variantId: sku.variant_id ?? null,
       buckets,
       totalUnits,
       avgPer7,
