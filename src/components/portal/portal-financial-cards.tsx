@@ -85,10 +85,11 @@ function DailyBars({ values, title, mode }: { values: (PortalDailySales | Portal
   )
 }
 
-function Metric({ label, value, format = 'currency' }: { label: string; value: number; format?: 'currency' | 'number' }) {
+function Metric({ label, value, subtitle, tooltip, format = 'currency' }: { label: string; value: number; subtitle?: string; tooltip?: string; format?: 'currency' | 'number' }) {
   return (
     <div className="min-w-0">
-      <p className="truncate text-[10px] font-medium text-theme-text-muted/75">{label}</p>
+      <p className="truncate text-[10px] font-medium text-theme-text-muted/75" title={tooltip}>{label}</p>
+      {subtitle && <p className="truncate text-[9px] leading-tight text-theme-text-muted/60">{subtitle}</p>}
       <p className="mt-0.5 truncate text-sm font-semibold tabular-nums tracking-tight text-theme-text">{format === 'currency' ? currency(value) : value.toLocaleString('es-CL')}</p>
     </div>
   )
@@ -103,6 +104,7 @@ export function PortalFinancialCard({ error, kind, data, mode, period }: Financi
   const collections = kind === 'collections' ? data as PortalCollections | null : null
   const title = kind === 'sales' ? 'Ventas a clientes (sin considerar Amimascotas)' : 'Cobranzas'
   const subtitle = mode === 'COMMISSIONABLE' ? 'Período comisionable' : 'Mes actual'
+  const currentMonth = new Intl.DateTimeFormat('es-CL', { month: 'long', timeZone: 'UTC' }).format(new Date(`${getPortalPeriod('CALENDAR_MONTH').from}T00:00:00Z`))
   const dailyValues = sales?.daily_sales ?? collections?.daily_collections ?? []
 
   return (
@@ -110,7 +112,7 @@ export function PortalFinancialCard({ error, kind, data, mode, period }: Financi
       <div className="border-b border-theme-border/70 px-4 py-2.5 sm:px-4">
         <h2 className="text-base font-semibold tracking-tight text-theme-text">{title}</h2>
         <p className="mt-0.5 text-[11px] text-theme-text-muted/70">
-          {subtitle}<span className="mx-1.5 text-theme-text-muted/45">·</span><span className="text-[10px] text-theme-text-muted/60">Montos netos, sin IVA</span>
+          {kind === 'collections' ? 'Cobranza mensual · Cartera desde 01-01-2026' : subtitle}<span className="mx-1.5 text-theme-text-muted/45">·</span><span className="text-[10px] text-theme-text-muted/60">Montos netos, sin IVA</span>
         </p>
         <p className="mt-1 text-[10px] font-medium text-theme-text-muted/60">{shortDate(period.from)} – {shortDate(period.to)}</p>
       </div>
@@ -131,9 +133,24 @@ export function PortalFinancialCard({ error, kind, data, mode, period }: Financi
               </>
             ) : (
               <>
-                <Metric label="Cobrado del mes" value={collections?.collected_month ?? 0} />
-                <Metric label={mode === 'COMMISSIONABLE' ? 'Pendiente actual' : 'Pendiente por cobrar'} value={collections?.pending_receivables ?? 0} />
-                <Metric label={mode === 'COMMISSIONABLE' ? 'Cartera vencida actual' : 'Cartera vencida'} value={collections?.overdue_receivables ?? 0} />
+                <Metric
+                  label="Cobrado del mes"
+                  subtitle={`Pagos y abonos registrados en ${currentMonth}`}
+                  tooltip="Incluye pagos y abonos registrados durante el mes, aunque la factura haya sido emitida anteriormente."
+                  value={collections?.collected_month ?? 0}
+                />
+                <Metric
+                  label="Pendiente no vencido"
+                  subtitle="Saldo vigente · facturas desde 01-01-2026"
+                  tooltip="Saldo pendiente de facturas emitidas desde el 01-01-2026 cuya fecha de vencimiento aún no ha pasado."
+                  value={collections?.pending_receivables ?? 0}
+                />
+                <Metric
+                  label="Cartera vencida"
+                  subtitle="Saldo vencido · facturas desde 01-01-2026"
+                  tooltip="Saldo pendiente de facturas emitidas desde el 01-01-2026 cuya fecha de vencimiento ya pasó."
+                  value={collections?.overdue_receivables ?? 0}
+                />
               </>
             )}
           </div>
