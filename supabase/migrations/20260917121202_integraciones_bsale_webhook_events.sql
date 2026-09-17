@@ -1,5 +1,5 @@
 -- Migración de infraestructura para recepción de webhooks de Bsale
--- Archivo: 20260917120443_integraciones_bsale_webhook_events.sql
+-- Archivo: 20260917121202_integraciones_bsale_webhook_events.sql
 
 CREATE TABLE IF NOT EXISTS integraciones.bsale_webhook_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
