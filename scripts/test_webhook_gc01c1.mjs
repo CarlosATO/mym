@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { NextRequest } from 'next/server';
+import { NextRequest } from 'next/server.js';
 
 // Variables globales para simular el entorno
 const SECRET = 'test-secret';
@@ -11,28 +11,36 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key';
 let mockInsertResult = { error: null };
 let insertedPayloads = [];
 
-// Mock custom module requires
-import Module from 'module';
-const originalRequire = Module.prototype.require;
+// Mock global fetch para interceptar llamadas de Supabase
+const originalFetch = global.fetch;
+global.fetch = async (url, options) => {
+  if (url.toString().includes('/rest/v1/bsale_webhook_events')) {
+    if (options.method === 'POST') {
+      const body = JSON.parse(options.body);
+      insertedPayloads.push(body);
 
-Module.prototype.require = function(id) {
-  if (id === '@supabase/supabase-js') {
-    return {
-      createClient: () => ({
-        from: (table) => {
-          assert.equal(table, 'bsale_webhook_events');
-          return {
-            insert: async (data) => {
-              insertedPayloads.push(data);
-              return mockInsertResult;
-            }
-          };
-        }
-      })
-    };
+      const headers = { get: () => null };
+      if (mockInsertResult.error) {
+        return {
+          ok: false,
+          status: 409,
+          headers,
+          json: async () => mockInsertResult.error,
+          text: async () => JSON.stringify(mockInsertResult.error)
+        };
+      }
+      return {
+        ok: true,
+        status: 201,
+        headers,
+        json: async () => [body],
+        text: async () => JSON.stringify([body])
+      };
+    }
   }
-  return originalRequire.apply(this, arguments);
+  return originalFetch(url, options);
 };
+
 
 // Importar la ruta dinámicamente DESPUÉS de hacer los mocks de entorno
 const route = await import('../src/app/api/integraciones/bsale/webhooks/payments/[key]/route.ts');

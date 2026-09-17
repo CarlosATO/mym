@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server.js'
 import { createClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
 
