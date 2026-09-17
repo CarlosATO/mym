@@ -11,6 +11,11 @@ export interface SkuRow {
   suggestedQty: number
   confirmedQty: number
   confirmedCost: number
+  suggestedCalculable: boolean
+  suggestedReason?: string
+  suggestedTargetUnits?: number
+  suggestedTargetDays?: number
+  suggestedRate?: number
   tendenciaPct: number | null
   estadoTendencia: string
 }
@@ -24,6 +29,37 @@ export type DailySalesIndex = Map<string, DailySalesPoint[]>
 
 export type BreakSummaryIndex = Map<number, BreakSummary60d>
 
+export type SuggestedQtyResult =
+  | { calculable: true; quantity: number; targetDays: number; targetUnits: number; rate: number }
+  | { calculable: false; quantity: null; reason: string }
+
+export function calculateSuggestedQty(input: {
+  salesRateWithStock: number | null
+  physicalStock: number
+  coverageWeeks: number
+  salesIdentityResolved: boolean
+}): SuggestedQtyResult {
+  if (!input.salesIdentityResolved) {
+    return { calculable: false, quantity: null, reason: 'Identidad de ventas no resuelta' }
+  }
+  if (input.salesRateWithStock === null || !Number.isFinite(input.salesRateWithStock)) {
+    return { calculable: false, quantity: null, reason: 'Ritmo con stock no calculable' }
+  }
+  if (input.salesRateWithStock < 0) {
+    return { calculable: false, quantity: null, reason: 'Ritmo con stock inválido' }
+  }
+
+  const targetDays = input.coverageWeeks * 7
+  const targetUnits = input.salesRateWithStock * targetDays
+  return {
+    calculable: true,
+    quantity: Math.max(0, Math.ceil(targetUnits - input.physicalStock)),
+    targetDays,
+    targetUnits,
+    rate: input.salesRateWithStock,
+  }
+}
+
 export function buildBreakSummaryIndex(dataset: ReplenishmentDataset): BreakSummaryIndex {
   return new Map(
     Object.entries(dataset.breakSummary60d).map(([variantId, summary]) => [Number(variantId), summary]),
@@ -32,7 +68,23 @@ export function buildBreakSummaryIndex(dataset: ReplenishmentDataset): BreakSumm
 
 export function getBreakSummary(index: BreakSummaryIndex, variantId: number | null | undefined): BreakSummary60d {
   // Missing read-model rows mean no confirmed break, not missing historical data.
-  return (variantId !== null && variantId !== undefined ? index.get(variantId) : undefined) || { breakDays: 0, breakCount: 0, daysWithoutStock: 0, daysWithStock: 0, stockoutRanges: [], lastBreakDate: null }
+  return (variantId !== null && variantId !== undefined ? index.get(variantId) : undefined) || {
+    breakDays: 0,
+    breakCount: 0,
+    daysWithoutStock: 0,
+    daysWithStock: 0,
+    daysUnknown: 0,
+    unitsSoldWithStock: 0,
+    unitsSoldUnknownDays: 0,
+    salesRateWithStock: null,
+    knownDays: 0,
+    evidenceCoveragePct: 0,
+    positiveSalesWithoutStock: 0,
+    salesIdentityResolved: false,
+    salesIdentityMethod: 'NONE',
+    stockoutRanges: [],
+    lastBreakDate: null,
+  }
 }
 
 export function buildDailySalesIndex(
@@ -70,9 +122,9 @@ export function buildDailySalesIndex(
   )
 }
 
-// Derivación pura: recibe un dataset ya obtenido y construye las filas SkuRow
-// con la MISMA fórmula del motor existente (buildSkuSummary + classifySkus +
-// buckets semanales). No depende de estado del componente.
+// Derivación pura: recibe un dataset ya obtenido y construye las filas SkuRow.
+// Las recomendaciones usan el ritmo 60d con stock; los buckets siguen siendo
+// solo datos históricos de la tabla. No depende de estado del componente.
 export function deriveRows(
   dataset: ReplenishmentDataset,
   periodDays: number,
@@ -91,6 +143,7 @@ export function deriveRows(
   const salesForPeriod = sales.filter(s => s.fecha >= startDate && s.fecha < dayAfterEnd)
   const raw = buildSkuSummary(salesForPeriod, stock, dayAfterEnd, startDate, dayAfterEnd, coverageWeeks)
   const classified = classifySkus(raw)
+  const breakSummaryByVariantId = buildBreakSummaryIndex(dataset)
 
   const bucketEnd = dayAfterEnd.getTime()
   const bucketSize = 7 * 86400000
@@ -115,7 +168,14 @@ export function deriveRows(
 
     const totalUnits = sku.unidades_6m
     const avgPer7 = numBuckets > 0 ? totalUnits / numBuckets : 0
-    const suggestedQty = Math.max(0, Math.ceil(avgPer7 * coverageWeeks) - sku.cantidad_disponible)
+    const breakSummary = getBreakSummary(breakSummaryByVariantId, sku.variant_id)
+    const suggested = calculateSuggestedQty({
+      salesRateWithStock: breakSummary.salesRateWithStock,
+      physicalStock: sku.cantidad_disponible,
+      coverageWeeks,
+      salesIdentityResolved: breakSummary.salesIdentityResolved,
+    })
+    const suggestedQty = suggested.calculable ? suggested.quantity : 0
 
     const TREND_THRESHOLD = 0.15
     let tendenciaPct: number | null = null
@@ -141,6 +201,11 @@ export function deriveRows(
       suggestedQty,
       confirmedQty: suggestedQty,
       confirmedCost: suggestedQty * sku.costo_unitario,
+      suggestedCalculable: suggested.calculable,
+      suggestedReason: suggested.calculable ? undefined : suggested.reason,
+      suggestedTargetUnits: suggested.calculable ? suggested.targetUnits : undefined,
+      suggestedTargetDays: suggested.calculable ? suggested.targetDays : undefined,
+      suggestedRate: suggested.calculable ? suggested.rate : undefined,
       tendenciaPct,
       estadoTendencia,
     }

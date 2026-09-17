@@ -41,6 +41,15 @@ export interface BreakSummary60d {
   breakCount: number
   daysWithoutStock: number
   daysWithStock: number
+  daysUnknown: number
+  unitsSoldWithStock: number
+  unitsSoldUnknownDays: number
+  salesRateWithStock: number | null
+  knownDays: number
+  evidenceCoveragePct: number
+  positiveSalesWithoutStock: number
+  salesIdentityResolved: boolean
+  salesIdentityMethod: 'VARIANT_ID' | 'VARIANT_CODE' | 'NONE' | 'AMBIGUOUS'
   stockoutRanges: Array<{ from: string; to: string }>
   lastBreakDate: string | null
 }
@@ -69,7 +78,7 @@ async function getBreakSummary60d(companyId: string, officeId: number): Promise<
   })
   if (error) throw new Error(`Error fetching break summary 60d: ${error.message}`)
 
-  const raw = data && typeof data === 'object' ? data as Record<string, { breakDays?: unknown; breakCount?: unknown; daysWithoutStock?: unknown; daysWithStock?: unknown; stockoutRanges?: unknown; lastBreakDate?: unknown }> : {}
+  const raw = data && typeof data === 'object' ? data as Record<string, { breakDays?: unknown; breakCount?: unknown; daysWithoutStock?: unknown; daysWithStock?: unknown; daysUnknown?: unknown; unitsSoldWithStock?: unknown; unitsSoldUnknownDays?: unknown; salesRateWithStock?: unknown; knownDays?: unknown; evidenceCoveragePct?: unknown; positiveSalesWithoutStock?: unknown; salesIdentityResolved?: unknown; salesIdentityMethod?: unknown; stockoutRanges?: unknown; lastBreakDate?: unknown }> : {}
   const normalized: Record<string, BreakSummary60d> = {}
   for (const [variantId, value] of Object.entries(raw)) {
     const breakDays = Number(value?.breakDays)
@@ -77,6 +86,17 @@ async function getBreakSummary60d(companyId: string, officeId: number): Promise<
     const breakCount = Number(value?.breakCount)
     const daysWithoutStock = Number(value?.daysWithoutStock)
     const daysWithStock = Number(value?.daysWithStock)
+    const daysUnknown = Number(value?.daysUnknown)
+    const unitsSoldWithStock = Number(value?.unitsSoldWithStock)
+    const unitsSoldUnknownDays = Number(value?.unitsSoldUnknownDays)
+    const salesRateWithStock = value?.salesRateWithStock == null ? null : Number(value.salesRateWithStock)
+    const knownDays = Number(value?.knownDays)
+    const evidenceCoveragePct = Number(value?.evidenceCoveragePct)
+    const positiveSalesWithoutStock = Number(value?.positiveSalesWithoutStock)
+    const salesIdentityResolved = value?.salesIdentityResolved === true
+    const salesIdentityMethod = value?.salesIdentityMethod === 'VARIANT_ID' || value?.salesIdentityMethod === 'VARIANT_CODE' || value?.salesIdentityMethod === 'AMBIGUOUS'
+      ? value.salesIdentityMethod
+      : 'NONE'
     const stockoutRanges = Array.isArray(value?.stockoutRanges)
       ? value.stockoutRanges.filter((range): range is { from: string; to: string } => typeof range?.from === 'string' && typeof range?.to === 'string')
       : []
@@ -85,6 +105,15 @@ async function getBreakSummary60d(companyId: string, officeId: number): Promise<
       breakCount: Number.isFinite(breakCount) ? breakCount : 0,
       daysWithoutStock: Number.isFinite(daysWithoutStock) ? daysWithoutStock : 0,
       daysWithStock: Number.isFinite(daysWithStock) ? daysWithStock : 0,
+      daysUnknown: Number.isFinite(daysUnknown) ? daysUnknown : 0,
+      unitsSoldWithStock: Number.isFinite(unitsSoldWithStock) ? unitsSoldWithStock : 0,
+      unitsSoldUnknownDays: Number.isFinite(unitsSoldUnknownDays) ? unitsSoldUnknownDays : 0,
+      salesRateWithStock: salesRateWithStock !== null && Number.isFinite(salesRateWithStock) ? salesRateWithStock : null,
+      knownDays: Number.isFinite(knownDays) ? knownDays : 0,
+      evidenceCoveragePct: Number.isFinite(evidenceCoveragePct) ? evidenceCoveragePct : 0,
+      positiveSalesWithoutStock: Number.isFinite(positiveSalesWithoutStock) ? positiveSalesWithoutStock : 0,
+      salesIdentityResolved,
+      salesIdentityMethod,
       stockoutRanges,
       lastBreakDate: typeof value?.lastBreakDate === 'string' ? value.lastBreakDate : null,
     }
@@ -306,7 +335,7 @@ export async function getReplenishmentDatasetFromBsale(
 
     // ── 5. Obtener stocks ──
     const stocksRaw = await fetchAll('integraciones', 'bsale_stock_current',
-    'variant_id, variant_code, quantity_available, office_id, synced_at',
+    'variant_id, variant_code, quantity, quantity_available, office_id, synced_at',
     { company_id: companyId })
     diag.stocks_raw = stocksRaw.length
     // Deducir: agrupar por (variant_id, office_id), conservar la fila más reciente por synced_at
@@ -477,7 +506,7 @@ export async function getReplenishmentDatasetFromBsale(
       const desc = variantDescMap.get(s.variant_id) || ''
 
       if (existing) {
-        existing.cantidad_disponible += s.quantity_available ?? 0
+        existing.cantidad_disponible += s.quantity ?? 0
         existing.costo_total = existing.cantidad_disponible * existing.costo_unitario
       } else {
         stockMapNormalized.set(code, {
@@ -485,9 +514,9 @@ export async function getReplenishmentDatasetFromBsale(
           SKU: code,
           producto: productName,
           variante: desc,
-          cantidad_disponible: s.quantity_available ?? 0,
+          cantidad_disponible: s.quantity ?? 0,
           costo_unitario: cost,
-          costo_total: (s.quantity_available ?? 0) * cost,
+          costo_total: (s.quantity ?? 0) * cost,
           por_recibir: 0,
           precio_venta_bruto: 0,
           marca: '',

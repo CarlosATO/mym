@@ -25,7 +25,11 @@ function formatDate(date: string) {
 }
 
 function formatDecimal(value: number) {
-  return new Intl.NumberFormat('es-CL', { maximumFractionDigits: 2 }).format(value)
+  return new Intl.NumberFormat('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)
+}
+
+function formatEvidence(value: number) {
+  return new Intl.NumberFormat('es-CL', { maximumFractionDigits: 1 }).format(value)
 }
 
 function formatBreakDate(date: string) {
@@ -58,9 +62,11 @@ export function ReplenishmentSalesHoverChart({
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
   const series = useMemo(() => completeSeries(sparseSeries, dateTo), [sparseSeries, dateTo])
   const total = series.reduce((sum, point) => sum + point.units, 0)
-  const averagePerDay = total / 60
-  const coverageDays = averagePerDay > 0 && stockActual >= 0
-    ? Math.round(stockActual / averagePerDay)
+  const salesRateWithStock = breakSummary.salesIdentityResolved && breakSummary.salesRateWithStock !== null
+    ? breakSummary.salesRateWithStock
+    : null
+  const coverageDays = salesRateWithStock !== null && salesRateWithStock > 0 && stockActual >= 0
+    ? Math.round(stockActual / salesRateWithStock)
     : null
   const hasMovement = series.some(point => point.units !== 0)
 
@@ -98,6 +104,19 @@ export function ReplenishmentSalesHoverChart({
   const hoveredPoint = hoveredIndex == null ? null : points[hoveredIndex]
   const zeroY = PADDING.top + ((max - 0) / (max - min)) * (CHART_HEIGHT - PADDING.top - PADDING.bottom)
   const line = points.map(point => `${point.x},${point.y}`).join(' ')
+  const stockoutBands = useMemo(() => {
+    const step = points.length > 1 ? points[1].x - points[0].x : 0
+    const firstX = PADDING.left
+    const lastX = CHART_WIDTH - PADDING.right
+    return breakSummary.stockoutRanges.flatMap(range => {
+      const startIndex = points.findIndex(point => point.date === range.from)
+      const endIndex = points.findIndex(point => point.date === range.to)
+      if (startIndex < 0 || endIndex < startIndex) return []
+      const x = Math.max(firstX, points[startIndex].x - step / 2)
+      const end = Math.min(lastX, points[endIndex].x + step / 2)
+      return [{ x, width: Math.max(0, end - x), from: range.from, to: range.to }]
+    })
+  }, [breakSummary.stockoutRanges, points])
 
   function handleChartMove(event: MouseEvent<SVGSVGElement>) {
     const rect = event.currentTarget.getBoundingClientRect()
@@ -126,13 +145,22 @@ export function ReplenishmentSalesHoverChart({
           </p>
         </div>
         <div>
-          <p className="text-[9px] font-semibold uppercase tracking-[0.08em] text-theme-text-muted">Ritmo promedio</p>
-          <p className="text-xs font-semibold tabular-nums">{formatDecimal(averagePerDay)} un./día</p>
+          <p className="text-[9px] font-semibold uppercase tracking-[0.08em] text-theme-text-muted">Ritmo con stock</p>
+          <p className="text-xs font-semibold tabular-nums">
+            {salesRateWithStock === null ? 'No calculable' : `${formatDecimal(salesRateWithStock)} ud/día`}
+          </p>
+          {breakSummary.salesIdentityResolved ? (
+            <p className="mt-0.5 text-[9px] text-theme-text-muted">
+              {breakSummary.unitsSoldWithStock} uds en {breakSummary.daysWithStock} días con stock
+            </p>
+          ) : (
+            <p className="mt-0.5 text-[9px] text-theme-text-muted">Identidad de ventas no resuelta</p>
+          )}
         </div>
         <div>
           <p className="text-[9px] font-semibold uppercase tracking-[0.08em] text-theme-text-muted">Cobertura estimada</p>
           <p className="text-xs font-semibold tabular-nums">
-            {stockActual < 0 ? 'No calculable' : coverageDays == null ? 'Sin ritmo' : `~${coverageDays} días`}
+            {coverageDays == null ? 'No calculable' : `~${coverageDays} días`}
           </p>
         </div>
         <div
@@ -154,6 +182,10 @@ export function ReplenishmentSalesHoverChart({
       </div>
 
       <p className="mt-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-theme-text-muted/80">Ventas últimos 60 días</p>
+      <p className="mt-2 text-[10px] text-theme-text-muted/80">
+        Evidencia histórica: {formatEvidence(breakSummary.evidenceCoveragePct)}% · {breakSummary.knownDays}/60 días
+      </p>
+
       <div className="relative mt-1">
         <svg
           viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
@@ -173,6 +205,17 @@ export function ReplenishmentSalesHoverChart({
               </g>
             )
           })}
+          {stockoutBands.map(band => (
+            <rect
+              key={`${band.from}-${band.to}`}
+              x={band.x}
+              y={PADDING.top}
+              width={band.width}
+              height={CHART_HEIGHT - PADDING.top - PADDING.bottom}
+              fill="rgb(239 68 68 / 0.14)"
+              aria-label={`Sin stock confirmado: ${formatDate(band.from)} a ${formatDate(band.to)}`}
+            />
+          ))}
           {zeroY >= PADDING.top && zeroY <= CHART_HEIGHT - PADDING.bottom && (
             <line x1={PADDING.left} y1={zeroY} x2={CHART_WIDTH - PADDING.right} y2={zeroY} stroke="currentColor" className="text-theme-text-muted/35" />
           )}
@@ -195,7 +238,7 @@ export function ReplenishmentSalesHoverChart({
         )}
       </div>
       {!hasMovement && <p className="mt-1 text-[10px] text-theme-text-muted">Sin movimientos en el período</p>}
-      <p className="mt-1 text-[9px] text-theme-text-muted/70">Basada en promedio de ventas 60d</p>
+      <p className="mt-1 text-[9px] text-theme-text-muted/70">Ritmo basado en días con stock confirmado</p>
     </section>
   )
 }

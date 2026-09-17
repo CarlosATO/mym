@@ -56,6 +56,8 @@ const COVERAGE_OPTIONS = [
   { label: '4 semanas', value: 4 },
   { label: '6 semanas', value: 6 },
   { label: '8 semanas', value: 8 },
+  { label: '12 semanas', value: 12 },
+  { label: '16 semanas', value: 16 },
 ]
 
 interface Props {
@@ -93,6 +95,8 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
 
   // ─── Interacción / resultados ────────────────────────────────────
   const [confirmedSet, setConfirmedSet] = useState<Set<string>>(new Set())
+  // Las cantidades editadas dejan de seguir el sugerido al cambiar parámetros.
+  const manualQuantitySkus = useRef(new Set<string>())
   const [activeSku, setActiveSku] = useState<string | null>(null)
   const [detailSku, setDetailSku] = useState<string | null>(null)
   const [hoveredRowSku, setHoveredRowSku] = useState<string | null>(null)
@@ -286,7 +290,16 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   // ─── Aplicación automática de período / cobertura ────────────────
   const applyDerive = useCallback((dataset: ReplenishmentDataset, periodDaysN: number, coverageWeeksN: number) => {
     const { rows: newRows, dayAfterEnd } = deriveRows(dataset, periodDaysN, coverageWeeksN)
-    setRows(newRows)
+    setRows(previousRows => {
+      const previousBySku = new Map(previousRows.map(row => [row.sku.SKU, row]))
+      return newRows.map(row => {
+        if (!manualQuantitySkus.current.has(row.sku.SKU)) return row
+        const previous = previousBySku.get(row.sku.SKU)
+        return previous
+          ? { ...row, confirmedQty: previous.confirmedQty, confirmedCost: previous.confirmedCost }
+          : row
+      })
+    })
     setEffectiveEndDate(dayAfterEnd)
   }, [])
 
@@ -330,12 +343,10 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
     if (dataset) {
       periodRequestRef.current += 1
       setActiveDataset(dataset)
-      const { rows: newRows, dayAfterEnd } = deriveRows(dataset, period, COVERAGE_OPTIONS[i].value)
-      setRows(newRows)
-      setEffectiveEndDate(dayAfterEnd)
+      applyDerive(dataset, period, COVERAGE_OPTIONS[i].value)
     }
     setCoverageIdx(i)
-  }, [findSuitableDataset])
+  }, [findSuitableDataset, applyDerive])
 
   const handleRefresh = useCallback(async () => {
     if (loading) return
@@ -598,6 +609,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   // ─── Actualizar cantidad confirmada ──────────────────────────────
   function updateConfirmedQty(sku: string, qty: number) {
     const normalizedQty = Number.isFinite(qty) ? Math.max(0, qty) : 0
+    manualQuantitySkus.current.add(sku)
     setRows(prev => {
       const rowIndex = prev.findIndex(row => row.sku.SKU === sku)
       if (rowIndex === -1) return prev

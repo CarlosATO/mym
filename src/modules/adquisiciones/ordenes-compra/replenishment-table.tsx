@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react'
+import { ChevronDown, ChevronUp, ChevronsUpDown, Info } from 'lucide-react'
 import { fmtN } from './replenishment-format'
 import { PRODUCT_FALLBACK, getProductName, getRealSupplierName, getPseudoSupplierName } from './replenishment-names'
 import {
@@ -454,13 +454,27 @@ export function ReplenishmentTable({
         )
       }
       case 'sugerido':
+        {
+          const suggestedTitle = row.suggestedCalculable
+            ? [
+                `Ritmo con stock: ${row.suggestedRate?.toLocaleString('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ud/día`,
+                `Cobertura objetivo: ${row.suggestedTargetDays} días`,
+                `Necesidad estimada: ${row.suggestedTargetUnits?.toLocaleString('es-CL', { maximumFractionDigits: 2 })} un.`,
+                `Stock físico: ${s.cantidad_disponible} un.`,
+                `Sugerido: ${row.suggestedQty} un.`,
+                'Ritmo calculado sobre historial de 60 días, ajustado por disponibilidad.',
+              ].join('\n')
+            : `No se puede calcular automáticamente: ${row.suggestedReason}`
         return (
           <td key={id}
-            className={`${tdBase} ${cellBg} ${align} font-semibold ${row.suggestedQty > 0 ? 'text-theme-text' : 'text-theme-text-muted/30'}`}
-            style={{ width: w, minWidth: w, maxWidth: w }}>
-            {row.suggestedQty > 0 ? row.suggestedQty : '—'}
+            className={`${tdBase} ${cellBg} ${align} font-semibold ${row.suggestedCalculable && row.suggestedQty > 0 ? 'text-theme-text' : row.suggestedCalculable ? 'text-theme-text-muted' : 'text-amber-600 dark:text-amber-400'}`}
+            style={{ width: w, minWidth: w, maxWidth: w }}
+            title={suggestedTitle}
+            aria-label={suggestedTitle}>
+            {row.suggestedCalculable ? row.suggestedQty : 'Revisar'}
           </td>
         )
+        }
       case 'cantidad':
         return (
           <td key={id}
@@ -548,7 +562,17 @@ export function ReplenishmentTable({
                     colSpan={span}
                     className={`${groupThBase} ${isProducto ? ALIGN.left : ALIGN.center}${isLast ? ' border-r-0' : ''}`}
                   >
-                    {g.label}
+                     <span className="inline-flex items-center gap-1">
+                       {g.label}
+                       {g.label === 'Cálculo sugerido' && (
+                         <span
+                           title="Calculado con el ritmo de venta durante días con stock de los últimos 60 días."
+                           aria-label="Calculado con el ritmo de venta durante días con stock de los últimos 60 días."
+                         >
+                           <Info className="h-3 w-3 text-theme-text-muted/50" aria-hidden="true" />
+                         </span>
+                       )}
+                     </span>
                   </th>
                 )
               })}
