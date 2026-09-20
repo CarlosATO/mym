@@ -152,6 +152,21 @@ export type WorkerAccountV2 = {
   last_payment_at: string | null;
 };
 
+export type WorkerBsaleBoletaCandidate = {
+  bsale_id: number;
+  document_number: number;
+  emission_date: string | null;
+  total_amount: number;
+  client_id: number | null;
+};
+
+export type WorkerRegularizationEmployee = {
+  id: string;
+  display_name: string;
+  rut: string;
+  cargo: string | null;
+};
+
 export type WorkerAccountChargeItemV2 = {
   bsale_variant_id: number | null;
   variant_id?: number | null;
@@ -173,13 +188,14 @@ export type WorkerAccountAllocationV2 = {
 
 export type WorkerAccountChargeV2 = {
   charge_id: string;
-  source_type: "MERMA" | "BSALE_BOLETA" | "BSALE_NOTA_CREDITO";
+  source_type: "MERMA" | "BSALE_BOLETA";
   source_label: string;
   source_id: string;
   document_type: string | null;
   document_number: string | null;
   document_date: string | null;
   original_amount: number;
+  credit_note_amount: number;
   approved_paid_amount: number;
   outstanding_amount: number;
   status: "ACTIVE" | "REVERSED";
@@ -221,10 +237,11 @@ export type WorkerAccountDetailV2 = {
   charges: WorkerAccountChargeV2[];
   payments: WorkerAccountPaymentV2[];
   movements: Array<{
-    movement_type: "CHARGE" | "PAYMENT";
+    movement_type: "CHARGE" | "PAYMENT" | "ADJUSTMENT";
     charge_id: string | null;
+    reversal_of_charge_id: string | null;
     payment_id: string | null;
-    source_type: WorkerAccountChargeV2["source_type"] | null;
+    source_type: WorkerAccountChargeV2["source_type"] | "BSALE_NOTA_CREDITO" | null;
     reference_number: string;
     amount: number;
     status: string;
@@ -532,6 +549,130 @@ export async function getWorkerAccountsV2(search = ""): Promise<{
       open_charge_count: Number(row.open_charge_count ?? 0),
     })),
   };
+}
+
+export async function getWorkerBsaleBoletaForRegularization(folio: string): Promise<{
+  data: WorkerBsaleBoletaCandidate | null;
+  error?: string;
+}> {
+  try {
+    const authorization = await requireMermasSuperUser();
+    const documentNumber = Number(folio.trim());
+    if (!Number.isInteger(documentNumber) || documentNumber <= 0) {
+      return { data: null, error: "Ingresa un folio válido." };
+    }
+    const { data: documents, error } = await db("integraciones")
+      .from("bsale_documents")
+      .select("bsale_id, number, emission_date, total_amount, client_id, document_type_id")
+      .eq("company_id", authorization.companyId)
+      .eq("number", documentNumber)
+      .limit(2);
+    if (error) throw error;
+    if (!documents || documents.length !== 1) return { data: null, error: "No se encontró una Boleta única para ese folio." };
+    const document = documents[0] as {
+      bsale_id: number;
+      number: number;
+      emission_date: string | null;
+      total_amount: number | string | null;
+      client_id: number | null;
+      document_type_id: number;
+    };
+    if (Number(document.document_type_id) !== 1) return { data: null, error: "El documento no es una Boleta." };
+    if (document.client_id !== null) return { data: null, error: "La Boleta ya tiene cliente identificado." };
+    if (document.total_amount == null || Number(document.total_amount) <= 0) return { data: null, error: "La Boleta no tiene un monto válido." };
+    const { count, error: chargeError } = await db("rrhh")
+      .from("worker_account_charges")
+      .select("id", { count: "exact", head: true })
+      .eq("company_id", authorization.companyId)
+      .eq("source_type", "BSALE_BOLETA")
+      .eq("source_id", String(document.bsale_id));
+    if (chargeError) throw chargeError;
+    if ((count ?? 0) > 0) return { data: null, error: "La Boleta ya tiene un cargo de cuenta corriente." };
+    return {
+      data: {
+        bsale_id: Number(document.bsale_id),
+        document_number: Number(document.number),
+        emission_date: document.emission_date,
+        total_amount: Number(document.total_amount),
+        client_id: document.client_id,
+      },
+    };
+  } catch (error) {
+    console.error("[MERMAS] getWorkerBsaleBoletaForRegularization failed", error);
+    return { data: null, error: error instanceof Error ? error.message : "No se pudo validar la Boleta." };
+  }
+}
+
+export async function searchWorkerRegularizationEmployees(search: string): Promise<{
+  data: WorkerRegularizationEmployee[];
+  error?: string;
+}> {
+  try {
+    await requireMermasSuperUser();
+    const { data, error } = await db("rrhh")
+      .from("employees")
+      .select("id, nombres, apellido_paterno, apellido_materno, rut, cargo")
+      .eq("estado", "ACTIVO")
+      .order("nombres")
+      .limit(200);
+    if (error) throw error;
+    const normalized = search.trim().toLocaleLowerCase("es-CL").normalize("NFD").replace(/[\u0300-\u036f.\- ]/g, "");
+    const employees = (data ?? []).map((employee) => {
+      const displayName = [employee.nombres, employee.apellido_paterno, employee.apellido_materno].filter(Boolean).join(" ").trim();
+      return {
+        id: employee.id as string,
+        display_name: displayName.toLocaleUpperCase("es-CL"),
+        rut: String(employee.rut ?? ""),
+        cargo: (employee.cargo as string | null) ?? null,
+        search_value: `${displayName} ${employee.rut ?? ""}`.toLocaleLowerCase("es-CL").normalize("NFD").replace(/[\u0300-\u036f.\- ]/g, ""),
+      };
+    }).filter((employee) => !normalized || employee.search_value.includes(normalized)).slice(0, 20);
+    return {
+      data: employees.slice(0, 20).map((employee) => ({
+        id: employee.id,
+        display_name: employee.display_name,
+        rut: employee.rut,
+        cargo: employee.cargo,
+      })),
+    };
+  } catch (error) {
+    console.error("[MERMAS] searchWorkerRegularizationEmployees failed", error);
+    return { data: [], error: error instanceof Error ? error.message : "No se pudo cargar trabajadores activos." };
+  }
+}
+
+export async function regularizeWorkerBsaleBoleta(input: {
+  document_number: number;
+  employee_id: string;
+  reason: string;
+}): Promise<{ success: boolean; data?: unknown; error?: string }> {
+  try {
+    const authorization = await requireMermasSuperUser();
+    if (!Number.isInteger(input.document_number) || input.document_number <= 0) return { success: false, error: "El folio es inválido." };
+    if (!/^[0-9a-f-]{36}$/i.test(input.employee_id)) return { success: false, error: "El trabajador es inválido." };
+    if (!input.reason.trim()) return { success: false, error: "El motivo es obligatorio." };
+    const { data, error } = await db("mermas").rpc("regularize_worker_bsale_boleta", {
+      p_company_id: authorization.companyId,
+      p_user_id: authorization.user.id,
+      p_document_number: input.document_number,
+      p_employee_id: input.employee_id,
+      p_reason: input.reason.trim(),
+    });
+    if (error) throw error;
+    return { success: true, data };
+  } catch (error) {
+    console.error("[MERMAS] regularizeWorkerBsaleBoleta failed", error);
+    return { success: false, error: error instanceof Error ? error.message : "No se pudo regularizar la Boleta." };
+  }
+}
+
+export async function getWorkerAccountRegularizationAccess() {
+  try {
+    await requireMermasSuperUser();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function getWorkerAccountDetailV2(employeeId: string): Promise<{
@@ -1871,6 +2012,11 @@ export type MermaWarehouseProduct = {
 
 export type MermaWarehouseListProduct = Omit<MermaWarehouseProduct, "lots" | "history">;
 
+export type MermaStockExitItem = {
+  bsale_variant_id: number;
+  quantity: number;
+};
+
 export async function getMermaWarehouseEvidence(variantId: number): Promise<{
   data: Array<{ movement_id: string; evidence: MermaEvidence[] }>;
   error?: string;
@@ -2296,6 +2442,65 @@ export async function getMermasWarehouse(): Promise<{
   return { data: [...products.values()] };
 }
 
+export async function getMermasStockExitAccess() {
+  try {
+    await requireMermasSuperUser();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function getMermasStockExitCatalog(): Promise<{
+  data: MermaWarehouseListProduct[];
+  error?: string;
+}> {
+  try {
+    await requireMermasSuperUser();
+    return getMermasWarehouse();
+  } catch (error) {
+    return { data: [], error: error instanceof Error ? error.message : "No se pudo cargar el stock de Mermas." };
+  }
+}
+
+export async function createMermasStockExit(
+  movementType: "SALIDA_DESTRUCCION" | "SALIDA_REGULACION",
+  reason: string,
+  observation: string,
+  items: MermaStockExitItem[],
+): Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }> {
+  try {
+    const authorization = await requireMermasSuperUser();
+    const cleanReason = reason.trim();
+    if (!cleanReason) return { success: false, error: "El motivo de la salida es obligatorio." };
+    if (!Array.isArray(items) || items.length === 0) return { success: false, error: "Agrega al menos un producto." };
+    const cleanItems = items.map((item) => ({
+      bsale_variant_id: Number(item.bsale_variant_id),
+      quantity: Number(item.quantity),
+    }));
+    if (cleanItems.some((item) => !Number.isInteger(item.bsale_variant_id) || item.bsale_variant_id <= 0 || !Number.isFinite(item.quantity) || item.quantity <= 0)) {
+      return { success: false, error: "Revisa las cantidades ingresadas." };
+    }
+    const { data, error } = await db("mermas").rpc("create_stock_exit", {
+      p_company_id: authorization.companyId,
+      p_user_id: authorization.user.id,
+      p_movement_type: movementType,
+      p_reason: cleanReason,
+      p_observation: observation.trim() || null,
+      p_items: cleanItems,
+    });
+    if (error) {
+      if (error.message.toLocaleLowerCase("es-CL").includes("stock insuficiente")) {
+        return { success: false, error: "El stock disponible cambió y no alcanza para la salida. Actualiza la disponibilidad." };
+      }
+      return { success: false, error: error.message };
+    }
+    return { success: true, data: (data ?? {}) as Record<string, unknown> };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : "No se pudo registrar la salida." };
+  }
+}
+
 async function getMermasWarehouseTraceData(variantId: number): Promise<{
   data: MermaWarehouseProduct[];
   error?: string;
@@ -2322,6 +2527,7 @@ async function getMermasWarehouseTraceData(variantId: number): Promise<{
     )
     .eq("company_id", authorization.companyId)
     .eq("variant_id", variantId)
+    .eq("authorization_status", "AUTORIZADA")
     .order("created_at", { ascending: true });
   if (movementError)
     return { data: [], error: "No se pudo cargar la trazabilidad de Bodega" };

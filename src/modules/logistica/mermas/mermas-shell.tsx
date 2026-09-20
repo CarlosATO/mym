@@ -60,8 +60,9 @@ export function MermasShell({ children }: { children: React.ReactNode }) {
   }
 
   const operationItems: NavigationItem[] = [
-    { href: "/dashboard/logistica/mermas", label: "Solicitudes de traspaso a Mermas", view: "requests" },
+    { href: "/dashboard/logistica/mermas", label: "Solicitud de merma", view: "requests" },
     { href: "/dashboard/logistica/mermas", label: "Bodega de Mermas", view: "warehouse", permission: bootstrap.canViewWarehouse },
+    { href: "/dashboard/logistica/mermas/salidas", label: "Salidas", permission: bootstrap.isSuperUser },
     { href: "/dashboard/logistica/mermas/venta-trabajadores", label: "Venta a trabajadores", permission: bootstrap.canUseInternalSale },
   ];
   const controlItems: NavigationItem[] = [

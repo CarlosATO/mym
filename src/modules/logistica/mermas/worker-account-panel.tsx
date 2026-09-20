@@ -15,14 +15,20 @@ import {
 } from "lucide-react";
 import {
   cleanupWorkerPaymentUpload,
+  getWorkerBsaleBoletaForRegularization,
+  getWorkerAccountRegularizationAccess,
   getWorkerAccountDetailV2,
   getWorkerAccountsV2,
+  regularizeWorkerBsaleBoleta,
+  searchWorkerRegularizationEmployees,
   prepareWorkerPaymentUpload,
   submitWorkerPayment,
   type WorkerAccountChargeV2,
   type WorkerAccountDetailV2,
   type WorkerAccountV2,
+  type WorkerBsaleBoletaCandidate,
   type WorkerPaymentUpload,
+  type WorkerRegularizationEmployee,
 } from "@/app/actions/logistica/mermas";
 import { formatInstantInSantiago } from "@/lib/datetime";
 import { createClient as createBrowserSupabaseClient } from "@/lib/supabase/client";
@@ -68,12 +74,14 @@ function paymentStatusClass(status: string) {
 
 function chargeStatus(charge: WorkerAccountChargeV2) {
   if (charge.status === "REVERSED") return "REVERSADO";
+  if (charge.outstanding_amount === 0 && charge.credit_note_amount > 0 && charge.approved_paid_amount === 0) return "SALDADO POR NC";
+  if (charge.outstanding_amount === 0 && charge.credit_note_amount > 0) return "SALDADO";
   if (charge.outstanding_amount === 0) return "PAGADO";
   return charge.approved_paid_amount > 0 ? "PAGO PARCIAL" : "PENDIENTE";
 }
 
 function chargeStatusClass(status: string) {
-  if (status === "PAGADO") return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+  if (status === "PAGADO" || status === "SALDADO" || status === "SALDADO POR NC") return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
   if (status === "PAGO PARCIAL") return "bg-amber-500/10 text-amber-700 dark:text-amber-300";
   if (status === "REVERSADO") return "bg-theme-text/[0.06] text-theme-text-muted";
   return "bg-red-500/10 text-red-700 dark:text-red-300";
@@ -135,6 +143,8 @@ export function WorkerAccountPanel() {
   const [detail, setDetail] = useState<WorkerAccountDetailV2 | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
+  const [regularizationOpen, setRegularizationOpen] = useState(false);
+  const [canRegularize, setCanRegularize] = useState(false);
 
   async function loadAccounts(query: string) {
     setLoading(true);
@@ -155,6 +165,10 @@ export function WorkerAccountPanel() {
     const timer = window.setTimeout(() => void loadAccounts(search.trim()), 220);
     return () => window.clearTimeout(timer);
   }, [search]);
+
+  useEffect(() => {
+    void getWorkerAccountRegularizationAccess().then(setCanRegularize);
+  }, []);
 
   async function openDetail(account: WorkerAccountV2) {
     setDetailLoading(true);
@@ -223,12 +237,23 @@ export function WorkerAccountPanel() {
                 className="h-9 w-full rounded-xl border border-theme-border bg-theme-bg pl-9 pr-3 text-sm text-theme-text outline-none focus:border-theme-accent"
               />
             </div>
-            {loading && (
-              <span className="flex items-center gap-2 text-xs text-theme-text-muted">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Actualizando
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {canRegularize && (
+                <button
+                  type="button"
+                  onClick={() => setRegularizationOpen(true)}
+                  className="rounded-lg border border-theme-accent bg-theme-accent/10 px-3 py-2 text-xs font-bold text-theme-accent hover:bg-theme-accent/15"
+                >
+                  Regularizar boleta sin cliente
+                </button>
+              )}
+              {loading && (
+                <span className="flex items-center gap-2 text-xs text-theme-text-muted">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Actualizando
+                </span>
+              )}
+            </div>
           </div>
 
           {error && <p className="rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">{error}</p>}
@@ -297,6 +322,140 @@ export function WorkerAccountPanel() {
           onSubmitted={() => void refreshAfterPayment()}
         />
       )}
+      {regularizationOpen && (
+        <WorkerBsaleBoletaRegularizationModal
+          onClose={() => setRegularizationOpen(false)}
+          onCompleted={() => void loadAccounts(search.trim())}
+        />
+      )}
+    </div>
+  );
+}
+
+function WorkerBsaleBoletaRegularizationModal({
+  onClose,
+  onCompleted,
+}: {
+  onClose: () => void;
+  onCompleted: () => void;
+}) {
+  const [folio, setFolio] = useState("");
+  const [candidate, setCandidate] = useState<WorkerBsaleBoletaCandidate | null>(null);
+  const [employeeSearch, setEmployeeSearch] = useState("");
+  const [employees, setEmployees] = useState<WorkerRegularizationEmployee[]>([]);
+  const [selectedEmployee, setSelectedEmployee] = useState<WorkerRegularizationEmployee | null>(null);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [loadingEmployees, setLoadingEmployees] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    const timer = window.setTimeout(async () => {
+      setLoadingEmployees(true);
+      const response = await searchWorkerRegularizationEmployees(employeeSearch);
+      setEmployees(response.data);
+      if (response.error) setError(response.error);
+      setLoadingEmployees(false);
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [employeeSearch]);
+
+  async function lookup() {
+    setBusy(true);
+    setError("");
+    setCandidate(null);
+    const response = await getWorkerBsaleBoletaForRegularization(folio);
+    if (response.data) setCandidate(response.data);
+    else setError(response.error ?? "No se pudo validar la Boleta.");
+    setBusy(false);
+  }
+
+  async function submit() {
+    if (!candidate || !selectedEmployee || !reason.trim() || busy) return;
+    setBusy(true);
+    setError("");
+    const response = await regularizeWorkerBsaleBoleta({
+      document_number: candidate.document_number,
+      employee_id: selectedEmployee.id,
+      reason,
+    });
+    if (response.success) {
+      setSuccess(true);
+      onCompleted();
+    } else {
+      setError(response.error ?? "No se pudo regularizar la Boleta.");
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-4" role="dialog" aria-modal="true">
+      <section className="w-full max-w-lg rounded-2xl border border-theme-border bg-theme-surface shadow-2xl">
+        <header className="flex items-start justify-between border-b border-theme-border px-5 py-4">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-theme-accent">SUPER_USUARIO</p>
+            <h2 className="mt-1 text-base font-semibold text-theme-text">Regularizar boleta sin cliente</h2>
+            <p className="mt-0.5 text-xs text-theme-text-muted">Asigna una Boleta Bsale real a un trabajador activo.</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={busy} aria-label="Cerrar" className="rounded-lg p-1 text-theme-text-muted hover:bg-theme-text/5">
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="space-y-4 p-5">
+          {success ? (
+            <div className="space-y-4">
+              <p className="rounded-lg bg-emerald-500/10 px-3 py-3 text-sm text-emerald-700 dark:text-emerald-300">Boleta regularizada correctamente.</p>
+              <button type="button" onClick={onClose} className="w-full rounded-xl bg-theme-accent px-4 py-3 text-xs font-bold text-white">Cerrar</button>
+            </div>
+          ) : (
+            <>
+              <div className="flex gap-2">
+                <label className="block flex-1 text-xs font-semibold text-theme-text">
+                  Folio
+                  <input value={folio} onChange={(event) => setFolio(event.target.value)} inputMode="numeric" className="mt-1 h-10 w-full rounded-xl border border-theme-border bg-theme-bg px-3 font-mono text-sm text-theme-text outline-none focus:border-theme-accent" />
+                </label>
+                <button type="button" onClick={() => void lookup()} disabled={busy || !folio.trim()} className="mt-5 rounded-xl border border-theme-accent px-4 text-xs font-bold text-theme-accent disabled:opacity-40">Validar</button>
+              </div>
+
+              {candidate && (
+                <div className="grid grid-cols-3 gap-2 rounded-xl border border-theme-border bg-theme-bg px-3 py-3">
+                  <Metric label="Folio" value={String(candidate.document_number)} />
+                  <Metric label="Fecha" value={candidate.emission_date ?? "Sin fecha"} />
+                  <Metric label="Monto" value={formatMoney(candidate.total_amount)} />
+                  <span className="col-span-3 text-xs font-bold text-amber-700 dark:text-amber-300">SIN CLIENTE</span>
+                </div>
+              )}
+
+              <label className="block text-xs font-semibold text-theme-text">
+                Trabajador ACTIVO
+                <input value={employeeSearch} onChange={(event) => { setEmployeeSearch(event.target.value); setSelectedEmployee(null); }} placeholder="Buscar por nombre o RUT" className="mt-1 h-10 w-full rounded-xl border border-theme-border bg-theme-bg px-3 text-sm text-theme-text outline-none focus:border-theme-accent" />
+              </label>
+              <div className="max-h-32 overflow-y-auto rounded-xl border border-theme-border">
+                {loadingEmployees ? <p className="px-3 py-2 text-xs text-theme-text-muted">Buscando...</p> : employees.map((employee) => (
+                  <button key={employee.id} type="button" onClick={() => setSelectedEmployee(employee)} className={`block w-full border-b border-theme-border/60 px-3 py-2 text-left last:border-b-0 ${selectedEmployee?.id === employee.id ? "bg-theme-accent/10" : "hover:bg-theme-text/5"}`}>
+                    <span className="block text-xs font-semibold text-theme-text">{employee.display_name}</span>
+                    <span className="font-mono text-[11px] text-theme-text-muted">{employee.rut}</span>
+                  </button>
+                ))}
+              </div>
+              {selectedEmployee && <p className="text-xs text-theme-text-muted">Seleccionado: <strong className="text-theme-text">{selectedEmployee.display_name}</strong></p>}
+
+              <label className="block text-xs font-semibold text-theme-text">
+                Motivo obligatorio
+                <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={3} className="mt-1 w-full rounded-xl border border-theme-border bg-theme-bg px-3 py-2 text-sm text-theme-text outline-none focus:border-theme-accent" />
+              </label>
+
+              {error && <p className="rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-600">{error}</p>}
+              <button type="button" onClick={() => void submit()} disabled={busy || !candidate || !selectedEmployee || !reason.trim()} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-theme-accent px-4 py-3 text-xs font-bold uppercase tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-40">
+                {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                Confirmar regularización
+              </button>
+            </>
+          )}
+        </div>
+      </section>
     </div>
   );
 }
@@ -496,7 +655,7 @@ function WorkerAccountDetailPanel({
 function ChargeCard({ charge }: { charge: WorkerAccountChargeV2 }) {
   const [itemsOpen, setItemsOpen] = useState(false);
   const status = chargeStatus(charge);
-  const isDimmed = status === "PAGADO" || status === "REVERSADO";
+  const isDimmed = status === "PAGADO" || status === "SALDADO" || status === "SALDADO POR NC" || status === "REVERSADO";
   const hasDescription = (item: WorkerAccountChargeV2["items"][number]) =>
     Boolean(
       item.variant_description &&
@@ -525,8 +684,9 @@ function ChargeCard({ charge }: { charge: WorkerAccountChargeV2 }) {
             {charge.document_type ?? "Documento"} · {formatDate(charge.document_date)}
           </p>
         </div>
-        <div className="grid grid-cols-3 gap-3 text-right text-xs sm:min-w-[280px]">
+        <div className="grid grid-cols-4 gap-3 text-right text-xs sm:min-w-[360px]">
           <MoneyStat label="Original" value={charge.original_amount} />
+          <MoneyStat label="NC" value={charge.credit_note_amount} />
           <MoneyStat label="Pagado" value={charge.approved_paid_amount} />
           <MoneyStat label="Pendiente" value={charge.outstanding_amount} strong={charge.outstanding_amount > 0} />
         </div>
@@ -681,6 +841,12 @@ function PaymentsSection({ payments }: { payments: WorkerAccountDetailV2["paymen
 
 type Movement = WorkerAccountDetailV2["movements"][number];
 
+const movementPriority: Record<Movement["movement_type"], number> = {
+  CHARGE: 0,
+  ADJUSTMENT: 1,
+  PAYMENT: 2,
+};
+
 interface KardexRow {
   movement: Movement;
   cargo: number;
@@ -696,14 +862,30 @@ function buildKardex(movements: Movement[]): KardexRow[] {
       if (m.movement_type === "PAYMENT" && m.status === "REVERSED") return false;
       return true;
     })
-    .sort((a, b) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime());
+    .sort((a, b) => {
+      const occurredAtDifference = new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime();
+      if (occurredAtDifference !== 0) return occurredAtDifference;
+
+      const priorityDifference = movementPriority[a.movement_type] - movementPriority[b.movement_type];
+      if (priorityDifference !== 0) return priorityDifference;
+
+      const referenceDifference = a.reference_number.localeCompare(b.reference_number);
+      if (referenceDifference !== 0) return referenceDifference;
+
+      return (a.charge_id ?? a.payment_id ?? "").localeCompare(b.charge_id ?? b.payment_id ?? "");
+    });
 
   let balance = 0;
   return sorted.map((m) => {
     const isReview = m.movement_type === "PAYMENT" && m.status === "PENDING_REVIEW";
     const cargo = m.movement_type === "CHARGE" ? m.amount : 0;
-    const abono = m.movement_type === "PAYMENT" && m.status === "APPROVED" ? m.amount : 0;
-    balance = balance + cargo - abono;
+    const abono =
+      m.movement_type === "PAYMENT" && m.status === "APPROVED"
+        ? m.amount
+        : m.movement_type === "ADJUSTMENT" && m.source_type === "BSALE_NOTA_CREDITO"
+        ? Math.abs(m.amount)
+        : 0;
+    balance = Math.max(balance + cargo - abono, 0);
     return { movement: m, cargo, abono, runningBalance: balance, isReview };
   });
 }
@@ -767,6 +949,8 @@ function KardexRowItem({ row }: { row: KardexRow }) {
     ? movement.source_type
       ? sourceLabel(movement.source_type)
       : "Cargo"
+    : movement.movement_type === "ADJUSTMENT" && movement.source_type === "BSALE_NOTA_CREDITO"
+    ? "Nota de crédito Bsale"
     : "Pago";
 
   return (
@@ -813,10 +997,16 @@ function KardexRowItem({ row }: { row: KardexRow }) {
           className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
             movement.movement_type === "PAYMENT"
               ? paymentStatusClass(movement.status)
+              : movement.movement_type === "ADJUSTMENT"
+              ? "bg-sky-500/10 text-sky-700 dark:text-sky-300"
               : "bg-theme-text/[0.06] text-theme-text-muted"
           }`}
         >
-          {movement.movement_type === "PAYMENT" ? paymentStatus(movement.status) : "Cargo"}
+          {movement.movement_type === "PAYMENT"
+            ? paymentStatus(movement.status)
+            : movement.movement_type === "ADJUSTMENT"
+            ? "Abono NC"
+            : "Cargo"}
         </span>
       </td>
     </tr>

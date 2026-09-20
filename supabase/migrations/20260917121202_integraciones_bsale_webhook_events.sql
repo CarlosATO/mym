@@ -22,24 +22,15 @@ CREATE TABLE IF NOT EXISTS integraciones.bsale_webhook_events (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Índices de consulta frecuente
 CREATE INDEX IF NOT EXISTS idx_bsale_webhook_events_status ON integraciones.bsale_webhook_events (status);
 CREATE INDEX IF NOT EXISTS idx_bsale_webhook_events_company_id ON integraciones.bsale_webhook_events (company_id);
 CREATE INDEX IF NOT EXISTS idx_bsale_webhook_events_resource_id ON integraciones.bsale_webhook_events (resource_id);
 CREATE INDEX IF NOT EXISTS idx_bsale_webhook_events_received_at ON integraciones.bsale_webhook_events (received_at);
 
--- Seguridad RLS y Grants
 ALTER TABLE integraciones.bsale_webhook_events ENABLE ROW LEVEL SECURITY;
 
--- Revocación de permisos genéricos si fuera necesario
--- (Usualmente no necesario si RLS está habilitado, pero por seguridad explícita)
 REVOKE ALL ON integraciones.bsale_webhook_events FROM PUBLIC;
 GRANT SELECT, INSERT, UPDATE, DELETE ON integraciones.bsale_webhook_events TO service_role;
 
--- Políticas de Seguridad
--- 1. Anon y Authenticated bloqueados por completo de toda acción
--- (El rechazo es por defecto en RLS al no haber políticas, pero lo hacemos explícito para mayor seguridad semántica si existieran configuraciones globales)
 CREATE POLICY "Block anon" ON integraciones.bsale_webhook_events FOR ALL TO anon USING (false);
-CREATE POLICY "Block authenticated" ON integraciones.bsale_webhook_events FOR ALL TO authenticated USING (false);
-
--- API server-side usa service_role, el cual sobrepasa (bypasses) el RLS por definición, por lo que no requiere políticas explícitas.
+CREATE POLICY "Block authenticated" ON integraciones.bsale_webhook_events FOR ALL TO authenticated USING (false);;
