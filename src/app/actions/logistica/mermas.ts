@@ -2017,6 +2017,56 @@ export type MermaStockExitItem = {
   quantity: number;
 };
 
+export type MermaStockExitOperation = {
+  operation_id: string;
+  created_at: string;
+  operation_type: "DESTRUCCION" | "REGULACION" | "REVERSA";
+  status: "VIGENTE" | "CORREGIDA";
+  reason: string;
+  observation: string | null;
+  created_by: string;
+  created_by_name: string;
+  total_units: number;
+  product_count: number;
+  corrects_operation_id: string | null;
+  reverses_operation_id: string | null;
+};
+
+export type MermaStockExitOperationProduct = {
+  variant_id: number;
+  sku: string;
+  product_name: string;
+  quantity: number;
+  movement_count: number;
+};
+
+export type MermaStockExitOperationMovement = {
+  movement_id: string;
+  movement_type: string;
+  variant_id: number;
+  quantity: number;
+  quantity_absolute: number;
+  expiration_date: string | null;
+  lot: string | null;
+  request_id: string | null;
+  source: string;
+  authorization_status: string;
+  created_by: string | null;
+  created_at: string;
+};
+
+export type MermaStockExitOperationDetail = Omit<
+  MermaStockExitOperation,
+  "total_units" | "product_count"
+> & {
+  company_id: string;
+  corrected_by: string | null;
+  corrected_at: string | null;
+  correction_reason: string | null;
+  products: MermaStockExitOperationProduct[];
+  movements: MermaStockExitOperationMovement[];
+};
+
 export async function getMermaWarehouseEvidence(variantId: number): Promise<{
   data: Array<{ movement_id: string; evidence: MermaEvidence[] }>;
   error?: string;
@@ -2498,6 +2548,110 @@ export async function createMermasStockExit(
     return { success: true, data: (data ?? {}) as Record<string, unknown> };
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : "No se pudo registrar la salida." };
+  }
+}
+
+export async function getMermasStockExitOperations(): Promise<{
+  data: MermaStockExitOperation[];
+  error?: string;
+}> {
+  try {
+    const authorization = await requireMermasSuperUser();
+    const { data, error } = await db("mermas").rpc("get_stock_exit_operations", {
+      p_company_id: authorization.companyId,
+      p_user_id: authorization.user.id,
+      p_limit: 500,
+      p_offset: 0,
+    });
+    if (error) return { data: [], error: error.message };
+    return {
+      data: (data ?? []).map((row: MermaStockExitOperation) => ({
+        ...row,
+        total_units: Number(row.total_units),
+        product_count: Number(row.product_count),
+      })),
+    };
+  } catch (error) {
+    return { data: [], error: error instanceof Error ? error.message : "No se pudo cargar el historial de salidas." };
+  }
+}
+
+export async function getMermasStockExitOperationDetail(
+  operationId: string,
+): Promise<{ data: MermaStockExitOperationDetail | null; error?: string }> {
+  try {
+    const authorization = await requireMermasSuperUser();
+    const { data, error } = await db("mermas").rpc("get_stock_exit_operation_detail", {
+      p_company_id: authorization.companyId,
+      p_user_id: authorization.user.id,
+      p_operation_id: operationId,
+    });
+    if (error) return { data: null, error: error.message };
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) return { data: null, error: "No se encontró la operación." };
+    return {
+      data: {
+        ...row,
+        products: (row.products ?? []).map((product: MermaStockExitOperationProduct) => ({
+          ...product,
+          variant_id: Number(product.variant_id),
+          quantity: Number(product.quantity),
+          movement_count: Number(product.movement_count),
+        })),
+        movements: (row.movements ?? []).map((movement: MermaStockExitOperationMovement) => ({
+          ...movement,
+          variant_id: Number(movement.variant_id),
+          quantity: Number(movement.quantity),
+          quantity_absolute: Number(movement.quantity_absolute),
+        })),
+      } as MermaStockExitOperationDetail,
+    };
+  } catch (error) {
+    return { data: null, error: error instanceof Error ? error.message : "No se pudo cargar el detalle de la salida." };
+  }
+}
+
+export async function correctMermasStockExit(
+  originalOperationId: string,
+  correctionReason: string,
+  operationType: "DESTRUCCION" | "REGULACION",
+  reason: string,
+  observation: string,
+  items: MermaStockExitItem[],
+): Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }> {
+  try {
+    const authorization = await requireMermasSuperUser();
+    const cleanCorrectionReason = correctionReason.trim();
+    const cleanReason = reason.trim();
+    if (!cleanCorrectionReason) return { success: false, error: "El motivo de la corrección es obligatorio." };
+    if (!cleanReason) return { success: false, error: "El motivo de la salida corregida es obligatorio." };
+    if (!Array.isArray(items) || items.length === 0) return { success: false, error: "Agrega al menos un producto." };
+    const cleanItems = items.map((item) => ({
+      bsale_variant_id: Number(item.bsale_variant_id),
+      quantity: Number(item.quantity),
+    }));
+    if (cleanItems.some((item) => !Number.isInteger(item.bsale_variant_id) || item.bsale_variant_id <= 0 || !Number.isFinite(item.quantity) || item.quantity <= 0)) {
+      return { success: false, error: "Revisa las cantidades ingresadas." };
+    }
+    const { data, error } = await db("mermas").rpc("correct_stock_exit", {
+      p_company_id: authorization.companyId,
+      p_user_id: authorization.user.id,
+      p_original_operation_id: originalOperationId,
+      p_correction_reason: cleanCorrectionReason,
+      p_new_operation_type: operationType,
+      p_new_reason: cleanReason,
+      p_new_observation: observation.trim() || null,
+      p_items: cleanItems,
+    });
+    if (error) {
+      if (error.message.toLocaleLowerCase("es-CL").includes("stock insuficiente")) {
+        return { success: false, error: "El stock disponible cambió y no alcanza para la corrección." };
+      }
+      return { success: false, error: error.message };
+    }
+    return { success: true, data: (data ?? {}) as Record<string, unknown> };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : "No se pudo corregir la salida." };
   }
 }
 
