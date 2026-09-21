@@ -43,6 +43,7 @@ export interface Product {
   created_at: string; updated_at: string
   source?: string | null; bsale_product_id?: number | null; bsale_variant_id?: number | null;
   bsale_product_type_id?: number | null; bsale_product_type_name?: string | null;
+  bsale_product_classification?: number | null;
   bsale_product_state?: number | null; bsale_variant_state?: number | null;
   last_bsale_sync_at?: string | null; bsale_sync_hash?: string | null;
   bsale_status_conflict?: boolean | null; bsale_status_conflict_reason?: string | null;

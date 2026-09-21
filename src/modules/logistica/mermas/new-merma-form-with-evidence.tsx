@@ -105,6 +105,9 @@ export function NewMermaForm() {
     const errors = lines.map((line) => {
       const next: LineErrors = {};
       if (!line.product) next.product = "Debes seleccionar un producto.";
+      else if (line.product.is_pack) {
+        next.product = "Este código corresponde a un Pack. Registra la merma por cada artículo físico que lo compone.";
+      }
       else if (line.product.stock_available === null) {
         next.product = "No hay información confiable de stock Bsale.";
       } else if (line.product.stock_available <= 0) {
@@ -378,7 +381,7 @@ function EvidenceLine({
         ? []
         : catalog
             .filter((product) =>
-              `${product.sku} ${product.product_name ?? ""} ${product.description ?? ""}`
+              `${product.sku} ${product.barcode ?? ""} ${product.product_name ?? ""} ${product.description ?? ""}`
                 .toLowerCase()
                 .includes(query),
             )
@@ -448,11 +451,18 @@ function EvidenceLine({
                 <strong className="font-mono text-theme-text">
                   {line.product.sku}
                 </strong>
+                {line.product.is_pack && (
+                  <span className="ml-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
+                    PACK
+                  </span>
+                )}
                 <span className="ml-2 text-theme-text-muted">
                   {line.product.product_name || line.product.description}
                 </span>
                 <span className={`ml-2 text-[10px] font-semibold ${line.product.stock_available !== null && line.product.stock_available > 0 ? "text-theme-text-muted" : "text-red-500"}`}>
-                  {line.product.stock_available === null
+                  {line.product.is_pack
+                    ? "PACK · Sin stock físico propio"
+                    : line.product.stock_available === null
                     ? "SIN INFORMACIÓN DE STOCK"
                     : line.product.stock_available <= 0
                       ? "SIN STOCK"
@@ -495,10 +505,8 @@ function EvidenceLine({
                     setActiveIndex((current) => Math.max(current - 1, 0));
                   } else if (event.key === "Enter") {
                     event.preventDefault();
-                    update(index, {
-                      product: results[Math.min(activeIndex, results.length - 1)],
-                      search: "",
-                    });
+                    const selected = results[Math.min(activeIndex, results.length - 1)];
+                    if (!selected.is_pack) update(index, { product: selected, search: "" });
                   } else if (event.key === "Escape") {
                     event.preventDefault();
                     update(index, { search: "" });
@@ -524,6 +532,7 @@ function EvidenceLine({
                 {results.map((product, resultIndex) => (
                   (() => {
                     const selectable =
+                      !product.is_pack &&
                       product.stock_available !== null &&
                       product.stock_available > 0;
                     return <button
@@ -537,16 +546,28 @@ function EvidenceLine({
                     className={`block w-full border-b border-theme-border/60 px-3 py-2 text-left text-xs last:border-0 hover:bg-theme-text/5 ${resultIndex === activeIndex ? "bg-theme-text/5" : ""}`}
                   >
                     <strong className="font-mono">{product.sku}</strong>
+                    {product.is_pack && (
+                      <span className="ml-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
+                        PACK
+                      </span>
+                    )}
                     <span className="ml-2 text-theme-text-muted">
                       {product.product_name || product.description}
                     </span>
                     <span className={`ml-2 text-[10px] font-semibold ${selectable ? "text-theme-text-muted" : "text-red-500"}`}>
-                      {product.stock_available === null
-                        ? "SIN INFORMACIÓN DE STOCK"
+                      {product.is_pack
+                        ? "PACK · Sin stock físico propio"
+                        : product.stock_available === null
+                          ? "SIN INFORMACIÓN DE STOCK"
                         : product.stock_available <= 0
                           ? "SIN STOCK"
                           : `Stock Bsale: ${product.stock_available}`}
                     </span>
+                    {product.is_pack && (
+                      <span className="mt-1 block text-[10px] text-amber-700">
+                        Este código corresponde a un Pack y no posee stock físico propio. Registra la merma individualmente sobre los productos que lo componen.
+                      </span>
+                    )}
                   </button>;
                   })()
                 ))}

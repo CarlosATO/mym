@@ -36,6 +36,7 @@ export type MermaProduct = {
   barcode: string | null;
   description: string | null;
   product_name: string | null;
+  is_pack: boolean;
   stock_available: number | null;
   stock_last_synced_at: string | null;
 };
@@ -1059,44 +1060,33 @@ export async function getMermasProductsCatalog(): Promise<{
   error?: string;
 }> {
   const authorization = await requireWmsPermission("logistica.mermas.request.create");
+  const productsDb = db("adquisiciones");
   const integrationDb = db("integraciones");
-  const variants: Array<{
+  const products: Array<{
     id: string;
-    bsale_id: number;
-    code: string | null;
-    bar_code: string | null;
+    sku: string;
+    barcode: string | null;
     description: string | null;
-    bsale_product_id: number;
+    bsale_variant_id: number;
+    bsale_product_classification: number | null;
   }> = [];
   const pageSize = 1000;
   for (let offset = 0; ; offset += pageSize) {
-    const { data, error } = await integrationDb
-      .from("bsale_variants")
-      .select("id, bsale_id, code, bar_code, description, bsale_product_id")
+    const { data, error } = await productsDb
+      .from("products")
+      .select("id, sku, barcode, description, bsale_variant_id, bsale_product_classification")
       .eq("company_id", authorization.companyId)
-      .eq("state", 0)
-      .order("code")
+      .eq("is_active", true)
+      .eq("status", "ACTIVE")
+      .eq("bsale_variant_state", 0)
+      .not("bsale_variant_id", "is", null)
+      .order("sku")
       .range(offset, offset + pageSize - 1);
     if (error)
-      return { data: [], error: "No se pudo cargar el catálogo Bsale" };
-    variants.push(...(data ?? []));
+      return { data: [], error: "No se pudo cargar el catálogo operativo" };
+    products.push(...(data ?? []));
     if (!data || data.length < pageSize) break;
   }
-  const productIds = [
-    ...new Set(variants.map((variant) => variant.bsale_product_id)),
-  ];
-  const { data: products, error: productsError } = productIds.length
-    ? await integrationDb
-        .from("bsale_products")
-        .select("bsale_id, name")
-        .eq("company_id", authorization.companyId)
-        .in("bsale_id", productIds)
-    : { data: [] as { bsale_id: number; name: string | null }[], error: null };
-  if (productsError)
-    return { data: [], error: "No se pudo cargar el catálogo Bsale" };
-  const productNames = new Map(
-    (products ?? []).map((product) => [product.bsale_id, product.name]),
-  );
   const stockRows: Array<{
     variant_id: number;
     quantity_available: number | null;
@@ -1167,18 +1157,19 @@ export async function getMermasProductsCatalog(): Promise<{
     stockByVariant.set(row.variant_id, current);
   }
   return {
-    data: variants.map((variant) => ({
-      id: variant.id,
-      bsale_id: variant.bsale_id,
-      sku: variant.code ?? "",
-      barcode: variant.bar_code,
-      description: variant.description,
-      product_name: productNames.get(variant.bsale_product_id) ?? null,
-      stock_available: stockByVariant.get(variant.bsale_id)?.validRows
-        ? stockByVariant.get(variant.bsale_id)!.total
+    data: products.map((product) => ({
+      id: product.id,
+      bsale_id: product.bsale_variant_id,
+      sku: product.sku,
+      barcode: product.barcode,
+      description: product.description,
+      product_name: product.description,
+      is_pack: product.bsale_product_classification === 3,
+      stock_available: stockByVariant.get(product.bsale_variant_id)?.validRows
+        ? stockByVariant.get(product.bsale_variant_id)!.total
         : null,
       stock_last_synced_at:
-        stockByVariant.get(variant.bsale_id)?.lastSyncedAt ?? null,
+        stockByVariant.get(product.bsale_variant_id)?.lastSyncedAt ?? null,
     })),
   };
 }
@@ -1361,38 +1352,31 @@ export async function searchMermasProducts(
   const authorization = await requireWmsPermission("logistica.mermas.request.create");
   const term = search.trim();
   if (term.length < 2) return { data: [] };
-  const query = db("integraciones")
-    .from("bsale_variants")
-    .select("id, bsale_id, code, bar_code, description, bsale_product_id")
+  const query = db("adquisiciones")
+    .from("products")
+    .select("id, sku, barcode, description, bsale_variant_id, bsale_product_classification")
     .eq("company_id", authorization.companyId)
+    .eq("is_active", true)
+    .eq("status", "ACTIVE")
+    .eq("bsale_variant_state", 0)
+    .not("bsale_variant_id", "is", null)
     .or(
-      `code.ilike.%${term}%,bar_code.ilike.%${term}%,description.ilike.%${term}%`,
+      `sku.ilike.%${term}%,barcode.ilike.%${term}%,description.ilike.%${term}%`,
     )
-    .eq("state", 0)
-    .order("code")
+    .order("sku")
     .limit(20);
-  const { data: variants, error } = await query;
+  const { data: products, error } = await query;
   if (error)
-    return { data: [], error: "No se pudo consultar el catálogo Bsale" };
-  const productIds = [
-    ...new Set((variants ?? []).map((v) => v.bsale_product_id)),
-  ];
-  const { data: products } = productIds.length
-    ? await db("integraciones")
-        .from("bsale_products")
-        .select("bsale_id, name")
-        .eq("company_id", authorization.companyId)
-        .in("bsale_id", productIds)
-    : { data: [] as { bsale_id: number; name: string | null }[] };
-   const names = new Map((products ?? []).map((p) => [p.bsale_id, p.name]));
+    return { data: [], error: "No se pudo consultar el catálogo operativo" };
   return {
-    data: (variants ?? []).map((v) => ({
-      id: v.id,
-      bsale_id: v.bsale_id,
-      sku: v.code ?? "",
-      barcode: v.bar_code,
-      description: v.description,
-      product_name: names.get(v.bsale_product_id) ?? null,
+    data: (products ?? []).map((product) => ({
+      id: product.id,
+      bsale_id: product.bsale_variant_id,
+      sku: product.sku,
+      barcode: product.barcode,
+      description: product.description,
+      product_name: product.description,
+      is_pack: product.bsale_product_classification === 3,
       stock_available: null,
       stock_last_synced_at: null,
     })),
@@ -2940,19 +2924,27 @@ async function validateMermaRequest(
     );
   }
 
+  const productsDb = db("adquisiciones");
   const integrationDb = db("integraciones");
   const variantIds = [...requestedByVariant.keys()];
-  const { data: variants, error: variantsError } = await integrationDb
-    .from("bsale_variants")
-    .select("id, bsale_id")
+  const { data: products, error: productsError } = await productsDb
+    .from("products")
+    .select("id, bsale_variant_id, bsale_product_classification")
     .eq("company_id", authorization.companyId)
+    .eq("is_active", true)
+    .eq("status", "ACTIVE")
+    .eq("bsale_variant_state", 0)
+    .not("bsale_variant_id", "is", null)
     .in("id", variantIds);
-  if (variantsError) throw new Error("No se pudo validar el catálogo Bsale");
-  const variantMap = new Map((variants ?? []).map((variant) => [variant.id, variant]));
-  if (variantIds.some((variantId) => !variantMap.has(variantId))) {
-    throw new Error("Producto no encontrado en el catálogo Bsale");
+  if (productsError) throw new Error("No se pudo validar el catálogo operativo");
+  const productMap = new Map((products ?? []).map((product) => [product.id, product]));
+  if (variantIds.some((variantId) => !productMap.has(variantId))) {
+    throw new Error("Producto no encontrado en el catálogo operativo");
   }
-  const bsaleVariantIds = [...variantMap.values()].map((variant) => variant.bsale_id);
+  if ([...productMap.values()].some((product) => product.bsale_product_classification === 3)) {
+    throw new Error("Los Packs deben registrarse por cada artículo físico que los compone.");
+  }
+  const bsaleVariantIds = [...productMap.values()].map((product) => product.bsale_variant_id);
   const { data: offices } = await integrationDb
     .from("bsale_offices")
     .select("bsale_id, name")
@@ -2985,7 +2977,7 @@ async function validateMermaRequest(
     }
   }
   for (const [variantId, requested] of requestedByVariant) {
-    const stock = stockByVariant.get(variantMap.get(variantId)!.bsale_id);
+    const stock = stockByVariant.get(productMap.get(variantId)!.bsale_variant_id);
     if (stock === undefined) throw new Error("Sin información de stock Bsale para el producto");
     if (stock <= 0) throw new Error("El producto no tiene stock disponible en Bsale.");
     if (requested > stock) throw new Error("La cantidad solicitada supera el stock disponible en Bsale.");

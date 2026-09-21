@@ -203,6 +203,7 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
         bsale_variant_id: bsaleVariantId,
         bsale_product_state: bsaleProductState,
         bsale_variant_state: bsaleVariantState,
+        bsale_product_classification: v.product?.classification ?? null,
         bsale_product_type_id: bsaleTypeId ? String(bsaleTypeId) : null,
         bsale_product_type_name: bsaleTypeName || null,
         product_type: bsaleTypeName || null,
@@ -218,7 +219,7 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
     let pOffset = 0
     while (true) {
       const { data: page, error: fetchErr } = await admin.schema('adquisiciones').from('products')
-        .select('id, sku, bsale_variant_id, description, barcode, bsale_product_state, bsale_variant_state, bsale_product_type_id, bsale_product_type_name, product_type, bsale_brand_id, bsale_brand_href, is_active')
+        .select('id, sku, bsale_variant_id, description, barcode, bsale_product_state, bsale_variant_state, bsale_product_classification, bsale_product_type_id, bsale_product_type_name, product_type, bsale_brand_id, bsale_brand_href, is_active')
         .eq('company_id', companyId)
         .range(pOffset, pOffset + 999)
         
@@ -264,6 +265,7 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
           (ext.barcode || '') === (rec.barcode || '') &&
           ext.bsale_product_state === rec.bsale_product_state &&
           ext.bsale_variant_state === rec.bsale_variant_state &&
+          (ext.bsale_product_classification ?? null) === (rec.bsale_product_classification ?? null) &&
           String(ext.bsale_product_type_id || '') === String(rec.bsale_product_type_id || '') &&
           (ext.bsale_product_type_name || null) === (rec.bsale_product_type_name || null) &&
           (ext.product_type || null) === (rec.product_type || null) &&
@@ -281,6 +283,7 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
             barcode: rec.barcode,
             bsale_product_state: rec.bsale_product_state,
             bsale_variant_state: rec.bsale_variant_state,
+            bsale_product_classification: rec.bsale_product_classification,
             bsale_product_type_id: rec.bsale_product_type_id,
             bsale_product_type_name: rec.bsale_product_type_name,
             product_type: rec.product_type,
@@ -310,6 +313,7 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
       bsale_variant_id?: string | number | null
       bsale_product_state: string | null
       bsale_variant_state: string | null
+      bsale_product_classification: number | null
       bsale_product_type_id: string | number | null
       bsale_product_type_name: string | null
       product_type: string | null
@@ -335,6 +339,7 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
           description: owner.description,
           bsale_product_state: owner.bsale_product_state,
           bsale_variant_state: owner.bsale_variant_state,
+          bsale_product_classification: owner.bsale_product_classification,
           bsale_product_type_id: owner.bsale_product_type_id,
           bsale_product_type_name: owner.bsale_product_type_name,
           product_type: owner.product_type,
@@ -399,6 +404,7 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
         description: u.description,
         bsale_product_state: u.bsale_product_state,
         bsale_variant_state: u.bsale_variant_state,
+        bsale_product_classification: u.bsale_product_classification,
         bsale_product_type_id: u.bsale_product_type_id,
         bsale_product_type_name: u.bsale_product_type_name,
         product_type: u.product_type,
