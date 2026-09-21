@@ -26,7 +26,7 @@ export function MermasShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { bootstrap, pendingCount, invalidateRequests, ensureRequestsLoaded } = useMermasModule();
+  const { bootstrap, pendingCount, invalidateRequests, ensureRequestsLoaded, invalidateWarehouse, ensureWarehouseLoaded } = useMermasModule();
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
   const [syncError, setSyncError] = useState("");
@@ -49,6 +49,8 @@ export function MermasShell({ children }: { children: React.ReactNode }) {
       }
       setSyncMessage(`${result.newDetails} detalles Bsale ingeridos · disponibles para asociación manual`);
       await invalidateRequests();
+      invalidateWarehouse();
+      if (bootstrap.canViewWarehouse) await ensureWarehouseLoaded(true);
       if (pathname === "/dashboard/logistica/mermas") {
         await ensureRequestsLoaded(searchParams.get("q") ?? "", true);
       }

@@ -2420,26 +2420,22 @@ export async function getMermasWarehouse(): Promise<{
     .order("entered_at", { ascending: false });
   if (error) return { data: [], error: "No se pudo cargar la Bodega de Mermas" };
   const variantIds = [...new Set((stockRows ?? []).map((row) => Number(row.variant_id)))];
+  const productsDb = db("adquisiciones");
   const integrationDb = db("integraciones");
-  const [{ data: variants }, { data: costRows }, { data: setting }] = await Promise.all([
+  const [{ data: productRows }, { data: costRows }, { data: setting }] = await Promise.all([
     variantIds.length
-      ? integrationDb.from("bsale_variants").select("bsale_id, code, bsale_product_id").eq("company_id", authorization.companyId).in("bsale_id", variantIds)
-      : Promise.resolve({ data: [] as { bsale_id: number; code: string | null; bsale_product_id: number }[] }),
+      ? productsDb.from("products").select("bsale_variant_id, sku, description").eq("company_id", authorization.companyId).eq("is_active", true).eq("status", "ACTIVE").in("bsale_variant_id", variantIds)
+      : Promise.resolve({ data: [] as { bsale_variant_id: number; sku: string | null; description: string | null }[] }),
     variantIds.length
       ? integrationDb.from("bsale_variant_costs").select("variant_id, average_cost").eq("company_id", authorization.companyId).in("variant_id", variantIds)
       : Promise.resolve({ data: [] as { variant_id: number; average_cost: number | null }[] }),
     database.from("internal_sale_settings").select("worker_markup_percent").eq("company_id", authorization.companyId).maybeSingle(),
   ]);
-  const productIds = [...new Set((variants ?? []).map((variant) => variant.bsale_product_id))];
-  const { data: productRows } = productIds.length
-    ? await integrationDb.from("bsale_products").select("bsale_id, name").eq("company_id", authorization.companyId).in("bsale_id", productIds)
-    : { data: [] as { bsale_id: number; name: string | null }[] };
-  const variantMap = new Map((variants ?? []).map((variant) => [Number(variant.bsale_id), variant]));
+  const productMap = new Map((productRows ?? []).map((product) => [Number(product.bsale_variant_id), product]));
   const costMap = new Map((costRows ?? []).map((row) => {
     const cost = Number(row.average_cost);
     return [Number(row.variant_id), Number.isFinite(cost) && cost > 0 ? cost : null] as const;
   }));
-  const productMap = new Map((productRows ?? []).map((product) => [Number(product.bsale_id), product.name]));
   const today = new Date().toISOString().slice(0, 10);
   const warningDate = new Date(`${today}T00:00:00Z`);
   warningDate.setUTCDate(warningDate.getUTCDate() + 30);
@@ -2452,11 +2448,11 @@ export async function getMermasWarehouse(): Promise<{
   for (const stock of stockRows ?? []) {
     if (Number(stock.available) <= 0) continue;
     const variantId = Number(stock.variant_id);
-    const variant = variantMap.get(variantId);
+    const product = productMap.get(variantId);
     const current = products.get(variantId) ?? {
       variant_id: variantId,
-      sku: variant?.code ?? `BS-${variantId}`,
-      product_name: productMap.get(Number(variant?.bsale_product_id)) ?? "Producto Bsale",
+      sku: product?.sku ?? `BS-${variantId}`,
+      product_name: product?.description ?? "Producto Bsale",
       available: 0,
       average_cost: costMap.get(variantId) ?? null,
       cost_with_vat: calculateCostWithVat(costMap.get(variantId)),
