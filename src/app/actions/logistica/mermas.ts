@@ -2421,16 +2421,16 @@ export async function getMermasWarehouse(): Promise<{
   if (error) return { data: [], error: "No se pudo cargar la Bodega de Mermas" };
   const variantIds = [...new Set((stockRows ?? []).map((row) => Number(row.variant_id)))];
   const productsDb = db("adquisiciones");
-  const integrationDb = db("integraciones");
-  const [{ data: productRows }, { data: costRows }, { data: setting }] = await Promise.all([
+  const [{ data: productRows }, costResult, { data: setting }] = await Promise.all([
     variantIds.length
       ? productsDb.from("products").select("bsale_variant_id, sku, description").eq("company_id", authorization.companyId).eq("is_active", true).eq("status", "ACTIVE").in("bsale_variant_id", variantIds)
       : Promise.resolve({ data: [] as { bsale_variant_id: number; sku: string | null; description: string | null }[] }),
     variantIds.length
-      ? integrationDb.from("bsale_variant_costs").select("variant_id, average_cost").eq("company_id", authorization.companyId).in("variant_id", variantIds)
+      ? database.rpc("get_internal_sale_costs", { p_company_id: authorization.companyId, p_variant_ids: variantIds })
       : Promise.resolve({ data: [] as { variant_id: number; average_cost: number | null }[] }),
     database.from("internal_sale_settings").select("worker_markup_percent").eq("company_id", authorization.companyId).maybeSingle(),
   ]);
+  const costRows = (costResult.data as Array<{ variant_id: number; average_cost: number | null }> | null) ?? [];
   const productMap = new Map((productRows ?? []).map((product) => [Number(product.bsale_variant_id), product]));
   const costMap = new Map((costRows ?? []).map((row) => {
     const cost = Number(row.average_cost);
