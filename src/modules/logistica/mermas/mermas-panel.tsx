@@ -136,6 +136,8 @@ function MermaOperations() {
     ensureWarehouseLoaded,
     invalidateRequests,
     invalidateWarehouse,
+    pricingSettings,
+    updatePricingSettings,
   } = useMermasModule();
   const [tab, setTab] = useState<"requests" | "warehouse" | "authorization" | "archived" | "configuration">(
     "requests",
@@ -149,7 +151,6 @@ function MermaOperations() {
   const [warehouseSearch, setWarehouseSearch] = useState("");
   const [selectedWarehouseProduct, setSelectedWarehouseProduct] = useState<MermaWarehouseListProduct | null>(null);
   const [incidentsOpen, setIncidentsOpen] = useState(false);
-  const [pricingSettings, setPricingSettings] = useState<MermaPricingSettings | null>(bootstrap.pricingSettings);
   const requestedTab = searchParams.get("view");
   useEffect(() => {
     if (requestedTab === "warehouse" || requestedTab === "authorization" || requestedTab === "archived" || requestedTab === "configuration") {
@@ -212,7 +213,7 @@ function MermaOperations() {
           <MermasPricingSettingsPanel
             settings={pricingSettings}
             onSaved={(settings) => {
-              setPricingSettings(settings);
+              updatePricingSettings(settings);
               invalidateWarehouse();
             }}
           />

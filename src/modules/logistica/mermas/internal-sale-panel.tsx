@@ -77,7 +77,7 @@ function isValidUnitPrice(
 }
 
 export function InternalSalePanel() {
-  const { invalidateWarehouse, invalidateWorkerAccounts } = useMermasModule();
+  const { invalidateWarehouse, invalidateWorkerAccounts, pricingSettings } = useMermasModule();
   const [employeeSearch, setEmployeeSearch] = useState("");
   const [employeeOptionsOpen, setEmployeeOptionsOpen] = useState(true);
   const [employees, setEmployees] = useState<InternalSaleEmployee[]>([]);
@@ -133,7 +133,7 @@ export function InternalSalePanel() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [pricingSettings]);
 
   const products = useMemo(() => {
     const normalized = productSearch.trim().toLocaleLowerCase("es-CL");

@@ -30,6 +30,7 @@ type Cache<T> = {
 
 type MermasModuleContext = {
   bootstrap: MermasBootstrap;
+  pricingSettings: MermasBootstrap["pricingSettings"];
   requests: Cache<MermaRequest[]> & { query: string };
   warehouse: Cache<MermaWarehouseListProduct[]>;
   authorization: Cache<MermaAuthorizationRow[]>;
@@ -49,6 +50,7 @@ type MermasModuleContext = {
   invalidateWarehouse: () => void;
   invalidateWorkerAccounts: () => void;
   invalidateWorkerPayments: () => void;
+  updatePricingSettings: (settings: MermasBootstrap["pricingSettings"]) => void;
 };
 
 const MermasContext = createContext<MermasModuleContext | null>(null);
@@ -72,6 +74,7 @@ export function MermasModuleProvider({
   const [workerPayments, setWorkerPayments] = useState(staleCache<WorkerPaymentReview[]>([]));
   const [bsaleIncidents, setBsaleIncidents] = useState(staleCache<MermaBsaleIncident[]>([]));
   const [pendingCount, setPendingCount] = useState(bootstrap.pendingCount);
+  const [pricingSettings, setPricingSettings] = useState(bootstrap.pricingSettings);
   const requestsPromise = useRef<Promise<void> | null>(null);
   const requestsPromiseQuery = useRef<string | null>(null);
   const warehousePromise = useRef<Promise<void> | null>(null);
@@ -187,6 +190,10 @@ export function MermasModuleProvider({
     setWorkerPayments((current) => ({ ...current, invalidated: true, stale: current.loaded }));
   }
 
+  function updatePricingSettings(settings: MermasBootstrap["pricingSettings"]) {
+    setPricingSettings(settings);
+  }
+
   async function invalidateMermaMovementViews() {
     setRequests((current) => ({ ...current, invalidated: true, stale: current.loaded }));
     setAuthorization((current) => ({ ...current, invalidated: true, stale: current.loaded }));
@@ -232,11 +239,11 @@ export function MermasModuleProvider({
 
   return (
     <MermasContext.Provider value={{
-      bootstrap, requests, warehouse, authorization, archived, workerAccounts, workerPayments,
+      bootstrap, pricingSettings, requests, warehouse, authorization, archived, workerAccounts, workerPayments,
       bsaleIncidents, pendingCount, ensureRequestsLoaded, ensureWarehouseLoaded,
       ensureAuthorizationLoaded, ensureArchivedLoaded, ensureWorkerAccountsLoaded,
       ensureWorkerPaymentsLoaded, invalidateMermaMovementViews, invalidateWorkerAccounts,
-      invalidateWorkerPayments, invalidateRequests, invalidateWarehouse,
+      invalidateWorkerPayments, invalidateRequests, invalidateWarehouse, updatePricingSettings,
     }}>
       {children}
     </MermasContext.Provider>
