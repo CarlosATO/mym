@@ -96,6 +96,30 @@ export type InternalSaleProduct = {
   next_eligible_expiration: string;
 };
 
+export type InternalSalePrintData = {
+  id: string;
+  sale_number: string;
+  employee_name_snapshot: string;
+  employee_rut_snapshot: string;
+  status: string;
+  total_amount: number;
+  created_at: string;
+  responsible_user_id: string;
+  lines: Array<{
+    id: string;
+    sku_snapshot: string;
+    product_name_snapshot: string;
+    quantity: number;
+    worker_unit_price_snapshot: number;
+    line_total: number;
+    lots: Array<{
+      quantity: number;
+      expiration_date: string | null;
+      lot: string | null;
+    }>;
+  }>;
+};
+
 export type WorkerAccount = {
   employee_id: string;
   employee_name: string;
@@ -987,6 +1011,82 @@ export async function createInternalSale(
     return { success: true, data: (data ?? {}) as Record<string, unknown> };
   } catch (error) {
     return { success: false, error: internalSaleErrorMessage(error instanceof Error ? error.message : "") };
+  }
+}
+
+export async function getInternalSaleForPrint(saleId: string): Promise<{
+  data: InternalSalePrintData | null;
+  error?: string;
+}> {
+  try {
+    const authorization = await requireWmsPermission("logistica.mermas.internal_sale.create");
+    if (!/^[0-9a-f-]{36}$/i.test(saleId)) {
+      return { data: null, error: "La venta solicitada no es válida." };
+    }
+
+    const { data: sale, error: saleError } = await db("mermas")
+      .from("internal_sales")
+      .select("id, sale_number, employee_name_snapshot, employee_rut_snapshot, status, total_amount, created_at, responsible_user_id")
+      .eq("company_id", authorization.companyId)
+      .eq("id", saleId)
+      .maybeSingle();
+    if (saleError) throw saleError;
+    if (!sale || sale.status === "REVERSED") {
+      return { data: null, error: "La venta no existe o no está disponible para impresión." };
+    }
+
+    const { data: lines, error: linesError } = await db("mermas")
+      .from("internal_sale_lines")
+      .select("id, sku_snapshot, product_name_snapshot, quantity, worker_unit_price_snapshot, line_total")
+      .eq("company_id", authorization.companyId)
+      .eq("sale_id", saleId)
+      .order("created_at", { ascending: true });
+    if (linesError) throw linesError;
+
+    const lineIds = (lines ?? []).map((line) => line.id as string);
+    const { data: lots, error: lotsError } = lineIds.length
+      ? await db("mermas")
+          .from("internal_sale_lot_allocations")
+          .select("sale_line_id, quantity, expiration_date, lot")
+          .eq("company_id", authorization.companyId)
+          .eq("sale_id", saleId)
+          .in("sale_line_id", lineIds)
+          .order("created_at", { ascending: true })
+      : { data: [], error: null };
+    if (lotsError) throw lotsError;
+
+    return {
+      data: {
+        id: sale.id as string,
+        sale_number: sale.sale_number as string,
+        employee_name_snapshot: sale.employee_name_snapshot as string,
+        employee_rut_snapshot: sale.employee_rut_snapshot as string,
+        status: sale.status as string,
+        total_amount: Number(sale.total_amount),
+        created_at: sale.created_at as string,
+        responsible_user_id: sale.responsible_user_id as string,
+        lines: (lines ?? []).map((line) => ({
+          id: line.id as string,
+          sku_snapshot: line.sku_snapshot as string,
+          product_name_snapshot: line.product_name_snapshot as string,
+          quantity: Number(line.quantity),
+          worker_unit_price_snapshot: Number(line.worker_unit_price_snapshot),
+          line_total: Number(line.line_total),
+          lots: (lots ?? [])
+            .filter((lot) => lot.sale_line_id === line.id)
+            .map((lot) => ({
+              quantity: Number(lot.quantity),
+              expiration_date: lot.expiration_date as string | null,
+              lot: lot.lot as string | null,
+            })),
+        })),
+      },
+    };
+  } catch (error) {
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : "No se pudo cargar la venta registrada.",
+    };
   }
 }
 

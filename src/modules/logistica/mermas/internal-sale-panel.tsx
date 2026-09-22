@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import {
   createInternalSale,
+  getInternalSaleForPrint,
   getInternalSaleCatalog,
   getInternalSaleWorkerContext,
   searchInternalSaleEmployees,
@@ -98,6 +99,7 @@ export function InternalSalePanel() {
   const [error, setError] = useState("");
   const [result, setResult] = useState<SaleResult | null>(null);
   const [printError, setPrintError] = useState("");
+  const [printLoading, setPrintLoading] = useState(false);
 
   useEffect(() => {
     const timer = window.setTimeout(async () => {
@@ -176,9 +178,6 @@ export function InternalSalePanel() {
     !productLoading &&
     !refreshingAfterSale &&
     (afterSale ?? -1) >= 0;
-  const printLineLimitExceeded = cart.length > MAX_INTERNAL_SALE_PRINT_LINES;
-  const canGenerate = canConfirm && !printLineLimitExceeded;
-
   function selectEmployee(employee: InternalSaleEmployee) {
     setEmployeeOptionsOpen(false);
     setPrintError("");
@@ -243,23 +242,26 @@ export function InternalSalePanel() {
     );
   }
 
-  async function generatePrintDocument() {
-    if (!selectedEmployee || !canGenerate) return;
+  async function printPersistedSale() {
+    const saleId = typeof result?.sale_id === "string" ? result.sale_id : "";
     setPrintError("");
-    const draft: InternalSalePrintDraft = {
-      employee: selectedEmployee,
-      lines: cart
-        .filter(isValidQuantity)
-        .filter(isValidUnitPrice)
-        .map((line) => ({
-          product: line.product,
-          quantity: line.quantity,
-          unitPrice: line.unitPrice as number,
-        })),
-      total,
-      generatedAt: new Date().toISOString(),
-    };
-    await printDraftInIsolatedFrame(draft);
+    setPrintLoading(true);
+    try {
+      const response = await getInternalSaleForPrint(saleId);
+      if (!response.data) {
+        setPrintError(response.error ?? "No se pudo cargar la venta registrada.");
+        return;
+      }
+      if (response.data.lines.length > MAX_INTERNAL_SALE_PRINT_LINES) {
+        setPrintError(
+          "Esta venta contiene demasiados productos para generar el comprobante en una sola hoja.",
+        );
+        return;
+      }
+      await printDraftInIsolatedFrame(response.data satisfies InternalSalePrintDraft);
+    } finally {
+      setPrintLoading(false);
+    }
   }
 
   async function printDraftInIsolatedFrame(draft: InternalSalePrintDraft) {
@@ -430,6 +432,7 @@ export function InternalSalePanel() {
     setError("");
     setProductError("");
     setPrintError("");
+    setPrintLoading(false);
     setRefreshingAfterSale(true);
     void refreshAfterSale().finally(() => setRefreshingAfterSale(false));
   }
@@ -458,13 +461,13 @@ export function InternalSalePanel() {
             <p className="mt-3 text-sm text-theme-text-muted">
               {displayResultEmployee(result)}
             </p>
-            <p className="mt-1 text-xl font-semibold text-theme-text">
-              {formatMoney(Number(result.total ?? total))}
-            </p>
+             <p className="mt-1 text-xl font-semibold text-theme-text">
+               {formatMoney(Number(result.total ?? total))}
+             </p>
             <span className="mt-4 inline-flex rounded-full bg-amber-500/15 px-3 py-1 text-xs font-semibold text-amber-700 dark:text-amber-300">
               PENDIENTE DE RENDICIÓN
             </span>
-            <div className="mx-auto mt-6 grid max-w-md grid-cols-2 gap-3 text-left text-sm">
+             <div className="mx-auto mt-6 grid max-w-md grid-cols-2 gap-3 text-left text-sm">
               <Metric
                 label="Utilizado después"
                 value={formatMoney(Number(result.monthly_used_after ?? 0))}
@@ -472,21 +475,41 @@ export function InternalSalePanel() {
               <Metric
                 label="Cupo restante"
                 value={formatMoney(monthlyRemaining)}
-              />
-            </div>
-            <button
-              type="button"
-              onClick={resetSale}
-              disabled={refreshingAfterSale}
-              className="mt-6 inline-flex items-center gap-2 rounded-xl bg-theme-accent px-4 py-2.5 text-xs font-semibold text-white hover:bg-theme-accent-hover disabled:cursor-wait disabled:opacity-60"
-            >
-              {refreshingAfterSale && (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              )}
-              {refreshingAfterSale
-                ? "Actualizando disponibilidad..."
-                : "Nueva venta"}
-            </button>
+               />
+             </div>
+             {printError && (
+               <p className="mx-auto mt-4 max-w-md rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
+                 {printError}
+               </p>
+             )}
+             <div className="mt-6 flex flex-col justify-center gap-2 sm:flex-row">
+               <button
+                 type="button"
+                 onClick={() => void printPersistedSale()}
+                 disabled={printLoading}
+                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-theme-accent px-4 py-2.5 text-xs font-semibold text-theme-accent hover:bg-theme-accent/10 disabled:cursor-wait disabled:opacity-60"
+               >
+                 {printLoading ? (
+                   <Loader2 className="h-4 w-4 animate-spin" />
+                 ) : (
+                   <Printer className="h-4 w-4" />
+                 )}
+                 Imprimir comprobante
+               </button>
+               <button
+                 type="button"
+                 onClick={resetSale}
+                 disabled={refreshingAfterSale}
+                 className="inline-flex items-center justify-center gap-2 rounded-xl bg-theme-accent px-4 py-2.5 text-xs font-semibold text-white hover:bg-theme-accent-hover disabled:cursor-wait disabled:opacity-60"
+               >
+                 {refreshingAfterSale && (
+                   <Loader2 className="h-4 w-4 animate-spin" />
+                 )}
+                 {refreshingAfterSale
+                   ? "Actualizando disponibilidad..."
+                   : "Nueva venta"}
+               </button>
+             </div>
           </section>
         </div>
       </div>
@@ -891,24 +914,8 @@ export function InternalSalePanel() {
                 {printError}
               </p>
             )}
-            {printLineLimitExceeded && (
-              <p className="mt-3 rounded-lg bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-800 dark:text-amber-300">
-                Esta venta contiene demasiados productos para generar el
-                comprobante en una sola hoja. Divide la venta en dos
-                operaciones.
-              </p>
-            )}
-            <div className="mt-5 grid gap-2">
-              <button
-                type="button"
-                disabled={!canGenerate}
-                onClick={() => void generatePrintDocument()}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-theme-accent px-4 py-3 text-xs font-bold uppercase tracking-wide text-theme-accent hover:bg-theme-accent/10 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <Printer className="h-4 w-4" />
-                Generar documento
-              </button>
-              <button
+             <div className="mt-5 grid gap-2">
+               <button
                 type="button"
                 disabled={!canConfirm || submitting}
                 onClick={() => setConfirmOpen(true)}

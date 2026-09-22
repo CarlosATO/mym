@@ -1,17 +1,7 @@
-import type { InternalSaleEmployee, InternalSaleProduct } from "@/app/actions/logistica/mermas";
+import type { InternalSalePrintData } from "@/app/actions/logistica/mermas";
 import { formatCivilDate } from "@/lib/datetime";
 
-export type InternalSalePrintLine = {
-  product: InternalSaleProduct;
-  quantity: number;
-  unitPrice: number;
-};
-export type InternalSalePrintDraft = {
-  employee: InternalSaleEmployee;
-  lines: InternalSalePrintLine[];
-  total: number;
-  generatedAt: string;
-};
+export type InternalSalePrintDraft = InternalSalePrintData;
 
 export const MAX_INTERNAL_SALE_PRINT_LINES = 6;
 
@@ -41,17 +31,17 @@ function formatDate(value: string) {
 
 export function buildInternalSalePrintHtml(draft: InternalSalePrintDraft) {
   const density = draft.lines.length <= 3 ? "normal" : draft.lines.length <= 5 ? "compact" : "extra-compact";
-  const rows = draft.lines.map(({ product, quantity, unitPrice }) => `
+  const rows = draft.lines.map(({ sku_snapshot, product_name_snapshot, quantity, worker_unit_price_snapshot, line_total, lots }) => `
     <tr>
-      <td class="sku">${escapeHtml(product.sku)}</td>
-      <td><span class="product-name">${escapeHtml(product.product_name)}</span><span class="expiry-info">Próximo vencimiento elegible: ${escapeHtml(formatCivilDate(product.next_eligible_expiration))}</span></td>
+      <td class="sku">${escapeHtml(sku_snapshot)}</td>
+      <td><span class="product-name">${escapeHtml(product_name_snapshot)}</span>${lots.map((lot) => `<span class="expiry-info">Lote: ${escapeHtml(lot.lot || "—")} · Vence: ${escapeHtml(formatCivilDate(lot.expiration_date))}</span>`).join("")}</td>
       <td class="number">${quantity}</td>
-       <td class="number">${money.format(unitPrice)}</td>
-       <td class="number strong">${money.format(Math.round(unitPrice * quantity))}</td>
+       <td class="number">${money.format(worker_unit_price_snapshot)}</td>
+       <td class="number strong">${money.format(line_total)}</td>
     </tr>`).join("");
 
   return `<!doctype html>
-<html lang="es"><head><meta charset="utf-8"><title>Autorización de compra interna de Mermas</title><style>
+ <html lang="es"><head><meta charset="utf-8"><title>Comprobante de venta interna de Mermas</title><style>
   @page { size: A4 portrait; margin: 0; }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; width: 210mm; height: 297mm; overflow: hidden; background: #fff; }
@@ -105,11 +95,11 @@ export function buildInternalSalePrintHtml(draft: InternalSalePrintDraft) {
   .internal-sale-print-extra-compact .signature-line { margin-top: 9mm; }
   @media print { .print-content { transform-origin: top left; } }
 </style></head><body><main class="print-root"><div class="print-sheet"><article class="print-content internal-sale-print-${density}">
-  <header class="print-header"><div><div class="brand">MYM / Petgroup</div><h1>Autorización de compra interna de Mermas</h1></div><div class="status"><div class="status-label">Documento previo</div><div class="status-date">Fecha: ${escapeHtml(formatDate(draft.generatedAt))}</div></div></header>
-  <section class="worker-card"><div class="section-title">Datos del trabajador</div><div class="worker-grid"><p><strong>Nombre completo:</strong> ${escapeHtml(draft.employee.display_name)}</p><p><strong>RUT:</strong> ${escapeHtml(draft.employee.rut)}</p><p><strong>Cargo / Área:</strong> ${escapeHtml(draft.employee.cargo || "—")}</p></div></section>
-  <section class="detail"><h2 class="detail-heading">Detalle de compra</h2><table><thead><tr><th>SKU</th><th>Producto</th><th class="number">Cantidad</th><th class="number">Precio unitario</th><th class="number">Subtotal</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td colspan="4" class="total-label">Total a pagar</td><td class="total-value">${money.format(draft.total)}</td></tr></tfoot></table></section>
+   <header class="print-header"><div><div class="brand">MYM / Petgroup</div><h1>Comprobante de venta interna de Mermas</h1></div><div class="status"><div class="status-label">Venta registrada</div><div class="status-date">Nº venta: ${escapeHtml(draft.sale_number)}<br>Fecha: ${escapeHtml(formatDate(draft.created_at))}</div></div></header>
+   <section class="worker-card"><div class="section-title">Datos del trabajador</div><div class="worker-grid"><p><strong>Nombre completo:</strong> ${escapeHtml(draft.employee_name_snapshot)}</p><p><strong>RUT:</strong> ${escapeHtml(draft.employee_rut_snapshot)}</p></div></section>
+   <section class="detail"><h2 class="detail-heading">Detalle de venta registrada</h2><table><thead><tr><th>SKU</th><th>Producto</th><th class="number">Cantidad</th><th class="number">Precio unitario</th><th class="number">Subtotal</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td colspan="4" class="total-label">Total registrado</td><td class="total-value">${money.format(draft.total_amount)}</td></tr></tfoot></table></section>
   <section class="declaration-box"><p>“Declaro que he sido informado(a) de que los productos detallados en este documento corresponden a una venta interna de productos provenientes de Mermas de la empresa.</p><p>Declaro conocer y aceptar la condición informada de los productos al momento de la compra, incluyendo su fecha de vencimiento cuando corresponda.</p><p>Asimismo, manifiesto mi voluntad de adquirir los productos detallados por el monto total señalado en este documento.”</p></section>
-  <section class="signatures-grid"><div class="signature-block"><h2>Trabajador comprador</h2><p>Nombre: ${escapeHtml(draft.employee.display_name)}</p><p>RUT: ${escapeHtml(draft.employee.rut)}</p><div class="signature-line">Firma</div></div><div class="signature-block"><h2>Responsable de entrega</h2><p>Nombre:</p><p>Cargo:</p><div class="signature-line">Firma</div></div></section>
-  <p class="final-date">Fecha: ____ / ____ / ______</p>
+   <section class="signatures-grid"><div class="signature-block"><h2>Trabajador comprador</h2><p>Nombre: ${escapeHtml(draft.employee_name_snapshot)}</p><p>RUT: ${escapeHtml(draft.employee_rut_snapshot)}</p><div class="signature-line">Firma</div></div><div class="signature-block"><h2>Responsable de entrega</h2><p>Nombre:</p><p>Cargo:</p><div class="signature-line">Firma</div></div></section>
+   <p class="final-date">Venta creada: ${escapeHtml(formatDate(draft.created_at))}</p>
 </article></div></main></body></html>`;
 }
