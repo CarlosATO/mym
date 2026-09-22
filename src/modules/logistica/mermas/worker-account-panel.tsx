@@ -3,18 +3,20 @@
 import { useEffect, useState } from "react";
 import {
   ChevronDown,
+  ExternalLink,
   FileText,
   Loader2,
   Search,
   Upload,
   X,
+  Ban,
   TrendingDown,
   TrendingUp,
-  AlertCircle,
   ClipboardList,
 } from "lucide-react";
 import {
   cleanupWorkerPaymentUpload,
+  getWorkerPaymentEvidenceUrl,
   getWorkerBsaleBoletaForRegularization,
   getWorkerAccountRegularizationAccess,
   getWorkerAccountDetailV2,
@@ -23,6 +25,7 @@ import {
   searchWorkerRegularizationEmployees,
   prepareWorkerPaymentUpload,
   submitWorkerPayment,
+  voidWorkerPayment,
   type WorkerAccountChargeV2,
   type WorkerAccountDetailV2,
   type WorkerAccountV2,
@@ -58,17 +61,15 @@ function lastMovementAt(account: WorkerAccountV2) {
 function paymentStatus(status: string) {
   return (
     {
-      APPROVED: "Aprobado",
-      PENDING_REVIEW: "En revisión",
-      REJECTED: "Rechazado",
-      REVERSED: "Reversado",
+      ACTIVE: "Vigente",
+      VOIDED: "Anulado",
     }[status] ?? status
   );
 }
 
 function paymentStatusClass(status: string) {
-  if (status === "APPROVED") return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
-  if (status === "PENDING_REVIEW") return "bg-amber-500/10 text-amber-700 dark:text-amber-300";
+  if (status === "ACTIVE") return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+  if (status === "VOIDED") return "bg-red-500/10 text-red-700 dark:text-red-300";
   return "bg-theme-text/[0.06] text-theme-text-muted";
 }
 
@@ -143,6 +144,7 @@ export function WorkerAccountPanel() {
   const [detail, setDetail] = useState<WorkerAccountDetailV2 | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
+  const [voidPayment, setVoidPayment] = useState<WorkerAccountDetailV2["payments"][number] | null>(null);
   const [regularizationOpen, setRegularizationOpen] = useState(false);
   const [canRegularize, setCanRegularize] = useState(false);
 
@@ -199,7 +201,7 @@ export function WorkerAccountPanel() {
       official: sum.official + account.official_balance,
       merma: sum.merma + account.merma_balance,
       bsale: sum.bsale + account.bsale_boleta_balance,
-      pending: sum.pending + account.pending_review_payments,
+      pending: sum.pending + account.approved_payments,
     }),
     { official: 0, merma: 0, bsale: 0, pending: 0 },
   );
@@ -224,7 +226,7 @@ export function WorkerAccountPanel() {
             <StatStrip label="Saldo total" value={formatMoney(totals.official)} accent />
             <StatStrip label="Mermas" value={formatMoney(totals.merma)} />
             <StatStrip label="Boletas Bsale" value={formatMoney(totals.bsale)} />
-            <StatStrip label="Pagos en revisión" value={formatMoney(totals.pending)} />
+            <StatStrip label="Pagos vigentes" value={formatMoney(totals.pending)} />
           </div>
 
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -313,6 +315,7 @@ export function WorkerAccountPanel() {
           detail={detail}
           onClose={() => setDetail(null)}
           onPayment={() => setPaymentOpen(true)}
+          onVoidPayment={setVoidPayment}
         />
       )}
       {paymentOpen && detail && (
@@ -320,6 +323,17 @@ export function WorkerAccountPanel() {
           detail={detail}
           onClose={() => setPaymentOpen(false)}
           onSubmitted={() => void refreshAfterPayment()}
+        />
+      )}
+      {voidPayment && detail && (
+        <VoidWorkerPaymentModal
+          payment={voidPayment}
+          employeeName={detail.employee.name}
+          onClose={() => setVoidPayment(null)}
+          onCompleted={async () => {
+            setVoidPayment(null);
+            await refreshAfterPayment();
+          }}
         />
       )}
       {regularizationOpen && (
@@ -542,10 +556,12 @@ function WorkerAccountDetailPanel({
   detail,
   onClose,
   onPayment,
+  onVoidPayment,
 }: {
   detail: WorkerAccountDetailV2;
   onClose: () => void;
   onPayment: () => void;
+  onVoidPayment: (payment: WorkerAccountDetailV2["payments"][number]) => void;
 }) {
   const charges = [...detail.charges].sort((a, b) => {
     const openDiff = Number(b.outstanding_amount > 0) - Number(a.outstanding_amount > 0);
@@ -554,8 +570,6 @@ function WorkerAccountDetailPanel({
       new Date(b.document_date ?? "1970-01-01").getTime() - new Date(a.document_date ?? "1970-01-01").getTime()
     );
   });
-  const projectedDiffers = detail.summary.projected_balance < detail.summary.official_balance;
-
   return (
     <div
       className="fixed inset-0 z-50 overflow-y-auto bg-black/45 p-0 sm:p-4"
@@ -587,7 +601,7 @@ function WorkerAccountDetailPanel({
               <button
                 type="button"
                 onClick={onPayment}
-                disabled={detail.summary.projected_balance <= 0}
+                disabled={detail.summary.official_balance <= 0}
                 className="rounded-lg bg-theme-accent px-3 py-1.5 text-xs font-bold text-white hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Registrar pago
@@ -609,17 +623,8 @@ function WorkerAccountDetailPanel({
             <Metric label="Mermas" value={formatMoney(detail.summary.merma_balance)} />
             <Metric label="Boletas Bsale" value={formatMoney(detail.summary.bsale_boleta_balance)} />
             <span className="hidden h-6 w-px bg-theme-border/60 sm:block" />
-            <Metric label="Pagado" value={formatMoney(detail.summary.approved_payments)} />
-            <Metric label="En revisión" value={formatMoney(detail.summary.pending_review_payments)} />
+            <Metric label="Pagos vigentes" value={formatMoney(detail.summary.approved_payments)} />
           </div>
-
-          {projectedDiffers && (
-            <div className="mt-2 flex items-center gap-2 rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-300">
-              <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-              Saldo proyectado si se aprueban pagos en revisión:{" "}
-              <strong className="ml-0.5">{formatMoney(detail.summary.projected_balance)}</strong>
-            </div>
-          )}
         </header>
 
         <div className="space-y-6 p-4 sm:p-6">
@@ -642,7 +647,7 @@ function WorkerAccountDetailPanel({
             </div>
           </section>
 
-          <PaymentsSection payments={detail.payments} />
+          <PaymentsSection payments={detail.payments} onVoidPayment={onVoidPayment} />
           <KardexSection movements={detail.movements} />
         </div>
       </section>
@@ -775,7 +780,13 @@ function ChargeCard({ charge }: { charge: WorkerAccountChargeV2 }) {
 
 // ─── PaymentsSection ─────────────────────────────────────────────────────────
 
-function PaymentsSection({ payments }: { payments: WorkerAccountDetailV2["payments"] }) {
+function PaymentsSection({
+  payments,
+  onVoidPayment,
+}: {
+  payments: WorkerAccountDetailV2["payments"];
+  onVoidPayment: (payment: WorkerAccountDetailV2["payments"][number]) => void;
+}) {
   return (
     <section>
       <div className="mb-3">
@@ -797,6 +808,31 @@ function PaymentsSection({ payments }: { payments: WorkerAccountDetailV2["paymen
                   </p>
                   <p className="mt-0.5 text-[11px] text-theme-text-muted">{formatDate(payment.submitted_at)}</p>
                 </div>
+                <div className="flex items-end gap-3 text-right">
+                   <button
+                     type="button"
+                     onClick={async () => {
+                       const evidenceWindow = window.open("about:blank", "_blank");
+                       const response = await getWorkerPaymentEvidenceUrl(payment.payment_id);
+                       if (response.url && evidenceWindow) evidenceWindow.location.href = response.url;
+                       else evidenceWindow?.close();
+                     }}
+                     className="inline-flex items-center gap-1 text-[11px] font-semibold text-theme-accent hover:underline"
+                   >
+                     <ExternalLink className="h-3.5 w-3.5" />
+                     Comprobante
+                   </button>
+                   {payment.status === "ACTIVE" && (
+                     <button
+                       type="button"
+                       onClick={() => onVoidPayment(payment)}
+                       className="inline-flex items-center gap-1 text-[11px] font-semibold text-red-600 hover:underline"
+                     >
+                       <Ban className="h-3.5 w-3.5" />
+                       Anular pago
+                     </button>
+                   )}
+                </div>
                 <div className="text-right">
                   <p className="text-sm font-bold tabular-nums text-theme-text">{formatMoney(payment.amount)}</p>
                   <span
@@ -806,7 +842,7 @@ function PaymentsSection({ payments }: { payments: WorkerAccountDetailV2["paymen
                   </span>
                 </div>
               </div>
-              {payment.status === "APPROVED" && payment.allocations.length > 0 && (
+              {payment.status === "ACTIVE" && payment.allocations.length > 0 && (
                 <div className="mt-2 border-t border-theme-border/60 pt-2">
                   <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-theme-text-muted">
                     Aplicado a:
@@ -827,6 +863,12 @@ function PaymentsSection({ payments }: { payments: WorkerAccountDetailV2["paymen
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+              {payment.status === "VOIDED" && (
+                <div className="mt-2 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
+                  <strong>ANULADO</strong> · {formatDate(payment.voided_at)}
+                  <span className="ml-1">· Motivo: {payment.void_reason || "Sin motivo informado"}</span>
                 </div>
               )}
             </div>
@@ -852,14 +894,12 @@ interface KardexRow {
   cargo: number;
   abono: number;
   runningBalance: number;
-  isReview: boolean;
 }
 
 function buildKardex(movements: Movement[]): KardexRow[] {
   const sorted = [...movements]
     .filter((m) => {
       if (m.movement_type === "CHARGE" && m.status === "REVERSED") return false;
-      if (m.movement_type === "PAYMENT" && m.status === "REVERSED") return false;
       return true;
     })
     .sort((a, b) => {
@@ -877,16 +917,15 @@ function buildKardex(movements: Movement[]): KardexRow[] {
 
   let balance = 0;
   return sorted.map((m) => {
-    const isReview = m.movement_type === "PAYMENT" && m.status === "PENDING_REVIEW";
     const cargo = m.movement_type === "CHARGE" ? m.amount : 0;
     const abono =
-      m.movement_type === "PAYMENT" && m.status === "APPROVED"
+      m.movement_type === "PAYMENT" && m.status === "ACTIVE"
         ? m.amount
         : m.movement_type === "ADJUSTMENT" && m.source_type === "BSALE_NOTA_CREDITO"
         ? Math.abs(m.amount)
         : 0;
     balance = Math.max(balance + cargo - abono, 0);
-    return { movement: m, cargo, abono, runningBalance: balance, isReview };
+    return { movement: m, cargo, abono, runningBalance: balance };
   });
 }
 
@@ -943,7 +982,7 @@ function KardexSection({ movements }: { movements: WorkerAccountDetailV2["moveme
 }
 
 function KardexRowItem({ row }: { row: KardexRow }) {
-  const { movement, cargo, abono, runningBalance, isReview } = row;
+  const { movement, cargo, abono, runningBalance } = row;
   const isCharge = movement.movement_type === "CHARGE";
   const conceptLabel = isCharge
     ? movement.source_type
@@ -954,7 +993,7 @@ function KardexRowItem({ row }: { row: KardexRow }) {
     : "Pago";
 
   return (
-    <tr className={`${isReview ? "bg-amber-500/[0.04]" : ""} hover:bg-theme-accent/[0.03]`}>
+    <tr className={`${movement.status === "VOIDED" ? "bg-red-500/[0.04]" : ""} hover:bg-theme-accent/[0.03]`}>
       <td className="px-3 py-2 text-theme-text-muted">{formatDate(movement.occurred_at)}</td>
       <td className="px-3 py-2">
         <span className="flex items-center gap-1.5 font-semibold text-theme-text">
@@ -977,20 +1016,14 @@ function KardexRowItem({ row }: { row: KardexRow }) {
       <td className="px-3 py-2 text-right tabular-nums">
         {abono > 0 ? (
           <span className="font-semibold text-emerald-700 dark:text-emerald-400">{formatMoney(abono)}</span>
-        ) : isReview ? (
-          <span className="text-amber-700 dark:text-amber-400">{formatMoney(movement.amount)}</span>
         ) : (
           <span className="text-theme-text-muted">—</span>
         )}
       </td>
       <td className="px-3 py-2 text-right tabular-nums">
-        {isReview ? (
-          <span className="italic text-theme-text-muted">no oficial</span>
-        ) : (
-          <span className={`font-bold ${runningBalance > 0 ? "text-theme-accent" : "text-theme-text-muted"}`}>
-            {formatMoney(runningBalance)}
-          </span>
-        )}
+        <span className={`font-bold ${runningBalance > 0 ? "text-theme-accent" : "text-theme-text-muted"}`}>
+          {formatMoney(runningBalance)}
+        </span>
       </td>
       <td className="px-3 py-2">
         <span
@@ -1040,8 +1073,7 @@ function WorkerPaymentModal({
   onClose: () => void;
   onSubmitted: () => void;
 }) {
-  const available = detail.summary.projected_balance;
-  const [mode, setMode] = useState<"total" | "partial">("total");
+  const available = detail.summary.official_balance;
   const [amount, setAmount] = useState(String(available));
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -1051,12 +1083,6 @@ function WorkerPaymentModal({
   const numericAmount = Number(amount);
   const validAmount = Number.isInteger(numericAmount) && numericAmount > 0 && numericAmount <= available;
   const validFile = Boolean(file);
-
-  function chooseMode(nextMode: "total" | "partial") {
-    setMode(nextMode);
-    setAmount(nextMode === "total" ? String(available) : "");
-    setError("");
-  }
 
   function selectFile(nextFile: File | null) {
     setError("");
@@ -1099,12 +1125,12 @@ function WorkerPaymentModal({
         mime_type: upload.mime_type,
         size_bytes: upload.size_bytes,
       });
-      if (!response.success) throw new Error(response.error ?? "No se pudo enviar el pago a revisión.");
+      if (!response.success) throw new Error(response.error ?? "No se pudo registrar el pago.");
       setPaymentNumber(response.data?.payment_number ?? "");
       onSubmitted();
     } catch (submitError) {
       if (upload) await cleanupWorkerPaymentUpload(upload);
-      setError(submitError instanceof Error ? submitError.message : "No se pudo enviar el pago a revisión.");
+      setError(submitError instanceof Error ? submitError.message : "No se pudo registrar el pago.");
     } finally {
       setUploading(false);
       setSubmitting(false);
@@ -1115,10 +1141,10 @@ function WorkerPaymentModal({
     return (
       <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-4">
         <section className="w-full max-w-md rounded-2xl border border-theme-border bg-theme-surface p-6 text-center shadow-2xl">
-          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-emerald-600">Pago enviado</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-emerald-600">Pago registrado</p>
           <h2 className="mt-2 text-xl font-bold text-theme-text">{paymentNumber}</h2>
           <p className="mt-3 text-sm text-theme-text-muted">
-            El pago quedó pendiente de revisión. El saldo oficial aún no cambia.
+            El pago quedó vigente y el saldo fue actualizado inmediatamente.
           </p>
           <button
             type="button"
@@ -1155,26 +1181,9 @@ function WorkerPaymentModal({
 
         <div className="space-y-4 p-5">
           <div className="flex flex-wrap items-center gap-5 rounded-xl border border-theme-border bg-theme-bg px-3 py-2">
-            <Metric label="Saldo oficial" value={formatMoney(detail.summary.official_balance)} />
-            <Metric label="En revisión" value={formatMoney(detail.summary.pending_review_payments)} />
-            <Metric label="Disponible para pagar" value={formatMoney(available)} accent />
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => chooseMode("total")}
-              className={`rounded-xl border px-3 py-2.5 text-xs font-bold ${mode === "total" ? "border-theme-accent bg-theme-accent/10 text-theme-accent" : "border-theme-border text-theme-text-muted"}`}
-            >
-              Pagar total
-            </button>
-            <button
-              type="button"
-              onClick={() => chooseMode("partial")}
-              className={`rounded-xl border px-3 py-2.5 text-xs font-bold ${mode === "partial" ? "border-theme-accent bg-theme-accent/10 text-theme-accent" : "border-theme-border text-theme-text-muted"}`}
-            >
-              Abono parcial
-            </button>
+            <Metric label="Deuda actual" value={formatMoney(available)} accent />
+            <Metric label="Pago ingresado" value={validAmount ? formatMoney(numericAmount) : "—"} />
+            <Metric label="Saldo pendiente" value={validAmount ? formatMoney(available - numericAmount) : "—"} />
           </div>
 
           <label className="block text-xs font-semibold text-theme-text">
@@ -1185,13 +1194,12 @@ function WorkerPaymentModal({
               max={available}
               step="1"
               value={amount}
-              readOnly={mode === "total"}
               onChange={(event) => setAmount(event.target.value)}
-              className="mt-1 h-10 w-full rounded-xl border border-theme-border bg-theme-bg px-3 font-mono text-sm text-theme-text outline-none focus:border-theme-accent read-only:opacity-70"
+              className="mt-1 h-10 w-full rounded-xl border border-theme-border bg-theme-bg px-3 font-mono text-sm text-theme-text outline-none focus:border-theme-accent"
             />
             {validAmount && (
               <span className="mt-1 block font-normal text-theme-text-muted">
-                Saldo proyectado después del envío:{" "}
+                Saldo pendiente después del pago:{" "}
                 <strong>{formatMoney(available - numericAmount)}</strong>
               </span>
             )}
@@ -1237,7 +1245,90 @@ function WorkerPaymentModal({
             className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-theme-accent px-4 py-3 text-xs font-bold uppercase tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
             {(uploading || submitting) && <Loader2 className="h-4 w-4 animate-spin" />}
-            {uploading ? "Subiendo comprobante..." : submitting ? "Enviando a revisión..." : "Enviar a revisión"}
+            {uploading ? "Subiendo comprobante..." : submitting ? "Registrando pago..." : "Registrar pago"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function VoidWorkerPaymentModal({
+  payment,
+  employeeName,
+  onClose,
+  onCompleted,
+}: {
+  payment: WorkerAccountDetailV2["payments"][number];
+  employeeName: string;
+  onClose: () => void;
+  onCompleted: () => Promise<void>;
+}) {
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function confirm() {
+    const cleanReason = reason.trim();
+    if (!cleanReason) {
+      setError("El motivo de anulación es obligatorio.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    const response = await voidWorkerPayment(payment.payment_id, cleanReason);
+    if (!response.success) {
+      setError(response.error ?? "No se pudo anular el pago.");
+      setBusy(false);
+      return;
+    }
+    await onCompleted();
+  }
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4">
+      <section className="w-full max-w-md rounded-2xl border border-theme-border bg-theme-surface shadow-2xl">
+        <header className="flex items-start justify-between border-b border-theme-border px-5 py-4">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-red-600">Anular pago</p>
+            <h2 className="mt-1 text-base font-semibold text-theme-text">
+              {payment.payment_number ?? "Pago sin correlativo"}
+            </h2>
+            <p className="mt-0.5 text-xs text-theme-text-muted">
+              {employeeName} · {formatMoney(payment.amount)}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            aria-label="Cerrar"
+            className="rounded-lg p-1 text-theme-text-muted hover:bg-theme-text/5"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+        <div className="space-y-4 p-5">
+          <label className="block text-xs font-semibold text-theme-text">
+            Motivo de anulación
+            <textarea
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              rows={4}
+              autoFocus
+              placeholder="Indica por qué se anula este pago..."
+              className="mt-1 w-full resize-none rounded-xl border border-theme-border bg-theme-bg px-3 py-2 text-sm text-theme-text outline-none focus:border-theme-accent"
+            />
+          </label>
+          {error && <p className="rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-600">{error}</p>}
+          <button
+            type="button"
+            onClick={() => void confirm()}
+            disabled={busy}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-3 text-xs font-bold uppercase tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+            Confirmar anulación
           </button>
         </div>
       </section>

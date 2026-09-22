@@ -232,9 +232,12 @@ export type WorkerAccountPaymentV2 = {
   payment_id: string;
   payment_number: string | null;
   amount: number;
-  status: "PENDING_REVIEW" | "APPROVED" | "REJECTED" | "REVERSED";
+  status: "ACTIVE" | "VOIDED";
   submitted_at: string;
   reviewed_at: string | null;
+  voided_by: string | null;
+  voided_at: string | null;
+  void_reason: string | null;
   allocations: Array<{
     charge_id: string;
     source_type: WorkerAccountChargeV2["source_type"];
@@ -781,7 +784,7 @@ export async function submitWorkerPayment(input: {
   original_filename: string;
   mime_type: string;
   size_bytes: number;
-}): Promise<{ success: boolean; data?: { payment_id: string; payment_number: string; amount: number }; error?: string }> {
+}): Promise<{ success: boolean; data?: { payment_id: string; payment_number: string; amount: number; status: string }; error?: string }> {
   let uploadedPath: string | null = null;
   try {
     const authorization = await requireWmsPermission("logistica.mermas.create");
@@ -810,10 +813,29 @@ export async function submitWorkerPayment(input: {
       p_size_bytes: input.size_bytes,
     });
     if (error) { await cleanup(); return { success: false, error: error.message.includes("saldo disponible") ? "El saldo disponible cambió. Actualiza la cuenta e inténtalo nuevamente." : error.message }; }
-    return { success: true, data: data as { payment_id: string; payment_number: string; amount: number } };
+    return { success: true, data: data as { payment_id: string; payment_number: string; amount: number; status: string } };
   } catch (error) {
     if (uploadedPath) await db("mermas").storage.from(MERMA_WORKER_PAYMENT_BUCKET).remove([uploadedPath]);
-    return { success: false, error: error instanceof Error ? error.message : "No se pudo enviar el pago a revisión." };
+    return { success: false, error: error instanceof Error ? error.message : "No se pudo registrar el pago." };
+  }
+}
+
+export async function voidWorkerPayment(paymentId: string, reason: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const authorization = await requireWmsPermission("logistica.mermas.authorize");
+    if (!/^[0-9a-f-]{36}$/i.test(paymentId)) return { success: false, error: "Pago inválido." };
+    const cleanReason = reason.trim();
+    if (!cleanReason) return { success: false, error: "El motivo de anulación es obligatorio." };
+    const { error } = await db("mermas").rpc("void_worker_payment", {
+      p_company_id: authorization.companyId,
+      p_user_id: authorization.user.id,
+      p_payment_id: paymentId,
+      p_reason: cleanReason,
+    });
+    if (error) throw error;
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : "No se pudo anular el pago." };
   }
 }
 
@@ -943,8 +965,11 @@ export async function getWorkerPaymentReviewDetail(paymentId: string): Promise<{
 
 export async function getWorkerPaymentEvidenceUrl(paymentId: string): Promise<{ url?: string; error?: string }> {
   try {
-    const authorization = await requireWorkerPaymentReviewer();
+    const authorization = await requireWmsPermission("logistica.mermas.account.view");
     if (!/^[0-9a-f-]{36}$/i.test(paymentId)) return { error: "Pago inválido." };
+    const { data: payment, error: paymentError } = await db("mermas").from("worker_payments")
+      .select("id").eq("id", paymentId).eq("company_id", authorization.companyId).maybeSingle();
+    if (paymentError || !payment) return { error: "Pago no encontrado." };
     const { data: evidence, error } = await db("mermas").from("worker_payment_evidence")
       .select("storage_path").eq("company_id", authorization.companyId).eq("payment_id", paymentId).maybeSingle();
     if (error || !evidence) return { error: "Comprobante no encontrado." };
