@@ -676,7 +676,7 @@ export function ReplenishmentTable({
               sku={chartRow.sku.SKU}
               sparseSeries={dailySalesBySku.get(chartRow.sku.SKU)}
               dateTo={dailySalesDateTo}
-              stockActual={chartRow.sku.cantidad_disponible}
+              metrics={chartRow.metrics}
               breakSummary={getBreakSummary(breakSummaryByVariantId, chartRow.variantId)}
             />
           </div>

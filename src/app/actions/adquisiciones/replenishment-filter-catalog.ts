@@ -23,11 +23,31 @@ export interface ReplenishmentFilterCatalog {
   pairs: ReplenishmentFilterPair[]
 }
 
+const FILTER_CATALOG_CACHE_TTL_MS = 30_000
+const filterCatalogCache = new Map<string, {
+  expiresAt: number
+  promise: Promise<{ success: boolean, data?: ReplenishmentFilterCatalog, error?: string }>
+}>()
+
 export async function getReplenishmentFilterCatalog(): Promise<{ success: boolean, data?: ReplenishmentFilterCatalog, error?: string }> {
   try {
     const companyId = await getActiveCompanyId()
     if (!companyId) throw new Error('No hay empresa activa')
+    const now = Date.now()
+    const cached = filterCatalogCache.get(companyId)
+    if (cached && cached.expiresAt > now) return cached.promise
 
+    const promise = loadReplenishmentFilterCatalog(companyId)
+    filterCatalogCache.set(companyId, { expiresAt: now + FILTER_CATALOG_CACHE_TTL_MS, promise })
+    return promise
+  } catch (e) {
+    console.error('[getReplenishmentFilterCatalog] Error:', e)
+    return { success: false, error: e instanceof Error ? e.message : 'Error desconocido' }
+  }
+}
+
+async function loadReplenishmentFilterCatalog(companyId: string): Promise<{ success: boolean, data?: ReplenishmentFilterCatalog, error?: string }> {
+  try {
     const aq = adqDb()
 
     // 1. Fetch active mappings

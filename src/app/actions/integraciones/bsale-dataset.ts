@@ -3,6 +3,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { REPLENISHMENT_DOCUMENT_TYPE_IDS, OFFICIAL_SALE_DOCUMENT_TYPE_IDS, BSALE_DOCUMENT_TYPE_IDS } from '@/lib/bsale/config'
 import type { NormalizedSale, NormalizedStock } from '@/modules/adquisiciones/analisis-ventas/utils/analytics'
+import { buildWeeklyDemand, forecastSku, type SkuForecastResult } from '@/modules/adquisiciones/ordenes-compra/replenishment-forecast'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -26,6 +27,7 @@ function intDb() {
 export interface ReplenishmentDataset {
   sales: NormalizedSale[]
   stock: NormalizedStock[]
+  variantIdsBySku?: Record<string, number>
   breakSummary60d: Record<string, BreakSummary60d>
   productsCount: number
   variantsCount: number
@@ -34,6 +36,158 @@ export interface ReplenishmentDataset {
   dateFrom: string
   dateTo: string
   diagnostics: Record<string, any>
+}
+
+export interface ReplenishmentAvailabilityDaily {
+  variant_id: number
+  availability_date: string
+  available_during_day: boolean
+  state_known: boolean
+}
+
+export interface ReplenishmentKardexEvent {
+  id: string
+  event_date: string
+  source_type: 'RECEPTION' | 'CONSUMPTION' | 'SHIPPING' | 'RETURN'
+  source_header_id: number
+  source_detail_id: number
+  quantity_delta: number
+  variant_stock_after: number | null
+  captured_at: string
+}
+
+export interface ReplenishmentKardexHistoryPayload {
+  events: ReplenishmentKardexEvent[]
+  forecast: SkuForecastResult
+  timing?: {
+    kardexMs: number
+    salesMs: number
+    weeklySeriesMs: number
+    forecastMs: number
+    totalMs: number
+  }
+}
+
+export async function getReplenishmentKardexHistory(
+  companyId: string,
+  variantId: number,
+  dateFrom: string,
+  dateTo: string,
+) {
+  const startedAt = performance.now()
+  if (!Number.isInteger(variantId) || !/^\d{4}-\d{2}-\d{2}$/.test(dateFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
+    return { success: false as const, error: 'Parámetros de Kardex inválidos' }
+  }
+
+  const { data, error } = await intDb()
+    .from('bsale_stock_kardex_events')
+    .select('id,event_date,source_type,source_header_id,source_detail_id,variant_id,variant_code,quantity_delta,variant_stock_after,captured_at,raw_json')
+    .eq('company_id', companyId)
+    .eq('office_id', 1)
+    .eq('variant_id', variantId)
+    .gte('event_date', dateFrom)
+    .lte('event_date', dateTo)
+    .order('event_date', { ascending: true })
+    .order('captured_at', { ascending: true })
+    .order('id', { ascending: true })
+  const kardexMs = Math.round(performance.now() - startedAt)
+
+  if (error) return { success: false as const, error: error.message }
+
+  const events = (data || []) as Array<{
+    id: string
+    event_date: string
+    source_type: ReplenishmentKardexEvent['source_type']
+    source_header_id: number
+    source_detail_id: number
+    variant_id: number
+    variant_code: string | null
+    quantity_delta: number | string
+    variant_stock_after: number | string | null
+    captured_at: string
+    raw_json: Record<string, any> | null
+  }>
+  const returnKeys = new Set(events
+    .filter(event => event.source_type === 'RETURN')
+    .map(event => `${event.event_date}|${event.quantity_delta}|${event.variant_stock_after ?? 'null'}|${event.source_header_id}|${event.raw_json?.header?.credit_note?.number ?? ''}`))
+
+  const effectiveEvents = events
+    .filter(event => Number(event.variant_id) === variantId)
+    .filter(event => event.source_type !== 'RECEPTION' || !returnKeys.has(`${event.event_date}|${event.quantity_delta}|${event.variant_stock_after ?? 'null'}|${event.raw_json?.header?.note ?? ''}|${event.raw_json?.header?.documentNumber ?? ''}`))
+    .map(event => ({
+      id: event.id,
+      event_date: event.event_date,
+      source_type: event.source_type,
+      source_header_id: Number(event.source_header_id),
+      source_detail_id: Number(event.source_detail_id),
+      quantity_delta: Number(event.quantity_delta),
+      variant_stock_after: event.variant_stock_after == null ? null : Number(event.variant_stock_after),
+      captured_at: event.captured_at,
+    } satisfies ReplenishmentKardexEvent))
+  const variantCode = events.find(event => event.variant_code)?.variant_code
+  const salesStartedAt = performance.now()
+  const sales = variantCode
+    ? await getReplenishmentSalesFromBsaleMirror(companyId, new Date(`${dateFrom}T00:00:00Z`), new Date(`${dateTo}T00:00:00Z`), variantCode)
+    : []
+  const salesMs = Math.round(performance.now() - salesStartedAt)
+
+  const weeklyStartedAt = performance.now()
+  const weeks = buildWeeklyDemand({
+    dateFrom,
+    dateTo,
+    sales: sales.map(row => ({ date: row.emission_date, quantity: Number(row.quantity) || 0 })),
+    stockEvents: effectiveEvents.map(event => ({ date: event.event_date, quantityDelta: event.quantity_delta, stockAfter: event.variant_stock_after })),
+  })
+  const weeklySeriesMs = Math.round(performance.now() - weeklyStartedAt)
+  const forecastStartedAt = performance.now()
+  const forecast = forecastSku(weeks)
+  const forecastMs = Math.round(performance.now() - forecastStartedAt)
+  const totalMs = Math.round(performance.now() - startedAt)
+  console.info('[replenishment-forecast]', { variantId, variantCode, events: effectiveEvents.length, sales: sales.length, weeks: weeks.length, kardexMs, salesMs, weeklySeriesMs, forecastMs, totalMs })
+
+  return {
+    success: true as const,
+    data: {
+      events: effectiveEvents,
+      forecast,
+      timing: { kardexMs, salesMs, weeklySeriesMs, forecastMs, totalMs },
+    } satisfies ReplenishmentKardexHistoryPayload,
+  }
+}
+
+export async function getReplenishmentAvailabilityDaily(
+  companyId: string,
+  variantId: number,
+) {
+  const { year, month, day } = getChileDateParts()
+  const readModelDateTo = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  const end = new Date(`${readModelDateTo}T00:00:00Z`)
+  if (!Number.isInteger(variantId) || Number.isNaN(end.getTime())) {
+    return { success: false as const, error: 'Parámetros de disponibilidad inválidos' }
+  }
+  const start = new Date(end)
+  start.setUTCDate(start.getUTCDate() - 59)
+
+  const { data, error } = await intDb()
+    .from('bsale_stock_availability_daily_60d')
+    .select('variant_id,availability_date,available_during_day,state_known')
+    .eq('company_id', companyId)
+    .eq('office_id', 1)
+    .eq('variant_id', variantId)
+    .gte('availability_date', start.toISOString().slice(0, 10))
+    .lte('availability_date', readModelDateTo)
+    .order('availability_date', { ascending: true })
+
+  if (error) return { success: false as const, error: error.message }
+  return {
+    success: true as const,
+    data: (data || []).map(row => ({
+      variant_id: Number(row.variant_id),
+      availability_date: String(row.availability_date),
+      available_during_day: row.available_during_day === true,
+      state_known: row.state_known === true,
+    } satisfies ReplenishmentAvailabilityDaily)),
+  }
 }
 
 export interface BreakSummary60d {
@@ -182,12 +336,64 @@ async function fetchAll(
   return result
 }
 
+async function fetchAllParallel(
+  schema: string,
+  table: string,
+  select: string,
+  filters?: Record<string, any>,
+  options?: { maxRows?: number },
+): Promise<any[]> {
+  const maxRows = options?.maxRows ?? 50000
+  const pageSize = 1000
+  const c = createClient(supabaseUrl, serviceKey, {
+    db: { schema }, auth: { autoRefreshToken: false, persistSession: false },
+  })
+  const applyFilters = (query: any) => {
+    let filtered = query
+    for (const [key, value] of Object.entries(filters || {})) {
+      if (value !== undefined && value !== null) filtered = Array.isArray(value) ? filtered.in(key, value) : filtered.eq(key, value)
+    }
+    return filtered
+  }
+  const countQuery = applyFilters(c.from(table).select('*', { count: 'exact', head: true }))
+  const { count, error: countError } = await countQuery
+  if (countError) throw new Error(`[fetchAllParallel] Error counting ${schema}.${table}: ${countError.message}`)
+  if ((count || 0) > maxRows) throw new Error(`[fetchAllParallel] Límite de seguridad de ${maxRows} filas excedido para tabla ${table}`)
+  const offsets = Array.from({ length: Math.ceil((count || 0) / pageSize) }, (_, index) => index * pageSize)
+  const pages = await Promise.all(offsets.map(async offset => {
+    const query = applyFilters(c.from(table).select(select).range(offset, offset + pageSize - 1))
+    const { data, error } = await query
+    if (error) throw new Error(`[fetchAllParallel] Error fetching ${schema}.${table}: ${error.message}`)
+    return data || []
+  }))
+  return pages.flat()
+}
+
+async function timed<T>(label: string, work: PromiseLike<T>, rows?: (value: T) => number) {
+  const startedAt = performance.now()
+  const value = await work
+  console.info('[replenishment-dataset]', {
+    block: label,
+    ms: Math.round(performance.now() - startedAt),
+    rows: rows ? rows(value) : undefined,
+  })
+  return value
+}
+
+function timedSync<T>(label: string, work: () => T) {
+  const startedAt = performance.now()
+  const value = work()
+  console.info('[replenishment-dataset]', { block: label, ms: Math.round(performance.now() - startedAt) })
+  return value
+}
+
 // ─── Main function ────────────────────────────────────────────────
 
 export async function getReplenishmentSalesFromBsaleMirror(
   companyId: string,
   dateFrom: Date,
   dateTo: Date,
+  variantCode?: string,
 ) {
   const dateFromStr = dateFrom.toISOString().split('T')[0]
   const dateToStr = dateTo.toISOString().split('T')[0]
@@ -196,11 +402,21 @@ export async function getReplenishmentSalesFromBsaleMirror(
   // El loop corta solo al recibir una página vacía, nunca por data.length < pageSize.
   const maxRows = 200000
   const c = intDb()
-  const result: any[] = []
   const pageSize = 1000
 
-  for (let off = 0; off < maxRows; off += pageSize) {
-    const { data, error } = await c.from('vw_bsale_sales_logistic_valid')
+  let countQuery = c.from('vw_bsale_sales_logistic_valid')
+    .select('variant_code', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .gte('emission_date', dateFromStr)
+    .lte('emission_date', dateToStr)
+  if (variantCode) countQuery = countQuery.eq('variant_code', variantCode)
+  const { count, error: countError } = await countQuery
+  if (countError) throw new Error(`Error counting mirror sales: ${countError.message}`)
+  if ((count || 0) > maxRows) throw new Error(`Límite de seguridad de ${maxRows} filas excedido para ventas`)
+
+  const pageOffsets = Array.from({ length: Math.ceil((count || 0) / pageSize) }, (_, index) => index * pageSize)
+  const pages = await Promise.all(pageOffsets.map(async off => {
+    let query = c.from('vw_bsale_sales_logistic_valid')
       .select('emission_date, variant_code, logistic_net_quantity')
       .eq('company_id', companyId)
       .gte('emission_date', dateFromStr)
@@ -209,13 +425,12 @@ export async function getReplenishmentSalesFromBsaleMirror(
       .order('variant_code', { ascending: true })
       .order('document_number', { ascending: true })
       .range(off, off + pageSize - 1)
-
+    if (variantCode) query = query.eq('variant_code', variantCode)
+    const { data, error } = await query
     if (error) throw new Error(`Error fetching mirror sales: ${error.message}`)
-
-    const rowsReceived = data?.length ?? 0
-    if (rowsReceived === 0) break
-    result.push(...data)
-  }
+    return data || []
+  }))
+  const result = pages.flat()
 
   // Agrupar por día y SKU en JS (una fila por combinación variant_code+emission_date)
   const grouped = new Map<string, number>()
@@ -254,6 +469,10 @@ function getChileDateParts(date = new Date()) {
   }
 }
 
+function normalizeVariantCode(value: unknown) {
+  return String(value ?? '').trim().toUpperCase()
+}
+
 export async function getReplenishmentDatasetFromBsale(
   companyId: string,
   options: ReplenishmentOptions = {}
@@ -274,27 +493,75 @@ export async function getReplenishmentDatasetFromBsale(
   
   const dateFrom = new Date(dateTo)
   dateFrom.setUTCDate(dateFrom.getUTCDate() - (periodDays - 1))
+  const datasetStartedAt = performance.now()
   const diag: Record<string, any> = {}
 
   try {
-    const breakSummaryPromise = getBreakSummary60d(companyId, 1)
-    // ── 1. Obtener productos ──
-    const products = await fetchAll('integraciones', 'bsale_products',
-      'bsale_id, name, product_type_id')
+    // These reads are independent. Keep the transformations below ordered,
+    // but do not make network latency accumulate for the initial dataset.
+    const officeRead = timed('office/read-model', (async () => {
+      const officeDb = intDb()
+      const { data: officeRows } = await officeDb.from('bsale_stock_current')
+        .select('office_id, raw_json')
+        .not('office_id', 'is', null)
+        .limit(5000)
+      const seen = new Set<number>()
+      let targetOfficeId: number | null = null
+      for (const row of officeRows || []) {
+        const oid = row.office_id
+        if (seen.has(oid)) continue
+        seen.add(oid)
+        const name = row.raw_json?.office?.name || ''
+        if (name.toUpperCase().includes('CASA MATRIZ') || name.toUpperCase().includes('MATRIZ')) targetOfficeId = oid
+      }
+      return { targetOfficeId, officeRows: officeRows || [] }
+    })(), value => value.officeRows.length)
+    const productsRead = timed('products', fetchAllParallel('integraciones', 'bsale_products', 'bsale_id, name, product_type_id'), value => value.length)
+    const variantsRead = timed('variants', fetchAllParallel('integraciones', 'bsale_variants', 'bsale_id, code, description, bsale_product_id'), value => value.length)
+    const salesRead = timed('sales', getReplenishmentSalesFromBsaleMirror(companyId, dateFrom, dateTo), value => value.length)
+    const breakSummaryRead = timed('break-summary', getBreakSummary60d(companyId, 1), value => Object.keys(value.data).length)
+    const stocksRead = timed('stock', fetchAllParallel('integraciones', 'bsale_stock_current', 'variant_id, variant_code, quantity, quantity_available, office_id, synced_at', { company_id: companyId }), value => value.length)
+    const costsRead = timed('costs', fetchAllParallel('integraciones', 'bsale_variant_costs', 'variant_id, variant_code, average_cost', { company_id: companyId }), value => value.length)
+    const aq = adqDb()
+    const catalogRead = timed('catalog', fetchAllParallel('adquisiciones', 'products', 'id, sku, description, barcode, bsale_variant_id, bsale_product_type_name, product_type', { company_id: companyId }, { maxRows: 10000 }), value => value.length)
+      .catch(error => { console.error('[bsale-dataset] catalog error:', error instanceof Error ? error.message : error); return [] })
+    const mappingsRead = timed('supplier-mappings', fetchAllParallel('adquisiciones', 'product_supplier_mappings', 'supplier_id, product_id, unit_cost, is_preferred, is_active', { company_id: companyId, is_active: true }, { maxRows: 10000 }), value => value.length)
+      .catch(error => { console.error('[bsale-dataset] mappings error:', error); return [] })
+    const suppliersRead = timed('suppliers', aq.from('suppliers')
+      .select('id, supplier_kind, business_name, bsale_product_type_name, parent_supplier_id')
+      .eq('company_id', companyId), value => value.data?.length ?? 0)
+      .then(value => value.data || [])
+      .catch(error => { console.error('[bsale-dataset] suppliers error:', error); return [] })
+    const [products, variants, mirrorSales, breakSummaryResult, officeData, stocksRaw, costs, catalogRows, allMappings, supplierRows] = await Promise.all([
+      productsRead,
+      variantsRead,
+      salesRead,
+      breakSummaryRead,
+      officeRead,
+      stocksRead,
+      costsRead,
+      catalogRead,
+      mappingsRead,
+      suppliersRead,
+    ])
+    const transformationStartedAt = performance.now()
+
     diag.products = products.length
-    const productNameMap = new Map(products.map(p => [p.bsale_id, p.name || '']))
+    const productNameMap = timedSync('transform/product-map', () => new Map(products.map(p => [p.bsale_id, p.name || ''])))
 
-    // ── 2. Obtener variantes ──
-    const variants = await fetchAll('integraciones', 'bsale_variants',
-    'bsale_id, code, description, bsale_product_id')
     diag.variants = variants.length
-    const variantProductMap = new Map(variants.map(v => [v.bsale_id, v.bsale_product_id]))
-    const variantDescMap = new Map(variants.map(v => [v.bsale_id, v.description]))
+    const variantMaps = timedSync('transform/variant-maps', () => ({
+      variantProductMap: new Map(variants.map(v => [v.bsale_id, v.bsale_product_id])),
+      variantDescMap: new Map(variants.map(v => [v.bsale_id, v.description])),
+      variantIdsBySku: Object.fromEntries(
+        variants
+          .filter(v => v.code && Number.isInteger(Number(v.bsale_id)))
+          .map(v => [normalizeVariantCode(v.code), Number(v.bsale_id)]),
+      ),
+    }))
+    const { variantProductMap, variantDescMap, variantIdsBySku } = variantMaps
 
-    // ── 3. & 4. Ventas: Bsale Mirror Logístico ──
-    const mirrorSales = await getReplenishmentSalesFromBsaleMirror(companyId, dateFrom, dateTo)
     diag.mirror_sales_rows = mirrorSales.length
-    const breakSummaryResult = await breakSummaryPromise
     const breakSummary60d = breakSummaryResult.data
     diag.break_summary_60d_variants = Object.keys(breakSummary60d).length
     diag.break_summary_60d_elapsed_ms = breakSummaryResult.elapsedMs
@@ -305,40 +572,14 @@ export async function getReplenishmentDatasetFromBsale(
     const allDetails: any[] = []
     const saleDetails: any[] = []
 
-    // ── 4.5. Resolver oficina CASA MATRIZ ──
-    let targetOfficeId: number | null = null
-    try {
-      const intDb = createClient(supabaseUrl, serviceKey, {
-        db: { schema: 'integraciones' },
-        auth: { autoRefreshToken: false, persistSession: false },
-      })
-      const { data: officeRows } = await intDb.from('bsale_stock_current')
-        .select('office_id, raw_json')
-        .not('office_id', 'is', null)
-        .limit(5000)
-      const seen = new Set<number>()
-      for (const row of officeRows || []) {
-        const oid = row.office_id
-        if (seen.has(oid)) continue
-        seen.add(oid)
-        const name = row.raw_json?.office?.name || ''
-        diag[`office_${oid}_name`] = name
-        if (name.toUpperCase().includes('CASA MATRIZ') || name.toUpperCase().includes('MATRIZ')) {
-          targetOfficeId = oid
-        }
-      }
-      diag.office_ids_found = [...seen]
-      diag.target_office_id = targetOfficeId
-    } catch (e) {
-      console.error('[bsale-dataset] office resolution error:', e instanceof Error ? e.message : e)
-    }
+    const targetOfficeId = officeData.targetOfficeId
+    diag.office_ids_found = [...new Set(officeData.officeRows.map(row => row.office_id))]
+    diag.target_office_id = targetOfficeId
 
     // ── 5. Obtener stocks ──
-    const stocksRaw = await fetchAll('integraciones', 'bsale_stock_current',
-    'variant_id, variant_code, quantity, quantity_available, office_id, synced_at',
-    { company_id: companyId })
     diag.stocks_raw = stocksRaw.length
     // Deducir: agrupar por (variant_id, office_id), conservar la fila más reciente por synced_at
+    const stockTransformStartedAt = performance.now()
     const stockDedupMap = new Map<string, any>()
     for (const s of stocksRaw) {
       const key = `${s.variant_id}|${s.office_id ?? 'null'}`
@@ -357,112 +598,68 @@ export async function getReplenishmentDatasetFromBsale(
       ? stocksDeduped.filter((s: any) => s.office_id === targetOfficeId)
       : stocksDeduped
     diag.stocks_filtered = stocks.length
+    console.info('[replenishment-dataset]', { block: 'transform/stock', ms: Math.round(performance.now() - stockTransformStartedAt), rows: stocksRaw.length })
     // ── 6. Obtener costos ──
-    const costs = await fetchAll('integraciones', 'bsale_variant_costs',
-    'variant_id, variant_code, average_cost',
-    { company_id: companyId })
     diag.costs = costs.length
     const costMap = new Map(costs.map(c => [c.variant_id, c.average_cost ?? 0]))
 
-    // ── 7. Obtener catálogo maestro, mappings y proveedores en lote ──
-    const aq = adqDb()
-    const catalogRows: CatalogProductRow[] = []
-    const catalogPageSize = 1000
-    const catalogMax = 10000
-    for (let off = 0; off < catalogMax; off += catalogPageSize) {
-      const { data, error } = await aq.from('products')
-        .select('id, sku, description, barcode, bsale_variant_id, bsale_product_type_name, product_type')
-        .eq('company_id', companyId)
-        .range(off, off + catalogPageSize - 1)
-      if (error) { console.error('[bsale-dataset] catalog page error:', error.message); break }
-      if (!data || data.length === 0) break
-      catalogRows.push(...(data as CatalogProductRow[]))
-      if (data.length < catalogPageSize) break
-      if (off + catalogPageSize >= catalogMax) {
-        console.warn('[bsale-dataset] catalog pagination reached safety cap at', catalogMax, '— may be incomplete')
-      }
-    }
+    // ── 7. Resolver catálogo, mappings y proveedores en memoria ──
     diag.catalog_products_loaded = catalogRows.length
 
-    const catalogBySku = new Map(catalogRows
-      .filter(p => p.sku)
-      .map(p => [String(p.sku).trim().toUpperCase(), p]))
-    const catalogByVariant = new Map(catalogRows
-      .filter(p => p.bsale_variant_id)
-      .map(p => [String(p.bsale_variant_id), p]))
+    const { catalogBySku, catalogByVariant } = timedSync('transform/catalog-maps', () => ({
+      catalogBySku: new Map(catalogRows
+        .filter(p => p.sku)
+        .map(p => [String(p.sku).trim().toUpperCase(), p])),
+      catalogByVariant: new Map(catalogRows
+        .filter(p => p.bsale_variant_id)
+        .map(p => [String(p.bsale_variant_id), p])),
+    }))
+
+    // The catalog keeps the physical Bsale identity even when the legacy
+    // variants mirror is incomplete for a SKU.
+    for (const product of catalogRows) {
+      const sku = normalizeVariantCode(product.sku)
+      const variantId = Number(product.bsale_variant_id)
+      if (sku && Number.isInteger(variantId)) variantIdsBySku[sku] ??= variantId
+    }
+    const targetVariant = variants.find(v => normalizeVariantCode(v.code) === '2008DG')
+    const targetCatalogProduct = catalogRows.find(p => normalizeVariantCode(p.sku) === '2008DG')
+    console.info('[replenishment-identity]', {
+      sku: '2008DG',
+      variantCode: targetVariant?.code ?? null,
+      variantId: targetVariant?.bsale_id ? Number(targetVariant.bsale_id) : null,
+      catalogSku: targetCatalogProduct?.sku ?? null,
+      catalogVariantId: targetCatalogProduct?.bsale_variant_id ?? null,
+      mappingVariantId: variantIdsBySku['2008DG'] ?? null,
+    })
 
     function resolveCatalogProduct(variantId: number | string | null | undefined, sku: string) {
       return catalogByVariant.get(String(variantId)) || catalogBySku.get(String(sku || '').trim().toUpperCase())
     }
 
     const productIdsSet = new Set(catalogRows.map(p => p.id).filter(Boolean))
-    const mappings: ProductSupplierMappingRow[] = []
-    const mappingPageSize = 1000
-    let mappingPagesExecuted = 0
-    let mappingPageErrors = 0
+    const mappings = allMappings.filter(row => productIdsSet.has(row.product_id)) as ProductSupplierMappingRow[]
+    const mappingPagesExecuted = Math.max(1, Math.ceil(allMappings.length / 1000))
+    const mappingPageErrors = 0
     const mappingErrorsSample: string[] = []
-    const mappingMax = 10000
-    for (let off = 0; off < mappingMax; off += mappingPageSize) {
-      mappingPagesExecuted++
-      try {
-        const { data: m, error } = await aq.from('product_supplier_mappings')
-          .select('supplier_id, product_id, unit_cost, is_preferred, is_active')
-          .eq('company_id', companyId)
-          .eq('is_active', true)
-          .range(off, off + mappingPageSize - 1)
-        if (error) {
-          mappingPageErrors++
-          const msg = `page ${mappingPagesExecuted}: ${error.message}`
-          console.error('[bsale-dataset] mappings page error:', msg)
-          if (mappingErrorsSample.length < 3) mappingErrorsSample.push(msg)
-          break
-        }
-        if (!m || m.length === 0) break
-        for (const row of m) {
-          if (productIdsSet.has(row.product_id)) {
-            mappings.push(row as ProductSupplierMappingRow)
-          }
-        }
-        if (m.length < mappingPageSize) break
-      } catch (e) {
-        mappingPageErrors++
-        const msg = `page ${mappingPagesExecuted}: ${e instanceof Error ? e.message : 'unknown'}`
-        console.error('[bsale-dataset] mappings page exception:', msg)
-        if (mappingErrorsSample.length < 3) mappingErrorsSample.push(msg)
-      }
-    }
     diag.mappings = mappings.length
     diag.mapping_pages_executed = mappingPagesExecuted
     diag.mapping_page_errors = mappingPageErrors
     diag.product_ids_for_mappings = productIdsSet.size
 
-    const mappingByProductId = new Map<string, ProductSupplierMappingRow>()
-    for (const mapping of mappings) {
-      if (!mapping.product_id) continue
-      const current = mappingByProductId.get(mapping.product_id)
-      if (!current || (!current.is_preferred && mapping.is_preferred)) {
-        mappingByProductId.set(mapping.product_id, mapping)
+    const mappingByProductId = timedSync('transform/mapping-map', () => {
+      const result = new Map<string, ProductSupplierMappingRow>()
+      for (const mapping of mappings) {
+        if (!mapping.product_id) continue
+        const current = result.get(mapping.product_id)
+        if (!current || (!current.is_preferred && mapping.is_preferred)) result.set(mapping.product_id, mapping)
       }
-    }
+      return result
+    })
 
-    const supplierIds = Array.from(new Set(mappings.map(m => m.supplier_id).filter(Boolean)))
-    const { data: supplierRows } = supplierIds.length > 0
-      ? await aq.from('suppliers')
-        .select('id, supplier_kind, business_name, bsale_product_type_name, parent_supplier_id')
-        .eq('company_id', companyId)
-        .in('id', supplierIds)
-      : { data: [] as SupplierRow[] }
-
-    const supplierList = (supplierRows || []) as SupplierRow[]
-    const supplierById = new Map(supplierList.map(s => [s.id, s]))
-    const parentIds = Array.from(new Set(supplierList.map(s => s.parent_supplier_id).filter(Boolean)))
-    const { data: parentRows } = parentIds.length > 0
-      ? await aq.from('suppliers')
-        .select('id, business_name')
-        .eq('company_id', companyId)
-        .in('id', parentIds)
-      : { data: [] as SupplierRow[] }
-    const parentById = new Map(((parentRows || []) as SupplierRow[]).map(s => [s.id, s]))
+    const supplierList = supplierRows as SupplierRow[]
+    const supplierById = timedSync('transform/supplier-maps', () => new Map(supplierList.map(s => [s.id, s])))
+    const parentById = new Map(supplierList.map(s => [s.id, s]))
 
     function resolveSuppliers(catalogProduct?: CatalogProductRow) {
       if (!catalogProduct?.id) {
@@ -492,6 +689,7 @@ export async function getReplenishmentDatasetFromBsale(
 
     // ── 8. Construir NormalizedStock[] ──
     const stockMapNormalized = new Map<string, NormalizedStock>()
+    const stockRowsTransformStartedAt = performance.now()
 
     // Agrupar stocks: un SKU puede tener stock en múltiples oficinas, sumamos
     for (const s of stocks) {
@@ -527,8 +725,10 @@ export async function getReplenishmentDatasetFromBsale(
         })
       }
     }
+    console.info('[replenishment-dataset]', { block: 'transform/normalized-stock', ms: Math.round(performance.now() - stockRowsTransformStartedAt), rows: stocks.length })
 
     // ── 9. Construir NormalizedSale[] ──
+    const salesTransformStartedAt = performance.now()
     const salesMap = new Map<string, NormalizedSale[]>()
     let skippedNoSku = 0
 
@@ -572,6 +772,7 @@ export async function getReplenishmentDatasetFromBsale(
     }
 
     const sales = [...salesMap.values()].flat()
+    console.info('[replenishment-dataset]', { block: 'transform/normalized-sales', ms: Math.round(performance.now() - salesTransformStartedAt), rows: mirrorSales.length })
     diag.sales_rows = sales.length
     diag.skipped_no_sku = skippedNoSku
 
@@ -645,6 +846,9 @@ export async function getReplenishmentDatasetFromBsale(
     if (mappingErrorsSample.length > 0) diag.mapping_errors_sample = mappingErrorsSample
 
     // ── 11. Diagnóstico SKU 1020 ──
+    // Kept for forensic use, but it must not be part of the initial load.
+    const includeLegacyDiagnostics = false
+    if (includeLegacyDiagnostics) {
     const sku1020 = '1020'
     try {
       // ── Stock por oficina ──
@@ -1010,12 +1214,24 @@ export async function getReplenishmentDatasetFromBsale(
     } catch (e) {
       diag.sku1020_error = e instanceof Error ? e.message : 'unknown'
     }
+    }
 
+    console.info('[replenishment-dataset]', {
+      block: 'total',
+      ms: Math.round(performance.now() - datasetStartedAt),
+      transformationMs: Math.round(performance.now() - transformationStartedAt),
+      products: products.length,
+      variants: variants.length,
+      sales: sales.length,
+      stock: stockMapNormalized.size,
+      breakSummary: Object.keys(breakSummary60d).length,
+    })
     return {
       success: true,
       data: {
         sales,
         stock: [...stockMapNormalized.values()],
+        variantIdsBySku,
         breakSummary60d,
         productsCount: products.length,
         variantsCount: variants.length,

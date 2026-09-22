@@ -3,13 +3,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Check, Loader2, X } from 'lucide-react'
 import { getReplenishmentDatasetFromBsale } from '@/app/actions/integraciones/bsale-dataset'
-import type { ReplenishmentDataset } from '@/app/actions/integraciones/bsale-dataset'
+import { getReplenishmentAvailabilityDaily, getReplenishmentKardexHistory } from '@/app/actions/integraciones/bsale-dataset'
+import type { ReplenishmentAvailabilityDaily, ReplenishmentDataset, ReplenishmentKardexEvent, ReplenishmentKardexHistoryPayload } from '@/app/actions/integraciones/bsale-dataset'
+import type { SkuForecastResult } from './replenishment-forecast'
 import { getReplenishmentFilterCatalog, type ReplenishmentFilterCatalog, type ReplenishmentFilterPair } from '@/app/actions/adquisiciones/replenishment-filter-catalog'
 import { prepareReplenishmentPurchaseOrder, type PrepareReplenishmentPurchaseOrderResult } from '@/app/actions/adquisiciones/purchase-orders'
 import { downloadReplenishmentExcelV2, type ReplenishmentExcelRow } from '@/modules/adquisiciones/ordenes-compra/replenishment-excel'
 import { fmt, fmtN } from './replenishment-format'
 import { NO_SUPPLIER, PRODUCT_FALLBACK, getProductName, getPseudoSupplierName, getRealSupplierName } from './replenishment-names'
-import { buildBreakSummaryIndex, buildDailySalesIndex, deriveRows, type BreakSummaryIndex, type DailySalesIndex, type SkuRow } from './replenishment-derive'
+import { buildBreakSummaryIndex, buildDailySalesIndex, deriveRows, getBreakSummary, type BreakSummaryIndex, type DailySalesIndex, type SkuRow } from './replenishment-derive'
 import {
   ALL_COLUMNS,
   FIXED_COLUMNS,
@@ -33,11 +35,33 @@ import { ReplenishmentEmptyState } from './replenishment-empty-state'
 import { ReplenishmentResultsBar } from './replenishment-results-bar'
 import { ReplenishmentConfigPanel } from './replenishment-config-panel'
 import { ReplenishmentTable } from './replenishment-table'
+import { ReplenishmentAnalyticsSheet } from './replenishment-analytics-sheet'
 
 const COMPANY_ID = 'd1000000-0000-0000-0000-000000000001'
 const DEFAULT_PERIOD_IDX = 3
 const INITIAL_DATASET_DAYS = 60
 const REPLENISHMENT_PO_PREPARATION_KEY = 'mym:adquisiciones:replenishment-po-preparation'
+const FORECAST_DATE_FROM = '2026-01-01'
+const FORECAST_DATE_TO = '2026-09-21'
+const DETAIL_OFFICE_ID = 1
+let filterCatalogPromise: ReturnType<typeof getReplenishmentFilterCatalog> | null = null
+
+function chileTodayKey() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Santiago' }).format(new Date())
+}
+
+function availabilityCacheKey(variantId: number) {
+  return `${COMPANY_ID}|${DETAIL_OFFICE_ID}|${variantId}|${chileTodayKey()}`
+}
+
+function kardexCacheKey(variantId: number) {
+  return `${COMPANY_ID}|${DETAIL_OFFICE_ID}|${variantId}|${FORECAST_DATE_FROM}|${FORECAST_DATE_TO}`
+}
+
+function getFilterCatalogOnce() {
+  filterCatalogPromise ??= getReplenishmentFilterCatalog()
+  return filterCatalogPromise
+}
 
 const PERIOD_OPTIONS = [
   { label: '7 días (1 bloque)', value: 7 },
@@ -72,6 +96,11 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   const [filterCatalog, setFilterCatalog] = useState<ReplenishmentFilterCatalog>({ suppliers: [], pairs: [] })
   const [catalogError, setCatalogError] = useState('')
   const datasetCache = useRef(new Map<number, ReplenishmentDataset>())
+  const availabilityCache = useRef(new Map<string, ReplenishmentAvailabilityDaily[] | null>())
+  const availabilityPromises = useRef(new Map<string, Promise<ReplenishmentAvailabilityDaily[] | null>>())
+  const kardexCache = useRef(new Map<string, ReplenishmentKardexEvent[] | null>())
+  const forecastCache = useRef(new Map<string, SkuForecastResult>())
+  const kardexPromises = useRef(new Map<string, Promise<ReplenishmentKardexHistoryPayload | null>>())
   const [loading, setLoading] = useState(false)
   const [initialLoading, setInitialLoading] = useState(true)
   const [effectiveEndDate, setEffectiveEndDate] = useState<Date>(() => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(0, 0, 0, 0); return d })
@@ -99,6 +128,13 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   const manualQuantitySkus = useRef(new Set<string>())
   const [activeSku, setActiveSku] = useState<string | null>(null)
   const [detailSku, setDetailSku] = useState<string | null>(null)
+  const [dailyAvailability, setDailyAvailability] = useState<ReplenishmentAvailabilityDaily[] | null>(null)
+  const [dailyAvailabilityLoading, setDailyAvailabilityLoading] = useState(false)
+  const [kardex, setKardex] = useState<ReplenishmentKardexEvent[] | null>(null)
+  const [kardexLoading, setKardexLoading] = useState(false)
+  const [forecast, setForecast] = useState<SkuForecastResult | null>(null)
+  const [forecastError, setForecastError] = useState<string | null>(null)
+  const [detailDataVariantId, setDetailDataVariantId] = useState<number | null>(null)
   const [hoveredRowSku, setHoveredRowSku] = useState<string | null>(null)
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
   const [error, setError] = useState('')
@@ -258,7 +294,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
     const period = PERIOD_OPTIONS[DEFAULT_PERIOD_IDX].value
 
     // 1. Cargar catálogo de filtros (independiente del dataset)
-    getReplenishmentFilterCatalog()
+    getFilterCatalogOnce()
       .then(res => {
         if (cancelled) return
         if (res.success && res.data) {
@@ -606,6 +642,82 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
     return () => window.removeEventListener('keydown', handler)
   }, [detailSku, showCreateModal, creating])
 
+  // El detalle V2 se carga una sola vez por variante durante la sesión del panel.
+  useEffect(() => {
+    if (!detailSku || !activeDataset) return
+    const selectedSku = detailSku.trim().toUpperCase()
+    const row = rows.find(candidate => candidate.sku.SKU.trim().toUpperCase() === selectedSku)
+    const variantId = row?.variantId
+    if (detailSku.trim().toUpperCase() === '2008DG') console.info('[replenishment-identity]', { stage: 'analysis-panel', sku: detailSku, rowVariantId: row?.variantId ?? null, variantId: variantId ?? null })
+    let cancelled = false
+    setDetailDataVariantId(null)
+    setDailyAvailability(null)
+    setKardex(null)
+    setForecast(null)
+    setForecastError(null)
+    if (variantId === null || variantId === undefined) {
+      setDailyAvailabilityLoading(false)
+      setKardexLoading(false)
+      setForecastError('Variante no disponible para este SKU')
+      return
+    }
+
+    const availabilityKey = availabilityCacheKey(variantId)
+    const cached = availabilityCache.current.get(availabilityKey)
+    if (availabilityCache.current.has(availabilityKey)) {
+      setDailyAvailability(cached ?? null)
+      setDailyAvailabilityLoading(false)
+    } else {
+      setDailyAvailabilityLoading(true)
+      const inFlight = availabilityPromises.current.get(availabilityKey) || getReplenishmentAvailabilityDaily(COMPANY_ID, variantId)
+        .then(result => result.success ? result.data : null)
+        .catch(() => null)
+        .then(result => {
+          availabilityCache.current.set(availabilityKey, result)
+          availabilityPromises.current.delete(availabilityKey)
+          return result
+        })
+      availabilityPromises.current.set(availabilityKey, inFlight)
+      inFlight.then(result => {
+        if (cancelled) return
+        setDailyAvailability(result)
+        setDailyAvailabilityLoading(false)
+      })
+    }
+
+    const kardexKey = kardexCacheKey(variantId)
+    const kardexCached = kardexCache.current.get(kardexKey)
+    if (kardexCache.current.has(kardexKey)) {
+      setKardex(kardexCached ?? null)
+      setKardexLoading(false)
+      const cachedForecast = forecastCache.current.get(kardexKey) ?? null
+      setForecast(cachedForecast)
+      setForecastError(cachedForecast ? null : 'Forecast no disponible para esta variante')
+      setDetailDataVariantId(variantId)
+    } else {
+      setKardexLoading(true)
+      const kardexInFlight = kardexPromises.current.get(kardexKey) || getReplenishmentKardexHistory(COMPANY_ID, variantId, FORECAST_DATE_FROM, FORECAST_DATE_TO)
+        .then(result => result.success ? result.data : null)
+        .catch(() => null)
+        .then(result => {
+          kardexCache.current.set(kardexKey, result?.events ?? null)
+          if (result?.forecast) forecastCache.current.set(kardexKey, result.forecast)
+          kardexPromises.current.delete(kardexKey)
+          return result
+        })
+      kardexPromises.current.set(kardexKey, kardexInFlight)
+      kardexInFlight.then(result => {
+        if (cancelled) return
+        setKardex(result?.events ?? null)
+        setForecast(result?.forecast ?? null)
+        setForecastError(result?.forecast ? null : 'No se pudo cargar el forecast para esta variante')
+        setDetailDataVariantId(variantId)
+        setKardexLoading(false)
+      })
+    }
+    return () => { cancelled = true }
+  }, [activeDataset, detailSku, rows])
+
   // ─── Actualizar cantidad confirmada ──────────────────────────────
   function updateConfirmedQty(sku: string, qty: number) {
     const normalizedQty = Number.isFinite(qty) ? Math.max(0, qty) : 0
@@ -922,106 +1034,26 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
         onRestoreDefault={restoreDefault}
       />
 
-      {/* Drawer / Ficha lateral */}
+      {/* Ficha analítica amplia. Reutiliza el dataset ya cargado, sin fetch adicional. */}
       {detailSku && (() => {
-        const row = rows.find(r => r.sku.SKU === detailSku)
-        if (!row) return null
-        const s = row.sku
-        const productName = getProductName(s)
-        const realSupplierName = getRealSupplierName(s)
-        const isConfirmed = confirmedSet.has(s.SKU)
-        const sAccion = s.alerta || 'Normal'
-
-        return (
-          <div className="fixed inset-0 z-[1100] flex justify-end bg-black/30 backdrop-blur-sm" onClick={() => setDetailSku(null)}>
-            <aside className="h-full w-full max-w-[720px] overflow-y-auto border-l border-theme-border bg-theme-surface shadow-2xl" onClick={e => e.stopPropagation()}>
-              <div className="sticky top-0 z-10 border-b border-theme-border bg-theme-surface px-5 py-3.5">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-theme-text-muted">Ficha de reposición</p>
-                    <h2 className="mt-0.5 truncate text-base font-bold text-theme-text">{productName}</h2>
-                    <div className="mt-1.5 flex flex-wrap gap-1.5">
-                      <span className="rounded-full border border-theme-border bg-theme-bg/40 px-2 py-0.5 text-[10px] font-medium text-theme-text-muted">SKU {s.SKU}</span>
-                      <span className="rounded-full border border-theme-border bg-theme-bg/40 px-2 py-0.5 text-[10px] font-medium text-theme-text-muted">{realSupplierName}</span>
-                      <span className="rounded-full border border-theme-border bg-theme-bg/40 px-2 py-0.5 text-[10px] font-medium text-theme-text-muted">{sAccion}</span>
-                    </div>
-                  </div>
-                  <button onClick={() => setDetailSku(null)} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-theme-border text-theme-text-muted hover:bg-theme-bg/50 hover:text-theme-text">
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-4 p-5">
-                <section className="rounded-lg border border-theme-border bg-theme-bg/30 p-4">
-                  <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-theme-text-muted">Indicadores del sugerido</h3>
-                  <div className="grid grid-cols-2 gap-x-5 gap-y-2.5 text-sm">
-                    {[
-                      ['Stock disponible', fmtN(s.cantidad_disponible)],
-                      ['Ventas del período', fmtN(row.totalUnits)],
-                      ['Promedio semanal', row.avgPer7.toFixed(2)],
-                      ['Stock objetivo', fmtN(Math.ceil(row.avgPer7 * coverageWeeks))],
-                      ['Cobertura actual', s.dias_cobertura != null ? `${(s.dias_cobertura / 7).toFixed(1)} sem.` : '—'],
-                      ['Variación reciente', row.tendenciaPct !== null ? `${(row.tendenciaPct * 100).toFixed(1)}%` : '—'],
-                      ['Estado tendencia', row.estadoTendencia],
-                      ['Compra sugerida', fmtN(row.suggestedQty)],
-                    ].map(([label, value]) => (
-                      <div key={label} className="flex items-center justify-between border-b border-theme-border/50 pb-1.5 last:border-0">
-                        <span className="text-[11px] text-theme-text-muted">{label}</span>
-                        <strong className={`text-[11px] font-semibold ${
-                          label === 'Estado tendencia' && value === 'Creciendo' ? 'text-emerald-500' :
-                            label === 'Estado tendencia' && value === 'Cayendo' ? 'text-red-500' :
-                              label === 'Variación reciente' && row.tendenciaPct !== null && row.tendenciaPct > 0 ? 'text-emerald-500' :
-                                label === 'Variación reciente' && row.tendenciaPct !== null && row.tendenciaPct < 0 ? 'text-red-500' :
-                                  'text-theme-text'
-                        }`}>{value}</strong>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-
-                <section className="rounded-lg border border-theme-border bg-theme-bg/30 p-4">
-                  <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-theme-text-muted">UNIDADES VENDIDAS CADA 7 DÍAS</h3>
-                  <div className="overflow-hidden rounded-md border border-theme-border">
-                    <table className="w-full text-[11px]">
-                      <tbody>
-                        {bucketLabels.map((label, bi) => (
-                          <tr key={bi} className="border-b border-theme-border last:border-0">
-                            <td className="px-3 py-2 text-theme-text-muted">{label}</td>
-                            <td className="px-3 py-2 text-right font-semibold text-theme-text">{row.buckets[bi] > 0 ? row.buckets[bi] : '—'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-
-                <section className="rounded-lg border border-theme-border bg-theme-bg/30 p-4">
-                  <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-theme-text-muted">Confirmación de compra</h3>
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                    <div className="flex flex-col justify-between rounded-lg border border-theme-border bg-theme-surface p-3.5">
-                      <label className="text-[10px] font-semibold text-theme-text-muted">Cantidad confirmada</label>
-                      <input type="number" min={0} value={row.confirmedQty} onChange={e => updateConfirmedQty(s.SKU, Number(e.target.value))}
-                        className="mt-2 h-9 w-full rounded-md border border-theme-border bg-theme-bg/40 px-3 text-right text-sm font-semibold text-theme-text outline-none focus:border-theme-accent focus:ring-2 focus:ring-theme-accent/15" />
-                    </div>
-                    <div className="flex flex-col justify-between rounded-lg border border-theme-border bg-theme-surface p-3.5">
-                      <label className="text-[10px] font-semibold text-theme-text-muted">Monto confirmado</label>
-                      <div className="mt-2 text-right text-sm font-bold text-theme-text">{fmt(row.confirmedCost)}</div>
-                    </div>
-                    <button onClick={() => { toggleConfirmed(s.SKU); setDetailSku(null) }}
-                      className="flex items-center justify-center gap-2 rounded-lg bg-theme-accent px-4 text-sm font-bold text-white shadow-sm shadow-theme-accent/15 transition hover:bg-theme-accent-hover">
-                      <Check className="h-4 w-4" />
-                      Confirmar compra
-                    </button>
-                  </div>
-                  <p className="mt-3 text-[10px] font-medium text-theme-text-muted">
-                    {isConfirmed ? '✓ Fila confirmada.' : 'Revise los indicadores antes de confirmar.'}
-                  </p>
-                </section>
-              </div>
-            </aside>
-          </div>
-        )
+        const selectedSku = detailSku.trim().toUpperCase()
+        const row = rows.find(candidate => candidate.sku.SKU.trim().toUpperCase() === selectedSku)
+        if (!row || !activeDataset) return null
+        return <ReplenishmentAnalyticsSheet
+          row={row}
+          dataset={activeDataset}
+          breakSummary={getBreakSummary(breakSummaryByVariantId, row.variantId)}
+            dailyAvailability={detailDataVariantId === row.variantId ? dailyAvailability : null}
+            dailyAvailabilityLoading={detailDataVariantId !== row.variantId || dailyAvailabilityLoading}
+            kardex={detailDataVariantId === row.variantId ? kardex : null}
+            kardexLoading={detailDataVariantId !== row.variantId || kardexLoading}
+            forecast={detailDataVariantId === row.variantId ? forecast : null}
+            forecastError={detailDataVariantId === row.variantId ? forecastError : null}
+          confirmed={confirmedSet.has(row.sku.SKU)}
+          onClose={() => setDetailSku(null)}
+          onUpdateQty={updateConfirmedQty}
+          onConfirm={sku => { toggleConfirmed(sku); setDetailSku(null) }}
+        />
       })()}
 
       {/* Modal de preparación de OC */}

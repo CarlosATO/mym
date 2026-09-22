@@ -2,14 +2,14 @@
 
 import { useMemo, useState, type MouseEvent } from 'react'
 import type { BreakSummary60d } from '@/app/actions/integraciones/bsale-dataset'
-import type { DailySalesPoint } from './replenishment-derive'
+import type { DailySalesPoint, ReplenishmentMetrics } from './replenishment-derive'
 
 interface ReplenishmentSalesHoverChartProps {
   productName: string
   sku: string
   sparseSeries: DailySalesPoint[] | undefined
   dateTo: string
-  stockActual: number
+  metrics: ReplenishmentMetrics
   breakSummary: BreakSummary60d
 }
 
@@ -30,6 +30,10 @@ function formatDecimal(value: number) {
 
 function formatEvidence(value: number) {
   return new Intl.NumberFormat('es-CL', { maximumFractionDigits: 1 }).format(value)
+}
+
+function formatWeeks(value: number) {
+  return new Intl.NumberFormat('es-CL', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value)
 }
 
 function formatBreakDate(date: string) {
@@ -56,18 +60,11 @@ export function ReplenishmentSalesHoverChart({
   sku,
   sparseSeries,
   dateTo,
-  stockActual,
   breakSummary,
+  metrics,
 }: ReplenishmentSalesHoverChartProps) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
   const series = useMemo(() => completeSeries(sparseSeries, dateTo), [sparseSeries, dateTo])
-  const total = series.reduce((sum, point) => sum + point.units, 0)
-  const salesRateWithStock = breakSummary.salesIdentityResolved && breakSummary.salesRateWithStock !== null
-    ? breakSummary.salesRateWithStock
-    : null
-  const coverageDays = salesRateWithStock !== null && salesRateWithStock > 0 && stockActual >= 0
-    ? Math.round(stockActual / salesRateWithStock)
-    : null
   const hasMovement = series.some(point => point.units !== 0)
 
   const { min, max, points } = useMemo(() => {
@@ -136,22 +133,22 @@ export function ReplenishmentSalesHoverChart({
       <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 border-y border-theme-border/50 py-2">
         <div>
           <p className="text-[9px] font-semibold uppercase tracking-[0.08em] text-theme-text-muted">Ventas 60d</p>
-          <p className="text-xs font-semibold tabular-nums">{total} un.</p>
+          <p className="text-xs font-semibold tabular-nums">{metrics.sales60d} un.</p>
         </div>
         <div>
           <p className="text-[9px] font-semibold uppercase tracking-[0.08em] text-theme-text-muted">Stock actual</p>
-          <p className={`text-xs font-semibold tabular-nums ${stockActual < 0 ? 'text-amber-600 dark:text-amber-400' : ''}`}>
-            {stockActual} un.
+          <p className={`text-xs font-semibold tabular-nums ${metrics.physicalStock < 0 ? 'text-amber-600 dark:text-amber-400' : ''}`}>
+            {metrics.physicalStock} un.
           </p>
         </div>
         <div>
           <p className="text-[9px] font-semibold uppercase tracking-[0.08em] text-theme-text-muted">Ritmo con stock</p>
           <p className="text-xs font-semibold tabular-nums">
-            {salesRateWithStock === null ? 'No calculable' : `${formatDecimal(salesRateWithStock)} ud/día`}
+            {metrics.salesRateWithStock === null ? 'Revisar' : `${formatDecimal(metrics.salesRateWithStock)} ud/día`}
           </p>
-          {breakSummary.salesIdentityResolved ? (
+          {metrics.isSalesIdentityResolved ? (
             <p className="mt-0.5 text-[9px] text-theme-text-muted">
-              {breakSummary.unitsSoldWithStock} uds en {breakSummary.daysWithStock} días con stock
+              {metrics.unitsSoldWithStock} uds en {metrics.daysWithStock} días con stock
             </p>
           ) : (
             <p className="mt-0.5 text-[9px] text-theme-text-muted">Identidad de ventas no resuelta</p>
@@ -160,22 +157,25 @@ export function ReplenishmentSalesHoverChart({
         <div>
           <p className="text-[9px] font-semibold uppercase tracking-[0.08em] text-theme-text-muted">Cobertura estimada</p>
           <p className="text-xs font-semibold tabular-nums">
-            {coverageDays == null ? 'No calculable' : `~${coverageDays} días`}
+            {metrics.coverageDays == null ? 'Revisar' : `~${Math.round(metrics.coverageDays)} días`}
           </p>
+          {metrics.coverageDays != null && (
+            <p className="mt-0.5 text-[9px] text-theme-text-muted">(~{formatWeeks(metrics.coverageDays / 7)} semanas)</p>
+          )}
         </div>
         <div
-          className={`col-span-2 rounded-md border px-2 py-1.5 ${breakSummary.daysWithoutStock > 0
+          className={`col-span-2 rounded-md border px-2 py-1.5 ${metrics.daysWithoutStock > 0
             ? 'border-amber-400/70 bg-amber-100/80 dark:border-amber-300/40 dark:bg-amber-400/15'
             : 'border-theme-border/40 bg-theme-surface/40'}`}
           title="Días calendario dentro de los últimos 60 en que el stock físico permaneció en 0 o menos. El período termina cuando cualquier movimiento deja nuevamente el stock sobre 0. Los quiebres indican cuántas veces el stock llegó a 0 o menos."
         >
-          <p className={`text-[9px] font-semibold uppercase tracking-[0.08em] ${breakSummary.daysWithoutStock > 0 ? 'text-amber-800 dark:text-amber-200' : 'text-theme-text-muted'}`}>Días sin stock 60d</p>
-          <p className={`text-sm font-bold tabular-nums ${breakSummary.daysWithoutStock > 0 ? 'text-amber-800 dark:text-amber-200' : ''}`}>
-            {breakSummary.daysWithoutStock} días
+          <p className={`text-[9px] font-semibold uppercase tracking-[0.08em] ${metrics.daysWithoutStock > 0 ? 'text-amber-800 dark:text-amber-200' : 'text-theme-text-muted'}`}>Días sin stock 60d</p>
+          <p className={`text-sm font-bold tabular-nums ${metrics.daysWithoutStock > 0 ? 'text-amber-800 dark:text-amber-200' : ''}`}>
+            {metrics.daysWithoutStock} días
           </p>
-          {breakSummary.breakCount > 0 && (
-            <p className={`text-[9px] ${breakSummary.daysWithoutStock > 0 ? 'text-amber-900/80 dark:text-amber-100/90' : 'text-amber-700 dark:text-amber-300'}`}>
-              {breakSummary.breakCount} {breakSummary.breakCount === 1 ? 'quiebre' : 'quiebres'}{breakSummary.lastBreakDate ? ` · último ${formatBreakDate(breakSummary.lastBreakDate)}` : ''}
+          {metrics.breakCount > 0 && (
+            <p className={`text-[9px] ${metrics.daysWithoutStock > 0 ? 'text-amber-900/80 dark:text-amber-100/90' : 'text-amber-700 dark:text-amber-300'}`}>
+              {metrics.breakCount} {metrics.breakCount === 1 ? 'quiebre' : 'quiebres'}{breakSummary.lastBreakDate ? ` · último ${formatBreakDate(breakSummary.lastBreakDate)}` : ''}
             </p>
           )}
         </div>
@@ -183,7 +183,7 @@ export function ReplenishmentSalesHoverChart({
 
       <p className="mt-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-theme-text-muted/80">Ventas últimos 60 días</p>
       <p className="mt-2 text-[10px] text-theme-text-muted/80">
-        Evidencia histórica: {formatEvidence(breakSummary.evidenceCoveragePct)}% · {breakSummary.knownDays}/60 días
+        Evidencia histórica: {formatEvidence(metrics.evidenceCoveragePct)}% · {metrics.knownDays}/60 días
       </p>
 
       <div className="relative mt-1">
