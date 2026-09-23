@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools==75.8.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "petgroup-finance-api"
+version = "0.1.0"
+description = "Minimal health-check service for PetGroup Control Financiero"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+    "fastapi==0.115.12",
+    "pydantic-settings==2.9.1",
+    "psycopg[binary]==3.3.6",
+    "sqlalchemy==2.0.40",
+    "uvicorn[standard]==0.34.2",
+]
+
+[dependency-groups]
+dev = [
+    "httpx==0.28.1",
+    "pytest==8.3.5",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
