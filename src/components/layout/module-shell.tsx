@@ -5,6 +5,7 @@ import { Menu } from 'lucide-react'
 import { getActiveCompany, type Company } from '@/app/actions/companies'
 import { cn } from '@/lib/utils'
 import { ModuleSidebar } from './module-sidebar'
+import { financialThemeStyle } from './theme-variants'
 import type { BreadcrumbValue, ModuleIdentity, ModuleNavigation, NavigationLocation, SurfaceMode } from './module-shell-types'
 import { usePathname, useSearchParams } from 'next/navigation'
 
@@ -21,6 +22,8 @@ type ModuleShellProps = {
   surfaceMode?: SurfaceMode
   showPortalLink?: boolean
   topbarVariant?: 'default' | 'module'
+  sidebarVariant?: 'default' | 'financial'
+  themeVariant?: 'default' | 'financial'
 }
 
 const STORAGE_KEY = 'mym:erp-sidebar-collapsed'
@@ -40,6 +43,8 @@ export function ModuleShell({
   surfaceMode = 'standard',
   showPortalLink = false,
   topbarVariant = 'default',
+  sidebarVariant = 'default',
+  themeVariant = 'default',
 }: ModuleShellProps) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -83,7 +88,10 @@ export function ModuleShell({
   if (!activeCompany) return <div className="min-h-screen bg-theme-bg" />
 
   return (
-    <div className="min-h-screen bg-theme-bg text-foreground">
+    <div
+      className="min-h-screen bg-theme-bg text-foreground"
+      style={themeVariant === 'financial' ? financialThemeStyle : undefined}
+    >
 
       {mobileOpen && <button aria-label="Cerrar navegación" className="fixed inset-0 z-30 bg-theme-sidebar-bg/70 md:hidden" onClick={() => setMobileOpen(false)} />}
 
@@ -94,6 +102,7 @@ export function ModuleShell({
         responsiveCollapsed={responsiveCollapsed}
         mobileOpen={mobileOpen}
         permissions={permissions}
+        variant={sidebarVariant}
         onToggle={toggleCollapsed}
         onNavigate={() => setMobileOpen(false)}
       />

@@ -11,6 +11,9 @@ import { TopbarDate } from '@/components/layout/topbar-date'
 import { BsaleReplenishmentTopbarControl } from '@/components/integraciones/bsale-replenishment-topbar-control'
 import type { Profile } from '@/lib/types'
 import type { Company } from '@/app/actions/companies'
+import { cn } from '@/lib/utils'
+import { financialThemeStyle } from './theme-variants'
+import { getFinancialCompanyDisplayName } from '@/modules/analisis-comercial/control-financiero/lib/company-display'
 
 interface AppTopbarProps {
   profile: Profile & { roles: { name: string } }
@@ -53,10 +56,16 @@ export function AppTopbar({ profile, activeCompany, permissions, moduleName }: A
 
   // Nombre de ubicación: prop tiene prioridad, si no se auto-detecta desde la ruta
   const locationName = moduleName ?? getLocationName(pathname)
+  const isAnalysisCommercialSurface = pathname.startsWith('/dashboard/analisis-comercial')
+  const isFinancialSurface = pathname.startsWith('/dashboard/analisis-comercial/control-financiero')
+  const visibleCompanyName = isFinancialSurface ? getFinancialCompanyDisplayName(activeCompany) : (activeCompany.trade_name || activeCompany.business_name)
 
   return (
     // Fondo siempre idéntico — sin importar si estamos en portal o en módulo ERP
-    <header className="fixed top-0 left-0 right-0 z-30 h-12 border-b border-theme-border/50 bg-theme-surface/90 backdrop-blur-md shadow-sm">
+    <header className={cn(
+      'fixed top-0 left-0 right-0 z-30 h-12 border-b backdrop-blur-md shadow-sm',
+      isAnalysisCommercialSurface ? 'border-[#D1C7BD] bg-[#EFE9E1]/95' : 'border-theme-border/50 bg-theme-surface/90',
+    )} style={isAnalysisCommercialSurface ? financialThemeStyle : undefined}>
       <div className="h-full max-w-7xl mx-auto px-4 lg:px-6 flex items-center justify-between gap-4">
 
         {/* ── Izquierda: logo empresa (fijo) + separador + nombre de ubicación ── */}
@@ -71,7 +80,7 @@ export function AppTopbar({ profile, activeCompany, permissions, moduleName }: A
             />
             <div className="leading-tight shrink-0">
               <p className="font-semibold text-[12px] text-theme-text max-w-[150px] truncate leading-snug">
-                {activeCompany.trade_name || activeCompany.business_name}
+                {visibleCompanyName}
               </p>
               <p className="text-[8.5px] font-semibold text-theme-text-muted/55 uppercase tracking-wider truncate max-w-[150px] leading-snug">
                 PetGroup
@@ -83,7 +92,7 @@ export function AppTopbar({ profile, activeCompany, permissions, moduleName }: A
           <div className="w-px h-4 bg-theme-border/70 shrink-0" />
 
           {/* Nombre de ubicación — siempre visible, más grande y destacado */}
-          <span className="text-sm font-semibold text-theme-text truncate max-w-[200px]">
+          <span className={cn('text-sm font-semibold truncate max-w-[200px]', isAnalysisCommercialSurface ? 'text-[#322D29]' : 'text-theme-text')}>
             {locationName}
           </span>
 
@@ -108,7 +117,7 @@ export function AppTopbar({ profile, activeCompany, permissions, moduleName }: A
 
           <TopbarDate />
           <BsaleReplenishmentTopbarControl isSuperUsuario={profile.roles?.name === 'SUPER_USUARIO'} />
-          <CompanySwitcher />
+          <CompanySwitcher resolveName={isFinancialSurface ? getFinancialCompanyDisplayName : undefined} />
           <div className="w-px h-4 bg-theme-border/50 shrink-0 mx-0.5" />
           <ThemeSwitcher />
           <UserMenu profile={profile} activeCompany={activeCompany} permissions={permissions} />

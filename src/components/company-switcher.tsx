@@ -5,7 +5,7 @@ import { getUserCompanies, setActiveCompanyId, getActiveCompany, type UserCompan
 import * as LucideIcons from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-export function CompanySwitcher() {
+export function CompanySwitcher({ resolveName }: { resolveName?: (company: Company) => string } = {}) {
   const [companies, setCompanies] = useState<UserCompany[]>([])
   const [activeCompany, setActiveCompany] = useState<Company | null>(null)
   const [open, setOpen] = useState(false)
@@ -65,6 +65,8 @@ export function CompanySwitcher() {
     }
   }
 
+  const displayName = (company: Company) => resolveName?.(company) ?? company.trade_name ?? company.business_name
+
   if (loading) {
     return (
       <div className="h-9 px-3 flex items-center justify-center rounded-xl bg-theme-surface/50 border border-white/5 text-xs text-theme-text-muted">
@@ -93,7 +95,7 @@ export function CompanySwitcher() {
                 )}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="font-semibold text-sm truncate leading-none mb-1">{company.trade_name || company.business_name}</p>
+                <p className="font-semibold text-sm truncate leading-none mb-1">{displayName(company)}</p>
                 <p className="text-[10px] text-theme-text-muted/70 truncate leading-none">{company.rut || 'Sin RUT'}</p>
               </div>
               <LucideIcons.ArrowRight className="h-4 w-4 text-theme-text-muted group-hover:text-theme-accent group-hover:translate-x-0.5 transition-all shrink-0" />
@@ -118,7 +120,7 @@ export function CompanySwitcher() {
           )}
         </div>
         <div className="truncate leading-tight">
-          <p className="text-xs font-bold text-theme-text max-w-[150px] truncate">{activeCompany.trade_name || activeCompany.business_name}</p>
+          <p className="text-xs font-bold text-theme-text max-w-[150px] truncate">{displayName(activeCompany)}</p>
           <p className="text-[10px] text-theme-text-muted/60 truncate max-w-[150px]">{activeCompany.rut || 'Sin RUT'}</p>
         </div>
         <LucideIcons.ChevronsUpDown className="h-3.5 w-3.5 text-theme-accent shrink-0" />
@@ -153,7 +155,7 @@ export function CompanySwitcher() {
                       )}
                     </div>
                     <div className="flex-1 truncate">
-                      <p className="truncate font-semibold">{company.trade_name || company.business_name}</p>
+                      <p className="truncate font-semibold">{displayName(company)}</p>
                       <p className="text-[9px] opacity-60 truncate">{company.rut || 'Sin RUT'}</p>
                     </div>
                     {isSelected && (

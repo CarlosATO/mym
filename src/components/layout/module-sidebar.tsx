@@ -20,11 +20,12 @@ type ModuleSidebarProps = {
   responsiveCollapsed: boolean
   mobileOpen: boolean
   permissions: string[]
+  variant: 'default' | 'financial'
   onToggle: () => void
   onNavigate: () => void
 }
 
-export function ModuleSidebar({ identity, navigation, collapsed, responsiveCollapsed, mobileOpen, permissions, onToggle, onNavigate }: ModuleSidebarProps) {
+export function ModuleSidebar({ identity, navigation, collapsed, responsiveCollapsed, mobileOpen, permissions, variant, onToggle, onNavigate }: ModuleSidebarProps) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const location = { pathname, searchParams }
@@ -38,46 +39,53 @@ export function ModuleSidebar({ identity, navigation, collapsed, responsiveColla
 
   return (
     <aside className={cn(
-      'fixed left-3 top-3 bottom-3 z-40 flex flex-col overflow-hidden rounded-[20px] border border-theme-sidebar-border bg-theme-sidebar-bg text-theme-sidebar-text shadow-lg transition-[width,transform] duration-200',
+      'fixed left-3 top-3 bottom-3 z-40 flex flex-col overflow-hidden rounded-[20px] border text-theme-sidebar-text shadow-lg transition-[width,transform] duration-200',
+      variant === 'financial'
+        ? 'border-[#AC9C8D]/40 bg-[#322D29] text-[#EFE9E1]'
+        : 'border-theme-sidebar-border bg-theme-sidebar-bg',
       sidebarWidth,
       mobileOpen ? 'translate-x-0 w-[244px]' : '-translate-x-[calc(100%+0.75rem)] md:translate-x-0'
     )}>
-      <div className={cn('flex h-[76px] shrink-0 items-center border-b border-theme-sidebar-border bg-theme-sidebar-surface px-4', effectiveCollapsed && 'md:justify-center md:px-2')}>
+      <div className={cn(
+        'flex h-[76px] shrink-0 items-center border-b px-4',
+        variant === 'financial' ? 'border-[#AC9C8D]/30 bg-[#322D29]' : 'border-theme-sidebar-border bg-theme-sidebar-surface',
+        effectiveCollapsed && 'md:justify-center md:px-2',
+      )}>
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-2">
-            {identity.icon && <identity.icon className="h-4 w-4 shrink-0 text-theme-sidebar-accent" />}
-            <p className="truncate text-[11px] font-bold uppercase tracking-[0.22em] text-theme-sidebar-accent">{identity.label}</p>
+            {identity.icon && <identity.icon className={cn('h-4 w-4 shrink-0', variant === 'financial' ? 'text-[#AC9C8D]' : 'text-theme-sidebar-accent')} />}
+            <p className={cn('truncate text-[11px] font-bold uppercase tracking-[0.22em]', variant === 'financial' ? 'text-[#AC9C8D]' : 'text-theme-sidebar-accent')}>{identity.label}</p>
           </div>
-          {(!effectiveCollapsed || mobileOpen) && identity.subtitle && <p className="mt-1 truncate text-sm font-medium text-theme-sidebar-text">{identity.subtitle}</p>}
+          {(!effectiveCollapsed || mobileOpen) && identity.subtitle && <p className={cn('mt-1 truncate text-sm font-medium', variant === 'financial' ? 'text-[#EFE9E1]' : 'text-theme-sidebar-text')}>{identity.subtitle}</p>}
         </div>
       </div>
 
       {primaryAction && <PrimaryAction item={primaryAction} collapsed={effectiveCollapsed} searchParams={searchParams} onNavigate={onNavigate} />}
 
       <nav className="flex-1 overflow-y-auto px-3 py-4">
-        {home && <SidebarItem item={home} location={location} collapsed={effectiveCollapsed} permissions={permissions} onNavigate={onNavigate} />}
+        {home && <SidebarItem item={home} location={location} collapsed={effectiveCollapsed} permissions={permissions} variant={variant} onNavigate={onNavigate} />}
         {visibleGroups.map(group => {
           const groupActive = group.items.some(item => isBranchActive(item, location))
           return (
             <div key={group.id} className="mt-5">
               {(!effectiveCollapsed || mobileOpen) && group.label && (
-                <p className={cn('mb-1 px-3 text-[10px] font-bold uppercase tracking-[0.16em]', groupActive ? 'text-theme-sidebar-accent' : 'text-theme-sidebar-muted')}>
+                <p className={cn('mb-1 px-3 text-[10px] font-bold uppercase tracking-[0.16em]', variant === 'financial' ? (groupActive ? 'text-[#AC9C8D]' : 'text-[#AC9C8D]/70') : (groupActive ? 'text-theme-sidebar-accent' : 'text-theme-sidebar-muted'))}>
                   {group.label}
                 </p>
               )}
               {group.items.map(item => (
-                <SidebarItem key={item.id} item={item} location={location} collapsed={effectiveCollapsed} permissions={permissions} onNavigate={onNavigate} />
+                <SidebarItem key={item.id} item={item} location={location} collapsed={effectiveCollapsed} permissions={permissions} variant={variant} onNavigate={onNavigate} />
               ))}
             </div>
           )
         })}
       </nav>
 
-      <div className={cn('border-t border-theme-sidebar-border bg-theme-sidebar-surface p-3', effectiveCollapsed && 'md:px-2')}>
+      <div className={cn('border-t p-3', variant === 'financial' ? 'border-[#AC9C8D]/30 bg-[#322D29]' : 'border-theme-sidebar-border bg-theme-sidebar-surface', effectiveCollapsed && 'md:px-2')}>
         <button
           title={collapsed ? 'Expandir navegación' : responsiveCollapsed ? 'Navegación compacta en este ancho' : 'Contraer navegación'}
           onClick={onToggle}
-          className="hidden w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold text-theme-sidebar-muted hover:bg-theme-sidebar-hover hover:text-theme-sidebar-text md:flex"
+          className={cn('hidden w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold md:flex', variant === 'financial' ? 'text-[#AC9C8D] hover:bg-white/10 hover:text-[#EFE9E1]' : 'text-theme-sidebar-muted hover:bg-theme-sidebar-hover hover:text-theme-sidebar-text')}
         >
           {effectiveCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
           {!effectiveCollapsed && 'Contraer menú'}
@@ -87,7 +95,7 @@ export function ModuleSidebar({ identity, navigation, collapsed, responsiveColla
   )
 }
 
-function SidebarItem({ item, location, collapsed, permissions, onNavigate, depth = 0 }: { item: ModuleNavItem; location: { pathname: string; searchParams: Pick<URLSearchParams, 'get' | 'has'> }; collapsed: boolean; permissions: string[]; onNavigate: () => void; depth?: number }) {
+function SidebarItem({ item, location, collapsed, permissions, variant, onNavigate, depth = 0 }: { item: ModuleNavItem; location: { pathname: string; searchParams: Pick<URLSearchParams, 'get' | 'has'> }; collapsed: boolean; permissions: string[]; variant: 'default' | 'financial'; onNavigate: () => void; depth?: number }) {
   const children = (item.children ?? []).filter(child => isVisible(child, permissions))
   const childBranchActive = children.some(child => isBranchActive(child, location))
   // A parent remains visible as context, but only the selected child receives
@@ -97,9 +105,9 @@ function SidebarItem({ item, location, collapsed, permissions, onNavigate, depth
   const href = buildNavHref(item.target, location.searchParams)
   const itemContent = (
     <>
-      {Icon ? <Icon className={cn('h-[17px] w-[17px] shrink-0', active ? 'text-theme-sidebar-accent' : 'text-theme-sidebar-muted group-hover:text-theme-sidebar-text')} /> : <span className="h-[17px] w-[17px] shrink-0" />}
+      {Icon ? <Icon className={cn('h-[17px] w-[17px] shrink-0', variant === 'financial' ? (active ? 'text-[#EFE9E1]' : 'text-[#AC9C8D] group-hover:text-[#EFE9E1]') : (active ? 'text-theme-sidebar-accent' : 'text-theme-sidebar-muted group-hover:text-theme-sidebar-text'))} /> : <span className="h-[17px] w-[17px] shrink-0" />}
       {!collapsed && <span className="truncate">{item.label}</span>}
-      {active && !collapsed && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-theme-sidebar-accent" />}
+      {active && !collapsed && <span className={cn('ml-auto h-1.5 w-1.5 rounded-full', variant === 'financial' ? 'bg-[#D1C7BD]' : 'bg-theme-sidebar-accent')} />}
     </>
   )
   const className = cn(
@@ -110,12 +118,16 @@ function SidebarItem({ item, location, collapsed, permissions, onNavigate, depth
     item.disabled
       ? 'cursor-not-allowed text-theme-sidebar-muted/50'
       : active
-        ? 'bg-theme-sidebar-active/20 font-semibold text-theme-sidebar-active-text ring-1 ring-inset ring-theme-sidebar-accent/30'
-        : 'text-theme-sidebar-muted hover:bg-theme-sidebar-hover hover:text-theme-sidebar-text'
+        ? variant === 'financial'
+          ? 'bg-[#72383D] font-semibold text-[#EFE9E1]'
+          : 'bg-theme-sidebar-active/20 font-semibold text-theme-sidebar-active-text ring-1 ring-inset ring-theme-sidebar-accent/30'
+        : variant === 'financial'
+          ? 'text-[#D1C7BD] hover:bg-white/10 hover:text-[#EFE9E1]'
+          : 'text-theme-sidebar-muted hover:bg-theme-sidebar-hover hover:text-theme-sidebar-text'
   )
 
   if (item.disabled) {
-    return <div title={collapsed ? item.label : undefined} className={className}>{itemContent}{children.map(child => <SidebarItem key={child.id} item={child} location={location} collapsed={collapsed} permissions={permissions} onNavigate={onNavigate} depth={depth + 1} />)}</div>
+    return <div title={collapsed ? item.label : undefined} className={className}>{itemContent}{children.map(child => <SidebarItem key={child.id} item={child} location={location} collapsed={collapsed} permissions={permissions} variant={variant} onNavigate={onNavigate} depth={depth + 1} />)}</div>
   }
 
   return (
@@ -123,7 +135,7 @@ function SidebarItem({ item, location, collapsed, permissions, onNavigate, depth
       <Link href={href} title={collapsed ? item.label : undefined} onClick={onNavigate} className={className}>
         {itemContent}
       </Link>
-      {children.map(child => <SidebarItem key={child.id} item={child} location={location} collapsed={collapsed} permissions={permissions} onNavigate={onNavigate} depth={depth + 1} />)}
+      {children.map(child => <SidebarItem key={child.id} item={child} location={location} collapsed={collapsed} permissions={permissions} variant={variant} onNavigate={onNavigate} depth={depth + 1} />)}
     </>
   )
 }

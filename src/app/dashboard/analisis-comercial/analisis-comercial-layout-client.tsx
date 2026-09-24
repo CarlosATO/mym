@@ -1,7 +1,11 @@
 'use client'
 
 import { ModuleShell } from '@/components/layout/module-shell'
-import { analisisComercialIdentity, analisisComercialNavigation, getAnalisisComercialBreadcrumb } from '@/modules/analisis-comercial/lib/navigation'
+import {
+  analisisComercialIdentity,
+  analisisComercialNavigation,
+  getAnalisisComercialBreadcrumb,
+} from '@/modules/analisis-comercial/lib/navigation'
 
 interface AnalisisComercialLayoutClientProps {
   children: React.ReactNode
@@ -21,6 +25,8 @@ export function AnalisisComercialLayoutClient({ children, profile, permissions }
       surfaceMode="none"
       showPortalLink
       topbarVariant="module"
+      sidebarVariant="financial"
+      themeVariant="financial"
     >
       {children}
     </ModuleShell>
