@@ -5,10 +5,12 @@ import test from 'node:test'
 const filtersPath = new URL('../src/modules/adquisiciones/ordenes-compra/replenishment-filters.tsx', import.meta.url)
 const analysisPath = new URL('../src/modules/adquisiciones/ordenes-compra/replenishment-analysis-panel.tsx', import.meta.url)
 const columnsPath = new URL('../src/modules/adquisiciones/ordenes-compra/replenishment-columns.ts', import.meta.url)
-const [filters, analysis, columns] = await Promise.all([
+const excelPath = new URL('../src/modules/adquisiciones/ordenes-compra/replenishment-excel.ts', import.meta.url)
+const [filters, analysis, columns, excel] = await Promise.all([
   readFile(filtersPath, 'utf8'),
   readFile(analysisPath, 'utf8'),
   readFile(columnsPath, 'utf8'),
+  readFile(excelPath, 'utf8'),
 ])
 
 test('cada filtro principal tiene un label descriptivo permanente', () => {
@@ -40,6 +42,12 @@ test('los labels reflejan el contrato real de períodos, cobertura, vistas e his
   assert.match(columns, /label: 'Compra'/)
   assert.match(columns, /label: 'Ventas'/)
   assert.match(columns, /label: 'Completa'/)
+  assert.match(columns, /id: 'ventas',[\s\S]*visible: [^\n]*'sugerido', 'cantidad', 'confirmar'/)
+  assert.match(analysis, /suggestedQty: r\.suggestedQty,[\s\S]*confirmedQty: r\.confirmedQty,[\s\S]*confirmed: confirmedSet\.has\(r\.sku\.SKU\)/)
+  assert.match(excel, /case 'sugerido': return row\.suggestedQty/)
+  assert.match(excel, /case 'cantidad': return row\.confirmedQty/)
+  assert.match(excel, /case 'confirmar': return row\.confirmed \? 'Sí' : 'No'/)
+  assert.match(excel, /id => visibleFixedCols\.includes\(id\) \|\| ALWAYS_VISIBLE_COLUMNS\.includes\(id\)/)
   assert.match(filters, /Análisis por semanas · \{historialVisible === 'Oculto' \? 'Oculto' : historialVisible\}/)
 })
 

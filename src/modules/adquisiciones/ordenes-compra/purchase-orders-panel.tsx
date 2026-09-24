@@ -11,8 +11,11 @@ import {
   type AuthorizedPersonnel
 } from '@/app/actions/adquisiciones/purchase-orders'
 import { getSuppliers, type Supplier } from '@/app/actions/adquisiciones/suppliers'
-import { searchPurchaseOrderProducts, type Product } from '@/app/actions/adquisiciones/products'
-import { getWarehouses, type Warehouse } from '@/app/actions/adquisiciones/warehouses'
+import { searchPurchaseOrderProducts } from '@/app/actions/adquisiciones/products'
+import { getPurchaseOrderProductCatalogCached, prefetchPurchaseOrderProductCatalog } from './purchase-order-product-cache'
+import { getPurchaseOrderWarehousesCached } from './warehouse-cache'
+import type { PurchaseOrderCatalogProduct } from '@/app/actions/adquisiciones/products'
+import type { Warehouse } from '@/app/actions/adquisiciones/warehouses'
 import { downloadPOBooklet, generatePdfBlob } from '@/lib/pdf/generate-po-pdf'
 import { getActiveCompany, type Company } from '@/app/actions/companies'
 import { OperationalTableResizeHandle, shouldIgnoreOperationalRowDoubleClick, useOperationalTableWidths, type OperationalTableColumn } from '@/components/ui/operational-table'
@@ -49,6 +52,7 @@ const INVOICE_BADGES: Record<string, { bg: string; text: string; border: string 
 
 const PURCHASE_ORDERS_TABLE_KEY = 'mym:table:adquisiciones:ordenes-compra'
 const REPLENISHMENT_PO_PREPARATION_KEY = 'mym:adquisiciones:replenishment-po-preparation'
+const PURCHASE_ORDER_PRODUCT_PAGE_SIZE = 40
 const PURCHASE_ORDER_COLUMNS: OperationalTableColumn[] = [
   { id: 'correlative', defaultWidth: 120, minWidth: 100, maxWidth: 190 },
   { id: 'issueDate', defaultWidth: 105, minWidth: 95, maxWidth: 150 },
@@ -95,7 +99,7 @@ const inputClass = "w-full h-9 rounded-lg border border-[#778B96]/30 bg-white px
 const selectClass = "w-full h-9 rounded-lg border border-[#778B96]/30 bg-white px-3 text-xs text-[#28353E] focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60 focus:border-[#45567D] appearance-none"
 const textareaClass = "w-full rounded-lg border border-[#778B96]/30 bg-white px-3 py-2 text-xs text-[#28353E] placeholder:text-[#778B96] focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60 focus:border-[#45567D] resize-none"
 
-export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: { initialOpenPoId?: string | null, onInitialOpenConsumed?: () => void }) {
+export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, prepareReplenishment = false }: { initialOpenPoId?: string | null, onInitialOpenConsumed?: () => void, prepareReplenishment?: boolean }) {
   const [view, setView] = useState<'list' | 'form' | 'detail' | 'analysis'>('list')
   const [selectedPo, setSelectedPo] = useState<PurchaseOrder | null>(null)
   const detailCacheRef = useRef<Record<string, PurchaseOrderDetail>>({})
@@ -112,13 +116,13 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [authorizedPersonnel, setAuthorizedPersonnel] = useState<AuthorizedPersonnel[]>([])
   const [productSearch, setProductSearch] = useState('')
-  const [productResults, setProductResults] = useState<Product[]>([])
+  const [productResults, setProductResults] = useState<PurchaseOrderCatalogProduct[]>([])
   const [productSearchLoading, setProductSearchLoading] = useState(false)
   const [productDropdownOpen, setProductDropdownOpen] = useState(false)
   const [productPage, setProductPage] = useState(0)
   const [productHasMore, setProductHasMore] = useState(false)
   const [productLoadingMore, setProductLoadingMore] = useState(false)
-  const productSearchCacheRef = useRef(new Map<string, { data: Product[]; has_more: boolean }>())
+  const productSearchCacheRef = useRef(new Map<string, { data: PurchaseOrderCatalogProduct[]; has_more: boolean }>())
   const productSearchRequestSequence = useRef(0)
   const productSearchTimerRef = useRef<number | null>(null)
   const productLoadingMoreRef = useRef(false)
@@ -134,6 +138,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
   const [activeCompany, setActiveCompany] = useState<Company | null>(null)
   const [replenishmentSupplierName, setReplenishmentSupplierName] = useState('')
   const [isReplenishmentPreparation, setIsReplenishmentPreparation] = useState(false)
+  const productInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     fetch('/logo-transparent.png')
@@ -187,6 +192,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
 
   const [items, setItems] = useState<LineItem[]>([])
   const [editingItem, setEditingItem] = useState<string | null>(null)
+  const [invalidPriceItemIds, setInvalidPriceItemIds] = useState<Set<string>>(new Set())
+  const linePriceInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
+  const [pendingProduct, setPendingProduct] = useState<PurchaseOrderCatalogProduct | null>(null)
+  const [pendingQuantity, setPendingQuantity] = useState('1')
+  const [pendingUnitPrice, setPendingUnitPrice] = useState('')
 
   const tempIdCounter = useRef(0)
   function newTempId() { tempIdCounter.current += 1; return `ni_${tempIdCounter.current}` }
@@ -304,11 +314,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
   useEffect(() => {
     Promise.all([
       getSuppliers(),
-      getWarehouses(),
+      getPurchaseOrderWarehousesCached(),
       getAuthorizedPersonnel(),
-    ]).then(([sup, wh, auth]) => {
+    ]).then(([sup, warehouses, auth]) => {
       setSuppliers(sup)
-      setWarehouses(wh.data)
+      setWarehouses(warehouses)
       setAuthorizedPersonnel(auth)
     })
   }, [])
@@ -325,6 +335,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
 
   useEffect(() => {
     if (!form.supplier_id) return
+    prefetchPurchaseOrderProductCatalog()
     const supplier = suppliers.find(s => s.id === form.supplier_id)
     if (!supplier) return
     if (!isReplenishmentPreparation && supplier.discount_percent > 0) {
@@ -341,7 +352,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
   function msg(text: string) { setMessage(text); setTimeout(() => setMessage(''), 3500) }
 
   useEffect(() => {
-    if (typeof window === 'undefined' || new URLSearchParams(window.location.search).get('prepare') !== 'replenishment') return
+    if (!prepareReplenishment || typeof window === 'undefined') return
 
     const raw = sessionStorage.getItem(REPLENISHMENT_PO_PREPARATION_KEY)
     try {
@@ -383,7 +394,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
     } catch {
       msg('La preparación de la orden de compra ya no está disponible.')
     }
-  }, [])
+  }, [prepareReplenishment])
 
   function resetForm() {
     setForm({
@@ -399,6 +410,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
     })
     setItems([])
     setEditingItem(null)
+    setInvalidPriceItemIds(new Set())
+    linePriceInputRefs.current = {}
     setEditId(null)
     setProductSearch('')
     setProductResults([])
@@ -407,6 +420,9 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
     setProductHasMore(false)
     setProductSearchLoading(false)
     setProductLoadingMore(false)
+    setPendingProduct(null)
+    setPendingQuantity('1')
+    setPendingUnitPrice('')
     productLoadingMoreRef.current = false
     setShowAuthorizerForm(false)
     setReplenishmentSupplierName('')
@@ -486,6 +502,13 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (items.length === 0) { msg('Agrega al menos una línea a la orden'); return }
+    const invalidPriceItems = items.filter(item => item.quantity > 0 && (!Number.isFinite(item.unit_price) || item.unit_price <= 0))
+    if (invalidPriceItems.length > 0) {
+      setInvalidPriceItemIds(new Set(invalidPriceItems.map(item => item.tempId)))
+      msg('Hay productos sin precio unitario. Complete el precio antes de emitir la orden.')
+      linePriceInputRefs.current[invalidPriceItems[0].tempId]?.focus()
+      return
+    }
     const res = await createPurchaseOrder({
       issue_date: form.issue_date,
       required_date: form.required_date,
@@ -496,6 +519,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
       authorized_by: form.authorized_by || undefined,
       notes: form.notes || undefined,
       currency: form.currency,
+      status: 'EMITIDA',
       items: items.map(it => ({
         item_type: it.item_type,
         product_id: it.product_id || null,
@@ -561,6 +585,29 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
       return
     }
 
+    try {
+      const catalog = await getPurchaseOrderProductCatalogCached()
+      if (requestId !== productSearchRequestSequence.current) return
+      const normalizedQuery = query.trim().toLowerCase()
+      const matches = catalog.filter(product => !normalizedQuery
+        || product.sku.toLowerCase().includes(normalizedQuery)
+        || product.description.toLowerCase().includes(normalizedQuery)
+        || (product.barcode ?? '').toLowerCase().includes(normalizedQuery))
+      const from = (page - 1) * PURCHASE_ORDER_PRODUCT_PAGE_SIZE
+      const pageData = matches.slice(from, from + PURCHASE_ORDER_PRODUCT_PAGE_SIZE)
+      setProductResults(prev => append
+        ? Array.from(new Map([...prev, ...pageData].map(product => [product.id, product])).values())
+        : pageData)
+      setProductPage(page)
+      setProductHasMore(from + pageData.length < matches.length)
+      setProductSearchLoading(false)
+      setProductLoadingMore(false)
+      productLoadingMoreRef.current = false
+      return
+    } catch {
+      // Fall back to the supplier-scoped server search if the catalog preload failed.
+    }
+
     if (append) {
       setProductLoadingMore(true)
       productLoadingMoreRef.current = true
@@ -580,7 +627,19 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
         return
       }
 
-      const pageData = { data: response.data, has_more: response.has_more }
+      const pageData = {
+        data: response.data.map(product => ({
+          id: product.id,
+          sku: product.sku,
+          barcode: product.barcode,
+          description: product.description,
+          unit_of_measure: product.unit_of_measure,
+          tax_rate: product.tax_rate,
+          bsale_variant_id: product.bsale_variant_id ?? null,
+          last_purchase_unit_cost: null,
+        })),
+        has_more: response.has_more,
+      }
       productSearchCacheRef.current.set(cacheKey, pageData)
       if (productSearchCacheRef.current.size > 40) {
         const oldestKey = productSearchCacheRef.current.keys().next().value
@@ -653,22 +712,38 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
     void loadProductPage(form.supplier_id, productSearch.trim().toLowerCase(), productPage + 1, requestId, true)
   }
 
-  function addProductToItems(p: Product) {
+  function selectProductForAddition(p: PurchaseOrderCatalogProduct) {
     if (items.some(it => it.product_id === p.id)) { msg('Este producto ya está en la orden'); return }
+    setPendingProduct(p)
+    setPendingQuantity('1')
+    setPendingUnitPrice(p.last_purchase_unit_cost === null ? '' : String(p.last_purchase_unit_cost))
+    setProductDropdownOpen(false)
+  }
+
+  function addProductToItems() {
+    if (!pendingProduct) return
+    if (items.some(it => it.product_id === pendingProduct.id)) { msg('Este producto ya está en la orden'); setPendingProduct(null); return }
+    const quantity = Number(pendingQuantity)
+    const unitPrice = Number(pendingUnitPrice)
+    if (!Number.isFinite(quantity) || quantity <= 0) { msg('Ingresa una cantidad mayor a 0.'); return }
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) { msg('Ingresa un precio unitario válido.'); return }
     setItems(prev => [...prev, {
       tempId: newTempId(),
       item_type: 'PRODUCT',
-      product_id: p.id,
-      sku: p.sku,
-      description: p.description,
-      unit: p.unit_of_measure || 'UNIDAD',
-      quantity: 1,
-      unit_price: 0,
+      product_id: pendingProduct.id,
+      sku: pendingProduct.sku,
+      description: pendingProduct.description,
+      unit: pendingProduct.unit_of_measure || 'UNIDAD',
+      quantity,
+      unit_price: unitPrice,
       discount_percent: 0,
-      tax_rate: p.tax_rate || 19,
+      tax_rate: pendingProduct.tax_rate || 19,
       warehouse_id: form.warehouse_id,
       notes: '',
     }])
+    setPendingProduct(null)
+    setPendingQuantity('1')
+    setPendingUnitPrice('')
     setProductSearch('')
     setProductResults([])
     setProductDropdownOpen(false)
@@ -679,8 +754,25 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
     productSearchRequestSequence.current += 1
   }
 
+  function focusProductSearch() {
+    if (!form.supplier_id) {
+      msg('Selecciona primero un proveedor para agregar productos.')
+      return
+    }
+    productInputRef.current?.focus()
+    openProductDropdown()
+  }
+
   function updateItem(tempId: string, field: keyof LineItem, value: unknown) {
     setItems(prev => prev.map(it => it.tempId === tempId ? { ...it, [field]: value } : it))
+    if (field === 'unit_price' || field === 'quantity') {
+      setInvalidPriceItemIds(prev => {
+        if (!prev.has(tempId)) return prev
+        const next = new Set(prev)
+        next.delete(tempId)
+        return next
+      })
+    }
   }
 
   function removeItem(tempId: string) {
@@ -1128,11 +1220,19 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
                   <h3 className="text-sm font-bold text-[#28353E]">Líneas de la orden</h3>
                   <p className="mt-0.5 text-[11px] text-[#778B96]">Productos y servicios incluidos</p>
                 </div>
+                <button
+                  type="button"
+                  onClick={focusProductSearch}
+                  className="inline-flex h-8 items-center justify-center gap-1.5 self-start rounded-lg border border-[#45567D]/30 bg-[#DFEBF7]/55 px-3 text-xs font-semibold text-[#45567D] transition-colors hover:bg-[#DFEBF7] sm:self-auto"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Agregar producto
+                </button>
               </div>
 
               <div ref={productRef} className="mb-4 relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted/50" />
-                    <input type="text" value={productSearch} onChange={e => handleProductSearch(e.target.value)}
+                    <input ref={productInputRef} type="text" value={productSearch} onChange={e => handleProductSearch(e.target.value)}
                      onFocus={openProductDropdown}
                      disabled={!form.supplier_id}
                      placeholder={form.supplier_id ? "Buscar por SKU, descripción o código de barra..." : "Selecciona primero un proveedor"}
@@ -1140,21 +1240,37 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
                   {!form.supplier_id && <p className="mt-1.5 text-[10px] text-[#778B96]">Debe seleccionar primero el proveedor para buscar productos.</p>}
                   {form.supplier_id && productDropdownOpen && (
                     <div onScroll={handleProductDropdownScroll} className="absolute top-full left-0 right-0 mt-1 bg-theme-surface border border-theme-border rounded-xl shadow-xl z-20 max-h-80 overflow-y-auto">
-                      {productSearchLoading ? <p className="px-4 py-2.5 text-xs text-theme-text-muted/60">Buscando...</p> : productResults.length === 0 ? (
+                       {productSearchLoading ? <p className="px-4 py-2.5 text-xs text-theme-text-muted/60">Buscando...</p> : productResults.length === 0 ? (
                         <p className="px-4 py-2.5 text-xs text-theme-text-muted/60">
                           {productSearch.trim() ? 'No se encontraron productos para este proveedor.' : 'Este proveedor no tiene productos disponibles.'}
                         </p>
-                      ) : productResults.map(p => (
-                        <button key={p.id} type="button" onClick={() => addProductToItems(p)}
+                       ) : productResults.map(p => (
+                         <button key={p.id} type="button" onClick={() => selectProductForAddition(p)}
                           className="w-full text-left px-4 py-2.5 text-xs text-theme-text hover:bg-theme-text/5 border-b border-theme-border last:border-0 flex items-center justify-between">
                           <span><span className="font-mono font-semibold">{p.sku}</span> — {p.description}</span>
                           <span className="text-theme-text-muted/50">{p.unit_of_measure || '—'}</span>
                         </button>
                       ))}
-                      {productLoadingMore && <p className="border-t border-theme-border px-4 py-2.5 text-center text-[11px] text-theme-text-muted/60">Cargando más productos...</p>}
-                    </div>
-                  )}
-              </div>
+                       {productLoadingMore && <p className="border-t border-theme-border px-4 py-2.5 text-center text-[11px] text-theme-text-muted/60">Cargando más productos...</p>}
+                     </div>
+                   )}
+               </div>
+
+               {pendingProduct && (
+                 <div className="mb-4 rounded-lg border border-[#A4C7D5]/60 bg-[#DFEBF7]/35 p-3">
+                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1.5fr)_minmax(110px,.7fr)_minmax(140px,.8fr)_auto] sm:items-end">
+                     <div className="min-w-0">
+                       <p className="text-[10px] font-semibold uppercase tracking-wide text-[#45567D]">Producto</p>
+                       <p className="truncate text-xs font-semibold text-[#28353E]" title={pendingProduct.description}>{pendingProduct.description}</p>
+                       <p className="mt-0.5 font-mono text-[10px] text-[#778B96]">SKU {pendingProduct.sku}</p>
+                       <p className="mt-1 text-[10px] text-[#778B96]">Último costo de compra Bsale (CLP): {pendingProduct.last_purchase_unit_cost === null ? 'Sin precio disponible' : formatCurrency(pendingProduct.last_purchase_unit_cost, 'CLP')}</p>
+                     </div>
+                     <label className="text-[10px] font-semibold text-[#45567D]">Cantidad<input type="number" min="0.001" step="0.001" value={pendingQuantity} onChange={event => setPendingQuantity(event.target.value)} className="mt-1 block h-8 w-full rounded-lg border border-[#778B96]/30 bg-white px-2 text-right text-xs text-[#28353E]" /></label>
+                     <label className="text-[10px] font-semibold text-[#45567D]">Precio unitario<input type="number" min="0" step="1" value={pendingUnitPrice} onChange={event => setPendingUnitPrice(event.target.value)} placeholder="Ingresar manualmente" className="mt-1 block h-8 w-full rounded-lg border border-[#778B96]/30 bg-white px-2 text-right text-xs text-[#28353E]" /></label>
+                     <button type="button" onClick={addProductToItems} className="h-8 rounded-lg bg-theme-accent px-3 text-xs font-bold text-white hover:bg-theme-accent-hover">Agregar producto</button>
+                   </div>
+                 </div>
+               )}
 
                 <div className="overflow-x-auto rounded-lg border border-[#778B96]/25">
                  <table className="w-full min-w-[1120px] table-fixed text-sm">
@@ -1192,7 +1308,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
                         <td colSpan={11} className="py-8 text-center text-xs text-theme-text-muted/40">No hay líneas agregadas</td>
                       </tr>
                     ) : items.map((it, idx) => (
-                       <tr key={it.tempId} className="border-b border-[#778B96]/15 odd:bg-white even:bg-[#DFEBF7]/20 hover:bg-[#DFEBF7]/60 transition-colors">
+                        <tr key={it.tempId} className={`border-b border-[#778B96]/15 odd:bg-white even:bg-[#DFEBF7]/20 hover:bg-[#DFEBF7]/60 transition-colors ${invalidPriceItemIds.has(it.tempId) ? 'bg-red-50 ring-1 ring-inset ring-red-300' : ''}`}>
                          <td className="py-2 px-3 text-center text-xs text-[#778B96]">{idx + 1}</td>
                          <td className="py-2 px-3 text-center">
                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded border bg-[#DFEBF7] text-[#45567D] border-[#A4C7D5]/70">{it.item_type === 'PRODUCT' ? 'Producto' : 'Servicio'}</span>
@@ -1209,7 +1325,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed }: 
                            <input type="number" min="0" step="0.001" value={it.quantity} onChange={e => updateItem(it.tempId, 'quantity', parseFloat(e.target.value) || 0)} className="mx-auto block w-20 h-8 rounded-lg border border-[#778B96]/30 bg-white px-2 text-xs text-[#28353E] text-right focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60" />
                         </td>
                          <td className="py-2 px-3 text-center">
-                            <input type="number" min="0" step="1" value={it.unit_price} onChange={e => updateItem(it.tempId, 'unit_price', parseFloat(e.target.value) || 0)} className="mx-auto block w-24 h-8 rounded-lg border border-[#778B96]/30 bg-white px-2 text-xs text-[#28353E] text-right focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60" />
+                             <input ref={input => { linePriceInputRefs.current[it.tempId] = input }} aria-invalid={invalidPriceItemIds.has(it.tempId)} type="number" min="0" step="1" value={it.unit_price} onChange={e => updateItem(it.tempId, 'unit_price', parseFloat(e.target.value) || 0)} className={`mx-auto block w-24 h-8 rounded-lg border bg-white px-2 text-xs text-[#28353E] text-right focus:outline-none focus:ring-2 ${invalidPriceItemIds.has(it.tempId) ? 'border-red-500 focus:ring-red-300' : 'border-[#778B96]/30 focus:ring-[#A4C7D5]/60'}`} />
+                             {invalidPriceItemIds.has(it.tempId) && <span className="block mt-0.5 text-[10px] font-semibold text-red-600">Complete el precio</span>}
                             {it.reference_unit_cost !== undefined && <span className="block mt-0.5 text-[10px] text-[#778B96]">Ref. Bsale {formatCurrency(it.reference_unit_cost, 'CLP')}</span>}
                         </td>
                          <td className="py-2 px-3 text-center">

@@ -96,6 +96,7 @@ export const ALL_COLUMNS: ColumnId[] = [
 
 export const FIXED_COLUMNS: ColumnId[] = ALL_COLUMNS.filter(id => id !== 'semanas')
 export const STICKY_COLUMNS: ColumnId[] = ['index', 'sku', 'product']
+export const ALWAYS_VISIBLE_COLUMNS: ColumnId[] = ['sugerido', 'cantidad', 'confirmar']
 
 export const COLUMN_DEFS: Record<ColumnId, ColumnDef> = {
   index: { label: '#', resizable: false, sticky: true, fixedWidth: 36, align: 'center' },
@@ -150,7 +151,7 @@ export const VIEWS: ViewDef[] = [
   {
     id: 'ventas',
     label: 'Ventas',
-    visible: ['index', 'sku', 'product', 'variant', 'line', 'disponible', 'semanas', 'totalVendido', 'promedio', 'costo', 'estado'],
+    visible: ['index', 'sku', 'product', 'variant', 'line', 'disponible', 'estado', 'sugerido', 'cantidad', 'confirmar', 'semanas', 'totalVendido', 'promedio', 'costo'],
     historial: 'Todas',
   },
   {

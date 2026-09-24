@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react'
 import { RotateCcw, X } from 'lucide-react'
-import { COLUMN_CONFIG_GROUPS, COLUMN_DEFS, type ColumnId } from './replenishment-columns'
+import { ALWAYS_VISIBLE_COLUMNS, COLUMN_CONFIG_GROUPS, COLUMN_DEFS, type ColumnId } from './replenishment-columns'
 
 interface ReplenishmentConfigPanelProps {
   open: boolean
@@ -97,8 +97,9 @@ export function ReplenishmentConfigPanel({
               <div className="grid grid-cols-2 gap-x-3 gap-y-0">
                 {group.columns.map(id => {
                   const isSupplier = id === 'supplier'
-                  const isDisabled = isSupplier && supplierFiltered
-                  const checked = isColumnVisible(id)
+                  const isAlwaysVisible = ALWAYS_VISIBLE_COLUMNS.includes(id)
+                  const isDisabled = isAlwaysVisible || (isSupplier && supplierFiltered)
+                  const checked = isAlwaysVisible || isColumnVisible(id)
 
                   return (
                     <div key={id}>

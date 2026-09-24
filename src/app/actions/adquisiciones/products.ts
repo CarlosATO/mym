@@ -199,6 +199,109 @@ export interface PurchaseOrderProductSearchResult {
   error?: string
 }
 
+export interface PurchaseOrderCatalogProduct {
+  id: string
+  sku: string
+  barcode: string | null
+  description: string
+  unit_of_measure: string | null
+  tax_rate: number
+  bsale_variant_id: number | null
+  last_purchase_unit_cost: number | null
+}
+
+const purchaseOrderCatalogCache = new Map<string, {
+  expiresAt: number
+  promise: Promise<{ data: PurchaseOrderCatalogProduct[]; error?: string }>
+}>()
+
+const PURCHASE_ORDER_CATALOG_TTL_MS = 60_000
+
+export async function getPurchaseOrderProductCatalog(): Promise<{ data: PurchaseOrderCatalogProduct[]; error?: string }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { data: [], error: 'No hay empresa activa.' }
+
+  const now = Date.now()
+  const cached = purchaseOrderCatalogCache.get(companyId)
+  if (cached && cached.expiresAt > now) return cached.promise
+
+  const promise = loadPurchaseOrderProductCatalog(companyId)
+  purchaseOrderCatalogCache.set(companyId, { expiresAt: now + PURCHASE_ORDER_CATALOG_TTL_MS, promise })
+  return promise
+}
+
+async function loadPurchaseOrderProductCatalog(companyId: string): Promise<{ data: PurchaseOrderCatalogProduct[]; error?: string }> {
+  const authRes = await verifyPermission('adquisiciones.products.view')
+  if (authRes.error) return { data: [], error: authRes.error }
+
+  const db = adqAdmin()
+  const products: PurchaseOrderCatalogProduct[] = []
+  const pageSize = 1000
+  for (let page = 0; ; page++) {
+    const { data, error } = await db.from('products')
+      .select('id, sku, barcode, description, unit_of_measure, tax_rate, bsale_variant_id')
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .order('description', { ascending: true, nullsFirst: false })
+      .order('sku', { ascending: true, nullsFirst: false })
+      .range(page * pageSize, (page + 1) * pageSize - 1)
+    if (error) return { data: [], error: error.message }
+    const rows = (data ?? []) as Array<Omit<PurchaseOrderCatalogProduct, 'last_purchase_unit_cost'>>
+    products.push(...rows.map(row => ({ ...row, last_purchase_unit_cost: null })))
+    if (rows.length < pageSize) break
+  }
+
+  const variantIds = Array.from(new Set(products.map(product => product.bsale_variant_id).filter((id): id is number => id !== null)))
+  const costByVariant = new Map<number, { cost: number; admissionTime: number; updatedTime: number; receptionId: number }>()
+  const integrations = db.schema('integraciones')
+  for (let offset = 0; offset < variantIds.length; offset += 500) {
+    const ids = variantIds.slice(offset, offset + 500)
+    const { data: details, error: detailsError } = await integrations.from('bsale_reception_details')
+      .select('variant_id, bsale_reception_id, cost, updated_at')
+      .eq('company_id', companyId)
+      .in('variant_id', ids)
+      .gt('cost', 0)
+    if (detailsError) return { data: [], error: detailsError.message }
+
+    const receptionIds = Array.from(new Set((details ?? []).map(detail => detail.bsale_reception_id).filter(Boolean)))
+    const { data: receptions, error: receptionsError } = receptionIds.length === 0
+      ? { data: [], error: null }
+      : await integrations.from('bsale_receptions')
+        .select('bsale_id, admission_date, document, raw_json')
+        .eq('company_id', companyId)
+        .in('bsale_id', receptionIds)
+    if (receptionsError) return { data: [], error: receptionsError.message }
+
+    const receptionById = new Map((receptions ?? []).map(reception => [reception.bsale_id, reception]))
+    for (const detail of details ?? []) {
+      const reception = receptionById.get(detail.bsale_reception_id)
+      if (!reception || !detail.variant_id || Number(detail.cost) <= 0) continue
+      const cancelled = Number((reception.raw_json as { cancellationStatus?: number } | null)?.cancellationStatus) === 1
+      const document = String(reception.document ?? '').toUpperCase()
+      if (cancelled || document.normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes('NOTA DE CREDITO')) continue
+      const candidate = {
+        cost: Number(detail.cost),
+        admissionTime: reception.admission_date ? Date.parse(reception.admission_date) : 0,
+        updatedTime: detail.updated_at ? Date.parse(detail.updated_at) : 0,
+        receptionId: Number(detail.bsale_reception_id),
+      }
+      const current = costByVariant.get(detail.variant_id)
+      if (!current || candidate.admissionTime > current.admissionTime
+        || (candidate.admissionTime === current.admissionTime && candidate.updatedTime > current.updatedTime)
+        || (candidate.admissionTime === current.admissionTime && candidate.updatedTime === current.updatedTime && candidate.receptionId > current.receptionId)) {
+        costByVariant.set(detail.variant_id, candidate)
+      }
+    }
+  }
+
+  return {
+    data: products.map(product => ({
+      ...product,
+      last_purchase_unit_cost: product.bsale_variant_id === null ? null : costByVariant.get(product.bsale_variant_id)?.cost ?? null,
+    })),
+  }
+}
+
 export async function searchPurchaseOrderProducts({
   real_supplier_id,
   search = '',

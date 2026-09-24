@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx'
-import type { ColumnId } from './replenishment-columns'
+import { ALWAYS_VISIBLE_COLUMNS, FIXED_COLUMNS, type ColumnId } from './replenishment-columns'
 
 // ─── Tipos del exportador V1 (preservados para no romper imports existentes) ─
 
@@ -15,6 +15,7 @@ export interface ReplenishmentExcelRow {
   avgPer7: number
   suggestedQty: number
   confirmedQty: number
+  confirmed: boolean
   unitCost: number
   subtotal: number
   critical: boolean
@@ -261,7 +262,7 @@ function getCellValue(col: ColumnId, row: ReplenishmentExcelRow): string | numbe
     case 'sugerido': return row.suggestedQty
     case 'cantidad': return row.confirmedQty
     case 'monto': return row.subtotal
-    case 'confirmar': return row.confirmedQty > 0 ? 'Sí' : 'No'
+    case 'confirmar': return row.confirmed ? 'Sí' : 'No'
     case 'totalVendido': return row.totalSold
     case 'promedio': return Number(row.avgPer7.toFixed(1))
     case 'costo': return row.unitCost
@@ -293,8 +294,11 @@ function buildContextSheet(opts: ReplenishmentExcelOptionsV2, now: Date): XLSX.W
 function buildDetalleSheetV2(opts: ReplenishmentExcelOptionsV2): XLSX.WorkSheet {
   const { visibleFixedCols, weeksVisible, visibleBucketIndices, bucketLabels, rows } = opts
 
-  // Columnas fijas a exportar (excluir las operacionales y respetar visibilidad)
-  const exportCols = visibleFixedCols.filter(id => !SKIP_COLS.has(id))
+  // Las columnas operativas siempre acompañan la vista exportada.
+  const exportVisibleFixedCols = FIXED_COLUMNS.filter(
+    id => visibleFixedCols.includes(id) || ALWAYS_VISIBLE_COLUMNS.includes(id),
+  )
+  const exportCols = exportVisibleFixedCols.filter(id => !SKIP_COLS.has(id))
 
   // Construir encabezado
   const header: string[] = []
@@ -302,11 +306,11 @@ function buildDetalleSheetV2(opts: ReplenishmentExcelOptionsV2): XLSX.WorkSheet 
     header.push(COL_LABEL[col] ?? col)
   }
   // Agregar columna de Cantidad confirmada si 'cantidad' estaba visible
-  if (visibleFixedCols.includes('cantidad')) header.push('Cantidad confirmada')
+  if (exportVisibleFixedCols.includes('cantidad')) header.push('Cantidad confirmada')
   // Agregar columna de Monto si 'monto' estaba visible
-  if (visibleFixedCols.includes('monto')) header.push('Monto estimado')
+  if (exportVisibleFixedCols.includes('monto')) header.push('Monto estimado')
   // Agregar columna confirmado si 'confirmar' estaba visible
-  if (visibleFixedCols.includes('confirmar')) header.push('Confirmado')
+  if (exportVisibleFixedCols.includes('confirmar')) header.push('Confirmado')
   // Columnas semanales
   if (weeksVisible) {
     for (const bi of visibleBucketIndices) {
@@ -324,9 +328,9 @@ function buildDetalleSheetV2(opts: ReplenishmentExcelOptionsV2): XLSX.WorkSheet 
       row.push(getCellValue(col, r))
     }
     // Columnas skip pero presentes
-    if (visibleFixedCols.includes('cantidad')) row.push(r.confirmedQty)
-    if (visibleFixedCols.includes('monto')) row.push(r.subtotal)
-    if (visibleFixedCols.includes('confirmar')) row.push(r.confirmedQty > 0 ? 'Sí' : 'No')
+    if (exportVisibleFixedCols.includes('cantidad')) row.push(r.confirmedQty)
+    if (exportVisibleFixedCols.includes('monto')) row.push(r.subtotal)
+    if (exportVisibleFixedCols.includes('confirmar')) row.push(r.confirmed ? 'Sí' : 'No')
 
     // Columnas semanales
     if (weeksVisible) {
@@ -346,9 +350,9 @@ function buildDetalleSheetV2(opts: ReplenishmentExcelOptionsV2): XLSX.WorkSheet 
     if (col === 'totalVendido') return rows.reduce((a, r) => a + r.totalSold, 0)
     return ''
   })
-  if (visibleFixedCols.includes('cantidad')) totalRow.push(rows.reduce((a, r) => a + r.confirmedQty, 0))
-  if (visibleFixedCols.includes('monto')) totalRow.push(rows.reduce((a, r) => a + r.subtotal, 0))
-  if (visibleFixedCols.includes('confirmar')) totalRow.push('')
+  if (exportVisibleFixedCols.includes('cantidad')) totalRow.push(rows.reduce((a, r) => a + r.confirmedQty, 0))
+  if (exportVisibleFixedCols.includes('monto')) totalRow.push(rows.reduce((a, r) => a + r.subtotal, 0))
+  if (exportVisibleFixedCols.includes('confirmar')) totalRow.push('')
   if (weeksVisible) {
     for (const bi of visibleBucketIndices) {
       totalRow.push(rows.reduce((a, r) => a + (r.buckets[bi] ?? 0), 0))

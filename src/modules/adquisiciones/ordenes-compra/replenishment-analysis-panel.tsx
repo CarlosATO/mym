@@ -14,6 +14,7 @@ import { NO_SUPPLIER, PRODUCT_FALLBACK, getProductName, getPseudoSupplierName, g
 import { buildBreakSummaryIndex, deriveRows, getBreakSummary, type BreakSummaryIndex, type SkuRow } from './replenishment-derive'
 import {
   ALL_COLUMNS,
+  ALWAYS_VISIBLE_COLUMNS,
   FIXED_COLUMNS,
   VIEWS,
   getBucketSortIdx,
@@ -36,6 +37,8 @@ import { ReplenishmentResultsBar } from './replenishment-results-bar'
 import { ReplenishmentConfigPanel } from './replenishment-config-panel'
 import { ReplenishmentTable } from './replenishment-table'
 import { ReplenishmentAnalyticsSheet } from './replenishment-analytics-sheet'
+import { prefetchPurchaseOrderProductCatalog } from './purchase-order-product-cache'
+import { prefetchPurchaseOrderWarehouses } from './warehouse-cache'
 
 const COMPANY_ID = 'd1000000-0000-0000-0000-000000000001'
 const DEFAULT_PERIOD_IDX = 3
@@ -245,6 +248,14 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
     saveViewPrefs({ view, hidden: Array.from(hiddenColumns) as ColumnId[], historial: historialVisible })
   }, [view, hiddenColumns, historialVisible])
 
+  useEffect(() => {
+    prefetchPurchaseOrderWarehouses()
+  }, [])
+
+  useEffect(() => {
+    if (supplier) prefetchPurchaseOrderProductCatalog()
+  }, [supplier])
+
   // ─── Fetch con caché en memoria por período (y promesas en vuelo) ──────
   const fetchDataset = useCallback((periodDays: number, force = false): Promise<ReplenishmentDataset> => {
     // 1. Revisar caché existente
@@ -417,6 +428,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   }, [])
 
   const toggleColumn = useCallback((id: ColumnId) => {
+    if (ALWAYS_VISIBLE_COLUMNS.includes(id)) return
     if (id === 'semanas') {
       setHistorialVisible(prev => (prev === 'Oculto' ? '4' : 'Oculto'))
     } else {
@@ -599,7 +611,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
         items: res.items,
       }))
       setShowCreateModal(false)
-      onNavigateToPo?.()
+       if (onNavigateToPo) onNavigateToPo()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error inesperado al preparar la OC')
       setPrepareResult(null)
@@ -771,7 +783,10 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   }
 
   // ─── Visibilidad de columnas / historial ─────────────────────────
-  const visibleFixed = useMemo(() => FIXED_COLUMNS.filter(id => !hiddenColumns.has(id)), [hiddenColumns])
+  const visibleFixed = useMemo(
+    () => FIXED_COLUMNS.filter(id => ALWAYS_VISIBLE_COLUMNS.includes(id) || !hiddenColumns.has(id)),
+    [hiddenColumns]
+  )
   const effectiveHistorial = useMemo<HistorialVisible>(() => {
     const opts = getHistorialOptions(numBuckets)
     return opts.some(o => o.id === historialVisible) ? historialVisible : 'Oculto'
@@ -831,6 +846,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
       avgPer7: r.avgPer7,
       suggestedQty: r.suggestedQty,
       confirmedQty: r.confirmedQty,
+      confirmed: confirmedSet.has(r.sku.SKU),
       unitCost: r.sku.costo_unitario,
       subtotal: r.confirmedQty * r.sku.costo_unitario,
       critical,

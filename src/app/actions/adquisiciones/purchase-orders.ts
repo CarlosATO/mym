@@ -222,6 +222,7 @@ export interface CreatePOData {
   authorized_by?: string | null
   notes?: string
   currency?: string
+  status?: 'BORRADOR' | 'EMITIDA'
   items: CreatePOItem[]
 }
 
@@ -245,6 +246,7 @@ export async function createPurchaseOrder(data: CreatePOData) {
       authorized_by: data.authorized_by || null,
       notes: data.notes || null,
       currency: data.currency || 'CLP',
+      status: data.status || 'EMITIDA',
       items: data.items.map(i => ({
         item_type: i.item_type,
         product_id: i.product_id || null,
