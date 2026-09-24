@@ -17,6 +17,7 @@ interface ReplenishmentResultsBarProps {
   selectedCount: number
   onExportVisible: () => void
   onExportSelected: () => void
+  onImportFile: () => void
   onCreate: () => void
   onClearQuantities: () => void
   onNewQuery: () => void
@@ -34,6 +35,7 @@ export function ReplenishmentResultsBar({
   selectedCount,
   onExportVisible,
   onExportSelected,
+  onImportFile,
   onCreate,
   onClearQuantities,
   onNewQuery,
@@ -62,6 +64,15 @@ export function ReplenishmentResultsBar({
             onExportVisible={onExportVisible}
             onExportSelected={onExportSelected}
           />
+
+          <button
+            type="button"
+            id="create-po-from-file-button"
+            onClick={onImportFile}
+            className="flex h-7 items-center gap-1 rounded-md border border-theme-accent/30 px-2.5 text-[11px] font-semibold text-theme-accent transition hover:bg-theme-accent/10"
+          >
+            Crear OC desde archivo
+          </button>
 
           <button
             id="clear-quantities-button"

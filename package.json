@@ -48,6 +48,7 @@
     "test:po-pdf-header": "node --experimental-strip-types --test scripts/test-po-pdf-header.mjs",
     "test:route-guide-pdf": "node --experimental-strip-types --test scripts/test-route-guide-pdf.mjs",
     "test:replenishment-filters": "node --experimental-strip-types --test scripts/test-replenishment-filters.mjs",
+    "test:replenishment-excel-import": "node --experimental-strip-types --test scripts/test-replenishment-excel-import.mjs",
     "test:table-2a-suppliers": "node --experimental-strip-types --test scripts/test-table-2a-suppliers.mjs",
     "test:table-2b-warehouses": "node --experimental-strip-types --test scripts/test-table-2b-warehouses.mjs",
     "test:bsale-product-batches": "node --experimental-strip-types --test scripts/test-bsale-product-batches.mjs",

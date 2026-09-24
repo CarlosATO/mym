@@ -6,12 +6,14 @@ const panelPath = new URL('../src/modules/adquisiciones/ordenes-compra/purchase-
 const actionPath = new URL('../src/app/actions/adquisiciones/purchase-orders.ts', import.meta.url)
 const pagePath = new URL('../src/app/dashboard/adquisiciones/ordenes-compra/page.tsx', import.meta.url)
 const warehouseCachePath = new URL('../src/modules/adquisiciones/ordenes-compra/warehouse-cache.ts', import.meta.url)
-const migrationPath = new URL('../supabase/migrations/20260924140000_validate_purchase_order_prices_on_issue.sql', import.meta.url)
-const [panel, action, page, warehouseCache, migration] = await Promise.all([
+const analysisPath = new URL('../src/modules/adquisiciones/ordenes-compra/replenishment-analysis-panel.tsx', import.meta.url)
+const migrationPath = new URL('../supabase/migrations/20260924184940_validate_purchase_order_prices_on_issue.sql', import.meta.url)
+const [panel, action, page, warehouseCache, analysis, migration] = await Promise.all([
   readFile(panelPath, 'utf8'),
   readFile(actionPath, 'utf8'),
   readFile(pagePath, 'utf8'),
   readFile(warehouseCachePath, 'utf8'),
+  readFile(analysisPath, 'utf8'),
   readFile(migrationPath, 'utf8'),
 ])
 
@@ -131,9 +133,13 @@ test('el handoff de Reposición abre Nueva OC mediante searchParams explícito y
   assert.match(page, /prepareReplenishment=\{prepareReplenishment\}/)
   assert.match(panel, /prepareReplenishment = false/)
   assert.match(panel, /if \(!prepareReplenishment \|\| typeof window === 'undefined'\) return/)
-  assert.match(panel, /setForm\(prev => \(\{ \.\.\.prev, supplier_id: payload\.supplier\.id/)
+  assert.match(panel, /setForm\(prev => \(\{ \.\.\.prev, supplier_id: payload\.supplier\?\.id/)
   assert.match(panel, /setItems\(payload\.items\.map/)
   assert.match(panel, /setView\('form'\)/)
+  assert.match(analysis, /source: 'EXCEL'/)
+  assert.match(analysis, /filter\(row => row\.status === 'VALIDO'/)
+  assert.match(analysis, /sessionStorage\.setItem\(REPLENISHMENT_PO_PREPARATION_KEY/)
+  assert.match(analysis, /unit_price: cost !== null && cost !== undefined/)
 })
 
 test('las bodegas se precargan por empresa, reutilizan caché y solo consultan activas', () => {

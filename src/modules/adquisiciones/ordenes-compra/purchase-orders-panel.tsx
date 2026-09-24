@@ -202,8 +202,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   function newTempId() { tempIdCounter.current += 1; return `ni_${tempIdCounter.current}` }
 
   interface ReplenishmentPreparationPayload {
-    source: 'REPLENISHMENT'
-    supplier: { id: string; name: string }
+    source: 'REPLENISHMENT' | 'EXCEL'
+    supplier?: { id: string; name: string }
     items: Array<{
       product_id: string
       sku: string
@@ -357,13 +357,13 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     const raw = sessionStorage.getItem(REPLENISHMENT_PO_PREPARATION_KEY)
     try {
       const payload = raw ? JSON.parse(raw) as ReplenishmentPreparationPayload : null
-      const valid = payload?.source === 'REPLENISHMENT'
-        && Boolean(payload.supplier?.id && payload.supplier?.name)
+      const valid = (payload?.source === 'REPLENISHMENT' || payload?.source === 'EXCEL')
+        && (payload.source === 'EXCEL' || Boolean(payload.supplier?.id && payload.supplier?.name))
         && Array.isArray(payload.items)
         && payload.items.length > 0
         && payload.items.every(item => Boolean(item.product_id && item.sku && item.product_description)
           && Number.isFinite(item.quantity) && item.quantity > 0
-          && Number.isFinite(item.unit_price) && Number.isFinite(item.reference_unit_cost)
+          && Number.isFinite(item.unit_price) && Number.isFinite(item.reference_unit_cost ?? item.unit_price)
           && Number.isFinite(item.discount_percent) && Number.isFinite(item.tax_rate))
       if (!valid) {
         msg('La preparación de la orden de compra ya no está disponible.')
@@ -371,9 +371,9 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       }
 
       sessionStorage.removeItem(REPLENISHMENT_PO_PREPARATION_KEY)
-      setForm(prev => ({ ...prev, supplier_id: payload.supplier.id, po_type: 'PRODUCTOS', currency: 'CLP' }))
-      setReplenishmentSupplierName(payload.supplier.name)
-      setIsReplenishmentPreparation(true)
+      setForm(prev => ({ ...prev, supplier_id: payload.supplier?.id ?? '', po_type: 'PRODUCTOS', currency: 'CLP' }))
+      setReplenishmentSupplierName(payload.supplier?.name ?? '')
+      setIsReplenishmentPreparation(payload.source === 'REPLENISHMENT')
       setItems(payload.items.map(item => ({
         tempId: newTempId(),
         item_type: 'PRODUCT' as const,
@@ -383,7 +383,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         unit: item.unit || 'UNIDAD',
         quantity: item.quantity,
         unit_price: item.unit_price,
-        reference_unit_cost: item.reference_unit_cost,
+        reference_unit_cost: item.reference_unit_cost ?? item.unit_price,
         discount_percent: item.discount_percent ?? 0,
         tax_rate: item.tax_rate,
         warehouse_id: '',
