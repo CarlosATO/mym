@@ -40,13 +40,6 @@ export interface ReplenishmentMetrics {
   isSalesIdentityResolved: boolean
 }
 
-export interface DailySalesPoint {
-  date: string
-  units: number
-}
-
-export type DailySalesIndex = Map<string, DailySalesPoint[]>
-
 export type BreakSummaryIndex = Map<number, BreakSummary60d>
 
 export interface ReplenishmentTimelineDay {
@@ -187,41 +180,6 @@ export function getBreakSummary(index: BreakSummaryIndex, variantId: number | nu
     stockoutRanges: [],
     lastBreakDate: null,
   }
-}
-
-export function buildDailySalesIndex(
-  dataset: ReplenishmentDataset,
-  days = 60,
-): DailySalesIndex {
-  const dateTo = new Date(dataset.dateTo + 'T00:00:00Z')
-  const startDate = new Date(dateTo)
-  startDate.setUTCDate(startDate.getUTCDate() - (days - 1))
-  const endDateExclusive = new Date(dateTo)
-  endDateExclusive.setUTCDate(endDateExclusive.getUTCDate() + 1)
-
-  const grouped = new Map<string, Map<string, number>>()
-  for (const sale of dataset.sales) {
-    const date = sale.fechaStr || sale.fecha.toISOString().split('T')[0]
-    const saleDate = new Date(date + 'T00:00:00Z')
-    if (saleDate < startDate || saleDate >= endDateExclusive) continue
-
-    const units = Number(sale.cantidad) || 0
-    if (units === 0) continue
-
-    if (!grouped.has(sale.SKU)) grouped.set(sale.SKU, new Map())
-    const byDate = grouped.get(sale.SKU)!
-    byDate.set(date, (byDate.get(date) || 0) + units)
-  }
-
-  return new Map(
-    [...grouped.entries()].map(([sku, byDate]) => [
-      sku,
-      [...byDate.entries()]
-        .filter(([, units]) => units !== 0)
-        .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
-        .map(([date, units]) => ({ date, units })),
-    ]),
-  )
 }
 
 function isoDate(date: Date) {

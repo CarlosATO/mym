@@ -11,7 +11,7 @@ import { prepareReplenishmentPurchaseOrder, type PrepareReplenishmentPurchaseOrd
 import { downloadReplenishmentExcelV2, type ReplenishmentExcelRow } from '@/modules/adquisiciones/ordenes-compra/replenishment-excel'
 import { fmt, fmtN } from './replenishment-format'
 import { NO_SUPPLIER, PRODUCT_FALLBACK, getProductName, getPseudoSupplierName, getRealSupplierName } from './replenishment-names'
-import { buildBreakSummaryIndex, buildDailySalesIndex, deriveRows, getBreakSummary, type BreakSummaryIndex, type DailySalesIndex, type SkuRow } from './replenishment-derive'
+import { buildBreakSummaryIndex, deriveRows, getBreakSummary, type BreakSummaryIndex, type SkuRow } from './replenishment-derive'
 import {
   ALL_COLUMNS,
   FIXED_COLUMNS,
@@ -202,11 +202,6 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
     return suitable
   }, [])
 
-  const dailySalesBySku: DailySalesIndex = useMemo(
-    () => activeDataset ? buildDailySalesIndex(activeDataset, INITIAL_DATASET_DAYS) : new Map(),
-    [activeDataset],
-  )
-  void dailySalesBySku
   const breakSummaryByVariantId: BreakSummaryIndex = useMemo(
     () => activeDataset ? buildBreakSummaryIndex(activeDataset) : new Map(),
     [activeDataset],
@@ -1000,9 +995,6 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
               onResizeCommit={updateColWidth}
                bucketColWidth={bucketColWidth}
                onResizeBucketCommit={updateBucketColWidth}
-                dailySalesBySku={dailySalesBySku}
-                breakSummaryByVariantId={breakSummaryByVariantId}
-               dailySalesDateTo={activeDataset?.dateTo ?? ''}
                sortConfig={sortConfig}
               onSort={handleSort}
               confirmedSet={confirmedSet}

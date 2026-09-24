@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useMemo } from 'react'
 import { ChevronDown, ChevronUp, ChevronsUpDown, Info } from 'lucide-react'
 import { fmtN } from './replenishment-format'
 import { PRODUCT_FALLBACK, getProductName, getRealSupplierName, getPseudoSupplierName } from './replenishment-names'
@@ -14,9 +14,7 @@ import {
   type SortKey,
   type WidthKey,
 } from './replenishment-columns'
-import { getBreakSummary, type BreakSummaryIndex, type SkuRow } from './replenishment-derive'
-import type { DailySalesIndex } from './replenishment-derive'
-import { ReplenishmentSalesHoverChart } from './replenishment-sales-hover-chart'
+import type { SkuRow } from './replenishment-derive'
 
 // ─── Constantes de estilo — imagen 2: limpio, elegante, sin ruido ─────────────
 
@@ -50,9 +48,6 @@ const groupThBase = [
 const stickyCellBase = 'sticky z-[40] border-b border-theme-border/40 px-3 py-2 text-[11px]'
 const tdBase = 'border-b border-theme-border/40 px-3 py-2 text-[11px] tabular-nums'
 const ALIGN: Record<string, string> = { left: 'text-left', center: 'text-center', right: 'text-right' }
-const SALES_HOVER_COLUMNS: ColumnId[] = ['sku', 'product', 'line']
-const SALES_HOVER_MARKER = '[data-replenishment-sales-hover="true"]'
-
 // ─── Status sin badges de color — texto sobrio con dot indicador ───────────────
 
 interface StatusInfo {
@@ -149,9 +144,6 @@ interface ReplenishmentTableProps {
   onResizeCommit: (key: WidthKey, width: number) => void
   bucketColWidth: number
   onResizeBucketCommit: (width: number) => void
-  dailySalesBySku: DailySalesIndex
-  breakSummaryByVariantId: BreakSummaryIndex
-  dailySalesDateTo: string
   sortConfig: SortConfig | null
   onSort: (key: SortKey) => void
   confirmedSet: Set<string>
@@ -176,9 +168,6 @@ export function ReplenishmentTable({
   onResizeCommit,
   bucketColWidth,
   onResizeBucketCommit,
-  dailySalesBySku,
-  breakSummaryByVariantId,
-  dailySalesDateTo,
   sortConfig,
   onSort,
   confirmedSet,
@@ -190,88 +179,6 @@ export function ReplenishmentTable({
   hoveredRowSku,
   onRowHover,
 }: ReplenishmentTableProps) {
-  const [salesChart, setSalesChart] = useState<{ sku: string; top: number; left: number; anchorX: number; anchorY: number } | null>(null)
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const salesChartRef = useRef<HTMLDivElement | null>(null)
-  const lastPointerRef = useRef({ x: 0, y: 0 })
-
-  const clearHoverTimer = () => {
-    if (hoverTimer.current) {
-      clearTimeout(hoverTimer.current)
-      hoverTimer.current = null
-    }
-  }
-
-  const scheduleCloseSalesChart = () => {
-    clearHoverTimer()
-    hoverTimer.current = setTimeout(() => {
-      setSalesChart(null)
-      hoverTimer.current = null
-    }, 120)
-  }
-
-  useEffect(() => {
-    return () => {
-      if (hoverTimer.current) clearTimeout(hoverTimer.current)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!salesChart) return
-    const close = () => setSalesChart(null)
-    window.addEventListener('scroll', close, true)
-    window.addEventListener('resize', close)
-    return () => {
-      window.removeEventListener('scroll', close, true)
-      window.removeEventListener('resize', close)
-    }
-  }, [salesChart])
-
-  useLayoutEffect(() => {
-    if (!salesChart || !salesChartRef.current) return
-    const { width, height } = salesChartRef.current.getBoundingClientRect()
-    const { anchorX: x, anchorY: y } = salesChart
-    const gap = 12
-    const viewportPadding = 12
-    const left = Math.max(viewportPadding, Math.min(x - width / 2, window.innerWidth - width - viewportPadding))
-    const top = y - height - gap >= viewportPadding
-      ? y - height - gap
-      : Math.min(y + gap, window.innerHeight - height - viewportPadding)
-    if (Math.abs(salesChart.left - left) > 1 || Math.abs(salesChart.top - top) > 1) {
-      setSalesChart(current => current ? { ...current, left, top } : null)
-    }
-  }, [salesChart])
-
-  const scheduleSalesChart = (event: React.MouseEvent<HTMLElement>, sku: string) => {
-    clearHoverTimer()
-    lastPointerRef.current = { x: event.clientX, y: event.clientY }
-    hoverTimer.current = setTimeout(() => {
-      const width = Math.min(360, window.innerWidth - 24)
-      const estimatedHeight = 290
-      const { x, y } = lastPointerRef.current
-      const left = Math.max(12, Math.min(x - width / 2, window.innerWidth - width - 12))
-      const top = y - estimatedHeight - 12 >= 12
-        ? y - estimatedHeight - 12
-        : Math.min(y + 12, window.innerHeight - estimatedHeight - 12)
-      setSalesChart({ sku, top, left, anchorX: x, anchorY: y })
-      hoverTimer.current = null
-    }, 180)
-  }
-
-  const handleSalesCellLeave = (event: React.MouseEvent<HTMLTableCellElement>) => {
-    const next = event.relatedTarget
-    if (next instanceof Element && next.closest(SALES_HOVER_MARKER)) {
-      scheduleCloseSalesChart()
-      return
-    }
-    if (next instanceof Node && salesChartRef.current?.contains(next)) {
-      clearHoverTimer()
-      return
-    }
-    clearHoverTimer()
-    setSalesChart(null)
-  }
-
   // Offsets sticky
   const stickyLeft = useMemo(() => {
     const map: Record<string, number> = {}
@@ -365,17 +272,6 @@ export function ReplenishmentTable({
       ? 'border-r border-theme-border/50 shadow-[1px_0_0_0_rgba(0,0,0,0.04)]'
       : ''
 
-    const salesHoverHandlers = SALES_HOVER_COLUMNS.includes(id)
-      ? {
-          'data-replenishment-sales-hover': 'true',
-          onMouseEnter: (event: React.MouseEvent<HTMLTableCellElement>) => scheduleSalesChart(event, s.SKU),
-          onMouseMove: (event: React.MouseEvent<HTMLTableCellElement>) => {
-            lastPointerRef.current = { x: event.clientX, y: event.clientY }
-          },
-          onMouseLeave: handleSalesCellLeave,
-        }
-      : {}
-
     switch (id) {
       case 'index':
         return (
@@ -389,8 +285,7 @@ export function ReplenishmentTable({
         return (
           <td key={id}
             className={`${stickyCellBase} ${cellBg} font-mono text-[11px] font-semibold text-theme-accent`}
-            style={{ left: stickyLeft[id], width: w, minWidth: w, maxWidth: w }}
-            {...salesHoverHandlers}>
+            style={{ left: stickyLeft[id], width: w, minWidth: w, maxWidth: w }}>
             <div className="truncate">{s.SKU}</div>
           </td>
         )
@@ -399,8 +294,7 @@ export function ReplenishmentTable({
           <td key={id}
             className={`${stickyCellBase} ${cellBg} ${stickyBorder} ${unresolved ? 'text-amber-600 dark:text-amber-400' : 'text-theme-text'} font-medium`}
             style={{ left: stickyLeft[id], width: w, minWidth: w, maxWidth: w }}
-            title={productName}
-            {...salesHoverHandlers}>
+            title={productName}>
             <div className="truncate text-[11px]">{productName}</div>
           </td>
         )
@@ -427,8 +321,7 @@ export function ReplenishmentTable({
           <td key={id}
             className={`${tdBase} ${cellBg} ${align} text-theme-text-muted`}
             style={{ width: w, minWidth: w, maxWidth: w }}
-            title={pseudoSupplierName}
-            {...salesHoverHandlers}>
+            title={pseudoSupplierName}>
             <div className="truncate">{pseudoSupplierName}</div>
           </td>
         )
@@ -661,27 +554,6 @@ export function ReplenishmentTable({
           </tbody>
         </table>
       </div>
-      {salesChart && dailySalesDateTo && (() => {
-        const chartRow = rows.find(row => row.sku.SKU === salesChart.sku)
-        if (!chartRow) return null
-        return (
-          <div
-            ref={salesChartRef}
-            className="fixed z-[120]"
-            style={{ top: salesChart.top, left: salesChart.left }}
-            onMouseEnter={clearHoverTimer}
-          >
-            <ReplenishmentSalesHoverChart
-              productName={getProductName(chartRow.sku)}
-              sku={chartRow.sku.SKU}
-              sparseSeries={dailySalesBySku.get(chartRow.sku.SKU)}
-              dateTo={dailySalesDateTo}
-              metrics={chartRow.metrics}
-              breakSummary={getBreakSummary(breakSummaryByVariantId, chartRow.variantId)}
-            />
-          </div>
-        )
-      })()}
     </div>
   )
 }
