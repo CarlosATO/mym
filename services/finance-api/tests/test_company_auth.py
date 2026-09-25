@@ -6,6 +6,7 @@ from pydantic import SecretStr
 
 from app.core.config import Settings
 from app.main import app
+from app.api.routes import financial
 from app.security import auth, company
 
 client = TestClient(app)
@@ -193,3 +194,45 @@ def test_company_permission_returns_503_on_technical_failure(monkeypatch) -> Non
 
     assert error.value.status_code == 503
     assert error.value.detail == "Company permission verification unavailable"
+
+
+def test_financial_sales_requires_authentication() -> None:
+    response = client.get(
+        "/financial/income-statement/sales-net?year=2026",
+        headers={"X-Company-Id": COMPANY_ID},
+    )
+
+    assert response.status_code == 401
+
+
+def test_financial_sales_uses_control_finance_permission(monkeypatch) -> None:
+    session = FakeSession(allowed=True)
+    context = company.AuthorizedCompanyContext(
+        user_id="user-123",
+        company_id=UUID(COMPANY_ID),
+    )
+    monkeypatch.setattr(company, "get_settings", lambda: _settings())
+    monkeypatch.setattr(company, "get_session_factory", lambda dsn: lambda: session)
+    monkeypatch.setattr(
+        financial,
+        "get_monthly_net_sales",
+        lambda company_id, year: {
+            "company_id": str(company_id),
+            "year": year,
+            "currency": "CLP",
+            "months": [],
+            "total_ytd": "0.00",
+        },
+    )
+    app.dependency_overrides[company.get_authorized_company_context] = lambda: context
+
+    try:
+        response = client.get(
+            "/financial/income-statement/sales-net?year=2026",
+            headers={"X-Company-Id": COMPANY_ID},
+        )
+    finally:
+        app.dependency_overrides.pop(company.get_authorized_company_context, None)
+
+    assert response.status_code == 200
+    assert session.parameters["permission_code"] == financial.CONTROL_FINANCE_VIEW

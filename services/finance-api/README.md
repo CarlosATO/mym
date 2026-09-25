@@ -44,6 +44,16 @@ LOG_LEVEL=INFO
 
 Los valores pueden sobrescribirse mediante variables de entorno sin añadir secretos al repositorio.
 
+## Integración con PetGroup
+
+El servidor Next.js consume el endpoint financiero mediante la variable server-side:
+
+```text
+FINANCE_API_BASE_URL=https://<finance-api-host>
+```
+
+No debe utilizarse el prefijo `NEXT_PUBLIC_`: la URL se resuelve en el servidor y la sesión Supabase existente se reenvía como Bearer token.
+
 ## Health checks
 
 ```text
