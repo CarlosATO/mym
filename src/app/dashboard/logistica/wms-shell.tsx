@@ -1,7 +1,8 @@
 'use client'
 
 import { ModuleShell } from '@/components/layout/module-shell'
-import { wmsNavigation } from './wms-navigation'
+import { getWmsNavigation } from './wms-navigation'
+import { usePathname } from 'next/navigation'
 
 interface WmsShellProps {
   children: React.ReactNode
@@ -13,10 +14,13 @@ interface WmsShellProps {
 }
 
 export function WmsShell({ children, profile, permissions, pageTitle, breadcrumb, compactSurface = false }: WmsShellProps) {
+  const pathname = usePathname()
+  const isMermasContext = pathname.startsWith('/dashboard/logistica/mermas')
+
   return (
     <ModuleShell
-      identity={{ id: 'logistica', label: 'WMS', subtitle: 'Gestión de Bodega' }}
-      navigation={wmsNavigation}
+      identity={isMermasContext ? { id: 'mermas', label: 'MERMAS' } : { id: 'logistica', label: 'WMS', subtitle: 'Gestión de Bodega' }}
+      navigation={getWmsNavigation(pathname)}
       profile={profile}
       permissions={permissions}
       pageTitle={pageTitle}

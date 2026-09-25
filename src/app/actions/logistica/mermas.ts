@@ -3238,3 +3238,214 @@ export async function cancelMermaRequest(
 export async function getActiveMermasCompanyId() {
   return getActiveCompanyId();
 }
+
+export type WorkerMonthlyMovement = {
+  type: "CHARGE" | "ADJUSTMENT" | "PAYMENT" | "PAYMENT_VOID";
+  source_type: string;
+  reference_number: string | null;
+  date: string;
+  amount: number;
+  balance_effect: number;
+  charge_id: string | null;
+  payment_id: string | null;
+  items: Array<{
+    sku?: string | null;
+    product_name: string | null;
+    quantity: number | null;
+  }>;
+};
+
+export type WorkerMonthlyReport = {
+  period: { year: number; month: number; timezone: string; start: string; end: string };
+  summary: {
+    opening_balance: number;
+    merma_charges: number;
+    bsale_charges: number;
+    adjustments: number;
+    payments: number;
+    voided_payments: number;
+    closing_balance: number;
+    worker_count: number;
+    workers_with_closing_debt: number;
+  };
+  workers: Array<{
+    employee_id: string;
+    name: string;
+    rut: string;
+    opening_balance: number;
+    merma_charges: number;
+    bsale_charges: number;
+    adjustments: number;
+    payments: number;
+    voided_payments: number;
+    closing_balance: number;
+    movement_count: number;
+    has_activity: boolean;
+    movements: WorkerMonthlyMovement[];
+  }>;
+};
+
+export type MermasAnalytics = {
+  from: string;
+  to: string;
+  totals: {
+    cost: number;
+    units: number;
+    products: number;
+    uncosted_lines: number;
+    uncosted_units: number;
+    previous_cost: number;
+    cost_variation: number | null;
+  };
+  monthly: Array<{ month: string; cost: number; units: number }>;
+  products: Array<{ sku: string; name: string; units: number; cost: number }>;
+};
+
+function santiagoCivilDate(value: string | null) {
+  if (!value) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Santiago",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(value));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+export async function getWorkerMonthlyAccountReport(year: number, month: number): Promise<{ data: WorkerMonthlyReport | null; error?: string }> {
+  try {
+    const authorization = await requireWmsPermission("logistica.mermas.account.view");
+    const { data, error } = await db("mermas").rpc("get_worker_monthly_account_report", {
+      p_company_id: authorization.companyId,
+      p_user_id: authorization.user.id,
+      p_year: year,
+      p_month: month,
+    });
+    if (error) return { data: null, error: error.message };
+    const report = data as WorkerMonthlyReport;
+    return {
+      data: {
+        ...report,
+        summary: Object.fromEntries(Object.entries(report.summary).map(([key, value]) => [key, typeof value === "number" ? value : Number(value)])) as WorkerMonthlyReport["summary"],
+        workers: report.workers.map((worker) => ({
+          ...worker,
+          opening_balance: Number(worker.opening_balance),
+          merma_charges: Number(worker.merma_charges),
+          bsale_charges: Number(worker.bsale_charges),
+          adjustments: Number(worker.adjustments),
+          payments: Number(worker.payments),
+          voided_payments: Number(worker.voided_payments),
+          closing_balance: Number(worker.closing_balance),
+          movement_count: Number(worker.movement_count),
+          movements: worker.movements.map((movement) => ({
+            ...movement,
+            amount: Number(movement.amount),
+            balance_effect: Number(movement.balance_effect),
+          })),
+        })),
+      },
+    };
+  } catch (error) {
+    return { data: null, error: error instanceof Error ? error.message : "No se pudo cargar el reporte mensual." };
+  }
+}
+
+export async function getMermasAnalytics(from: string, to: string): Promise<{ data: MermasAnalytics | null; error?: string }> {
+  try {
+    const authorization = await requireWmsPermission("logistica.mermas.view");
+    const start = new Date(`${from}T00:00:00Z`);
+    const end = new Date(`${addCivilDays(to, 1)}T00:00:00Z`);
+    const periodDays = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000));
+    const previousTo = addCivilDays(from, -1);
+    const previousFrom = addCivilDays(previousTo, -(periodDays - 1));
+    const database = db("mermas");
+    const { data: consumptions, error: consumptionError } = await database
+      .from("bsale_consumptions")
+      .select("consumption_id, consumption_date, consumption_type_id")
+      .eq("company_id", authorization.companyId)
+      .eq("consumption_type_id", 2)
+      .gte("consumption_date", `${previousFrom}T00:00:00Z`)
+      .lt("consumption_date", `${addCivilDays(to, 2)}T00:00:00Z`);
+    if (consumptionError) return { data: null, error: "No se pudo cargar la analítica de Mermas." };
+
+    const selectedConsumptions = (consumptions ?? []).filter((row) => {
+      const date = santiagoCivilDate(row.consumption_date);
+      return date !== null && date >= previousFrom && date <= to;
+    });
+    const consumptionIds = selectedConsumptions.map((row) => Number(row.consumption_id));
+    const { data: details, error: detailsError } = consumptionIds.length
+      ? await database.from("bsale_consumption_details").select("consumption_id, variant_id, quantity, cost").eq("company_id", authorization.companyId).in("consumption_id", consumptionIds)
+      : { data: [], error: null };
+    if (detailsError) return { data: null, error: "No se pudieron cargar los costos históricos de Mermas." };
+
+    const variantIds = [...new Set((details ?? []).map((detail) => Number(detail.variant_id)))];
+    const { data: products } = variantIds.length
+      ? await db("adquisiciones").from("products").select("bsale_variant_id, sku, description").eq("company_id", authorization.companyId).eq("is_active", true).eq("status", "ACTIVE").in("bsale_variant_id", variantIds)
+      : { data: [] as { bsale_variant_id: number; sku: string | null; description: string | null }[] };
+    const productMap = new Map((products ?? []).map((product) => [Number(product.bsale_variant_id), product]));
+    const consumptionDateMap = new Map(selectedConsumptions.map((row) => [Number(row.consumption_id), santiagoCivilDate(row.consumption_date)]));
+    const currentProducts = new Map<number, { units: number; cost: number }>();
+    const monthly = new Map<string, { cost: number; units: number }>();
+    let currentCost = 0;
+    let currentUnits = 0;
+    let previousCost = 0;
+    let uncostedLines = 0;
+    let uncostedUnits = 0;
+    for (const detail of details ?? []) {
+      const quantity = Number(detail.quantity) || 0;
+      const cost = detail.cost === null || detail.cost === undefined ? null : Number(detail.cost);
+      const date = consumptionDateMap.get(Number(detail.consumption_id));
+      if (!date) continue;
+      const isCurrent = date >= from && date <= to;
+      if (cost === null || !Number.isFinite(cost)) {
+        if (isCurrent) {
+          uncostedLines += 1;
+          uncostedUnits += quantity;
+        }
+        continue;
+      }
+      const lineCost = quantity * cost;
+      if (!isCurrent) {
+        previousCost += lineCost;
+        continue;
+      }
+      currentUnits += quantity;
+      currentCost += lineCost;
+      const month = date.slice(0, 7);
+      const monthValue = monthly.get(month) ?? { cost: 0, units: 0 };
+      monthValue.cost += lineCost;
+      monthValue.units += quantity;
+      monthly.set(month, monthValue);
+      const product = currentProducts.get(Number(detail.variant_id)) ?? { units: 0, cost: 0 };
+      product.units += quantity;
+      product.cost += lineCost;
+      currentProducts.set(Number(detail.variant_id), product);
+    }
+    return {
+      data: {
+        from,
+        to,
+        totals: {
+          cost: currentCost,
+          units: currentUnits,
+          products: currentProducts.size,
+          uncosted_lines: uncostedLines,
+          uncosted_units: uncostedUnits,
+          previous_cost: previousCost,
+          cost_variation: previousCost === 0 ? null : ((currentCost - previousCost) / previousCost) * 100,
+        },
+        monthly: [...monthly.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([month, value]) => ({ month, ...value })),
+        products: [...currentProducts.entries()]
+          .map(([variantId, value]) => ({
+            sku: productMap.get(variantId)?.sku ?? `BS-${variantId}`,
+            name: productMap.get(variantId)?.description ?? "Producto Bsale",
+            ...value,
+          }))
+          .sort((a, b) => b.cost - a.cost),
+      },
+    };
+  } catch (error) {
+    return { data: null, error: error instanceof Error ? error.message : "No se pudo cargar la analítica de Mermas." };
+  }
+}

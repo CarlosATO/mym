@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import {
   CheckCircle2,
   Loader2,
@@ -520,13 +519,7 @@ export function InternalSalePanel() {
     <div className="min-h-[calc(100vh-7.5rem)] bg-theme-bg p-3 sm:p-5">
       <header className="mb-4 flex flex-col gap-3 rounded-2xl border border-theme-border bg-theme-surface px-4 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:px-5">
         <div>
-          <Link
-            href="/dashboard/logistica/mermas"
-            className="text-xs font-semibold text-theme-text-accent hover:underline"
-          >
-            ← Volver a Mermas
-          </Link>
-          <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.22em] text-theme-accent">
+          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-theme-accent">
             Mermas · Punto de venta
           </p>
           <h1 className="mt-1 text-xl font-bold tracking-tight text-theme-text">
