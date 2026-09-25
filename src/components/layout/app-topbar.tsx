@@ -57,6 +57,8 @@ export function AppTopbar({ profile, activeCompany, permissions, moduleName }: A
   // Nombre de ubicación: prop tiene prioridad, si no se auto-detecta desde la ruta
   const locationName = moduleName ?? getLocationName(pathname)
   const isAnalysisCommercialSurface = pathname.startsWith('/dashboard/analisis-comercial')
+  const isAdquisicionesSurface = pathname.startsWith('/dashboard/adquisiciones')
+  const usesExecutiveTheme = isAnalysisCommercialSurface || isAdquisicionesSurface
   const isFinancialSurface = pathname.startsWith('/dashboard/analisis-comercial/control-financiero')
   const visibleCompanyName = isFinancialSurface ? getFinancialCompanyDisplayName(activeCompany) : (activeCompany.trade_name || activeCompany.business_name)
 
@@ -64,8 +66,8 @@ export function AppTopbar({ profile, activeCompany, permissions, moduleName }: A
     // Fondo siempre idéntico — sin importar si estamos en portal o en módulo ERP
     <header className={cn(
       'fixed top-0 left-0 right-0 z-30 h-12 border-b backdrop-blur-md shadow-sm',
-      isAnalysisCommercialSurface ? 'border-[#D1C7BD] bg-[#EFE9E1]/95' : 'border-theme-border/50 bg-theme-surface/90',
-    )} style={isAnalysisCommercialSurface ? financialThemeStyle : undefined}>
+      usesExecutiveTheme ? 'border-[#D1C7BD] bg-[#EFE9E1]/95' : 'border-theme-border/50 bg-theme-surface/90',
+    )} style={usesExecutiveTheme ? financialThemeStyle : undefined}>
       <div className="h-full max-w-7xl mx-auto px-4 lg:px-6 flex items-center justify-between gap-4">
 
         {/* ── Izquierda: logo empresa (fijo) + separador + nombre de ubicación ── */}
@@ -92,7 +94,7 @@ export function AppTopbar({ profile, activeCompany, permissions, moduleName }: A
           <div className="w-px h-4 bg-theme-border/70 shrink-0" />
 
           {/* Nombre de ubicación — siempre visible, más grande y destacado */}
-          <span className={cn('text-sm font-semibold truncate max-w-[200px]', isAnalysisCommercialSurface ? 'text-[#322D29]' : 'text-theme-text')}>
+          <span className={cn('text-sm font-semibold truncate max-w-[200px]', usesExecutiveTheme ? 'text-[#322D29]' : 'text-theme-text')}>
             {locationName}
           </span>
 

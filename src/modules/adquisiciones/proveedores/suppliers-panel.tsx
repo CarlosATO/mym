@@ -375,173 +375,176 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
 
   if (showForm) {
     return (
-      <div className="flex flex-col h-full overflow-hidden bg-theme-surface animate-in fade-in zoom-in-95 duration-200">
+      <div className="flex h-full flex-col overflow-hidden bg-[#EFE9E1] animate-in fade-in zoom-in-95 duration-200">
         <form onSubmit={handleSubmit} className="flex-1 overflow-auto">
-          <div className="px-6 py-4 border-b border-theme-border bg-theme-text/5 flex items-center justify-between sticky top-0 z-10">
-            <div className="flex items-center gap-4">
-              <button type="button" onClick={() => { setShowForm(false); resetForm() }} className="p-2 rounded-lg hover:bg-theme-text/10 text-theme-text-muted transition-colors">
-                <ArrowLeft className="w-5 h-5" />
+          <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-[#AC9C8D]/35 bg-[#322D29] px-4 py-2 sm:px-6">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <button type="button" onClick={() => { setShowForm(false); resetForm() }} className="rounded-md p-1.5 text-[#D1C7BD] transition-colors hover:bg-white/10 hover:text-[#EFE9E1]">
+                <ArrowLeft className="h-4 w-4" />
               </button>
-              <h2 className="text-lg font-bold text-theme-text">{editId ? 'Editar Proveedor Real' : 'Nuevo Proveedor Real'}</h2>
+              <div className="min-w-0">
+                <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-[#AC9C8D]">Proveedores</p>
+                <h2 className="truncate text-sm font-bold uppercase tracking-wide text-[#EFE9E1]">{editId ? 'Editar proveedor real' : 'Nuevo proveedor real'}</h2>
+              </div>
             </div>
-            <div className="flex gap-3">
-              <button type="button" onClick={() => { setShowForm(false); resetForm() }} className="px-4 py-2 rounded-xl border border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/10 text-sm font-semibold transition-colors">
+            <div className="flex w-full flex-wrap gap-1.5 sm:w-auto">
+              <button type="button" onClick={() => { setShowForm(false); resetForm() }} className="flex-1 rounded-md px-3 py-1.5 text-xs font-semibold text-[#D1C7BD] transition-colors hover:bg-white/10 hover:text-[#EFE9E1] sm:flex-none">
                 Cancelar
               </button>
-              <button type="submit" className="px-5 py-2 rounded-xl bg-theme-accent hover:bg-theme-accent-hover text-white text-sm font-bold transition-colors shadow-lg shadow-theme-accent/20">
+              <button type="submit" className="flex-1 rounded-md bg-[#72383D] px-4 py-1.5 text-xs font-bold text-[#EFE9E1] transition-colors hover:bg-[#5D2E32] sm:flex-none">
                 Guardar Proveedor
               </button>
             </div>
           </div>
-          <div className="p-6 lg:p-8">
-            <div className="max-w-7xl mx-auto space-y-10">
+          <div className="px-4 py-4 sm:px-6 sm:py-5">
+            <div className="mx-auto max-w-7xl space-y-5">
               
-              <div className="space-y-6">
-                <div className="border-b border-theme-border pb-4">
-                  <h3 className="text-base font-bold text-theme-text">Datos Legales y Comerciales</h3>
-                  <p className="text-xs text-theme-text-muted mt-1">Información principal del proveedor real.</p>
+              <div className="border-b border-[#D1C7BD] pb-4">
+                <div className="mb-3 border-b border-[#D1C7BD] pb-2">
+                  <h3 className="text-sm font-bold uppercase tracking-wide text-[#322D29]">Datos legales y comerciales</h3>
+                  <p className="mt-0.5 text-[10px] text-[#AC9C8D]">Información principal del proveedor real.</p>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-5">
+                <div className="grid grid-cols-1 gap-x-4 gap-y-2.5 md:grid-cols-2 xl:grid-cols-4">
                   <div className="space-y-1">
-                    <label className="text-xs text-theme-text-muted/60">RUT</label>
+                    <label className="text-[10px] font-semibold text-[#6D625B]">RUT</label>
                     <input type="text" value={form.rut} onChange={e => setForm(p => ({ ...p, rut: e.target.value }))}
                       disabled={!!editId}
-                      className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text disabled:text-theme-text-muted/50 focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                      className="h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] disabled:cursor-not-allowed disabled:bg-[#D1C7BD]/35 disabled:text-[#AC9C8D] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-xs text-theme-text-muted/60">Razón social *</label>
+                    <label className="text-[10px] font-semibold text-[#6D625B]">Razón social *</label>
                     <input type="text" value={form.business_name} onChange={e => setForm(p => ({ ...p, business_name: e.target.value }))} required
-                      className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                      className="h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-xs text-theme-text-muted/60">Nombre fantasía</label>
+                    <label className="text-[10px] font-semibold text-[#6D625B]">Nombre fantasía</label>
                     <input type="text" value={form.fantasy_name} onChange={e => setForm(p => ({ ...p, fantasy_name: e.target.value }))}
-                      className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                      className="h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-xs text-theme-text-muted/60">Giro</label>
+                    <label className="text-[10px] font-semibold text-[#6D625B]">Giro</label>
                     <input type="text" value={form.business_activity} onChange={e => setForm(p => ({ ...p, business_activity: e.target.value }))}
-                      className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                      className="h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-xs text-theme-text-muted/60">Contacto</label>
+                    <label className="text-[10px] font-semibold text-[#6D625B]">Contacto</label>
                     <input type="text" value={form.contact_name} onChange={e => setForm(p => ({ ...p, contact_name: e.target.value }))}
-                      className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                      className="h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-xs text-theme-text-muted/60">Correo</label>
+                    <label className="text-[10px] font-semibold text-[#6D625B]">Correo</label>
                     <input type="email" value={form.contact_email} onChange={e => setForm(p => ({ ...p, contact_email: e.target.value }))}
-                      className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                      className="h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-xs text-theme-text-muted/60">Teléfono</label>
+                    <label className="text-[10px] font-semibold text-[#6D625B]">Teléfono</label>
                     <input type="text" value={form.contact_phone} onChange={e => setForm(p => ({ ...p, contact_phone: e.target.value }))}
-                      className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                      className="h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-xs text-theme-text-muted/60">Condición de pago</label>
+                    <label className="text-[10px] font-semibold text-[#6D625B]">Condición de pago</label>
                     <input type="text" value={form.payment_terms} onChange={e => setForm(p => ({ ...p, payment_terms: e.target.value }))}
-                      className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                      className="h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-xs text-theme-text-muted/60">Días crédito</label>
+                    <label className="text-[10px] font-semibold text-[#6D625B]">Días crédito</label>
                     <input type="number" min="0" value={form.credit_days} onChange={e => setForm(p => ({ ...p, credit_days: e.target.value }))}
-                      className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                      className="h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-xs text-theme-text-muted/60">Descuento %</label>
+                    <label className="text-[10px] font-semibold text-[#6D625B]">Descuento %</label>
                     <input type="number" min="0" max="100" step="0.01" value={form.discount_percent} onChange={e => setForm(p => ({ ...p, discount_percent: e.target.value }))}
-                      className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                      className="h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-xs text-theme-text-muted/60">Ciudad</label>
+                    <label className="text-[10px] font-semibold text-[#6D625B]">Ciudad</label>
                     <input type="text" value={form.city} onChange={e => setForm(p => ({ ...p, city: e.target.value }))}
-                      className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                      className="h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-xs text-theme-text-muted/60">Región</label>
+                    <label className="text-[10px] font-semibold text-[#6D625B]">Región</label>
                     <input type="text" value={form.region} onChange={e => setForm(p => ({ ...p, region: e.target.value }))}
-                      className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                      className="h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                   </div>
-                  <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4 space-y-1">
-                    <label className="text-xs text-theme-text-muted/60">Dirección</label>
+                  <div className="col-span-1 space-y-1 md:col-span-2 xl:col-span-4">
+                    <label className="text-[10px] font-semibold text-[#6D625B]">Dirección</label>
                     <input type="text" value={form.address} onChange={e => setForm(p => ({ ...p, address: e.target.value }))}
-                      className="w-full h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                      className="h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                   </div>
-                  <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4 space-y-1">
-                    <label className="text-xs text-theme-text-muted/60">Observaciones</label>
+                  <div className="col-span-1 space-y-1 md:col-span-2 xl:col-span-4">
+                    <label className="text-[10px] font-semibold text-[#6D625B]">Observaciones</label>
                     <textarea value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} rows={3}
-                      className="w-full rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30 resize-none" />
+                      className="h-14 w-full resize-none rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 py-1.5 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                   </div>
                 </div>
               </div>
 
               {/* Sección de Asociación Bsale */}
-              <div className="space-y-6">
-                <div className="border-b border-theme-border pb-4 flex items-end justify-between">
+              <div className="border-b border-[#D1C7BD] pb-4">
+                <div className="mb-3 flex items-end justify-between gap-3 border-b border-[#D1C7BD] pb-2">
                   <div>
-                    <h3 className="text-base font-bold text-theme-text">Asociar pseudoproveedores Bsale</h3>
-                    <p className="text-xs text-theme-text-muted mt-1">Selecciona qué orígenes operativos de Bsale pertenecen a esta entidad legal.</p>
+                    <h3 className="text-sm font-bold uppercase tracking-wide text-[#322D29]">Asociar pseudoproveedores Bsale</h3>
+                    <p className="mt-0.5 text-[10px] text-[#AC9C8D]">Selecciona qué orígenes operativos de Bsale pertenecen a esta entidad legal.</p>
                   </div>
-                  <div className="text-xs font-semibold px-3 py-1 bg-theme-accent/10 text-theme-accent rounded-lg border border-theme-accent/20">
+                  <div className="shrink-0 border border-[#72383D]/30 bg-[#F5EDEE] px-2.5 py-1 text-[10px] font-semibold text-[#72383D]">
                     {selectedPseudos.size} seleccionados
                   </div>
                 </div>
                 
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted/50" />
+                  <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#AC9C8D]" />
                   <input type="text" value={pseudoSearch} onChange={e => setPseudoSearch(e.target.value)}
                     placeholder="Filtrar por nombre o raíz sugerida..."
-                    className="w-full h-10 pl-9 pr-4 rounded-xl border border-theme-border bg-theme-surface px-3 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-accent/30" />
+                    className="h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] pl-8 pr-3 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                 </div>
 
-                <div className="border border-theme-border rounded-xl bg-theme-surface overflow-hidden">
-                  <div className="max-h-96 overflow-y-auto">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-theme-text/5 sticky top-0 z-10 shadow-sm">
+                <div className="mt-3 overflow-hidden border border-[#D1C7BD] bg-white">
+                  <div className="max-h-96 overflow-x-auto overflow-y-auto">
+                    <table className="w-full min-w-[760px] text-left text-xs">
+                      <thead className="sticky top-0 z-10 bg-[#322D29]">
                         <tr>
-                          <th className="py-2.5 px-4 font-semibold text-theme-text-muted w-10"></th>
-                          <th className="py-2.5 px-4 font-semibold text-theme-text-muted">Nombre Bsale</th>
-                          <th className="py-2.5 px-4 font-semibold text-theme-text-muted">Raíz</th>
-                          <th className="py-2.5 px-4 font-semibold text-theme-text-muted text-right">Productos</th>
-                          <th className="py-2.5 px-4 font-semibold text-theme-text-muted">Estado Actual</th>
+                          <th className="w-10 border-r border-[#AC9C8D]/35 px-3 py-1.5 font-semibold text-[#EFE9E1]"></th>
+                          <th className="border-r border-[#AC9C8D]/35 px-3 py-1.5 font-semibold text-[#EFE9E1]">Nombre Bsale</th>
+                          <th className="border-r border-[#AC9C8D]/35 px-3 py-1.5 font-semibold text-[#EFE9E1]">Raíz</th>
+                          <th className="border-r border-[#AC9C8D]/35 px-3 py-1.5 text-right font-semibold text-[#EFE9E1]">Productos</th>
+                          <th className="px-3 py-1.5 font-semibold text-[#EFE9E1]">Estado Actual</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-theme-border/50">
+                      <tbody className="divide-y divide-[#E5DDD4] bg-white">
                         {filteredFormPseudos.map(p => {
                           const isSelected = selectedPseudos.has(p.id)
                           const isRemnant = p.total_products === 0
                           const hasOtherParent = p.parent_supplier_id !== null && p.parent_supplier_id !== editId
                           
                           return (
-                            <tr key={p.id} className={`hover:bg-theme-text/5 transition-colors cursor-pointer ${isSelected ? 'bg-theme-accent/5' : ''}`}
+                            <tr key={p.id} className={`cursor-pointer transition-colors hover:bg-[#F3EFE9] ${isSelected ? 'bg-[#F5EDEE]' : ''}`}
                                 onClick={() => togglePseudo(p)}>
-                              <td className="py-2.5 px-4 w-10">
-                                <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${isSelected ? 'bg-theme-accent border-theme-accent' : 'border-theme-border bg-theme-surface'}`}>
+                              <td className="w-10 px-3 py-1.5">
+                                <div className={`flex h-3.5 w-3.5 items-center justify-center rounded-sm border transition-colors ${isSelected ? 'border-[#72383D] bg-[#72383D]' : 'border-[#D1C7BD] bg-[#F7F4F0]'}`}>
                                   {isSelected && <Check className="w-3 h-3 text-white" />}
                                 </div>
                               </td>
-                              <td className="py-2.5 px-4 font-medium text-theme-text">
+                              <td className="px-3 py-1.5 font-medium text-[#322D29]">
                                 {p.display_name}
-                                {isRemnant && <span className="ml-2 text-[10px] bg-theme-text/10 text-theme-text-muted px-1.5 py-0.5 rounded">Remanente</span>}
+                                {isRemnant && <span className="ml-2 rounded border border-[#D1C7BD] bg-[#EFE9E1] px-1.5 py-0.5 text-[10px] text-[#6D625B]">Remanente</span>}
                               </td>
-                              <td className="py-2.5 px-4 text-theme-text-muted/80">{p.suggested_root}</td>
-                              <td className="py-2.5 px-4 text-right font-mono">{p.total_products}</td>
-                              <td className="py-2.5 px-4">
+                              <td className="px-3 py-1.5 text-[#6D625B]">{p.suggested_root}</td>
+                              <td className="px-3 py-1.5 text-right font-mono text-[#322D29]">{p.total_products}</td>
+                              <td className="px-3 py-1.5">
                                 {hasOtherParent ? (
                                   <span className="flex items-center gap-1 text-[11px] font-semibold text-orange-400 bg-orange-400/10 px-2 py-0.5 rounded w-fit">
                                     <AlertCircle className="w-3 h-3" /> Asociado a {p.parent_supplier_name}
                                   </span>
                                 ) : (p.parent_supplier_id !== null && p.parent_supplier_id === editId) ? (
-                                  <span className="text-[11px] font-semibold text-theme-accent bg-theme-accent/10 px-2 py-0.5 rounded w-fit">
+                                    <span className="w-fit rounded border border-[#72383D]/20 bg-[#F5EDEE] px-2 py-0.5 text-[11px] font-semibold text-[#72383D]">
                                     Asociado actual
                                   </span>
                                 ) : isRemnant ? (
-                                  <span className="text-[11px] font-medium text-theme-text-muted bg-theme-text/5 px-2 py-0.5 rounded w-fit">
+                                    <span className="w-fit rounded border border-[#D1C7BD] bg-[#EFE9E1] px-2 py-0.5 text-[11px] font-medium text-[#6D625B]">
                                     Remanente sin productos
                                   </span>
                                 ) : (
-                                  <span className="text-[11px] font-medium text-theme-text-muted bg-theme-text/5 px-2 py-0.5 rounded w-fit">
+                                    <span className="w-fit rounded border border-[#D1C7BD] bg-[#EFE9E1] px-2 py-0.5 text-[11px] font-medium text-[#6D625B]">
                                     Sin asociar
                                   </span>
                                 )}
@@ -566,25 +569,25 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
   }
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
+    <div className="relative flex h-full min-w-0 flex-col overflow-hidden bg-[#EFE9E1]">
       {message && (
-        <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-muted">{message}</div>
+        <div className="shrink-0 border-b border-[#D1C7BD] bg-[#F5EDEE] px-4 py-2 text-sm text-[#72383D]">{message}</div>
       )}
 
       {/* TABS */}
-      <div className="shrink-0 flex items-center overflow-x-auto border-b border-theme-border bg-theme-text/[0.02] px-4 pt-1.5">
-        <button onClick={() => { setActiveTab('REAL'); setSearch('') }} className={`px-3 py-1.5 text-sm font-bold border-b-2 transition-all ${activeTab === 'REAL' ? 'border-theme-accent text-theme-accent' : 'border-transparent text-theme-text-muted hover:text-theme-text'}`}>
+      <div className="shrink-0 flex items-center overflow-x-auto border-b border-[#D1C7BD] bg-[#EFE9E1] px-3 pt-1">
+        <button onClick={() => { setActiveTab('REAL'); setSearch('') }} className={`border-b-2 px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition-all ${activeTab === 'REAL' ? 'border-[#72383D] bg-[#72383D] text-[#EFE9E1]' : 'border-transparent text-[#AC9C8D] hover:text-[#322D29]'}`}>
           Proveedores Reales
         </button>
-        <button onClick={() => { setActiveTab('BSALE'); setSearch('') }} className={`px-3 py-1.5 text-sm font-bold border-b-2 transition-all ${activeTab === 'BSALE' ? 'border-theme-accent text-theme-accent' : 'border-transparent text-theme-text-muted hover:text-theme-text'}`}>
+        <button onClick={() => { setActiveTab('BSALE'); setSearch('') }} className={`border-b-2 px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition-all ${activeTab === 'BSALE' ? 'border-[#72383D] bg-[#72383D] text-[#EFE9E1]' : 'border-transparent text-[#AC9C8D] hover:text-[#322D29]'}`}>
           Pseudoproveedores Bsale
         </button>
-        <button onClick={() => { setActiveTab('BSALE_BRANDS'); setSearch('') }} className={`px-3 py-1.5 text-sm font-bold border-b-2 transition-all ${activeTab === 'BSALE_BRANDS' ? 'border-theme-accent text-theme-accent' : 'border-transparent text-theme-text-muted hover:text-theme-text'}`}>
+        <button onClick={() => { setActiveTab('BSALE_BRANDS'); setSearch('') }} className={`border-b-2 px-3 py-1.5 text-xs font-bold uppercase tracking-wide transition-all ${activeTab === 'BSALE_BRANDS' ? 'border-[#72383D] bg-[#72383D] text-[#EFE9E1]' : 'border-transparent text-[#AC9C8D] hover:text-[#322D29]'}`}>
           Proveedor en Bsale
         </button>
       </div>
 
-      <div className={`shrink-0 flex flex-col gap-2.5 p-3 border-b border-theme-border/60 bg-theme-text/[0.01] ${activeTab === 'BSALE_BRANDS' ? 'hidden' : ''}`}>
+      <div className={`shrink-0 flex flex-col gap-2 border-b border-[#D1C7BD] bg-[#EFE9E1] px-3 py-2 ${activeTab === 'BSALE_BRANDS' ? 'hidden' : ''}`}>
         
         {activeTab === 'BSALE' && (
           <div className="flex w-full">
@@ -594,17 +597,17 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
 
         <div className="flex flex-col md:flex-row items-center gap-2 w-full">
           <div className="relative flex-1 w-full">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted/50" />
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#AC9C8D]" />
             <input type="text" value={search} onChange={e => setSearch(e.target.value)}
               placeholder={activeTab === 'REAL' ? "Buscar reales por RUT o razón social..." : "Buscar pseudos por nombre o raíz..."}
-              className="w-full h-9 pl-10 pr-4 rounded-lg border border-theme-border bg-theme-surface hover:bg-theme-text/5 focus:bg-theme-surface focus:ring-2 focus:ring-theme-accent/20 focus:border-theme-accent transition-all text-sm text-theme-text placeholder:text-theme-text-muted/40" />
+              className="h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] pl-8 pr-3 text-xs text-[#322D29] placeholder:text-[#AC9C8D] transition-all focus:border-[#72383D] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
           </div>
 
           <div className="flex items-center gap-1.5 w-full md:w-auto">
             {activeTab === 'REAL' && (
               <>
                 <div className="relative group z-10">
-                  <button className="h-9 px-2.5 md:px-3 rounded-lg border border-theme-border bg-theme-surface hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text text-sm font-semibold transition-all flex items-center justify-center gap-1.5">
+                  <button className="flex h-8 items-center justify-center gap-1.5 rounded-md border border-[#D1C7BD] bg-[#EFE9E1] px-2.5 text-xs font-semibold text-[#6D625B] transition-all hover:bg-[#D1C7BD]/40 hover:text-[#322D29]">
                     <MoreHorizontal className="w-4 h-4" />
                     <span className="hidden md:inline">Opciones</span>
                   </button>
@@ -624,25 +627,25 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
                   </div>
                 </div>
 
-                <button onClick={() => setShowFilters(!showFilters)} className={`h-9 px-2.5 md:px-3 rounded-lg border transition-all flex items-center justify-center gap-1.5 text-sm font-semibold ${showFilters ? 'bg-theme-text/10 border-theme-border text-theme-text' : 'bg-theme-surface border-theme-border hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text'}`}>
+                  <button onClick={() => setShowFilters(!showFilters)} className={`flex h-8 items-center justify-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold transition-all ${showFilters ? 'border-[#72383D]/40 bg-[#72383D]/10 text-[#72383D]' : 'border-[#D1C7BD] bg-[#EFE9E1] text-[#6D625B] hover:bg-[#D1C7BD]/40 hover:text-[#322D29]'}`}>
                   <Filter className="w-4 h-4" />
                   <span className="hidden md:inline">Filtros</span>
                 </button>
 
-                <button onClick={openCreate} className="h-9 px-3.5 md:px-4 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-sm font-bold transition-all shadow-lg shadow-theme-accent/20 flex items-center justify-center gap-1.5 ml-auto md:ml-0">
+                <button onClick={openCreate} className="ml-auto flex h-8 items-center justify-center gap-1.5 rounded-md bg-[#72383D] px-3 text-xs font-bold text-[#EFE9E1] transition-all hover:bg-[#5D2E32] md:ml-0">
                   <Plus className="w-4 h-4" />
                   <span className="hidden sm:inline">Nuevo</span>
                 </button>
               </>
             )}
-            {activeTab === 'BSALE' && <button type="button" onClick={resetPseudoWidths} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs font-semibold text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text">Restablecer anchos</button>}
+            {activeTab === 'BSALE' && <button type="button" onClick={resetPseudoWidths} className="h-8 rounded-md border border-[#D1C7BD] bg-[#EFE9E1] px-2.5 text-[11px] font-semibold text-[#6D625B] hover:bg-[#D1C7BD]/40 hover:text-[#322D29]">Restablecer anchos</button>}
           </div>
         </div>
 
         {activeTab === 'REAL' && showFilters && (
-          <div className="p-3.5 rounded-xl border border-theme-border bg-theme-text/5 animate-in slide-in-from-top-2 duration-200">
+          <div className="border-t border-[#D1C7BD] pt-2 animate-in slide-in-from-top-2 duration-200">
             <div className="flex items-center justify-between mb-3">
-              <h4 className="text-xs font-bold text-theme-text-muted/80 uppercase tracking-wider">Filtros Avanzados</h4>
+              <h4 className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#AC9C8D]">Filtros avanzados</h4>
               <button onClick={() => setFilters({ region: '', city: '', is_active: '' })} className="text-xs font-semibold text-theme-text-accent hover:text-theme-text flex items-center gap-1 transition-colors">
                 <X className="w-3 h-3" /> Limpiar filtros
               </button>
@@ -703,30 +706,30 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
             </button>
           </div>
         ) : (
-          <div className="flex-1 overflow-auto">
-            <table className="min-w-[1450px] w-full table-fixed whitespace-nowrap text-sm border-collapse">
+           <div className="min-w-0 flex-1 overflow-x-auto overflow-y-auto bg-white">
+             <table className="min-w-[1450px] w-full table-fixed whitespace-nowrap text-sm border-collapse">
               <colgroup>{REAL_COLUMNS.map(column => <col key={column.id} style={{ width: realWidths[column.id] ?? column.defaultWidth }} />)}</colgroup>
-              <thead className="sticky top-0 z-10 bg-theme-surface">
-                <tr className="border-b border-theme-border text-xs text-theme-accent/60 uppercase tracking-wider">
-                  <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'rut', 'RUT')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'rut')}</th>
-                  <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'business-name', 'Razón social')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'business-name')}</th>
-                  <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'fantasy-name', 'Nombre fantasía')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'fantasy-name')}</th>
-                  <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'contact', 'Contacto')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'contact')}</th>
-                  <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'email', 'Correo')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'email')}</th>
-                  <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'payment', 'Cond. pago')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'payment')}</th>
-                  <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4 font-medium">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'status', 'Estado')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'status')}</th>
-                  <th className="sticky right-0 z-30 border-l border-theme-border bg-theme-surface text-right py-2.5 px-4 font-medium">Acciones</th>
+               <thead className="sticky top-0 z-10 bg-[#322D29]">
+                 <tr className="border-b border-[#AC9C8D]/35 text-[9px] uppercase tracking-[0.1em] text-[#EFE9E1]">
+                   <th className="relative border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left font-semibold">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'rut', 'RUT')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'rut')}</th>
+                   <th className="relative border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left font-semibold">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'business-name', 'Razón social')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'business-name')}</th>
+                   <th className="relative border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left font-semibold">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'fantasy-name', 'Nombre fantasía')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'fantasy-name')}</th>
+                   <th className="relative border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left font-semibold">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'contact', 'Contacto')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'contact')}</th>
+                   <th className="relative border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left font-semibold">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'email', 'Correo')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'email')}</th>
+                   <th className="relative border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left font-semibold">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'payment', 'Cond. pago')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'payment')}</th>
+                   <th className="relative border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left font-semibold">{headerLabel(REAL_COLUMNS, realSort, cycleRealSort, 'status', 'Estado')}{resizeHandle(REAL_COLUMNS, realWidths, setRealColumnWidth, persistRealWidths, 'status')}</th>
+                   <th className="sticky right-0 z-30 border-l border-[#D1C7BD] bg-[#322D29] px-3 py-1.5 text-right font-semibold">Acciones</th>
                 </tr>
               </thead>
-              <tbody>
+               <tbody className="bg-white">
                 {sortedSuppliers.map(s => (
-                  <tr key={s.id} onDoubleClick={event => { if (!(event.target instanceof Element && event.target.closest('button, input, select, textarea, a'))) openEdit(s) }} className="border-b border-theme-border hover:bg-theme-text/5 transition-colors">
-                    <td className="py-2.5 px-4 text-theme-text-accent/80 text-xs font-mono truncate" title={s.rut || undefined}>{s.rut || '—'}</td>
-                    <td className="py-2.5 px-4 text-theme-text text-xs font-medium truncate" title={s.business_name}>{s.business_name}</td>
-                    <td className="py-2.5 px-4 text-theme-text-accent/80 text-xs truncate" title={s.fantasy_name || undefined}>{s.fantasy_name || '—'}</td>
-                    <td className="py-2.5 px-4 text-theme-text-accent/80 text-xs truncate" title={s.contact_name || undefined}>{s.contact_name || '—'}</td>
-                    <td className="py-2.5 px-4 text-theme-text-muted/60 text-xs truncate" title={s.contact_email || undefined}>{s.contact_email || '—'}</td>
-                    <td className="py-2.5 px-4 text-theme-text-accent/80 text-xs truncate" title={s.payment_terms || undefined}>{s.payment_terms || '—'}</td>
+                  <tr key={s.id} onDoubleClick={event => { if (!(event.target instanceof Element && event.target.closest('button, input, select, textarea, a'))) openEdit(s) }} className="border-b border-[#E5DDD4] transition-colors hover:bg-[#F3EFE9]">
+                    <td className="truncate px-3 py-1.5 font-mono text-xs text-[#6D625B]" title={s.rut || undefined}>{s.rut || '—'}</td>
+                    <td className="truncate px-3 py-1.5 text-xs font-medium text-[#322D29]" title={s.business_name}>{s.business_name}</td>
+                    <td className="truncate px-3 py-1.5 text-xs text-[#6D625B]" title={s.fantasy_name || undefined}>{s.fantasy_name || '—'}</td>
+                    <td className="truncate px-3 py-1.5 text-xs text-[#6D625B]" title={s.contact_name || undefined}>{s.contact_name || '—'}</td>
+                    <td className="truncate px-3 py-1.5 text-xs text-[#AC9C8D]" title={s.contact_email || undefined}>{s.contact_email || '—'}</td>
+                    <td className="truncate px-3 py-1.5 text-xs text-[#6D625B]" title={s.payment_terms || undefined}>{s.payment_terms || '—'}</td>
                     <td className="py-2.5 px-4">
                       {s.is_active ? (
                         <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-theme-accent-hover/10 text-theme-accent border-theme-accent/20">Activo</span>
@@ -734,7 +737,7 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
                         <span className="text-[11px] font-semibold px-2 py-0.5 rounded border bg-red-500/10 text-red-400 border-red-500/20">Inactivo</span>
                       )}
                     </td>
-                    <td className="sticky right-0 z-20 border-l border-theme-border bg-theme-surface py-2.5 px-4 text-right shadow-[-6px_0_12px_-10px_rgba(0,0,0,0.5)]">
+                    <td className="sticky right-0 z-20 border-l border-[#D1C7BD] bg-white px-3 py-1.5 text-right">
                       <button onClick={() => openEdit(s)} className="text-xs text-theme-accent/70 hover:text-theme-text-muted mr-3 font-semibold">Editar</button>
                       <button onClick={() => handleDeactivate(s)}
                         className={`text-xs font-semibold ${s.is_active ? 'text-red-400/70 hover:text-red-400' : 'text-theme-accent/70 hover:text-theme-text-muted'}`}>
@@ -748,33 +751,33 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
           </div>
         )
       ) : (
-        <div className="flex-1 overflow-auto bg-theme-text/[0.02]">
+         <div className="min-w-0 flex-1 overflow-x-auto overflow-y-auto bg-white">
           <table className="min-w-[1400px] w-full table-fixed text-sm border-collapse">
             <colgroup>{PSEUDO_COLUMNS.map(column => <col key={column.id} style={{ width: pseudoWidths[column.id] ?? column.defaultWidth }} />)}</colgroup>
-            <thead className="sticky top-0 z-10 bg-theme-surface">
-              <tr className="border-b border-theme-border text-[11px] text-theme-text-muted uppercase tracking-wider font-semibold">
-                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'display-name', 'Pseudoproveedor Bsale')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'display-name')}</th>
-                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'root', 'Raíz Sugerida')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'root')}</th>
-                <th className="relative border-r border-theme-border/30 text-left py-2.5 px-4">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'parent', 'Proveedor Real Asociado')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'parent')}</th>
-                <th className="relative border-r border-theme-border/30 text-right py-2.5 px-4">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'total', 'Productos Totales')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'total')}</th>
-                <th className="relative border-r border-theme-border/30 text-right py-2.5 px-4">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'active', 'Activos / Inactivos')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'active')}</th>
-                <th className="relative border-r border-theme-border/30 text-right py-2.5 px-4">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'mappings', 'Mappings C / S Costo')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'mappings')}</th>
-                <th className="relative text-left py-2.5 px-4">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'status', 'Estado')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'status')}</th>
+             <thead className="sticky top-0 z-10 bg-[#322D29]">
+               <tr className="border-b border-[#AC9C8D]/35 text-[9px] font-semibold uppercase tracking-[0.1em] text-[#EFE9E1]">
+                 <th className="relative border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'display-name', 'Pseudoproveedor Bsale')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'display-name')}</th>
+                 <th className="relative border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'root', 'Raíz Sugerida')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'root')}</th>
+                 <th className="relative border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'parent', 'Proveedor Real Asociado')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'parent')}</th>
+                 <th className="relative border-r border-[#AC9C8D]/35 px-3 py-1.5 text-right">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'total', 'Productos Totales')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'total')}</th>
+                 <th className="relative border-r border-[#AC9C8D]/35 px-3 py-1.5 text-right">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'active', 'Activos / Inactivos')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'active')}</th>
+                 <th className="relative border-r border-[#AC9C8D]/35 px-3 py-1.5 text-right">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'mappings', 'Mappings C / S Costo')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'mappings')}</th>
+                 <th className="relative px-3 py-1.5 text-left">{headerLabel(PSEUDO_COLUMNS, pseudoSort, cyclePseudoSort, 'status', 'Estado')}{resizeHandle(PSEUDO_COLUMNS, pseudoWidths, setPseudoColumnWidth, persistPseudoWidths, 'status')}</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-theme-border/50">
+               <tbody className="divide-y divide-[#E5DDD4] bg-white">
               {sortedPseudos.map(p => {
                 const isRemnant = p.total_products === 0
                 return (
-                  <tr key={p.id} className="hover:bg-theme-surface transition-colors">
-                    <td className="py-2.5 px-4 font-medium text-theme-text text-xs truncate" title={`${p.display_name}${p.display_name !== p.business_name ? ` · ${p.business_name}` : ''}`}>
+                  <tr key={p.id} className="transition-colors hover:bg-[#F3EFE9]">
+                    <td className="truncate px-3 py-1.5 text-xs font-medium text-[#322D29]" title={`${p.display_name}${p.display_name !== p.business_name ? ` · ${p.business_name}` : ''}`}>
                       {p.display_name}
                       {p.display_name !== p.business_name && (
                         <div className="text-[10px] text-theme-text-muted/60 font-mono mt-0.5">{p.business_name}</div>
                       )}
                     </td>
-                    <td className="py-2.5 px-4 text-theme-text-muted text-xs font-mono truncate" title={p.suggested_root}>{p.suggested_root}</td>
-                      <td className="py-2.5 px-4 truncate">
+                    <td className="truncate px-3 py-1.5 font-mono text-xs text-[#6D625B]" title={p.suggested_root}>{p.suggested_root}</td>
+                      <td className="truncate px-3 py-1.5">
                       {p.parent_supplier_name ? (
                         <span className="text-xs font-semibold text-theme-text-accent bg-theme-accent/5 px-2 py-1 rounded border border-theme-accent/10">
                           {p.parent_supplier_name}
@@ -783,18 +786,18 @@ export function SuppliersPanel({ canManageBsale = false }: { canManageBsale?: bo
                         <span className="text-xs text-theme-text-muted/50 italic">—</span>
                       )}
                     </td>
-                    <td className="py-2.5 px-4 text-right font-mono text-xs text-theme-text">{p.total_products}</td>
-                    <td className="py-2.5 px-4 text-right text-xs">
+                    <td className="px-3 py-1.5 text-right font-mono text-xs text-[#322D29]">{p.total_products}</td>
+                    <td className="px-3 py-1.5 text-right text-xs">
                       <span className="text-emerald-500/80 font-mono">{p.active_products}</span>
                       <span className="text-theme-text-muted/30 mx-1">/</span>
                       <span className="text-theme-text-muted/80 font-mono">{p.inactive_products}</span>
                     </td>
-                    <td className="py-2.5 px-4 text-right text-xs">
+                    <td className="px-3 py-1.5 text-right text-xs">
                       <span className="text-emerald-500/80 font-mono">{p.mappings_with_cost}</span>
                       <span className="text-theme-text-muted/30 mx-1">/</span>
                       <span className="text-theme-text-muted/80 font-mono">{p.mappings_without_cost}</span>
                     </td>
-                    <td className="py-2.5 px-4">
+                    <td className="px-3 py-1.5">
                       {p.parent_supplier_id ? (
                         <span className="text-[10px] font-semibold text-theme-accent bg-theme-accent/10 px-2 py-0.5 rounded border border-theme-accent/20">Asociado</span>
                       ) : isRemnant ? (

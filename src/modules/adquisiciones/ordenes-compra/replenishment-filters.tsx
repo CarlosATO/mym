@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CalendarRange, Check, ChevronDown, Filter, Loader2, Search, Settings2, X } from 'lucide-react'
+import { CalendarRange, Check, ChevronDown, Filter, Loader2, RefreshCw, Search, Settings2, X } from 'lucide-react'
 import { VIEWS, type HistorialVisible, type ViewId } from './replenishment-columns'
 
 interface PeriodOption {
@@ -39,6 +39,9 @@ interface ReplenishmentFiltersProps {
   historialVisible: HistorialVisible
   onSelectHistorial: (h: HistorialVisible) => void
   onOpenConfig: () => void
+  headerDisabled: boolean
+  onBack?: () => void
+  onRefresh: () => void
 }
 
 type OpenMenu = 'estado' | 'historial' | 'proveedor' | 'linea' | null
@@ -50,10 +53,23 @@ const STATUS_OPTIONS = [
   { id: 'SIN_COSTO', label: 'Sin costo' },
 ]
 
-const inputClass = 'h-8 rounded-md border border-theme-border bg-theme-bg/40 px-2.5 text-xs text-theme-text outline-none transition placeholder:text-theme-text-muted/45 focus:border-theme-accent focus:ring-2 focus:ring-theme-accent/15 disabled:cursor-not-allowed disabled:opacity-60'
-const triggerClass = 'flex h-8 shrink-0 items-center gap-1 rounded-md border px-2 text-xs font-semibold transition'
-const optionRowClass = 'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs font-medium text-theme-text transition hover:bg-theme-text/5'
-const filterLabelClass = 'px-0.5 text-[10px] font-semibold uppercase tracking-wide text-theme-text-muted/70'
+const inputClass =
+  'h-[30px] rounded border border-[#D1C7BD] bg-[#EFE9E1]/70 px-2 text-xs text-[#322D29] outline-none transition placeholder:text-[#AC9C8D]/70 focus:border-[#72383D] focus:ring-2 focus:ring-[#72383D]/15 disabled:cursor-not-allowed disabled:opacity-60'
+const triggerClass =
+  'flex h-[30px] shrink-0 items-center gap-1 rounded border px-2 text-xs font-semibold transition'
+const optionRowClass =
+  'flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-xs font-medium text-[#322D29] transition hover:bg-[#D1C7BD]/35'
+const filterLabelClass = 'block text-[9px] font-bold uppercase tracking-[0.08em] text-[#AC9C8D] leading-none mb-[3px]'
+
+/** Celda de filtro: label encima + control debajo */
+function FilterCell({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-col">
+      <span className={filterLabelClass}>{label}</span>
+      {children}
+    </div>
+  )
+}
 
 export function ReplenishmentFilters({
   periodOptions,
@@ -85,6 +101,9 @@ export function ReplenishmentFilters({
   historialVisible,
   onSelectHistorial,
   onOpenConfig,
+  headerDisabled,
+  onBack,
+  onRefresh,
 }: ReplenishmentFiltersProps) {
   const [open, setOpen] = useState<OpenMenu>(null)
   const [proveedorQuery, setProveedorQuery] = useState('')
@@ -129,224 +148,282 @@ export function ReplenishmentFilters({
   const clearSearch = () => { onClearSearch(); setOpen(null) }
 
   return (
-    <div ref={rootRef} className="shrink-0 border-b border-theme-border bg-theme-surface px-5 py-1.5">
-      {/* Toolbar única */}
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex shrink-0 flex-col gap-0.5">
-          <label htmlFor="replenishment-period" className={filterLabelClass}>Período de análisis</label>
-          <select
-            id="replenishment-period"
-            aria-label="Período de análisis"
-            value={draftPeriodIdx}
-            onChange={e => onDraftPeriodChange(Number(e.target.value))}
-            className={`${inputClass} max-w-[135px] cursor-pointer`}
-          >
-            {periodOptions.map((o, i) => (
-              <option key={i} value={i}>{o.label}</option>
-            ))}
-          </select>
-        </div>
+    <div ref={rootRef} className="shrink-0 border-b border-[#D1C7BD] bg-[#EFE9E1]">
 
-        <div className="flex shrink-0 flex-col gap-0.5">
-          <label htmlFor="replenishment-coverage" className={filterLabelClass}>Cobertura objetivo</label>
-          <select
-            id="replenishment-coverage"
-            aria-label="Cobertura objetivo"
-            value={draftCoverageIdx}
-            onChange={e => onDraftCoverageChange(Number(e.target.value))}
-            className={`${inputClass} max-w-[100px] cursor-pointer`}
-          >
-            {coverageOptions.map((o, i) => (
-              <option key={i} value={i}>{o.label}</option>
-            ))}
-          </select>
-        </div>
+      {/* ═══════════════════════════════════════════════════════════
+          TOOLBAR 1 — PARÁMETROS DE REPOSICIÓN
+          Grid explícito: label ENCIMA del control en cada celda.
+          Desktop xl+: una línea.
+          Desktop lg: puede hacer wrap controlado (2 líneas).
+          Mobile: columnas apiladas.
+      ═══════════════════════════════════════════════════════════ */}
+      <div className="border-b border-[#D1C7BD] px-4 py-1.5">
+        <div
+          className="grid items-end gap-x-3 gap-y-2"
+          style={{
+            gridTemplateColumns:
+              'clamp(110px,150px,170px) 128px 104px minmax(140px,1fr) minmax(130px,1fr) minmax(145px,1fr) 108px 68px auto',
+          }}
+        >
+          {/* ── Título ── */}
+          <div className="flex items-end pb-[3px]">
+            <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#72383D] leading-tight">
+              Parámetros{'\u00A0'}de<br />reposición
+            </span>
+          </div>
 
-        <div className="flex shrink-0 flex-col gap-0.5">
-          <label htmlFor="replenishment-supplier" className={filterLabelClass}>Proveedor</label>
-          <div className="relative w-[155px]">
-            <input
-              id="replenishment-supplier"
-              aria-label="Proveedor"
-              value={open === 'proveedor' ? proveedorQuery : draftSupplier}
-              onChange={e => { setProveedorQuery(e.target.value); setOpen('proveedor') }}
-              onFocus={() => { setProveedorQuery(draftSupplier); setOpen('proveedor') }}
-              placeholder={initialLoading ? 'Cargando proveedores...' : 'Proveedor...'}
-              disabled={initialLoading}
-              className={`${inputClass} w-full pr-7`}
-            />
-            {!initialLoading && draftSupplier && (
-              <button
-                onClick={clearSupplier}
-                aria-label="Limpiar proveedor"
-                className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-theme-text-muted/70 transition hover:bg-theme-text/10 hover:text-theme-text"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
+          {/* ── PERÍODO ── */}
+          <FilterCell label="Período de análisis">
+            <select
+              id="replenishment-period"
+              aria-label="Período de análisis"
+              value={draftPeriodIdx}
+              onChange={e => onDraftPeriodChange(Number(e.target.value))}
+              className={`${inputClass} w-full cursor-pointer`}
+            >
+              {periodOptions.map((o, i) => (
+                <option key={i} value={i}>{o.label}</option>
+              ))}
+            </select>
+          </FilterCell>
+
+          {/* ── COBERTURA ── */}
+          <FilterCell label="Cobertura objetivo">
+            <select
+              id="replenishment-coverage"
+              aria-label="Cobertura objetivo"
+              value={draftCoverageIdx}
+              onChange={e => onDraftCoverageChange(Number(e.target.value))}
+              className={`${inputClass} w-full cursor-pointer`}
+            >
+              {coverageOptions.map((o, i) => (
+                <option key={i} value={i}>{o.label}</option>
+              ))}
+            </select>
+          </FilterCell>
+
+          {/* ── PROVEEDOR ── */}
+          <FilterCell label="Proveedor">
+            <div className="relative w-full">
+              <input
+                id="replenishment-supplier"
+                aria-label="Proveedor"
+                value={open === 'proveedor' ? proveedorQuery : draftSupplier}
+                onChange={e => { setProveedorQuery(e.target.value); setOpen('proveedor') }}
+                onFocus={() => { setProveedorQuery(draftSupplier); setOpen('proveedor') }}
+                placeholder={initialLoading ? 'Cargando...' : 'Proveedor...'}
+                disabled={initialLoading}
+                className={`${inputClass} w-full pr-6`}
+              />
+              {!initialLoading && draftSupplier && (
+                <button
+                  onClick={clearSupplier}
+                  aria-label="Limpiar proveedor"
+                  className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-[#AC9C8D] transition hover:bg-[#D1C7BD]/40 hover:text-[#72383D]"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+          </FilterCell>
+
+          {/* ── LÍNEA ── */}
+          <FilterCell label="Línea de artículos">
+            <div className="relative w-full">
+              <input
+                id="replenishment-line"
+                aria-label="Línea de artículos"
+                value={open === 'linea' ? lineaQuery : draftLine}
+                onChange={e => { setLineaQuery(e.target.value); setOpen('linea') }}
+                onFocus={() => { setLineaQuery(draftLine); setOpen('linea') }}
+                placeholder={initialLoading ? 'Cargando...' : 'Línea...'}
+                disabled={initialLoading}
+                className={`${inputClass} w-full pr-6`}
+              />
+              {!initialLoading && draftLine && (
+                <button
+                  onClick={clearLine}
+                  aria-label="Limpiar línea de artículos"
+                  className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-[#AC9C8D] transition hover:bg-[#D1C7BD]/40 hover:text-[#72383D]"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+          </FilterCell>
+
+          {/* ── SKU / PRODUCTO ── */}
+          <FilterCell label="SKU / Producto">
+            <div className="relative w-full">
+              <Search className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2 h-3 w-3 text-[#AC9C8D]/60" />
+              <input
+                id="replenishment-search"
+                aria-label="Buscar SKU o producto"
+                type="text"
+                value={draftSearch}
+                onChange={e => onDraftSearchChange(e.target.value)}
+                placeholder="Buscar..."
+                disabled={initialLoading}
+                className={`${inputClass} w-full pl-5 pr-6`}
+              />
+              {!initialLoading && draftSearch !== '' && (
+                <button
+                  onClick={clearSearch}
+                  aria-label="Limpiar búsqueda"
+                  className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-[#AC9C8D] transition hover:bg-[#D1C7BD]/40 hover:text-[#72383D]"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+          </FilterCell>
+
+          {/* ── ESTADO ── */}
+          <FilterCell label="Estado">
+            <button
+              onClick={() => setOpen(prev => (prev === 'estado' ? null : 'estado'))}
+              aria-expanded={open === 'estado'}
+              className={`${triggerClass} w-full justify-between ${
+                open === 'estado' || hasStatus
+                  ? 'border-[#72383D]/50 bg-[#72383D]/10 text-[#72383D]'
+                  : 'border-[#D1C7BD] bg-[#EFE9E1]/70 text-[#AC9C8D] hover:bg-[#D1C7BD]/40 hover:text-[#322D29]'
+              }`}
+            >
+              <span className="flex items-center gap-1 min-w-0">
+                <Filter className="h-3 w-3 shrink-0" />
+                <span className="truncate text-[11px]">{statusLabel}</span>
+              </span>
+              <ChevronDown className={`h-3 w-3 shrink-0 transition-transform ${open === 'estado' ? 'rotate-180' : ''}`} />
+            </button>
+          </FilterCell>
+
+          {/* ── PRODUCTOS (checkbox Todos) ── */}
+          <FilterCell label="Productos">
+            <label className="flex h-[30px] cursor-pointer select-none items-center gap-1.5 text-xs font-medium text-[#322D29]">
+              <input
+                type="checkbox"
+                checked={draftShowAll}
+                onChange={e => onDraftShowAllChange(e.target.checked)}
+                disabled={initialLoading}
+                className="h-3.5 w-3.5 rounded border-[#D1C7BD] text-[#72383D] disabled:cursor-not-allowed disabled:opacity-60"
+              />
+              Todos
+            </label>
+          </FilterCell>
+
+          {/* ── ACTUALIZAR — siempre al extremo derecho ── */}
+          <div className="flex items-end">
+            <button
+              onClick={onRefresh}
+              disabled={headerDisabled}
+              title={headerDisabled && !busy ? 'Aplica una consulta antes de actualizar' : undefined}
+              className="flex h-[30px] shrink-0 items-center gap-1.5 rounded border border-[#D1C7BD] bg-[#EFE9E1] px-3 text-xs font-semibold text-[#72383D] whitespace-nowrap transition hover:border-[#72383D]/50 hover:bg-[#D1C7BD]/40 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+              Actualizar
+            </button>
           </div>
         </div>
+      </div>
 
-        <div className="flex shrink-0 flex-col gap-0.5">
-          <label htmlFor="replenishment-line" className={filterLabelClass}>Línea de artículos</label>
-          <div className="relative w-[155px]">
-            <input
-              id="replenishment-line"
-              aria-label="Línea de artículos"
-              value={open === 'linea' ? lineaQuery : draftLine}
-              onChange={e => { setLineaQuery(e.target.value); setOpen('linea') }}
-              onFocus={() => { setLineaQuery(draftLine); setOpen('linea') }}
-              placeholder={initialLoading ? 'Cargando líneas...' : 'Línea de artículos...'}
-              disabled={initialLoading}
-              className={`${inputClass} w-full pr-7`}
-            />
-            {!initialLoading && draftLine && (
-              <button
-                onClick={clearLine}
-                aria-label="Limpiar línea de artículos"
-                className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-theme-text-muted/70 transition hover:bg-theme-text/10 hover:text-theme-text"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
+      {/* ═══════════════════════════════════════════════════════════
+          TOOLBAR 2 — VISTA Y ANÁLISIS
+          Franja compacta que aprovecha el ancho completo.
+      ═══════════════════════════════════════════════════════════ */}
+      <div className="flex flex-wrap items-end gap-x-4 gap-y-2 px-4 py-1.5">
+        {/* Título */}
+        <div className="flex items-end pb-[3px]">
+          <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#72383D] leading-tight whitespace-nowrap">
+            Vista y análisis
+          </span>
         </div>
 
-        <div className="flex shrink-0 flex-col gap-0.5">
-          <label htmlFor="replenishment-search" className={filterLabelClass}>SKU / Producto</label>
-          <div className="relative w-[160px]">
-            <Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-theme-text-muted/60" />
-            <input
-              id="replenishment-search"
-              aria-label="Buscar SKU o producto"
-              type="text"
-              value={draftSearch}
-              onChange={e => onDraftSearchChange(e.target.value)}
-              placeholder="Buscar SKU o producto..."
-              disabled={initialLoading}
-              className={`${inputClass} w-full pl-7 pr-7`}
-            />
-            {!initialLoading && draftSearch !== '' && (
-              <button
-                onClick={clearSearch}
-                aria-label="Limpiar búsqueda"
-                className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-theme-text-muted/70 transition hover:bg-theme-text/10 hover:text-theme-text"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-        </div>
-
-        <div className="flex shrink-0 flex-col gap-0.5">
-          <span className={filterLabelClass}>Estado</span>
-          <button
-            onClick={() => setOpen(prev => (prev === 'estado' ? null : 'estado'))}
-            aria-expanded={open === 'estado'}
-            className={`${triggerClass} ${
-              open === 'estado' || hasStatus
-                ? 'border-theme-accent/50 bg-theme-accent/10 text-theme-text'
-                : 'border-theme-border bg-theme-bg/40 text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text'
-            }`}
+        {/* VISTA — botones segmentados */}
+        <FilterCell label="Vista">
+          <div
+            className="flex h-[30px] items-center gap-0.5 rounded border border-[#D1C7BD] bg-[#D1C7BD]/35 p-0.5"
+            role="group"
+            aria-label="Vista de análisis"
           >
-            <Filter className="h-3.5 w-3.5" />
-            Estado · {statusLabel}
-            <ChevronDown className={`h-3 w-3 transition-transform ${open === 'estado' ? 'rotate-180' : ''}`} />
-          </button>
-        </div>
-
-        <div className="flex shrink-0 flex-col gap-0.5">
-          <span className={filterLabelClass}>Productos</span>
-          <label className="flex h-8 cursor-pointer select-none items-center gap-1.5 text-xs font-medium text-theme-text">
-            <input
-              type="checkbox"
-              checked={draftShowAll}
-              onChange={e => onDraftShowAllChange(e.target.checked)}
-              disabled={initialLoading}
-              className="h-3.5 w-3.5 rounded border-theme-border text-theme-accent disabled:cursor-not-allowed disabled:opacity-60"
-            />
-            Todos
-          </label>
-        </div>
-
-        {/* Vistas: botones segmentados siempre disponibles */}
-        <div className="flex shrink-0 flex-col gap-0.5">
-          <span className={filterLabelClass}>Vista de análisis</span>
-          <div className="flex h-8 items-center gap-0.5 rounded-md border border-theme-border bg-theme-bg/40 p-0.5" role="group" aria-label="Vista de análisis">
             {VIEWS.map(v => (
               <button
                 key={v.id}
                 onClick={() => onSelectView(v.id)}
-                className={`flex h-6 items-center rounded px-2 text-[11px] font-semibold transition ${
+                className={`flex h-[22px] items-center rounded px-2.5 text-[11px] font-semibold transition ${
                   viewLabel === v.label
-                    ? 'bg-theme-accent text-white shadow-sm'
-                    : 'text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text'
+                    ? 'bg-[#72383D] text-white'
+                    : 'text-[#AC9C8D] hover:bg-[#D1C7BD]/50 hover:text-[#322D29]'
                 }`}
               >
                 {v.label}
               </button>
             ))}
           </div>
-        </div>
+        </FilterCell>
+
         {viewLabel === 'Personalizada' && (
-          <span className="inline-flex shrink-0 items-center rounded-full border border-theme-border bg-theme-text/5 px-2 py-0.5 text-[10px] font-semibold text-theme-text-muted">
+          <span className="mb-0.5 inline-flex shrink-0 self-end items-center rounded-full border border-[#D1C7BD] bg-[#D1C7BD]/35 px-2 py-0.5 text-[10px] font-semibold text-[#AC9C8D]">
             Personalizada
           </span>
         )}
 
-        <div className="flex shrink-0 flex-col gap-0.5">
-          <span className={filterLabelClass}>Detalle temporal</span>
+        {/* DETALLE TEMPORAL */}
+        <FilterCell label="Detalle temporal">
           <button
             onClick={() => setOpen(prev => (prev === 'historial' ? null : 'historial'))}
             aria-expanded={open === 'historial'}
             title="Análisis por semanas"
             className={`${triggerClass} ${
               open === 'historial'
-                ? 'border-theme-accent/50 bg-theme-accent/10 text-theme-text'
-                : 'border-theme-border bg-theme-bg/40 text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text'
+                ? 'border-[#72383D]/50 bg-[#72383D]/10 text-[#72383D]'
+                : 'border-[#D1C7BD] bg-[#EFE9E1]/70 text-[#AC9C8D] hover:bg-[#D1C7BD]/40 hover:text-[#322D29]'
             }`}
           >
-            <CalendarRange className="h-3.5 w-3.5" />
-            Análisis por semanas · {historialVisible === 'Oculto' ? 'Oculto' : historialVisible}
-            <ChevronDown className={`h-3 w-3 transition-transform ${open === 'historial' ? 'rotate-180' : ''}`} />
+            <CalendarRange className="h-3 w-3 shrink-0" />
+            <span className="truncate max-w-[170px] text-[11px]">
+              Análisis por semanas · {historialVisible === 'Oculto' ? 'Oculto' : historialVisible}
+            </span>
+            <ChevronDown className={`h-3 w-3 shrink-0 transition-transform ${open === 'historial' ? 'rotate-180' : ''}`} />
           </button>
-        </div>
+        </FilterCell>
 
-        <div className="flex shrink-0 flex-col gap-0.5">
-          <span aria-hidden="true" className="h-[15px]" />
+        {/* CONFIGURACIÓN */}
+        <div className="flex items-end">
           <button
             onClick={onOpenConfig}
             title="Configuración de columnas"
-            className="flex h-8 shrink-0 items-center gap-1 rounded-md border border-theme-border bg-theme-bg/40 px-2 text-xs font-semibold text-theme-text-muted transition hover:bg-theme-text/5 hover:text-theme-text"
+            className="flex h-[30px] shrink-0 items-center gap-1 rounded border border-[#D1C7BD] bg-[#EFE9E1]/70 px-2 text-xs font-semibold text-[#AC9C8D] transition hover:border-[#72383D]/40 hover:text-[#72383D]"
           >
-            <Settings2 className="h-3.5 w-3.5" />
+            <Settings2 className="h-3 w-3" />
             Configuración
           </button>
         </div>
 
-        <div className="ml-auto flex h-8 shrink-0 items-center gap-1.5">
-          {busy && (
-            <>
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-theme-accent" />
-              <span className="text-xs font-semibold text-theme-text-muted">Consultando...</span>
-            </>
-          )}
-        </div>
+        {/* Spinner consultando */}
+        {busy && (
+          <div className="ml-auto flex items-center gap-1.5 self-end pb-0.5">
+            <Loader2 className="h-3 w-3 animate-spin text-[#72383D]" />
+            <span className="text-[11px] font-semibold text-[#AC9C8D]">Consultando...</span>
+          </div>
+        )}
       </div>
 
-      {/* Área temporal contextual: en flujo, empuja la tabla (nunca la cubre) */}
+      {/* ═══════════════════════════════════════════════════════════
+          PANEL CONTEXTUAL DE DROPDOWNS
+          En flujo — empuja la tabla, nunca superpuesto.
+      ═══════════════════════════════════════════════════════════ */}
       {open && (
-        <div className="mt-2 rounded-lg border border-theme-border bg-theme-surface p-2 shadow-sm">
+        <div className="border-t border-[#D1C7BD] bg-[#EFE9E1] px-4 py-2">
           {open === 'estado' && (
             <div className="flex flex-wrap gap-1">
               {STATUS_OPTIONS.map(o => (
                 <button
                   key={o.id}
                   onClick={() => { onDraftStatusChange(o.id); setOpen(null) }}
-                  className={`flex h-7 items-center gap-1 rounded-md border px-2.5 text-xs font-semibold transition ${
+                  className={`flex h-7 items-center gap-1 rounded border px-2.5 text-xs font-semibold transition ${
                     draftStatus === o.id
-                      ? 'border-theme-accent/50 bg-theme-accent/10 text-theme-text'
-                      : 'border-theme-border text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text'
+                      ? 'border-[#72383D]/50 bg-[#72383D]/10 text-[#72383D]'
+                      : 'border-[#D1C7BD] text-[#AC9C8D] hover:bg-[#D1C7BD]/40 hover:text-[#322D29]'
                   }`}
                 >
                   {draftStatus === o.id && <Check className="h-3 w-3" />}
@@ -358,15 +435,17 @@ export function ReplenishmentFilters({
 
           {open === 'historial' && (
             <div className="flex flex-wrap gap-1">
-              <span className="flex h-7 items-center px-1 text-[10px] font-semibold uppercase tracking-wide text-theme-text-muted/70">Análisis por semanas</span>
+              <span className="flex h-7 items-center px-1 text-[10px] font-semibold uppercase tracking-wide text-[#AC9C8D]/70">
+                Análisis por semanas
+              </span>
               {historialOptions.map(o => (
                 <button
                   key={o.id}
                   onClick={() => { onSelectHistorial(o.id); setOpen(null) }}
-                  className={`flex h-7 items-center gap-1 rounded-md border px-2.5 text-xs font-semibold transition ${
+                  className={`flex h-7 items-center gap-1 rounded border px-2.5 text-xs font-semibold transition ${
                     historialVisible === o.id
-                      ? 'border-theme-accent/50 bg-theme-accent/10 text-theme-text'
-                      : 'border-theme-border text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text'
+                      ? 'border-[#72383D]/50 bg-[#72383D]/10 text-[#72383D]'
+                      : 'border-[#D1C7BD] text-[#AC9C8D] hover:bg-[#D1C7BD]/40 hover:text-[#322D29]'
                   }`}
                 >
                   {historialVisible === o.id && <Check className="h-3 w-3" />}
@@ -377,13 +456,13 @@ export function ReplenishmentFilters({
           )}
 
           {open === 'proveedor' && (
-            <div className="max-h-[320px] overflow-y-auto overscroll-contain">
+            <div className="max-h-[280px] overflow-y-auto overscroll-contain">
               {filteredSuppliers.length === 0 ? (
-                <p className="px-2 py-1.5 text-xs text-theme-text-muted">Sin resultados</p>
+                <p className="px-2 py-1.5 text-xs text-[#AC9C8D]">Sin resultados</p>
               ) : (
                 filteredSuppliers.map(s => (
                   <button key={s} onClick={() => selectSupplier(s)} className={optionRowClass}>
-                    {draftSupplier === s && <Check className="h-3 w-3 shrink-0 text-theme-accent" />}
+                    {draftSupplier === s && <Check className="h-3 w-3 shrink-0 text-[#72383D]" />}
                     <span className="truncate">{s}</span>
                   </button>
                 ))
@@ -392,15 +471,15 @@ export function ReplenishmentFilters({
           )}
 
           {open === 'linea' && (
-            <div className="max-h-[320px] overflow-y-auto overscroll-contain">
+            <div className="max-h-[280px] overflow-y-auto overscroll-contain">
               {filteredLines.length === 0 ? (
-                <p className="px-2 py-1.5 text-xs text-theme-text-muted">
+                <p className="px-2 py-1.5 text-xs text-[#AC9C8D]">
                   {lineOptions.length === 0 ? 'Sin líneas disponibles' : 'Sin resultados'}
                 </p>
               ) : (
                 filteredLines.map(l => (
                   <button key={l} onClick={() => selectLine(l)} className={optionRowClass}>
-                    {draftLine === l && <Check className="h-3 w-3 shrink-0 text-theme-accent" />}
+                    {draftLine === l && <Check className="h-3 w-3 shrink-0 text-[#72383D]" />}
                     <span className="truncate">{l}</span>
                   </button>
                 ))

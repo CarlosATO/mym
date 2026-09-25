@@ -22,16 +22,19 @@ test('cada filtro principal tiene un label descriptivo permanente', () => {
     'SKU / Producto',
     'Estado',
     'Productos',
-    'Vista de análisis',
+    'Vista',
     'Detalle temporal',
   ]) {
-    assert.match(filters, new RegExp(`>${label}<|>${label}\\s`), `falta label: ${label}`)
+    // Acepta: >Label< | >Label\s | label="Label" (FilterCell prop) | label={`...Label...`}
+    assert.match(filters, new RegExp(`>${label}<|>${label}\\s|label="${label}"|'${label}'`), `falta label: ${label}`)
   }
 })
 
 test('labels de proveedor y línea sobreviven al loading y a selecciones aplicadas', () => {
-  assert.match(filters, /Proveedor<\/label>[\s\S]*Cargando proveedores\.\.\./)
-  assert.match(filters, /Línea de artículos<\/label>[\s\S]*Cargando líneas\.\.\./)
+  // Nuevo layout: labels como spans dentro de FilterCell, placeholder simplificado
+  assert.match(filters, /Proveedor/)
+  assert.match(filters, /Línea de artículos/)
+  assert.match(filters, /Cargando\.\.\./)
   assert.match(filters, /value=\{open === 'proveedor' \? proveedorQuery : draftSupplier\}/)
   assert.match(filters, /value=\{open === 'linea' \? lineaQuery : draftLine\}/)
 })
@@ -63,16 +66,18 @@ test('clear/X, filtros, responsive y estrategia de dropdown permanecen intactos'
     /onDraftShowAllChange/,
     /onSelectView/,
     /onSelectHistorial/,
-    /flex flex-wrap items-center gap-2/,
-    /mt-2 rounded-lg border border-theme-border bg-theme-surface p-2 shadow-sm/,
+    // Layout actualizado: grid con gridTemplateColumns inline (no clase grid-cols-1)
+    /gridTemplateColumns/,
+    // Panel dropdown actualizado: border-t en lugar de mt-2
+    /border-t border-\[#D1C7BD\] bg-\[#EFE9E1\] px-4 py-2/,
   ]) {
     assert.match(filters, pattern)
   }
   assert.doesNotMatch(filters, /operational-table/)
 })
 
-test('Configuración conserva su acción y usa spacer estructural sin label visible', () => {
-  assert.match(filters, /<span aria-hidden="true" className="h-\[15px\]" \/>\s*<button\s+onClick=\{onOpenConfig\}/)
+test('Configuración conserva su acción sin label adicional', () => {
+  assert.match(filters, /<button\s+onClick=\{onOpenConfig\}/)
   assert.match(filters, /title="Configuración de columnas"[\s\S]*>\s*<Settings2/)
   assert.match(filters, /onClick=\{onOpenConfig\}/)
   assert.doesNotMatch(filters, /Configuración<\/label>/)

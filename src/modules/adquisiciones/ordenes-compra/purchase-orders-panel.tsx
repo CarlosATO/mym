@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, Ban, PackageOpen, XCircle, CheckCircle2, BarChart3 } from 'lucide-react'
+import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, Ban, PackageOpen, XCircle, CheckCircle2, BarChart3, RefreshCw } from 'lucide-react'
 import { AuthorizedPersonnelCombobox } from '@/components/ui/authorized-personnel-combobox'
 import {
   getPurchaseOrders, getPurchaseOrderDetail, createPurchaseOrder,
@@ -95,9 +95,9 @@ function Badge({ value, map }: { value: string | null; map: Record<string, { bg:
   return <span className={`inline-flex whitespace-nowrap text-[11px] font-semibold px-2 py-0.5 rounded border ${s.bg} ${s.text} ${s.border}`}>{statusLabel(value)}</span>
 }
 
-const inputClass = "w-full h-9 rounded-lg border border-[#778B96]/30 bg-white px-3 text-xs text-[#28353E] placeholder:text-[#778B96] focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60 focus:border-[#45567D]"
-const selectClass = "w-full h-9 rounded-lg border border-[#778B96]/30 bg-white px-3 text-xs text-[#28353E] focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60 focus:border-[#45567D] appearance-none"
-const textareaClass = "w-full rounded-lg border border-[#778B96]/30 bg-white px-3 py-2 text-xs text-[#28353E] placeholder:text-[#778B96] focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60 focus:border-[#45567D] resize-none"
+const inputClass = "w-full h-8 rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15 focus:border-[#72383D]"
+const selectClass = "w-full h-8 rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15 focus:border-[#72383D] appearance-none"
+const textareaClass = "w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 py-1.5 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15 focus:border-[#72383D] resize-none"
 
 export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, prepareReplenishment = false }: { initialOpenPoId?: string | null, onInitialOpenConsumed?: () => void, prepareReplenishment?: boolean }) {
   const [view, setView] = useState<'list' | 'form' | 'detail' | 'analysis'>('list')
@@ -999,53 +999,52 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
 
   if (view === 'form') {
     return (
-      <div className="flex flex-col h-full overflow-hidden bg-[#DFEBF7]/30 animate-in fade-in zoom-in-95 duration-200">
+       <div className="flex h-full flex-col overflow-hidden bg-[#EFE9E1] animate-in fade-in zoom-in-95 duration-200">
         {message && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
         <form onSubmit={handleSubmit} className="flex-1 overflow-auto">
-          <div className="px-4 sm:px-6 py-3 border-b border-[#778B96]/25 bg-[#28353E] flex flex-wrap items-center justify-between gap-3 sticky top-0 z-10 shadow-md shadow-[#28353E]/10">
+           <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-[#AC9C8D]/35 bg-[#322D29] px-4 py-2 sm:px-6">
             <div className="flex items-center gap-3 min-w-0">
-              <button type="button" onClick={() => { setView('list'); resetForm() }} className="p-1.5 rounded-lg text-[#DFEBF7]/75 hover:bg-white/10 hover:text-white transition-colors">
+               <button type="button" onClick={() => { setView('list'); resetForm() }} className="rounded-md p-1.5 text-[#D1C7BD] transition-colors hover:bg-white/10 hover:text-[#EFE9E1]">
                 <ArrowLeft className="w-5 h-5" />
               </button>
               <div className="min-w-0">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#A4C7D5]">Adquisiciones</p>
-                <h2 className="truncate text-base sm:text-lg font-bold text-white">{editId ? 'Editar orden de compra' : 'Nueva orden de compra'}</h2>
+                 <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-[#AC9C8D]">Adquisiciones</p>
+                 <h2 className="truncate text-sm font-bold uppercase tracking-wide text-[#EFE9E1]">{editId ? 'Editar orden de compra' : 'Nueva orden de compra'}</h2>
               </div>
             </div>
-            <div className="flex w-full sm:w-auto gap-2">
-              <button type="button" onClick={() => { setView('list'); resetForm() }} className="flex-1 sm:flex-none px-3.5 py-1.5 rounded-lg border border-white/20 text-[#DFEBF7]/80 hover:text-white hover:bg-white/10 text-xs font-semibold transition-colors">
+             <div className="flex w-full flex-wrap gap-1.5 sm:w-auto">
+               <button type="button" onClick={() => { setView('list'); resetForm() }} className="flex-1 rounded-md px-3 py-1.5 text-xs font-semibold text-[#D1C7BD] transition-colors hover:bg-white/10 hover:text-[#EFE9E1] sm:flex-none">
                 Cancelar
               </button>
-              <button type="button" onClick={handlePreviewPDF} className="flex-1 sm:flex-none px-3.5 py-1.5 rounded-lg border border-[#A4C7D5]/45 text-[#DFEBF7] hover:bg-[#45567D] text-xs font-semibold transition-colors">
+               <button type="button" onClick={handlePreviewPDF} className="flex-1 rounded-md border border-[#AC9C8D]/55 px-3 py-1.5 text-xs font-semibold text-[#EFE9E1] transition-colors hover:border-[#D1C7BD] hover:bg-white/10 sm:flex-none">
                 Vista previa PDF
               </button>
-              <button type="submit" className="flex-1 sm:flex-none px-4 py-1.5 rounded-lg bg-[#A4C7D5] hover:bg-[#DFEBF7] text-[#28353E] text-xs font-bold transition-colors shadow-lg shadow-[#A4C7D5]/20">
+               <button type="submit" className="flex-1 rounded-md bg-[#72383D] px-4 py-1.5 text-xs font-bold text-[#EFE9E1] transition-colors hover:bg-[#5D2E32] sm:flex-none">
                 Emitir OC
               </button>
             </div>
           </div>
-          <div className="p-4 sm:p-5 lg:p-6 space-y-5 sm:space-y-6">
-            <section className="rounded-xl border border-[#778B96]/25 bg-white/70 p-4 sm:p-5 shadow-sm backdrop-blur-sm">
-              <div className="mb-4 flex items-center justify-between border-b border-[#778B96]/20 pb-3">
-                <div>
-                  <h3 className="text-sm font-bold text-[#28353E]">Datos generales</h3>
-                  <p className="mt-0.5 text-[11px] text-[#778B96]">Información principal de la orden</p>
-                </div>
-                <span className="hidden sm:block rounded-full bg-[#DFEBF7] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-[#45567D]">Cabecera OC</span>
-              </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-4 gap-y-3.5">
-              <div className="space-y-1">
-                <label className="text-[11px] font-semibold text-[#45567D]">Fecha emisión</label>
-                <div className="h-9 rounded-lg border border-[#778B96]/25 bg-[#DFEBF7]/55 px-3 flex items-center text-xs text-[#45567D]">
+           <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-5">
+             <section className="border-b border-[#D1C7BD] pb-4">
+               <div className="mb-3 border-b border-[#D1C7BD] pb-2">
+                 <div>
+                   <h3 className="text-sm font-bold uppercase tracking-wide text-[#322D29]">Datos generales</h3>
+                   <p className="mt-0.5 text-[10px] text-[#AC9C8D]">Información principal de la orden</p>
+                 </div>
+               </div>
+             <div className="grid grid-cols-1 gap-x-4 gap-y-2.5 md:grid-cols-2 xl:grid-cols-4">
+               <div className="space-y-1">
+                 <label className="text-[10px] font-semibold text-[#6D625B]">Fecha emisión</label>
+                 <div className="flex h-8 items-center rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#6D625B]">
                   {new Date().toLocaleDateString('es-CL')}
                 </div>
               </div>
               <div className="space-y-1">
-                <label className="text-[11px] font-semibold text-[#45567D]">Fecha requerida</label>
+                  <label className="text-[10px] font-semibold text-[#6D625B]">Fecha requerida</label>
                 <input type="date" value={form.required_date} onChange={e => setForm(p => ({ ...p, required_date: e.target.value }))} className={inputClass} />
               </div>
               <div ref={supplierRef} className="relative space-y-1">
-                 <label className="text-[11px] font-semibold text-[#45567D]">Proveedor *</label>
+                  <label className="text-[10px] font-semibold text-[#6D625B]">Proveedor *</label>
                 <input
                   type="text"
                   value={
@@ -1058,7 +1057,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                    placeholder="Buscar proveedor..."
                    required
                    readOnly={isReplenishmentPreparation}
-                    className="w-full h-9 rounded-lg border border-[#778B96]/30 bg-white px-3 text-xs text-[#28353E] placeholder:text-[#778B96] focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60 focus:border-[#45567D]"
+                     className="w-full h-8 rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15"
                  />
                  {isReplenishmentPreparation && <p className="mt-1 text-[10px] text-theme-text-muted">Proveedor definido por los productos seleccionados en Reposición.</p>}
                  {!isReplenishmentPreparation && supplierOpen && (
@@ -1094,7 +1093,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                 )}
               </div>
               <div className="relative space-y-1" ref={warehouseRef}>
-                 <label className="text-[11px] font-semibold text-[#45567D]">Bodega destino</label>
+                  <label className="text-[10px] font-semibold text-[#6D625B]">Bodega destino</label>
                 {warehouses.length === 0 ? (
                   <div className="w-full rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-500 font-semibold">
                     No hay bodegas disponibles. Las bodegas deben ser creadas desde el módulo WMS.
@@ -1111,7 +1110,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                       onChange={e => { setWarehouseSearch(e.target.value); setWarehouseOpen(true); if (form.warehouse_id) setForm(p => ({ ...p, warehouse_id: '' })) }}
                       onFocus={() => setWarehouseOpen(true)}
                       placeholder="Buscar bodega..."
-                       className="w-full h-9 rounded-lg border border-[#778B96]/30 bg-white px-3 text-xs text-[#28353E] placeholder:text-[#778B96] focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60 focus:border-[#45567D]"
+                       className="w-full h-8 rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15"
                     />
                     {warehouseOpen && (
                       <>
@@ -1147,7 +1146,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                 )}
               </div>
               <div className="space-y-1">
-                 <label className="text-[11px] font-semibold text-[#45567D]">Tipo OC</label>
+                  <label className="text-[10px] font-semibold text-[#6D625B]">Tipo OC</label>
                 <select value={form.po_type} onChange={e => setForm(p => ({ ...p, po_type: e.target.value }))} className={selectClass}>
                   <option value="PRODUCTOS" className="bg-white dark:bg-emerald-900">Productos</option>
                   <option value="SERVICIOS" className="bg-white dark:bg-emerald-900">Servicios</option>
@@ -1155,7 +1154,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                 </select>
               </div>
               <div className="space-y-1">
-                 <label className="text-[11px] font-semibold text-[#45567D]">Moneda</label>
+                  <label className="text-[10px] font-semibold text-[#6D625B]">Moneda</label>
                 <select value={form.currency} onChange={e => setForm(p => ({ ...p, currency: e.target.value }))} className={selectClass}>
                   <option value="CLP" className="bg-white dark:bg-emerald-900">CLP</option>
                   <option value="USD" className="bg-white dark:bg-emerald-900">USD</option>
@@ -1163,16 +1162,16 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                 </select>
               </div>
               <div className="space-y-1">
-                 <label className="text-[11px] font-semibold text-[#45567D]">Condiciones de pago</label>
+                  <label className="text-[10px] font-semibold text-[#6D625B]">Condiciones de pago</label>
                 <input type="text" value={form.payment_terms} onChange={e => setForm(p => ({ ...p, payment_terms: e.target.value }))} placeholder="Ej: 30 días" className={inputClass} />
               </div>
               {showAuthorizerForm ? (
-                <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4 border border-theme-border rounded-xl p-4 space-y-4 bg-theme-text/5">
+                 <div className="col-span-1 border border-[#D1C7BD] bg-[#F7F4F0] p-3 space-y-3 md:col-span-2 xl:col-span-4">
                   <div className="flex items-center justify-between">
                     <h4 className="text-xs font-bold text-theme-text-muted/80 uppercase tracking-wider">Nuevo autorizador</h4>
                     <button type="button" onClick={() => setShowAuthorizerForm(false)} className="text-xs text-theme-text-muted hover:text-theme-text">Cancelar</button>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-4">
+                     <div className="grid grid-cols-1 gap-x-4 gap-y-2.5 md:grid-cols-2 xl:grid-cols-4">
                     <div className="space-y-1">
                       <label className="text-xs text-theme-text-muted/70">Nombre completo *</label>
                       <input type="text" value={authorizerForm.full_name} onChange={e => setAuthorizerForm(p => ({ ...p, full_name: e.target.value }))} className={inputClass} />
@@ -1207,46 +1206,46 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                   />
                 </div>
               )}
-              <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4 space-y-1">
-                 <label className="text-[11px] font-semibold text-[#45567D]">Notas</label>
-                  <textarea value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} rows={2} className={`${textareaClass} min-h-16 border-[#778B96]/30 bg-white focus:ring-2 focus:ring-[#A4C7D5]/60`} />
+               <div className="col-span-1 space-y-1 md:col-span-2 xl:col-span-4">
+                  <label className="text-[10px] font-semibold text-[#6D625B]">Notas</label>
+                   <textarea value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} rows={2} className={`${textareaClass} h-12`} />
                </div>
              </div>
            </section>
 
-            <section className="rounded-xl border border-[#778B96]/25 bg-white/75 p-4 sm:p-5 shadow-sm backdrop-blur-sm">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-                <div>
-                  <h3 className="text-sm font-bold text-[#28353E]">Líneas de la orden</h3>
-                  <p className="mt-0.5 text-[11px] text-[#778B96]">Productos y servicios incluidos</p>
+             <section className="border-b border-[#D1C7BD] pb-4">
+               <div className="mb-3 flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
+                 <div>
+                   <h3 className="text-sm font-bold uppercase tracking-wide text-[#322D29]">Líneas de la orden</h3>
+                   <p className="mt-0.5 text-[10px] text-[#AC9C8D]">Productos y servicios incluidos</p>
                 </div>
                 <button
                   type="button"
                   onClick={focusProductSearch}
-                  className="inline-flex h-8 items-center justify-center gap-1.5 self-start rounded-lg border border-[#45567D]/30 bg-[#DFEBF7]/55 px-3 text-xs font-semibold text-[#45567D] transition-colors hover:bg-[#DFEBF7] sm:self-auto"
+                   className="inline-flex h-8 items-center justify-center gap-1.5 self-start rounded-md border border-[#72383D]/40 bg-[#EFE9E1] px-3 text-xs font-semibold text-[#72383D] transition-colors hover:bg-[#F5EDEE] sm:self-auto"
                 >
                   <Plus className="h-3.5 w-3.5" />
                   Agregar producto
                 </button>
               </div>
 
-              <div ref={productRef} className="mb-4 relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted/50" />
+               <div ref={productRef} className="relative mb-3">
+                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#AC9C8D]" />
                     <input ref={productInputRef} type="text" value={productSearch} onChange={e => handleProductSearch(e.target.value)}
                      onFocus={openProductDropdown}
                      disabled={!form.supplier_id}
                      placeholder={form.supplier_id ? "Buscar por SKU, descripción o código de barra..." : "Selecciona primero un proveedor"}
-                      className="w-full h-9 pl-10 pr-4 rounded-lg border border-[#778B96]/30 bg-[#DFEBF7]/35 text-xs text-[#28353E] placeholder:text-[#778B96] focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60 focus:bg-white disabled:cursor-not-allowed disabled:opacity-65 disabled:bg-[#E7E7E7]/70" />
-                  {!form.supplier_id && <p className="mt-1.5 text-[10px] text-[#778B96]">Debe seleccionar primero el proveedor para buscar productos.</p>}
+                       className="h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] pl-8 pr-3 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:border-[#72383D] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#72383D]/15 disabled:cursor-not-allowed disabled:bg-[#D1C7BD]/30 disabled:opacity-65" />
+                  {!form.supplier_id && <p className="mt-1.5 text-[10px] text-[#AC9C8D]">Debe seleccionar primero el proveedor para buscar productos.</p>}
                   {form.supplier_id && productDropdownOpen && (
-                    <div onScroll={handleProductDropdownScroll} className="absolute top-full left-0 right-0 mt-1 bg-theme-surface border border-theme-border rounded-xl shadow-xl z-20 max-h-80 overflow-y-auto">
+                     <div onScroll={handleProductDropdownScroll} className="absolute left-0 right-0 top-full z-20 mt-1 max-h-80 overflow-y-auto border border-[#D1C7BD] bg-white shadow-lg">
                        {productSearchLoading ? <p className="px-4 py-2.5 text-xs text-theme-text-muted/60">Buscando...</p> : productResults.length === 0 ? (
                         <p className="px-4 py-2.5 text-xs text-theme-text-muted/60">
                           {productSearch.trim() ? 'No se encontraron productos para este proveedor.' : 'Este proveedor no tiene productos disponibles.'}
                         </p>
                        ) : productResults.map(p => (
                          <button key={p.id} type="button" onClick={() => selectProductForAddition(p)}
-                          className="w-full text-left px-4 py-2.5 text-xs text-theme-text hover:bg-theme-text/5 border-b border-theme-border last:border-0 flex items-center justify-between">
+                           className="flex w-full items-center justify-between border-b border-[#E5DDD4] px-3 py-2 text-left text-xs text-[#322D29] last:border-0 hover:bg-[#F3EFE9]">
                           <span><span className="font-mono font-semibold">{p.sku}</span> — {p.description}</span>
                           <span className="text-theme-text-muted/50">{p.unit_of_measure || '—'}</span>
                         </button>
@@ -1257,23 +1256,23 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                </div>
 
                {pendingProduct && (
-                 <div className="mb-4 rounded-lg border border-[#A4C7D5]/60 bg-[#DFEBF7]/35 p-3">
+                  <div className="mb-3 border border-[#D1C7BD] bg-[#F7F4F0] p-3">
                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1.5fr)_minmax(110px,.7fr)_minmax(140px,.8fr)_auto] sm:items-end">
                      <div className="min-w-0">
-                       <p className="text-[10px] font-semibold uppercase tracking-wide text-[#45567D]">Producto</p>
-                       <p className="truncate text-xs font-semibold text-[#28353E]" title={pendingProduct.description}>{pendingProduct.description}</p>
-                       <p className="mt-0.5 font-mono text-[10px] text-[#778B96]">SKU {pendingProduct.sku}</p>
-                       <p className="mt-1 text-[10px] text-[#778B96]">Último costo de compra Bsale (CLP): {pendingProduct.last_purchase_unit_cost === null ? 'Sin precio disponible' : formatCurrency(pendingProduct.last_purchase_unit_cost, 'CLP')}</p>
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-[#72383D]">Producto</p>
+                        <p className="truncate text-xs font-semibold text-[#322D29]" title={pendingProduct.description}>{pendingProduct.description}</p>
+                        <p className="mt-0.5 font-mono text-[10px] text-[#AC9C8D]">SKU {pendingProduct.sku}</p>
+                        <p className="mt-1 text-[10px] text-[#AC9C8D]">Último costo de compra Bsale (CLP): {pendingProduct.last_purchase_unit_cost === null ? 'Sin precio disponible' : formatCurrency(pendingProduct.last_purchase_unit_cost, 'CLP')}</p>
                      </div>
-                     <label className="text-[10px] font-semibold text-[#45567D]">Cantidad<input type="number" min="0.001" step="0.001" value={pendingQuantity} onChange={event => setPendingQuantity(event.target.value)} className="mt-1 block h-8 w-full rounded-lg border border-[#778B96]/30 bg-white px-2 text-right text-xs text-[#28353E]" /></label>
-                     <label className="text-[10px] font-semibold text-[#45567D]">Precio unitario<input type="number" min="0" step="1" value={pendingUnitPrice} onChange={event => setPendingUnitPrice(event.target.value)} placeholder="Ingresar manualmente" className="mt-1 block h-8 w-full rounded-lg border border-[#778B96]/30 bg-white px-2 text-right text-xs text-[#28353E]" /></label>
-                     <button type="button" onClick={addProductToItems} className="h-8 rounded-lg bg-theme-accent px-3 text-xs font-bold text-white hover:bg-theme-accent-hover">Agregar producto</button>
+                      <label className="text-[10px] font-semibold text-[#6D625B]">Cantidad<input type="number" min="0.001" step="0.001" value={pendingQuantity} onChange={event => setPendingQuantity(event.target.value)} className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" /></label>
+                      <label className="text-[10px] font-semibold text-[#6D625B]">Precio unitario<input type="number" min="0" step="1" value={pendingUnitPrice} onChange={event => setPendingUnitPrice(event.target.value)} placeholder="Ingresar manualmente" className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" /></label>
+                      <button type="button" onClick={addProductToItems} className="h-8 rounded-md border border-[#72383D]/40 bg-[#EFE9E1] px-3 text-xs font-bold text-[#72383D] hover:bg-[#F5EDEE]">Agregar producto</button>
                    </div>
                  </div>
                )}
 
-                <div className="overflow-x-auto rounded-lg border border-[#778B96]/25">
-                 <table className="w-full min-w-[1120px] table-fixed text-sm">
+                 <div className="overflow-x-auto border border-[#D1C7BD] bg-white">
+                  <table className="w-full min-w-[1120px] table-fixed text-sm">
                    <colgroup>
                      <col className="w-10" />
                      <col className="w-24" />
@@ -1287,56 +1286,56 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                      <col className="w-32" />
                      <col className="w-12" />
                    </colgroup>
-                   <thead className="bg-[#28353E]">
-                     <tr className="border-b border-[#45567D] text-[10px] text-[#DFEBF7]/80 uppercase tracking-wider">
-                       <th className="text-center py-2.5 px-3 font-semibold">#</th>
-                       <th className="text-center py-2.5 px-3 font-semibold">Tipo</th>
-                       <th className="text-left py-2.5 px-3 font-semibold">Producto/Servicio</th>
-                       <th className="text-center py-2.5 px-3 font-semibold">Unidad</th>
-                       <th className="text-center py-2.5 px-3 font-semibold">Cantidad</th>
-                       <th className="text-center py-2.5 px-3 font-semibold">P.Unitario</th>
-                       <th className="text-center py-2.5 px-3 font-semibold">Dto%</th>
-                       <th className="text-right py-2.5 px-3 font-semibold">Descuento</th>
-                       <th className="text-center py-2.5 px-3 font-semibold">IVA%</th>
-                       <th className="text-right py-2.5 px-3 font-semibold">Total</th>
-                       <th className="text-center py-2.5 px-3 font-medium">Acción</th>
+                    <thead className="bg-[#322D29]">
+                      <tr className="border-b border-[#AC9C8D]/35 text-[9px] uppercase tracking-[0.08em] text-[#EFE9E1]">
+                        <th className="px-3 py-1.5 text-center font-semibold">#</th>
+                        <th className="px-3 py-1.5 text-center font-semibold">Tipo</th>
+                        <th className="px-3 py-1.5 text-left font-semibold">Producto/Servicio</th>
+                        <th className="px-3 py-1.5 text-center font-semibold">Unidad</th>
+                        <th className="px-3 py-1.5 text-center font-semibold">Cantidad</th>
+                        <th className="px-3 py-1.5 text-center font-semibold">P.Unitario</th>
+                        <th className="px-3 py-1.5 text-center font-semibold">Dto%</th>
+                        <th className="px-3 py-1.5 text-right font-semibold">Descuento</th>
+                        <th className="px-3 py-1.5 text-center font-semibold">IVA%</th>
+                        <th className="px-3 py-1.5 text-right font-semibold">Total</th>
+                        <th className="px-3 py-1.5 text-center font-medium">Acción</th>
                     </tr>
                   </thead>
                   <tbody>
                     {items.length === 0 ? (
                       <tr>
-                        <td colSpan={11} className="py-8 text-center text-xs text-theme-text-muted/40">No hay líneas agregadas</td>
+                         <td colSpan={11} className="py-6 text-center text-xs text-[#AC9C8D]">No hay líneas agregadas</td>
                       </tr>
                     ) : items.map((it, idx) => (
-                        <tr key={it.tempId} className={`border-b border-[#778B96]/15 odd:bg-white even:bg-[#DFEBF7]/20 hover:bg-[#DFEBF7]/60 transition-colors ${invalidPriceItemIds.has(it.tempId) ? 'bg-red-50 ring-1 ring-inset ring-red-300' : ''}`}>
-                         <td className="py-2 px-3 text-center text-xs text-[#778B96]">{idx + 1}</td>
+                         <tr key={it.tempId} className={`border-b border-[#E5DDD4] odd:bg-white even:bg-[#FBFAF8] hover:bg-[#F3EFE9] transition-colors ${invalidPriceItemIds.has(it.tempId) ? 'bg-red-50 ring-1 ring-inset ring-red-300' : ''}`}>
+                          <td className="px-3 py-1.5 text-center text-xs text-[#AC9C8D]">{idx + 1}</td>
                          <td className="py-2 px-3 text-center">
-                           <span className="text-[10px] font-semibold px-2 py-0.5 rounded border bg-[#DFEBF7] text-[#45567D] border-[#A4C7D5]/70">{it.item_type === 'PRODUCT' ? 'Producto' : 'Servicio'}</span>
+                            <span className="rounded border border-[#D1C7BD] bg-[#EFE9E1] px-2 py-0.5 text-[10px] font-semibold text-[#6D625B]">{it.item_type === 'PRODUCT' ? 'Producto' : 'Servicio'}</span>
                         </td>
-                         <td className="py-2 px-3 text-xs text-[#28353E]">
+                          <td className="px-3 py-1.5 text-xs text-[#322D29]">
                           {editingItem === it.tempId ? (
-                             <input type="text" value={it.description} onChange={e => updateItem(it.tempId, 'description', e.target.value)} className="w-full h-8 rounded-lg border border-[#778B96]/30 bg-white px-2 text-xs text-[#28353E] focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60" />
+                              <input type="text" value={it.description} onChange={e => updateItem(it.tempId, 'description', e.target.value)} className="h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                           ) : (
                             <span>{it.description || <span className="text-theme-text-muted/40">—</span>}</span>
                           )}
                         </td>
-                         <td className="py-2 px-3 text-center text-xs text-[#778B96]">{it.unit}</td>
-                         <td className="py-2 px-3 text-center">
-                           <input type="number" min="0" step="0.001" value={it.quantity} onChange={e => updateItem(it.tempId, 'quantity', parseFloat(e.target.value) || 0)} className="mx-auto block w-20 h-8 rounded-lg border border-[#778B96]/30 bg-white px-2 text-xs text-[#28353E] text-right focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60" />
+                          <td className="px-3 py-1.5 text-center text-xs text-[#AC9C8D]">{it.unit}</td>
+                          <td className="px-3 py-1.5 text-center">
+                            <input type="number" min="0" step="0.001" value={it.quantity} onChange={e => updateItem(it.tempId, 'quantity', parseFloat(e.target.value) || 0)} className="mx-auto block h-8 w-20 rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                         </td>
-                         <td className="py-2 px-3 text-center">
-                             <input ref={input => { linePriceInputRefs.current[it.tempId] = input }} aria-invalid={invalidPriceItemIds.has(it.tempId)} type="number" min="0" step="1" value={it.unit_price} onChange={e => updateItem(it.tempId, 'unit_price', parseFloat(e.target.value) || 0)} className={`mx-auto block w-24 h-8 rounded-lg border bg-white px-2 text-xs text-[#28353E] text-right focus:outline-none focus:ring-2 ${invalidPriceItemIds.has(it.tempId) ? 'border-red-500 focus:ring-red-300' : 'border-[#778B96]/30 focus:ring-[#A4C7D5]/60'}`} />
+                          <td className="px-3 py-1.5 text-center">
+                              <input ref={input => { linePriceInputRefs.current[it.tempId] = input }} aria-invalid={invalidPriceItemIds.has(it.tempId)} type="number" min="0" step="1" value={it.unit_price} onChange={e => updateItem(it.tempId, 'unit_price', parseFloat(e.target.value) || 0)} className={`mx-auto block h-8 w-24 rounded-md border bg-white px-2 text-right text-xs text-[#322D29] focus:outline-none focus:ring-2 ${invalidPriceItemIds.has(it.tempId) ? 'border-red-500 focus:ring-red-300' : 'border-[#D1C7BD] focus:border-[#72383D] focus:ring-[#72383D]/15'}`} />
                              {invalidPriceItemIds.has(it.tempId) && <span className="block mt-0.5 text-[10px] font-semibold text-red-600">Complete el precio</span>}
-                            {it.reference_unit_cost !== undefined && <span className="block mt-0.5 text-[10px] text-[#778B96]">Ref. Bsale {formatCurrency(it.reference_unit_cost, 'CLP')}</span>}
+                             {it.reference_unit_cost !== undefined && <span className="mt-0.5 block text-[10px] text-[#AC9C8D]">Ref. Bsale {formatCurrency(it.reference_unit_cost, 'CLP')}</span>}
                         </td>
-                         <td className="py-2 px-3 text-center">
-                           <input type="number" min="0" max="100" step="0.01" value={it.discount_percent} onChange={e => updateItem(it.tempId, 'discount_percent', parseFloat(e.target.value) || 0)} className="mx-auto block w-16 h-8 rounded-lg border border-[#778B96]/30 bg-white px-2 text-xs text-[#28353E] text-right focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60" />
+                          <td className="px-3 py-1.5 text-center">
+                            <input type="number" min="0" max="100" step="0.01" value={it.discount_percent} onChange={e => updateItem(it.tempId, 'discount_percent', parseFloat(e.target.value) || 0)} className="mx-auto block h-8 w-16 rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                         </td>
-                        <td className="py-2.5 px-3 text-xs text-theme-text-muted/60 text-right">{(it.quantity * it.unit_price * it.discount_percent / 100).toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 })}</td>
-                         <td className="py-2 px-3 text-center">
-                           <input type="number" min="0" max="100" step="0.01" value={it.tax_rate} onChange={e => updateItem(it.tempId, 'tax_rate', parseFloat(e.target.value) || 0)} className="mx-auto block w-16 h-8 rounded-lg border border-[#778B96]/30 bg-white px-2 text-xs text-[#28353E] text-right focus:outline-none focus:ring-2 focus:ring-[#A4C7D5]/60" />
+                         <td className="px-3 py-1.5 text-right text-xs text-[#6D625B]">{(it.quantity * it.unit_price * it.discount_percent / 100).toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 })}</td>
+                          <td className="px-3 py-1.5 text-center">
+                            <input type="number" min="0" max="100" step="0.01" value={it.tax_rate} onChange={e => updateItem(it.tempId, 'tax_rate', parseFloat(e.target.value) || 0)} className="mx-auto block h-8 w-16 rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                         </td>
-                        <td className="py-2.5 px-3 text-xs text-theme-text font-semibold text-right">
+                         <td className="px-3 py-1.5 text-right text-xs font-semibold text-[#322D29]">
                           {(() => {
                             const lineNet = it.quantity * it.unit_price
                             const lineDisc = lineNet * it.discount_percent / 100
@@ -1344,8 +1343,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                             return (lineNet - lineDisc + lineTax).toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 })
                           })()}
                         </td>
-                        <td className="py-2.5 px-3 text-center">
-                          <button type="button" onClick={() => removeItem(it.tempId)} className="p-1 rounded-lg hover:bg-red-500/10 text-theme-text-muted hover:text-red-500 transition-colors">
+                         <td className="px-3 py-1.5 text-center">
+                           <button type="button" onClick={() => removeItem(it.tempId)} className="rounded-md p-1 text-[#AC9C8D] transition-colors hover:bg-red-500/10 hover:text-red-500">
                             <X className="w-3.5 h-3.5" />
                           </button>
                         </td>
@@ -1355,25 +1354,25 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                 </table>
               </div>
 
-               <div className="flex justify-end mt-4">
-                 <div className="w-full sm:w-80 rounded-lg border border-[#778B96]/25 bg-[#DFEBF7]/45 p-3.5 space-y-1 text-xs">
-                   <div className="flex justify-between py-1">
-                     <span className="text-[#778B96]">Neto</span>
-                     <span className="text-[#28353E] font-medium">{formatCurrency(netTotal, form.currency)}</span>
+                <div className="mt-3 flex justify-end border-t border-[#D1C7BD] pt-3">
+                  <div className="w-full space-y-1 text-xs sm:w-96">
+                    <div className="flex justify-between py-0.5">
+                      <span className="text-[#AC9C8D]">Neto</span>
+                      <span className="font-medium text-[#322D29]">{formatCurrency(netTotal, form.currency)}</span>
                   </div>
                   {discountTotal > 0 && (
-                    <div className="flex justify-between py-1">
-                      <span className="text-theme-text-muted/70">Descuentos</span>
+                     <div className="flex justify-between py-0.5">
+                       <span className="text-[#AC9C8D]">Descuentos</span>
                       <span className="text-red-500">-{formatCurrency(discountTotal, form.currency)}</span>
                     </div>
                   )}
-                  <div className="flex justify-between py-1">
-                       <span className="text-[#778B96]">IVA</span>
-                       <span className="text-[#28353E] font-medium">{formatCurrency(taxTotal, form.currency)}</span>
-                  </div>
-                   <div className="flex justify-between py-2 mt-1 border-t border-[#778B96]/25">
-                     <span className="text-[#28353E] font-bold">Total</span>
-                     <span className="text-[#45567D] font-bold text-base">{formatCurrency(grandTotal, form.currency)}</span>
+                   <div className="flex justify-between py-0.5">
+                        <span className="text-[#AC9C8D]">IVA</span>
+                        <span className="font-medium text-[#322D29]">{formatCurrency(taxTotal, form.currency)}</span>
+                   </div>
+                    <div className="mt-1 flex justify-between border-t border-[#D1C7BD] py-1.5">
+                      <span className="font-bold text-[#322D29]">Total</span>
+                      <span className="text-base font-bold text-[#72383D]">{formatCurrency(grandTotal, form.currency)}</span>
                   </div>
                 </div>
               </div>
@@ -1534,44 +1533,48 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   }
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface shadow-sm">
+    <div className="relative flex h-full min-w-0 flex-col overflow-hidden bg-[#EFE9E1]">
       <div className="flex flex-1 overflow-hidden">
         <div className={`flex flex-col h-full overflow-hidden transition-all duration-300 ${selectedPo ? "w-full md:w-1/3 lg:w-1/4 border-r border-theme-border" : "w-full"}`}>
       {message && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
 
-      <div className="shrink-0 flex flex-col gap-2.5 p-3 border-b border-theme-border/60 bg-theme-text/[0.01]">
+      <div className="shrink-0 flex flex-col gap-2 border-b border-[#D1C7BD] bg-[#EFE9E1] px-3 py-2">
         <div className="flex flex-col md:flex-row items-center gap-2 w-full">
           <div className="relative flex-1 w-full">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted/50" />
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#AC9C8D]" />
             <input type="text" value={filters.search ?? ''} onChange={e => setFilters(p => ({ ...p, search: e.target.value || undefined, page: 1 }))}
               placeholder="Buscar por N° OC, proveedor..."
-              className="w-full h-9 pl-10 pr-4 rounded-lg border border-theme-border bg-theme-surface hover:bg-theme-text/5 focus:bg-theme-surface focus:ring-2 focus:ring-theme-accent/20 focus:border-theme-accent transition-all text-sm text-theme-text placeholder:text-theme-text-muted/40" />
+              className="h-8 w-full rounded-md border border-[#D1C7BD] bg-white pl-8 pr-3 text-xs text-[#322D29] placeholder:text-[#AC9C8D] transition-all focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
           </div>
 
-          <div className="flex items-center gap-1.5 w-full md:w-auto">
-            <button onClick={() => setShowFilters(!showFilters)} className={`h-9 px-2.5 md:px-3 rounded-lg border transition-all flex items-center justify-center gap-1.5 text-sm font-semibold ${showFilters ? 'bg-theme-text/10 border-theme-border text-theme-text' : 'bg-theme-surface border-theme-border hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text'}`}>
-              <Filter className="w-4 h-4" />
-              <span className="hidden md:inline">Filtros</span>
+          <div className="flex w-full items-center gap-1.5 md:w-auto">
+            <button onClick={() => setShowFilters(!showFilters)} className={`flex h-8 items-center justify-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold transition-all ${showFilters ? 'border-[#72383D]/40 bg-[#72383D]/10 text-[#72383D]' : 'border-[#D1C7BD] bg-[#EFE9E1] text-[#6D625B] hover:bg-[#D1C7BD]/40 hover:text-[#322D29]'}`}>
+              <Filter className="h-3.5 w-3.5" />
+              <span>Filtros</span>
             </button>
-            <button type="button" onClick={resetWidths} className="h-9 px-2.5 rounded-lg border border-theme-border bg-theme-surface text-xs font-semibold text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text transition-all">
+            <button type="button" onClick={load} className="flex h-8 items-center gap-1.5 rounded-md border border-[#D1C7BD] bg-[#EFE9E1] px-2.5 text-xs font-semibold text-[#6D625B] transition-all hover:bg-[#D1C7BD]/40 hover:text-[#322D29]" title="Actualizar listado">
+              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Actualizar</span>
+            </button>
+            <button type="button" onClick={resetWidths} className="hidden h-8 rounded-md border border-[#D1C7BD] bg-[#EFE9E1] px-2.5 text-[11px] font-semibold text-[#6D625B] transition-all hover:bg-[#D1C7BD]/40 hover:text-[#322D29] lg:inline-flex lg:items-center">
               Restablecer anchos
             </button>
 
-            <button onClick={() => setView('analysis')} className="h-9 px-3.5 rounded-lg border border-theme-accent/30 text-theme-accent hover:bg-theme-accent/10 text-sm font-semibold transition-all flex items-center justify-center gap-1.5 shadow-sm">
-              <BarChart3 className="w-4 h-4" />
-              <span className="hidden sm:inline">Realizar Análisis</span>
+            <button onClick={() => setView('analysis')} className="flex h-8 items-center justify-center gap-1.5 rounded-md border border-[#72383D]/35 px-2.5 text-xs font-semibold text-[#72383D] transition-all hover:bg-[#72383D]/10">
+              <BarChart3 className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Análisis de reposición</span>
             </button>
-            <button onClick={() => { resetForm(); setView('form') }} className="h-9 px-3.5 md:px-4 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-sm font-bold transition-all shadow-lg shadow-theme-accent/20 flex items-center justify-center gap-1.5 ml-auto md:ml-0">
-              <Plus className="w-4 h-4" />
+            <button onClick={() => { resetForm(); setView('form') }} className="ml-auto flex h-8 items-center justify-center gap-1.5 rounded-md bg-[#72383D] px-3 text-xs font-bold text-[#EFE9E1] transition-all hover:bg-[#5D2E32] md:ml-0">
+              <Plus className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Crear OC</span>
             </button>
           </div>
         </div>
 
         {showFilters && (
-          <div className="p-3.5 rounded-xl border border-theme-border bg-theme-text/5 animate-in slide-in-from-top-2 duration-200">
+           <div className="border-t border-[#D1C7BD] pt-2 animate-in slide-in-from-top-2 duration-200">
             <div className="flex items-center justify-between mb-4">
-              <h4 className="text-xs font-bold text-theme-text-muted/80 uppercase tracking-wider">Filtros Avanzados</h4>
+                 <h4 className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#AC9C8D]">Filtros avanzados</h4>
               <button onClick={() => { setFilters({ page: 1, pageSize: 50 }); setShowFilters(false) }} className="text-xs font-semibold text-theme-text-accent hover:text-theme-text flex items-center gap-1 transition-colors">
                 <X className="w-3 h-3" /> Limpiar filtros
               </button>
@@ -1606,49 +1609,58 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
 
       {refreshing && <div role="status" aria-live="polite" className="pointer-events-none absolute left-1/2 top-20 z-50 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-theme-border bg-theme-surface/95 px-3 py-1.5 text-[11px] font-semibold text-theme-text-muted shadow-md">Actualizando...</div>}
 
-      {initialLoading ? (
-        <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-10 text-center">
+       {initialLoading ? (
+         <div className="p-10 text-center">
           <p className="text-theme-text-muted/50 text-sm">Cargando...</p>
         </div>
       ) : data.length === 0 ? (
-        <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-10 text-center">
+         <div className="p-10 text-center">
           <p className="text-theme-text-muted/50 text-sm">No hay órdenes de compra.</p>
         </div>
       ) : (
-        <div className="min-w-0 flex-1 overflow-x-auto overflow-y-auto">
-          <table className="min-w-[1650px] w-full table-fixed whitespace-nowrap border-collapse text-sm">
-            <colgroup>{PURCHASE_ORDER_COLUMNS.map(column => <col key={column.id} style={{ width: widths[column.id] ?? column.defaultWidth }} />)}</colgroup>
-            <thead className="sticky top-0 z-10 bg-theme-surface">
-              <tr className="border-b border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider">
-                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">N° OC{resizeHandle('correlative')}</th>
-                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">Fecha{resizeHandle('issueDate')}</th>
-                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">Proveedor{resizeHandle('supplier')}</th>
-                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">Tipo{resizeHandle('type')}</th>
-                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">Bodega{resizeHandle('warehouse')}</th>
-                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">Solicitante{resizeHandle('requester')}</th>
-                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">Autoriza{resizeHandle('authorized')}</th>
-                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">Estado{resizeHandle('status')}</th>
-                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-right font-medium">Total{resizeHandle('total')}</th>
-                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">Recepción{resizeHandle('receipt')}</th>
-                <th className="relative border-r border-theme-border/30 px-4 py-2.5 text-left font-medium">Factura{resizeHandle('invoice')}</th>
-                <th className={`sticky right-0 z-20 border-l border-theme-border bg-theme-surface px-4 py-2.5 text-right font-medium ${selectedPo ? "hidden" : ""}`}>Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.map(po => (
-                <tr key={po.id} className={`border-b border-theme-border hover:bg-theme-text/5 transition-colors cursor-pointer ${selectedPo?.id === po.id ? "bg-theme-accent/5 border-l-2 border-l-theme-accent" : ""}`} onClick={() => openDetail(po)} onDoubleClick={event => { if (!shouldIgnoreOperationalRowDoubleClick(event.target)) openDetail(po) }} onMouseEnter={() => prefetchDetail(po.id)}>
-                  <td className="px-4 py-2.5 truncate text-xs font-mono font-semibold text-theme-text-accent" title={po.correlative}>{po.correlative}</td>
-                  <td className="px-4 py-2.5 truncate text-xs text-theme-text" title={formatDate(po.issue_date)}>{formatDate(po.issue_date)}</td>
-                  <td className="px-4 py-2.5 truncate text-xs text-theme-text" title={po.supplier_name}>{po.supplier_name}</td>
-                  <td className="px-4 py-2.5 truncate text-xs text-theme-text-muted/60" title={po.po_type}>{po.po_type}</td>
-                  <td className="px-4 py-2.5 truncate text-xs text-theme-text-muted/60" title={po.warehouse_name || '—'}>{po.warehouse_name || '—'}</td>
-                  <td className="px-4 py-2.5 truncate text-xs text-theme-text-muted/60" title={po.requester_name}>{po.requester_name}</td>
-                  <td className="px-4 py-2.5 truncate text-xs text-theme-text-muted/60" title={po.authorized_name || '—'}>{po.authorized_name || '—'}</td>
+         <div className="min-w-0 flex-1 overflow-x-auto overflow-y-auto overscroll-x-contain bg-white">
+           <table className="min-w-[1650px] w-full table-fixed whitespace-nowrap border-collapse text-sm">
+             <colgroup>{PURCHASE_ORDER_COLUMNS.map(column => <col key={column.id} style={{ width: widths[column.id] ?? column.defaultWidth }} />)}</colgroup>
+             <thead className="sticky top-0 z-10">
+               <tr className="bg-[#322D29] text-[9px] font-bold uppercase tracking-[0.12em] text-[#EFE9E1]">
+                 <th colSpan={3} className="border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left">Identificación</th>
+                 <th colSpan={2} className="border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left">Clasificación</th>
+                 <th colSpan={2} className="border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left">Responsables</th>
+                 <th className="border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left">Estado</th>
+                 <th className="border-r border-[#AC9C8D]/35 px-3 py-1.5 text-right">Importe</th>
+                 <th colSpan={2} className="border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left">Seguimiento</th>
+                 <th className={`sticky right-0 z-20 bg-[#322D29] px-3 py-1.5 text-right ${selectedPo ? "hidden" : ""}`}>Acciones</th>
+               </tr>
+               <tr className="border-b border-[#D1C7BD] bg-[#F7F4F0] text-[9px] font-semibold uppercase tracking-[0.08em] text-[#322D29]">
+                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">N° OC{resizeHandle('correlative')}</th>
+                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">Fecha{resizeHandle('issueDate')}</th>
+                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">Proveedor{resizeHandle('supplier')}</th>
+                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">Tipo{resizeHandle('type')}</th>
+                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">Bodega{resizeHandle('warehouse')}</th>
+                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">Solicitante{resizeHandle('requester')}</th>
+                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">Autoriza{resizeHandle('authorized')}</th>
+                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">Estado{resizeHandle('status')}</th>
+                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-right">Total{resizeHandle('total')}</th>
+                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">Recepción{resizeHandle('receipt')}</th>
+                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">Factura{resizeHandle('invoice')}</th>
+                 <th className={`sticky right-0 z-20 border-l border-[#D1C7BD] bg-[#F7F4F0] px-3 py-1.5 text-right text-[#322D29] ${selectedPo ? "hidden" : ""}`}>Acciones</th>
+               </tr>
+             </thead>
+             <tbody>
+               {data.map(po => (
+                 <tr key={po.id} className={`cursor-pointer border-b border-[#E5DDD4] transition-colors hover:bg-[#F3EFE9] ${selectedPo?.id === po.id ? "bg-[#F5EDEE] border-l-2 border-l-[#72383D]" : "bg-white"}`} onClick={() => openDetail(po)} onDoubleClick={event => { if (!shouldIgnoreOperationalRowDoubleClick(event.target)) openDetail(po) }} onMouseEnter={() => prefetchDetail(po.id)}>
+                   <td className="truncate px-3 py-1.5 text-xs font-mono font-semibold text-[#72383D]" title={po.correlative}>{po.correlative}</td>
+                   <td className="truncate px-3 py-1.5 text-xs text-[#322D29]" title={formatDate(po.issue_date)}>{formatDate(po.issue_date)}</td>
+                   <td className="truncate px-3 py-1.5 text-xs text-[#322D29]" title={po.supplier_name}>{po.supplier_name}</td>
+                   <td className="truncate px-3 py-1.5 text-xs text-[#6D625B]" title={po.po_type}>{po.po_type}</td>
+                   <td className="truncate px-3 py-1.5 text-xs text-[#6D625B]" title={po.warehouse_name || '—'}>{po.warehouse_name || '—'}</td>
+                   <td className="truncate px-3 py-1.5 text-xs text-[#6D625B]" title={po.requester_name}>{po.requester_name}</td>
+                   <td className="truncate px-3 py-1.5 text-xs text-[#6D625B]" title={po.authorized_name || '—'}>{po.authorized_name || '—'}</td>
                   <td className="px-4 py-2.5 truncate"><Badge value={po.status} map={STATUS_BADGES} /></td>
-                  <td className="px-4 py-2.5 truncate text-right text-xs tabular-nums text-theme-text font-medium" title={formatCurrency(po.grand_total, po.currency)}>{formatCurrency(po.grand_total, po.currency)}</td>
+                   <td className="truncate px-3 py-1.5 text-right text-xs font-medium tabular-nums text-[#322D29]" title={formatCurrency(po.grand_total, po.currency)}>{formatCurrency(po.grand_total, po.currency)}</td>
                   <td className="px-4 py-2.5 truncate"><Badge value={po.receipt_status} map={RECEIPT_BADGES} /></td>
                   <td className="px-4 py-2.5 truncate"><Badge value={po.invoice_status} map={INVOICE_BADGES} /></td>
-                  <td className={`sticky right-0 z-[5] border-l border-theme-border bg-theme-surface whitespace-nowrap px-4 py-2.5 text-right ${selectedPo ? "hidden" : ""}`} onClick={e => e.stopPropagation()}>
+                   <td className={`sticky right-0 z-[5] whitespace-nowrap border-l border-[#D1C7BD] bg-white px-3 py-1.5 text-right ${selectedPo ? "hidden" : ""}`} onClick={e => e.stopPropagation()}>
                     <button onClick={() => openDetail(po)} className="p-1.5 rounded-lg hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text transition-colors" title="Ver detalle">
                       <Eye className="w-4 h-4" />
                     </button>

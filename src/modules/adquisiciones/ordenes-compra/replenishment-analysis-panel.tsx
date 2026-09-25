@@ -31,7 +31,6 @@ import {
   type ViewId,
   type WidthKey,
 } from './replenishment-columns'
-import { ReplenishmentHeader } from './replenishment-header'
 import { ReplenishmentFilters } from './replenishment-filters'
 import { ReplenishmentEmptyState } from './replenishment-empty-state'
 import { ReplenishmentResultsBar } from './replenishment-results-bar'
@@ -1006,14 +1005,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   const canClearVisibleQuantities = filtered.some(row => row.confirmedQty > 0 || confirmedSet.has(row.sku.SKU))
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-[18px] border border-theme-border bg-theme-surface text-theme-text shadow-sm animate-in fade-in duration-200">
-      <ReplenishmentHeader
-        busy={loading}
-        disabled={loading || initialLoading}
-        onBack={onBack}
-        onRefresh={handleRefresh}
-      />
-
+    <div className="flex h-full flex-col overflow-hidden bg-theme-surface text-theme-text animate-in fade-in duration-200">
       <ReplenishmentFilters
         periodOptions={PERIOD_OPTIONS}
         coverageOptions={COVERAGE_OPTIONS}
@@ -1044,6 +1036,9 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
         historialVisible={effectiveHistorial}
         onSelectHistorial={setHistorialVisible}
         onOpenConfig={() => setConfigOpen(true)}
+        headerDisabled={loading || initialLoading}
+        onBack={onBack}
+        onRefresh={handleRefresh}
       />
 
       {hasResults && (

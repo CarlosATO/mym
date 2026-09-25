@@ -22,6 +22,8 @@ export function AdquisicionesLayoutClient({ children, profile, permissions }: Ad
       surfaceMode="none"
       showPortalLink
       topbarVariant="module"
+      sidebarVariant="financial"
+      themeVariant="financial"
     >
       {children}
     </ModuleShell>

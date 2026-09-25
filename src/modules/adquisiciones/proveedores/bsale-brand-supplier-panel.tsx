@@ -187,12 +187,12 @@ export function BsaleBrandSupplierPanel({ canWrite }: Props) {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-theme-surface">
-      <div className="shrink-0 border-b border-theme-border/70 bg-theme-text/[0.02] px-4 py-4 md:px-5">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#EFE9E1]">
+      <div className="shrink-0 border-b border-[#D1C7BD] bg-[#EFE9E1] px-4 py-2 md:px-5">
+        <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
           <div>
-            <h2 className="text-base font-bold text-theme-text">Proveedor en Bsale</h2>
-            <p className="mt-1 max-w-3xl text-xs text-theme-text-muted/75">Administra el vínculo aprobado de cada Brand Bsale con un proveedor REAL PetGroup.</p>
+            <h2 className="text-sm font-bold uppercase tracking-wide text-[#322D29]">Proveedor en Bsale</h2>
+            <p className="mt-0.5 max-w-3xl text-[10px] text-[#AC9C8D]">Administra el vínculo aprobado de cada Brand Bsale con un proveedor REAL PetGroup.</p>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Summary label="Brands detectados" value={summary.total} />
@@ -202,33 +202,33 @@ export function BsaleBrandSupplierPanel({ canWrite }: Props) {
         </div>
       </div>
 
-      <div className="shrink-0 flex flex-col gap-2 border-b border-theme-border/60 p-3 md:flex-row md:items-center">
+      <div className="shrink-0 flex flex-col gap-2 border-b border-[#D1C7BD] bg-[#EFE9E1] px-3 py-2 md:flex-row md:items-center">
         <div className="relative min-w-0 flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-theme-text-muted/50" />
-          <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Buscar Brand o proveedor REAL..." className="h-9 w-full rounded-lg border border-theme-border bg-theme-surface pl-9 pr-3 text-xs text-theme-text outline-none focus:border-theme-accent" />
+          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#AC9C8D]" />
+          <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Buscar Brand o proveedor REAL..." className="h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] pl-8 pr-3 text-xs text-[#322D29] outline-none focus:border-[#72383D] focus:bg-white focus:ring-2 focus:ring-[#72383D]/15" />
         </div>
-        <select value={statusFilter} onChange={event => setStatusFilter(event.target.value as typeof statusFilter)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-xs text-theme-text outline-none">
+        <select value={statusFilter} onChange={event => setStatusFilter(event.target.value as typeof statusFilter)} className="h-8 rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2 text-xs text-[#322D29] outline-none focus:border-[#72383D] focus:ring-2 focus:ring-[#72383D]/15">
           <option value="ALL">Todos los estados</option>
           <option value="PENDING">Pendientes</option>
           <option value="LINKED">Vinculados</option>
         </select>
-        <button type="button" onClick={resetWidths} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-3 text-xs font-semibold text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text">Restablecer anchos</button>
+        <button type="button" onClick={resetWidths} className="h-8 rounded-md border border-[#D1C7BD] bg-[#EFE9E1] px-2.5 text-[11px] font-semibold text-[#6D625B] hover:bg-[#D1C7BD]/40 hover:text-[#322D29]">Restablecer anchos</button>
       </div>
 
       {loading ? <LoadingState /> : error ? <ErrorState onRetry={() => void loadCandidates()} /> : visibleCandidates.length === 0 ? <EmptyState /> : (
         <div className="min-h-0 flex-1 overflow-x-auto overflow-y-auto">
-          <table className="min-w-[980px] w-full table-fixed whitespace-nowrap text-xs">
+           <table className="min-w-[980px] w-full table-fixed whitespace-nowrap bg-white text-xs">
             <colgroup>{BRAND_COLUMNS.map(column => <col key={column.id} style={{ width: widths[column.id] ?? column.defaultWidth }} />)}</colgroup>
-            <thead className="sticky top-0 z-10 border-b border-theme-border bg-theme-surface text-[10px] uppercase tracking-wider text-theme-text-muted">
+            <thead className="sticky top-0 z-10 border-b border-[#AC9C8D]/35 bg-[#322D29] text-[9px] uppercase tracking-[0.1em] text-[#EFE9E1]">
               <tr>
-                <th className="relative border-r border-theme-border/30 px-4 py-3 text-left font-semibold">{brandHeader('brand', 'Brand Bsale')}{brandResize('brand')}</th>
-                <th className="relative border-r border-theme-border/30 px-4 py-3 text-left font-semibold">{brandHeader('products', 'Productos activos')}{brandResize('products')}</th>
-                <th className="relative border-r border-theme-border/30 px-4 py-3 text-left font-semibold">{brandHeader('status', 'Estado')}{brandResize('status')}</th>
-                <th className="relative border-r border-theme-border/30 px-4 py-3 text-left font-semibold">{brandHeader('supplier', 'Proveedor REAL')}{brandResize('supplier')}</th>
-                <th className="sticky right-0 z-30 border-l border-theme-border bg-theme-surface px-4 py-3 text-right font-semibold">Acción</th>
+                <th className="relative border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left font-semibold">{brandHeader('brand', 'Brand Bsale')}{brandResize('brand')}</th>
+                <th className="relative border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left font-semibold">{brandHeader('products', 'Productos activos')}{brandResize('products')}</th>
+                <th className="relative border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left font-semibold">{brandHeader('status', 'Estado')}{brandResize('status')}</th>
+                <th className="relative border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left font-semibold">{brandHeader('supplier', 'Proveedor REAL')}{brandResize('supplier')}</th>
+                <th className="sticky right-0 z-30 border-l border-[#D1C7BD] bg-[#322D29] px-3 py-1.5 text-right font-semibold">Acción</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-theme-border/50">
+            <tbody className="divide-y divide-[#E5DDD4] bg-white">
               {sortedCandidates.map(candidate => (
                 <BrandRow
                   key={`${candidate.company_id}-${candidate.bsale_brand_id}`}
@@ -244,7 +244,7 @@ export function BsaleBrandSupplierPanel({ canWrite }: Props) {
         </div>
       )}
 
-      {!canWrite && <div className="shrink-0 border-t border-theme-border bg-theme-text/[0.02] px-4 py-2 text-[11px] text-theme-text-muted">Modo lectura: requiere permiso de actualización de proveedores para aprobar o desvincular.</div>}
+      {!canWrite && <div className="shrink-0 border-t border-[#D1C7BD] bg-[#EFE9E1] px-4 py-2 text-[11px] text-[#6D625B]">Modo lectura: requiere permiso de actualización de proveedores para aprobar o desvincular.</div>}
 
       {target && <ConfirmationDialog target={target} busy={mutation === 'LINK'} onCancel={() => setTarget(null)} onConfirm={() => void confirmLink()} />}
       {unlinkTarget && <UnlinkDialog candidate={unlinkTarget} busy={mutation === 'UNLINK'} onCancel={() => setUnlinkTarget(null)} onConfirm={() => void confirmUnlink()} />}
@@ -256,17 +256,17 @@ export function BsaleBrandSupplierPanel({ canWrite }: Props) {
 
 function Summary({ label, value, tone = 'default' }: { label: string; value: number; tone?: 'default' | 'green' | 'amber' | 'red' }) {
   const color = tone === 'green' ? 'text-emerald-500' : tone === 'amber' ? 'text-amber-500' : tone === 'red' ? 'text-red-400' : 'text-theme-text'
-  return <div className="rounded-lg border border-theme-border bg-theme-surface px-3 py-2"><div className={`text-lg font-bold leading-none ${color}`}>{value}</div><div className="mt-1 text-[10px] text-theme-text-muted">{label}</div></div>
+  return <div className="border border-[#D1C7BD] bg-[#F7F4F0] px-3 py-1.5"><div className={`text-base font-bold leading-none ${color}`}>{value}</div><div className="mt-0.5 text-[9px] text-[#AC9C8D]">{label}</div></div>
 }
 
 function BrandRow({ candidate, canWrite, onPick, onUnlink, onDetails }: { candidate: BsaleBrandSupplierCandidate; canWrite: boolean; onPick: () => void; onUnlink: (candidate: BsaleBrandSupplierCandidate) => void; onDetails: () => void }) {
   return (
-    <tr onDoubleClick={event => { if ((event.target as Element).closest('button, select, a, input, textarea')) return; onDetails() }} className="cursor-zoom-in hover:bg-theme-text/[0.025]">
-      <td className="px-4 py-3 align-top"><div className="font-mono font-bold text-theme-text">Brand {candidate.bsale_brand_id}</div><div className="mt-1 text-[10px] text-theme-text-muted">ID fuente Bsale</div></td>
-      <td className="px-4 py-3 align-top font-mono text-theme-text">{candidate.active_products}</td>
-      <td className="px-4 py-3 align-top"><span className={`inline-flex rounded border px-2 py-1 text-[10px] font-semibold ${statusClass(currentStatus(candidate))}`}>{statusLabels[currentStatus(candidate)]}</span></td>
-      <td className="px-4 py-3 align-top"><div className="truncate font-semibold text-theme-text" title={candidate.linked_supplier_name ?? undefined}>{candidate.linked_supplier_name ?? '—'}</div>{candidate.linked_supplier_rut && <div className="mt-1 truncate text-[10px] text-theme-text-muted">{candidate.linked_supplier_rut}</div>}</td>
-      <td className="sticky right-0 z-20 border-l border-theme-border bg-theme-surface px-4 py-3 text-right align-top shadow-[-6px_0_12px_-10px_rgba(0,0,0,0.5)]">
+    <tr onDoubleClick={event => { if ((event.target as Element).closest('button, select, a, input, textarea')) return; onDetails() }} className="cursor-zoom-in border-b border-[#E5DDD4] transition-colors hover:bg-[#F3EFE9]">
+      <td className="px-3 py-1.5 align-top"><div className="font-mono font-bold text-[#322D29]">Brand {candidate.bsale_brand_id}</div><div className="mt-0.5 text-[10px] text-[#AC9C8D]">ID fuente Bsale</div></td>
+      <td className="px-3 py-1.5 align-top font-mono text-[#322D29]">{candidate.active_products}</td>
+      <td className="px-3 py-1.5 align-top"><span className={`inline-flex rounded border px-2 py-0.5 text-[10px] font-semibold ${statusClass(currentStatus(candidate))}`}>{statusLabels[currentStatus(candidate)]}</span></td>
+      <td className="px-3 py-1.5 align-top"><div className="truncate font-semibold text-[#322D29]" title={candidate.linked_supplier_name ?? undefined}>{candidate.linked_supplier_name ?? '—'}</div>{candidate.linked_supplier_rut && <div className="mt-0.5 truncate text-[10px] text-[#AC9C8D]">{candidate.linked_supplier_rut}</div>}</td>
+      <td className="sticky right-0 z-20 border-l border-[#D1C7BD] bg-white px-3 py-1.5 text-right align-top">
         {!canWrite ? <span className="text-[10px] text-theme-text-muted">Solo lectura</span> : currentStatus(candidate) === 'LINKED' ? <button onClick={() => onUnlink(candidate)} className="inline-flex h-7 items-center gap-1 rounded-lg border border-red-500/20 px-2.5 text-[11px] font-semibold text-red-400 hover:bg-red-500/10"><Unlink className="h-3.5 w-3.5" /> Desvincular</button> : (
           <div className="flex justify-end gap-1.5">
             <button onClick={onPick} className="inline-flex h-7 items-center gap-1 rounded-lg border border-theme-border px-2.5 text-[11px] font-semibold text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text">Seleccionar proveedor</button>
