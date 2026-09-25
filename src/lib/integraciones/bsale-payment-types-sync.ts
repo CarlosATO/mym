@@ -11,7 +11,7 @@ import { getBsaleConfigForCompany } from '@/lib/bsale/company-config'
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
-export interface SyncBsaleSaleConditionsOptions {
+export interface SyncBsalePaymentTypesOptions {
   companyId: string
   triggerType: SyncTriggerType
   requestedBy?: string
@@ -20,10 +20,10 @@ export interface SyncBsaleSaleConditionsOptions {
   limitOverride?: number | null
 }
 
-export async function syncBsaleSaleConditions(options: SyncBsaleSaleConditionsOptions) {
+export async function syncBsalePaymentTypes(options: SyncBsalePaymentTypesOptions) {
   const { companyId, triggerType, requestedBy, isDryRun = false, recordDryRun = false, limitOverride = null } = options
   const provider = 'BSALE'
-  const entity = 'sale_conditions'
+  const entity = 'payment_types'
 
   const { baseUrl: bsaleUrl, accessToken: bsaleToken } = getBsaleConfigForCompany(companyId)
 
@@ -68,10 +68,10 @@ export async function syncBsaleSaleConditions(options: SyncBsaleSaleConditionsOp
     const limit = 50
     let hasMore = true
     let totalCount = -1
-    const allConditions = []
+    const allPaymentTypes: any[] = []
 
     while (hasMore) {
-      const url = `${bsaleUrl}/sale_conditions.json?limit=${limit}&offset=${offset}`
+      const url = `${bsaleUrl}/payment_types.json?limit=${limit}&offset=${offset}`
       const response = await fetch(url, {
         method: 'GET',
         headers: { 'access_token': bsaleToken, 'Content-Type': 'application/json' }
@@ -80,7 +80,7 @@ export async function syncBsaleSaleConditions(options: SyncBsaleSaleConditionsOp
       if (!response.ok) {
         if (response.status === 429) { await sleep(2000); continue }
         if (response.status === 404) {
-          return { status: 'FAILED', message: 'Bsale API endpoint /sale_conditions.json no encontrado (404). Verificar disponibilidad.', stats }
+          return { status: 'FAILED', message: 'Bsale API endpoint /payment_types.json no encontrado (404).', stats }
         }
         throw new Error(`Bsale API error: ${response.status} ${response.statusText}`)
       }
@@ -96,10 +96,10 @@ export async function syncBsaleSaleConditions(options: SyncBsaleSaleConditionsOp
         break
       }
 
-      allConditions.push(...data.items)
+      allPaymentTypes.push(...data.items)
       stats.bsaleFetched += data.items.length
 
-      if (limitOverride && allConditions.length >= limitOverride) {
+      if (limitOverride && allPaymentTypes.length >= limitOverride) {
         hasMore = false
         break
       }
@@ -113,20 +113,26 @@ export async function syncBsaleSaleConditions(options: SyncBsaleSaleConditionsOp
       return { status: 'SUCCESS', stats, isDryRun: true }
     }
 
-    const records = allConditions.map((sc: any) => ({
-      company_id: companyId,
-      bsale_id: sc.id,
-      name: sc.name ? sc.name.trim() : `Condición ${sc.id}`,
-      state: sc.state ?? null,
-      raw_json: sc,
-      synced_at: new Date().toISOString()
-    }))
+    const now = new Date().toISOString()
+    const records = allPaymentTypes.map((pt: any) => {
+      const bsaleId = Number(pt.id)
+      return {
+        company_id: companyId,
+        bsale_id: bsaleId,
+        bsale_payment_type_id: bsaleId,
+        name: pt.name ? pt.name.trim() : `Forma de pago ${bsaleId}`,
+        is_active: pt.state === 0,
+        raw_json: pt,
+        synced_at: now,
+        updated_at: now
+      }
+    })
 
     const chunkSize = 100
     for (let i = 0; i < records.length; i += chunkSize) {
       const chunk = records.slice(i, i + chunkSize)
-      const { error } = await admin.schema('integraciones').from('bsale_sale_conditions').upsert(chunk, {
-        onConflict: 'company_id, bsale_id',
+      const { error } = await admin.schema('integraciones').from('bsale_payment_types').upsert(chunk, {
+        onConflict: 'company_id, bsale_payment_type_id',
         ignoreDuplicates: false
       })
       if (error) {

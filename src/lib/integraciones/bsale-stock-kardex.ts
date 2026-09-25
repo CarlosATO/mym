@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { getBsaleConfigForCompany } from '@/lib/bsale/company-config'
 
 type BsalePage<T> = { count?: number; items?: T[] }
 type StockHeader = {
@@ -49,8 +50,6 @@ export type KardexSyncResult = {
   error?: string
 }
 
-const base = process.env.BSALE_API_BASE_URL || 'https://api.bsale.cl/v1'
-const token = process.env.BSALE_ACCESS_TOKEN
 const limit = 50
 const detailConcurrency = 5
 const provider = 'BSALE'
@@ -95,15 +94,15 @@ function detailVariantId(detail: StockDetail) {
   return number(detail.variant?.id ?? detail.variantId)
 }
 
-async function fetchPage<T>(path: string, params: Record<string, string | number>, metrics: { requests: number; retries: number }) {
-  if (!token) throw new Error('BSALE_ACCESS_TOKEN no configurado')
+async function fetchPage<T>(path: string, params: Record<string, string | number>, metrics: { requests: number; retries: number }, companyId: string) {
+  const { baseUrl, accessToken } = getBsaleConfigForCompany(companyId)
   let lastError = ''
   for (let attempt = 0; attempt < 4; attempt++) {
-    const url = new URL(`${base}${path}`)
+    const url = new URL(`${baseUrl}${path}`)
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value))
     metrics.requests++
     try {
-      const response = await fetch(url, { headers: { access_token: token, Accept: 'application/json' } })
+      const response = await fetch(url, { headers: { access_token: accessToken, Accept: 'application/json' } })
       if (response.ok) return await response.json() as BsalePage<T>
       lastError = `HTTP ${response.status}: ${(await response.text()).slice(0, 180)}`
       if (![408, 429, 500, 502, 503, 504].includes(response.status)) break
@@ -118,10 +117,10 @@ async function fetchPage<T>(path: string, params: Record<string, string | number
   throw new Error(`${path}: ${lastError}`)
 }
 
-async function fetchAll<T>(path: string, params: Record<string, string | number>, metrics: { requests: number; pages: number; retries: number }) {
+async function fetchAll<T>(path: string, params: Record<string, string | number>, metrics: { requests: number; pages: number; retries: number }, companyId: string) {
   const items: T[] = []
   for (let offset = 0; ; offset += limit) {
-    const page = await fetchPage<T>(path, { ...params, limit, offset }, metrics)
+    const page = await fetchPage<T>(path, { ...params, limit, offset }, metrics, companyId)
     const current = page.items || []
     metrics.pages++
     items.push(...current)
@@ -136,7 +135,7 @@ async function fetchHeadersByDay<T extends StockHeader>(path: string, dateParam:
     const batch = await Promise.all(dates.slice(offset, offset + detailConcurrency).map(date => fetchAll<T>(path, {
       officeid: options.officeId || 1,
       [dateParam]: epochDay(date),
-    }, metrics)))
+    }, metrics, options.companyId)))
     headers.push(...batch.flat())
   }
   return headers
@@ -199,7 +198,7 @@ export async function syncBsaleStockKardex(options: KardexSyncOptions): Promise<
           const detailsPath = source.type === 'RECEPTION' ? `/stocks/receptions/${header.id}/details.json`
             : source.type === 'CONSUMPTION' ? `/stocks/consumptions/${header.id}/details.json`
               : source.type === 'SHIPPING' ? `/shippings/${header.id}/details.json` : `/returns/${header.id}/details.json`
-          const details = await fetchAll<StockDetail>(detailsPath, {}, metrics)
+          const details = await fetchAll<StockDetail>(detailsPath, {}, metrics, options.companyId)
           return { header, details }
         }))
         for (const item of settled) {

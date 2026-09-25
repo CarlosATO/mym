@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
-import { bsaleFetchAll, getBsaleHeaders } from '@/lib/bsale/client'
+import { bsaleFetchAll } from '@/lib/bsale/client'
+import { getBsaleConfigForCompany } from '@/lib/bsale/company-config'
 import { tryAcquireSyncLock, releaseSyncLock, type SyncTriggerType } from './sync-core'
 
 type BsaleReception = {
@@ -39,7 +40,6 @@ type LocalVariantRow = {
   sku: string | null
 }
 
-const BSALE_API_BASE = process.env.BSALE_API_BASE_URL || 'https://api.bsale.cl/v1'
 
 function integrDb() {
   return createClient(
@@ -184,9 +184,10 @@ async function buildVariantCodeMap(companyId: string, variantIds: number[], cach
   const missing = unresolved.filter((id) => !map.has(id))
   for (const variantId of missing) {
     try {
-      const response = await fetch(`${BSALE_API_BASE}/variants/${variantId}.json`, {
+      const { baseUrl: bsaleBaseUrl, accessToken: bsaleToken } = getBsaleConfigForCompany(companyId)
+      const response = await fetch(`${bsaleBaseUrl}/variants/${variantId}.json`, {
         method: 'GET',
-        headers: getBsaleHeaders(),
+        headers: { access_token: bsaleToken, 'Content-Type': 'application/json', Accept: 'application/json' },
         signal: AbortSignal.timeout(10000),
       })
       if (!response.ok) {

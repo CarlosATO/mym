@@ -35,6 +35,7 @@ import {
   releaseSyncLock,
   SyncTriggerType
 } from './sync-core'
+import { getBsaleConfigForCompany } from '@/lib/bsale/company-config'
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -56,8 +57,7 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
   const provider = 'BSALE'
   const entity = 'products'
   
-  const bsaleUrl = process.env.BSALE_API_BASE_URL!
-  const bsaleToken = process.env.BSALE_ACCESS_TOKEN!
+  const { baseUrl: bsaleUrl, accessToken: bsaleToken } = getBsaleConfigForCompany(companyId)
 
   const admin = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

@@ -1,3 +1,5 @@
+import { getBsaleConfigForCompany } from './company-config'
+
 const BSALE_API_BASE = process.env.BSALE_API_BASE_URL || 'https://api.bsale.cl/v1'
 const BSALE_TOKEN = process.env.BSALE_ACCESS_TOKEN
 
@@ -37,6 +39,66 @@ export function getBsaleHeaders(): Record<string, string> {
     'access_token': BSALE_TOKEN,
     'Content-Type': 'application/json',
   }
+}
+
+/**
+ * Versión multiempresa de getBsaleHeaders.
+ * Resuelve el token según companyId a través del helper centralizado.
+ */
+export function getBsaleHeadersForCompany(
+  companyId: string
+): Record<string, string> {
+  const { accessToken } = getBsaleConfigForCompany(companyId)
+  return {
+    'access_token': accessToken,
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  }
+}
+
+interface BsaleFetchForCompanyOptions extends BsaleFetchOptions {
+  companyId: string
+}
+
+/**
+ * Versión multiempresa de bsaleFetch.
+ * Resuelve baseUrl y token según companyId.
+ */
+export async function bsaleFetchForCompany<T>(
+  options: BsaleFetchForCompanyOptions
+): Promise<BsaleResponse<T>> {
+  const { companyId, path, params, signal } = options
+  const { baseUrl, accessToken } = getBsaleConfigForCompany(companyId)
+  const url = new URL(`${baseUrl}${path}`)
+
+  if (params) {
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        url.searchParams.set(key, String(value))
+      }
+    })
+  }
+
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: {
+      'access_token': accessToken,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    signal,
+  })
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    throw new BsaleApiError(
+      response.status,
+      `Bsale API error ${response.status}: ${response.statusText}`,
+      body
+    )
+  }
+
+  return response.json()
 }
 
 export async function bsaleFetch<T>(options: BsaleFetchOptions): Promise<BsaleResponse<T>> {

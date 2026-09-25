@@ -1,7 +1,8 @@
 'use server'
 
 import { createClient } from '@supabase/supabase-js'
-import { bsaleFetchAll, normalizeSku, getBsaleHeaders } from '@/lib/bsale/client'
+import { bsaleFetchAll, normalizeSku } from '@/lib/bsale/client'
+import { getBsaleConfigForCompany } from '@/lib/bsale/company-config'
 import { syncBsaleClients } from '@/lib/integraciones/bsale-clients-sync'
 import { runCatalogAutoSyncStep } from '@/lib/integraciones/bsale-catalog-auto-sync'
 import { canRefreshClientMetricsSnapshot } from '@/lib/integraciones/client-metrics-refresh-policy'
@@ -9,8 +10,18 @@ import { syncBsaleStockKardex } from '@/lib/integraciones/bsale-stock-kardex'
 import { createClient as createServerSessionClient } from '@/lib/supabase/server'
 import crypto from 'crypto'
 
-const BSALE_API_BASE = process.env.BSALE_API_BASE_URL || 'https://api.bsale.cl/v1'
 const WAREHOUSE_PREP_SYNC_TRIGGER = 'WAREHOUSE_PREP'
+
+/** Resuelve baseUrl + headers HTTP para BSale según companyId. */
+function bsaleConfig(companyId: string) {
+  const { baseUrl, accessToken } = getBsaleConfigForCompany(companyId)
+  const headers = {
+    access_token: accessToken,
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  }
+  return { baseUrl, headers }
+}
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -631,10 +642,11 @@ function normalizeDocumentSellerName(seller: BsaleDocumentSeller) {
   return [seller?.firstName, seller?.lastName].filter(Boolean).join(' ').trim() || seller?.name || null
 }
 
-async function fetchDocumentSellers(docId: number) {
-  const response = await fetch(`${BSALE_API_BASE}/documents/${docId}/sellers.json`, {
+async function fetchDocumentSellers(docId: number, companyId: string) {
+  const { baseUrl, headers } = bsaleConfig(companyId)
+  const response = await fetch(`${baseUrl}/documents/${docId}/sellers.json`, {
     method: 'GET',
-    headers: getBsaleHeaders(),
+    headers,
     signal: AbortSignal.timeout(20000),
   })
 
@@ -658,7 +670,7 @@ export async function syncDocumentSellersForDocuments(companyId: string, documen
 
   for (const doc of relevantDocuments) {
     try {
-      const { items, raw } = await fetchDocumentSellers(doc.id)
+      const { items, raw } = await fetchDocumentSellers(doc.id, companyId)
       if (!items.length) {
         empty++
         continue
@@ -805,10 +817,11 @@ async function hydrateOrphanClients(companyId: string, runId: string): Promise<{
 
   for (const clientId of orphanIds) {
     try {
-      const url = `${process.env.BSALE_API_BASE_URL || 'https://api.bsale.cl/v1'}/clients/${clientId}.json`
+      const { baseUrl: orphanBase, headers: orphanHeaders } = bsaleConfig(companyId)
+      const url = `${orphanBase}/clients/${clientId}.json`
       const response = await fetch(url, {
         method: 'GET',
-        headers: getBsaleHeaders(),
+        headers: orphanHeaders,
         signal: AbortSignal.timeout(15000),
       })
 
@@ -896,17 +909,18 @@ async function hydrateOrphanClients(companyId: string, runId: string): Promise<{
 }
 
 
-async function getVariantCost(bsaleVariantId: number): Promise<{
+async function getVariantCost(bsaleVariantId: number, companyId: string): Promise<{
   averageCost: number
   totalCost: number
   parsedHistory: any[]
   raw: any
 } | null> {
   try {
-    const url = `${BSALE_API_BASE}/variants/${bsaleVariantId}/costs.json`
+    const { baseUrl, headers } = bsaleConfig(companyId)
+    const url = `${baseUrl}/variants/${bsaleVariantId}/costs.json`
     const response = await fetch(url, {
       method: 'GET',
-      headers: getBsaleHeaders(),
+      headers,
       signal: AbortSignal.timeout(10000),
     })
 
@@ -985,7 +999,7 @@ async function syncCosts(companyId: string, runId: string): Promise<{
       const variantId = Number(v.bsale_id)
       if (!variantId) return
 
-      const cost = await getVariantCost(variantId)
+      const cost = await getVariantCost(variantId, companyId)
       processed++
 
       if (!cost) {
@@ -1095,12 +1109,13 @@ async function fetchAllDocuments(
   let offset = 0
   let pages = 0
   const rangeEncoded = encodeURIComponent(`[${Math.floor(dateFrom.getTime() / 1000)},${Math.floor(dateTo.getTime() / 1000)}]`)
+  const { baseUrl, headers } = bsaleConfig(companyId)
 
   while (true) {
-    const url = `${BSALE_API_BASE}/documents.json?limit=${LIMIT}&offset=${offset}&emissiondaterange=${rangeEncoded}`
+    const url = `${baseUrl}/documents.json?limit=${LIMIT}&offset=${offset}&emissiondaterange=${rangeEncoded}`
     const response = await fetch(url, {
       method: 'GET',
-      headers: getBsaleHeaders(),
+      headers,
       signal: AbortSignal.timeout(30000),
     })
 
@@ -1218,10 +1233,11 @@ async function syncDocuments(
             await new Promise(r => setTimeout(r, delay))
           }
 
-          const url = `${BSALE_API_BASE}/documents/${doc.id}/details.json?limit=50`
+          const { baseUrl: detailBase, headers: detailHeaders } = bsaleConfig(companyId)
+          const url = `${detailBase}/documents/${doc.id}/details.json?limit=50`
           const response = await fetch(url, {
             method: 'GET',
-            headers: getBsaleHeaders(),
+            headers: detailHeaders,
             signal: AbortSignal.timeout(20000),
           })
 
@@ -1339,8 +1355,8 @@ async function syncDocuments(
           if (doc.document_type?.id === 5) {
             console.log(`[syncSales] Fetching references for Factura ${doc.number}...`)
             try {
-              const headers = getBsaleHeaders()
-              const refsRes = await fetch(`${BSALE_API_BASE}/documents/${doc.id}/references.json`, { headers })
+              const { baseUrl: refsBase, headers: refsHeaders } = bsaleConfig(companyId)
+              const refsRes = await fetch(`${refsBase}/documents/${doc.id}/references.json`, { headers: refsHeaders })
               if (refsRes.ok) {
                 const refsData = await refsRes.json()
                 if (refsData && refsData.items && refsData.items.length > 0) {
@@ -1459,11 +1475,12 @@ function directedDocumentTypeId(document: DirectedDocument) {
   return toNumber(document.documentTypeId ?? document.document_type?.id)
 }
 
-async function fetchDirectedDocument(invoiceNumber: string, scope?: { amount: number; emissionDate?: string; address?: string }): Promise<DirectedDocument | null> {
+async function fetchDirectedDocument(companyId: string, invoiceNumber: string, scope?: { amount: number; emissionDate?: string; address?: string }): Promise<DirectedDocument | null> {
   const query = new URLSearchParams({ number: invoiceNumber, limit: '50' })
-  const response = await fetch(`${BSALE_API_BASE}/documents.json?${query.toString()}`, {
+  const { baseUrl: dirBase, headers: dirHeaders } = bsaleConfig(companyId)
+  const response = await fetch(`${dirBase}/documents.json?${query.toString()}`, {
     method: 'GET',
-    headers: getBsaleHeaders(),
+    headers: dirHeaders,
     signal: AbortSignal.timeout(30000),
   })
 
@@ -1514,9 +1531,10 @@ async function syncDirectedClient(companyId: string, clientId: number, runId: st
   if (existingError) throw existingError
   if (existing) return true
 
-  const response = await fetch(`${BSALE_API_BASE}/clients/${clientId}.json`, {
+  const { baseUrl: clientBase, headers: clientHeaders } = bsaleConfig(companyId)
+  const response = await fetch(`${clientBase}/clients/${clientId}.json`, {
     method: 'GET',
-    headers: getBsaleHeaders(),
+    headers: clientHeaders,
     signal: AbortSignal.timeout(20000),
   })
   if (response.status === 404) return false
@@ -1587,9 +1605,10 @@ async function upsertDirectedDocument(companyId: string, runId: string, document
 }
 
 async function fetchAndUpsertDirectedDetails(companyId: string, runId: string, document: DirectedDocument) {
-  const response = await fetch(`${BSALE_API_BASE}/documents/${document.id}/details.json?limit=50`, {
+  const { baseUrl: dBase, headers: dHeaders } = bsaleConfig(companyId)
+  const response = await fetch(`${dBase}/documents/${document.id}/details.json?limit=50`, {
     method: 'GET',
-    headers: getBsaleHeaders(),
+    headers: dHeaders,
     signal: AbortSignal.timeout(20000),
   })
   if (!response.ok) throw new Error(`Detalles Bsale HTTP ${response.status}`)
@@ -1764,7 +1783,7 @@ export async function syncBsaleDocumentsForRouteGuide(input: {
           documents.push({ invoice_number: invoiceNumber, status: identity.conflict ? 'ERROR' : 'READY', bsale_document_id: local.document.id, customer_bsale_id: local.customerId, details_count: local.detailsCount, customer_identity_updated: identity.guideUpdated, settlement_identity_updated: identity.settlementUpdated, ...(identity.conflict ? { error: 'Conflicto de customer_bsale_id; no se modificaron identidades' } : {}) })
           continue
         }
-        const document = await fetchDirectedDocument(invoiceNumber, routeGuideContext.get(invoiceNumber))
+        const document = await fetchDirectedDocument(input.company_id, invoiceNumber, routeGuideContext.get(invoiceNumber))
         if (!document) {
           documents.push({ invoice_number: invoiceNumber, status: 'NOT_FOUND' })
           continue
@@ -2634,9 +2653,11 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
     let offset = 0
     const bsaleDocsMap = new Map<number, BsalePreparationDocument>()
 
+    const { baseUrl: prepBase, headers: prepHeaders } = bsaleConfig(companyId)
+
     while (true) {
-      const url = `${BSALE_API_BASE}/documents.json?documenttypeid=23&limit=50&offset=${offset}&generationdaterange=${rangeEncoded}`
-      const response = await fetch(url, { headers: getBsaleHeaders(), signal: AbortSignal.timeout(30000) })
+      const url = `${prepBase}/documents.json?documenttypeid=23&limit=50&offset=${offset}&generationdaterange=${rangeEncoded}`
+      const response = await fetch(url, { headers: prepHeaders, signal: AbortSignal.timeout(30000) })
       if (!response.ok) throw new Error(`Bsale discovery error ${response.status}`)
       const data = await response.json() as { items?: unknown[] }
       if (!Array.isArray(data.items)) throw new Error('Bsale discovery response missing items')
@@ -2660,8 +2681,8 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
       .filter(id => !bsaleDocsMap.has(id))
 
     for (const bsaleId of activeNvIds) {
-       const url = `${BSALE_API_BASE}/documents/${bsaleId}.json`
-       const response = await fetch(url, { headers: getBsaleHeaders(), signal: AbortSignal.timeout(15000) })
+       const url = `${prepBase}/documents/${bsaleId}.json`
+       const response = await fetch(url, { headers: prepHeaders, signal: AbortSignal.timeout(15000) })
        if (response.ok) {
          const doc = await response.json() as unknown
          if (isBsalePreparationDocument(doc)) bsaleDocsMap.set(doc.id, doc)
@@ -2674,16 +2695,16 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
     let referenceErrors = 0
     let invoiceOffset = 0
     while (true) {
-      const url = `${BSALE_API_BASE}/documents.json?documenttypeid=5&limit=50&offset=${invoiceOffset}&generationdaterange=${rangeEncoded}`
-      const response = await fetch(url, { headers: getBsaleHeaders(), signal: AbortSignal.timeout(30000) })
+      const url = `${prepBase}/documents.json?documenttypeid=5&limit=50&offset=${invoiceOffset}&generationdaterange=${rangeEncoded}`
+      const response = await fetch(url, { headers: prepHeaders, signal: AbortSignal.timeout(30000) })
       if (!response.ok) throw new Error(`Bsale invoice discovery error ${response.status}`)
       const data = await response.json() as { items?: unknown[] }
       if (!Array.isArray(data.items)) throw new Error('Bsale invoice discovery response missing items')
 
       for (const invoice of data.items.filter(isBsalePreparationDocument)) {
         try {
-          const refsResponse = await fetch(`${BSALE_API_BASE}/documents/${invoice.id}/references.json`, {
-            headers: getBsaleHeaders(),
+          const refsResponse = await fetch(`${prepBase}/documents/${invoice.id}/references.json`, {
+            headers: prepHeaders,
             signal: AbortSignal.timeout(15000),
           })
           if (!refsResponse.ok) throw new Error(`HTTP ${refsResponse.status}`)
@@ -2771,8 +2792,8 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
            const detailLimit = 50
 
            while (true) {
-             const url = `${BSALE_API_BASE}/documents/${doc.id}/details.json?limit=${detailLimit}&offset=${detailOffset}`
-             const response = await fetch(url, { headers: getBsaleHeaders(), signal: AbortSignal.timeout(20000) })
+             const url = `${prepBase}/documents/${doc.id}/details.json?limit=${detailLimit}&offset=${detailOffset}`
+             const response = await fetch(url, { headers: prepHeaders, signal: AbortSignal.timeout(20000) })
              if (!response.ok) throw new Error(`Detalles Bsale HTTP ${response.status}`)
              const data = await response.json() as { items?: unknown[] }
              if (!Array.isArray(data.items)) throw new Error('Respuesta de detalles Bsale sin items')
