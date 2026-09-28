@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import { REPLENISHMENT_DOCUMENT_TYPE_IDS, OFFICIAL_SALE_DOCUMENT_TYPE_IDS, BSALE_DOCUMENT_TYPE_IDS } from '@/lib/bsale/config'
 import type { NormalizedSale, NormalizedStock } from '@/modules/adquisiciones/analisis-ventas/utils/analytics'
 import { buildWeeklyDemand, forecastSku, type SkuForecastResult } from '@/modules/adquisiciones/ordenes-compra/replenishment-forecast'
+import { getBsaleAvailableStockQuantity, resolveBsaleStockIdentity } from '@/lib/integraciones/bsale-stock-identity'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -622,17 +623,6 @@ export async function getReplenishmentDatasetFromBsale(
       const variantId = Number(product.bsale_variant_id)
       if (sku && Number.isInteger(variantId)) variantIdsBySku[sku] ??= variantId
     }
-    const targetVariant = variants.find(v => normalizeVariantCode(v.code) === '2008DG')
-    const targetCatalogProduct = catalogRows.find(p => normalizeVariantCode(p.sku) === '2008DG')
-    console.info('[replenishment-identity]', {
-      sku: '2008DG',
-      variantCode: targetVariant?.code ?? null,
-      variantId: targetVariant?.bsale_id ? Number(targetVariant.bsale_id) : null,
-      catalogSku: targetCatalogProduct?.sku ?? null,
-      catalogVariantId: targetCatalogProduct?.bsale_variant_id ?? null,
-      mappingVariantId: variantIdsBySku['2008DG'] ?? null,
-    })
-
     function resolveCatalogProduct(variantId: number | string | null | undefined, sku: string) {
       return catalogByVariant.get(String(variantId)) || catalogBySku.get(String(sku || '').trim().toUpperCase())
     }
@@ -690,10 +680,17 @@ export async function getReplenishmentDatasetFromBsale(
     // ── 8. Construir NormalizedStock[] ──
     const stockMapNormalized = new Map<string, NormalizedStock>()
     const stockRowsTransformStartedAt = performance.now()
+    const stockIdentityDiagnostics = {
+      stock_identity_from_catalog: 0,
+      stock_identity_from_variant_code: 0,
+      stock_identity_unresolved: 0,
+    }
 
     // Agrupar stocks: un SKU puede tener stock en múltiples oficinas, sumamos
     for (const s of stocks) {
-      const code = s.variant_code || ''
+      const identity = resolveBsaleStockIdentity(s.variant_id, s.variant_code, catalogByVariant)
+      stockIdentityDiagnostics[identity.method]++
+      const code = identity.sku
       if (!code) continue
       const existing = stockMapNormalized.get(code)
       const prodBsaleId = variantProductMap.get(s.variant_id)
@@ -704,7 +701,7 @@ export async function getReplenishmentDatasetFromBsale(
       const desc = variantDescMap.get(s.variant_id) || ''
 
       if (existing) {
-        existing.cantidad_disponible += s.quantity ?? 0
+        existing.cantidad_disponible += getBsaleAvailableStockQuantity(s.quantity_available)
         existing.costo_total = existing.cantidad_disponible * existing.costo_unitario
       } else {
         stockMapNormalized.set(code, {
@@ -712,9 +709,9 @@ export async function getReplenishmentDatasetFromBsale(
           SKU: code,
           producto: productName,
           variante: desc,
-          cantidad_disponible: s.quantity ?? 0,
+          cantidad_disponible: getBsaleAvailableStockQuantity(s.quantity_available),
           costo_unitario: cost,
-          costo_total: (s.quantity ?? 0) * cost,
+          costo_total: getBsaleAvailableStockQuantity(s.quantity_available) * cost,
           por_recibir: 0,
           precio_venta_bruto: 0,
           marca: '',
@@ -725,6 +722,7 @@ export async function getReplenishmentDatasetFromBsale(
         })
       }
     }
+    Object.assign(diag, stockIdentityDiagnostics)
     console.info('[replenishment-dataset]', { block: 'transform/normalized-stock', ms: Math.round(performance.now() - stockRowsTransformStartedAt), rows: stocks.length })
 
     // ── 9. Construir NormalizedSale[] ──
