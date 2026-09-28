@@ -166,3 +166,36 @@ test('las bodegas se precargan por empresa, reutilizan caché y solo consultan a
   assert.match(panel, /onClick=\{\(\) => \{ setForm\(p => \(\{ \.\.\.p, warehouse_id: w\.id \}\)\)/)
   assert.match(warehouseCache, /if \(cached && cached\.expiresAt > now\) return cached\.promise/)
 })
+
+test('borrador automático local de Nueva OC administra localStorage, versión, debounce, prompt de recuperación y limpieza en éxito', () => {
+  // Key versionada por empresa + usuario autenticado
+  assert.match(panel, /mym:adquisiciones:purchase-order-draft:\$\{activeCompany\.id\}:\$\{currentUserId\}/)
+  assert.match(panel, /createBrowserClient/)
+  assert.match(panel, /supabase\.auth\.getUser/)
+
+  // Estructura versionada y savedAt
+  assert.match(panel, /version: 1/)
+  assert.match(panel, /savedAt:/)
+
+  // Debounce autosave
+  assert.match(panel, /const timer = setTimeout\(\(\) => \{/)
+  assert.match(panel, /1000\)/)
+
+  // Autosave solo para Nueva OC y con contenido significativo (no editId, no empty)
+  assert.match(panel, /editId !== null/)
+  assert.match(panel, /hasContent/)
+
+  // Prompt de recuperación compacta (Continuar borrador / Descartar) e indicador visual discreto
+  assert.match(panel, /Tienes una Orden de Compra sin terminar/)
+  assert.match(panel, /Continuar borrador/)
+  assert.match(panel, /Descartar/)
+  assert.match(panel, /Guardado automáticamente ·/)
+
+  // Limpieza en emisión exitosa y conservación en error
+  assert.match(panel, /justEmittedRef\.current = true[\s\S]*localStorage\.removeItem\(draftStorageKey\)/)
+  assert.match(panel, /if \('error' in res && res\.error\) \{[\s\S]*return\s*\}/) // error returns early before clear draft
+
+  // Compatibilidad con priorización de Reposición/Excel
+  assert.match(panel, /if \(prepareReplenishment\) return/)
+  assert.match(panel, /REPLENISHMENT_PO_PREPARATION_KEY/)
+})

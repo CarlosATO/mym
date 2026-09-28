@@ -20,6 +20,7 @@ import { downloadPOBooklet, generatePdfBlob } from '@/lib/pdf/generate-po-pdf'
 import { getActiveCompany, type Company } from '@/app/actions/companies'
 import { OperationalTableResizeHandle, shouldIgnoreOperationalRowDoubleClick, useOperationalTableWidths, type OperationalTableColumn } from '@/components/ui/operational-table'
 import { ReplenishmentAnalysisPanel } from './replenishment-analysis-panel'
+import { createClient as createBrowserClient } from '@/lib/supabase/client'
 import { formatCivilDate } from '@/lib/datetime'
 
 const STATUS_BADGES: Record<string, { bg: string; text: string; border: string }> = {
@@ -199,6 +200,46 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const [pendingProduct, setPendingProduct] = useState<PurchaseOrderCatalogProduct | null>(null)
   const [pendingQuantity, setPendingQuantity] = useState('1')
   const [pendingUnitPrice, setPendingUnitPrice] = useState('')
+
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null)
+  interface DraftPrompt {
+    draftData: {
+      version: number
+      savedAt: string
+      form: {
+        issue_date: string
+        required_date: string
+        supplier_id: string
+        warehouse_id: string
+        po_type: string
+        currency: string
+        payment_terms: string
+        authorized_by: string
+        notes: string
+      }
+      items: LineItem[]
+      isReplenishmentPreparation?: boolean
+      replenishmentSupplierName?: string
+    }
+    supplierName: string
+    itemCount: number
+    savedAtFormatted: string
+  }
+  const [draftPrompt, setDraftPrompt] = useState<DraftPrompt | null>(null)
+  const justEmittedRef = useRef(false)
+  const draftHandledRef = useRef(false)
+
+  useEffect(() => {
+    const supabase = createBrowserClient()
+    supabase.auth.getUser().then(({ data }) => {
+      if (data?.user?.id) setCurrentUserId(data.user.id)
+    })
+  }, [])
+
+  const draftStorageKey = activeCompany?.id && currentUserId
+    ? `mym:adquisiciones:purchase-order-draft:${activeCompany.id}:${currentUserId}`
+    : null
 
   const tempIdCounter = useRef(0)
   function newTempId() { tempIdCounter.current += 1; return `ni_${tempIdCounter.current}` }
@@ -392,11 +433,146 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         notes: '',
       })))
       setEditId(null)
+      draftHandledRef.current = true
       setView('form')
     } catch {
       msg('La preparación de la orden de compra ya no está disponible.')
     }
   }, [prepareReplenishment])
+
+  // Auto-recovery check when opening New PO form
+  useEffect(() => {
+    if (view !== 'form' || editId !== null || !draftStorageKey || typeof window === 'undefined') return
+    if (draftHandledRef.current) return
+    if (prepareReplenishment) return
+    const rawRepl = sessionStorage.getItem(REPLENISHMENT_PO_PREPARATION_KEY)
+    if (rawRepl) return
+
+    try {
+      const raw = localStorage.getItem(draftStorageKey)
+      if (!raw) return
+      const parsed = JSON.parse(raw)
+      if (
+        parsed &&
+        parsed.version === 1 &&
+        parsed.form &&
+        typeof parsed.form === 'object' &&
+        Array.isArray(parsed.items)
+      ) {
+        const hasContent =
+          Boolean(parsed.form.supplier_id) ||
+          Boolean(parsed.form.warehouse_id) ||
+          Boolean(parsed.form.required_date) ||
+          Boolean(parsed.form.authorized_by) ||
+          Boolean(parsed.form.notes?.trim()) ||
+          parsed.items.length > 0
+
+        if (!hasContent) {
+          localStorage.removeItem(draftStorageKey)
+          return
+        }
+
+        const savedDate = parsed.savedAt ? new Date(parsed.savedAt) : null
+        const timeStr = savedDate && !isNaN(savedDate.getTime())
+          ? savedDate.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })
+          : ''
+
+        let supplierName = parsed.replenishmentSupplierName || ''
+        if (!supplierName && parsed.form.supplier_id && suppliers.length > 0) {
+          const sup = suppliers.find(s => s.id === parsed.form.supplier_id)
+          if (sup) supplierName = sup.business_name
+        }
+
+        setDraftPrompt({
+          draftData: parsed,
+          supplierName,
+          itemCount: parsed.items.length,
+          savedAtFormatted: timeStr,
+        })
+      } else {
+        localStorage.removeItem(draftStorageKey)
+      }
+    } catch {
+      try { localStorage.removeItem(draftStorageKey) } catch {}
+    }
+  }, [view, editId, draftStorageKey, prepareReplenishment, suppliers])
+
+  function handleRestoreDraft() {
+    if (!draftPrompt) return
+    const d = draftPrompt.draftData
+    setForm(d.form)
+    setItems(d.items)
+    setIsReplenishmentPreparation(Boolean(d.isReplenishmentPreparation))
+    setReplenishmentSupplierName(d.replenishmentSupplierName || '')
+    setLastSavedAt(draftPrompt.savedAtFormatted)
+    setDraftPrompt(null)
+    draftHandledRef.current = true
+  }
+
+  function handleDiscardDraft() {
+    if (draftStorageKey) {
+      try { localStorage.removeItem(draftStorageKey) } catch {}
+    }
+    setDraftPrompt(null)
+    setLastSavedAt(null)
+    draftHandledRef.current = true
+  }
+
+  // Autosave effect (Debounce 1000ms)
+  useEffect(() => {
+    if (
+      view !== 'form' ||
+      editId !== null ||
+      !draftStorageKey ||
+      draftPrompt !== null ||
+      isSubmitting ||
+      submittingRef.current ||
+      justEmittedRef.current
+    ) {
+      return
+    }
+
+    const hasContent =
+      Boolean(form.supplier_id) ||
+      Boolean(form.warehouse_id) ||
+      Boolean(form.required_date) ||
+      Boolean(form.authorized_by) ||
+      Boolean(form.notes?.trim()) ||
+      items.length > 0
+
+    if (!hasContent) return
+
+    const timer = setTimeout(() => {
+      const nowIso = new Date().toISOString()
+      const draftPayload = {
+        version: 1,
+        savedAt: nowIso,
+        form,
+        items,
+        isReplenishmentPreparation,
+        replenishmentSupplierName: replenishmentSupplierName || undefined,
+      }
+      try {
+        localStorage.setItem(draftStorageKey, JSON.stringify(draftPayload))
+        const timeStr = new Date(nowIso).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })
+        setLastSavedAt(timeStr)
+      } catch (err) {
+        console.error('Error auto-saving purchase order draft:', err)
+      }
+    }, 1000)
+
+    return () => clearTimeout(timer)
+  }, [
+    form,
+    items,
+    isReplenishmentPreparation,
+    replenishmentSupplierName,
+    view,
+    editId,
+    draftStorageKey,
+    draftPrompt,
+    isSubmitting
+  ])
 
   function resetForm() {
     setForm({
@@ -431,6 +607,10 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     setIsReplenishmentPreparation(false)
     submittingRef.current = false
     setIsSubmitting(false)
+    setLastSavedAt(null)
+    setDraftPrompt(null)
+    draftHandledRef.current = false
+    setTimeout(() => { justEmittedRef.current = false }, 50)
   }
 
   function editPO(po: PurchaseOrder) {
@@ -546,6 +726,10 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         submittingRef.current = false
         setIsSubmitting(false)
         return
+      }
+      justEmittedRef.current = true
+      if (draftStorageKey) {
+        try { localStorage.removeItem(draftStorageKey) } catch {}
       }
       msg('Orden de compra creada')
       setView('list'); resetForm(); load()
@@ -1027,7 +1211,14 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
               </button>
               <div className="min-w-0">
                  <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-[#AC9C8D]">Adquisiciones</p>
-                 <h2 className="truncate text-sm font-bold uppercase tracking-wide text-[#EFE9E1]">{editId ? 'Editar orden de compra' : 'Nueva orden de compra'}</h2>
+                 <div className="flex flex-wrap items-center gap-2 min-w-0">
+                   <h2 className="truncate text-sm font-bold uppercase tracking-wide text-[#EFE9E1]">{editId ? 'Editar orden de compra' : 'Nueva orden de compra'}</h2>
+                   {!editId && lastSavedAt && (
+                     <span className="text-[11px] font-normal text-[#AC9C8D] flex items-center gap-1 shrink-0">
+                       • Guardado automáticamente · {lastSavedAt}
+                     </span>
+                   )}
+                 </div>
               </div>
             </div>
              <div className="flex w-full flex-wrap gap-1.5 sm:w-auto">
@@ -1043,6 +1234,36 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
             </div>
           </div>
            <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-5">
+             {!editId && draftPrompt && (
+               <div className="rounded-lg border border-[#AC9C8D]/40 bg-[#F7F4F0] p-3.5 shadow-sm text-[#322D29] animate-in fade-in duration-150">
+                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                   <div className="space-y-0.5">
+                     <h4 className="text-xs font-bold text-[#322D29]">Tienes una Orden de Compra sin terminar</h4>
+                     <p className="text-[11px] text-[#6D625B]">
+                       {draftPrompt.supplierName ? `Proveedor: ${draftPrompt.supplierName} · ` : ''}
+                       {draftPrompt.itemCount} {draftPrompt.itemCount === 1 ? 'producto' : 'productos'}
+                       {draftPrompt.savedAtFormatted ? ` · Guardado: ${draftPrompt.savedAtFormatted}` : ''}
+                     </p>
+                   </div>
+                   <div className="flex items-center gap-2 shrink-0">
+                     <button
+                       type="button"
+                       onClick={handleRestoreDraft}
+                       className="rounded-md bg-[#72383D] px-3 py-1.5 text-xs font-bold text-[#EFE9E1] transition-colors hover:bg-[#5D2E32]"
+                     >
+                       Continuar borrador
+                     </button>
+                     <button
+                       type="button"
+                       onClick={handleDiscardDraft}
+                       className="rounded-md border border-[#D1C7BD] bg-white px-3 py-1.5 text-xs font-semibold text-[#6D625B] transition-colors hover:bg-[#EFE9E1]"
+                     >
+                       Descartar
+                     </button>
+                   </div>
+                 </div>
+               </div>
+             )}
              <section className="border-b border-[#D1C7BD] pb-4">
                <div className="mb-3 border-b border-[#D1C7BD] pb-2">
                  <div>
