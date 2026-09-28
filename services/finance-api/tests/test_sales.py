@@ -2,10 +2,21 @@ from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
-from app.financial.sales import build_sales_net_response
+from app.financial.sales import MONTHLY_NET_SALES_SQL, SALES_METADATA_SQL, build_sales_net_response
 
 
 COMPANY_ID = UUID("d1000000-0000-0000-0000-000000000001")
+
+
+def test_sales_query_reads_net_amount_from_normalized_view() -> None:
+    monthly_sql = str(MONTHLY_NET_SALES_SQL)
+    metadata_sql = str(SALES_METADATA_SQL)
+
+    assert "normalized.net_amount" in monthly_sql
+    assert "JOIN integraciones.bsale_documents" not in monthly_sql
+    assert "JOIN integraciones.bsale_documents" not in metadata_sql
+    assert "vw_bsale_documents_normalized" in monthly_sql
+    assert "vw_bsale_documents_normalized" in metadata_sql
 
 
 def test_sales_net_subtracts_credit_notes_and_matches_ytd() -> None:

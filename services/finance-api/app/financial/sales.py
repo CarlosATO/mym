@@ -14,8 +14,7 @@ from app.db.connection import get_session_factory
 
 
 SALES_SOURCE = (
-    "integraciones.vw_bsale_documents_normalized + "
-    "integraciones.bsale_documents.net_amount"
+    "integraciones.vw_bsale_documents_normalized.net_amount"
 )
 MONEY_QUANTUM = Decimal("0.01")
 
@@ -28,11 +27,8 @@ MONTHLY_NET_SALES_SQL = text(
             normalized.bsale_id,
             normalized.emission_date,
             normalized.sign_for_sales,
-            documents.net_amount
+            normalized.net_amount
         FROM integraciones.vw_bsale_documents_normalized AS normalized
-        JOIN integraciones.bsale_documents AS documents
-          ON documents.company_id = normalized.company_id
-         AND documents.bsale_id = normalized.bsale_id
         WHERE normalized.company_id = :company_id
           AND normalized.emission_date >= :date_from
           AND normalized.emission_date < :date_to
@@ -67,9 +63,6 @@ SALES_METADATA_SQL = text(
             normalized.bsale_id,
             normalized.emission_date
         FROM integraciones.vw_bsale_documents_normalized AS normalized
-        JOIN integraciones.bsale_documents AS documents
-          ON documents.company_id = normalized.company_id
-         AND documents.bsale_id = normalized.bsale_id
         WHERE normalized.company_id = :company_id
           AND normalized.emission_date >= :date_from
           AND normalized.emission_date < :date_to

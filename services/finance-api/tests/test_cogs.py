@@ -93,6 +93,7 @@ def test_cogs_query_is_company_scoped_and_document_level() -> None:
 
     assert "normalized.company_id = :company_id" in sql
     assert "costs.company_id = eligible.company_id" in sql
+    assert "JOIN integraciones.bsale_documents" not in sql
     assert "bsale_document_details" not in sql
     assert "SELECT DISTINCT" in sql
 

@@ -28,9 +28,6 @@ MONTHLY_COGS_SQL = text(
             normalized.bsale_id,
             normalized.emission_date
         FROM integraciones.vw_bsale_documents_normalized AS normalized
-        JOIN integraciones.bsale_documents AS documents
-          ON documents.company_id = normalized.company_id
-         AND documents.bsale_id = normalized.bsale_id
         WHERE normalized.company_id = :company_id
           AND normalized.emission_date >= :date_from
           AND normalized.emission_date < :date_to
@@ -70,9 +67,6 @@ MONTHLY_COGS_SQL = text(
             normalized.bsale_id,
             normalized.emission_date
         FROM integraciones.vw_bsale_documents_normalized AS normalized
-        JOIN integraciones.bsale_documents AS documents
-          ON documents.company_id = normalized.company_id
-         AND documents.bsale_id = normalized.bsale_id
         WHERE normalized.company_id = :company_id
           AND normalized.emission_date >= :date_from
           AND normalized.emission_date < :date_to
