@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, Ban, PackageOpen, XCircle, CheckCircle2, BarChart3, RefreshCw } from 'lucide-react'
+import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, Ban, PackageOpen, XCircle, CheckCircle2, BarChart3, RefreshCw, Loader2 } from 'lucide-react'
 import { AuthorizedPersonnelCombobox } from '@/components/ui/authorized-personnel-combobox'
 import {
   getPurchaseOrders, getPurchaseOrderDetail, createPurchaseOrder,
@@ -138,6 +138,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const [activeCompany, setActiveCompany] = useState<Company | null>(null)
   const [replenishmentSupplierName, setReplenishmentSupplierName] = useState('')
   const [isReplenishmentPreparation, setIsReplenishmentPreparation] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const submittingRef = useRef(false)
   const productInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -427,6 +429,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     setShowAuthorizerForm(false)
     setReplenishmentSupplierName('')
     setIsReplenishmentPreparation(false)
+    submittingRef.current = false
+    setIsSubmitting(false)
   }
 
   function editPO(po: PurchaseOrder) {
@@ -501,6 +505,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    if (submittingRef.current) return
     if (items.length === 0) { msg('Agrega al menos una línea a la orden'); return }
     const invalidPriceItems = items.filter(item => item.quantity > 0 && (!Number.isFinite(item.unit_price) || item.unit_price <= 0))
     if (invalidPriceItems.length > 0) {
@@ -509,33 +514,46 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       linePriceInputRefs.current[invalidPriceItems[0].tempId]?.focus()
       return
     }
-    const res = await createPurchaseOrder({
-      issue_date: form.issue_date,
-      required_date: form.required_date,
-      supplier_id: form.supplier_id,
-      source_type: isReplenishmentPreparation ? 'REPLENISHMENT' : 'MANUAL',
-      warehouse_id: form.warehouse_id,
-      payment_terms: form.payment_terms || undefined,
-      authorized_by: form.authorized_by || undefined,
-      notes: form.notes || undefined,
-      currency: form.currency,
-      status: 'EMITIDA',
-      items: items.map(it => ({
-        item_type: it.item_type,
-        product_id: it.product_id || null,
-        product_description: it.description,
-        unit: it.unit || null,
-        quantity: it.quantity,
-        unit_price: it.unit_price,
-        discount_percent: it.discount_percent,
-        tax_rate: it.tax_rate,
-        warehouse_id: it.warehouse_id || null,
-        notes: it.notes || null,
-      })),
-    })
-    if ('error' in res && res.error) { msg(res.error); return }
-    msg('Orden de compra creada')
-    setView('list'); resetForm(); load()
+    submittingRef.current = true
+    setIsSubmitting(true)
+    try {
+      const res = await createPurchaseOrder({
+        issue_date: form.issue_date,
+        required_date: form.required_date,
+        supplier_id: form.supplier_id,
+        source_type: isReplenishmentPreparation ? 'REPLENISHMENT' : 'MANUAL',
+        warehouse_id: form.warehouse_id,
+        payment_terms: form.payment_terms || undefined,
+        authorized_by: form.authorized_by || undefined,
+        notes: form.notes || undefined,
+        currency: form.currency,
+        status: 'EMITIDA',
+        items: items.map(it => ({
+          item_type: it.item_type,
+          product_id: it.product_id || null,
+          product_description: it.description,
+          unit: it.unit || null,
+          quantity: it.quantity,
+          unit_price: it.unit_price,
+          discount_percent: it.discount_percent,
+          tax_rate: it.tax_rate,
+          warehouse_id: it.warehouse_id || null,
+          notes: it.notes || null,
+        })),
+      })
+      if ('error' in res && res.error) {
+        msg(res.error)
+        submittingRef.current = false
+        setIsSubmitting(false)
+        return
+      }
+      msg('Orden de compra creada')
+      setView('list'); resetForm(); load()
+    } catch (error) {
+      submittingRef.current = false
+      setIsSubmitting(false)
+      msg(error instanceof Error ? error.message : 'Error al crear la orden de compra')
+    }
   }
 
   async function handleStatusUpdate(poId: string, newStatus: string, reason?: string) {
@@ -1019,9 +1037,9 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                <button type="button" onClick={handlePreviewPDF} className="flex-1 rounded-md border border-[#AC9C8D]/55 px-3 py-1.5 text-xs font-semibold text-[#EFE9E1] transition-colors hover:border-[#D1C7BD] hover:bg-white/10 sm:flex-none">
                 Vista previa PDF
               </button>
-               <button type="submit" className="flex-1 rounded-md bg-[#72383D] px-4 py-1.5 text-xs font-bold text-[#EFE9E1] transition-colors hover:bg-[#5D2E32] sm:flex-none">
-                Emitir OC
-              </button>
+                <button type="submit" disabled={isSubmitting} className="flex-1 rounded-md bg-[#72383D] px-4 py-1.5 text-xs font-bold text-[#EFE9E1] transition-colors hover:bg-[#5D2E32] disabled:cursor-not-allowed disabled:opacity-60 sm:flex-none">
+                 {isSubmitting ? <><Loader2 className="mr-1 inline-block h-3 w-3 animate-spin" />Emitiendo...</> : 'Emitir OC'}
+               </button>
             </div>
           </div>
            <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-5">

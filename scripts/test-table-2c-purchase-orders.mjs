@@ -122,6 +122,17 @@ test('la emisión de OC envía estado explícito y el backend permite borradores
   assert.match(migration, /Hay productos sin precio unitario\. Complete el precio antes de emitir la orden\./)
 })
 
+test('la emisión bloquea submits repetidos y libera el bloqueo al fallar o reiniciar', () => {
+  assert.match(panel, /const \[isSubmitting, setIsSubmitting\] = useState\(false\)/)
+  assert.match(panel, /const submittingRef = useRef\(false\)/)
+  assert.match(panel, /if \(submittingRef\.current\) return/)
+  assert.match(panel, /submittingRef\.current = true[\s\S]*setIsSubmitting\(true\)[\s\S]*createPurchaseOrder/)
+  assert.match(panel, /disabled=\{isSubmitting\}/)
+  assert.match(panel, /Emitiendo\.\.\./)
+  assert.match(panel, /submittingRef\.current = false[\s\S]*setIsSubmitting\(false\)/)
+  assert.match(panel, /setView\('list'\); resetForm\(\); load\(\)/)
+})
+
 test('no migra Reposición ni otros listados al cambiar Órdenes de Compra', () => {
   assert.doesNotMatch(panel, /OperationalTableSortIndicator/)
   assert.doesNotMatch(panel, /replenishment-table/)
