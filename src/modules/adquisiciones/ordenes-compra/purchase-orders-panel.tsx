@@ -244,6 +244,36 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const tempIdCounter = useRef(0)
   function newTempId() { tempIdCounter.current += 1; return `ni_${tempIdCounter.current}` }
 
+  async function buildLineItems(detailItems: PurchaseOrderDetail['items']): Promise<LineItem[]> {
+    const productIds = detailItems
+      .filter(item => item.item_type !== 'SERVICE' && item.product_id)
+      .map(item => item.product_id as string)
+    const productsById = new Map<string, PurchaseOrderCatalogProduct>()
+    if (productIds.length > 0) {
+      try {
+        const catalog = await getPurchaseOrderProductCatalogCached()
+        catalog.forEach(product => productsById.set(product.id, product))
+      } catch {
+        // A missing catalog must not prevent editing the purchase order.
+      }
+    }
+
+    return detailItems.map(i => ({
+      tempId: i.id,
+      item_type: (i.item_type === 'SERVICE' ? 'SERVICE' : 'PRODUCT') as 'PRODUCT' | 'SERVICE',
+      product_id: i.product_id || '',
+      sku: i.item_type === 'SERVICE' ? '' : productsById.get(i.product_id || '')?.sku || '',
+      description: i.product_description || '',
+      unit: i.unit || 'UNIDAD',
+      quantity: i.quantity || 0,
+      unit_price: i.unit_price || 0,
+      discount_percent: i.discount_percent || 0,
+      tax_rate: i.tax_rate || 19,
+      warehouse_id: i.warehouse_id || '',
+      notes: i.notes || '',
+    }))
+  }
+
   interface ReplenishmentPreparationPayload {
     source: 'REPLENISHMENT' | 'EXCEL'
     supplier?: { id: string; name: string }
@@ -319,20 +349,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
           notes: d.po.notes || '',
         });
         setEditId(d.po.id);
-        setItems(d.items.map(i => ({
-          tempId: i.id,
-          item_type: (i.item_type === 'SERVICE' ? 'SERVICE' : 'PRODUCT') as 'PRODUCT' | 'SERVICE',
-          product_id: i.product_id || '',
-          sku: '', // Podríamos recuperarlo si viniera, pero se deja vacio en base al modelo
-          description: i.product_description || '',
-          unit: i.unit || 'UNIDAD',
-          quantity: i.quantity || 0,
-          unit_price: i.unit_price || 0,
-          discount_percent: i.discount_percent || 0,
-          tax_rate: i.tax_rate || 19,
-          warehouse_id: i.warehouse_id || '',
-          notes: i.notes || '',
-        })));
+        setItems(await buildLineItems(d.items));
         setSelectedPo(null);
         setView('form');
       }
@@ -633,20 +650,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   async function loadDetailItems(poId: string) {
     const d = await getPurchaseOrderDetail(poId)
     if (d) {
-      setItems(d.items.map(i => ({
-        tempId: i.id,
-        item_type: (i.item_type === 'SERVICE' ? 'SERVICE' : 'PRODUCT') as 'PRODUCT' | 'SERVICE',
-        product_id: i.product_id || '',
-        sku: '',
-        description: i.product_description || '',
-        unit: i.unit || 'UNIDAD',
-        quantity: i.quantity || 0,
-        unit_price: i.unit_price || 0,
-        discount_percent: i.discount_percent || 0,
-        tax_rate: i.tax_rate || 19,
-        warehouse_id: i.warehouse_id || '',
-        notes: i.notes || '',
-      })))
+      setItems(await buildLineItems(d.items))
     }
   }
 
@@ -1557,6 +1561,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                           ) : (
                             <span>{it.description || <span className="text-theme-text-muted/40">—</span>}</span>
                           )}
+                          {it.sku && <div className="font-mono text-[10px] text-[#AC9C8D]">SKU {it.sku}</div>}
                         </td>
                           <td className="px-3 py-1.5 text-center text-xs text-[#AC9C8D]">{it.unit}</td>
                           <td className="px-3 py-1.5 text-center">

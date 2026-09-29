@@ -113,6 +113,16 @@ test('el formulario de OC permite ajustar líneas antes de emitir y reutiliza el
   assert.doesNotMatch(panel, /po\.status === 'EMITIDA'[\s\S]*editPO\(po\)/)
 })
 
+test('las líneas del formulario muestran SKU sin hacerlo editable y lo resuelven al editar una OC', () => {
+  assert.match(panel, /interface LineItem[\s\S]*sku: string/)
+  assert.match(panel, /it\.sku && <div className="font-mono text-\[10px\] text-\[#AC9C8D\]">SKU \{it\.sku\}<\/div>/)
+  assert.match(panel, /editingItem === it\.tempId \? \([\s\S]*?it\.description[\s\S]*?it\.sku &&/)
+  assert.match(panel, /getPurchaseOrderProductCatalogCached\(\)[\s\S]*?productsById\.set\(product\.id, product\)/)
+  assert.match(panel, /sku: i\.item_type === 'SERVICE' \? '' : productsById\.get\(i\.product_id \|\| ''\)\?\.sku \|\| ''/)
+  assert.match(panel, /catch \{[\s\S]*?A missing catalog must not prevent editing the purchase order\./)
+  assert.doesNotMatch(panel, /PurchaseOrderItem/)
+})
+
 test('la emisión de OC envía estado explícito y el backend permite borradores pero bloquea precios inválidos al emitir', () => {
   assert.match(action, /status\?: 'BORRADOR' \| 'EMITIDA'/)
   assert.match(panel, /status: 'EMITIDA'/)
