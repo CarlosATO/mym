@@ -42,6 +42,10 @@ export interface ReplenishmentMetrics {
 
 export type BreakSummaryIndex = Map<number, BreakSummary60d>
 
+export const MIN_UNITS_SOLD_WITH_STOCK = 3
+export const MIN_DAYS_WITH_STOCK = 3
+const INSUFFICIENT_EVIDENCE_REASON = 'Información insuficiente — requiere análisis manual'
+
 export interface ReplenishmentTimelineDay {
   date: string
   sales: number
@@ -92,10 +96,18 @@ export type SuggestedQtyResult =
 
 export function calculateSuggestedQty(input: {
   salesRateWithStock: number | null
+  unitsSoldWithStock: number
+  daysWithStock: number
   physicalStock: number
   coverageWeeks: number
   salesIdentityResolved: boolean
 }): SuggestedQtyResult {
+  if (
+    input.unitsSoldWithStock < MIN_UNITS_SOLD_WITH_STOCK
+    || input.daysWithStock < MIN_DAYS_WITH_STOCK
+  ) {
+    return { calculable: false, quantity: null, reason: INSUFFICIENT_EVIDENCE_REASON }
+  }
   if (!input.salesIdentityResolved) {
     return { calculable: false, quantity: null, reason: 'Identidad de ventas no resuelta' }
   }
@@ -130,6 +142,8 @@ export function buildReplenishmentMetrics(input: {
   const coverageDays = rate !== null && rate > 0 ? physicalStock / rate : null
   const suggested = calculateSuggestedQty({
     salesRateWithStock: rate,
+    unitsSoldWithStock: breakSummary.unitsSoldWithStock,
+    daysWithStock: breakSummary.daysWithStock,
     physicalStock,
     coverageWeeks,
     salesIdentityResolved: breakSummary.salesIdentityResolved,
