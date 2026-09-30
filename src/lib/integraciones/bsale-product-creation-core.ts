@@ -3,6 +3,7 @@ export type BsaleCreationStatus =
   | 'PREFLIGHT_BLOCKED'
   | 'BSALE_PRODUCT_FAILED'
   | 'BSALE_PRODUCT_CREATED_VARIANT_FAILED'
+  | 'BSALE_PRODUCT_TAX_MISMATCH'
   | 'BSALE_VARIANT_EXISTS'
   | 'ERP_PERSIST_FAILED'
   | 'MAPPING_FAILED'
@@ -17,7 +18,6 @@ export type BsaleProductPayload = {
   productTypeId: number
   serialNumber: 0
   isLot: 0
-  taxId: 1
 }
 
 export type BsaleVariantPayload = {
@@ -57,10 +57,12 @@ export type BsaleProductCreationInput = {
   productType: { id: number; name: string }
   expectedBrandId: number | null
   userId: string
+  existingProductId?: number | null
 }
 
 export type BsaleProductCreationDependencies = {
   findExistingVariant: (sku: string, barcode: string | null) => Promise<BsaleVariantIdentity | null>
+  getProductTaxes: (productId: number) => Promise<number[]>
   createProduct: (payload: BsaleProductPayload) => Promise<{ id: number; state: number | null }>
   createVariant: (payload: BsaleVariantPayload) => Promise<{ id: number; productId: number; state: number | null }>
   persistProduct: (input: {
@@ -97,6 +99,8 @@ export type BsaleProductCreationResult =
       error: string
       bsale_product_id?: number
       bsale_variant_id?: number
+      expected_tax_id?: number
+      actual_tax_ids?: number[]
       product?: LocalCreatedProduct
     }
 
@@ -121,7 +125,6 @@ function toProductPayload(input: BsaleProductCreationInput): BsaleProductPayload
     productTypeId: input.productType.id,
     serialNumber: 0,
     isLot: 0,
-    taxId: 1,
   }
 }
 
@@ -208,20 +211,51 @@ export async function createBsaleProductAndVariant(
   }
 
   let bsaleProduct: { id: number; state: number | null }
-  try {
-    bsaleProduct = await deps.createProduct(toProductPayload(input))
-  } catch (error) {
-    const recovered = await deps.findExistingVariant(input.sku, input.barcode)
-    if (recovered) return persistRecoveredVariant(input, deps, recovered, null, 'BSALE_VARIANT_EXISTS')
-    const uncertain = error instanceof Error && (error.name === 'AbortError' || error.name === 'TypeError')
-    return { success: false, status: uncertain ? 'RECONCILIATION_REQUIRED' : 'BSALE_PRODUCT_FAILED', error: error instanceof Error ? error.message : 'No se pudo crear el Product en Bsale.' }
+  let productId: number
+  if (input.existingProductId != null) {
+    try {
+      productId = responseId(input.existingProductId, 'Product ID de reconciliación')
+      bsaleProduct = { id: productId, state: null }
+    } catch (error) {
+      return { success: false, status: 'RECONCILIATION_REQUIRED', error: error instanceof Error ? error.message : 'Product Bsale de reconciliación inválido.' }
+    }
+  } else {
+    try {
+      bsaleProduct = await deps.createProduct(toProductPayload(input))
+    } catch (error) {
+      const recovered = await deps.findExistingVariant(input.sku, input.barcode)
+      if (recovered) return persistRecoveredVariant(input, deps, recovered, null, 'BSALE_VARIANT_EXISTS')
+      const uncertain = error instanceof Error && (error.name === 'AbortError' || error.name === 'TypeError')
+      return { success: false, status: uncertain ? 'RECONCILIATION_REQUIRED' : 'BSALE_PRODUCT_FAILED', error: error instanceof Error ? error.message : 'No se pudo crear el Product en Bsale.' }
+    }
+
+    try {
+      productId = responseId(bsaleProduct.id, 'Product ID')
+    } catch (error) {
+      return { success: false, status: 'RECONCILIATION_REQUIRED', error: error instanceof Error ? error.message : 'Product Bsale sin ID.', bsale_product_id: Number(bsaleProduct.id) || undefined }
+    }
   }
 
-  let productId: number
+  let actualTaxIds: number[]
   try {
-    productId = responseId(bsaleProduct.id, 'Product ID')
+    actualTaxIds = await deps.getProductTaxes(productId)
   } catch (error) {
-    return { success: false, status: 'RECONCILIATION_REQUIRED', error: error instanceof Error ? error.message : 'Product Bsale sin ID.', bsale_product_id: Number(bsaleProduct.id) || undefined }
+    return {
+      success: false,
+      status: 'RECONCILIATION_REQUIRED',
+      error: error instanceof Error ? error.message : 'No se pudieron verificar los impuestos del Product Bsale.',
+      bsale_product_id: productId,
+    }
+  }
+  if (!actualTaxIds.includes(1)) {
+    return {
+      success: false,
+      status: 'BSALE_PRODUCT_TAX_MISMATCH',
+      error: 'El producto fue creado en Bsale, pero los impuestos asignados no coinciden con la configuración esperada. Se requiere revisión.',
+      bsale_product_id: productId,
+      expected_tax_id: 1,
+      actual_tax_ids: actualTaxIds,
+    }
   }
 
   const existingBeforeVariant = await deps.findExistingVariant(input.sku, input.barcode)

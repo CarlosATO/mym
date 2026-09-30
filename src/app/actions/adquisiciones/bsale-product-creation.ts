@@ -24,6 +24,7 @@ type BsaleVariant = {
 }
 
 type BsaleListResponse<T> = { count?: number; items?: T[] }
+type BsaleProductTax = { tax?: { id?: number | string } | null; id?: number | string }
 
 export type ProductCreationDefaults = {
   classification: 0
@@ -450,6 +451,17 @@ async function findExistingVariantForCreation(companyId: string, sku: string, ba
   return { variantId: variant.variant_id, productId: variant.product_id, code: variant.code, barcode: variant.barcode }
 }
 
+async function getProductTaxesForCreation(companyId: string, productId: number) {
+  const result = await bsaleFetchForCompany<BsaleProductTax>({
+    companyId,
+    path: `/products/${productId}/product_taxes.json`,
+    params: { limit: 50 },
+  }) as BsaleListResponse<BsaleProductTax>
+  return [...new Set((result.items ?? [])
+    .map(item => Number(item.tax?.id ?? item.id))
+    .filter(id => Number.isInteger(id) && id > 0))]
+}
+
 async function persistCreatedProduct(input: {
   companyId: string
   userId: string
@@ -547,7 +559,7 @@ async function ensureRealSupplierMapping(input: {
 
 export async function createPurchaseOrderBsaleProduct(
   poId: string,
-  input: ProductCreationPreflightInput & { description: string },
+  input: ProductCreationPreflightInput & { description: string; bsale_product_id?: number | null },
 ): Promise<BsaleProductCreationResult | { success: false; status: 'PREFLIGHT_BLOCKED'; error: string }> {
   const auth = await authorize()
   if (auth.error || !auth.companyId || !auth.userId) return { success: false, status: 'PREFLIGHT_BLOCKED', error: auth.error || 'Empresa activa requerida.' }
@@ -560,6 +572,7 @@ export async function createPurchaseOrderBsaleProduct(
 
   const dependencies: BsaleProductCreationDependencies = {
     findExistingVariant: (sku, barcode) => findExistingVariantForCreation(auth.companyId!, sku, barcode),
+    getProductTaxes: productId => getProductTaxesForCreation(auth.companyId!, productId),
     createProduct: async payload => {
       const response = await bsaleWriteForCompany<{ id?: number | string; state?: number | string }>({ companyId: auth.companyId!, path: '/products.json', body: payload })
       return { id: Number(response.id), state: response.state == null ? null : Number(response.state) }
@@ -586,6 +599,7 @@ export async function createPurchaseOrderBsaleProduct(
       description: input.description,
       productType: preflight.product_type,
       expectedBrandId: preflight.brand?.expected_bsale_brand_id ?? null,
+      existingProductId: input.bsale_product_id ?? null,
     }, dependencies)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Se requiere reconciliación Bsale.'

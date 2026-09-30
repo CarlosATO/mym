@@ -22,6 +22,7 @@ function dependencies(overrides = {}) {
   return {
     calls,
     findExistingVariant: async () => { calls.find += 1; return null },
+    getProductTaxes: async () => [1],
     createProduct: async payload => { calls.products.push(payload); return { id: 501, state: 0 } },
     createVariant: async payload => { calls.variants.push(payload); return { id: 601, productId: payload.productId, state: 0 } },
     persistProduct: async value => {
@@ -39,8 +40,10 @@ test('contract writes Product then Variant with documented payloads only', async
   assert.equal(result.success, true)
   assert.deepEqual(deps.calls.products[0], {
     name: 'Producto nuevo', description: 'Producto nuevo', classification: 0, allowDecimal: 0,
-    stockControl: 1, productTypeId: 37, serialNumber: 0, isLot: 0, taxId: 1,
+    stockControl: 1, productTypeId: 37, serialNumber: 0, isLot: 0,
   })
+  assert.equal('taxId' in deps.calls.products[0], false)
+  assert.equal('taxes' in deps.calls.products[0], false)
   assert.deepEqual(deps.calls.variants[0], {
     productId: 501, description: 'Producto nuevo', unlimitedStock: 0, allowNegativeStock: 0,
     code: 'SKU-001', barCode: '000001',
@@ -59,6 +62,9 @@ test('preflight gate and backend contract exclude UI/items and real writes', () 
   assert.match(action, /company_id: input\.companyId/)
   assert.match(action, /source: 'BSALE'/)
   assert.match(action, /is_preferred: true/)
+  assert.match(action, /product_taxes\.json/)
+  assert.match(action, /getProductTaxes/)
+  assert.match(action, /path: `\/products\/\$\{productId\}\/product_taxes\.json`/)
   assert.doesNotMatch(action, /\n\s+bsale_brand_id\s*:/)
   assert.doesNotMatch(action, /purchase_order_items/)
   assert.doesNotMatch(action, /purchase-order-supplier-review\.tsx/)
@@ -85,6 +91,39 @@ test('Product created and Variant failure returns partial state without deleting
   assert.equal(result.status, 'BSALE_PRODUCT_CREATED_VARIANT_FAILED')
   assert.equal(result.bsale_product_id, 501)
   assert.equal(deps.calls.persisted.length, 0)
+})
+
+test('Tax mismatch preserves Product ID and prevents Variant and ERP writes', async () => {
+  const deps = dependencies({ getProductTaxes: async () => [2] })
+  const result = await core.createBsaleProductAndVariant(input, deps)
+  assert.equal(result.status, 'BSALE_PRODUCT_TAX_MISMATCH')
+  assert.equal(result.bsale_product_id, 501)
+  assert.deepEqual(result.actual_tax_ids, [2])
+  assert.equal(result.expected_tax_id, 1)
+  assert.equal(deps.calls.variants.length, 0)
+  assert.equal(deps.calls.persisted.length, 0)
+})
+
+test('Product taxes GET failure does not create Variant or repeat Product POST', async () => {
+  let productPosts = 0
+  const deps = dependencies({
+    createProduct: async payload => { productPosts += 1; deps.calls.products.push(payload); return { id: 501, state: 0 } },
+    getProductTaxes: async () => { throw new Error('tax lookup unavailable') },
+  })
+  const result = await core.createBsaleProductAndVariant(input, deps)
+  assert.equal(result.status, 'RECONCILIATION_REQUIRED')
+  assert.equal(result.bsale_product_id, 501)
+  assert.equal(productPosts, 1)
+  assert.equal(deps.calls.variants.length, 0)
+  assert.equal(deps.calls.persisted.length, 0)
+})
+
+test('Known Product ID resumes tax verification without creating another Product', async () => {
+  const deps = dependencies()
+  const result = await core.createBsaleProductAndVariant({ ...input, existingProductId: 501 }, deps)
+  assert.equal(result.success, true)
+  assert.equal(deps.calls.products.length, 0)
+  assert.equal(deps.calls.variants[0].productId, 501)
 })
 
 test('existing Variant is detected before Product POST', async () => {
