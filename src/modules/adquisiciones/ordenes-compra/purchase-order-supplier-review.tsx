@@ -77,6 +77,16 @@ function toEditable(item: PurchaseOrderReviewItem, index: number): EditableRevie
   }
 }
 
+function matchesOriginal(line: EditableReviewItem, original: PurchaseOrderReviewItem) {
+  return line.item_type === original.item_type
+    && line.product_id === original.product_id
+    && line.quantity === original.quantity
+    && line.unit_price === original.unit_price
+    && line.discount_percent === original.discount_percent
+    && line.tax_rate === original.tax_rate
+    && line.notes === original.notes
+}
+
 export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseOrderSupplierReviewProps) {
   const [comparison, setComparison] = useState<PurchaseOrderSupplierReviewComparison | null>(null)
   const [lines, setLines] = useState<EditableReviewItem[]>([])
@@ -132,7 +142,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
   useEffect(() => { setNewProductModalOpen(false) }, [poId])
 
   const statuses = useMemo(() => reviewLineMap(comparison?.comparison ?? []), [comparison])
-  const removedLines = comparison?.comparison.filter(line => line.comparison_status === 'ELIMINADA') ?? []
+  const removedLines = comparison?.comparison.filter(line => line.comparison_status === 'ELIMINADA' && !lines.some(item => item.item_id === line.item_id)) ?? []
   const catalog = productPickerOpen ? catalogCache : []
   const visibleProducts = useMemo(() => {
     const query = catalogQuery.trim().toLocaleLowerCase('es-CL')
@@ -160,6 +170,13 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
   function removeLine(clientId: string | null) {
     setLines(current => current.filter(line => line.item_id !== clientId && line.client_id !== clientId))
     setDirty(true)
+  }
+
+  function restoreLine(line: PurchaseOrderReviewItem | null) {
+    if (!line) return
+    setLines(current => current.some(item => item.item_id === line.item_id) ? current : [...current, toEditable(line, current.length)])
+    setDirty(true)
+    setMessage('Línea restaurada; guarda la revisión para confirmar.')
   }
 
   async function openCatalog() {
@@ -327,7 +344,9 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
             <thead><tr className="bg-[#322D29] text-[10px] uppercase tracking-wider text-[#EFE9E1]"><th className="px-3 py-2 text-left">Estado</th><th className="px-3 py-2 text-left">SKU</th><th className="px-3 py-2 text-left">Producto</th><th className="px-3 py-2 text-left">Unidad</th><th className="px-3 py-2 text-right">Cantidad</th><th className="px-3 py-2 text-right">P. unitario</th><th className="px-3 py-2 text-right">Dto %</th><th className="px-3 py-2 text-right">IVA %</th><th className="px-3 py-2 text-right">Total</th><th className="px-3 py-2 text-right">Acción</th></tr></thead>
             <tbody>{lines.map(line => {
               const persisted = line.item_id ? statuses.get(line.item_id) : undefined
-              const status = persisted?.comparison_status ?? 'AGREGADA'
+               const status = persisted?.comparison_status === 'ELIMINADA' && persisted.original_item
+                 ? matchesOriginal(line, persisted.original_item) ? 'SIN_CAMBIOS' : 'MODIFICADA'
+                 : persisted?.comparison_status ?? 'AGREGADA'
               return <tr key={line.item_id ?? `${line.product_id}-${line.line_number}`} className="border-b border-[#E5DDD4] align-top"><td className="px-3 py-2"><span className={`inline-flex whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] font-semibold ${statusStyle(status)}`}>{statusLabel(status)}</span></td><td className="px-3 py-2 font-mono text-[#72383D]">{line.sku || '—'}</td><td className="px-3 py-2 font-medium">{line.product_description}{line.unit_price === 0 && <span className="ml-2 text-[10px] text-[#AC9C8D]">Precio pendiente</span>}{persisted?.comparison_status === 'MODIFICADA' && <div className="mt-1 space-y-0.5 text-[10px] text-[#AC9C8D]">{persisted.changed_fields.map(change => <div key={change.field}>Antes {change.field}: {displayValue(change.original, change.field, po.currency)}</div>)}</div>}</td><td className="px-3 py-2">{line.unit || '—'}</td><td className="px-3 py-2"><input aria-label={`Cantidad ${line.product_description}`} type="number" min="0" step="0.01" value={line.quantity} onChange={event => updateLine(line.item_id, 'quantity', event.target.value)} className={`${inputClass} w-24 text-right`} /></td><td className="px-3 py-2"><input aria-label={`Precio ${line.product_description}`} type="number" min="0" step="0.01" value={line.unit_price} onChange={event => updateLine(line.item_id, 'unit_price', event.target.value)} className={`${inputClass} w-28 text-right`} /></td><td className="px-3 py-2"><input aria-label={`Descuento ${line.product_description}`} type="number" min="0" max="100" step="0.01" value={line.discount_percent} onChange={event => updateLine(line.item_id, 'discount_percent', event.target.value)} className={`${inputClass} w-20 text-right`} /></td><td className="px-3 py-2"><input aria-label={`IVA ${line.product_description}`} type="number" min="0" max="100" step="0.01" value={line.tax_rate} onChange={event => updateLine(line.item_id, 'tax_rate', event.target.value)} className={`${inputClass} w-20 text-right`} /></td><td className="px-3 py-2 text-right font-semibold tabular-nums">{currency((line.quantity * line.unit_price) - (line.quantity * line.unit_price * line.discount_percent / 100) + (((line.quantity * line.unit_price) - (line.quantity * line.unit_price * line.discount_percent / 100)) * line.tax_rate / 100), po.currency)}</td><td className="px-3 py-2 text-right"><button onClick={() => removeLine(line.item_id)} className="rounded p-1.5 text-[#6D625B] hover:bg-[#F5EDEE] hover:text-[#72383D]" title="Eliminar línea"><Trash2 className="h-3.5 w-3.5" /></button></td></tr>
             })}</tbody>
          </table>
@@ -346,7 +365,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
         </section>}
 
 
-        {removedLines.length > 0 && <section className="mb-4 border border-[#D1C7BD] bg-white/70 p-3"><h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-[#6D625B]">Productos no disponibles / eliminados</h2><div className="overflow-x-auto"><table className="min-w-[700px] w-full text-xs"><thead><tr className="border-b border-[#D1C7BD] text-left text-[10px] uppercase text-[#AC9C8D]"><th className="py-2">Estado</th><th>SKU</th><th>Descripción</th><th className="text-right">Cantidad</th><th className="text-right">Precio</th><th className="text-right">Total</th></tr></thead><tbody>{removedLines.map(line => <tr key={line.item_id} className="border-b border-[#E5DDD4]"><td className="py-2"><span className={`rounded border px-1.5 py-0.5 text-[10px] ${statusStyle('ELIMINADA')}`}>Eliminada</span></td><td className="font-mono">{line.original_item?.sku || '—'}</td><td>{line.original_item?.product_description || '—'}</td><td className="text-right">{line.original_item?.quantity ?? '—'}</td><td className="text-right">{currency(line.original_item?.unit_price, po.currency)}</td><td className="text-right font-semibold">{currency(line.original_item?.line_total, po.currency)}</td></tr>)}</tbody></table></div></section>}
+         {removedLines.length > 0 && <section className="mb-4 border border-[#D1C7BD] bg-white/70 p-3"><h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-[#6D625B]">Productos no disponibles / eliminados</h2><div className="overflow-x-auto"><table className="min-w-[820px] w-full text-xs"><thead><tr className="border-b border-[#D1C7BD] text-left text-[10px] uppercase text-[#AC9C8D]"><th className="py-2">Estado</th><th>SKU</th><th>Descripción</th><th className="text-right">Cantidad</th><th className="text-right">Precio</th><th className="text-right">Total</th><th className="text-right">Acción</th></tr></thead><tbody>{removedLines.map(line => <tr key={line.item_id} className="border-b border-[#E5DDD4]"><td className="py-2"><span className={`rounded border px-1.5 py-0.5 text-[10px] ${statusStyle('ELIMINADA')}`}>Eliminada</span></td><td className="font-mono">{line.original_item?.sku || '—'}</td><td>{line.original_item?.product_description || '—'}</td><td className="text-right">{line.original_item?.quantity ?? '—'}</td><td className="text-right">{currency(line.original_item?.unit_price, po.currency)}</td><td className="text-right font-semibold">{currency(line.original_item?.line_total, po.currency)}</td><td className="text-right"><button type="button" onClick={() => restoreLine(line.original_item)} className="rounded border border-[#72383D]/40 px-2 py-1 text-[11px] font-semibold text-[#72383D] hover:bg-[#72383D]/10">Restaurar</button></td></tr>)}</tbody></table></div></section>}
 
         <section className="flex justify-end border-t border-[#D1C7BD] pt-3"><div className="w-72 space-y-1 text-xs"><div className="flex justify-between"><span className="text-[#AC9C8D]">Neto preview</span><span>{currency(preview.net, po.currency)}</span></div><div className="flex justify-between"><span className="text-[#AC9C8D]">Descuento preview</span><span>{currency(preview.discount, po.currency)}</span></div><div className="flex justify-between"><span className="text-[#AC9C8D]">IVA preview</span><span>{currency(preview.tax, po.currency)}</span></div><div className="flex justify-between border-t border-[#D1C7BD] pt-1 font-bold text-[#72383D]"><span>Total preview</span><span>{currency(preview.total, po.currency)}</span></div></div></section>
        </main>
