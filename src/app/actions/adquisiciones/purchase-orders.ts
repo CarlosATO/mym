@@ -286,6 +286,49 @@ export interface SupplierReviewData {
   items: SupplierReviewItemInput[]
 }
 
+export type PurchaseOrderReviewComparisonStatus =
+  | 'SIN_CAMBIOS'
+  | 'MODIFICADA'
+  | 'ELIMINADA'
+  | 'AGREGADA'
+
+export interface PurchaseOrderReviewChangedField {
+  field: string
+  original: unknown
+  current: unknown
+}
+
+export interface PurchaseOrderReviewComparisonLine {
+  item_id: string
+  comparison_status: PurchaseOrderReviewComparisonStatus
+  original_item: Record<string, unknown> | null
+  current_item: Record<string, unknown> | null
+  changed_fields: PurchaseOrderReviewChangedField[]
+}
+
+export interface PurchaseOrderSupplierReviewComparison {
+  success: true
+  po: Record<string, unknown>
+  original: {
+    snapshot_id: string
+    created_at: string
+    header: Record<string, unknown>
+    items: Record<string, unknown>[]
+  }
+  current: { items: Record<string, unknown>[] }
+  comparison: PurchaseOrderReviewComparisonLine[]
+  summary: {
+    total_lines: number
+    unchanged_count: number
+    modified_count: number
+    removed_count: number
+    added_count: number
+    original_grand_total: number
+    current_grand_total: number
+    total_difference: number
+  }
+}
+
 export async function updateSentPurchaseOrderReview(poId: string, data: SupplierReviewData) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -320,6 +363,27 @@ export async function updateSentPurchaseOrderReview(poId: string, data: Supplier
     po_id: r.po_id,
     item_count: r.item_count,
   }
+}
+
+export async function getPurchaseOrderSupplierReviewComparison(poId: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado' }
+
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
+
+  const db = adqAdmin()
+  const { data, error } = await db.rpc('get_purchase_order_supplier_review_comparison', {
+    p_po_id: poId,
+    p_user_id: user.id,
+    p_company_id: companyId,
+  })
+  if (error) return { error: error.message }
+  if (!data || typeof data !== 'object' || (data as { success?: boolean }).success !== true) {
+    return { error: 'No se pudo obtener la comparación de la OC' }
+  }
+  return { data: data as PurchaseOrderSupplierReviewComparison }
 }
 
 export async function updatePurchaseOrderStatus(poId: string, newStatus: string, reason?: string) {
