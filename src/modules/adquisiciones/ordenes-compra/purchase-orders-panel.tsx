@@ -1,12 +1,12 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, Ban, PackageOpen, XCircle, CheckCircle2, BarChart3, RefreshCw, Loader2, ClipboardCheck, Send } from 'lucide-react'
+import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, FileSpreadsheet, Ban, PackageOpen, XCircle, CheckCircle2, BarChart3, RefreshCw, Loader2, ClipboardCheck, Send } from 'lucide-react'
 import { AuthorizedPersonnelCombobox } from '@/components/ui/authorized-personnel-combobox'
 import {
   getPurchaseOrders, getPurchaseOrderDetail, createPurchaseOrder,
   updatePurchaseOrderStatus, getAuthorizedPersonnel, createAuthorizedPersonnel,
-  getNextCorrelative,
+  getNextCorrelative, getPurchaseOrderDocumentDetail,
   type PurchaseOrder, type PurchaseOrderDetail, type PurchaseOrderFilters,
   type AuthorizedPersonnel
 } from '@/app/actions/adquisiciones/purchase-orders'
@@ -17,6 +17,7 @@ import { getPurchaseOrderWarehousesCached } from './warehouse-cache'
 import type { PurchaseOrderCatalogProduct } from '@/app/actions/adquisiciones/products'
 import type { Warehouse } from '@/app/actions/adquisiciones/warehouses'
 import { downloadPOBooklet, generatePdfBlob } from '@/lib/pdf/generate-po-pdf'
+import { generatePurchaseOrderExcel } from '@/lib/excel/generate-po-excel'
 import { getActiveCompany, type Company } from '@/app/actions/companies'
 import { OperationalTableResizeHandle, shouldIgnoreOperationalRowDoubleClick, useOperationalTableWidths, type OperationalTableColumn } from '@/components/ui/operational-table'
 import { ReplenishmentAnalysisPanel } from './replenishment-analysis-panel'
@@ -144,6 +145,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const [isReplenishmentPreparation, setIsReplenishmentPreparation] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isMarkingSent, setIsMarkingSent] = useState(false)
+  const [downloadingPdf, setDownloadingPdf] = useState(false)
+  const [downloadingExcel, setDownloadingExcel] = useState(false)
   const submittingRef = useRef(false)
   const productInputRef = useRef<HTMLInputElement>(null)
 
@@ -1086,69 +1089,32 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   }
 
   async function handleDownloadPDF() {
-    if (!detail) return
-    const it = detail.items
-    const net = it.reduce((s, i) => s + (i.quantity * i.unit_price), 0)
-    const disc = it.reduce((s, i) => s + (i.quantity * i.unit_price * i.discount_percent / 100), 0)
-    const tax = it.reduce((s, i) => {
-      const ln = i.quantity * i.unit_price
-      const ld = ln * i.discount_percent / 100
-      return s + ((ln - ld) * i.tax_rate / 100)
-    }, 0)
-    const pdfDetail = {
-      po: {
-        id: detail.po.id,
-        correlative: detail.po.correlative,
-        issue_date: detail.po.issue_date,
-        required_date: detail.po.required_date || undefined,
-        supplier_name: detail.po.supplier_name,
-        supplier_rut: detail.po.supplier_rut || undefined,
-        supplier_contact: detail.po.supplier_contact || undefined,
-        supplier_email: detail.po.supplier_email || undefined,
-        supplier_phone: detail.po.supplier_phone || undefined,
-        supplier_address: detail.po.supplier_address || undefined,
-        warehouse_name: detail.po.warehouse_name || undefined,
-        po_type: detail.po.po_type,
-        currency: detail.po.currency,
-        payment_terms: detail.po.payment_terms || undefined,
-        requester_name: detail.po.requester_name || '',
-        authorized_name: detail.po.authorized_name || undefined,
-        notes: detail.po.notes || undefined,
-        net_total: net,
-        discount_total: disc,
-        tax_total: tax,
-        exempt_total: detail.po.exempt_total || 0,
-        grand_total: net - disc + tax,
-        status: detail.po.status,
-        receipt_status: detail.po.receipt_status || undefined,
-        invoice_status: detail.po.invoice_status || undefined,
-        created_at: detail.po.created_at,
-        company_name: detail.po.company_name,
-        company_rut: detail.po.company_rut,
-        company_logo_url: detail.po.company_logo_url,
-        company_phone: detail.po.company_phone,
-        company_email: detail.po.company_email,
-        company_address: detail.po.company_address
-      },
-      items: it.map((i, idx) => ({
-        line_number: idx + 1,
-        item_type: i.item_type,
-        product_id: i.product_id || undefined,
-        product_description: i.product_description,
-        unit: i.unit || undefined,
-        quantity: i.quantity,
-        unit_price: i.unit_price,
-        discount_percent: i.discount_percent,
-        discount_amount: i.discount_amount,
-        tax_rate: i.tax_rate,
-        tax_amount: i.tax_amount,
-        line_total: i.line_total,
-        warehouse_name: i.warehouse_name || undefined,
-        cost_center: i.cost_center || undefined,
-        notes: i.notes || undefined,
-      })),
+    if (!detail || downloadingPdf) return
+    setDownloadingPdf(true)
+    try {
+      const result = await getPurchaseOrderDocumentDetail(detail.po.id)
+      if ('error' in result) throw new Error(result.error)
+      const document = result.data
+      await downloadPOBooklet(document, `OC_${document.po.correlative}`, undefined)
+    } catch (error) {
+      msg(error instanceof Error ? error.message : 'No se pudo generar el PDF.')
+    } finally {
+      setDownloadingPdf(false)
     }
-    await downloadPOBooklet(pdfDetail, `OC_${detail.po.correlative}`, undefined)
+  }
+
+  async function handleDownloadExcel() {
+    if (!detail || downloadingExcel) return
+    setDownloadingExcel(true)
+    try {
+      const result = await getPurchaseOrderDocumentDetail(detail.po.id)
+      if ('error' in result) throw new Error(result.error)
+      generatePurchaseOrderExcel(result.data)
+    } catch (error) {
+      msg(error instanceof Error ? error.message : 'No se pudo generar el Excel.')
+    } finally {
+      setDownloadingExcel(false)
+    }
   }
 
   async function handlePreviewPDF() {
@@ -1726,8 +1692,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                   <ClipboardCheck className="w-3.5 h-3.5" /> Revisar confirmación
                 </button>
               )}
-              <button onClick={handleDownloadPDF} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5">
-                <Download className="w-3.5 h-3.5" /> PDF
+              <button onClick={() => void handleDownloadPDF()} disabled={downloadingPdf} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50">
+                <Download className="w-3.5 h-3.5" /> {downloadingPdf ? 'PDF...' : 'PDF'}
+              </button>
+              <button onClick={() => void handleDownloadExcel()} disabled={downloadingExcel} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50">
+                <FileSpreadsheet className="w-3.5 h-3.5" /> {downloadingExcel ? 'Excel...' : 'Excel'}
               </button>
               {['EMITIDA', 'BORRADOR', 'PENDIENTE_APROBACION', 'APROBADA'].includes(detail.po.status) && (
                 <button onClick={() => handleStatusUpdate(detail.po.id, 'CANCELADA')} className="px-4 py-2 rounded-xl border border-red-500/30 text-red-500 hover:bg-red-500/10 text-xs font-semibold transition-colors flex items-center gap-1.5">
@@ -2042,7 +2011,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                {detail ? (
                  <div className="space-y-8">
                     <div className="flex gap-2">
-                      <button onClick={handleDownloadPDF} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5"><Download className="w-3.5 h-3.5" /> PDF</button>
+                       <button onClick={() => void handleDownloadPDF()} disabled={downloadingPdf} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"><Download className="w-3.5 h-3.5" /> {downloadingPdf ? 'PDF...' : 'PDF'}</button>
+                       <button onClick={() => void handleDownloadExcel()} disabled={downloadingExcel} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"><FileSpreadsheet className="w-3.5 h-3.5" /> {downloadingExcel ? 'Excel...' : 'Excel'}</button>
                       {detail.po.status === 'EMITIDA' && <button onClick={() => void handleMarkSentToSupplier(detail.po.id)} disabled={isMarkingSent} className="px-4 py-2 rounded-xl border border-[#72383D]/35 text-[#72383D] hover:bg-[#72383D]/10 text-xs font-semibold transition-colors flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50">{isMarkingSent ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}{isMarkingSent ? 'Marcando...' : 'Marcar enviada al proveedor'}</button>}
                       {detail.po.status === 'ENVIADA_PROVEEDOR' && <button onClick={() => openSupplierReview(detail.po.id)} className="px-4 py-2 rounded-xl bg-[#72383D] text-[#EFE9E1] hover:bg-[#5D2E32] text-xs font-semibold transition-colors flex items-center gap-1.5"><ClipboardCheck className="w-3.5 h-3.5" /> Revisar confirmación</button>}
                     </div>

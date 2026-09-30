@@ -2,12 +2,12 @@ import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { formatCivilDate, todayInSantiago } from '@/lib/datetime'
 
-interface POItem {
+export interface POItem {
   line_number: number
   item_type: string
-  product_id?: string
+  product_id?: string | null
   product_description: string
-  unit?: string
+  unit?: string | null
   quantity: number
   unit_price: number
   discount_percent: number
@@ -15,38 +15,39 @@ interface POItem {
   tax_rate: number
   tax_amount: number
   line_total: number
-  warehouse_name?: string
-  cost_center?: string
-  notes?: string
+  warehouse_name?: string | null
+  cost_center?: string | null
+  notes?: string | null
+  sku?: string | null
 }
 
-interface PODetail {
+export interface PODetail {
   po: {
     id: string
     correlative: string
     issue_date: string
-    required_date?: string
+    required_date?: string | null
     supplier_name: string
-    supplier_rut?: string
-    supplier_contact?: string
-    supplier_email?: string
-    supplier_phone?: string
-    supplier_address?: string
-    warehouse_name?: string
+    supplier_rut?: string | null
+    supplier_contact?: string | null
+    supplier_email?: string | null
+    supplier_phone?: string | null
+    supplier_address?: string | null
+    warehouse_name?: string | null
     po_type: string
     currency: string
-    payment_terms?: string
+    payment_terms?: string | null
     requester_name: string
-    authorized_name?: string
-    notes?: string
+    authorized_name?: string | null
+    notes?: string | null
     net_total: number
     discount_total: number
     tax_total: number
     exempt_total: number
     grand_total: number
     status: string
-    receipt_status?: string
-    invoice_status?: string
+    receipt_status?: string | null
+    invoice_status?: string | null
     created_at: string
     company_name?: string | null
     company_rut?: string | null
@@ -382,26 +383,24 @@ export function generatePdfBlob(detail: PODetail, logoBase64?: string): Blob {
   // ── ITEMS TABLE ──
   const tableHeaders = [
     'Línea',
-    'Tipo',
+    'SKU',
     'Producto / Servicio',
     'Unidad',
     'Cant.',
     'P.Unitario',
     'Dto%',
-    'Descuento',
     'IVA%',
     'Total Línea',
   ]
 
   const tableBody = detail.items.map((item) => [
     item.line_number.toString(),
-    item.item_type,
+    item.sku || '-',
     item.product_description,
     item.unit || '-',
     item.quantity.toString(),
     formatCurrency(item.unit_price),
     item.discount_percent ? `${item.discount_percent}%` : '-',
-    item.discount_amount ? formatCurrency(item.discount_amount) : '-',
     item.tax_rate ? `${item.tax_rate}%` : '-',
     formatCurrency(item.line_total),
   ])
@@ -428,15 +427,14 @@ export function generatePdfBlob(detail: PODetail, logoBase64?: string): Blob {
     },
     columnStyles: {
       0: { halign: 'center', cellWidth: 10 },
-      1: { halign: 'center', cellWidth: 12 },
-      2: { cellWidth: 55 },
+      1: { cellWidth: 23 },
+      2: { cellWidth: 58 },
       3: { halign: 'center', cellWidth: 11 },
-      4: { halign: 'center', cellWidth: 11 },
-      5: { halign: 'right', cellWidth: 18 },
-      6: { halign: 'center', cellWidth: 9 },
-      7: { halign: 'right', cellWidth: 18 },
-      8: { halign: 'center', cellWidth: 9 },
-      9: { halign: 'right', cellWidth: 20 },
+      4: { halign: 'center', cellWidth: 13 },
+      5: { halign: 'right', cellWidth: 22 },
+      6: { halign: 'center', cellWidth: 10 },
+      7: { halign: 'center', cellWidth: 10 },
+      8: { halign: 'right', cellWidth: 23 },
     },
     alternateRowStyles: {
       fillColor: [248, 250, 252],
