@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ClipboardCheck, Loader2, Plus, Save, Search, Trash2 } from 'lucide-react'
 import {
   getPurchaseOrderSupplierReviewComparison,
@@ -14,7 +14,10 @@ import {
 import { getPurchaseOrderProductCatalogCached } from './purchase-order-product-cache'
 import type { PurchaseOrderCatalogProduct } from '@/app/actions/adquisiciones/products'
 
-type EditableReviewItem = Omit<PurchaseOrderReviewItem, 'item_id'> & { item_id: string | null }
+type EditableReviewItem = Omit<PurchaseOrderReviewItem, 'item_id'> & {
+  item_id: string | null
+  client_id: string
+}
 
 interface PurchaseOrderSupplierReviewProps {
   poId: string
@@ -60,8 +63,12 @@ function reviewLineMap(comparison: PurchaseOrderReviewComparisonLine[]) {
   return new Map(comparison.map(line => [line.item_id, line]))
 }
 
-function toEditable(item: PurchaseOrderReviewItem): EditableReviewItem {
-  return { ...item, item_id: item.item_id || null }
+function toEditable(item: PurchaseOrderReviewItem, index: number): EditableReviewItem {
+  return {
+    ...item,
+    item_id: item.item_id || null,
+    client_id: item.item_id ? `persisted-${item.item_id}` : `persisted-new-${index}`,
+  }
 }
 
 export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseOrderSupplierReviewProps) {
@@ -78,11 +85,19 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
   const [dirty, setDirty] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const newItemSequence = useRef(0)
 
   async function loadComparison() {
     setLoading(true)
     setError('')
-    const result = await getPurchaseOrderSupplierReviewComparison(poId)
+    let result: Awaited<ReturnType<typeof getPurchaseOrderSupplierReviewComparison>>
+    try {
+      result = await getPurchaseOrderSupplierReviewComparison(poId)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'No se pudo cargar la comparación de la OC.')
+      setLoading(false)
+      return
+    }
     if ('error' in result && result.error) {
       setError(result.error)
       setLoading(false)
@@ -119,12 +134,12 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
 
   function updateLine(itemId: string | null, field: 'quantity' | 'unit_price' | 'discount_percent' | 'tax_rate', value: string) {
     const numeric = Number(value)
-    setLines(current => current.map(line => line.item_id === itemId ? { ...line, [field]: Number.isFinite(numeric) ? numeric : 0 } : line))
+    setLines(current => current.map(line => line.item_id === itemId || line.client_id === itemId ? { ...line, [field]: Number.isFinite(numeric) ? numeric : 0 } : line))
     setDirty(true)
   }
 
-  function removeLine(itemId: string | null) {
-    setLines(current => current.filter(line => line.item_id !== itemId))
+  function removeLine(clientId: string | null) {
+    setLines(current => current.filter(line => line.item_id !== clientId && line.client_id !== clientId))
     setDirty(true)
   }
 
@@ -152,7 +167,8 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
       return
     }
     setLines(current => [...current, {
-      item_id: null,
+      item_id: `new-${++newItemSequence.current}`,
+      client_id: `new-${newItemSequence.current}`,
       line_number: current.length + 1,
       item_type: 'PRODUCT',
       product_id: selectedProduct.id,
@@ -184,7 +200,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
     setError('')
     const payload: SupplierReviewData = {
       items: lines.map(line => ({
-        item_id: line.item_id,
+        item_id: line.item_id?.startsWith('new-') ? null : line.item_id,
         item_type: line.item_type,
         product_id: line.product_id,
         quantity: line.quantity,
