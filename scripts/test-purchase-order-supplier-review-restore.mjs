@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 const root = new URL('..', import.meta.url)
-const migration = await readFile(new URL('supabase/migrations/20260930220000_adquisiciones_supplier_review_restore_removed_lines.sql', root), 'utf8')
+const migration = await readFile(new URL('supabase/migrations/20260930190841_adquisiciones_supplier_review_restore_removed_lines.sql', root), 'utf8')
 const review = await readFile(new URL('src/modules/adquisiciones/ordenes-compra/purchase-order-supplier-review.tsx', root), 'utf8')
 
 test('restoration uses ORIGINAL_SENT identity and preserves the original UUID', () => {

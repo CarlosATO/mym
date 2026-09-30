@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ClipboardCheck, Loader2, Plus, Save, Search, Trash2 } from 'lucide-react'
 import {
+  confirmPurchaseOrderSupplierReview,
   getPurchaseOrderSupplierReviewComparison,
   updateSentPurchaseOrderReview,
   type PurchaseOrderReviewChangedField,
@@ -25,6 +26,7 @@ interface PurchaseOrderSupplierReviewProps {
   poId: string
   onBack: () => void
   onSaved?: () => void | Promise<void>
+  onConfirmed?: () => void | Promise<void>
 }
 
 const inputClass = 'h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15'
@@ -87,11 +89,13 @@ function matchesOriginal(line: EditableReviewItem, original: PurchaseOrderReview
     && line.notes === original.notes
 }
 
-export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseOrderSupplierReviewProps) {
+export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed }: PurchaseOrderSupplierReviewProps) {
   const [comparison, setComparison] = useState<PurchaseOrderSupplierReviewComparison | null>(null)
   const [lines, setLines] = useState<EditableReviewItem[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
+  const [confirming, setConfirming] = useState(false)
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [catalogCache, setCatalogCache] = useState<PurchaseOrderCatalogProduct[]>([])
   const [catalogQuery, setCatalogQuery] = useState('')
@@ -160,6 +164,16 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
     totals.total += base - discount + tax
     return totals
   }, { net: 0, discount: 0, tax: 0, total: 0 }), [lines])
+
+  const hasPendingPrice = lines.some(line => !Number.isFinite(line.unit_price) || line.unit_price <= 0)
+  const hasInvalidQuantity = lines.some(line => !Number.isFinite(line.quantity) || line.quantity <= 0)
+  const confirmDisabledReason = dirty
+    ? 'Guarda la revisión antes de confirmar la OC.'
+    : hasPendingPrice
+      ? 'Existen productos con precio pendiente.'
+      : hasInvalidQuantity
+        ? 'Existen líneas con cantidad inválida.'
+        : ''
 
   function updateLine(itemId: string | null, field: 'quantity' | 'unit_price' | 'discount_percent' | 'tax_rate', value: string) {
     const numeric = Number(value)
@@ -295,6 +309,35 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
     setSaving(false)
   }
 
+  function openConfirmDialog() {
+    if (confirmDialogOpen || confirming || confirmDisabledReason) return
+    setError('')
+    setConfirmDialogOpen(true)
+  }
+
+  async function confirmReview() {
+    if (confirming || confirmDisabledReason) return
+    setConfirming(true)
+    setError('')
+    try {
+      const result = await confirmPurchaseOrderSupplierReview(poId)
+      if ('error' in result) {
+        if (result.error) setError(result.error)
+        return
+      }
+      if (result.success && result.status === 'CONFIRMADA') {
+        setConfirmDialogOpen(false)
+        await onConfirmed?.()
+      } else {
+        setError('No se pudo confirmar la OC.')
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'No se pudo confirmar la OC.')
+    } finally {
+      setConfirming(false)
+    }
+  }
+
   function leave() {
     if (dirty && !confirm('Hay cambios sin guardar. ¿Deseas salir sin guardarlos?')) return
     onBack()
@@ -326,7 +369,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
     <div className="flex h-full min-w-0 flex-col overflow-hidden bg-[#EFE9E1] text-[#322D29]">
       <header className="sticky top-0 z-20 flex shrink-0 flex-wrap items-center justify-between gap-3 bg-[#322D29] px-4 py-3 text-[#EFE9E1] shadow-sm">
         <div className="flex items-center gap-3"><button onClick={leave} className="rounded-md p-1.5 hover:bg-white/10" title="Volver"><ArrowLeft className="h-4 w-4" /></button><div><div className="flex items-center gap-2"><ClipboardCheck className="h-4 w-4 text-[#D1C7BD]" /><h1 className="text-sm font-bold">Confirmación del proveedor</h1><span className="font-mono text-xs text-[#D1C7BD]">OC {po.correlative}</span></div><p className="text-[11px] text-[#D1C7BD]">Proveedor: {po.supplier_name || '—'} · Estado: ENVIADA_PROVEEDOR</p></div></div>
-        <div className="flex items-center gap-3"><span className="text-[11px] text-[#D1C7BD]">{dirty ? 'Cambios sin guardar' : message}</span><button onClick={() => void saveReview()} disabled={saving} className="inline-flex items-center gap-1.5 rounded-md bg-[#EFE9E1] px-3 py-2 text-xs font-bold text-[#72383D] disabled:opacity-50"><Save className="h-3.5 w-3.5" /> {saving ? 'Guardando...' : 'Guardar revisión'}</button></div>
+         <div className="flex items-center gap-3"><span className="text-[11px] text-[#D1C7BD]">{dirty ? 'Cambios sin guardar' : message}</span><button onClick={() => void saveReview()} disabled={saving || confirming} className="inline-flex items-center gap-1.5 rounded-md bg-[#EFE9E1] px-3 py-2 text-xs font-bold text-[#72383D] disabled:opacity-50"><Save className="h-3.5 w-3.5" /> {saving ? 'Guardando...' : 'Guardar revisión'}</button><button type="button" onClick={openConfirmDialog} disabled={Boolean(confirmDisabledReason) || saving || confirming} title={confirmDisabledReason || 'Confirmar la orden de compra'} className="inline-flex items-center gap-1.5 rounded-md border border-[#D1C7BD] px-3 py-2 text-xs font-bold text-[#EFE9E1] hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50">Confirmar OC</button></div>
       </header>
 
         <main className="min-w-0 flex-1 overflow-auto p-4 lg:p-6">
@@ -367,8 +410,9 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
 
          {removedLines.length > 0 && <section className="mb-4 border border-[#D1C7BD] bg-white/70 p-3"><h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-[#6D625B]">Productos no disponibles / eliminados</h2><div className="overflow-x-auto"><table className="min-w-[820px] w-full text-xs"><thead><tr className="border-b border-[#D1C7BD] text-left text-[10px] uppercase text-[#AC9C8D]"><th className="py-2">Estado</th><th>SKU</th><th>Descripción</th><th className="text-right">Cantidad</th><th className="text-right">Precio</th><th className="text-right">Total</th><th className="text-right">Acción</th></tr></thead><tbody>{removedLines.map(line => <tr key={line.item_id} className="border-b border-[#E5DDD4]"><td className="py-2"><span className={`rounded border px-1.5 py-0.5 text-[10px] ${statusStyle('ELIMINADA')}`}>Eliminada</span></td><td className="font-mono">{line.original_item?.sku || '—'}</td><td>{line.original_item?.product_description || '—'}</td><td className="text-right">{line.original_item?.quantity ?? '—'}</td><td className="text-right">{currency(line.original_item?.unit_price, po.currency)}</td><td className="text-right font-semibold">{currency(line.original_item?.line_total, po.currency)}</td><td className="text-right"><button type="button" onClick={() => restoreLine(line.original_item)} className="rounded border border-[#72383D]/40 px-2 py-1 text-[11px] font-semibold text-[#72383D] hover:bg-[#72383D]/10">Restaurar</button></td></tr>)}</tbody></table></div></section>}
 
-        <section className="flex justify-end border-t border-[#D1C7BD] pt-3"><div className="w-72 space-y-1 text-xs"><div className="flex justify-between"><span className="text-[#AC9C8D]">Neto preview</span><span>{currency(preview.net, po.currency)}</span></div><div className="flex justify-between"><span className="text-[#AC9C8D]">Descuento preview</span><span>{currency(preview.discount, po.currency)}</span></div><div className="flex justify-between"><span className="text-[#AC9C8D]">IVA preview</span><span>{currency(preview.tax, po.currency)}</span></div><div className="flex justify-between border-t border-[#D1C7BD] pt-1 font-bold text-[#72383D]"><span>Total preview</span><span>{currency(preview.total, po.currency)}</span></div></div></section>
-       </main>
+         <section className="flex justify-end border-t border-[#D1C7BD] pt-3"><div className="w-72 space-y-1 text-xs"><div className="flex justify-between"><span className="text-[#AC9C8D]">Neto preview</span><span>{currency(preview.net, po.currency)}</span></div><div className="flex justify-between"><span className="text-[#AC9C8D]">Descuento preview</span><span>{currency(preview.discount, po.currency)}</span></div><div className="flex justify-between"><span className="text-[#AC9C8D]">IVA preview</span><span>{currency(preview.tax, po.currency)}</span></div><div className="flex justify-between border-t border-[#D1C7BD] pt-1 font-bold text-[#72383D]"><span>Total preview</span><span>{currency(preview.total, po.currency)}</span></div></div></section>
+         {confirmDialogOpen && <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#322D29]/60 p-4"><section role="dialog" aria-modal="true" aria-labelledby="confirm-purchase-order-title" className="w-full max-w-md border border-[#D1C7BD] bg-[#EFE9E1] p-5 text-[#322D29] shadow-xl"><h2 id="confirm-purchase-order-title" className="text-base font-bold text-[#72383D]">Confirmar orden de compra</h2><div className="mt-3 space-y-1 text-xs"><p><span className="font-semibold">OC:</span> {po.correlative}</p><p><span className="font-semibold">Proveedor:</span> {po.supplier_name || '—'}</p><p><span className="font-semibold">Total definitivo:</span> {currency(displayCurrentTotal, po.currency)}</p></div><div className="mt-3 border-y border-[#D1C7BD] py-3 text-xs"><p className="font-semibold">Resumen</p><p>Modificadas: {summary.modified_count}</p><p>Eliminadas: {summary.removed_count}</p><p>Agregadas: {summary.added_count}</p></div><p className="mt-3 text-xs text-[#6D625B]">Esta acción cerrará la revisión del proveedor y dejará esta versión como definitiva para recepción. Después de confirmar, la OC ya no podrá editarse desde esta pantalla.</p>{error && <p className="mt-3 border border-[#72383D]/30 bg-[#F5EDEE] px-3 py-2 text-xs text-[#72383D]">{error}</p>}<div className="mt-4 flex justify-end gap-2"><button type="button" onClick={() => setConfirmDialogOpen(false)} disabled={confirming} className="rounded-md border border-[#D1C7BD] px-3 py-2 text-xs font-semibold text-[#6D625B] disabled:opacity-50">Cancelar</button><button type="button" onClick={() => void confirmReview()} disabled={confirming} className="rounded-md bg-[#72383D] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{confirming ? 'Confirmando...' : 'Confirmar definitivamente'}</button></div></section></div>}
+        </main>
        <PurchaseOrderNewProductModal poId={poId} open={newProductModalOpen} onClose={() => setNewProductModalOpen(false)} onCreated={addCreatedProduct} />
     </div>
   )

@@ -5,6 +5,7 @@ import test from 'node:test'
 const root = new URL('..', import.meta.url)
 const panel = await readFile(new URL('src/modules/adquisiciones/ordenes-compra/purchase-orders-panel.tsx', root), 'utf8')
 const review = await readFile(new URL('src/modules/adquisiciones/ordenes-compra/purchase-order-supplier-review.tsx', root), 'utf8')
+const actions = await readFile(new URL('src/app/actions/adquisiciones/purchase-orders.ts', root), 'utf8')
 const modal = await readFile(new URL('src/modules/adquisiciones/ordenes-compra/purchase-order-new-product-modal.tsx', root), 'utf8')
 const sidePanelStart = panel.indexOf('{selectedPo && (')
 assert.notEqual(sidePanelStart, -1, 'split-pane selectedPo no encontrado')
@@ -28,7 +29,7 @@ test('EMITIDA can be marked as sent without implementing confirmation', () => {
   assert.match(panel, /await getPurchaseOrderDetail\(poId\)/)
   assert.match(panel, /setDetail\(updatedDetail\)[\s\S]*?setSelectedPo\(updatedDetail\.po as PurchaseOrder\)/)
   assert.match(panel, /CONFIRMADA:.*Confirmada/)
-  assert.doesNotMatch(panel, /Confirmar OC/)
+  assert.match(review, /Confirmar OC/)
 })
 
 test('supplier review handles complete payloads and comparison states', () => {
@@ -45,7 +46,7 @@ test('supplier review handles complete payloads and comparison states', () => {
   assert.match(review, /lines\.length === 0/)
   assert.match(review, /Cambios sin guardar/)
   assert.match(review, /confirm\('Hay cambios sin guardar\./)
-  assert.doesNotMatch(review, /Confirmar OC/)
+  assert.match(review, /Confirmar OC/)
 })
 
 test('supplier review summary reflects live totals only while dirty', () => {
@@ -79,12 +80,56 @@ test('supplier review product picker has explicit compact open and close state',
   assert.doesNotMatch(review, /catalog\.length > 0 && !selectedProduct/)
   assert.equal((review.match(/Cargando catálogo/g) ?? []).length, 1)
   assert.match(review, /unitPrice < 0/)
-  assert.doesNotMatch(review, /Confirmar OC/)
+  assert.match(review, /Confirmar OC/)
 })
 
 test('panel invalidates detail cache and reloads the listing after save', () => {
   assert.match(panel, /delete detailCacheRef\.current\[poId\]/)
   assert.match(panel, /await load\(\)/)
+})
+
+test('supplier review confirms explicitly and only after local validation', () => {
+  const confirmStart = review.indexOf('async function confirmReview()')
+  const confirmEnd = review.indexOf('\n  function leave()', confirmStart)
+  assert.ok(confirmStart >= 0 && confirmEnd > confirmStart)
+  const confirmSource = review.slice(confirmStart, confirmEnd)
+  const validationStart = review.indexOf('const confirmDisabledReason = dirty')
+  const validationEnd = review.indexOf('\n\n  function updateLine', validationStart)
+  const validationSource = review.slice(validationStart, validationEnd)
+
+  assert.match(review, /Confirmar OC/)
+  assert.match(review, /Guardar revisión/)
+  assert.match(review, /const confirmDisabledReason = dirty/)
+  assert.match(review, /hasPendingPrice = lines\.some\(line => !Number\.isFinite\(line\.unit_price\) \|\| line\.unit_price <= 0\)/)
+  assert.match(review, /hasInvalidQuantity = lines\.some\(line => !Number\.isFinite\(line\.quantity\) \|\| line\.quantity <= 0\)/)
+  assert.match(review, /Guarda la revisión antes de confirmar la OC\./)
+  assert.match(review, /Existen productos con precio pendiente\./)
+  assert.match(review, /Existen líneas con cantidad inválida\./)
+  assert.doesNotMatch(validationSource, /modified_count|removed_count|added_count|total_difference/)
+
+  assert.match(review, /function openConfirmDialog\(\)/)
+  assert.match(review, /setConfirmDialogOpen\(true\)/)
+  assert.match(review, /confirmPurchaseOrderSupplierReview\(poId\)/)
+  assert.match(confirmSource, /if \(confirming \|\| confirmDisabledReason\) return/)
+  assert.match(confirmSource, /if \('error' in result\)/)
+  assert.match(confirmSource, /setError\(result\.error\)/)
+  assert.match(confirmSource, /result\.success && result\.status === 'CONFIRMADA'/)
+  assert.match(confirmSource, /await onConfirmed\?\.\(\)/)
+  assert.match(review, /disabled=\{confirming\}/)
+  assert.match(review, /Confirmar definitivamente/)
+  assert.match(review, /Esta acción cerrará la revisión del proveedor/)
+  assert.match(actions, /already_confirmed: boolean/)
+  assert.doesNotMatch(review, /updatePurchaseOrderStatus\(poId, 'CONFIRMADA'\)/)
+  assert.doesNotMatch(confirmSource, /updateSentPurchaseOrderReview/)
+  assert.doesNotMatch(confirmSource, /updatePurchaseOrderStatus/)
+})
+
+test('confirmation success refreshes and closes supplier review without bypassing backend', () => {
+  assert.match(review, /interface PurchaseOrderSupplierReviewProps[\s\S]*onConfirmed\?:/)
+  assert.match(panel, /async function handleSupplierReviewConfirmed\(poId: string\)/)
+  assert.match(panel, /handleSupplierReviewConfirmed[\s\S]*delete detailCacheRef\.current\[poId\][\s\S]*delete pendingRequestsRef\.current\[poId\][\s\S]*await load\(\)[\s\S]*setView\('list'\)[\s\S]*Orden de compra confirmada\./)
+  assert.match(panel, /onConfirmed=\{\(\) => handleSupplierReviewConfirmed\(supplierReviewPoId\)\}/)
+  assert.doesNotMatch(panel, /updatePurchaseOrderStatus\(poId, 'CONFIRMADA'\)/)
 })
 
 test('new Bsale product flow is lazy, supplier-bound, and local-only after creation', () => {

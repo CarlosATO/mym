@@ -799,6 +799,17 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     await load()
   }
 
+  async function handleSupplierReviewConfirmed(poId: string) {
+    delete detailCacheRef.current[poId]
+    delete pendingRequestsRef.current[poId]
+    await load()
+    setSupplierReviewPoId(null)
+    setView('list')
+    setDetail(null)
+    setSelectedPo(null)
+    msg('Orden de compra confirmada.')
+  }
+
   function handleSupplierChange(supplierId: string) {
     if (supplierId !== form.supplier_id && form.supplier_id && items.length > 0) {
       const confirmed = confirm('Cambiar el proveedor eliminará los productos agregados a esta orden.\n¿Deseas continuar?')
@@ -1675,10 +1686,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
    if (view === 'supplier-review' && supplierReviewPoId) {
      return (
        <PurchaseOrderSupplierReview
-         poId={supplierReviewPoId}
-         onBack={() => { setSupplierReviewPoId(null); setView('list'); setDetail(null); setSelectedPo(null) }}
-         onSaved={() => handleSupplierReviewSaved(supplierReviewPoId)}
-       />
+          poId={supplierReviewPoId}
+          onBack={() => { setSupplierReviewPoId(null); setView('list'); setDetail(null); setSelectedPo(null) }}
+          onSaved={() => handleSupplierReviewSaved(supplierReviewPoId)}
+          onConfirmed={() => handleSupplierReviewConfirmed(supplierReviewPoId)}
+        />
      )
    }
 
