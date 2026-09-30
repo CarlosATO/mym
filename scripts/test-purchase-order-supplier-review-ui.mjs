@@ -56,6 +56,23 @@ test('supplier review summary reflects live totals only while dirty', () => {
   assert.match(review, /updateSentPurchaseOrderReview\(poId, payload\)/)
 })
 
+test('supplier review product picker has explicit compact open and close state', () => {
+  assert.match(review, /const \[productPickerOpen, setProductPickerOpen\] = useState\(false\)/)
+  assert.match(review, /const catalog = productPickerOpen \? catalogCache : \[\]/)
+  assert.match(review, /catalog\.length > 0 && !selectedProduct/)
+  assert.match(review, /setProductPickerOpen\(true\)/)
+  assert.match(review, /setProductPickerOpen\(false\)/)
+  assert.match(review, /setSelectedProduct\(null\)/)
+  assert.match(review, /setCatalogQuery\(''\)/)
+  assert.match(review, /setNewQuantity\('1'\)/)
+  assert.match(review, /setNewUnitPrice\('0'\)/)
+  assert.match(review, />Cancelar<\/button>/)
+  assert.match(review, /getPurchaseOrderProductCatalogCached\(\)/)
+  assert.doesNotMatch(review, /setCatalog\(/)
+  assert.match(review, /unitPrice < 0/)
+  assert.doesNotMatch(review, /Confirmar OC/)
+})
+
 test('panel invalidates detail cache and reloads the listing after save', () => {
   assert.match(panel, /delete detailCacheRef\.current\[poId\]/)
   assert.match(panel, /await load\(\)/)

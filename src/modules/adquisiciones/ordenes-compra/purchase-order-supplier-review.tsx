@@ -81,11 +81,12 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [catalogLoading, setCatalogLoading] = useState(false)
-  const [catalog, setCatalog] = useState<PurchaseOrderCatalogProduct[]>([])
+  const [catalogCache, setCatalogCache] = useState<PurchaseOrderCatalogProduct[]>([])
   const [catalogQuery, setCatalogQuery] = useState('')
   const [selectedProduct, setSelectedProduct] = useState<PurchaseOrderCatalogProduct | null>(null)
   const [newQuantity, setNewQuantity] = useState('1')
   const [newUnitPrice, setNewUnitPrice] = useState('0')
+  const [productPickerOpen, setProductPickerOpen] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -116,9 +117,15 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
   }
 
   useEffect(() => { void loadComparison() }, [poId])
+  useEffect(() => {
+    setProductPickerOpen(false)
+    setSelectedProduct(null)
+    setCatalogQuery('')
+  }, [poId])
 
   const statuses = useMemo(() => reviewLineMap(comparison?.comparison ?? []), [comparison])
   const removedLines = comparison?.comparison.filter(line => line.comparison_status === 'ELIMINADA') ?? []
+  const catalog = productPickerOpen ? catalogCache : []
   const visibleProducts = useMemo(() => {
     const query = catalogQuery.trim().toLocaleLowerCase('es-CL')
     if (!query) return catalog.slice(0, 8)
@@ -148,9 +155,21 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
   }
 
   async function openCatalog() {
+    if (productPickerOpen) {
+      setProductPickerOpen(false)
+      setSelectedProduct(null)
+      setCatalogQuery('')
+      setNewQuantity('1')
+      setNewUnitPrice('0')
+      return
+    }
+    setProductPickerOpen(true)
+    setSelectedProduct(null)
+    setCatalogQuery('')
+    if (catalogCache.length > 0) return
     setCatalogLoading(true)
     try {
-      setCatalog(await getPurchaseOrderProductCatalogCached())
+      setCatalogCache(await getPurchaseOrderProductCatalogCached())
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'No se pudo cargar el catálogo.')
     } finally {
@@ -190,6 +209,9 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
     }])
     setSelectedProduct(null)
     setCatalogQuery('')
+    setProductPickerOpen(false)
+    setNewQuantity('1')
+    setNewUnitPrice('0')
     setDirty(true)
     setError('')
   }
@@ -261,6 +283,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
       </header>
 
       <main className="min-w-0 flex-1 overflow-auto p-4 lg:p-6">
+        {productPickerOpen && selectedProduct && <div className="mb-3 flex justify-end"><button type="button" onClick={() => { setSelectedProduct(null); setCatalogQuery(''); setProductPickerOpen(false); setNewQuantity('1'); setNewUnitPrice('0') }} className="rounded-md border border-[#D1C7BD] px-3 py-1.5 text-xs font-semibold text-[#6D625B] hover:bg-[#EFE9E1]">Cancelar</button></div>}
         {error && <div className="mb-3 border border-[#72383D]/30 bg-[#F5EDEE] px-3 py-2 text-xs text-[#72383D]">{error}</div>}
         <section className="mb-4 grid grid-cols-2 gap-3 border border-[#D1C7BD] bg-white/60 p-3 text-xs md:grid-cols-4 xl:grid-cols-7">
           {[['Proveedor', po.supplier_name], ['RUT', po.supplier_rut], ['Bodega', po.warehouse_name], ['Fecha emisión', dateValue(po.issue_date)], ['Fecha requerida', dateValue(po.required_date)], ['Condición de pago', po.payment_terms], ['Moneda', po.currency]].map(([label, value]) => <div key={label as string}><p className="text-[10px] uppercase tracking-wider text-[#AC9C8D]">{label}</p><p className="mt-1 font-medium">{value || '—'}</p></div>)}
