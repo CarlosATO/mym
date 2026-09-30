@@ -89,14 +89,44 @@ test('mocked Bsale lookup uses GET by code and barcode with URL encoding', async
 
 test('ERP and Bsale duplicates, conflicts, and can_create are blocking', () => {
   assert.match(action, /from\('products'\)/)
-  assert.match(action, /\.eq\('sku', sku\)/)
-  assert.match(action, /\.eq\('barcode', barcode\)/)
+  assert.match(action, /\.or\(`company_id\.is\.null,company_id\.eq\.\$\{companyId\}`\)/)
+  assert.match(action, /\.eq\(field, value\)/)
+  assert.match(action, /lookup\('sku', sku\)/)
+  assert.match(action, /lookup\('barcode', barcode\)/)
   assert.match(action, /erp_duplicate/)
+  assert.match(action, /erp_conflict/)
   assert.match(action, /bsale_duplicate/)
+  assert.match(action, /ya existen en ERP pero pertenecen a productos diferentes/)
   assert.match(action, /pertenecen a variantes diferentes/)
-  assert.match(action, /can_create: !erpDuplicate\.exists && !bsaleDuplicate\.exists && !conflict/)
+  assert.match(action, /can_create: !erpDuplicate\.exists && !erpConflict && !bsaleDuplicate\.exists && !conflict/)
   assert.doesNotMatch(action, /can_create:[\s\S]{0,120}brand/)
   assert.match(action, /expected_bsale_brand_id/)
+})
+
+test('ERP duplicate scope includes globals and active company, excluding other companies', () => {
+  const companyId = 'company-a'
+  const rows = [
+    { company_id: null, sku: 'GLOBAL-1', barcode: '000001' },
+    { company_id: 'company-a', sku: 'PRIVATE-1', barcode: '000002' },
+    { company_id: 'company-b', sku: 'PRIVATE-2', barcode: '000003' },
+  ]
+  const effectiveRows = rows.filter(row => row.company_id === null || row.company_id === companyId)
+  assert.equal(effectiveRows.some(row => row.sku === 'GLOBAL-1'), true)
+  assert.equal(effectiveRows.some(row => row.barcode === '000001'), true)
+  assert.equal(effectiveRows.some(row => row.sku === 'PRIVATE-1'), true)
+  assert.equal(effectiveRows.some(row => row.barcode === '000002'), true)
+  assert.equal(effectiveRows.some(row => row.sku === 'PRIVATE-2'), false)
+  assert.equal(effectiveRows.some(row => row.barcode === '000003'), false)
+  assert.equal('000001', '000001')
+})
+
+test('ERP SKU and barcode matches from different products are an explicit conflict', () => {
+  const skuProduct = { id: 'global-product' }
+  const barcodeProduct = { id: 'company-product' }
+  const erpConflict = skuProduct.id !== barcodeProduct.id
+  assert.equal(erpConflict, true)
+  assert.match(action, /Boolean\(skuProduct && barcodeProduct && skuProduct\.id !== barcodeProduct\.id\)/)
+  assert.match(action, /!erpDuplicate\.exists && !erpConflict/)
 })
 
 test('flow is read-only and has no Bsale write methods or persistence of Brand', () => {

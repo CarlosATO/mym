@@ -84,6 +84,7 @@ export type ProductCreationPreflight = {
   product_type: ProductCreationType | null
   brand: ProductCreationBrand | null
   erp_duplicate: ErpDuplicate
+  erp_conflict: boolean
   bsale_duplicate: BsaleDuplicate
   conflict: boolean
   can_create: boolean
@@ -272,27 +273,35 @@ export async function getPurchaseOrderNewProductContext(poId: string) {
   }
 }
 
-async function findErpDuplicate(companyId: string, sku: string, barcode: string | null): Promise<ErpDuplicate> {
+async function findErpDuplicate(companyId: string, sku: string, barcode: string | null): Promise<{ duplicate: ErpDuplicate; conflict: boolean }> {
   const db = adqAdmin()
-  const queries = [
-    db.from('products').select('id, sku, barcode, description, bsale_product_id, bsale_variant_id').eq('company_id', companyId).eq('sku', sku).maybeSingle(),
-    barcode
-      ? db.from('products').select('id, sku, barcode, description, bsale_product_id, bsale_variant_id').eq('company_id', companyId).eq('barcode', barcode).maybeSingle()
-      : Promise.resolve({ data: null, error: null }),
-  ] as const
-  const [skuResult, barcodeResult] = await Promise.all(queries)
-  if (skuResult.error) throw new Error(`No se pudo validar el SKU en ERP: ${skuResult.error.message}`)
-  if (barcodeResult.error) throw new Error(`No se pudo validar el barcode en ERP: ${barcodeResult.error.message}`)
-  const product = skuResult.data ?? barcodeResult.data
-  if (!product) return { exists: false, match_type: null, product_id: null, sku: null, description: null, bsale_product_id: null, bsale_variant_id: null }
+  const select = 'id, sku, barcode, description, bsale_product_id, bsale_variant_id'
+  const lookup = async (field: 'sku' | 'barcode', value: string) => {
+    const { data, error } = await db.from('products')
+      .select(select)
+      .or(`company_id.is.null,company_id.eq.${companyId}`)
+      .eq(field, value)
+      .limit(1)
+    if (error) throw new Error(`No se pudo validar el ${field} en ERP: ${error.message}`)
+    return data?.[0] ?? null
+  }
+  const [skuProduct, barcodeProduct] = await Promise.all([
+    lookup('sku', sku),
+    barcode ? lookup('barcode', barcode) : Promise.resolve(null),
+  ])
+  const product = skuProduct ?? barcodeProduct
+  if (!product) return { duplicate: emptyErpDuplicate(), conflict: false }
   return {
-    exists: true,
-    match_type: skuResult.data ? 'SKU' : 'BARCODE',
-    product_id: product.id,
-    sku: product.sku,
-    description: product.description,
-    bsale_product_id: product.bsale_product_id,
-    bsale_variant_id: product.bsale_variant_id,
+    duplicate: {
+      exists: true,
+      match_type: skuProduct ? 'SKU' : 'BARCODE',
+      product_id: product.id,
+      sku: product.sku,
+      description: product.description,
+      bsale_product_id: product.bsale_product_id,
+      bsale_variant_id: product.bsale_variant_id,
+    },
+    conflict: Boolean(skuProduct && barcodeProduct && skuProduct.id !== barcodeProduct.id),
   }
 }
 
@@ -351,6 +360,7 @@ export async function preflightPurchaseOrderNewProduct(
     product_type: null,
     brand: null,
     erp_duplicate: emptyErpDuplicate(),
+    erp_conflict: false,
     bsale_duplicate: emptyBsaleDuplicate(),
     conflict: false,
     can_create: false,
@@ -377,11 +387,13 @@ export async function preflightPurchaseOrderNewProduct(
     const resultBase = { ...base, supplier: context.supplier, product_type: typeValidation.product_type, brand }
     if (!typeValidation.valid) return { success: false, ...resultBase, blocking_reason: INVALID_PRODUCT_TYPE_MESSAGE, error: INVALID_PRODUCT_TYPE_MESSAGE }
 
-    const erpDuplicate = await findErpDuplicate(auth.companyId, normalized.sku, normalized.barcode)
+    const erpLookup = await findErpDuplicate(auth.companyId, normalized.sku, normalized.barcode)
+    const erpDuplicate = erpLookup.duplicate
+    const erpConflict = erpLookup.conflict
     const skuLookup = await findBsaleVariant(auth.companyId, 'code', normalized.sku)
-    if (skuLookup.kind === 'ERROR') return { success: false, ...resultBase, erp_duplicate: erpDuplicate, blocking_reason: skuLookup.message, error: skuLookup.message }
+    if (skuLookup.kind === 'ERROR') return { success: false, ...resultBase, erp_duplicate: erpDuplicate, erp_conflict: erpConflict, blocking_reason: skuLookup.message, error: skuLookup.message }
     const barcodeLookup = normalized.barcode ? await findBsaleVariant(auth.companyId, 'barcode', normalized.barcode) : { kind: 'OK' as const, variants: [] }
-    if (barcodeLookup.kind === 'ERROR') return { success: false, ...resultBase, erp_duplicate: erpDuplicate, blocking_reason: barcodeLookup.message, error: barcodeLookup.message }
+    if (barcodeLookup.kind === 'ERROR') return { success: false, ...resultBase, erp_duplicate: erpDuplicate, erp_conflict: erpConflict, blocking_reason: barcodeLookup.message, error: barcodeLookup.message }
 
     const skuMatch = firstVariant(skuLookup.variants)
     const barcodeMatch = firstVariant(barcodeLookup.variants)
@@ -398,6 +410,8 @@ export async function preflightPurchaseOrderNewProduct(
       : emptyBsaleDuplicate()
     const blockingReason = conflict
       ? 'El SKU y el código de barras existen en Bsale pero pertenecen a variantes diferentes.'
+      : erpConflict
+        ? 'El SKU y el código de barras ya existen en ERP pero pertenecen a productos diferentes.'
       : erpDuplicate.exists
         ? 'El SKU o código de barras ya existe en ERP.'
         : bsaleDuplicate.exists
@@ -407,9 +421,10 @@ export async function preflightPurchaseOrderNewProduct(
       success: true,
       ...resultBase,
       erp_duplicate: erpDuplicate,
+      erp_conflict: erpConflict,
       bsale_duplicate: bsaleDuplicate,
       conflict,
-      can_create: !erpDuplicate.exists && !bsaleDuplicate.exists && !conflict,
+      can_create: !erpDuplicate.exists && !erpConflict && !bsaleDuplicate.exists && !conflict,
       blocking_reason: blockingReason,
     }
   } catch (error) {
