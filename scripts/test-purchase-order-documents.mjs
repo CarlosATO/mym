@@ -7,6 +7,7 @@ const action = await readFile(new URL('src/app/actions/adquisiciones/purchase-or
 const panel = await readFile(new URL('src/modules/adquisiciones/ordenes-compra/purchase-orders-panel.tsx', root), 'utf8')
 const pdf = await readFile(new URL('src/lib/pdf/generate-po-pdf.ts', root), 'utf8')
 const excel = await readFile(new URL('src/lib/excel/generate-po-excel.ts', root), 'utf8')
+const fileName = await readFile(new URL('src/lib/adquisiciones/purchase-order-file-name.ts', root), 'utf8')
 
 const pdfStart = panel.indexOf('async function handleDownloadPDF()')
 const pdfEnd = panel.indexOf('\n  async function handleDownloadExcel()', pdfStart)
@@ -35,6 +36,18 @@ test('SKU is resolved from products for CURRENT and directly from CONFIRMED snap
   assert.match(pdf, /'SKU'/)
   assert.match(pdf, /item\.sku \|\| '-'/)
   assert.match(excel, /'Línea', 'SKU', 'Descripción'/)
+})
+
+test('PDF and Excel use the shared supplier-aware filename base', () => {
+  assert.match(fileName, /export function buildPurchaseOrderFileNameBase\(supplierName: string, correlative: string\)/)
+  assert.match(fileName, /replace\(\/\^OC-\//)
+  assert.match(fileName, /normalize\('NFD'\)/)
+  assert.ok(fileName.includes('[.\\\\/:*?"<>|]'))
+  assert.ok(fileName.includes(".replace(/[\\s_]+/g, '_')"))
+  assert.match(pdfHandler, /buildPurchaseOrderFileNameBase\(document\.po\.supplier_name, document\.po\.correlative\)/)
+  assert.match(excel, /buildPurchaseOrderFileNameBase\(po\.supplier_name, po\.correlative\)/)
+  assert.match(pdfHandler, /\.pdf/)
+  assert.match(excel, /\.xlsx/)
 })
 
 test('CONFIRMED preserves null snapshot values and only takes operational state from CURRENT', () => {
@@ -76,7 +89,7 @@ test('Excel has Resumen and Detalle with numeric export values', () => {
   assert.match(excel, /book_append_sheet\(workbook, detailSheet, 'Detalle'\)/)
   assert.match(excel, /item\.quantity,/)
   assert.match(excel, /item\.unit_price,/)
-  assert.match(excel, /XLSX\.writeFile\(workbook, `OC_\$\{sanitizeFileName\(po\.correlative\)\}\.xlsx`\)/)
+  assert.match(excel, /XLSX\.writeFile\(workbook, `\$\{buildPurchaseOrderFileNameBase\(po\.supplier_name, po\.correlative\)\}\.xlsx`\)/)
 })
 
 test('document buttons prevent duplicate downloads and expose errors', () => {

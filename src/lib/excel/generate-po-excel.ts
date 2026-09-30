@@ -1,9 +1,6 @@
 import * as XLSX from 'xlsx'
 import type { PurchaseOrderDocumentDetail } from '@/app/actions/adquisiciones/purchase-orders'
-
-function sanitizeFileName(value: string) {
-  return value.replace(/[\\/:*?"<>|]/g, '_').trim() || 'orden_compra'
-}
+import { buildPurchaseOrderFileNameBase } from '@/lib/adquisiciones/purchase-order-file-name'
 
 function formatSource(source: PurchaseOrderDocumentDetail['document_source']) {
   return source === 'CONFIRMED' ? 'Versión confirmada' : 'Actual'
@@ -68,5 +65,5 @@ export function generatePurchaseOrderExcel(detail: PurchaseOrderDocumentDetail) 
 
   XLSX.utils.book_append_sheet(workbook, summarySheet, 'Resumen')
   XLSX.utils.book_append_sheet(workbook, detailSheet, 'Detalle')
-  XLSX.writeFile(workbook, `OC_${sanitizeFileName(po.correlative)}.xlsx`)
+  XLSX.writeFile(workbook, `${buildPurchaseOrderFileNameBase(po.supplier_name, po.correlative)}.xlsx`)
 }

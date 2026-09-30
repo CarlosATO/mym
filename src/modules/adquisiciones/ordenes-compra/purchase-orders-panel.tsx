@@ -18,6 +18,7 @@ import type { PurchaseOrderCatalogProduct } from '@/app/actions/adquisiciones/pr
 import type { Warehouse } from '@/app/actions/adquisiciones/warehouses'
 import { downloadPOBooklet, generatePdfBlob } from '@/lib/pdf/generate-po-pdf'
 import { generatePurchaseOrderExcel } from '@/lib/excel/generate-po-excel'
+import { buildPurchaseOrderFileNameBase } from '@/lib/adquisiciones/purchase-order-file-name'
 import { getActiveCompany, type Company } from '@/app/actions/companies'
 import { OperationalTableResizeHandle, shouldIgnoreOperationalRowDoubleClick, useOperationalTableWidths, type OperationalTableColumn } from '@/components/ui/operational-table'
 import { ReplenishmentAnalysisPanel } from './replenishment-analysis-panel'
@@ -1095,7 +1096,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       const result = await getPurchaseOrderDocumentDetail(detail.po.id)
       if ('error' in result) throw new Error(result.error)
       const document = result.data
-      await downloadPOBooklet(document, `OC_${document.po.correlative}`, undefined)
+      await downloadPOBooklet(document, `${buildPurchaseOrderFileNameBase(document.po.supplier_name, document.po.correlative)}.pdf`, undefined)
     } catch (error) {
       msg(error instanceof Error ? error.message : 'No se pudo generar el PDF.')
     } finally {
