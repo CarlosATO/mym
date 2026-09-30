@@ -402,6 +402,34 @@ export async function updateSentPurchaseOrderReview(poId: string, data: Supplier
   }
 }
 
+export type ConfirmPurchaseOrderSupplierReviewResult = {
+  success: true
+  already_confirmed: boolean
+  po_id: string
+  status: 'CONFIRMADA'
+  snapshot_id: string
+}
+
+export async function confirmPurchaseOrderSupplierReview(poId: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado' }
+
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
+
+  const db = adqAdmin()
+  const { data, error } = await db.rpc('confirm_purchase_order_supplier_review', {
+    p_po_id: poId,
+    p_user_id: user.id,
+    p_company_id: companyId,
+  })
+  if (error) return { error: error.message }
+  const result = data as Partial<ConfirmPurchaseOrderSupplierReviewResult> & { success?: boolean; error?: string }
+  if (result.success !== true) return { error: result.error || 'No se pudo confirmar la OC' }
+  return result as ConfirmPurchaseOrderSupplierReviewResult
+}
+
 export async function getPurchaseOrderSupplierReviewComparison(poId: string) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
