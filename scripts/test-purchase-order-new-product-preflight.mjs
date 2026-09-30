@@ -4,6 +4,7 @@ import test from 'node:test'
 
 const root = new URL('..', import.meta.url)
 const action = await readFile(new URL('src/app/actions/adquisiciones/bsale-product-creation.ts', root), 'utf8')
+const preflightAction = action.split('async function persistCreatedProduct')[0]
 
 function mockFetchForLookup({ code, barcode }) {
   const calls = []
@@ -84,7 +85,7 @@ test('mocked Bsale lookup uses GET by code and barcode with URL encoding', async
   assert.match(action, /bsaleFetchForCompany/)
   assert.match(action, /path: '\/variants\.json'/)
   assert.match(action, /\[key\]: value/)
-  assert.doesNotMatch(action, /method: ['"]POST|method: ['"]PUT|method: ['"]PATCH|method: ['"]DELETE/)
+  assert.doesNotMatch(preflightAction, /method: ['"]POST|method: ['"]PUT|method: ['"]PATCH|method: ['"]DELETE/)
 })
 
 test('ERP and Bsale duplicates, conflicts, and can_create are blocking', () => {
@@ -130,7 +131,7 @@ test('ERP SKU and barcode matches from different products are an explicit confli
 })
 
 test('flow is read-only and has no Bsale write methods or persistence of Brand', () => {
-  assert.doesNotMatch(action, /POST|PUT|PATCH|DELETE/)
-  assert.doesNotMatch(action, /fetch\([^)]*method:/)
-  assert.doesNotMatch(action, /from\('products'\)[\s\S]*?\.(insert|update|upsert)\(/)
+  assert.doesNotMatch(preflightAction, /POST|PUT|PATCH|DELETE/)
+  assert.doesNotMatch(preflightAction, /fetch\([^)]*method:/)
+  assert.doesNotMatch(preflightAction, /from\('products'\)[\s\S]*?\.(insert|update|upsert)\(/)
 })

@@ -5,6 +5,13 @@ import { createClient } from '@/lib/supabase/server'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { KNOWN_COMPANY_IDS } from '@/lib/bsale/company-config'
 import { BsaleApiError, bsaleFetchForCompany } from '@/lib/bsale/client'
+import { bsaleWriteForCompany } from '@/lib/bsale/write-client'
+import {
+  createBsaleProductAndVariant,
+  type BsaleProductCreationDependencies,
+  type BsaleProductCreationResult,
+  type LocalCreatedProduct,
+} from '@/lib/integraciones/bsale-product-creation-core'
 
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const INVALID_PRODUCT_TYPE_MESSAGE = 'El tipo de producto Bsale seleccionado no corresponde al proveedor de esta orden.'
@@ -126,25 +133,25 @@ function defaultsForCompany(companyId: string): ProductCreationDefaults | null {
 async function authorize() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'No autorizado' as string | null, companyId: null as string | null }
+  if (!user) return { error: 'No autorizado' as string | null, companyId: null as string | null, userId: null as string | null }
 
   const { data: canCreate, error: permissionError } = await supabase.rpc('has_permission', {
     p_permission_code: 'adquisiciones.products.create',
   })
   if (permissionError || canCreate !== true) {
-    return { error: 'Permisos insuficientes para crear productos.' as string | null, companyId: null }
+    return { error: 'Permisos insuficientes para crear productos.' as string | null, companyId: null, userId: null }
   }
 
   const { data: canViewOrders, error: orderPermissionError } = await supabase.rpc('has_permission', {
     p_permission_code: 'adquisiciones.po.view',
   })
   if (orderPermissionError || canViewOrders !== true) {
-    return { error: 'Permisos insuficientes para consultar órdenes de compra.' as string | null, companyId: null }
+    return { error: 'Permisos insuficientes para consultar órdenes de compra.' as string | null, companyId: null, userId: null }
   }
 
   const companyId = await getActiveCompanyId()
-  if (!companyId) return { error: 'Empresa activa requerida' as string | null, companyId: null }
-  return { error: null, companyId }
+  if (!companyId) return { error: 'Empresa activa requerida' as string | null, companyId: null, userId: null }
+  return { error: null, companyId, userId: user.id }
 }
 
 async function getSupplierProductTypes(companyId: string, supplierId: string) {
@@ -430,5 +437,158 @@ export async function preflightPurchaseOrderNewProduct(
   } catch (error) {
     const message = error instanceof Error ? error.message : 'No se pudo ejecutar el preflight.'
     return { success: false, ...base, blocking_reason: message, error: message }
+  }
+}
+
+async function findExistingVariantForCreation(companyId: string, sku: string, barcode: string | null) {
+  const skuLookup = await findBsaleVariant(companyId, 'code', sku)
+  if (skuLookup.kind === 'ERROR') throw new Error(`RECONCILIATION_REQUIRED: ${skuLookup.message}`)
+  const barcodeLookup = barcode ? await findBsaleVariant(companyId, 'barcode', barcode) : { kind: 'OK' as const, variants: [] }
+  if (barcodeLookup.kind === 'ERROR') throw new Error(`RECONCILIATION_REQUIRED: ${barcodeLookup.message}`)
+  const variant = firstVariant(skuLookup.variants) ?? firstVariant(barcodeLookup.variants)
+  if (!variant || variant.variant_id == null) return null
+  return { variantId: variant.variant_id, productId: variant.product_id, code: variant.code, barcode: variant.barcode }
+}
+
+async function persistCreatedProduct(input: {
+  companyId: string
+  userId: string
+  sku: string
+  barcode: string | null
+  description: string
+  productType: ProductCreationType
+  bsaleProductId: number
+  bsaleVariantId: number
+  bsaleProductState: number | null
+  bsaleVariantState: number | null
+}): Promise<LocalCreatedProduct> {
+  const db = adqAdmin()
+  const duplicate = await findErpDuplicate(input.companyId, input.sku, input.barcode)
+  if (duplicate.duplicate.exists || duplicate.conflict) {
+    throw new Error('ERP_PERSIST_FAILED: el SKU o barcode ya existe en el catálogo efectivo.')
+  }
+
+  const now = new Date().toISOString()
+  const description = input.description.trim().replace(/\s+/g, ' ')
+  const { data, error } = await db.from('products').insert({
+    company_id: input.companyId,
+    sku: input.sku,
+    barcode: input.barcode,
+    description,
+    short_description: null,
+    brand: null,
+    product_type: input.productType.name,
+    tax_rate: 19,
+    min_stock: 0,
+    max_stock: 0,
+    reorder_point: 0,
+    is_perishable: false,
+    requires_lot: false,
+    requires_expiration: false,
+    status: 'ACTIVE',
+    is_active: true,
+    source: 'BSALE',
+    bsale_product_id: input.bsaleProductId,
+    bsale_variant_id: input.bsaleVariantId,
+    bsale_product_type_id: input.productType.id,
+    bsale_product_type_name: input.productType.name,
+    bsale_product_state: input.bsaleProductState,
+    bsale_variant_state: input.bsaleVariantState,
+    last_bsale_sync_at: now,
+    created_by: input.userId,
+    updated_by: input.userId,
+  }).select('id, sku, barcode, description, tax_rate, bsale_product_id, bsale_variant_id, bsale_product_type_id, bsale_product_type_name').maybeSingle()
+
+  if (error || !data) throw new Error(`ERP_PERSIST_FAILED: ${error?.message || 'No se insertó el producto.'}`)
+  return data as LocalCreatedProduct
+}
+
+async function ensureRealSupplierMapping(input: {
+  companyId: string
+  userId: string
+  product: LocalCreatedProduct
+  supplierId: string
+}) {
+  const db = adqAdmin()
+  const { data: preferredMappings, error: preferredError } = await db.from('product_supplier_mappings')
+    .select('id, supplier_id')
+    .eq('company_id', input.companyId)
+    .eq('sku', input.product.sku)
+    .eq('is_active', true)
+    .eq('is_preferred', true)
+  if (preferredError) throw new Error(`MAPPING_FAILED: ${preferredError.message}`)
+  if ((preferredMappings ?? []).some(mapping => mapping.supplier_id !== input.supplierId)) {
+    throw new Error('MAPPING_FAILED: el SKU ya tiene otro proveedor preferido activo.')
+  }
+
+  const { data: existing, error: existingError } = await db.from('product_supplier_mappings')
+    .select('id')
+    .eq('company_id', input.companyId)
+    .eq('supplier_id', input.supplierId)
+    .eq('sku', input.product.sku)
+    .maybeSingle()
+  if (existingError) throw new Error(`MAPPING_FAILED: ${existingError.message}`)
+
+  const mapping = {
+    product_id: input.product.id,
+    supplier_id: input.supplierId,
+    bsale_variant_id: input.product.bsale_variant_id,
+    sku: input.product.sku,
+    product_name: input.product.description,
+    is_preferred: true,
+    is_active: true,
+    updated_by: input.userId,
+  }
+  const result = existing
+    ? await db.from('product_supplier_mappings').update(mapping).eq('id', existing.id)
+    : await db.from('product_supplier_mappings').insert({ ...mapping, company_id: input.companyId, created_by: input.userId })
+  if (result.error) throw new Error(`MAPPING_FAILED: ${result.error.message}`)
+}
+
+export async function createPurchaseOrderBsaleProduct(
+  poId: string,
+  input: ProductCreationPreflightInput & { description: string },
+): Promise<BsaleProductCreationResult | { success: false; status: 'PREFLIGHT_BLOCKED'; error: string }> {
+  const auth = await authorize()
+  if (auth.error || !auth.companyId || !auth.userId) return { success: false, status: 'PREFLIGHT_BLOCKED', error: auth.error || 'Empresa activa requerida.' }
+  if (!input.description.trim()) return { success: false, status: 'PREFLIGHT_BLOCKED', error: 'La descripción es obligatoria.' }
+
+  const preflight = await preflightPurchaseOrderNewProduct(poId, input)
+  if (!preflight.success || !preflight.can_create || !preflight.supplier || !preflight.product_type) {
+    return { success: false, status: 'PREFLIGHT_BLOCKED', error: preflight.blocking_reason || preflight.error || 'El preflight bloqueó la creación.' }
+  }
+
+  const dependencies: BsaleProductCreationDependencies = {
+    findExistingVariant: (sku, barcode) => findExistingVariantForCreation(auth.companyId!, sku, barcode),
+    createProduct: async payload => {
+      const response = await bsaleWriteForCompany<{ id?: number | string; state?: number | string }>({ companyId: auth.companyId!, path: '/products.json', body: payload })
+      return { id: Number(response.id), state: response.state == null ? null : Number(response.state) }
+    },
+    createVariant: async payload => {
+      const response = await bsaleWriteForCompany<{ id?: number | string; state?: number | string; product?: { id?: number | string }; productId?: number | string }>({ companyId: auth.companyId!, path: '/variants.json', body: payload })
+      return {
+        id: Number(response.id),
+        productId: Number(response.product?.id ?? response.productId ?? payload.productId),
+        state: response.state == null ? null : Number(response.state),
+      }
+    },
+    persistProduct: persistCreatedProduct,
+    ensureSupplierMapping: ensureRealSupplierMapping,
+  }
+
+  try {
+    return await createBsaleProductAndVariant({
+      companyId: auth.companyId,
+      userId: auth.userId,
+      supplier: preflight.supplier,
+      sku: preflight.normalized.sku,
+      barcode: preflight.normalized.barcode,
+      description: input.description,
+      productType: preflight.product_type,
+      expectedBrandId: preflight.brand?.expected_bsale_brand_id ?? null,
+    }, dependencies)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Se requiere reconciliación Bsale.'
+    return { success: false, status: 'RECONCILIATION_REQUIRED', error: message.replace(/^RECONCILIATION_REQUIRED:\s*/, '') }
   }
 }
