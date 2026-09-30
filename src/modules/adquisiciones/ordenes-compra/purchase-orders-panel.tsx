@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, Ban, PackageOpen, XCircle, CheckCircle2, BarChart3, RefreshCw, Loader2, ClipboardCheck } from 'lucide-react'
+import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, Ban, PackageOpen, XCircle, CheckCircle2, BarChart3, RefreshCw, Loader2, ClipboardCheck, Send } from 'lucide-react'
 import { AuthorizedPersonnelCombobox } from '@/components/ui/authorized-personnel-combobox'
 import {
   getPurchaseOrders, getPurchaseOrderDetail, createPurchaseOrder,
@@ -30,6 +30,7 @@ const STATUS_BADGES: Record<string, { bg: string; text: string; border: string }
   PENDIENTE_APROBACION: { bg: 'bg-amber-500/10', text: 'text-amber-500', border: 'border-amber-500/20' },
   APROBADA: { bg: 'bg-emerald-500/10', text: 'text-emerald-500', border: 'border-emerald-500/20' },
   ENVIADA_PROVEEDOR: { bg: 'bg-blue-500/10', text: 'text-blue-500', border: 'border-blue-500/20' },
+  CONFIRMADA: { bg: 'bg-emerald-500/10', text: 'text-emerald-500', border: 'border-emerald-500/20' },
   RECEPCION_PARCIAL: { bg: 'bg-cyan-500/10', text: 'text-cyan-500', border: 'border-cyan-500/20' },
   RECEPCION_TOTAL: { bg: 'bg-emerald-500/10', text: 'text-emerald-500', border: 'border-emerald-500/20' },
   FACTURADA_PARCIAL: { bg: 'bg-purple-500/10', text: 'text-purple-500', border: 'border-purple-500/20' },
@@ -82,7 +83,7 @@ function formatDate(dateStr: string | null | undefined) {
 function statusLabel(s: string) {
   const map: Record<string, string> = {
     BORRADOR: 'Borrador', EMITIDA: 'Emitida', PENDIENTE_APROBACION: 'Pendiente Aprob.', APROBADA: 'Aprobada',
-    ENVIADA_PROVEEDOR: 'Enviada Prov.', RECEPCION_PARCIAL: 'Recep. Parcial',
+    ENVIADA_PROVEEDOR: 'Enviada Prov.', CONFIRMADA: 'Confirmada', RECEPCION_PARCIAL: 'Recep. Parcial',
     RECEPCION_TOTAL: 'Recep. Total', FACTURADA_PARCIAL: 'Fact. Parcial',
     FACTURADA_TOTAL: 'Fact. Total', CERRADA: 'Cerrada', CANCELADA: 'Cancelada',
     RECHAZADA: 'Rechazada',
@@ -142,6 +143,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const [replenishmentSupplierName, setReplenishmentSupplierName] = useState('')
   const [isReplenishmentPreparation, setIsReplenishmentPreparation] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isMarkingSent, setIsMarkingSent] = useState(false)
   const submittingRef = useRef(false)
   const productInputRef = useRef<HTMLInputElement>(null)
 
@@ -761,6 +763,31 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     const d = await getPurchaseOrderDetail(poId)
     if (d) setDetail(d)
     load()
+  }
+
+  async function handleMarkSentToSupplier(poId: string) {
+    if (isMarkingSent) return
+    if (!confirm('¿Confirmas que esta orden de compra ya fue enviada al proveedor?\n\nAl continuar se guardará una copia histórica de la versión enviada.')) return
+
+    setIsMarkingSent(true)
+    try {
+      const res = await updatePurchaseOrderStatus(poId, 'ENVIADA_PROVEEDOR')
+      if ('error' in res && res.error) {
+        msg(res.error)
+        return
+      }
+
+      delete detailCacheRef.current[poId]
+      delete pendingRequestsRef.current[poId]
+      await load()
+      const updatedDetail = await getPurchaseOrderDetail(poId)
+      if (updatedDetail) setDetail(updatedDetail)
+      msg('OC marcada como enviada al proveedor')
+    } catch (error) {
+      msg(error instanceof Error ? error.message : 'No se pudo marcar la OC como enviada al proveedor')
+    } finally {
+      setIsMarkingSent(false)
+    }
   }
 
   async function handleSupplierReviewSaved(poId: string) {
@@ -1671,6 +1698,12 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
               {(detail.po.status === 'BORRADOR') && (
                 <button onClick={() => { editPO(detail.po) }} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5">
                   <Edit className="w-3.5 h-3.5" /> Editar
+                </button>
+              )}
+              {detail.po.status === 'EMITIDA' && (
+                <button onClick={() => void handleMarkSentToSupplier(detail.po.id)} disabled={isMarkingSent} className="px-4 py-2 rounded-xl border border-[#72383D]/35 text-[#72383D] hover:bg-[#72383D]/10 text-xs font-semibold transition-colors flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50">
+                  {isMarkingSent ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                  {isMarkingSent ? 'Marcando...' : 'Marcar enviada al proveedor'}
                 </button>
               )}
               {detail.po.status === 'ENVIADA_PROVEEDOR' && (

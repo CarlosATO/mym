@@ -14,6 +14,17 @@ test('supplier review is isolated from the legacy PO form', () => {
   assert.doesNotMatch(review, /createPurchaseOrder|handleSubmit/)
 })
 
+test('EMITIDA can be marked as sent without implementing confirmation', () => {
+  assert.match(panel, /detail\.po\.status === 'EMITIDA'[\s\S]*?Marcar enviada al proveedor/)
+  assert.match(panel, /handleMarkSentToSupplier[\s\S]*?updatePurchaseOrderStatus\(poId, 'ENVIADA_PROVEEDOR'\)/)
+  assert.match(panel, /Confirmas que esta orden de compra ya fue enviada al proveedor\?/)
+  assert.match(panel, /delete detailCacheRef\.current\[poId\]/)
+  assert.match(panel, /await load\(\)/)
+  assert.match(panel, /await getPurchaseOrderDetail\(poId\)/)
+  assert.match(panel, /CONFIRMADA:.*Confirmada/)
+  assert.doesNotMatch(panel, /Confirmar OC/)
+})
+
 test('supplier review handles complete payloads and comparison states', () => {
   for (const field of ['item_id', 'item_type', 'product_id', 'quantity', 'unit_price', 'discount_percent', 'tax_rate', 'notes']) {
     assert.match(review, new RegExp(field))
