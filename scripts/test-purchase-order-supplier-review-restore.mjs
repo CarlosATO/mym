@@ -25,3 +25,20 @@ test('restored lines are opt-in in the UI and use the existing review payload', 
   assert.match(review, /matchesOriginal\(line, persisted\.original_item\)/)
   assert.match(review, /item_id: line\.item_id\?\.startsWith\('new-'\) \? null : line\.item_id/)
 })
+
+test('mixed existing, restored, and new payload retains all three rows', () => {
+  const mixedPayload = [
+    { item_id: 'existing-item-id', item_type: 'PRODUCT' },
+    { item_id: 'restored-original-id', item_type: 'PRODUCT' },
+    { item_id: null, item_type: 'PRODUCT' },
+  ]
+
+  assert.equal(mixedPayload.length, 3)
+  assert.equal(mixedPayload.filter(item => item.item_id === null).length, 1)
+  assert.match(migration, /v_retained_item_ids uuid\[\] := ARRAY\[\]::uuid\[\]/)
+  assert.match(migration, /\) RETURNING id INTO v_item_id;/)
+  assert.match(migration, /v_retained_item_ids := array_append\(v_retained_item_ids, v_item_id\)/)
+  assert.match(migration, /v_item_id, p_company_id, p_po_id, v_line_number/)
+  assert.match(migration, /AND NOT \(id = ANY\(v_retained_item_ids\)\)/)
+  assert.doesNotMatch(migration, /v_restore_line_number|v_seen_item_ids/)
+})

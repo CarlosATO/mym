@@ -29,9 +29,8 @@ DECLARE
     v_tax_amount numeric;
     v_line_total numeric;
     v_line_number integer := 0;
-    v_restore_line_number integer;
     v_original_count integer;
-    v_seen_item_ids uuid[] := ARRAY[]::uuid[];
+    v_retained_item_ids uuid[] := ARRAY[]::uuid[];
     v_has_product boolean := false;
     v_has_service boolean := false;
     v_net_total numeric := 0;
@@ -139,11 +138,9 @@ BEGIN
             v_tax_rate := COALESCE((v_item->>'tax_rate')::numeric, 19);
             v_notes := CASE WHEN v_item ? 'notes' THEN v_item->>'notes' ELSE NULL END;
         ELSE
-            IF v_item_id = ANY(v_seen_item_ids) THEN
+            IF v_item_id = ANY(v_retained_item_ids) THEN
                 RAISE EXCEPTION 'Una línea existente aparece más de una vez en el payload';
             END IF;
-            v_seen_item_ids := array_append(v_seen_item_ids, v_item_id);
-
             SELECT * INTO v_current_item
             FROM adquisiciones.purchase_order_items
             WHERE id = v_item_id
@@ -175,7 +172,6 @@ BEGIN
                 END IF;
 
                 v_restore := true;
-                v_restore_line_number := COALESCE((v_original_item->>'line_number')::integer, v_line_number);
             ELSE
                 IF v_item_type <> v_current_item.item_type THEN
                     RAISE EXCEPTION 'No se permite cambiar item_type de una línea existente';
@@ -231,7 +227,8 @@ BEGIN
                 v_discount_percent, v_discount_amount, v_tax_rate, v_tax_amount,
                 v_line_total, v_po.warehouse_id, v_po.required_date, v_notes,
                 0, p_user_id, p_user_id
-            );
+            ) RETURNING id INTO v_item_id;
+            v_retained_item_ids := array_append(v_retained_item_ids, v_item_id);
         ELSIF v_restore THEN
             INSERT INTO adquisiciones.purchase_order_items (
                 id, company_id, po_id, line_number, item_type, product_id,
@@ -240,7 +237,7 @@ BEGIN
                 line_total, warehouse_id, cost_center, required_date, notes,
                 quantity_received, created_by, updated_by
             ) VALUES (
-                v_item_id, p_company_id, p_po_id, v_restore_line_number,
+                v_item_id, p_company_id, p_po_id, v_line_number,
                 v_original_item->>'item_type',
                 NULLIF(v_original_item->>'product_id', '')::uuid,
                 v_original_item->>'product_description', v_original_item->>'unit',
@@ -251,6 +248,7 @@ BEGIN
                 NULLIF(v_original_item->>'required_date', '')::date,
                 v_notes, 0, p_user_id, p_user_id
             );
+            v_retained_item_ids := array_append(v_retained_item_ids, v_item_id);
         ELSE
             UPDATE adquisiciones.purchase_order_items
             SET line_number = v_line_number,
@@ -267,14 +265,15 @@ BEGIN
             WHERE id = v_item_id
               AND po_id = p_po_id
               AND company_id = p_company_id;
+            v_retained_item_ids := array_append(v_retained_item_ids, v_item_id);
         END IF;
     END LOOP;
 
-    IF cardinality(v_seen_item_ids) > 0 THEN
+    IF cardinality(v_retained_item_ids) > 0 THEN
         DELETE FROM adquisiciones.purchase_order_items
         WHERE po_id = p_po_id
           AND company_id = p_company_id
-          AND NOT (id = ANY(v_seen_item_ids));
+          AND NOT (id = ANY(v_retained_item_ids));
     ELSE
         DELETE FROM adquisiciones.purchase_order_items
         WHERE po_id = p_po_id AND company_id = p_company_id;
