@@ -31,6 +31,10 @@ function currency(value: number | null | undefined, code: string) {
   return Number(value ?? 0).toLocaleString('es-CL', { style: 'currency', currency: code })
 }
 
+function signedCurrency(value: number, code: string) {
+  return value > 0 ? `+${currency(value, code)}` : currency(value, code)
+}
+
 function dateValue(value: string | null | undefined) {
   if (!value) return '—'
   const date = new Date(`${value.slice(0, 10)}T00:00:00`)
@@ -237,6 +241,17 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
 
   if (!comparison) return null
   const { po, summary } = comparison
+  const displayCurrentTotal = dirty ? preview.total : summary.current_grand_total
+  const displayDifference = displayCurrentTotal - summary.original_grand_total
+  const summaryCards = [
+    ['Sin cambios', summary.unchanged_count, false],
+    ['Modificadas', summary.modified_count, false],
+    ['Eliminadas', summary.removed_count, false],
+    ['Agregadas', summary.added_count, false],
+    ['Total original', currency(summary.original_grand_total, po.currency), false],
+    ['Total actual', currency(displayCurrentTotal, po.currency), dirty],
+    ['Diferencia', signedCurrency(displayDifference, po.currency), dirty],
+  ] as const
 
   return (
     <div className="flex h-full min-w-0 flex-col overflow-hidden bg-[#EFE9E1] text-[#322D29]">
@@ -252,7 +267,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
         </section>
 
         <section className="mb-4 grid gap-px border border-[#D1C7BD] bg-[#D1C7BD] md:grid-cols-7">
-          {[['Sin cambios', summary.unchanged_count], ['Modificadas', summary.modified_count], ['Eliminadas', summary.removed_count], ['Agregadas', summary.added_count], ['Total original', currency(summary.original_grand_total, po.currency)], ['Total actual', currency(summary.current_grand_total, po.currency)], ['Diferencia', currency(summary.total_difference, po.currency)]].map(([label, value]) => <div key={label as string} className="bg-white/80 px-3 py-2"><p className="text-[10px] uppercase tracking-wider text-[#AC9C8D]">{label}</p><p className="mt-1 text-sm font-bold tabular-nums">{value}</p></div>)}
+           {summaryCards.map(([label, value, pending]) => <div key={label} className="bg-white/80 px-3 py-2"><p className="text-[10px] uppercase tracking-wider text-[#AC9C8D]">{label}{pending && <span className="ml-1 normal-case tracking-normal text-[#AC9C8D]">Sin guardar</span>}</p><p className="mt-1 text-sm font-bold tabular-nums">{value}</p></div>)}
         </section>
 
         <section className="mb-4 overflow-x-auto border border-[#D1C7BD] bg-white">

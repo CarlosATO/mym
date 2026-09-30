@@ -47,6 +47,15 @@ test('supplier review handles complete payloads and comparison states', () => {
   assert.doesNotMatch(review, /Confirmar OC/)
 })
 
+test('supplier review summary reflects live totals only while dirty', () => {
+  assert.match(review, /const displayCurrentTotal = dirty \? preview\.total : summary\.current_grand_total/)
+  assert.match(review, /const displayDifference = displayCurrentTotal - summary\.original_grand_total/)
+  assert.match(review, /signedCurrency\(displayDifference, po\.currency\)/)
+  assert.match(review, /pending && <span[^>]*>Sin guardar<\/span>/)
+  assert.doesNotMatch(review, /summary\.total_difference/)
+  assert.match(review, /updateSentPurchaseOrderReview\(poId, payload\)/)
+})
+
 test('panel invalidates detail cache and reloads the listing after save', () => {
   assert.match(panel, /delete detailCacheRef\.current\[poId\]/)
   assert.match(panel, /await load\(\)/)
