@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 const migration = await readFile(
-  new URL('../supabase/migrations/20260930140000_adquisiciones_supplier_review_backend.sql', import.meta.url),
+  new URL('../supabase/migrations/20260930150000_adquisiciones_supplier_review_retain_new_items.sql', import.meta.url),
   'utf8',
 )
 const action = await readFile(
@@ -21,8 +21,12 @@ test('supplier review RPC has transactional safety and server-side validation', 
   assert.match(migration, /v_quantity <= 0/)
   assert.match(migration, /v_unit_price < 0/)
   assert.match(migration, /is_active = true/)
-  assert.match(migration, /v_item_id = ANY\(v_seen_item_ids\)/)
+  assert.match(migration, /RETURNING id INTO v_item_id/)
+  assert.match(migration, /v_retained_item_ids := array_append\(v_retained_item_ids, v_item_id\)/)
+  assert.match(migration, /v_item_id = ANY\(v_retained_item_ids\)/)
   assert.match(migration, /DELETE FROM adquisiciones\.purchase_order_items/)
+  assert.match(migration, /AND NOT \(id = ANY\(v_retained_item_ids\)\)/)
+  assert.doesNotMatch(migration, /v_seen_item_ids/)
   assert.match(migration, /ROUND\(v_grand_total, 2\)/)
   assert.doesNotMatch(migration, /UPDATE adquisiciones\.purchase_order_snapshots/)
   assert.doesNotMatch(migration, /DELETE FROM adquisiciones\.purchase_order_snapshots/)
