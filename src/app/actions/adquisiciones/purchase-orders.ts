@@ -271,6 +271,57 @@ export async function createPurchaseOrder(data: CreatePOData) {
   return { success: true, po_id: r.po_id, correlative: r.correlative }
 }
 
+export interface SupplierReviewItemInput {
+  item_id?: string | null
+  item_type: 'PRODUCT' | 'SERVICE'
+  product_id?: string | null
+  quantity: number
+  unit_price: number
+  discount_percent?: number | null
+  tax_rate?: number | null
+  notes?: string | null
+}
+
+export interface SupplierReviewData {
+  items: SupplierReviewItemInput[]
+}
+
+export async function updateSentPurchaseOrderReview(poId: string, data: SupplierReviewData) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado' }
+
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
+
+  const db = adqAdmin()
+  const { data: result, error } = await db.rpc('update_purchase_order_supplier_review', {
+    p_po_id: poId,
+    p_data: {
+      items: data.items.map(item => ({
+        item_id: item.item_id || null,
+        item_type: item.item_type,
+        product_id: item.product_id || null,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        discount_percent: item.discount_percent ?? null,
+        tax_rate: item.tax_rate ?? null,
+        notes: item.notes ?? null,
+      })),
+    },
+    p_user_id: user.id,
+    p_company_id: companyId,
+  })
+  if (error) return { error: error.message }
+  const r = result as { success: boolean; error?: string; po_id?: string; item_count?: number }
+  if (!r.success) return { error: r.error || 'Error al revisar la OC' }
+  return {
+    success: true,
+    po_id: r.po_id,
+    item_count: r.item_count,
+  }
+}
+
 export async function updatePurchaseOrderStatus(poId: string, newStatus: string, reason?: string) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
