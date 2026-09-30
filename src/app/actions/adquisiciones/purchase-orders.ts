@@ -207,13 +207,15 @@ export async function getPurchaseOrderDetail(poId: string) {
   return data as PurchaseOrderDetail | null
 }
 
-function snapshotText(value: unknown, fallback: string | null = null) {
-  return typeof value === 'string' && value.length > 0 ? value : fallback
+function snapshotText(value: unknown): string | null {
+  if (value === null || value === undefined) return null
+  return typeof value === 'string' ? value : String(value)
 }
 
-function snapshotNumber(value: unknown, fallback = 0) {
+function snapshotNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
   const number = typeof value === 'number' ? value : Number(value)
-  return Number.isFinite(number) ? number : fallback
+  return Number.isFinite(number) ? number : null
 }
 
 export async function getPurchaseOrderDocumentDetail(poId: string) {
@@ -241,13 +243,12 @@ export async function getPurchaseOrderDocumentDetail(poId: string) {
     return { error: 'No se pudo obtener la versión documental de la OC' }
   }
 
-  const productIds = current.items.map(item => item.product_id).filter((id): id is string => Boolean(id))
-  const { data: products } = productIds.length > 0
-    ? await db.from('products').select('id, sku').in('id', productIds).eq('company_id', companyId)
-    : { data: [] as { id: string; sku: string | null }[] }
-  const currentSkuById = new Map((products ?? []).map(product => [product.id, product.sku]))
-
   if (!confirmed) {
+    const productIds = current.items.map(item => item.product_id).filter((id): id is string => Boolean(id))
+    const { data: products } = productIds.length > 0
+      ? await db.from('products').select('id, sku').in('id', productIds).eq('company_id', companyId)
+      : { data: [] as { id: string; sku: string | null }[] }
+    const currentSkuById = new Map((products ?? []).map(product => [product.id, product.sku]))
     return {
       data: {
         ...current,
@@ -266,52 +267,52 @@ export async function getPurchaseOrderDocumentDetail(poId: string) {
   const currentItemsById = new Map(current.items.map(item => [item.id, item]))
   const snapshotPo = {
     ...current.po,
-    issue_date: snapshotText(header.issue_date, current.po.issue_date) as string,
-    required_date: snapshotText(header.required_date, current.po.required_date),
-    supplier_id: snapshotText(header.supplier_id, current.po.supplier_id) as string,
-    supplier_name: snapshotText(header.supplier_name, current.po.supplier_name) as string,
-    supplier_rut: snapshotText(header.supplier_rut, current.po.supplier_rut),
-    warehouse_id: snapshotText(header.warehouse_id, current.po.warehouse_id),
-    warehouse_name: snapshotText(header.warehouse_name, current.po.warehouse_name),
-    po_type: snapshotText(header.po_type, current.po.po_type) as string,
-    source_type: snapshotText(header.source_type, current.po.source_type) as PurchaseOrder['source_type'],
-    currency: snapshotText(header.currency, current.po.currency) as string,
-    payment_terms: snapshotText(header.payment_terms, current.po.payment_terms),
-    requested_by: snapshotText(header.requested_by, current.po.requested_by) as string,
-    requester_name: snapshotText(header.requester_name, current.po.requester_name) as string,
-    authorized_by: snapshotText(header.authorized_by, current.po.authorized_by),
-    authorized_name: snapshotText(header.authorized_name, current.po.authorized_name),
-    notes: snapshotText(header.notes, current.po.notes),
-    net_total: snapshotNumber(header.net_total, current.po.net_total),
-    discount_total: snapshotNumber(header.discount_total, current.po.discount_total),
-    tax_total: snapshotNumber(header.tax_total, current.po.tax_total),
-    exempt_total: snapshotNumber(header.exempt_total, current.po.exempt_total),
-    grand_total: snapshotNumber(header.grand_total, current.po.grand_total),
+    issue_date: snapshotText(header.issue_date) as string,
+    required_date: snapshotText(header.required_date),
+    supplier_id: snapshotText(header.supplier_id) as string,
+    supplier_name: snapshotText(header.supplier_name) as string,
+    supplier_rut: snapshotText(header.supplier_rut),
+    warehouse_id: snapshotText(header.warehouse_id),
+    warehouse_name: snapshotText(header.warehouse_name),
+    po_type: snapshotText(header.po_type) as string,
+    source_type: snapshotText(header.source_type) as PurchaseOrder['source_type'],
+    currency: snapshotText(header.currency) as string,
+    payment_terms: snapshotText(header.payment_terms),
+    requested_by: snapshotText(header.requested_by) as string,
+    requester_name: snapshotText(header.requester_name) as string,
+    authorized_by: snapshotText(header.authorized_by),
+    authorized_name: snapshotText(header.authorized_name),
+    notes: snapshotText(header.notes),
+    net_total: snapshotNumber(header.net_total) as number,
+    discount_total: snapshotNumber(header.discount_total) as number,
+    tax_total: snapshotNumber(header.tax_total) as number,
+    exempt_total: snapshotNumber(header.exempt_total) as number,
+    grand_total: snapshotNumber(header.grand_total) as number,
     status: current.po.status,
     receipt_status: current.po.receipt_status,
     invoice_status: current.po.invoice_status,
   }
   const documentItems = snapshotItems.map(raw => {
     const item = (raw ?? {}) as Record<string, unknown>
-    const itemId = snapshotText(item.item_id, '') as string
+    const itemId = snapshotText(item.item_id) as string
     const currentItem = currentItemsById.get(itemId)
-    const quantity = snapshotNumber(item.quantity)
+    const quantity = snapshotNumber(item.quantity) as number
     const quantityReceived = currentItem?.quantity_received ?? 0
     return {
       id: itemId,
-      line_number: snapshotNumber(item.line_number),
-      item_type: snapshotText(item.item_type, 'PRODUCT') as string,
+      line_number: snapshotNumber(item.line_number) as number,
+      item_type: snapshotText(item.item_type) as string,
       product_id: snapshotText(item.product_id),
-      sku: snapshotText(item.sku, item.product_id ? currentSkuById.get(item.product_id as string) ?? null : null),
-      product_description: snapshotText(item.product_description, '') as string,
+      sku: snapshotText(item.sku),
+      product_description: snapshotText(item.product_description) as string,
       unit: snapshotText(item.unit),
       quantity,
-      unit_price: snapshotNumber(item.unit_price),
-      discount_percent: snapshotNumber(item.discount_percent),
-      discount_amount: snapshotNumber(item.discount_amount),
-      tax_rate: snapshotNumber(item.tax_rate),
-      tax_amount: snapshotNumber(item.tax_amount),
-      line_total: snapshotNumber(item.line_total),
+      unit_price: snapshotNumber(item.unit_price) as number,
+      discount_percent: snapshotNumber(item.discount_percent) as number,
+      discount_amount: snapshotNumber(item.discount_amount) as number,
+      tax_rate: snapshotNumber(item.tax_rate) as number,
+      tax_amount: snapshotNumber(item.tax_amount) as number,
+      line_total: snapshotNumber(item.line_total) as number,
       warehouse_id: snapshotText(item.warehouse_id),
       warehouse_name: snapshotText(item.warehouse_name),
       cost_center: snapshotText(item.cost_center),
