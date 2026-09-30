@@ -13,6 +13,8 @@ import {
 } from '@/app/actions/adquisiciones/purchase-orders'
 import { getPurchaseOrderProductCatalogCached } from './purchase-order-product-cache'
 import type { PurchaseOrderCatalogProduct } from '@/app/actions/adquisiciones/products'
+import { PurchaseOrderNewProductModal } from './purchase-order-new-product-modal'
+import type { LocalCreatedProduct } from '@/lib/integraciones/bsale-product-creation-core'
 
 type EditableReviewItem = Omit<PurchaseOrderReviewItem, 'item_id'> & {
   item_id: string | null
@@ -87,6 +89,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
   const [newQuantity, setNewQuantity] = useState('1')
   const [newUnitPrice, setNewUnitPrice] = useState('0')
   const [productPickerOpen, setProductPickerOpen] = useState(false)
+  const [newProductModalOpen, setNewProductModalOpen] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -117,11 +120,16 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
   }
 
   useEffect(() => { void loadComparison() }, [poId])
-  useEffect(() => {
+  function closeProductPicker() {
     setProductPickerOpen(false)
     setSelectedProduct(null)
     setCatalogQuery('')
-  }, [poId])
+    setNewQuantity('1')
+    setNewUnitPrice('0')
+  }
+
+  useEffect(() => { closeProductPicker() }, [poId])
+  useEffect(() => { setNewProductModalOpen(false) }, [poId])
 
   const statuses = useMemo(() => reviewLineMap(comparison?.comparison ?? []), [comparison])
   const removedLines = comparison?.comparison.filter(line => line.comparison_status === 'ELIMINADA') ?? []
@@ -156,11 +164,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
 
   async function openCatalog() {
     if (productPickerOpen) {
-      setProductPickerOpen(false)
-      setSelectedProduct(null)
-      setCatalogQuery('')
-      setNewQuantity('1')
-      setNewUnitPrice('0')
+      closeProductPicker()
       return
     }
     setProductPickerOpen(true)
@@ -207,12 +211,38 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
       line_total: 0,
       notes: null,
     }])
-    setSelectedProduct(null)
-    setCatalogQuery('')
-    setProductPickerOpen(false)
-    setNewQuantity('1')
-    setNewUnitPrice('0')
+    closeProductPicker()
     setDirty(true)
+    setError('')
+  }
+
+  function addCreatedProduct(product: LocalCreatedProduct, quantity: number, unitPrice: number) {
+    setLines(current => [...current, {
+      item_id: `new-${++newItemSequence.current}`,
+      client_id: `new-${newItemSequence.current}`,
+      line_number: current.length + 1,
+      item_type: 'PRODUCT',
+      product_id: product.id,
+      sku: product.sku,
+      product_description: product.description,
+      unit: null,
+      quantity,
+      unit_price: unitPrice,
+      discount_percent: 0,
+      discount_amount: 0,
+      tax_rate: product.tax_rate,
+      tax_amount: 0,
+      line_total: 0,
+      notes: null,
+    }])
+    setCatalogCache(current => current.some(item => item.id === product.id) ? current : [...current, {
+      id: product.id, sku: product.sku, barcode: product.barcode, description: product.description,
+      unit_of_measure: null, tax_rate: product.tax_rate, bsale_variant_id: product.bsale_variant_id, last_purchase_unit_cost: null,
+    }])
+    setNewProductModalOpen(false)
+    closeProductPicker()
+    setDirty(true)
+    setMessage('Producto creado en Bsale y agregado a la revisión.')
     setError('')
   }
 
@@ -282,8 +312,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
         <div className="flex items-center gap-3"><span className="text-[11px] text-[#D1C7BD]">{dirty ? 'Cambios sin guardar' : message}</span><button onClick={() => void saveReview()} disabled={saving} className="inline-flex items-center gap-1.5 rounded-md bg-[#EFE9E1] px-3 py-2 text-xs font-bold text-[#72383D] disabled:opacity-50"><Save className="h-3.5 w-3.5" /> {saving ? 'Guardando...' : 'Guardar revisión'}</button></div>
       </header>
 
-      <main className="min-w-0 flex-1 overflow-auto p-4 lg:p-6">
-        {productPickerOpen && selectedProduct && <div className="mb-3 flex justify-end"><button type="button" onClick={() => { setSelectedProduct(null); setCatalogQuery(''); setProductPickerOpen(false); setNewQuantity('1'); setNewUnitPrice('0') }} className="rounded-md border border-[#D1C7BD] px-3 py-1.5 text-xs font-semibold text-[#6D625B] hover:bg-[#EFE9E1]">Cancelar</button></div>}
+       <main className="min-w-0 flex-1 overflow-auto p-4 lg:p-6 [&>section:nth-of-type(5)]:hidden">
         {error && <div className="mb-3 border border-[#72383D]/30 bg-[#F5EDEE] px-3 py-2 text-xs text-[#72383D]">{error}</div>}
         <section className="mb-4 grid grid-cols-2 gap-3 border border-[#D1C7BD] bg-white/60 p-3 text-xs md:grid-cols-4 xl:grid-cols-7">
           {[['Proveedor', po.supplier_name], ['RUT', po.supplier_rut], ['Bodega', po.warehouse_name], ['Fecha emisión', dateValue(po.issue_date)], ['Fecha requerida', dateValue(po.required_date)], ['Condición de pago', po.payment_terms], ['Moneda', po.currency]].map(([label, value]) => <div key={label as string}><p className="text-[10px] uppercase tracking-wider text-[#AC9C8D]">{label}</p><p className="mt-1 font-medium">{value || '—'}</p></div>)}
@@ -301,15 +330,28 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved }: PurchaseO
               const status = persisted?.comparison_status ?? 'AGREGADA'
               return <tr key={line.item_id ?? `${line.product_id}-${line.line_number}`} className="border-b border-[#E5DDD4] align-top"><td className="px-3 py-2"><span className={`inline-flex whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] font-semibold ${statusStyle(status)}`}>{statusLabel(status)}</span></td><td className="px-3 py-2 font-mono text-[#72383D]">{line.sku || '—'}</td><td className="px-3 py-2 font-medium">{line.product_description}{line.unit_price === 0 && <span className="ml-2 text-[10px] text-[#AC9C8D]">Precio pendiente</span>}{persisted?.comparison_status === 'MODIFICADA' && <div className="mt-1 space-y-0.5 text-[10px] text-[#AC9C8D]">{persisted.changed_fields.map(change => <div key={change.field}>Antes {change.field}: {displayValue(change.original, change.field, po.currency)}</div>)}</div>}</td><td className="px-3 py-2">{line.unit || '—'}</td><td className="px-3 py-2"><input aria-label={`Cantidad ${line.product_description}`} type="number" min="0" step="0.01" value={line.quantity} onChange={event => updateLine(line.item_id, 'quantity', event.target.value)} className={`${inputClass} w-24 text-right`} /></td><td className="px-3 py-2"><input aria-label={`Precio ${line.product_description}`} type="number" min="0" step="0.01" value={line.unit_price} onChange={event => updateLine(line.item_id, 'unit_price', event.target.value)} className={`${inputClass} w-28 text-right`} /></td><td className="px-3 py-2"><input aria-label={`Descuento ${line.product_description}`} type="number" min="0" max="100" step="0.01" value={line.discount_percent} onChange={event => updateLine(line.item_id, 'discount_percent', event.target.value)} className={`${inputClass} w-20 text-right`} /></td><td className="px-3 py-2"><input aria-label={`IVA ${line.product_description}`} type="number" min="0" max="100" step="0.01" value={line.tax_rate} onChange={event => updateLine(line.item_id, 'tax_rate', event.target.value)} className={`${inputClass} w-20 text-right`} /></td><td className="px-3 py-2 text-right font-semibold tabular-nums">{currency((line.quantity * line.unit_price) - (line.quantity * line.unit_price * line.discount_percent / 100) + (((line.quantity * line.unit_price) - (line.quantity * line.unit_price * line.discount_percent / 100)) * line.tax_rate / 100), po.currency)}</td><td className="px-3 py-2 text-right"><button onClick={() => removeLine(line.item_id)} className="rounded p-1.5 text-[#6D625B] hover:bg-[#F5EDEE] hover:text-[#72383D]" title="Eliminar línea"><Trash2 className="h-3.5 w-3.5" /></button></td></tr>
             })}</tbody>
-          </table>
-        </section>
+         </table>
+       </section>
 
-        <section className="mb-4 border border-[#D1C7BD] bg-white/70 p-3"><div className="mb-2 flex flex-wrap items-center gap-2"><button onClick={() => void openCatalog()} disabled={catalogLoading} className="inline-flex items-center gap-1.5 rounded-md border border-[#72383D]/40 px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#72383D]/10"><Plus className="h-3.5 w-3.5" /> {catalogLoading ? 'Cargando catálogo...' : 'Agregar producto'}</button>{selectedProduct && <><span className="text-xs font-medium">{selectedProduct.sku} · {selectedProduct.description}</span><input aria-label="Cantidad nuevo producto" type="number" min="0" step="0.01" value={newQuantity} onChange={event => setNewQuantity(event.target.value)} className={`${inputClass} w-24`} /><input aria-label="Precio nuevo producto" type="number" min="0" step="0.01" value={newUnitPrice} onChange={event => setNewUnitPrice(event.target.value)} className={`${inputClass} w-28`} /><button onClick={addProduct} className="rounded-md bg-[#72383D] px-3 py-2 text-xs font-semibold text-white">Agregar</button></>}</div>{catalog.length > 0 && !selectedProduct && <div className="max-w-xl"><div className="relative"><Search className="absolute left-2 top-2 h-3.5 w-3.5 text-[#AC9C8D]" /><input value={catalogQuery} onChange={event => setCatalogQuery(event.target.value)} placeholder="Buscar por SKU, descripción o código de barra" className={`${inputClass} pl-7`} /></div><div className="mt-1 divide-y divide-[#E5DDD4] border border-[#D1C7BD]">{visibleProducts.map(product => <button key={product.id} onClick={() => setSelectedProduct(product)} className="block w-full px-2 py-1.5 text-left text-xs hover:bg-[#EFE9E1]"><span className="font-mono text-[#72383D]">{product.sku}</span> · {product.description} <span className="text-[#AC9C8D]">({product.barcode || 'sin código'})</span></button>)}{visibleProducts.length === 0 && <p className="px-2 py-2 text-xs text-[#AC9C8D]">Producto no encontrado en catálogo.</p>}</div></div>}</section>
+        {!productPickerOpen && <section className="mb-4 border border-[#D1C7BD] bg-white/70 p-3">
+          <button type="button" onClick={() => void openCatalog()} disabled={catalogLoading} className="inline-flex items-center gap-1.5 rounded-md border border-[#72383D]/40 px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#72383D]/10 disabled:opacity-50"><Plus className="h-3.5 w-3.5" /> {catalogLoading ? 'Cargando catálogo...' : 'Agregar producto'}</button>
+        </section>}
+         {productPickerOpen && !selectedProduct && <section className="mb-4 max-w-2xl border border-[#D1C7BD] bg-white/70 p-3">
+          <div className="mb-2 flex items-center justify-between gap-2"><span className="text-xs font-semibold text-[#6D625B]">Buscar producto</span><button type="button" onClick={closeProductPicker} className="rounded-md border border-[#D1C7BD] px-2 py-1 text-[11px] font-semibold text-[#6D625B] hover:bg-[#EFE9E1]">Cerrar</button></div>
+          <div className="relative"><Search className="absolute left-2 top-2 h-3.5 w-3.5 text-[#AC9C8D]" /><input autoFocus value={catalogQuery} onChange={event => setCatalogQuery(event.target.value)} placeholder="Buscar por SKU, descripción o código de barra" className={`${inputClass} pl-7`} /></div>
+          <div className="mt-2 max-h-[220px] overflow-y-auto divide-y divide-[#E5DDD4] border border-[#D1C7BD]">{visibleProducts.map(product => <button type="button" key={product.id} onClick={() => setSelectedProduct(product)} className="block w-full px-2 py-1.5 text-left text-xs hover:bg-[#EFE9E1]"><span className="font-mono text-[#72383D]">{product.sku}</span> · {product.description} <span className="text-[#AC9C8D]">({product.barcode || 'sin código'})</span></button>)}{visibleProducts.length === 0 && <div className="flex items-center justify-between gap-3 px-2 py-3 text-xs"><span className="text-[#AC9C8D]">No encontramos el producto en el catálogo.</span><button type="button" onClick={() => setNewProductModalOpen(true)} className="whitespace-nowrap rounded-md bg-[#72383D] px-2.5 py-1.5 font-semibold text-white">+ Crear producto nuevo</button></div>}</div>
+        </section>}
+        {productPickerOpen && selectedProduct && <section className="mb-4 border border-[#D1C7BD] bg-white/70 p-3">
+          <div className="flex flex-wrap items-center gap-2"><div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold">{selectedProduct.description}</p><p className="font-mono text-[11px] text-[#72383D]">{selectedProduct.sku}</p></div><input aria-label="Cantidad nuevo producto" type="number" min="0" step="0.01" value={newQuantity} onChange={event => setNewQuantity(event.target.value)} className={`${inputClass} w-24`} /><input aria-label="Precio nuevo producto" type="number" min="0" step="0.01" value={newUnitPrice} onChange={event => setNewUnitPrice(event.target.value)} className={`${inputClass} w-28`} /><button type="button" onClick={addProduct} className="rounded-md bg-[#72383D] px-3 py-2 text-xs font-semibold text-white">Agregar</button><button type="button" onClick={closeProductPicker} className="rounded-md border border-[#D1C7BD] px-3 py-2 text-xs font-semibold text-[#6D625B] hover:bg-[#EFE9E1]">Cancelar</button></div>
+        </section>}
+
+         <section className="mb-4 border border-[#D1C7BD] bg-white/70 p-3"><div className="mb-2 flex flex-wrap items-center gap-2"><button onClick={() => void openCatalog()} disabled={catalogLoading} className="inline-flex items-center gap-1.5 rounded-md border border-[#72383D]/40 px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#72383D]/10"><Plus className="h-3.5 w-3.5" /> {catalogLoading ? 'Cargando catálogo...' : 'Agregar producto'}</button>{selectedProduct && <><span className="text-xs font-medium">{selectedProduct.sku} · {selectedProduct.description}</span><input aria-label="Cantidad nuevo producto" type="number" min="0" step="0.01" value={newQuantity} onChange={event => setNewQuantity(event.target.value)} className={`${inputClass} w-24`} /><input aria-label="Precio nuevo producto" type="number" min="0" step="0.01" value={newUnitPrice} onChange={event => setNewUnitPrice(event.target.value)} className={`${inputClass} w-28`} /><button onClick={addProduct} className="rounded-md bg-[#72383D] px-3 py-2 text-xs font-semibold text-white">Agregar</button></>}</div>{catalog.length > 0 && !selectedProduct && <div className="max-w-xl"><div className="relative"><Search className="absolute left-2 top-2 h-3.5 w-3.5 text-[#AC9C8D]" /><input value={catalogQuery} onChange={event => setCatalogQuery(event.target.value)} placeholder="Buscar por SKU, descripción o código de barra" className={`${inputClass} pl-7`} /></div><div className="mt-1 divide-y divide-[#E5DDD4] border border-[#D1C7BD]">{visibleProducts.map(product => <button key={product.id} onClick={() => setSelectedProduct(product)} className="block w-full px-2 py-1.5 text-left text-xs hover:bg-[#EFE9E1]"><span className="font-mono text-[#72383D]">{product.sku}</span> · {product.description} <span className="text-[#AC9C8D]">({product.barcode || 'sin código'})</span></button>)}{visibleProducts.length === 0 && <p className="px-2 py-2 text-xs text-[#AC9C8D]">Producto no encontrado en catálogo.</p>}</div></div>}</section>
 
         {removedLines.length > 0 && <section className="mb-4 border border-[#D1C7BD] bg-white/70 p-3"><h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-[#6D625B]">Productos no disponibles / eliminados</h2><div className="overflow-x-auto"><table className="min-w-[700px] w-full text-xs"><thead><tr className="border-b border-[#D1C7BD] text-left text-[10px] uppercase text-[#AC9C8D]"><th className="py-2">Estado</th><th>SKU</th><th>Descripción</th><th className="text-right">Cantidad</th><th className="text-right">Precio</th><th className="text-right">Total</th></tr></thead><tbody>{removedLines.map(line => <tr key={line.item_id} className="border-b border-[#E5DDD4]"><td className="py-2"><span className={`rounded border px-1.5 py-0.5 text-[10px] ${statusStyle('ELIMINADA')}`}>Eliminada</span></td><td className="font-mono">{line.original_item?.sku || '—'}</td><td>{line.original_item?.product_description || '—'}</td><td className="text-right">{line.original_item?.quantity ?? '—'}</td><td className="text-right">{currency(line.original_item?.unit_price, po.currency)}</td><td className="text-right font-semibold">{currency(line.original_item?.line_total, po.currency)}</td></tr>)}</tbody></table></div></section>}
 
         <section className="flex justify-end border-t border-[#D1C7BD] pt-3"><div className="w-72 space-y-1 text-xs"><div className="flex justify-between"><span className="text-[#AC9C8D]">Neto preview</span><span>{currency(preview.net, po.currency)}</span></div><div className="flex justify-between"><span className="text-[#AC9C8D]">Descuento preview</span><span>{currency(preview.discount, po.currency)}</span></div><div className="flex justify-between"><span className="text-[#AC9C8D]">IVA preview</span><span>{currency(preview.tax, po.currency)}</span></div><div className="flex justify-between border-t border-[#D1C7BD] pt-1 font-bold text-[#72383D]"><span>Total preview</span><span>{currency(preview.total, po.currency)}</span></div></div></section>
-      </main>
+       </main>
+       <PurchaseOrderNewProductModal poId={poId} open={newProductModalOpen} onClose={() => setNewProductModalOpen(false)} onCreated={addCreatedProduct} />
     </div>
   )
 }
