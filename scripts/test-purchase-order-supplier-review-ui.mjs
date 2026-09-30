@@ -5,6 +5,9 @@ import test from 'node:test'
 const root = new URL('..', import.meta.url)
 const panel = await readFile(new URL('src/modules/adquisiciones/ordenes-compra/purchase-orders-panel.tsx', root), 'utf8')
 const review = await readFile(new URL('src/modules/adquisiciones/ordenes-compra/purchase-order-supplier-review.tsx', root), 'utf8')
+const sidePanelStart = panel.indexOf('{selectedPo && (')
+assert.notEqual(sidePanelStart, -1, 'split-pane selectedPo no encontrado')
+const sidePanel = panel.slice(sidePanelStart)
 
 test('supplier review is isolated from the legacy PO form', () => {
   assert.match(panel, /status === 'ENVIADA_PROVEEDOR'[\s\S]*?Revisar confirmación/)
@@ -15,12 +18,14 @@ test('supplier review is isolated from the legacy PO form', () => {
 })
 
 test('EMITIDA can be marked as sent without implementing confirmation', () => {
-  assert.match(panel, /detail\.po\.status === 'EMITIDA'[\s\S]*?Marcar enviada al proveedor/)
+  assert.match(sidePanel, /detail\.po\.status === 'EMITIDA'[\s\S]*?handleMarkSentToSupplier\(detail\.po\.id\)[\s\S]*?Marcar enviada al proveedor/)
+  assert.match(sidePanel, /detail\.po\.status === 'ENVIADA_PROVEEDOR'[\s\S]*?Revisar confirmación/)
   assert.match(panel, /handleMarkSentToSupplier[\s\S]*?updatePurchaseOrderStatus\(poId, 'ENVIADA_PROVEEDOR'\)/)
   assert.match(panel, /Confirmas que esta orden de compra ya fue enviada al proveedor\?/)
   assert.match(panel, /delete detailCacheRef\.current\[poId\]/)
   assert.match(panel, /await load\(\)/)
   assert.match(panel, /await getPurchaseOrderDetail\(poId\)/)
+  assert.match(panel, /setDetail\(updatedDetail\)[\s\S]*?setSelectedPo\(updatedDetail\.po as PurchaseOrder\)/)
   assert.match(panel, /CONFIRMADA:.*Confirmada/)
   assert.doesNotMatch(panel, /Confirmar OC/)
 })
