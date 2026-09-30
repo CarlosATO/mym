@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, Ban, PackageOpen, XCircle, CheckCircle2, BarChart3, RefreshCw, Loader2 } from 'lucide-react'
+import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, Ban, PackageOpen, XCircle, CheckCircle2, BarChart3, RefreshCw, Loader2, ClipboardCheck } from 'lucide-react'
 import { AuthorizedPersonnelCombobox } from '@/components/ui/authorized-personnel-combobox'
 import {
   getPurchaseOrders, getPurchaseOrderDetail, createPurchaseOrder,
@@ -20,6 +20,7 @@ import { downloadPOBooklet, generatePdfBlob } from '@/lib/pdf/generate-po-pdf'
 import { getActiveCompany, type Company } from '@/app/actions/companies'
 import { OperationalTableResizeHandle, shouldIgnoreOperationalRowDoubleClick, useOperationalTableWidths, type OperationalTableColumn } from '@/components/ui/operational-table'
 import { ReplenishmentAnalysisPanel } from './replenishment-analysis-panel'
+import { PurchaseOrderSupplierReview } from './purchase-order-supplier-review'
 import { createClient as createBrowserClient } from '@/lib/supabase/client'
 import { formatCivilDate } from '@/lib/datetime'
 
@@ -101,7 +102,7 @@ const selectClass = "w-full h-8 rounded-md border border-[#D1C7BD] bg-[#F7F4F0] 
 const textareaClass = "w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 py-1.5 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15 focus:border-[#72383D] resize-none"
 
 export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, prepareReplenishment = false }: { initialOpenPoId?: string | null, onInitialOpenConsumed?: () => void, prepareReplenishment?: boolean }) {
-  const [view, setView] = useState<'list' | 'form' | 'detail' | 'analysis'>('list')
+  const [view, setView] = useState<'list' | 'form' | 'detail' | 'analysis' | 'supplier-review'>('list')
   const [selectedPo, setSelectedPo] = useState<PurchaseOrder | null>(null)
   const detailCacheRef = useRef<Record<string, PurchaseOrderDetail>>({})
   const pendingRequestsRef = useRef<Record<string, Promise<PurchaseOrderDetail | null>>>({})
@@ -113,6 +114,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const [message, setMessage] = useState('')
   const [filters, setFilters] = useState<PurchaseOrderFilters>({ page: 1, pageSize: 50 })
   const [detail, setDetail] = useState<PurchaseOrderDetail | null>(null)
+  const [supplierReviewPoId, setSupplierReviewPoId] = useState<string | null>(null)
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [authorizedPersonnel, setAuthorizedPersonnel] = useState<AuthorizedPersonnel[]>([])
@@ -676,6 +678,13 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     })
   }
 
+  function openSupplierReview(poId: string) {
+    setSupplierReviewPoId(poId)
+    setSelectedPo(null)
+    setDetail(null)
+    setView('supplier-review')
+  }
+
   function prefetchDetail(poId: string) {
     if (detailCacheRef.current[poId]) return
     if (!pendingRequestsRef.current[poId]) {
@@ -752,6 +761,12 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     const d = await getPurchaseOrderDetail(poId)
     if (d) setDetail(d)
     load()
+  }
+
+  async function handleSupplierReviewSaved(poId: string) {
+    delete detailCacheRef.current[poId]
+    delete pendingRequestsRef.current[poId]
+    await load()
   }
 
   function handleSupplierChange(supplierId: string) {
@@ -1627,7 +1642,17 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     )
   }
 
-  if (view === 'detail' && detail) {
+   if (view === 'supplier-review' && supplierReviewPoId) {
+     return (
+       <PurchaseOrderSupplierReview
+         poId={supplierReviewPoId}
+         onBack={() => { setSupplierReviewPoId(null); setView('list'); setDetail(null); setSelectedPo(null) }}
+         onSaved={() => handleSupplierReviewSaved(supplierReviewPoId)}
+       />
+     )
+   }
+
+   if (view === 'detail' && detail) {
     return (
       <div className="flex flex-col h-full overflow-hidden bg-theme-surface animate-in fade-in zoom-in-95 duration-200">
         {message && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
@@ -1646,6 +1671,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
               {(detail.po.status === 'BORRADOR') && (
                 <button onClick={() => { editPO(detail.po) }} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5">
                   <Edit className="w-3.5 h-3.5" /> Editar
+                </button>
+              )}
+              {detail.po.status === 'ENVIADA_PROVEEDOR' && (
+                <button onClick={() => openSupplierReview(detail.po.id)} className="px-4 py-2 rounded-xl bg-[#72383D] text-[#EFE9E1] hover:bg-[#5D2E32] text-xs font-semibold transition-colors flex items-center gap-1.5">
+                  <ClipboardCheck className="w-3.5 h-3.5" /> Revisar confirmación
                 </button>
               )}
               <button onClick={handleDownloadPDF} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5">
@@ -1963,9 +1993,10 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
              <div className="flex-1 overflow-auto p-6 lg:p-8">
                {detail ? (
                  <div className="space-y-8">
-                   <div className="flex gap-2">
-                     <button onClick={handleDownloadPDF} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5"><Download className="w-3.5 h-3.5" /> PDF</button>
-                   </div>
+                    <div className="flex gap-2">
+                      <button onClick={handleDownloadPDF} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5"><Download className="w-3.5 h-3.5" /> PDF</button>
+                      {detail.po.status === 'ENVIADA_PROVEEDOR' && <button onClick={() => openSupplierReview(detail.po.id)} className="px-4 py-2 rounded-xl bg-[#72383D] text-[#EFE9E1] hover:bg-[#5D2E32] text-xs font-semibold transition-colors flex items-center gap-1.5"><ClipboardCheck className="w-3.5 h-3.5" /> Revisar confirmación</button>}
+                    </div>
                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-5">
                      <div><p className="text-xs text-theme-text-muted/70 mb-0.5">Fecha emisión</p><p className="text-sm text-theme-text">{formatDate(selectedPo.issue_date)}</p></div>
                      <div><p className="text-xs text-theme-text-muted/70 mb-0.5">Total Neto</p><p className="text-sm text-theme-text">{formatCurrency(selectedPo.net_total, selectedPo.currency)}</p></div>

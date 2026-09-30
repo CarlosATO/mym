@@ -292,6 +292,24 @@ export type PurchaseOrderReviewComparisonStatus =
   | 'ELIMINADA'
   | 'AGREGADA'
 
+export interface PurchaseOrderReviewItem {
+  item_id: string
+  line_number: number
+  item_type: 'PRODUCT' | 'SERVICE'
+  product_id: string | null
+  sku: string | null
+  product_description: string
+  unit: string | null
+  quantity: number
+  unit_price: number
+  discount_percent: number
+  discount_amount: number
+  tax_rate: number
+  tax_amount: number
+  line_total: number
+  notes: string | null
+}
+
 export interface PurchaseOrderReviewChangedField {
   field: string
   original: unknown
@@ -301,21 +319,40 @@ export interface PurchaseOrderReviewChangedField {
 export interface PurchaseOrderReviewComparisonLine {
   item_id: string
   comparison_status: PurchaseOrderReviewComparisonStatus
-  original_item: Record<string, unknown> | null
-  current_item: Record<string, unknown> | null
+  original_item: PurchaseOrderReviewItem | null
+  current_item: PurchaseOrderReviewItem | null
   changed_fields: PurchaseOrderReviewChangedField[]
+}
+
+export interface PurchaseOrderSupplierReviewPO {
+  id: string
+  correlative: string
+  status: string
+  supplier_id: string
+  supplier_name: string | null
+  supplier_rut: string | null
+  warehouse_id: string | null
+  warehouse_name: string | null
+  currency: string
+  issue_date: string
+  required_date: string | null
+  payment_terms: string | null
+  net_total: number
+  discount_total: number
+  tax_total: number
+  grand_total: number
 }
 
 export interface PurchaseOrderSupplierReviewComparison {
   success: true
-  po: Record<string, unknown>
+  po: PurchaseOrderSupplierReviewPO
   original: {
     snapshot_id: string
     created_at: string
     header: Record<string, unknown>
-    items: Record<string, unknown>[]
+    items: PurchaseOrderReviewItem[]
   }
-  current: { items: Record<string, unknown>[] }
+  current: { items: PurchaseOrderReviewItem[] }
   comparison: PurchaseOrderReviewComparisonLine[]
   summary: {
     total_lines: number
