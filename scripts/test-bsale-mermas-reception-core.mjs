@@ -34,6 +34,32 @@ test('FEFO consumes earliest expiry and preserves the cost snapshot', () => {
   ])
 })
 
+test('partial regularization consumes only the selected quantity from one MER', () => {
+  const snapshot = buildFefoSnapshot('MER-GENERIC-1', 7, 'Ajuste parcial', [{ variantId: 1021, quantity: 2 }], [
+    line({ quantity: 5, requestId: 'mer-a', requestLineId: 'line-a' }),
+  ])
+  assert.equal(snapshot.lines.reduce((sum, item) => sum + item.quantity, 0), 2)
+  assert.equal(snapshot.lines[0].requestId, 'mer-a')
+  assert.equal(snapshot.lines[0].requestLineId, 'line-a')
+})
+
+test('one regularization can consume multiple MER sources and variants', () => {
+  const snapshot = buildFefoSnapshot('MER-GENERIC-2', 7, 'Ajuste múltiple', [
+    { variantId: 1021, quantity: 6 },
+    { variantId: 2042, quantity: 1 },
+  ], [
+    line({ quantity: 5, requestId: 'mer-a', requestLineId: 'line-a', expirationDate: '2026-10-01' }),
+    line({ quantity: 4, requestId: 'mer-b', requestLineId: 'line-b', expirationDate: '2026-11-01' }),
+    line({ variantId: 2042, quantity: 2, requestId: 'mer-c', requestLineId: 'line-c' }),
+  ])
+  assert.deepEqual(snapshot.lines.map(item => [item.variantId, item.quantity, item.requestId, item.requestLineId]), [
+    [1021, 5, 'mer-a', 'line-a'],
+    [1021, 1, 'mer-b', 'line-b'],
+    [2042, 1, 'mer-c', 'line-c'],
+  ])
+  assert.equal('requestId' in buildReceptionPayload(snapshot), false)
+})
+
 test('weighted historical cost is quantity weighted', () => {
   assert.equal(weightedUnitCost([{ quantity: 4, unitCost: 615 }, { quantity: 1, unitCost: 700 }]), 632)
 })

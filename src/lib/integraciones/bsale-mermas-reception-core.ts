@@ -15,6 +15,7 @@ export type ReceptionSnapshot = {
   correlationCode: string
   officeId: number
   reason: string
+  observation?: string | null
   lines: ReceptionSnapshotLine[]
 }
 
@@ -117,7 +118,7 @@ export function buildReceptionPayload(snapshot: ReceptionSnapshot): BsaleRecepti
     document: 'OTRO',
     officeId,
     documentNumber: snapshot.correlationCode,
-    note: buildReceptionNote(snapshot.correlationCode, snapshot.reason),
+    note: buildReceptionNote(snapshot.correlationCode, [snapshot.reason, snapshot.observation].filter(Boolean).join(' | ')),
     details,
   }
 }

@@ -14,6 +14,12 @@ export type MermaBsaleReceptionResult =
   | { status: 'RECONCILIATION_REQUIRED'; operationId: string; receptionId: number | null; error: string }
   | { status: 'SENDING'; operationId: string }
 
+export type MermaBsaleReceptionInput = {
+  items: Array<{ variantId: number; quantity: number }>
+  reason: string
+  observation?: string | null
+}
+
 type OperationRow = {
   operation_id?: string
   status?: ReceptionOperationSnapshot['status']
@@ -57,7 +63,7 @@ export async function applyMermaBsaleReception(operationId: string) {
   return String((data as { stock_exit_operation_id?: string }).stock_exit_operation_id)
 }
 
-export async function executeMermaBsaleReception(requestId: string): Promise<MermaBsaleReceptionResult> {
+export async function executeMermaBsaleReception(input: MermaBsaleReceptionInput): Promise<MermaBsaleReceptionResult> {
   const authorization = await requireWmsPermission('logistica.mermas.request.create')
   const database = createAdminClient()
   const companyId = authorization.companyId
@@ -65,20 +71,14 @@ export async function executeMermaBsaleReception(requestId: string): Promise<Mer
   let operationId = ''
   const workflow = await executeBsaleReceptionWorkflow({
     prepare: async () => {
-      const [{ data: request, error: requestError }, { data: lines, error: linesError }, officeId] = await Promise.all([
-        database.schema('mermas').from('requests').select('id, request_code').eq('id', requestId).eq('company_id', companyId).maybeSingle(),
-        database.schema('mermas').from('request_lines').select('bsale_variant_id, quantity, request_line_id:id').eq('request_id', requestId).eq('company_id', companyId).order('created_at'),
-        resolveOffice(database, companyId),
-      ])
-      if (requestError || !request) throw new Error(`No se pudo cargar la solicitud: ${requestError?.message ?? 'no encontrada'}`)
-      if (linesError) throw new Error(`No se pudieron cargar las líneas: ${linesError.message}`)
+      const officeId = await resolveOffice(database, companyId)
       const { data, error } = await database.schema('mermas').rpc('prepare_bsale_reception_operation', {
         p_company_id: companyId,
         p_user_id: userId,
-        p_request_id: requestId,
         p_office_id: officeId,
-        p_reason: `Regularización de ${request.request_code}`,
-        p_items: (lines ?? []).map(line => ({ variant_id: Number(line.bsale_variant_id), quantity: Number(line.quantity), request_line_id: line.request_line_id })),
+        p_reason: input.reason,
+        p_observation: input.observation ?? null,
+        p_items: input.items.map(item => ({ variant_id: item.variantId, quantity: item.quantity })),
       })
       if (error) throw new Error(`No se pudo preparar la recepción Bsale: ${error.message}`)
       const operation = parseOperation(data)
