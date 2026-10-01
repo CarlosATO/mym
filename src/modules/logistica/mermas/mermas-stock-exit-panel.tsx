@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import {
   correctMermasStockExit,
+  createMermasBsaleRegularization,
   createMermasStockExit,
   getMermasStockExitCatalog,
   getMermasStockExitOperationDetail,
@@ -25,6 +26,7 @@ import {
   type MermaWarehouseListProduct,
 } from "@/app/actions/logistica/mermas";
 import { useMermasModule } from "./mermas-module-provider";
+import { blocksRegularizationSubmit, regularizationOutcomeMessage, resolveStockExitSubmitMode } from "./mermas-stock-exit-submit";
 
 type ExitType = "SALIDA_DESTRUCCION" | "SALIDA_REGULACION";
 type OperationType = "DESTRUCCION" | "REGULACION";
@@ -39,7 +41,7 @@ type CorrectionLine = {
 
 function operationTypeLabel(type: MermaStockExitOperation["operation_type"] | OperationType) {
   if (type === "DESTRUCCION") return "Destrucción";
-  if (type === "REGULACION") return "Regularización";
+  if (type === "REGULACION") return "Regularización / Reintegro Bsale";
   return "Reversa";
 }
 
@@ -139,10 +141,10 @@ export function MermasStockExitPanel() {
         {view === "new" ? (
           <MermasStockExitCreateForm
             onBack={showHistory}
-            onCreated={() => {
-              setView("history");
-              void refreshAfterMutation("Salida registrada correctamente.");
-            }}
+             onCreated={(successMessage) => {
+               setView("history");
+               void refreshAfterMutation(successMessage);
+             }}
           />
         ) : (
           <>
@@ -204,7 +206,7 @@ export function MermasStockExitPanel() {
                           <td className="px-3 py-3">
                             <div className="flex justify-end gap-2">
                               <button type="button" onClick={() => void openDetail(operation.operation_id)} className="inline-flex items-center gap-1 rounded-lg border border-theme-border px-2.5 py-1.5 font-semibold text-theme-text-muted hover:border-theme-accent/50 hover:text-theme-text"><Eye className="h-3.5 w-3.5" /> Ver detalle</button>
-                              {bootstrap.isSuperUser && operation.status === "VIGENTE" && operation.operation_type !== "REVERSA" && (
+                               {bootstrap.isSuperUser && operation.status === "VIGENTE" && operation.operation_type !== "REVERSA" && !operation.bsale_reception_operation_id && (
                                 <button type="button" onClick={() => void openDetail(operation.operation_id).then(() => setCorrectionOpen(true))} className="inline-flex items-center gap-1 rounded-lg border border-theme-accent/40 bg-theme-accent/10 px-2.5 py-1.5 font-semibold text-theme-text-accent hover:bg-theme-accent/15"><Pencil className="h-3.5 w-3.5" /> Corregir</button>
                               )}
                             </div>
@@ -224,7 +226,7 @@ export function MermasStockExitPanel() {
               <MermasStockExitDetail
                 detail={detail}
                 replacement={operations.find((operation) => operation.corrects_operation_id === detail.operation_id) ?? null}
-                canCorrect={bootstrap.isSuperUser && detail.status === "VIGENTE" && detail.operation_type !== "REVERSA"}
+                 canCorrect={bootstrap.isSuperUser && detail.status === "VIGENTE" && detail.operation_type !== "REVERSA" && !detail.bsale_reception_operation_id}
                 correctionOpen={correctionOpen}
                 onClose={() => { setDetail(null); setCorrectionOpen(false); }}
                 onCorrect={() => setCorrectionOpen(true)}
@@ -264,6 +266,7 @@ function MermasStockExitDetail({
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-semibold text-theme-text">Detalle de salida</h3>
+            {detail.bsale_reception_operation_id && <span className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-[10px] font-semibold text-sky-700 dark:text-sky-300">Reintegro Bsale</span>}
             <StatusBadge status={detail.status} />
           </div>
           <p className="mt-1 text-xs text-theme-text-muted">{formatDate(detail.created_at)} · {operationTypeLabel(detail.operation_type)}</p>
@@ -278,6 +281,8 @@ function MermasStockExitDetail({
         <Info label="Usuario" value={detail.created_by_name} />
         <Info label="Observación" value={detail.observation || "-"} />
         <Info label="Estado" value={operationStatusLabel(detail.status)} />
+        {detail.bsale_reception_id && <Info label="Recepción Bsale" value={String(detail.bsale_reception_id)} />}
+        {detail.bsale_reception_correlation_code && <Info label="Correlación" value={detail.bsale_reception_correlation_code} />}
       </div>
       {detail.status === "CORREGIDA" && (
         <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
@@ -381,7 +386,9 @@ function MermasStockExitCorrectionForm({
   );
 }
 
-function MermasStockExitCreateForm({ onBack, onCreated }: { onBack: () => void; onCreated: () => void }) {
+type RegularizationStatus = "SENDING" | "RECONCILIATION_REQUIRED" | "LOCAL_APPLICATION_PENDING";
+
+function MermasStockExitCreateForm({ onBack, onCreated }: { onBack: () => void; onCreated: (message: string) => void }) {
   const { invalidateWarehouse, ensureWarehouseLoaded } = useMermasModule();
   const [catalog, setCatalog] = useState<MermaWarehouseListProduct[]>([]);
   const [search, setSearch] = useState("");
@@ -393,6 +400,8 @@ function MermasStockExitCreateForm({ onBack, onCreated }: { onBack: () => void; 
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null);
+  const [regularizationStatus, setRegularizationStatus] = useState<RegularizationStatus | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -418,25 +427,45 @@ function MermasStockExitCreateForm({ onBack, onCreated }: { onBack: () => void; 
   async function submit() {
     setError("");
     setMessage("");
+    if (regularizationBlocked) return;
     if (!reason.trim()) { setError("El motivo de la salida es obligatorio."); return; }
     if (!cart.length || cart.some((line) => !Number.isFinite(line.quantity) || line.quantity <= 0 || line.quantity > line.product.available)) { setError("Revisa las cantidades: no pueden superar el stock disponible."); return; }
+    const regularizationKey = type === "SALIDA_REGULACION" ? idempotencyKey ?? crypto.randomUUID() : null;
+    if (regularizationKey && !idempotencyKey) setIdempotencyKey(regularizationKey);
     setSubmitting(true);
-    const response = await createMermasStockExit(type, reason, observation, cart.map((line) => ({ bsale_variant_id: line.product.variant_id, quantity: line.quantity })));
+    const response = resolveStockExitSubmitMode(type) === "BSALE_REGULARIZATION"
+      ? await createMermasBsaleRegularization({ idempotencyKey: regularizationKey!, reason, observation, items: cart.map((line) => ({ variantId: line.product.variant_id, quantity: line.quantity })) })
+      : await createMermasStockExit(type, reason, observation, cart.map((line) => ({ bsale_variant_id: line.product.variant_id, quantity: line.quantity })));
+    const responseStatus = "status" in response ? response.status : undefined;
     if (response.success) {
-      setMessage("Salida registrada correctamente.");
+      setMessage(type === "SALIDA_REGULACION" ? "Reintegro registrado correctamente en Bsale." : "Salida registrada correctamente.");
       setCart([]);
       setReason("");
       setObservation("");
       setType("SALIDA_DESTRUCCION");
+      setIdempotencyKey(null);
+      setRegularizationStatus(null);
       invalidateWarehouse();
       await ensureWarehouseLoaded(true);
-      onCreated();
-    } else setError(response.error ?? "No se pudo registrar la salida.");
+      onCreated(type === "SALIDA_REGULACION" ? "Reintegro registrado correctamente en Bsale." : "Salida registrada correctamente.");
+    } else if (resolveStockExitSubmitMode(type) === "BSALE_REGULARIZATION" && responseStatus && responseStatus !== "FAILED" && responseStatus !== "CONFIRMED") {
+      setRegularizationStatus(responseStatus);
+      setError(regularizationOutcomeMessage(responseStatus));
+    } else {
+      if (resolveStockExitSubmitMode(type) === "BSALE_REGULARIZATION" && responseStatus === "FAILED") setIdempotencyKey(null);
+      setError(response.error ?? "No se pudo registrar la salida.");
+    }
     setSubmitting(false);
   }
 
+  const regularizationBlocked = resolveStockExitSubmitMode(type) === "BSALE_REGULARIZATION" && blocksRegularizationSubmit(regularizationStatus);
+
   return (
     <>
+      {regularizationStatus === "LOCAL_APPLICATION_PENDING" && <button type="button" onClick={() => void submit()} disabled={submitting} className="mb-3 inline-flex items-center gap-2 rounded-xl border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs font-semibold text-sky-700 dark:text-sky-300">Reintentar aplicación local</button>}
+      {type === "SALIDA_REGULACION" && <p className="mb-3 rounded-xl border border-sky-500/20 bg-sky-500/5 px-3 py-2 text-xs text-sky-700 dark:text-sky-300">Devuelve stock desde Bodega de Mermas a CASA MATRIZ en Bsale. El sistema seleccionará las partidas por FEFO.</p>}
+      {type === "SALIDA_REGULACION" && <p className="mb-3 text-xs font-semibold text-theme-text-muted">{submitting ? "Reintegrando..." : "Acción: Reintegrar a Bsale"}</p>}
+      {type === "SALIDA_REGULACION" && <p className="mb-3 text-[11px] text-theme-text-muted">Tipo seleccionado: Regularización / Reintegro a Bsale</p>}
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><button type="button" onClick={onBack} className="inline-flex items-center gap-1 text-xs font-semibold text-theme-text-accent hover:underline"><ArrowLeft className="h-3.5 w-3.5" /> Historial de salidas</button><p className="mt-3 text-[10px] font-bold uppercase tracking-[0.2em] text-theme-accent">Mermas · Control de stock</p><h2 className="mt-1 text-xl font-semibold text-theme-text">Nueva salida</h2><p className="mt-1 text-sm text-theme-text-muted">Retira stock de Mermas mediante FEFO y deja trazabilidad de la operación.</p></div></header>
       {message && <Notice tone="success">{message}</Notice>}
       {error && <Notice tone="error">{error}</Notice>}

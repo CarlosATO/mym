@@ -6,6 +6,7 @@ import { getActiveCompany, getActiveCompanyId } from "@/app/actions/companies";
 import { requireWmsPermission } from "./authorization";
 import { syncBsaleMermas } from "@/lib/integraciones/bsale-mermas-sync";
 import { executeMermaBsaleOutbound } from "@/lib/integraciones/bsale-mermas-outbound-orchestrator";
+import { executeMermaBsaleReception, type MermaBsaleReceptionInput } from "@/lib/integraciones/bsale-mermas-reception-orchestrator";
 import { applyConfirmedMermaBsaleOutbound } from "@/lib/integraciones/bsale-mermas-local-application";
 import { createAndProcessMermaRequest as createAndProcessMermaRequestCore, type MermaWorkflowResult } from "@/lib/integraciones/bsale-mermas-workflow-core";
 import { createHmac, randomUUID, timingSafeEqual } from "crypto";
@@ -2188,6 +2189,15 @@ export type MermaStockExitItem = {
   quantity: number;
 };
 
+export type MermaBsaleRegularizationResponse = {
+  success: boolean;
+  status?: "CONFIRMED" | "FAILED" | "RECONCILIATION_REQUIRED" | "SENDING" | "LOCAL_APPLICATION_PENDING";
+  operationId?: string;
+  receptionId?: number | null;
+  stockExitOperationId?: string;
+  error?: string;
+};
+
 export type MermaStockExitOperation = {
   operation_id: string;
   created_at: string;
@@ -2201,6 +2211,9 @@ export type MermaStockExitOperation = {
   product_count: number;
   corrects_operation_id: string | null;
   reverses_operation_id: string | null;
+  bsale_reception_operation_id?: string | null;
+  bsale_reception_id?: number | null;
+  bsale_reception_correlation_code?: string | null;
 };
 
 export type MermaStockExitOperationProduct = {
@@ -2688,6 +2701,7 @@ export async function createMermasStockExit(
 ): Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }> {
   try {
     const authorization = await requireMermasSuperUser();
+    if (movementType === "SALIDA_REGULACION") return { success: false, error: "Las regularizaciones deben registrarse mediante el reintegro seguro a Bsale." };
     const cleanReason = reason.trim();
     if (!cleanReason) return { success: false, error: "El motivo de la salida es obligatorio." };
     if (!Array.isArray(items) || items.length === 0) return { success: false, error: "Agrega al menos un producto." };
@@ -2718,6 +2732,27 @@ export async function createMermasStockExit(
   }
 }
 
+export async function createMermasBsaleRegularization(
+  input: MermaBsaleReceptionInput,
+): Promise<MermaBsaleRegularizationResponse> {
+  try {
+    if (!input.idempotencyKey || !Array.isArray(input.items) || input.items.length === 0) {
+      return { success: false, status: "FAILED", error: "La regularización requiere una clave y productos." };
+    }
+    const result = await executeMermaBsaleReception(input);
+    return {
+      success: result.status === "CONFIRMED",
+      status: result.status,
+      operationId: result.operationId,
+      receptionId: "receptionId" in result ? result.receptionId : null,
+      stockExitOperationId: "stockExitOperationId" in result ? result.stockExitOperationId : undefined,
+      error: "error" in result ? result.error : undefined,
+    };
+  } catch (error) {
+    return { success: false, status: "FAILED", error: error instanceof Error ? error.message : "No se pudo registrar el reintegro en Bsale." };
+  }
+}
+
 export async function getMermasStockExitOperations(): Promise<{
   data: MermaStockExitOperation[];
   error?: string;
@@ -2731,11 +2766,25 @@ export async function getMermasStockExitOperations(): Promise<{
       p_offset: 0,
     });
     if (error) return { data: [], error: error.message };
+    const rows = (data ?? []) as MermaStockExitOperation[];
+    const operationIds = rows.map((row) => row.operation_id);
+    const { data: receptionLinks } = operationIds.length
+      ? await db("mermas").from("stock_exit_operations").select("id, bsale_reception_operation_id").eq("company_id", authorization.companyId).in("id", operationIds)
+      : { data: [] as { id: string; bsale_reception_operation_id: string | null }[] };
+    const receptionOperationIds = (receptionLinks ?? []).map((row) => row.bsale_reception_operation_id).filter(Boolean) as string[];
+    const { data: receptions } = receptionOperationIds.length
+      ? await db("mermas").from("bsale_reception_operations").select("id, reception_id, correlation_code").eq("company_id", authorization.companyId).in("id", receptionOperationIds)
+      : { data: [] as { id: string; reception_id: number | null; correlation_code: string | null }[] };
+    const linkMap = new Map((receptionLinks ?? []).map((row) => [row.id, row.bsale_reception_operation_id]));
+    const receptionMap = new Map((receptions ?? []).map((row) => [row.id, row]));
     return {
-      data: (data ?? []).map((row: MermaStockExitOperation) => ({
+      data: rows.map((row: MermaStockExitOperation) => ({
         ...row,
         total_units: Number(row.total_units),
         product_count: Number(row.product_count),
+        bsale_reception_operation_id: linkMap.get(row.operation_id) ?? null,
+        bsale_reception_id: receptionMap.get(linkMap.get(row.operation_id) ?? "")?.reception_id ?? null,
+        bsale_reception_correlation_code: receptionMap.get(linkMap.get(row.operation_id) ?? "")?.correlation_code ?? null,
       })),
     };
   } catch (error) {
@@ -2756,9 +2805,16 @@ export async function getMermasStockExitOperationDetail(
     if (error) return { data: null, error: error.message };
     const row = Array.isArray(data) ? data[0] : data;
     if (!row) return { data: null, error: "No se encontró la operación." };
+    const { data: receptionLink } = await db("mermas").from("stock_exit_operations").select("bsale_reception_operation_id").eq("company_id", authorization.companyId).eq("id", operationId).maybeSingle();
+    const { data: reception } = receptionLink?.bsale_reception_operation_id
+      ? await db("mermas").from("bsale_reception_operations").select("reception_id, correlation_code").eq("company_id", authorization.companyId).eq("id", receptionLink.bsale_reception_operation_id).maybeSingle()
+      : { data: null };
     return {
       data: {
         ...row,
+        bsale_reception_operation_id: receptionLink?.bsale_reception_operation_id ?? null,
+        bsale_reception_id: reception?.reception_id ?? null,
+        bsale_reception_correlation_code: reception?.correlation_code ?? null,
         products: (row.products ?? []).map((product: MermaStockExitOperationProduct) => ({
           ...product,
           variant_id: Number(product.variant_id),
@@ -2800,6 +2856,9 @@ export async function correctMermasStockExit(
     if (cleanItems.some((item) => !Number.isInteger(item.bsale_variant_id) || item.bsale_variant_id <= 0 || !Number.isFinite(item.quantity) || item.quantity <= 0)) {
       return { success: false, error: "Revisa las cantidades ingresadas." };
     }
+    const { data: originalOperation, error: originalOperationError } = await db("mermas").from("stock_exit_operations").select("bsale_reception_operation_id").eq("company_id", authorization.companyId).eq("id", originalOperationId).maybeSingle();
+    if (originalOperationError) return { success: false, error: originalOperationError.message };
+    if (originalOperation?.bsale_reception_operation_id) return { success: false, error: "Las salidas vinculadas a Bsale no pueden corregirse por el flujo legacy." };
     const { data, error } = await db("mermas").rpc("correct_stock_exit", {
       p_company_id: authorization.companyId,
       p_user_id: authorization.user.id,
