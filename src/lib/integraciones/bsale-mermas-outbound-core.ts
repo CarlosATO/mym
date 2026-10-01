@@ -98,19 +98,22 @@ export function resolveMermaRequestObservation(lines: MermaOutboundLine[]): stri
       .map(line => line.observation?.trim() ?? '')
       .filter(Boolean),
   )]
-  if (observations.length > 1) {
-    throw new Error('La solicitud contiene observaciones distintas por línea; no existe una observación única para Bsale.')
-  }
-  return observations[0] ?? null
+  return observations.length ? observations.join('; ') : null
 }
 
 export function buildMermaBsaleNote(requestCode: string, observation?: string | null): string {
   const code = requestCode.trim()
   if (!code) throw new Error('El código de solicitud es obligatorio.')
+  if (code.length > 100) throw new Error('El código de solicitud supera el máximo de 100 caracteres.')
   const value = observation?.trim() ?? ''
   if (!value) return code
-  const availableObservationLength = Math.max(0, 100 - code.length - 3)
-  return `${code} | ${value.slice(0, availableObservationLength)}`
+  const prefix = `${code} | `
+  let observationsPart = ''
+  for (const character of value) {
+    if ((prefix + observationsPart + character).length > 100) break
+    observationsPart += character
+  }
+  return prefix + observationsPart
 }
 
 export function buildMermaBsalePayload(input: MermaOutboundRequest): BsaleConsumptionPayload {

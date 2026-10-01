@@ -45,13 +45,28 @@ test('preserves accents and ñ', () => {
   assert.equal(buildMermaBsaleNote('MER-2026-000123', 'Piña dañada'), 'MER-2026-000123 | Piña dañada')
 })
 
-test('resolves one shared line observation and rejects conflicting observations', () => {
+test('consolidates line observations in first-appearance order', () => {
   assert.equal(resolveMermaRequestObservation(input.lines.map(line => ({ ...line, observation: input.observation }))), input.observation)
+  assert.equal(resolveMermaRequestObservation([
+    { ...input.lines[0], observation: ' Envase roto ' },
+    { ...input.lines[1], observation: 'Producto mojado' },
+    { ...input.lines[0], observation: 'Envase roto' },
+    { ...input.lines[1], observation: '  Sello abierto  ' },
+  ]), 'Envase roto; Producto mojado; Sello abierto')
   assert.equal(resolveMermaRequestObservation([{ ...input.lines[0], observation: '   ' }]), null)
-  assert.throws(() => resolveMermaRequestObservation([
-    { ...input.lines[0], observation: 'Primera' },
-    { ...input.lines[1], observation: 'Segunda' },
-  ]), /observaciones distintas/)
+})
+
+test('fails before POST when request_code exceeds 100 characters', async () => {
+  const longCode = 'M'.repeat(101)
+  assert.throws(() => buildMermaBsaleNote(longCode, 'Observación'), /supera el máximo/)
+  let posts = 0
+  const result = await executeBsaleMermaOutbound({ ...input, requestCode: longCode }, {
+    createConsumption: async () => { posts += 1; return { id: 1 } },
+    getConsumption: async () => ({ id: 1, consumptionTypeId: 2, office: { id: 11 } }),
+    getDetails: async () => [],
+  })
+  assert.equal(posts, 0)
+  assert.equal(result.status, 'FAILED')
 })
 
 test('does not retry a failed POST and requires reconciliation', async () => {
