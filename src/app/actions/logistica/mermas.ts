@@ -1744,6 +1744,12 @@ export type MermaBsaleIncidentDetail = {
   sku: string;
   product_name: string;
   quantity: number;
+  request_id: string | null;
+  request_code: string | null;
+  request_line_id: string | null;
+  requested_quantity: number | null;
+  remaining_quantity: number | null;
+  match_status: "MATCHED" | "NO_MATCH" | "AMBIGUOUS";
 };
 
 export type MermaBsaleIncident = {
@@ -1752,8 +1758,16 @@ export type MermaBsaleIncident = {
   note: string | null;
   product_count: number;
   total_quantity: number;
-  status: "SIN SOLICITUD" | "ASOCIACIÓN INCONSISTENTE";
+  status: "SIN SOLICITUD" | "ASOCIACIÓN INCONSISTENTE" | "ASOCIACIÓN DISPONIBLE";
   details: MermaBsaleIncidentDetail[];
+};
+
+export type MermaBsaleAssociationMatch = {
+  detail_id: number;
+  request_id: string;
+  request_code: string;
+  request_line_id: string;
+  quantity: number;
 };
 
 export type MermaIncidentLineInput = {
@@ -1782,7 +1796,7 @@ export async function getMermasBsaleIncidents(): Promise<{
   const [{ data: consumptions, error: consumptionsError }, { data: details, error: detailsError }] = await Promise.all([
     database
       .from("bsale_consumptions")
-      .select("consumption_id, consumption_date, note, request_id")
+      .select("consumption_id, consumption_date, note, request_id, match_method")
       .eq("company_id", authorization.companyId)
       .eq("consumption_type_id", 2)
       .gte("consumption_date", activationDate)
@@ -1857,27 +1871,68 @@ export async function getMermasBsaleIncidents(): Promise<{
           allocationsForDetail.reduce((sum, allocation) => sum + allocation.quantity, 0) >= Number(detail.quantity);
       });
     if (completeAssociation) continue;
+    const preview = await database.rpc("preview_bsale_consumption_request_matches", {
+      p_consumption_id: consumption.consumption_id,
+      p_company_id: authorization.companyId,
+      p_user_id: authorization.user.id,
+    });
+    type PreviewRow = {
+      detail_id: number;
+      sku: string | null;
+      product: string | null;
+      request_id: string | null;
+      request_code: string | null;
+      request_line_id: string | null;
+      requested_quantity: number | null;
+      remaining_quantity: number | null;
+      match_status: "MATCHED" | "NO_MATCH" | "AMBIGUOUS";
+    };
+    const previewRows = (preview.data ?? []) as PreviewRow[];
+    const previewByDetail = new Map(previewRows.map((row) => [Number(row.detail_id), row]));
     const incidentDetails = consumptionDetails.map((detail) => {
       const variant = variantMap.get(Number(detail.variant_id));
+      const row = previewByDetail.get(Number(detail.detail_id));
       return {
         detail_id: Number(detail.detail_id),
         variant_id: Number(detail.variant_id),
-        sku: variant?.code ?? `BS-${detail.variant_id}`,
-        product_name: productMap.get(variant?.bsale_product_id ?? 0) ?? "Producto Bsale",
+        sku: row?.sku ?? variant?.code ?? `BS-${detail.variant_id}`,
+        product_name: row?.product ?? productMap.get(variant?.bsale_product_id ?? 0) ?? "Producto Bsale",
         quantity: Number(detail.quantity),
+        request_id: row?.request_id ?? null,
+        request_code: row?.request_code ?? null,
+        request_line_id: row?.request_line_id ?? null,
+        requested_quantity: row?.requested_quantity == null ? null : Number(row.requested_quantity),
+        remaining_quantity: row?.remaining_quantity == null ? null : Number(row.remaining_quantity),
+        match_status: (row?.match_status ?? "NO_MATCH") as "MATCHED" | "NO_MATCH" | "AMBIGUOUS",
       };
     });
+    const allMatched = incidentDetails.length > 0 && incidentDetails.every((detail) => detail.match_status === "MATCHED");
     incidents.push({
       consumption_id: consumption.consumption_id,
       consumption_date: consumption.consumption_date,
       note: consumption.note,
       product_count: incidentDetails.length,
       total_quantity: incidentDetails.reduce((sum, detail) => sum + detail.quantity, 0),
-      status: allocationRequestIds.size > 0 || consumption.request_id ? "ASOCIACIÓN INCONSISTENTE" : "SIN SOLICITUD",
+      status: allMatched ? "ASOCIACIÓN DISPONIBLE" : allocationRequestIds.size > 0 || consumption.request_id ? "ASOCIACIÓN INCONSISTENTE" : "SIN SOLICITUD",
       details: incidentDetails,
     });
   }
   return { data: incidents };
+}
+
+export async function associateMermaBsaleConsumptionRequests(
+  consumptionId: number,
+  matches: MermaBsaleAssociationMatch[],
+): Promise<{ success?: boolean; error?: string }> {
+  const authorization = await requireWmsPermission("logistica.mermas.authorize");
+  const { data, error } = await db("mermas").rpc("associate_bsale_consumption_requests", {
+    p_consumption_id: consumptionId,
+    p_company_id: authorization.companyId,
+    p_user_id: authorization.user.id,
+    p_matches: matches,
+  });
+  if (error) return { error: error.message };
+  return data as { success: boolean };
 }
 
 export async function prepareMermaIncidentEvidenceUploads(

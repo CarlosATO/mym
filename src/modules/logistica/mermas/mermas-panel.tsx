@@ -19,6 +19,7 @@ import {
 import {
   createMermaRequest,
   cancelMermaRequest,
+  associateMermaBsaleConsumptionRequests,
   authorizeMermaRequestWithConsumption,
   getMermasBsaleCandidates,
   getMermasContext,
@@ -627,9 +628,11 @@ function MermaBsaleIncidentsDialog({
   const [formOpen, setFormOpen] = useState(false);
   const [draftLines, setDraftLines] = useState<DraftIncidentLine[]>([]);
   const [saving, setSaving] = useState(false);
+  const [associationSaving, setAssociationSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [uploadStatus, setUploadStatus] = useState("");
   const selected = incidents.find((incident) => incident.consumption_id === selectedId) ?? null;
+  const allMatched = Boolean(selected?.details.length) && selected?.details.every((detail) => detail.match_status === "MATCHED");
   function draftLinesFor(incident: MermaBsaleIncident | null) {
     return incident?.details.map((detail) => ({
       ...detail,
@@ -694,6 +697,26 @@ function MermaBsaleIncidentsDialog({
     } finally {
       setUploadStatus("");
       setSaving(false);
+    }
+  }
+  async function associateRequests() {
+    if (!selected || !allMatched) return;
+    setAssociationSaving(true);
+    setSaveError("");
+    try {
+      const result = await associateMermaBsaleConsumptionRequests(selected.consumption_id, selected.details.map((detail) => ({
+        detail_id: detail.detail_id,
+        request_id: detail.request_id!,
+        request_code: detail.request_code!,
+        request_line_id: detail.request_line_id!,
+        quantity: detail.quantity,
+      })));
+      if (result.error) throw new Error(result.error);
+      onCreated("Solicitudes asociadas");
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "No se pudieron asociar las solicitudes");
+    } finally {
+      setAssociationSaving(false);
     }
   }
   return (
@@ -817,7 +840,7 @@ function MermaBsaleIncidentsDialog({
                 <div className="mt-2 min-h-0 flex-1 overflow-auto rounded-lg border border-theme-border">
                   <table className="w-full min-w-[420px] text-xs">
                     <thead className="bg-theme-text/[0.025] text-left text-[10px] uppercase tracking-wider text-theme-text-muted">
-                      <tr><th className="px-3 py-2">SKU</th><th className="px-3 py-2">Producto</th><th className="px-3 py-2">Cantidad</th></tr>
+                       <tr><th className="px-3 py-2">SKU</th><th className="px-3 py-2">Producto</th><th className="px-3 py-2">Cantidad</th><th className="px-3 py-2">Solicitud</th></tr>
                     </thead>
                     <tbody>
                       {selected.details.map((detail) => (
@@ -825,14 +848,21 @@ function MermaBsaleIncidentsDialog({
                           <td className="px-3 py-2 font-mono text-theme-text">{detail.sku}</td>
                           <td className="px-3 py-2 text-theme-text-muted">{detail.product_name}</td>
                           <td className="px-3 py-2 tabular-nums text-theme-text">{detail.quantity}</td>
+                          <td className="px-3 py-2 text-theme-text-muted">
+                            {detail.match_status === "MATCHED" ? <><span className="font-mono font-semibold text-theme-text">{detail.request_code}</span><span className="ml-1 text-[10px]">MATCHED</span></> : detail.match_status}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
                 <div className="mt-3 flex shrink-0 items-center justify-between gap-3 border-t border-theme-border pt-3">
-                  <span className="text-xs text-theme-text-muted">{selected.status === "SIN SOLICITUD" ? "Consumo listo para regularización." : "Requiere revisión por asociación inconsistente."}</span>
-                  <button type="button" disabled={selected.status !== "SIN SOLICITUD"} onClick={() => { setDraftLines(draftLinesFor(selected)); setFormOpen(true); }} className="rounded-lg border border-theme-accent bg-theme-accent/10 px-3 py-2 text-[10px] font-semibold text-theme-text-accent disabled:cursor-not-allowed disabled:border-theme-border disabled:bg-transparent disabled:text-theme-text-muted disabled:opacity-60">CREAR SOLICITUD</button>
+                   <span className="text-xs text-theme-text-muted">{allMatched ? "Se encontraron solicitudes existentes compatibles con todas las líneas de este consumo." : selected.status === "SIN SOLICITUD" ? "Consumo listo para regularización." : "Algunas líneas requieren revisión."}</span>
+                   {allMatched ? (
+                     <button type="button" disabled={associationSaving} onClick={() => void associateRequests()} className="rounded-lg bg-theme-accent px-3 py-2 text-[10px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60">{associationSaving ? "ASOCIANDO..." : "ASOCIAR SOLICITUDES"}</button>
+                   ) : (
+                     <button type="button" disabled={selected.status !== "SIN SOLICITUD"} onClick={() => { setDraftLines(draftLinesFor(selected)); setFormOpen(true); }} className="rounded-lg border border-theme-accent bg-theme-accent/10 px-3 py-2 text-[10px] font-semibold text-theme-text-accent disabled:cursor-not-allowed disabled:border-theme-border disabled:bg-transparent disabled:text-theme-text-muted disabled:opacity-60">CREAR SOLICITUD</button>
+                   )}
                 </div>
               </>
             )) : <p className="text-xs text-theme-text-muted">Selecciona un consumo para revisar sus detalles.</p>}
