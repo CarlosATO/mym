@@ -7,6 +7,35 @@ export type DirectBsaleReviewLine = {
   has_difference?: boolean;
 };
 
+export type BulkEditableLine = {
+  reason: string;
+  expiration_date: string;
+  observation: string;
+};
+
+export function isValidDirectBsaleDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+export function applyBulkReason<T extends BulkEditableLine>(lines: T[], reason: string) {
+  return lines.map((line) => ({ ...line, reason }));
+}
+
+export function applyBulkExpiration<T extends BulkEditableLine>(lines: T[], expiration: string) {
+  if (!isValidDirectBsaleDate(expiration)) return null;
+  return lines.map((line) => ({ ...line, expiration_date: expiration }));
+}
+
+export function applyBulkObservation<T extends BulkEditableLine>(lines: T[], observation: string) {
+  return lines.map((line) => ({ ...line, observation }));
+}
+
+export function getIncompleteLineCount(lines: BulkEditableLine[]) {
+  return lines.filter((line) => !line.reason.trim() || !isValidDirectBsaleDate(line.expiration_date)).length;
+}
+
 export function validateDirectBsaleReview(lines: DirectBsaleReviewLine[], confirmedReview: boolean, expectedDetailIds?: number[]): string | null {
   if (!confirmedReview) return "Confirma que revisaste los productos y cantidades del consumo Bsale.";
   if (!lines.length) return "El consumo Bsale debe contener al menos una línea.";

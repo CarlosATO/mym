@@ -1,14 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import {
   cleanupMermaEvidenceUploads,
   prepareDirectBsaleEvidenceUploads,
   regularizeDirectBsaleConsumption,
+  type DirectBsaleIncidentLineInput,
   type MermaBsaleIncident,
   type MermaEvidenceMetadata,
-  type DirectBsaleIncidentLineInput,
 } from "@/app/actions/logistica/mermas";
+import {
+  applyBulkExpiration,
+  applyBulkObservation,
+  applyBulkReason,
+  getIncompleteLineCount,
+  isValidDirectBsaleDate,
+} from "@/lib/integraciones/direct-bsale-regularization-core";
 import { uploadMermaEvidence } from "./new-merma-form-with-evidence";
 
 type DraftLine = MermaBsaleIncident["details"][number] & {
@@ -19,12 +26,6 @@ type DraftLine = MermaBsaleIncident["details"][number] & {
   evidence: File[];
   has_difference: boolean;
 };
-
-function isValidDate(value: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const date = new Date(`${value}T00:00:00Z`);
-  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
-}
 
 function draftLinesFor(incident: MermaBsaleIncident | null, reason: string) {
   return incident?.details.map((detail) => ({
@@ -55,6 +56,7 @@ export function DirectBsaleIncidentsDialog({
   const [generalReason, setGeneralReason] = useState("Regularización consumo directo Bsale");
   const [generalExpiration, setGeneralExpiration] = useState("");
   const [generalObservation, setGeneralObservation] = useState("");
+  const [bulkFeedback, setBulkFeedback] = useState("");
   const [confirmedReview, setConfirmedReview] = useState(false);
   const [draftLines, setDraftLines] = useState<DraftLine[]>(draftLinesFor(incidents[0] ?? null, "Regularización consumo directo Bsale"));
   const [saving, setSaving] = useState(false);
@@ -68,6 +70,7 @@ export function DirectBsaleIncidentsDialog({
     setEditingIndex(null);
     setConfirmedReview(false);
     setSaveError("");
+    setBulkFeedback("");
     setDraftLines(draftLinesFor(incident, generalReason));
   }
 
@@ -77,20 +80,34 @@ export function DirectBsaleIncidentsDialog({
   }
 
   function applyReason() {
-    setDraftLines((current) => current.map((line) => ({ ...line, reason: generalReason })));
+    if (!generalReason.trim()) {
+      setBulkFeedback("Ingresa un motivo general antes de aplicarlo.");
+      return;
+    }
+    setDraftLines((current) => applyBulkReason(current, generalReason));
+    setBulkFeedback(`Motivo aplicado a ${draftLines.length} líneas.`);
   }
 
-  function applyExpiration() {
-    setDraftLines((current) => current.map((line) => ({ ...line, expiration_date: generalExpiration })));
+  function applyExpiration(value: string) {
+    const nextLines = applyBulkExpiration(draftLines, value);
+    if (!nextLines) {
+      setBulkFeedback("Ingresa un vencimiento válido en formato YYYY-MM-DD.");
+      return;
+    }
+    setDraftLines(nextLines);
+    setBulkFeedback(`Vencimiento aplicado a ${nextLines.length} líneas.`);
   }
 
   function applyObservation() {
-    setDraftLines((current) => current.map((line) => ({ ...line, observation: generalObservation })));
+    setDraftLines((current) => applyBulkObservation(current, generalObservation));
+    setBulkFeedback(`Observación aplicada a ${draftLines.length} líneas.`);
   }
 
   const hasDifferences = draftLines.some((line) => line.has_difference);
-  const incomplete = draftLines.some((line) => !line.reason.trim() || !isValidDate(line.expiration_date));
-  const saveDisabled = saving || Boolean(uploadStatus) || !canAuthorize || !confirmedReview || hasDifferences || incomplete;
+  const incompleteCount = getIncompleteLineCount(draftLines);
+  const missingExpirationCount = draftLines.filter((line) => !isValidDirectBsaleDate(line.expiration_date)).length;
+  const missingReasonCount = draftLines.filter((line) => !line.reason.trim()).length;
+  const saveDisabled = saving || Boolean(uploadStatus) || !canAuthorize || !confirmedReview || hasDifferences || incompleteCount > 0;
 
   async function saveIncident() {
     if (!selected || saveDisabled) return;
@@ -187,16 +204,33 @@ export function DirectBsaleIncidentsDialog({
               <div className="shrink-0 border-b border-theme-border pb-3">
                 <div className="flex items-start justify-between gap-3"><div><h3 className="font-mono text-sm font-semibold text-theme-text">Regularizar consumo Bsale #{selected.consumption_id}</h3><p className="mt-1 text-xs text-theme-text-muted">{selected.product_count} productos · {selected.total_quantity} unidades</p></div><button type="button" onClick={() => setFormOpen(false)} className="rounded-lg border border-theme-border px-2.5 py-1.5 text-[10px] font-semibold text-theme-text-muted">Volver</button></div>
                 <p className="mt-2 rounded-lg bg-theme-accent/10 px-3 py-2 text-xs text-theme-text-muted">Producto y cantidad provienen directamente de Bsale y no pueden modificarse.</p>
-                <div className="mt-3 grid gap-2 sm:grid-cols-2"><label className="text-xs text-theme-text-muted">Motivo general *<input value={generalReason} onChange={(event) => setGeneralReason(event.target.value)} className="mt-1 h-8 w-full rounded-md border border-theme-border bg-theme-surface px-2 text-xs text-theme-text" /></label><button type="button" onClick={applyReason} className="self-end rounded-md border border-theme-border px-2 py-2 text-[10px] font-semibold text-theme-text-muted">Aplicar motivo a todas</button><label className="text-xs text-theme-text-muted">Vencimiento común<input type="date" value={generalExpiration} onChange={(event) => setGeneralExpiration(event.target.value)} className="mt-1 h-8 w-full rounded-md border border-theme-border bg-theme-surface px-2 text-xs text-theme-text" /></label><button type="button" onClick={applyExpiration} className="self-end rounded-md border border-theme-border px-2 py-2 text-[10px] font-semibold text-theme-text-muted">Aplicar vencimiento a todas</button><label className="text-xs text-theme-text-muted sm:col-span-2">Observación general<textarea value={generalObservation} onChange={(event) => setGeneralObservation(event.target.value)} className="mt-1 min-h-16 w-full rounded-md border border-theme-border bg-theme-surface px-2 py-2 text-xs text-theme-text" /></label><button type="button" onClick={applyObservation} className="sm:col-span-2 justify-self-start rounded-md border border-theme-border px-2 py-2 text-[10px] font-semibold text-theme-text-muted">Aplicar observación a todas</button></div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2"><label className="text-xs text-theme-text-muted">Motivo general *<input value={generalReason} onChange={(event) => setGeneralReason(event.target.value)} className="mt-1 h-8 w-full rounded-md border border-theme-border bg-theme-surface px-2 text-xs text-theme-text" /></label><button type="button" onClick={applyReason} className="self-end rounded-md border border-theme-border px-2 py-2 text-[10px] font-semibold text-theme-text-muted">Aplicar motivo a todas</button><label className="text-xs text-theme-text-muted">Vencimiento común<input type="date" value={generalExpiration} onChange={(event) => setGeneralExpiration(event.target.value)} className="mt-1 h-8 w-full rounded-md border border-theme-border bg-theme-surface px-2 text-xs text-theme-text" /></label><button type="button" onClick={() => applyExpiration(generalExpiration)} className="self-end rounded-md border border-theme-border px-2 py-2 text-[10px] font-semibold text-theme-text-muted">Aplicar vencimiento a todas</button><label className="text-xs text-theme-text-muted sm:col-span-2">Observación general<textarea value={generalObservation} onChange={(event) => setGeneralObservation(event.target.value)} className="mt-1 min-h-16 w-full rounded-md border border-theme-border bg-theme-surface px-2 py-2 text-xs text-theme-text" /></label><button type="button" onClick={applyObservation} className="sm:col-span-2 justify-self-start rounded-md border border-theme-border px-2 py-2 text-[10px] font-semibold text-theme-text-muted">Aplicar observación a todas</button></div>
+                {bulkFeedback && <p className="mt-2 rounded-md bg-emerald-500/10 px-2 py-1.5 text-xs text-emerald-700 dark:text-emerald-300">{bulkFeedback}</p>}
               </div>
-              <div className="min-h-0 flex-1 overflow-auto py-3"><div className="overflow-x-auto rounded-lg border border-theme-border"><table className="w-full min-w-[760px] text-xs"><thead className="bg-theme-text/[0.025] text-left text-[10px] uppercase tracking-wider text-theme-text-muted"><tr><th className="px-3 py-2">SKU</th><th className="px-3 py-2">Producto</th><th className="px-3 py-2">Cantidad</th><th className="px-3 py-2">Vencimiento</th><th className="px-3 py-2">Lote</th><th className="px-3 py-2">Evidencia</th><th className="px-3 py-2">Acción</th></tr></thead><tbody>{draftLines.map((line, index) => <tr key={line.detail_id} className={`border-t border-theme-border/70 ${line.has_difference ? "bg-amber-500/10" : ""}`}><td className="px-3 py-2 font-mono font-semibold text-theme-text">{line.sku}</td><td className="px-3 py-2 text-theme-text-muted">{line.product_name}</td><td className="px-3 py-2 tabular-nums font-semibold text-theme-text">{line.quantity}</td><td className="px-3 py-2 text-theme-text-muted">{line.expiration_date || "Pendiente"}</td><td className="px-3 py-2 text-theme-text-muted">{line.lot || "—"}</td><td className="px-3 py-2 text-theme-text-muted">{line.evidence.length ? `${line.evidence.length} foto(s)` : "Sin evidencia disponible"}</td><td className="px-3 py-2"><button type="button" onClick={() => setEditingIndex(editingIndex === index ? null : index)} className="font-semibold text-theme-text-accent hover:underline">{editingIndex === index ? "Cerrar" : "Editar"}</button></td></tr>)}</tbody></table></div>
-                {editingIndex !== null && draftLines[editingIndex] && <div className="mt-3 rounded-lg border border-theme-accent/30 bg-theme-accent/5 p-3"><div className="grid gap-2 sm:grid-cols-2"><label className="text-xs text-theme-text-muted">Motivo *<input value={draftLines[editingIndex].reason} onChange={(event) => updateLine(editingIndex, { reason: event.target.value })} className="mt-1 h-8 w-full rounded-md border border-theme-border bg-theme-surface px-2 text-xs text-theme-text" /></label><label className="text-xs text-theme-text-muted">Vencimiento *<input type="date" value={draftLines[editingIndex].expiration_date} onChange={(event) => updateLine(editingIndex, { expiration_date: event.target.value })} className="mt-1 h-8 w-full rounded-md border border-theme-border bg-theme-surface px-2 text-xs text-theme-text" /></label><label className="text-xs text-theme-text-muted">Lote opcional<input value={draftLines[editingIndex].lot} onChange={(event) => updateLine(editingIndex, { lot: event.target.value })} className="mt-1 h-8 w-full rounded-md border border-theme-border bg-theme-surface px-2 text-xs text-theme-text" /></label><label className="text-xs text-theme-text-muted">Observación opcional<input value={draftLines[editingIndex].observation} onChange={(event) => updateLine(editingIndex, { observation: event.target.value })} className="mt-1 h-8 w-full rounded-md border border-theme-border bg-theme-surface px-2 text-xs text-theme-text" /></label></div><label className="mt-2 block text-xs text-theme-text-muted">Evidencia opcional<input type="file" accept="image/jpeg,image/png,image/webp,image/heic" multiple onChange={(event) => updateLine(editingIndex, { evidence: Array.from(event.target.files ?? []) })} className="mt-1 block w-full text-xs text-theme-text file:mr-2 file:rounded-md file:border-0 file:bg-theme-text/5 file:px-2 file:py-1 file:text-xs file:font-semibold file:text-theme-text" /></label><p className="mt-1 text-[11px] text-theme-text-muted">{draftLines[editingIndex].evidence.length ? `${draftLines[editingIndex].evidence.length} archivo(s) seleccionado(s)` : "Sin evidencia disponible es un estado válido para DIRECTO_BSALE."}</p><label className="mt-3 flex items-center gap-2 text-xs text-amber-700 dark:text-amber-300"><input type="checkbox" checked={draftLines[editingIndex].has_difference} onChange={(event) => updateLine(editingIndex, { has_difference: event.target.checked })} />Marcar diferencia: requiere revisión manual y bloquea la regularización.</label></div>}
+              <div className="min-h-0 flex-1 overflow-auto py-3">
+                <div className="overflow-x-auto rounded-lg border border-theme-border">
+                  <table className="w-full min-w-[760px] text-xs">
+                    <thead className="bg-theme-text/[0.025] text-left text-[10px] uppercase tracking-wider text-theme-text-muted"><tr><th className="px-3 py-2">SKU</th><th className="px-3 py-2">Producto</th><th className="px-3 py-2">Cantidad</th><th className="px-3 py-2">Vencimiento</th><th className="px-3 py-2">Lote</th><th className="px-3 py-2">Evidencia</th><th className="px-3 py-2">Acción</th></tr></thead>
+                    <tbody>{draftLines.map((line, index) => <Fragment key={line.detail_id}>
+                      <tr className={`border-t border-theme-border/70 ${line.has_difference ? "bg-amber-500/10" : ""}`}>
+                        <td className="px-3 py-2 font-mono font-semibold text-theme-text">{line.sku}</td>
+                        <td className="px-3 py-2 text-theme-text-muted">{line.product_name}</td>
+                        <td className="px-3 py-2 tabular-nums font-semibold text-theme-text">{line.quantity}</td>
+                        <td className="px-3 py-2 text-theme-text-muted">{line.expiration_date || "Pendiente"}</td>
+                        <td className="px-3 py-2 text-theme-text-muted">{line.lot || "—"}</td>
+                        <td className="px-3 py-2 text-theme-text-muted">{line.evidence.length ? `${line.evidence.length} foto(s)` : "Sin evidencia disponible"}</td>
+                        <td className="px-3 py-2"><button type="button" onClick={() => setEditingIndex(editingIndex === index ? null : index)} className="font-semibold text-theme-text-accent hover:underline">{editingIndex === index ? "Cerrar" : "Editar"}</button></td>
+                      </tr>
+                      {editingIndex === index && <tr className="bg-theme-accent/5"><td colSpan={7} className="p-3"><div className="rounded-lg border border-theme-accent/30 p-3"><div className="grid gap-2 sm:grid-cols-2"><label className="text-xs text-theme-text-muted">Motivo *<input value={line.reason} onChange={(event) => updateLine(index, { reason: event.target.value })} className="mt-1 h-8 w-full rounded-md border border-theme-border bg-theme-surface px-2 text-xs text-theme-text" /></label><label className="text-xs text-theme-text-muted">Vencimiento *<input type="date" value={line.expiration_date} onChange={(event) => updateLine(index, { expiration_date: event.target.value })} className="mt-1 h-8 w-full rounded-md border border-theme-border bg-theme-surface px-2 text-xs text-theme-text" /></label><label className="text-xs text-theme-text-muted">Lote opcional<input value={line.lot} onChange={(event) => updateLine(index, { lot: event.target.value })} className="mt-1 h-8 w-full rounded-md border border-theme-border bg-theme-surface px-2 text-xs text-theme-text" /></label><label className="text-xs text-theme-text-muted">Observación opcional<input value={line.observation} onChange={(event) => updateLine(index, { observation: event.target.value })} className="mt-1 h-8 w-full rounded-md border border-theme-border bg-theme-surface px-2 text-xs text-theme-text" /></label></div><label className="mt-2 block text-xs text-theme-text-muted">Evidencia opcional<input type="file" accept="image/jpeg,image/png,image/webp,image/heic" multiple onChange={(event) => updateLine(index, { evidence: Array.from(event.target.files ?? []) })} className="mt-1 block w-full text-xs text-theme-text file:mr-2 file:rounded-md file:border-0 file:bg-theme-text/5 file:px-2 file:py-1 file:text-xs file:font-semibold file:text-theme-text" /></label><p className="mt-1 text-[11px] text-theme-text-muted">{line.evidence.length ? `${line.evidence.length} archivo(s) seleccionado(s)` : "Sin evidencia disponible es válido para DIRECTO_BSALE."}</p><label className="mt-3 flex items-center gap-2 text-xs text-amber-700 dark:text-amber-300"><input type="checkbox" checked={line.has_difference} onChange={(event) => updateLine(index, { has_difference: event.target.checked })} />Marcar diferencia: requiere revisión manual y bloquea la regularización.</label></div></td></tr>}
+                    </Fragment>)}</tbody>
+                  </table>
+                </div>
               </div>
               {saveError && <p className="mb-2 rounded-lg bg-red-500/10 px-3 py-2 text-xs font-medium text-red-600">{saveError}</p>}
               {!canAuthorize && <p className="mb-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">Puedes revisar el consumo, pero necesitas permiso para autorizar su ingreso a Bodega.</p>}
               {hasDifferences && <p className="mb-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">Existe una diferencia pendiente de revisión.</p>}
               <div className="flex shrink-0 items-center justify-between gap-3 border-t border-theme-border pt-3"><label className="flex items-center gap-2 text-xs text-theme-text-muted"><input type="checkbox" checked={confirmedReview} onChange={(event) => setConfirmedReview(event.target.checked)} />Confirmo que revisé los productos y cantidades del consumo Bsale.</label>{canAuthorize ? <button type="button" disabled={saveDisabled} onClick={() => void saveIncident()} className="rounded-lg bg-theme-accent px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{saving ? "INGRESANDO..." : "REGULARIZAR E INGRESAR A BODEGA"}</button> : <span className="text-right text-[11px] text-theme-text-muted">Permiso de autorización requerido para finalizar.</span>}</div>
-              <p className="mt-2 text-right text-[11px] text-theme-text-muted">{uploadStatus || (incomplete ? "Completa motivo y vencimiento en todas las líneas." : "Una sola confirmación · evidencia opcional para DIRECTO_BSALE.")}</p>
+              <p className="mt-2 text-right text-[11px] text-theme-text-muted">{uploadStatus || (hasDifferences ? "Existe una diferencia pendiente de revisión." : missingExpirationCount > 0 ? `Faltan vencimientos en ${missingExpirationCount} líneas.` : missingReasonCount > 0 ? `Faltan motivos en ${missingReasonCount} líneas.` : incompleteCount > 0 ? `Faltan datos obligatorios en ${incompleteCount} líneas.` : "Una sola confirmación · evidencia opcional para DIRECTO_BSALE.")}</p>
             </div> : <div className="flex min-h-0 flex-1 flex-col"><div className="border-b border-theme-border pb-3"><h3 className="font-mono text-sm font-semibold text-theme-text">Consumo Bsale #{selected.consumption_id}</h3><p className="mt-2 text-xs text-theme-text-muted">{selected.product_count} productos · {selected.total_quantity} unidades</p><p className="mt-2 text-xs text-theme-text-muted">Revisión consolidada: motivo, vencimiento y observación pueden aplicarse en masa; las excepciones se editan por línea.</p></div><div className="mt-3 min-h-0 flex-1 overflow-auto rounded-lg border border-theme-border"><table className="w-full min-w-[560px] text-xs"><thead className="bg-theme-text/[0.025] text-left text-[10px] uppercase tracking-wider text-theme-text-muted"><tr><th className="px-3 py-2">SKU</th><th className="px-3 py-2">Producto</th><th className="px-3 py-2">Cantidad</th><th className="px-3 py-2">Solicitud</th></tr></thead><tbody>{selected.details.map((detail) => <tr key={detail.detail_id} className="border-t border-theme-border/70"><td className="px-3 py-2 font-mono text-theme-text">{detail.sku}</td><td className="px-3 py-2 text-theme-text-muted">{detail.product_name}</td><td className="px-3 py-2 tabular-nums text-theme-text">{detail.quantity}</td><td className="px-3 py-2 text-theme-text-muted">{detail.match_status}</td></tr>)}</tbody></table></div><div className="mt-3 flex justify-end border-t border-theme-border pt-3"><button type="button" disabled={selected.status !== "SIN SOLICITUD"} onClick={() => { setDraftLines(draftLinesFor(selected, generalReason)); setFormOpen(true); }} className="rounded-lg border border-theme-accent bg-theme-accent/10 px-3 py-2 text-[10px] font-semibold text-theme-text-accent disabled:cursor-not-allowed disabled:border-theme-border disabled:bg-transparent disabled:text-theme-text-muted">REVISAR REGULARIZACIÓN</button></div></div>)}
           </div>
         </div>

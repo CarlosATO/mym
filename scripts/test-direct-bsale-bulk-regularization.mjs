@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { validateDirectBsaleReview } from '../src/lib/integraciones/direct-bsale-regularization-core.ts'
+import {
+  applyBulkExpiration,
+  applyBulkObservation,
+  applyBulkReason,
+  getIncompleteLineCount,
+  validateDirectBsaleReview,
+} from '../src/lib/integraciones/direct-bsale-regularization-core.ts'
 
 const migration = await readFile(new URL('../supabase/migrations/20261001180000_mermas_direct_bsale_bulk_regularization.sql', import.meta.url), 'utf8')
 const action = await readFile(new URL('../src/app/actions/logistica/mermas.ts', import.meta.url), 'utf8')
@@ -27,6 +33,19 @@ test('common values and one exception remain valid', () => {
   reviewed[4].expiration_date = '2028-01-15'
   reviewed[6].reason = 'Daño de empaque'
   assert.equal(validateDirectBsaleReview(reviewed, true), null)
+})
+
+test('bulk controls preserve YYYY-MM-DD and allow an individual override', () => {
+  const initial = lines(8).map((line) => ({ ...line, observation: '' }))
+  const withReason = applyBulkReason(initial, 'Vencido')
+  const withExpiration = applyBulkExpiration(withReason, '2026-11-29')
+  assert.ok(withExpiration)
+  const withObservation = applyBulkObservation(withExpiration, 'Regularización histórica')
+  assert.equal(getIncompleteLineCount(withObservation), 0)
+  const overridden = withObservation.map((line, index) => index === 3 ? { ...line, expiration_date: '2027-01-15' } : line)
+  assert.equal(overridden[3].expiration_date, '2027-01-15')
+  assert.equal(overridden.every((line) => /^\d{4}-\d{2}-\d{2}$/.test(line.expiration_date)), true)
+  assert.equal(applyBulkExpiration(overridden, '29/11/2026'), null)
 })
 
 test('difference, missing line, duplicate line, and unchecked review are blocked', () => {
@@ -55,6 +74,9 @@ test('the atomic RPC keeps the direct exception isolated from normal evidence ru
   assert.match(dialog, /Sin evidencia disponible/)
   assert.match(dialog, /REGULARIZAR E INGRESAR A BODEGA/)
   assert.match(dialog, /Marcar diferencia/)
+  assert.match(dialog, /Vencimiento aplicado a/)
+  assert.match(dialog, /Faltan vencimientos en/)
+  assert.match(dialog, /<tr className=\"bg-theme-accent\/5\"/)
   assert.match(normalForm, /Debes adjuntar al menos una fotografía/)
 })
 
