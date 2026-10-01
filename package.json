@@ -52,6 +52,7 @@
     "test:table-2a-suppliers": "node --experimental-strip-types --test scripts/test-table-2a-suppliers.mjs",
     "test:table-2b-warehouses": "node --experimental-strip-types --test scripts/test-table-2b-warehouses.mjs",
     "test:bsale-product-batches": "node --experimental-strip-types --test scripts/test-bsale-product-batches.mjs",
+    "test:bsale-mermas-outbound-core": "node --experimental-strip-types --test scripts/test-bsale-mermas-outbound-core.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },
