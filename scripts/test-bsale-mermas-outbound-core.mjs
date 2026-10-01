@@ -6,6 +6,7 @@ import {
   resolveMermaRequestObservation,
   executeBsaleMermaOutbound,
   executeMermaBsaleOutboundWorkflow,
+  parseFinishedOutboundOperation,
 } from '../src/lib/integraciones/bsale-mermas-outbound-core.ts'
 
 const input = {
@@ -221,6 +222,24 @@ test('normal workflow is PREPARED to SENDING to CONFIRMED', async () => {
   const result = await executeMermaBsaleOutboundWorkflow(harness.dependencies)
   assert.deepEqual(result, { status: 'CONFIRMED', operationId: 'operation-1', consumptionId: 91 })
   assert.equal(harness.posts, 1)
+})
+
+test('terminal finish response without request_id confirms once without a second finish', async () => {
+  const harness = workflowHarness()
+  let finishCalls = 0
+  harness.dependencies.finish = async (_operationId, result) => {
+    finishCalls += 1
+    assert.equal(result.status, 'CONFIRMED')
+    return parseFinishedOutboundOperation({
+      operation_id: 'operation-1',
+      status: 'CONFIRMED',
+      bsale_consumption_id: result.consumptionId,
+      last_error: null,
+    })
+  }
+  const result = await executeMermaBsaleOutboundWorkflow(harness.dependencies)
+  assert.deepEqual(result, { status: 'CONFIRMED', operationId: 'operation-1', consumptionId: 91 })
+  assert.equal(finishCalls, 1)
 })
 
 test('concurrent executions produce only one POST', async () => {

@@ -3,6 +3,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { createBsaleMermaOutboundDependencies } from './bsale-mermas-outbound-adapter'
 import {
   executeMermaBsaleOutboundWorkflow,
+  parseFinishedOutboundOperation,
   resolveMermaRequestObservation,
   type OutboundOperationSnapshot,
   type MermaOutboundLine,
@@ -80,7 +81,7 @@ async function finish(
     consumptionId: result.status === 'CONFIRMED' ? result.consumptionId : null,
     error: `No se pudo persistir la transición outbound: ${error.message}`,
   }
-  return snapshot(asOperation(data))
+  return parseFinishedOutboundOperation(data)
 }
 
 export async function executeMermaBsaleOutbound(requestId: string): Promise<MermaBsaleOutboundResult> {

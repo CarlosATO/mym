@@ -64,6 +64,24 @@ export type OutboundOperationSnapshot = {
   error: string | null
 }
 
+export function parseFinishedOutboundOperation(value: unknown): OutboundOperationSnapshot {
+  const operation = value as {
+    operation_id?: unknown
+    status?: unknown
+    bsale_consumption_id?: unknown
+    last_error?: unknown
+  }
+  if (!operation.operation_id || !operation.status) {
+    throw new Error('La RPC devolvió una transición outbound inválida.')
+  }
+  return {
+    operationId: String(operation.operation_id),
+    status: operation.status as OutboundOperationSnapshot['status'],
+    consumptionId: operation.bsale_consumption_id == null ? null : Number(operation.bsale_consumption_id),
+    error: operation.last_error == null ? null : String(operation.last_error),
+  }
+}
+
 export type MermaOutboundWorkflowDependencies = {
   prepare: () => Promise<OutboundOperationSnapshot>
   claim: (operationId: string) => Promise<{ claimed: boolean; current?: OutboundOperationSnapshot }>
