@@ -60,6 +60,32 @@ interface BsaleFetchForCompanyOptions extends BsaleFetchOptions {
   companyId: string
 }
 
+async function fetchBsaleForCompany<T>(options: BsaleFetchForCompanyOptions): Promise<T> {
+  const { companyId, path, params, signal } = options
+  const { baseUrl, accessToken } = getBsaleConfigForCompany(companyId)
+  const url = new URL(`${baseUrl}${path}`)
+
+  if (params) {
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value))
+    })
+  }
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: {
+      access_token: accessToken,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    signal,
+  })
+  if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    throw new BsaleApiError(response.status, `Bsale API error ${response.status}: ${response.statusText}`, body)
+  }
+  return response.json() as Promise<T>
+}
+
 /**
  * Versión multiempresa de bsaleFetch.
  * Resuelve baseUrl y token según companyId.
@@ -67,38 +93,14 @@ interface BsaleFetchForCompanyOptions extends BsaleFetchOptions {
 export async function bsaleFetchForCompany<T>(
   options: BsaleFetchForCompanyOptions
 ): Promise<BsaleResponse<T>> {
-  const { companyId, path, params, signal } = options
-  const { baseUrl, accessToken } = getBsaleConfigForCompany(companyId)
-  const url = new URL(`${baseUrl}${path}`)
+  return fetchBsaleForCompany<BsaleResponse<T>>(options)
+}
 
-  if (params) {
-    Object.entries(params).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && value !== '') {
-        url.searchParams.set(key, String(value))
-      }
-    })
-  }
-
-  const response = await fetch(url.toString(), {
-    method: 'GET',
-    headers: {
-      'access_token': accessToken,
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    signal,
-  })
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    throw new BsaleApiError(
-      response.status,
-      `Bsale API error ${response.status}: ${response.statusText}`,
-      body
-    )
-  }
-
-  return response.json()
+/** Fetches a single resource; unlike bsaleFetchForCompany, BSale returns the resource itself. */
+export async function bsaleFetchResourceForCompany<T>(
+  options: BsaleFetchForCompanyOptions,
+): Promise<T> {
+  return fetchBsaleForCompany<T>(options)
 }
 
 export async function bsaleFetch<T>(options: BsaleFetchOptions): Promise<BsaleResponse<T>> {

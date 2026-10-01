@@ -7,6 +7,7 @@ import {
   type OutboundOperationSnapshot,
   type MermaOutboundLine,
 } from './bsale-mermas-outbound-core'
+import { resolveCasaMatrizOfficeId } from './bsale-mermas-office'
 
 type OperationStatus = 'PREPARED' | 'SENDING' | 'CONFIRMED' | 'FAILED' | 'RECONCILIATION_REQUIRED'
 
@@ -48,21 +49,16 @@ function snapshot(operation: OperationRecord): OutboundOperationSnapshot {
 }
 
 async function resolveCasaMatrizOffice(database: ReturnType<typeof createAdminClient>, companyId: string): Promise<number> {
-  const { data, error } = await database.schema('integraciones')
-    .from('bsale_offices')
-    .select('bsale_id, name')
-    .eq('company_id', companyId)
-  if (error) throw new Error(`No se pudo resolver CASA MATRIZ: ${error.message}`)
-  const offices = (data ?? []).filter(office => {
-    const name = String(office.name ?? '').trim().toUpperCase()
-    return name.includes('CASA MATRIZ') || name.includes('MATRIZ')
-  })
-  if (offices.length !== 1) {
-    throw new Error('No se pudo resolver una única oficina CASA MATRIZ.')
-  }
-  const officeId = Number(offices[0].bsale_id)
-  if (!Number.isInteger(officeId) || officeId <= 0) throw new Error('La oficina CASA MATRIZ no es válida.')
-  return officeId
+  const [{ data: offices, error: officesError }, { data: stockRows, error: stockError }] = await Promise.all([
+    database.schema('integraciones').from('bsale_offices').select('bsale_id, name').eq('company_id', companyId),
+    database.schema('integraciones').from('bsale_stock_current').select('office_id, raw_json').eq('company_id', companyId),
+  ])
+  if (officesError) throw new Error(`No se pudo resolver CASA MATRIZ: ${officesError.message}`)
+  if (stockError) throw new Error(`No se pudo resolver CASA MATRIZ desde stock: ${stockError.message}`)
+  return resolveCasaMatrizOfficeId(
+    (offices ?? []).map(office => ({ bsaleId: Number(office.bsale_id), name: office.name })),
+    (stockRows ?? []).map(row => ({ officeId: row.office_id == null ? null : Number(row.office_id), rawJson: row.raw_json })),
+  )
 }
 
 async function finish(
