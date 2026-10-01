@@ -1860,16 +1860,20 @@ export async function getMermasBsaleIncidents(): Promise<{
     const allocationRequestIds = new Set(
       detailAllocations.flat().map((allocation) => allocation.request_id).filter(Boolean),
     );
+    const allDetailsFullyAllocated = consumptionDetails.length > 0 && consumptionDetails.every((detail, index) => {
+      const allocationsForDetail = detailAllocations[index];
+      return allocationsForDetail.length > 0 &&
+        allocationsForDetail.reduce((sum, allocation) => sum + allocation.quantity, 0) >= Number(detail.quantity);
+    });
+    const completeMultiRequestAssociation = consumption.match_method === "MULTI_REQUEST" &&
+      allDetailsFullyAllocated &&
+      detailAllocations.flat().every((allocation) => allocation.request_id !== null && requestIds.has(allocation.request_id));
     const associatedRequestId = allocationRequestIds.size === 1 ? [...allocationRequestIds][0] : null;
-    const completeAssociation = Boolean(associatedRequestId && requestIds.has(associatedRequestId)) &&
+    const completeSingleRequestAssociation = Boolean(associatedRequestId && requestIds.has(associatedRequestId)) &&
       (!consumption.request_id || consumption.request_id === associatedRequestId) &&
-      consumptionDetails.length > 0 &&
-      consumptionDetails.every((detail, index) => {
-        const allocationsForDetail = detailAllocations[index];
-        return allocationsForDetail.length > 0 &&
-          allocationsForDetail.every((allocation) => allocation.request_id === associatedRequestId) &&
-          allocationsForDetail.reduce((sum, allocation) => sum + allocation.quantity, 0) >= Number(detail.quantity);
-      });
+      allDetailsFullyAllocated &&
+      detailAllocations.flat().every((allocation) => allocation.request_id === associatedRequestId);
+    const completeAssociation = completeMultiRequestAssociation || completeSingleRequestAssociation;
     if (completeAssociation) continue;
     const preview = await database.rpc("preview_bsale_consumption_request_matches", {
       p_consumption_id: consumption.consumption_id,
