@@ -55,6 +55,7 @@
     "test:bsale-mermas-outbound-core": "node --experimental-strip-types --test scripts/test-bsale-mermas-outbound-core.mjs",
     "test:bsale-mermas-local-application": "node --experimental-strip-types --test scripts/test-bsale-mermas-local-application.mjs",
     "test:bsale-mermas-workflow": "node --experimental-strip-types --test scripts/test-bsale-mermas-workflow.mjs",
+    "test:merma-submit-outcome": "node --experimental-strip-types --test scripts/test-merma-submit-outcome.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },

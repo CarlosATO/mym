@@ -14,7 +14,7 @@ import {
 import { useRouter } from "next/navigation";
 import {
   cleanupMermaEvidenceUploads,
-  createMermaRequest,
+  createAndProcessMermaRequest,
   getMermasContext,
   getMermasProductsCatalog,
   prepareMermaEvidenceUploads,
@@ -23,6 +23,7 @@ import {
   type MermaProduct,
 } from "@/app/actions/logistica/mermas";
 import { createClient as createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { resolveMermaSubmitOutcome } from "./merma-submit-outcome";
 
 type Line = {
   product: MermaProduct | null;
@@ -101,6 +102,7 @@ export function NewMermaForm() {
   }
   function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (saving) return;
     setError("");
     const errors = lines.map((line) => {
       const next: LineErrors = {};
@@ -147,13 +149,14 @@ export function NewMermaForm() {
     });
     setLineErrors(errors);
     if (errors.some((line) => Object.keys(line).length > 0)) {
-      setError("Revisa las líneas indicadas antes de guardar.");
+      setError("Revisa las líneas indicadas antes de registrar la merma.");
       return;
     }
     setSaving(true);
     void (async () => {
       let session: { session_id: string; session_token: string; finalize_token: string } | null = null;
       const uploadedPaths: string[] = [];
+      let requestPersisted = false;
       try {
         const requestLines = lines.map((line) => ({
           variant_id: line.product!.id,
@@ -189,18 +192,27 @@ export function NewMermaForm() {
             file_size: upload.file_size,
           });
         }
-        setUploadStatus("Guardando solicitud...");
-        const result = await createMermaRequest(
+        setUploadStatus("Registrando merma en PetGroup y Bsale...");
+        const result = await createAndProcessMermaRequest(
           requestLines,
           evidence,
           prepared.data.session_id,
           prepared.data.session_token,
           prepared.data.finalize_token,
         );
-        if (result.error) throw new Error(result.error);
-        router.push("/dashboard/logistica/mermas");
+        const decision = resolveMermaSubmitOutcome(result);
+        requestPersisted = result.requestPersisted;
+        if (decision.cleanupEvidence && session && uploadedPaths.length) {
+          await cleanupMermaEvidenceUploads(
+            session.session_id,
+            session.session_token,
+            uploadedPaths,
+          );
+        }
+        if (decision.message) setError(decision.message);
+        if (decision.destination) router.push(decision.destination);
       } catch (saveError) {
-        if (session && uploadedPaths.length) {
+        if (!requestPersisted && session && uploadedPaths.length) {
           await cleanupMermaEvidenceUploads(
             session.session_id,
             session.session_token,
@@ -210,7 +222,7 @@ export function NewMermaForm() {
         setError(
           saveError instanceof Error
             ? saveError.message
-            : "No se pudo guardar la solicitud",
+            : "No se pudo registrar la merma",
         );
       } finally {
         setUploadStatus("");
@@ -228,6 +240,9 @@ export function NewMermaForm() {
           </h1>
           <p className="mt-1 text-xs text-theme-text-muted/70">
             Cada línea requiere evidencia fotográfica
+          </p>
+          <p className="mt-1 text-xs text-theme-text-muted/70">
+            Al registrar, se genera el movimiento de Merma en Bsale sin aprobación posterior.
           </p>
         </div>
         <button
@@ -299,7 +314,7 @@ export function NewMermaForm() {
             disabled={saving || loading}
             className="inline-flex items-center gap-2 rounded-xl bg-theme-accent px-5 py-2.5 text-xs font-semibold text-white disabled:opacity-50"
           >
-            {saving && <Loader2 className="h-4 w-4 animate-spin" />} {saving ? uploadStatus || "Guardando..." : "Guardar solicitud"}
+            {saving && <Loader2 className="h-4 w-4 animate-spin" />} {saving ? uploadStatus || "Registrando merma..." : "Registrar merma"}
           </button>
         </div>
       </form>
