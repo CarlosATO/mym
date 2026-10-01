@@ -5,6 +5,9 @@ import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { getActiveCompany, getActiveCompanyId } from "@/app/actions/companies";
 import { requireWmsPermission } from "./authorization";
 import { syncBsaleMermas } from "@/lib/integraciones/bsale-mermas-sync";
+import { executeMermaBsaleOutbound } from "@/lib/integraciones/bsale-mermas-outbound-orchestrator";
+import { applyConfirmedMermaBsaleOutbound } from "@/lib/integraciones/bsale-mermas-local-application";
+import { createAndProcessMermaRequest as createAndProcessMermaRequestCore, type MermaWorkflowResult } from "@/lib/integraciones/bsale-mermas-workflow-core";
 import { createHmac, randomUUID, timingSafeEqual } from "crypto";
 import {
   calculateCostWithVat,
@@ -3039,7 +3042,7 @@ export async function getMermasWarehouseTrace(variantId: number): Promise<{
   return { data: result.data[0] ?? null, error: result.error };
 }
 
-type MermaRequestLineInput = {
+export type MermaRequestLineInput = {
   variant_id: string;
   quantity: string | number;
   reason: string;
@@ -3242,6 +3245,7 @@ export async function createMermaRequest(
     return reportEvidenceValidation(new MermaEvidenceValidationError("EVIDENCE_PATH_INVALID", invalidPath.line_index));
   }
   const uploadedPaths = evidence.map((file) => file.storage_path);
+  let requestPersisted = false;
   try {
     await validateMermaRequest(authorization, lines, evidence);
     const storage = db("mermas").storage.from(MERMA_EVIDENCE_BUCKET);
@@ -3263,12 +3267,34 @@ export async function createMermaRequest(
       p_evidence: evidence,
     });
     if (error) throw new Error(error.message);
+    requestPersisted = true;
     return data as { success: boolean; request_id: string; request_code: string; status: string };
   } catch (error) {
-    if (uploadedPaths.length) await db("mermas").storage.from(MERMA_EVIDENCE_BUCKET).remove(uploadedPaths);
+    if (!requestPersisted && uploadedPaths.length) await db("mermas").storage.from(MERMA_EVIDENCE_BUCKET).remove(uploadedPaths);
     if (error instanceof MermaEvidenceValidationError) return reportEvidenceValidation(error);
     return { error: error instanceof Error ? error.message : "No se pudo guardar la solicitud" };
   }
+}
+
+export async function createAndProcessMermaRequest(
+  lines: MermaRequestLineInput[],
+  evidence: MermaEvidenceMetadata[] = [],
+  sessionId = "",
+  sessionToken = "",
+  finalizeToken = "",
+): Promise<MermaWorkflowResult> {
+  return createAndProcessMermaRequestCore(
+    { lines, evidence, sessionId, sessionToken, finalizeToken },
+    {
+      create: async input => {
+        const result = await createMermaRequest(input.lines, input.evidence, input.sessionId, input.sessionToken, input.finalizeToken);
+        if (!result.request_id || !result.request_code) throw new Error(result.error ?? "No se pudo crear la solicitud.");
+        return { requestId: result.request_id, requestCode: result.request_code };
+      },
+      executeOutbound: executeMermaBsaleOutbound,
+      applyLocal: applyConfirmedMermaBsaleOutbound,
+    },
+  );
 }
 
 export async function cancelMermaRequest(
