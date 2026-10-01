@@ -12,9 +12,11 @@ export type MermaBsaleReceptionResult =
   | { status: 'CONFIRMED'; operationId: string; receptionId: number; stockExitOperationId: string }
   | { status: 'FAILED'; operationId: string; error: string }
   | { status: 'RECONCILIATION_REQUIRED'; operationId: string; receptionId: number | null; error: string }
+  | { status: 'LOCAL_APPLICATION_PENDING'; operationId: string; receptionId: number; error: string }
   | { status: 'SENDING'; operationId: string }
 
 export type MermaBsaleReceptionInput = {
+  idempotencyKey: string
   items: Array<{ variantId: number; quantity: number }>
   reason: string
   observation?: string | null
@@ -26,6 +28,7 @@ type OperationRow = {
   reception_id?: number | string | null
   error?: string | null
   payload?: ReceptionSnapshot | null
+  local_applied_at?: string | null
 }
 
 function parseOperation(value: unknown): ReceptionOperationSnapshot {
@@ -37,6 +40,7 @@ function parseOperation(value: unknown): ReceptionOperationSnapshot {
     receptionId: row.reception_id == null ? null : Number(row.reception_id),
     error: row.error ?? null,
     payload: row.payload ?? null,
+    localAppliedAt: row.local_applied_at ?? null,
   }
 }
 
@@ -75,6 +79,7 @@ export async function executeMermaBsaleReception(input: MermaBsaleReceptionInput
       const { data, error } = await database.schema('mermas').rpc('prepare_bsale_reception_operation', {
         p_company_id: companyId,
         p_user_id: userId,
+        p_idempotency_key: input.idempotencyKey,
         p_office_id: officeId,
         p_reason: input.reason,
         p_observation: input.observation ?? null,
@@ -88,9 +93,9 @@ export async function executeMermaBsaleReception(input: MermaBsaleReceptionInput
     claim: async id => {
       const { data, error } = await database.schema('mermas').rpc('claim_bsale_reception_operation', { p_operation_id: id })
       if (error) throw new Error(`No se pudo reclamar la recepción Bsale: ${error.message}`)
-      const row = data as { claimed?: boolean; status?: ReceptionOperationSnapshot['status']; reception_id?: number; error?: string }
+      const row = data as { claimed?: boolean; status?: ReceptionOperationSnapshot['status']; reception_id?: number; error?: string; local_applied_at?: string | null }
       if (row.claimed) return { claimed: true }
-      return { claimed: false, current: { operationId: id, status: row.status ?? 'RECONCILIATION_REQUIRED', receptionId: row.reception_id ?? null, error: row.error ?? null, payload: null } }
+      return { claimed: false, current: { operationId: id, status: row.status ?? 'RECONCILIATION_REQUIRED', receptionId: row.reception_id ?? null, error: row.error ?? null, payload: null, localAppliedAt: row.local_applied_at ?? null } }
     },
     loadSnapshot: async () => {
       const { data, error } = await database.schema('mermas').from('bsale_reception_operations').select('payload_snapshot').eq('id', operationId).single()
@@ -110,10 +115,16 @@ export async function executeMermaBsaleReception(input: MermaBsaleReceptionInput
     bsale: createBsaleMermaReceptionDependencies(companyId),
   })
   if (workflow.status !== 'CONFIRMED') return workflow
+  if (workflow.receptionId === null) return { status: 'RECONCILIATION_REQUIRED', operationId: workflow.operationId, receptionId: null, error: 'La recepción confirmada no tiene reception_id.' }
   try {
     const stockExitOperationId = await applyMermaBsaleReception(workflow.operationId)
     return { ...workflow, stockExitOperationId }
   } catch (error) {
-    return { status: 'RECONCILIATION_REQUIRED', operationId: workflow.operationId, receptionId: workflow.receptionId, error: error instanceof Error ? error.message : 'La recepción requiere aplicación local.' }
+    return {
+      status: 'LOCAL_APPLICATION_PENDING',
+      operationId: workflow.operationId,
+      receptionId: workflow.receptionId,
+      error: error instanceof Error ? error.message : 'La recepción confirmada requiere aplicación local.',
+    }
   }
 }

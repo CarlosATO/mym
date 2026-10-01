@@ -5,6 +5,7 @@ import {
   buildReceptionPayload,
   executeBsaleReception,
   executeBsaleReceptionWorkflow,
+  localApplicationPendingResult,
   weightedUnitCost,
 } from '../src/lib/integraciones/bsale-mermas-reception-core.ts'
 
@@ -114,4 +115,50 @@ test('a concurrent worker does not POST after the operation was claimed elsewher
   })
   assert.equal(result.status, 'SENDING')
   assert.equal(posts, 0)
+})
+
+test('terminal and sending states never POST on idempotent re-execution', async () => {
+  for (const status of ['CONFIRMED', 'SENDING', 'RECONCILIATION_REQUIRED', 'FAILED']) {
+    let posts = 0
+    const result = await executeBsaleReceptionWorkflow({
+      prepare: async () => ({ operationId: 'same-key', status, receptionId: status === 'CONFIRMED' ? 91 : null, error: status === 'FAILED' ? 'failed' : null, payload: null }),
+      claim: async () => { throw new Error('No debe reclamar un estado existente') },
+      loadSnapshot: async () => { throw new Error('No debe cargar snapshot') },
+      finish: async () => { throw new Error('No debe cerrar operación') },
+      bsale: {
+        createReception: async () => { posts += 1; return { id: 91 } },
+        getReception: async () => ({ id: 91 }),
+        getDetails: async () => [],
+      },
+    })
+    assert.equal(posts, 0)
+    assert.equal(result.status, status === 'CONFIRMED' ? 'CONFIRMED' : status)
+  }
+})
+
+test('confirmed local application failure is a distinct pending state', () => {
+  assert.deepEqual(localApplicationPendingResult({ operationId: 'op-1', status: 'CONFIRMED', receptionId: 91, error: null, payload: null }, new Error('local RPC failed')), {
+    status: 'LOCAL_APPLICATION_PENDING', operationId: 'op-1', receptionId: 91, error: 'local RPC failed',
+  })
+})
+
+test('same idempotency key prepares once and makes at most one POST', async () => {
+  let posts = 0
+  let first = true
+  const dependencies = () => executeBsaleReceptionWorkflow({
+    prepare: async () => first
+      ? { operationId: 'same-key', status: 'PREPARED', receptionId: null, error: null, payload: null }
+      : { operationId: 'same-key', status: 'CONFIRMED', receptionId: 91, error: null, payload: null },
+    claim: async () => ({ claimed: true }),
+    loadSnapshot: async () => ({ correlationCode: 'REG-1', officeId: 7, reason: 'x', lines: [line()] }),
+    finish: async () => { first = false; return { operationId: 'same-key', status: 'CONFIRMED', receptionId: 91, error: null, payload: null } },
+    bsale: {
+      createReception: async () => { posts += 1; return { id: 91 } },
+      getReception: async () => ({ id: 91, office: { id: 7 } }),
+      getDetails: async () => [{ variant: { id: 1021 }, quantity: 4, cost: 615 }],
+    },
+  })
+  assert.equal((await dependencies()).status, 'CONFIRMED')
+  assert.equal((await dependencies()).status, 'CONFIRMED')
+  assert.equal(posts, 1)
 })

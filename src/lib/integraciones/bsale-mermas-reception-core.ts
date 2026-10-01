@@ -59,6 +59,7 @@ export type ReceptionOperationSnapshot = {
   receptionId: number | null
   error: string | null
   payload: ReceptionSnapshot | null
+  localAppliedAt?: string | null
 }
 
 export type ReceptionWorkflowDependencies = {
@@ -74,6 +75,22 @@ export type ReceptionWorkflowResult =
   | { status: 'FAILED'; operationId: string; error: string }
   | { status: 'RECONCILIATION_REQUIRED'; operationId: string; receptionId: number | null; error: string }
   | { status: 'SENDING'; operationId: string }
+
+export type ReceptionLocalApplicationPendingResult = {
+  status: 'LOCAL_APPLICATION_PENDING'
+  operationId: string
+  receptionId: number | null
+  error: string
+}
+
+export function localApplicationPendingResult(operation: ReceptionOperationSnapshot, error: unknown): ReceptionLocalApplicationPendingResult {
+  return {
+    status: 'LOCAL_APPLICATION_PENDING',
+    operationId: operation.operationId,
+    receptionId: operation.receptionId,
+    error: error instanceof Error ? error.message : 'La recepción confirmada requiere aplicación local.',
+  }
+}
 
 function numberOrNull(value: unknown) {
   if (value === null || value === undefined || value === '') return null
