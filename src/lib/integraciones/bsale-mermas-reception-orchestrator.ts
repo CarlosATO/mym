@@ -3,6 +3,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { createBsaleMermaReceptionDependencies } from './bsale-mermas-reception-adapter'
 import {
   executeBsaleReceptionWorkflow,
+  reconcileBsaleReception,
   type ReceptionOperationSnapshot,
   type ReceptionSnapshot,
 } from './bsale-mermas-reception-core'
@@ -14,6 +15,11 @@ export type MermaBsaleReceptionResult =
   | { status: 'RECONCILIATION_REQUIRED'; operationId: string; receptionId: number | null; error: string }
   | { status: 'LOCAL_APPLICATION_PENDING'; operationId: string; receptionId: number; error: string }
   | { status: 'SENDING'; operationId: string }
+
+export type MermaBsaleReceptionReconciliationResult =
+  | { status: 'CONFIRMED'; operationId: string; receptionId: number; stockExitOperationId: string }
+  | { status: 'LOCAL_APPLICATION_PENDING'; operationId: string; receptionId: number; error: string }
+  | { status: 'RECONCILIATION_REQUIRED'; operationId: string; receptionId: number | null; error: string }
 
 export type MermaBsaleReceptionInput = {
   idempotencyKey: string
@@ -65,6 +71,44 @@ export async function applyMermaBsaleReception(operationId: string) {
   })
   if (error) throw new Error(`No se pudo aplicar localmente la recepción Bsale: ${error.message}`)
   return String((data as { stock_exit_operation_id?: string }).stock_exit_operation_id)
+}
+
+export async function reconcileMermaBsaleReception(operationId: string): Promise<MermaBsaleReceptionReconciliationResult> {
+  const authorization = await requireWmsPermission('logistica.mermas.request.create')
+  const database = createAdminClient()
+  const { data: operation, error: operationError } = await database.schema('mermas')
+    .from('bsale_reception_operations')
+    .select('id,status,reception_id,payload_snapshot')
+    .eq('id', operationId)
+    .eq('company_id', authorization.companyId)
+    .single()
+  if (operationError || !operation) {
+    return { status: 'RECONCILIATION_REQUIRED', operationId, receptionId: null, error: operationError?.message ?? 'Operación no encontrada.' }
+  }
+  if (operation.status !== 'RECONCILIATION_REQUIRED' || operation.reception_id == null) {
+    return { status: 'RECONCILIATION_REQUIRED', operationId, receptionId: operation.reception_id == null ? null : Number(operation.reception_id), error: 'Solo se pueden reconciliar operaciones RECONCILIATION_REQUIRED con reception_id.' }
+  }
+  const receptionId = Number(operation.reception_id)
+  const snapshot = operation.payload_snapshot as ReceptionSnapshot
+  try {
+    const dependencies = createBsaleMermaReceptionDependencies(authorization.companyId)
+    const remoteResult = await reconcileBsaleReception(snapshot, receptionId, dependencies)
+    if (remoteResult.status !== 'CONFIRMED') return { status: 'RECONCILIATION_REQUIRED', operationId, receptionId, error: remoteResult.error }
+    const { data: confirmed, error: confirmError } = await database.schema('mermas').rpc('confirm_reconciled_bsale_reception', {
+      p_operation_id: operationId,
+      p_user_id: authorization.user.id,
+    })
+    if (confirmError) return { status: 'RECONCILIATION_REQUIRED', operationId, receptionId, error: confirmError.message }
+    if (!confirmed) return { status: 'RECONCILIATION_REQUIRED', operationId, receptionId, error: 'No se pudo confirmar la reconciliación.' }
+    try {
+      const stockExitOperationId = await applyMermaBsaleReception(operationId)
+      return { status: 'CONFIRMED', operationId, receptionId, stockExitOperationId }
+    } catch (error) {
+      return { status: 'LOCAL_APPLICATION_PENDING', operationId, receptionId, error: error instanceof Error ? error.message : 'La recepción confirmada requiere aplicación local.' }
+    }
+  } catch (error) {
+    return { status: 'RECONCILIATION_REQUIRED', operationId, receptionId, error: error instanceof Error ? error.message : 'No se pudo verificar la recepción Bsale.' }
+  }
 }
 
 export async function executeMermaBsaleReception(input: MermaBsaleReceptionInput): Promise<MermaBsaleReceptionResult> {

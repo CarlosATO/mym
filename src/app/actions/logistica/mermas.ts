@@ -6,7 +6,7 @@ import { getActiveCompany, getActiveCompanyId } from "@/app/actions/companies";
 import { requireWmsPermission } from "./authorization";
 import { syncBsaleMermas } from "@/lib/integraciones/bsale-mermas-sync";
 import { executeMermaBsaleOutbound } from "@/lib/integraciones/bsale-mermas-outbound-orchestrator";
-import { executeMermaBsaleReception, type MermaBsaleReceptionInput } from "@/lib/integraciones/bsale-mermas-reception-orchestrator";
+import { executeMermaBsaleReception, reconcileMermaBsaleReception, type MermaBsaleReceptionInput } from "@/lib/integraciones/bsale-mermas-reception-orchestrator";
 import { applyConfirmedMermaBsaleOutbound } from "@/lib/integraciones/bsale-mermas-local-application";
 import { createAndProcessMermaRequest as createAndProcessMermaRequestCore, type MermaWorkflowResult } from "@/lib/integraciones/bsale-mermas-workflow-core";
 import { createHmac, randomUUID, timingSafeEqual } from "crypto";
@@ -2750,6 +2750,23 @@ export async function createMermasBsaleRegularization(
     };
   } catch (error) {
     return { success: false, status: "FAILED", error: error instanceof Error ? error.message : "No se pudo registrar el reintegro en Bsale." };
+  }
+}
+
+export async function reconcileMermasBsaleReception(operationId: string): Promise<MermaBsaleRegularizationResponse> {
+  try {
+    if (!operationId?.trim()) return { success: false, status: "RECONCILIATION_REQUIRED", error: "La operación de recepción es obligatoria." };
+    const result = await reconcileMermaBsaleReception(operationId);
+    return {
+      success: result.status === "CONFIRMED",
+      status: result.status,
+      operationId: result.operationId,
+      receptionId: result.receptionId,
+      stockExitOperationId: "stockExitOperationId" in result ? result.stockExitOperationId : undefined,
+      error: "error" in result ? result.error : undefined,
+    };
+  } catch (error) {
+    return { success: false, status: "RECONCILIATION_REQUIRED", error: error instanceof Error ? error.message : "No se pudo reconciliar la recepción Bsale." };
   }
 }
 

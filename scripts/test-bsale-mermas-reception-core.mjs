@@ -6,6 +6,8 @@ import {
   executeBsaleReception,
   executeBsaleReceptionWorkflow,
   localApplicationPendingResult,
+  reconcileBsaleReception,
+  verifyReception,
   weightedUnitCost,
 } from '../src/lib/integraciones/bsale-mermas-reception-core.ts'
 
@@ -33,6 +35,15 @@ test('FEFO consumes earliest expiry and preserves the cost snapshot', () => {
     { quantity: 4, variantId: 1021, cost: 615 },
     { quantity: 1, variantId: 1021, cost: 700 },
   ])
+})
+
+test('new receptions send a numeric document number', () => {
+  const payload = buildReceptionPayload({
+    correlationCode: 'REG-2026-000001', documentNumber: 2026000001, officeId: 7, reason: 'x', lines: [line()],
+  })
+  assert.equal(payload.document, 'OTRO')
+  assert.equal(payload.documentNumber, 2026000001)
+  assert.equal(typeof payload.documentNumber, 'number')
 })
 
 test('partial regularization consumes only the selected quantity from one MER', () => {
@@ -88,6 +99,36 @@ test('verification mismatch requires reconciliation', async () => {
     getDetails: async () => [{ variant: { id: 1021 }, quantity: 3, cost: 615 }],
   })
   assert.equal(result.status, 'RECONCILIATION_REQUIRED')
+})
+
+test('numeric document numbers accept Bsale string responses', () => {
+  const snapshot = { correlationCode: 'REG-2026-000001', documentNumber: 2026000001, officeId: 7, reason: 'x', lines: [line()] }
+  assert.equal(verifyReception(snapshot, { id: 91, document: 'OTRO', documentNumber: '2026000001', office: { id: 7 }, note: 'REG-2026-000001 | x' }, [{ variant: { id: 1021 }, quantity: 4, cost: 615 }], 91), true)
+})
+
+test('a different future document number requires reconciliation', () => {
+  const snapshot = { correlationCode: 'REG-2026-000001', documentNumber: 2026000001, officeId: 7, reason: 'x', lines: [line()] }
+  assert.equal(verifyReception(snapshot, { id: 91, document: 'OTRO', documentNumber: 2026000002, office: { id: 7 }, note: 'REG-2026-000001 | x' }, [{ variant: { id: 1021 }, quantity: 4, cost: 615 }], 91), false)
+})
+
+test('legacy snapshots accept Bsale document number normalization', () => {
+  const snapshot = { correlationCode: 'MERMA-20261001190159432-f495776b', officeId: 1, reason: 'x', lines: [line({ quantity: 1, expirationDate: '2027-12-31', lot: 'PRUEBA-001' })] }
+  assert.equal(verifyReception(snapshot, { id: 11336, document: 'OTRO', documentNumber: 'MERMA-20261001190159', office: { id: 1 }, note: 'MERMA-20261001190159432-f495776b | x' }, [{ variant: { id: 1021 }, quantity: 1, cost: 615 }], 11336), true)
+})
+
+test('reconciliation performs GET only and accepts a matching legacy reception', async () => {
+  let posts = 0
+  let reads = 0
+  const result = await reconcileBsaleReception({
+    correlationCode: 'MERMA-20261001190159432-f495776b', officeId: 1, reason: 'x', lines: [line({ quantity: 1, expirationDate: '2027-12-31', lot: 'PRUEBA-001' })],
+  }, 11336, {
+    createReception: async () => { posts += 1; return { id: 999 } },
+    getReception: async () => { reads += 1; return { id: 11336, document: 'OTRO', documentNumber: 'MERMA-20261001190159', office: { id: 1 }, note: 'MERMA-20261001190159432-f495776b | x' } },
+    getDetails: async () => { reads += 1; return [{ variant: { id: 1021 }, quantity: 1, cost: 615 }] },
+  })
+  assert.deepEqual(result, { status: 'CONFIRMED', receptionId: 11336 })
+  assert.equal(reads, 2)
+  assert.equal(posts, 0)
 })
 
 test('timeout-like POST failure requires reconciliation instead of a blind retry', async () => {

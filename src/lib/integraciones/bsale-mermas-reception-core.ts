@@ -13,6 +13,7 @@ export type ReceptionSnapshotLine = {
 
 export type ReceptionSnapshot = {
   correlationCode: string
+  documentNumber?: number | string | null
   officeId: number
   reason: string
   observation?: string | null
@@ -22,7 +23,7 @@ export type ReceptionSnapshot = {
 export type BsaleReceptionPayload = {
   document: 'OTRO'
   officeId: number
-  documentNumber: string
+  documentNumber: number | string
   note: string
   details: Array<{ quantity: number; variantId: number; cost: number }>
 }
@@ -52,6 +53,10 @@ export type BsaleReceptionResult =
   | { status: 'CONFIRMED'; receptionId: number }
   | { status: 'FAILED'; error: string }
   | { status: 'RECONCILIATION_REQUIRED'; receptionId: number | null; error: string }
+
+export type BsaleReceptionReconciliationResult =
+  | { status: 'CONFIRMED'; receptionId: number }
+  | { status: 'RECONCILIATION_REQUIRED'; receptionId: number; error: string }
 
 export type ReceptionOperationSnapshot = {
   operationId: string
@@ -134,7 +139,7 @@ export function buildReceptionPayload(snapshot: ReceptionSnapshot): BsaleRecepti
   return {
     document: 'OTRO',
     officeId,
-    documentNumber: snapshot.correlationCode,
+    documentNumber: snapshot.documentNumber ?? snapshot.correlationCode,
     note: buildReceptionNote(snapshot.correlationCode, [snapshot.reason, snapshot.observation].filter(Boolean).join(' | ')),
     details,
   }
@@ -181,10 +186,19 @@ function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback
 }
 
-function verifyReception(snapshot: ReceptionSnapshot, header: BsaleReceptionHeader, details: BsaleReceptionDetail[], receptionId: number) {
+function sameDocumentNumber(expected: number | string, actual: number | string) {
+  const expectedNumber = numberOrNull(expected)
+  const actualNumber = numberOrNull(actual)
+  return expectedNumber !== null && actualNumber !== null
+    ? expectedNumber === actualNumber
+    : String(actual) === String(expected)
+}
+
+export function verifyReception(snapshot: ReceptionSnapshot, header: BsaleReceptionHeader, details: BsaleReceptionDetail[], receptionId: number) {
   if (numberOrNull(header.id) !== receptionId || numberOrNull(header.office?.id) !== snapshot.officeId) return false
   if (header.document && header.document !== 'OTRO') return false
-  if (header.documentNumber !== undefined && String(header.documentNumber) !== snapshot.correlationCode) return false
+  if (snapshot.documentNumber !== undefined && snapshot.documentNumber !== null && header.documentNumber !== undefined && header.documentNumber !== null
+    && !sameDocumentNumber(snapshot.documentNumber, header.documentNumber)) return false
   if (header.note !== undefined && !String(header.note).includes(snapshot.correlationCode)) return false
   const expected = new Map<number, { quantity: number; cost: number }>()
   for (const line of snapshot.lines) {
@@ -232,6 +246,25 @@ export async function executeBsaleReception(snapshot: ReceptionSnapshot, depende
   try {
     const [header, details] = await Promise.all([dependencies.getReception(receptionId), dependencies.getDetails(receptionId)])
     if (!verifyReception(snapshot, header, details, receptionId)) return { status: 'RECONCILIATION_REQUIRED', receptionId, error: `La recepción Bsale ${receptionId} no coincide con el snapshot.` }
+    return { status: 'CONFIRMED', receptionId }
+  } catch (error) {
+    return { status: 'RECONCILIATION_REQUIRED', receptionId, error: errorMessage(error, 'No se pudo verificar la recepción Bsale.') }
+  }
+}
+
+export async function reconcileBsaleReception(
+  snapshot: ReceptionSnapshot,
+  receptionId: number,
+  dependencies: BsaleReceptionDependencies,
+): Promise<BsaleReceptionReconciliationResult> {
+  try {
+    const [header, details] = await Promise.all([
+      dependencies.getReception(receptionId),
+      dependencies.getDetails(receptionId),
+    ])
+    if (!verifyReception(snapshot, header, details, receptionId)) {
+      return { status: 'RECONCILIATION_REQUIRED', receptionId, error: `La recepción Bsale ${receptionId} no coincide con el snapshot.` }
+    }
     return { status: 'CONFIRMED', receptionId }
   } catch (error) {
     return { status: 'RECONCILIATION_REQUIRED', receptionId, error: errorMessage(error, 'No se pudo verificar la recepción Bsale.') }
