@@ -49,6 +49,7 @@ import { MermasArchivedPanel } from "./mermas-archived-panel";
 import { MermaEvidenceViewer } from "./mermas-evidence-viewer";
 import { formatCivilDate, formatInstantInSantiago } from "@/lib/datetime";
 import { useMermasModule } from "./mermas-module-provider";
+import { DirectBsaleIncidentsDialog } from "./direct-bsale-incidents-dialog";
 
 type Mode = "list" | "new" | "detail";
 type DraftLine = {
@@ -494,8 +495,9 @@ function MermaOperations() {
         />
       )}
         {incidentsOpen && (
-          <MermaBsaleIncidentsDialog
+          <DirectBsaleIncidentsDialog
             incidents={incidentsCache.data}
+            canAuthorize={bootstrap.canAuthorize}
             onClose={() => setIncidentsOpen(false)}
             onCreated={(requestCode) => {
               setIncidentsOpen(false);
@@ -608,7 +610,7 @@ function MermasPricingSettingsPanel({
   );
 }
 
-function MermaBsaleIncidentsDialog({
+export function LegacyMermaBsaleIncidentsDialog({
   incidents,
   onClose,
   onCreated,

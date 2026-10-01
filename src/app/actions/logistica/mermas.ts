@@ -16,6 +16,7 @@ import {
 } from "@/modules/logistica/mermas/worker-pricing";
 import { todayInSantiago } from "@/lib/datetime";
 import { calculateMermasAnalytics, type MermaAnalyticsResult } from "@/lib/integraciones/mermas-analytics";
+import { validateDirectBsaleReview } from "@/lib/integraciones/direct-bsale-regularization-core";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -1785,6 +1786,10 @@ export type MermaIncidentLineInput = {
   observation?: string;
 };
 
+export type DirectBsaleIncidentLineInput = MermaIncidentLineInput & {
+  has_difference?: boolean;
+};
+
 export async function getMermasBsaleIncidents(): Promise<{
   data: MermaBsaleIncident[];
   error?: string;
@@ -2003,6 +2008,66 @@ export async function prepareMermaIncidentEvidenceUploads(
   }
 }
 
+export async function prepareDirectBsaleEvidenceUploads(
+  consumptionId: number,
+  files: Array<Omit<MermaEvidenceMetadata, "storage_path">>,
+): Promise<{ data?: { session_id: string; session_token: string; finalize_token: string; uploads: MermaEvidenceUpload[] }; error?: string }> {
+  try {
+    const authorization = await requireWmsPermission("logistica.mermas.authorize");
+    const supabase = await createClient();
+    const { data: auth } = await supabase.auth.getUser();
+    if (!auth.user) return { error: "No autorizado" };
+    const database = db("mermas");
+    const { data: consumption, error: consumptionError } = await database
+      .from("bsale_consumptions")
+      .select("consumption_id, consumption_type_id, request_id")
+      .eq("company_id", authorization.companyId)
+      .eq("consumption_id", consumptionId)
+      .maybeSingle();
+    if (consumptionError || !consumption || consumption.consumption_type_id !== 2 || consumption.request_id) {
+      return { error: "Este consumo Bsale ya fue regularizado o no es válido." };
+    }
+    const { data: details, error: detailsError } = await database
+      .from("bsale_consumption_details")
+      .select("id")
+      .eq("company_id", authorization.companyId)
+      .eq("consumption_id", consumptionId);
+    if (detailsError || !details?.length) return { error: "El consumo Bsale no tiene líneas válidas." };
+    const detailIds = details.map((detail) => detail.id);
+    const { data: allocations, error: allocationsError } = await database
+      .from("bsale_detail_allocations")
+      .select("consumption_detail_id")
+      .eq("company_id", authorization.companyId)
+      .in("consumption_detail_id", detailIds);
+    if (allocationsError) return { error: "No se pudo validar la asociación del consumo Bsale." };
+    if (allocations?.length) return { error: "El consumo Bsale tiene una asociación parcial y requiere revisión." };
+    if (files.some((file) => !Number.isInteger(file.line_index) || file.line_index < 0 || file.line_index >= details.length)) {
+      return { error: "La evidencia apunta a una línea Bsale inválida." };
+    }
+    if (files.some((file) => !MERMA_EVIDENCE_MIME_TYPES.has(file.mime_type) || file.file_size <= 0 || file.file_size > MERMA_EVIDENCE_MAX_SIZE)) {
+      return { error: "La evidencia debe ser una imagen válida de hasta 10 MB." };
+    }
+    const sessionId = randomUUID();
+    const metadata = files.map((file) => ({ ...file, storage_path: "" }));
+    const uploads = metadata.map((file) => {
+      const safeName = file.file_name.replace(/[^a-zA-Z0-9._-]/g, "_") || "evidencia.jpg";
+      return { ...file, storage_path: `${authorization.companyId}/${sessionId}/${file.line_index}/${randomUUID()}-${safeName}` };
+    });
+    const sessionToken = signMermaEvidenceSession(authorization.companyId, auth.user.id, sessionId);
+    const finalizeToken = signMermaEvidenceSession(authorization.companyId, auth.user.id, sessionId, uploads.map((file) => file.storage_path));
+    const storage = database.storage.from(MERMA_EVIDENCE_BUCKET);
+    const signedUploads: MermaEvidenceUpload[] = [];
+    for (const upload of uploads) {
+      const { data, error } = await storage.createSignedUploadUrl(upload.storage_path);
+      if (error || !data?.signedUrl || !data.token) throw new Error("No se pudo preparar una carga segura.");
+      signedUploads.push({ ...upload, signed_upload_url: data.signedUrl, upload_token: data.token });
+    }
+    return { data: { session_id: sessionId, session_token: sessionToken, finalize_token: finalizeToken, uploads: signedUploads } };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo preparar la evidencia" };
+  }
+}
+
 export async function regularizeMermaBsaleIncident(
   consumptionId: number,
   lines: MermaIncidentLineInput[],
@@ -2029,6 +2094,57 @@ export async function regularizeMermaBsaleIncident(
     });
     if (result.error) throw new Error(result.error.message);
     return result.data as { success: boolean; request_id: string; request_code: string; status: string };
+  } catch (error) {
+    if (paths.length) await db("mermas").storage.from(MERMA_EVIDENCE_BUCKET).remove(paths);
+    return { error: error instanceof Error ? error.message : "No se pudo regularizar el consumo Bsale" };
+  }
+}
+
+export async function regularizeDirectBsaleConsumption({
+  consumptionId,
+  lines,
+  evidence,
+  confirmedReview,
+  sessionId,
+  sessionToken,
+  finalizeToken,
+}: {
+  consumptionId: number;
+  lines: DirectBsaleIncidentLineInput[];
+  evidence: MermaEvidenceMetadata[];
+  confirmedReview: boolean;
+  sessionId?: string;
+  sessionToken?: string;
+  finalizeToken?: string;
+}): Promise<{ success?: boolean; idempotent?: boolean; request_id?: string; request_code?: string; status?: string; error?: string }> {
+  const authorization = await requireWmsPermission("logistica.mermas.authorize");
+  const reviewError = validateDirectBsaleReview(lines, confirmedReview);
+  if (reviewError) return { error: reviewError };
+  const supabase = await createClient();
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth.user) return { error: "No autorizado" };
+  if (evidence.length) {
+    if (!sessionId || !sessionToken || !finalizeToken) return { error: "La sesión de evidencia no es válida" };
+    const expectedSessionToken = signMermaEvidenceSession(authorization.companyId, auth.user.id, sessionId);
+    const expectedFinalizeToken = signMermaEvidenceSession(authorization.companyId, auth.user.id, sessionId, evidence.map((file) => file.storage_path));
+    if (!hasValidMermaEvidenceSignature(sessionToken, expectedSessionToken) || !hasValidMermaEvidenceSignature(finalizeToken, expectedFinalizeToken)) {
+      return { error: "La sesión de evidencia no es válida" };
+    }
+  } else if (sessionId || sessionToken || finalizeToken) {
+    return { error: "La sesión de evidencia no es válida" };
+  }
+  const paths = evidence.map((file) => file.storage_path);
+  try {
+    const { data, error } = await db("mermas").rpc("regularize_and_authorize_bsale_incident", {
+      p_consumption_id: consumptionId,
+      p_company_id: authorization.companyId,
+      p_user_id: auth.user.id,
+      p_lines: lines,
+      p_evidence: evidence,
+      p_confirmed_review: confirmedReview,
+    });
+    if (error) throw new Error(error.message);
+    return data as { success: boolean; idempotent?: boolean; request_id: string; request_code: string; status: string };
   } catch (error) {
     if (paths.length) await db("mermas").storage.from(MERMA_EVIDENCE_BUCKET).remove(paths);
     return { error: error instanceof Error ? error.message : "No se pudo regularizar el consumo Bsale" };
