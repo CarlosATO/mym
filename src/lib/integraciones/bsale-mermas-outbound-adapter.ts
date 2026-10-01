@@ -8,6 +8,11 @@ import type {
   MermaOutboundDependencies,
 } from './bsale-mermas-outbound-core'
 
+export type BsaleConsumptionForLocalApplication = {
+  header: BsaleConsumptionResponse
+  details: BsaleConsumptionDetail[]
+}
+
 export function createBsaleMermaOutboundDependencies(companyId: string): MermaOutboundDependencies {
   return {
     createConsumption: (payload: BsaleConsumptionPayload) =>
@@ -29,4 +34,21 @@ export function createBsaleMermaOutboundDependencies(companyId: string): MermaOu
       return response.items ?? []
     },
   }
+}
+
+export async function fetchBsaleConsumptionForLocalApplication(
+  companyId: string,
+  consumptionId: number,
+): Promise<BsaleConsumptionForLocalApplication> {
+  const [header, details] = await Promise.all([
+    bsaleFetchResourceForCompany<BsaleConsumptionResponse>({
+      companyId,
+      path: `/stocks/consumptions/${consumptionId}.json`,
+    }),
+    bsaleFetchForCompany<BsaleConsumptionDetail>({
+      companyId,
+      path: `/stocks/consumptions/${consumptionId}/details.json`,
+    }),
+  ])
+  return { header, details: details.items ?? [] }
 }

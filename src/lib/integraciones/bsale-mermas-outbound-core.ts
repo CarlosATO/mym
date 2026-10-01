@@ -23,6 +23,11 @@ export type BsaleConsumptionPayload = {
 
 export type BsaleConsumptionResponse = {
   id?: number | string | null
+  consumptionDate?: number | string | null
+  note?: string | null
+  consumptionTypeId?: number | string | null
+  office?: { id?: number | string | null } | null
+  user?: { id?: number | string | null } | null
   details?: { href?: string | null } | null
 }
 
@@ -34,7 +39,10 @@ export type BsaleConsumptionVerification = {
 }
 
 export type BsaleConsumptionDetail = {
+  id?: number | string | null
   quantity?: number | string | null
+  cost?: number | string | null
+  variantStock?: number | string | null
   variant?: { id?: number | string | null } | null
 }
 
