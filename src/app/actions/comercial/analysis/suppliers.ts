@@ -3,6 +3,7 @@
 import type { AnalysisSupplierOption, SupplierCatalogRow, SupplierPurchaseSales360, SupplierWeeklyPoint, SupplierWeeklyDetail, SupplierWeeklyDocumentDetail, SupplierWeeklyProductDetail, SupplierDocumentDetail, SupplierDocumentLineDetail, SupplierPurchaseRow } from './types'
 import { adqQuery, fetchAll, getAuthedCompany, integQuery, toNum } from './utils'
 import { getPurchaseReceptionSign, isCreditNote } from './document-sign'
+import { excludedMermaReceptionIds, filterExcludedMermaReceptionIds } from '@/lib/integraciones/merma-reception-exclusions'
 
 function chunkArray<T>(items: T[], size: number) {
   const chunks: T[][] = []
@@ -169,6 +170,7 @@ export async function getSupplierPurchaseSales360(params: {
 }): Promise<SupplierPurchaseSales360> {
   const { companyId } = await getAuthedCompany()
   const { supplierId, dateFrom, dateTo } = params
+  const excludedReceptionIds = await excludedMermaReceptionIds(companyId)
 
   const { data: supplier, error: supplierError } = await adqQuery('suppliers')
     .select('id,business_name,supplier_kind,parent_supplier_id')
@@ -268,7 +270,7 @@ export async function getSupplierPurchaseSales360(params: {
       .eq('company_id', companyId)
       .in('variant_code', missingSkus)
     const detailRows = (allRepRows || []) as { bsale_reception_id: number }[]
-    const detailRepIds = [...new Set(detailRows.map(r => Number(r.bsale_reception_id)).filter(Boolean))]
+    const detailRepIds = filterExcludedMermaReceptionIds([...new Set(detailRows.map(r => Number(r.bsale_reception_id)).filter(Boolean))], excludedReceptionIds)
     // Check which receptions are NOT credit notes
     const validRepIdsSet = new Set<number>()
     if (detailRepIds.length > 0) {
@@ -464,7 +466,7 @@ export async function getSupplierPurchaseSales360(params: {
       typedReceptionDetails.push(...((receptionDetails || []) as ReceptionDetailRow[]))
     }
 
-    const receptionIds = Array.from(new Set(typedReceptionDetails.map((row) => Number(row.bsale_reception_id || 0)).filter((id) => id > 0)))
+    const receptionIds = filterExcludedMermaReceptionIds(Array.from(new Set(typedReceptionDetails.map((row) => Number(row.bsale_reception_id || 0)).filter((id) => id > 0))), excludedReceptionIds)
     const { data: receptions, error: receptionsError } = receptionIds.length
         ? await integQuery('bsale_receptions')
           .select('bsale_id,raw_admission_date,admission_date,document,document_number')
@@ -604,6 +606,7 @@ export async function getSupplierWeeklyDetail(params: {
 }): Promise<SupplierWeeklyDetail> {
   const { companyId } = await getAuthedCompany()
   const { supplierId, dateFrom, dateTo } = params
+  const excludedReceptionIds = await excludedMermaReceptionIds(companyId)
 
   const { data: supplier, error: supplierError } = await adqQuery('suppliers')
     .select('id,business_name,supplier_kind,parent_supplier_id')
@@ -778,7 +781,7 @@ export async function getSupplierWeeklyDetail(params: {
       typedReceptionDetails.push(...((receptionDetails || []) as ReceptionDetailRow[]))
     }
 
-    const receptionIds = Array.from(new Set(typedReceptionDetails.map(row => Number(row.bsale_reception_id || 0)).filter(id => id > 0)))
+    const receptionIds = filterExcludedMermaReceptionIds(Array.from(new Set(typedReceptionDetails.map(row => Number(row.bsale_reception_id || 0)).filter(id => id > 0))), excludedReceptionIds)
     const { data: receptions } = receptionIds.length
       ? await integQuery('bsale_receptions')
           .select('bsale_id,raw_admission_date,admission_date,document,document_number')
@@ -884,10 +887,12 @@ export async function getSupplierDocumentDetail({ supplierId, documentKind, docu
 
     if (receptionIds.length === 0) return null
 
+    const validReceptionIds = filterExcludedMermaReceptionIds(receptionIds, await excludedMermaReceptionIds(companyId))
+    if (validReceptionIds.length === 0) return null
     const { data: rawReceptions } = await integQuery('bsale_receptions')
       .select('bsale_id,raw_admission_date,document,document_number')
       .eq('company_id', companyId)
-      .in('bsale_id', receptionIds)
+      .in('bsale_id', validReceptionIds)
     const receptions = (rawReceptions || []) as BsaleReceptionHeaderRow[]
     if (receptions.length === 0) return null
 
@@ -896,7 +901,7 @@ export async function getSupplierDocumentDetail({ supplierId, documentKind, docu
     const { data: rawDetails } = await integQuery('bsale_reception_details')
       .select('bsale_reception_id,variant_code,quantity,cost')
       .eq('company_id', companyId)
-      .in('bsale_reception_id', receptionIds)
+      .in('bsale_reception_id', validReceptionIds)
     const repDetails = (rawDetails || []) as BsaleReceptionDetailRow[]
 
     const allSkus = [...new Set(repDetails.map(d => d.variant_code).filter(Boolean))]
@@ -957,7 +962,7 @@ export async function getSupplierDocumentDetail({ supplierId, documentKind, docu
       totalAmount: Math.round(totalAmount),
       units: Math.round(totalUnits),
       skuCount: lines.length,
-      sourceIds: receptionIds.map(String),
+      sourceIds: validReceptionIds.map(String),
       lines
     }
   } else {

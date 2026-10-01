@@ -15,6 +15,7 @@ import {
   calculateWorkerPrice,
 } from "@/modules/logistica/mermas/worker-pricing";
 import { todayInSantiago } from "@/lib/datetime";
+import { calculateMermasAnalytics, type MermaAnalyticsResult } from "@/lib/integraciones/mermas-analytics";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -3450,16 +3451,24 @@ export type MermasAnalytics = {
   from: string;
   to: string;
   totals: {
+    gross_cost: number;
+    gross_units: number;
+    returned_cost: number;
+    returned_units: number;
+    net_cost: number;
+    net_units: number;
     cost: number;
     units: number;
     products: number;
     uncosted_lines: number;
     uncosted_units: number;
     previous_cost: number;
+    previous_net_cost: number;
     cost_variation: number | null;
+    inconsistencies: MermaAnalyticsResult["totals"]["inconsistencies"];
   };
-  monthly: Array<{ month: string; cost: number; units: number }>;
-  products: Array<{ sku: string; name: string; units: number; cost: number }>;
+  monthly: MermaAnalyticsResult["monthly"];
+  products: MermaAnalyticsResult["products"];
 };
 
 function santiagoCivilDate(value: string | null) {
@@ -3523,7 +3532,7 @@ export async function getMermasAnalytics(from: string, to: string): Promise<{ da
     const database = db("mermas");
     const { data: consumptions, error: consumptionError } = await database
       .from("bsale_consumptions")
-      .select("consumption_id, consumption_date, consumption_type_id")
+      .select("consumption_id, consumption_date, consumption_type_id, request_id")
       .eq("company_id", authorization.companyId)
       .eq("consumption_type_id", 2)
       .gte("consumption_date", `${previousFrom}T00:00:00Z`)
@@ -3536,7 +3545,7 @@ export async function getMermasAnalytics(from: string, to: string): Promise<{ da
     });
     const consumptionIds = selectedConsumptions.map((row) => Number(row.consumption_id));
     const { data: details, error: detailsError } = consumptionIds.length
-      ? await database.from("bsale_consumption_details").select("consumption_id, variant_id, quantity, cost").eq("company_id", authorization.companyId).in("consumption_id", consumptionIds)
+      ? await database.from("bsale_consumption_details").select("consumption_id, detail_id, variant_id, quantity, cost").eq("company_id", authorization.companyId).in("consumption_id", consumptionIds)
       : { data: [], error: null };
     if (detailsError) return { data: null, error: "No se pudieron cargar los costos históricos de Mermas." };
 
@@ -3544,66 +3553,50 @@ export async function getMermasAnalytics(from: string, to: string): Promise<{ da
     const { data: products } = variantIds.length
       ? await db("adquisiciones").from("products").select("bsale_variant_id, sku, description").eq("company_id", authorization.companyId).eq("is_active", true).eq("status", "ACTIVE").in("bsale_variant_id", variantIds)
       : { data: [] as { bsale_variant_id: number; sku: string | null; description: string | null }[] };
-    const productMap = new Map((products ?? []).map((product) => [Number(product.bsale_variant_id), product]));
-    const consumptionDateMap = new Map(selectedConsumptions.map((row) => [Number(row.consumption_id), santiagoCivilDate(row.consumption_date)]));
-    const currentProducts = new Map<number, { units: number; cost: number }>();
-    const monthly = new Map<string, { cost: number; units: number }>();
-    let currentCost = 0;
-    let currentUnits = 0;
-    let previousCost = 0;
-    let uncostedLines = 0;
-    let uncostedUnits = 0;
-    for (const detail of details ?? []) {
-      const quantity = Number(detail.quantity) || 0;
-      const cost = detail.cost === null || detail.cost === undefined ? null : Number(detail.cost);
-      const date = consumptionDateMap.get(Number(detail.consumption_id));
-      if (!date) continue;
-      const isCurrent = date >= from && date <= to;
-      if (cost === null || !Number.isFinite(cost)) {
-        if (isCurrent) {
-          uncostedLines += 1;
-          uncostedUnits += quantity;
-        }
-        continue;
-      }
-      const lineCost = quantity * cost;
-      if (!isCurrent) {
-        previousCost += lineCost;
-        continue;
-      }
-      currentUnits += quantity;
-      currentCost += lineCost;
-      const month = date.slice(0, 7);
-      const monthValue = monthly.get(month) ?? { cost: 0, units: 0 };
-      monthValue.cost += lineCost;
-      monthValue.units += quantity;
-      monthly.set(month, monthValue);
-      const product = currentProducts.get(Number(detail.variant_id)) ?? { units: 0, cost: 0 };
-      product.units += quantity;
-      product.cost += lineCost;
-      currentProducts.set(Number(detail.variant_id), product);
-    }
+    const consumptionMap = new Map((selectedConsumptions ?? []).map((row) => [Number(row.consumption_id), row]));
+    const returnOperationsQuery = await database.from("bsale_reception_operations")
+      .select("id, sending_at, created_at")
+      .eq("company_id", authorization.companyId)
+      .eq("status", "CONFIRMED")
+      .not("local_applied_at", "is", null)
+      .not("stock_exit_operation_id", "is", null);
+    if (returnOperationsQuery.error) return { data: null, error: "No se pudieron cargar los reintegros de Mermas." };
+    const returnOperationIds = (returnOperationsQuery.data ?? []).map((operation) => operation.id);
+    const { data: returnLines, error: returnLinesError } = returnOperationIds.length
+      ? await database.from("bsale_reception_operation_lines").select("operation_id,source_consumption_id,source_detail_id,variant_id,request_id,quantity,unit_cost").eq("company_id", authorization.companyId).in("operation_id", returnOperationIds)
+      : { data: [], error: null };
+    if (returnLinesError) return { data: null, error: "No se pudieron cargar las líneas reintegradas de Mermas." };
+    const operationDateMap = new Map((returnOperationsQuery.data ?? []).map((operation) => [operation.id, santiagoCivilDate(operation.sending_at || operation.created_at)]));
+    const labels = new Map((products ?? []).map((product) => [Number(product.bsale_variant_id), { sku: product.sku ?? `BS-${product.bsale_variant_id}`, name: product.description ?? "Producto Bsale" }]));
+    const analytics = calculateMermasAnalytics({
+      from,
+      to,
+      previousFrom,
+      previousTo,
+      grossLines: (details ?? []).flatMap((detail) => {
+        const consumption = consumptionMap.get(Number(detail.consumption_id));
+        if (!consumption) return [];
+        const date = santiagoCivilDate(consumption.consumption_date);
+        return date ? [{ consumptionId: Number(detail.consumption_id), detailId: Number(detail.detail_id), variantId: Number(detail.variant_id), requestId: consumption.request_id ?? null, date, quantity: Number(detail.quantity) || 0, cost: detail.cost === null || detail.cost === undefined ? null : Number(detail.cost) }] : [];
+      }),
+      returnLines: (returnLines ?? []).flatMap((line) => {
+        const date = operationDateMap.get(line.operation_id);
+        return date ? [{ sourceConsumptionId: line.source_consumption_id == null ? null : Number(line.source_consumption_id), sourceDetailId: line.source_detail_id == null ? null : Number(line.source_detail_id), variantId: Number(line.variant_id), requestId: line.request_id ?? null, date, quantity: Number(line.quantity) || 0, unitCost: Number(line.unit_cost) || 0 }] : [];
+      }),
+      labels,
+    });
     return {
       data: {
         from,
         to,
         totals: {
-          cost: currentCost,
-          units: currentUnits,
-          products: currentProducts.size,
-          uncosted_lines: uncostedLines,
-          uncosted_units: uncostedUnits,
-          previous_cost: previousCost,
-          cost_variation: previousCost === 0 ? null : ((currentCost - previousCost) / previousCost) * 100,
+          ...analytics.totals,
+          cost: analytics.totals.net_cost,
+          units: analytics.totals.net_units,
+          previous_cost: analytics.totals.previous_net_cost,
         },
-        monthly: [...monthly.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([month, value]) => ({ month, ...value })),
-        products: [...currentProducts.entries()]
-          .map(([variantId, value]) => ({
-            sku: productMap.get(variantId)?.sku ?? `BS-${variantId}`,
-            name: productMap.get(variantId)?.description ?? "Producto Bsale",
-            ...value,
-          }))
-          .sort((a, b) => b.cost - a.cost),
+        monthly: analytics.monthly,
+        products: analytics.products,
       },
     };
   } catch (error) {
