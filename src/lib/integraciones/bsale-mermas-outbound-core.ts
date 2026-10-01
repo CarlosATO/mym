@@ -10,6 +10,7 @@ export type MermaOutboundLine = {
 export type MermaOutboundRequest = {
   requestCode: string
   officeId: number
+  observation?: string | null
   lines: MermaOutboundLine[]
 }
 
@@ -91,12 +92,25 @@ function snapshotResult(operation: OutboundOperationSnapshot): MermaOutboundWork
   }
 }
 
-export function buildMermaBsaleNote(requestCode: string, lines: MermaOutboundLine[]): string {
+export function resolveMermaRequestObservation(lines: MermaOutboundLine[]): string | null {
+  const observations = [...new Set(
+    lines
+      .map(line => line.observation?.trim() ?? '')
+      .filter(Boolean),
+  )]
+  if (observations.length > 1) {
+    throw new Error('La solicitud contiene observaciones distintas por línea; no existe una observación única para Bsale.')
+  }
+  return observations[0] ?? null
+}
+
+export function buildMermaBsaleNote(requestCode: string, observation?: string | null): string {
   const code = requestCode.trim()
   if (!code) throw new Error('El código de solicitud es obligatorio.')
-  const reasons = [...new Set(lines.map(line => line.reason.trim()).filter(Boolean))]
-  if (!reasons.length) throw new Error('La solicitud debe contener al menos un motivo.')
-  return `Mermas PetGroup ${code} | ${reasons.join(', ')}`.slice(0, 100)
+  const value = observation?.trim() ?? ''
+  if (!value) return code
+  const availableObservationLength = Math.max(0, 100 - code.length - 3)
+  return `${code} | ${value.slice(0, availableObservationLength)}`
 }
 
 export function buildMermaBsalePayload(input: MermaOutboundRequest): BsaleConsumptionPayload {
@@ -107,7 +121,7 @@ export function buildMermaBsalePayload(input: MermaOutboundRequest): BsaleConsum
     variantId: positiveInteger(line.variantId, 'variantId'),
   }))
   return {
-    note: buildMermaBsaleNote(input.requestCode, input.lines),
+    note: buildMermaBsaleNote(input.requestCode, input.observation),
     officeId,
     consumptionTypeId: 2,
     details,

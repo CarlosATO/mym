@@ -3,6 +3,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { createBsaleMermaOutboundDependencies } from './bsale-mermas-outbound-adapter'
 import {
   executeMermaBsaleOutboundWorkflow,
+  resolveMermaRequestObservation,
   type OutboundOperationSnapshot,
   type MermaOutboundLine,
 } from './bsale-mermas-outbound-core'
@@ -124,7 +125,12 @@ export async function executeMermaBsaleOutbound(requestId: string): Promise<Merm
         variantId: Number(line.bsale_variant_id), quantity: Number(line.quantity), reason: String(line.reason ?? ''),
         expirationDate: String(line.expiration_date ?? ''), lot: line.lot, observation: line.observation,
       })) satisfies MermaOutboundLine[]
-      return { requestCode: request.request_code, officeId, lines: outboundLines }
+      return {
+        requestCode: request.request_code,
+        officeId,
+        observation: resolveMermaRequestObservation(outboundLines),
+        lines: outboundLines,
+      }
     },
     finish: (operationId, result) => finish(database, operationId, companyId, result),
     bsale: createBsaleMermaOutboundDependencies(companyId),

@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   buildMermaBsaleNote,
   buildMermaBsalePayload,
+  resolveMermaRequestObservation,
   executeBsaleMermaOutbound,
   executeMermaBsaleOutboundWorkflow,
 } from '../src/lib/integraciones/bsale-mermas-outbound-core.ts'
@@ -10,6 +11,7 @@ import {
 const input = {
   requestCode: 'MER-0007',
   officeId: 11,
+  observation: 'Saco roto durante descarga',
   lines: [
     { variantId: 20, quantity: 2, reason: 'Vencimiento', expirationDate: '2026-10-01' },
     { variantId: 21, quantity: 1.5, reason: 'Vencimiento', expirationDate: '2026-10-01' },
@@ -17,14 +19,39 @@ const input = {
 }
 
 test('builds deterministic Bsale payload for type Mermas', () => {
-  assert.equal(buildMermaBsaleNote(input.requestCode, input.lines), 'Mermas PetGroup MER-0007 | Vencimiento')
+  assert.equal(buildMermaBsaleNote(input.requestCode, input.observation), 'MER-0007 | Saco roto durante descarga')
   assert.deepEqual(buildMermaBsalePayload(input), {
-    note: 'Mermas PetGroup MER-0007 | Vencimiento',
+    note: 'MER-0007 | Saco roto durante descarga',
     officeId: 11,
     consumptionTypeId: 2,
     details: [{ quantity: 2, variantId: 20 }, { quantity: 1.5, variantId: 21 }],
   })
-  assert.ok(buildMermaBsaleNote('X'.repeat(200), [{ ...input.lines[0], reason: 'R'.repeat(200) }]).length <= 100)
+  assert.ok(buildMermaBsaleNote('MER-2026-000123', 'R'.repeat(200)).length <= 100)
+  const exactObservation = 'a'.repeat(100 - 'MER-2026-000123'.length - 3)
+  assert.equal(buildMermaBsaleNote('MER-2026-000123', exactObservation).length, 100)
+})
+
+test('uses the real observation rather than reason', () => {
+  assert.equal(buildMermaBsaleNote('MER-2026-000123', 'Saco roto durante descarga'), 'MER-2026-000123 | Saco roto durante descarga')
+  assert.notEqual(buildMermaBsaleNote('MER-2026-000123', 'Saco roto durante descarga'), 'MER-2026-000123 | Vencimiento')
+})
+
+test('sends only request_code when observation is empty', () => {
+  assert.equal(buildMermaBsaleNote('MER-2026-000123', '   '), 'MER-2026-000123')
+  assert.equal(buildMermaBsaleNote('MER-2026-000123', null), 'MER-2026-000123')
+})
+
+test('preserves accents and ñ', () => {
+  assert.equal(buildMermaBsaleNote('MER-2026-000123', 'Piña dañada'), 'MER-2026-000123 | Piña dañada')
+})
+
+test('resolves one shared line observation and rejects conflicting observations', () => {
+  assert.equal(resolveMermaRequestObservation(input.lines.map(line => ({ ...line, observation: input.observation }))), input.observation)
+  assert.equal(resolveMermaRequestObservation([{ ...input.lines[0], observation: '   ' }]), null)
+  assert.throws(() => resolveMermaRequestObservation([
+    { ...input.lines[0], observation: 'Primera' },
+    { ...input.lines[1], observation: 'Segunda' },
+  ]), /observaciones distintas/)
 })
 
 test('does not retry a failed POST and requires reconciliation', async () => {
