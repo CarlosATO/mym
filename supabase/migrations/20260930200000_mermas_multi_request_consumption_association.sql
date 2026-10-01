@@ -219,7 +219,7 @@ BEGIN
     UPDATE mermas.requests
     SET status = CASE WHEN v_all_complete THEN 'FINALIZADA' ELSE 'PARCIAL' END, updated_at = now()
     WHERE id = v_request_id;
-    IF v_status_before IS DISTINCT FROM CASE WHEN v_all_complete THEN 'FINALIZADA' ELSE 'PARCIAL' END THEN
+    IF v_status_before IS DISTINCT FROM (CASE WHEN v_all_complete THEN 'FINALIZADA' ELSE 'PARCIAL' END) THEN
       INSERT INTO portal.audit_logs(table_name, record_id, action, old_data, new_data, performed_by)
       VALUES ('mermas.requests', v_request_id, 'STATUS_CHANGE',
         jsonb_build_object('status', v_status_before),
