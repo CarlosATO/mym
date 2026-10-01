@@ -53,6 +53,7 @@
     "test:table-2b-warehouses": "node --experimental-strip-types --test scripts/test-table-2b-warehouses.mjs",
     "test:bsale-product-batches": "node --experimental-strip-types --test scripts/test-bsale-product-batches.mjs",
     "test:bsale-mermas-outbound-core": "node --experimental-strip-types --test scripts/test-bsale-mermas-outbound-core.mjs",
+    "test:bsale-mermas-reception-core": "node --experimental-strip-types --test scripts/test-bsale-mermas-reception-core.mjs",
     "test:bsale-mermas-local-application": "node --experimental-strip-types --test scripts/test-bsale-mermas-local-application.mjs",
     "test:bsale-mermas-workflow": "node --experimental-strip-types --test scripts/test-bsale-mermas-workflow.mjs",
     "test:bsale-mermas-office": "node --experimental-strip-types --test scripts/test-bsale-mermas-office.mjs",
