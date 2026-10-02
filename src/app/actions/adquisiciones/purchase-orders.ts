@@ -768,7 +768,6 @@ export interface ReplenishmentPurchaseOrderPreparationItem {
   sku: string
   product_name: string
   quantity: number
-  reference_unit_cost: number
 }
 
 export interface PrepareReplenishmentPurchaseOrderRequest {
@@ -858,6 +857,7 @@ export async function prepareReplenishmentPurchaseOrder(
     description: string | null
     unit_of_measure: string | null
     tax_rate: number | null
+    bsale_variant_id: number | null
   }>
   const mappingRows = (mappings ?? []) as Array<{
     id: string
@@ -944,6 +944,38 @@ export async function prepareReplenishmentPurchaseOrder(
     return { success: false, code: 'UNRESOLVED_SUPPLIER', items: unresolvedItems }
   }
 
+  const canonicalCostByVariant = new Map<number, number>()
+  const variantIds = Array.from(new Set(
+    resolved
+      .map(entry => entry.product.bsale_variant_id)
+      .filter((variantId): variantId is number => variantId !== null),
+  ))
+  const integrations = db.schema('integraciones')
+  for (let offset = 0; offset < variantIds.length; offset += 500) {
+    const ids = variantIds.slice(offset, offset + 500)
+    const { data: canonicalCosts, error: canonicalCostsError } = await integrations
+      .from('vw_bsale_variant_last_purchase_cost')
+      .select('bsale_variant_id, last_purchase_cost')
+      .eq('company_id', companyId)
+      .in('bsale_variant_id', ids)
+    if (canonicalCostsError) {
+      return {
+        success: false,
+        code: 'UNRESOLVED_SUPPLIER',
+        items: selectedItems.map(item => ({ sku: item.sku, product_name: item.product_name })),
+      }
+    }
+    for (const row of canonicalCosts ?? []) {
+      const variantId = Number(row.bsale_variant_id)
+      const cost = row.last_purchase_cost === null || row.last_purchase_cost === undefined
+        ? NaN
+        : Number(row.last_purchase_cost)
+      if (Number.isFinite(variantId) && Number.isFinite(cost) && cost > 0) {
+        canonicalCostByVariant.set(variantId, cost)
+      }
+    }
+  }
+
   const groups = new Map<string, typeof resolved>()
   for (const entry of resolved) {
     groups.set(entry.realSupplierId, [...(groups.get(entry.realSupplierId) ?? []), entry])
@@ -970,8 +1002,8 @@ export async function prepareReplenishmentPurchaseOrder(
       product_description: entry.product.description ?? entry.input.product_name,
       unit: entry.product.unit_of_measure ?? '',
       quantity: entry.input.quantity,
-      unit_price: entry.input.reference_unit_cost,
-      reference_unit_cost: entry.input.reference_unit_cost,
+      unit_price: entry.product.bsale_variant_id === null ? 0 : canonicalCostByVariant.get(entry.product.bsale_variant_id) ?? 0,
+      reference_unit_cost: entry.product.bsale_variant_id === null ? 0 : canonicalCostByVariant.get(entry.product.bsale_variant_id) ?? 0,
       discount_percent: 0,
       tax_rate: entry.product.tax_rate ?? 19,
     })),

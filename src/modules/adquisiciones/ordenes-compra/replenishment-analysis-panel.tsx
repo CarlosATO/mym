@@ -604,7 +604,6 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
         sku: r.sku.SKU,
         product_name: getProductName(r.sku),
         quantity: r.confirmedQty,
-        reference_unit_cost: r.sku.costo_unitario,
       }))
       const res = await prepareReplenishmentPurchaseOrder({ items: itemsToPrepare })
       if (!res.success) {
