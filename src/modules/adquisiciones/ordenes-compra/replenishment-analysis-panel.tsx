@@ -37,7 +37,6 @@ import { ReplenishmentResultsBar } from './replenishment-results-bar'
 import { ReplenishmentConfigPanel } from './replenishment-config-panel'
 import { ReplenishmentTable } from './replenishment-table'
 import { ReplenishmentAnalyticsSheet } from './replenishment-analytics-sheet'
-import { prefetchPurchaseOrderProductCatalog } from './purchase-order-product-cache'
 import { getPurchaseOrderProductCatalogCached } from './purchase-order-product-cache'
 import { prefetchPurchaseOrderWarehouses } from './warehouse-cache'
 import { getVisibleReplenishmentExcelRows, parseReplenishmentExcel, type ImportedRowStatus, type ReplenishmentExcelImportPreview } from './replenishment-excel-import'
@@ -66,6 +65,17 @@ function kardexCacheKey(variantId: number) {
 function getFilterCatalogOnce() {
   filterCatalogPromise ??= getReplenishmentFilterCatalog()
   return filterCatalogPromise
+}
+
+function canonicalCostForSku(costs: Map<string, number>, sku: string): number {
+  return costs.get(sku.trim().toUpperCase()) ?? 0
+}
+
+function applyCanonicalCosts(rows: SkuRow[], costs: Map<string, number>): SkuRow[] {
+  return rows.map(row => ({
+    ...row,
+    confirmedCost: row.confirmedQty * canonicalCostForSku(costs, row.sku.SKU),
+  }))
 }
 
 const PERIOD_OPTIONS = [
@@ -97,6 +107,7 @@ interface Props {
 export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   // ─── Dataset / filas ─────────────────────────────────────────────
   const [rows, setRows] = useState<SkuRow[]>([])
+  const canonicalCostBySku = useRef(new Map<string, number>())
   const [activeDataset, setActiveDataset] = useState<ReplenishmentDataset | null>(null)
   const [filterCatalog, setFilterCatalog] = useState<ReplenishmentFilterCatalog>({ suppliers: [], pairs: [] })
   const [catalogError, setCatalogError] = useState('')
@@ -259,7 +270,24 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   }, [])
 
   useEffect(() => {
-    if (supplier) prefetchPurchaseOrderProductCatalog()
+    if (!supplier) return
+    let cancelled = false
+    getPurchaseOrderProductCatalogCached()
+      .then(catalog => {
+        const nextCosts = new Map<string, number>()
+        for (const product of catalog) {
+          const cost = product.last_purchase_unit_cost === null || product.last_purchase_unit_cost === undefined
+            ? NaN
+            : Number(product.last_purchase_unit_cost)
+          if (Number.isFinite(cost) && cost > 0) nextCosts.set(product.sku.trim().toUpperCase(), cost)
+        }
+        canonicalCostBySku.current = nextCosts
+        if (!cancelled) {
+          setRows(previous => applyCanonicalCosts(previous, nextCosts))
+        }
+      })
+      .catch(() => undefined)
+    return () => { cancelled = true }
   }, [supplier])
 
   // ─── Fetch con caché en memoria por período (y promesas en vuelo) ──────
@@ -325,7 +353,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
         if (cancelled) return
         setActiveDataset(dataset)
         const { rows: newRows, dayAfterEnd } = deriveRows(dataset, period, COVERAGE_OPTIONS[coverageIdxRef.current].value)
-        setRows(newRows)
+        setRows(applyCanonicalCosts(newRows, canonicalCostBySku.current))
         setEffectiveEndDate(dayAfterEnd)
         setInitialLoading(false)
       })
@@ -338,13 +366,14 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   // ─── Aplicación automática de período / cobertura ────────────────
   const applyDerive = useCallback((dataset: ReplenishmentDataset, periodDaysN: number, coverageWeeksN: number) => {
     const { rows: newRows, dayAfterEnd } = deriveRows(dataset, periodDaysN, coverageWeeksN)
+    const pricedRows = applyCanonicalCosts(newRows, canonicalCostBySku.current)
     setRows(previousRows => {
       const previousBySku = new Map(previousRows.map(row => [row.sku.SKU, row]))
-      return newRows.map(row => {
+      return pricedRows.map(row => {
         if (!manualQuantitySkus.current.has(row.sku.SKU)) return row
         const previous = previousBySku.get(row.sku.SKU)
         return previous
-          ? { ...row, confirmedQty: previous.confirmedQty, confirmedCost: previous.confirmedCost }
+          ? { ...row, confirmedQty: previous.confirmedQty, confirmedCost: previous.confirmedQty * canonicalCostForSku(canonicalCostBySku.current, row.sku.SKU) }
           : row
       })
     })
@@ -819,7 +848,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
       const next = [...prev]
       const r = { ...next[rowIndex] }
       r.confirmedQty = normalizedQty
-      r.confirmedCost = r.confirmedQty * r.sku.costo_unitario
+      r.confirmedCost = r.confirmedQty * canonicalCostForSku(canonicalCostBySku.current, r.sku.SKU)
       next[rowIndex] = r
       return next
     })
@@ -917,7 +946,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   // ─── Handlers de exportación Excel (despues de todas las derivaciones) ─
   function buildExcelRow(r: SkuRow): ReplenishmentExcelRow {
     const critical = r.sku.alerta === 'Quiebre crítico' || r.sku.alerta === 'Demanda histórica sin stock'
-    const noCost = r.sku.costo_unitario === 0
+    const unitCost = canonicalCostForSku(canonicalCostBySku.current, r.sku.SKU)
     return {
       sku: r.sku.SKU,
       product: getProductName(r.sku),
@@ -931,10 +960,10 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
       suggestedQty: r.suggestedQty,
       confirmedQty: r.confirmedQty,
       confirmed: confirmedSet.has(r.sku.SKU),
-      unitCost: r.sku.costo_unitario,
-      subtotal: r.confirmedQty * r.sku.costo_unitario,
+      unitCost,
+      subtotal: r.confirmedQty * unitCost,
       critical,
-      noCost,
+      noCost: unitCost === 0,
       trend: r.estadoTendencia,
     }
   }

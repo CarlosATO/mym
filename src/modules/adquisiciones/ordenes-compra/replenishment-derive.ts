@@ -411,7 +411,7 @@ export function deriveRows(
       avgPer7,
       suggestedQty,
       confirmedQty: suggestedQty,
-      confirmedCost: suggestedQty * sku.costo_unitario,
+      confirmedCost: 0,
       suggestedCalculable: metrics.suggestedQty !== null,
       suggestedReason: metrics.suggestedReason,
       suggestedTargetUnits: metrics.targetUnits ?? undefined,
