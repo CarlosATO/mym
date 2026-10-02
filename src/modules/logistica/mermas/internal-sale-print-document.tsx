@@ -45,46 +45,46 @@ export function buildInternalSalePrintHtml(draft: InternalSalePrintDraft) {
   @page { size: A4 portrait; margin: 0; }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; width: 210mm; height: 297mm; overflow: hidden; background: #fff; }
-  body { color: #18252d; font-family: Arial, Helvetica, sans-serif; font-size: 10pt; line-height: 1.25; }
+  body { color: #322D29; font-family: Arial, Helvetica, sans-serif; font-size: 10pt; line-height: 1.25; }
   .print-root, .print-sheet { width: 210mm; height: 297mm; overflow: hidden; }
   .print-sheet { position: relative; }
   .print-content { position: absolute; top: 10mm; left: 10mm; width: 190mm; margin: 0; padding: 10mm; transform-origin: top left; }
-  .print-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8mm; padding-bottom: 5mm; border-bottom: 2px solid #173b4d; }
-  .brand { color: #173b4d; font-size: 11pt; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; }
-  h1 { max-width: 115mm; margin: 3mm 0 0; color: #173b4d; font-family: Georgia, "Times New Roman", serif; font-size: 23pt; line-height: 1.05; text-transform: uppercase; }
-  .status { min-width: 38mm; padding: 3mm; border: 2px solid #b87928; color: #8b5b1c; text-align: center; }
+  .print-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8mm; padding-bottom: 5mm; border-bottom: 2px solid #72383D; }
+  .brand { color: #72383D; font-size: 11pt; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; }
+  h1 { max-width: 115mm; margin: 3mm 0 0; color: #72383D; font-family: Georgia, "Times New Roman", serif; font-size: 23pt; line-height: 1.05; text-transform: uppercase; }
+  .status { min-width: 38mm; padding: 3mm; border: 2px solid #AC9C8D; color: #6D625B; text-align: center; }
   .status-label { font-size: 8pt; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
-  .status-date { margin-top: 2mm; color: #18252d; font-size: 9pt; font-weight: 600; }
-  .worker-card { margin-top: 7mm; border: 1px solid #9aaeb8; break-inside: avoid; page-break-inside: avoid; }
-  .section-title { padding: 2mm 4mm; border-bottom: 1px solid #9aaeb8; background: #edf3f5; color: #173b4d; font-size: 8pt; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+  .status-date { margin-top: 2mm; color: #322D29; font-size: 9pt; font-weight: 600; }
+  .worker-card { margin-top: 7mm; border: 1px solid #D1C7BD; break-inside: avoid; page-break-inside: avoid; }
+  .section-title { padding: 2mm 4mm; border-bottom: 1px solid #D1C7BD; background: #EFE9E1; color: #72383D; font-size: 8pt; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
   .worker-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2mm 8mm; padding: 4mm; }
   .worker-grid p { margin: 0; }
   .worker-grid p:first-child { white-space: nowrap; }
   .worker-grid p:last-child { grid-column: 1 / -1; }
   .detail { margin-top: 7mm; break-inside: avoid; page-break-inside: avoid; }
-  .detail-heading { margin: 0 0 3mm; color: #173b4d; font-size: 8pt; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+  .detail-heading { margin: 0 0 3mm; color: #72383D; font-size: 8pt; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
   table { width: 100%; border-collapse: collapse; }
-  th { padding: 2mm; border-top: 2px solid #173b4d; border-bottom: 1px solid #9aaeb8; background: #edf3f5; color: #173b4d; font-size: 8pt; text-align: left; text-transform: uppercase; }
-  td { padding: 3mm 2mm; border-bottom: 1px solid #d7e0e4; vertical-align: top; }
+  th { padding: 2mm; border-top: 2px solid #72383D; border-bottom: 1px solid #D1C7BD; background: #EFE9E1; color: #72383D; font-size: 8pt; text-align: left; text-transform: uppercase; }
+  td { padding: 3mm 2mm; border-bottom: 1px solid #D1C7BD; vertical-align: top; }
   th.number, td.number { text-align: right; }
   td.sku { width: 20%; font-family: "Courier New", monospace; font-size: 8.5pt; }
   td.number { width: 16%; white-space: nowrap; }
   .product-name, .expiry-info { display: block; }
   .product-name { font-weight: 700; }
-  .expiry-info { margin-top: 1mm; color: #596a72; font-size: 8pt; }
+  .expiry-info { margin-top: 1mm; color: #6D625B; font-size: 8pt; }
   .strong { font-weight: 700; }
   tfoot { break-inside: avoid; page-break-inside: avoid; }
-  .total-label, .total-value { padding: 4mm 2mm; border-top: 2px solid #173b4d; font-size: 12pt; font-weight: 800; text-transform: uppercase; }
+  .total-label, .total-value { padding: 4mm 2mm; border-top: 2px solid #72383D; font-size: 12pt; font-weight: 800; text-transform: uppercase; }
   .total-label { text-align: right; }
-  .total-value { color: #173b4d; text-align: right; white-space: nowrap; }
-  .declaration-box { margin-top: 7mm; padding: 4mm; border-left: 4px solid #b87928; background: #faf7f0; break-inside: avoid; page-break-inside: avoid; }
+  .total-value { color: #72383D; text-align: right; white-space: nowrap; }
+  .declaration-box { margin-top: 7mm; padding: 4mm; border-left: 4px solid #AC9C8D; background: #EFE9E1; break-inside: avoid; page-break-inside: avoid; }
   .declaration-box p { margin: 0 0 2mm; font-size: 9pt; }
   .declaration-box p:last-child { margin-bottom: 0; }
   .signatures-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16mm; margin-top: 15mm; break-inside: avoid; page-break-inside: avoid; }
-  .signature-block h2 { margin: 0 0 4mm; color: #173b4d; font-size: 9pt; letter-spacing: .08em; text-transform: uppercase; }
-  .signature-block p { margin: 0 0 3mm; padding-bottom: 1mm; border-bottom: 1px solid #18252d; font-size: 9pt; }
-  .signature-line { margin-top: 13mm; padding-top: 2mm; border-top: 1px solid #18252d; text-align: center; font-size: 9pt; font-weight: 700; }
-  .final-date { margin-top: 10mm; padding-top: 3mm; border-top: 1px solid #9aaeb8; color: #596a72; font-size: 8pt; text-align: center; }
+  .signature-block h2 { margin: 0 0 4mm; color: #72383D; font-size: 9pt; letter-spacing: .08em; text-transform: uppercase; }
+  .signature-block p { margin: 0 0 3mm; padding-bottom: 1mm; border-bottom: 1px solid #322D29; font-size: 9pt; }
+  .signature-line { margin-top: 13mm; padding-top: 2mm; border-top: 1px solid #322D29; text-align: center; font-size: 9pt; font-weight: 700; }
+  .final-date { margin-top: 10mm; padding-top: 3mm; border-top: 1px solid #D1C7BD; color: #6D625B; font-size: 8pt; text-align: center; }
   .internal-sale-print-compact { font-size: 9.5pt; }
   .internal-sale-print-compact .worker-card, .internal-sale-print-compact .detail, .internal-sale-print-compact .declaration-box { margin-top: 5mm; }
   .internal-sale-print-compact .signatures-grid { margin-top: 10mm; }

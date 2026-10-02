@@ -48,7 +48,7 @@ function movementLabel(type: string, sourceType = "") {
 function movementClass(type: string) {
   if (type === "PAYMENT") return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
   if (type === "PAYMENT_VOID") return "bg-rose-500/10 text-rose-700 dark:text-rose-300";
-  if (type === "ADJUSTMENT") return "bg-sky-500/10 text-sky-700 dark:text-sky-300";
+  if (type === "ADJUSTMENT") return "bg-theme-text/[0.06] text-theme-text-muted";
   return "bg-theme-accent/10 text-theme-accent";
 }
 
@@ -127,8 +127,8 @@ export function MermasReport() {
   const rankedProducts = useMemo(() => [...(analytics?.products ?? [])].sort((a, b) => b[metric] - a[metric]).slice(0, 10), [analytics, metric]);
   return (
     <div className="mermas-report min-h-[calc(100vh-7.5rem)] bg-theme-bg p-3 sm:p-5">
-      <div className="mermas-report-screen mx-auto max-w-[1500px] overflow-hidden rounded-2xl border border-theme-border bg-theme-surface shadow-sm">
-        <header className="border-b border-theme-border/60 bg-theme-text/[0.012] px-4 py-3 sm:px-5 sm:py-4">
+      <div className="mermas-report-screen mx-auto max-w-[1500px] overflow-hidden">
+        <header className="border-b border-theme-border/70 px-1 py-3 sm:py-4">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-theme-accent">Mermas · Reportes</p>

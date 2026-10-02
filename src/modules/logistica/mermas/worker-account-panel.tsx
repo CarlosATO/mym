@@ -91,7 +91,7 @@ function chargeStatusClass(status: string) {
 function sourceClass(sourceType: string) {
   return sourceType === "MERMA"
     ? "bg-theme-accent/10 text-theme-accent"
-    : "bg-sky-500/10 text-sky-700 dark:text-sky-300";
+    : "bg-theme-text/[0.06] text-theme-text-muted";
 }
 
 function sourceLabel(sourceType: string) {
@@ -1031,7 +1031,7 @@ function KardexRowItem({ row }: { row: KardexRow }) {
             movement.movement_type === "PAYMENT"
               ? paymentStatusClass(movement.status)
               : movement.movement_type === "ADJUSTMENT"
-              ? "bg-sky-500/10 text-sky-700 dark:text-sky-300"
+              ? "bg-theme-text/[0.06] text-theme-text-muted"
               : "bg-theme-text/[0.06] text-theme-text-muted"
           }`}
         >

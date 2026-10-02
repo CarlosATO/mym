@@ -266,7 +266,7 @@ function MermasStockExitDetail({
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-semibold text-theme-text">Detalle de salida</h3>
-            {detail.bsale_reception_operation_id && <span className="rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-[10px] font-semibold text-sky-700 dark:text-sky-300">Reintegro Bsale</span>}
+            {detail.bsale_reception_operation_id && <span className="rounded-md border border-theme-border bg-theme-text/[0.06] px-2 py-1 text-[10px] font-semibold text-theme-text-muted">Reintegro Bsale</span>}
             <StatusBadge status={detail.status} />
           </div>
           <p className="mt-1 text-xs text-theme-text-muted">{formatDate(detail.created_at)} · {operationTypeLabel(detail.operation_type)}</p>
@@ -462,8 +462,8 @@ function MermasStockExitCreateForm({ onBack, onCreated }: { onBack: () => void; 
 
   return (
     <>
-      {regularizationStatus === "LOCAL_APPLICATION_PENDING" && <button type="button" onClick={() => void submit()} disabled={submitting} className="mb-3 inline-flex items-center gap-2 rounded-xl border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs font-semibold text-sky-700 dark:text-sky-300">Reintentar aplicación local</button>}
-      {type === "SALIDA_REGULACION" && <p className="mb-3 rounded-xl border border-sky-500/20 bg-sky-500/5 px-3 py-2 text-xs text-sky-700 dark:text-sky-300">Devuelve stock desde Bodega de Mermas a CASA MATRIZ en Bsale. El sistema seleccionará las partidas por FEFO.</p>}
+      {regularizationStatus === "LOCAL_APPLICATION_PENDING" && <button type="button" onClick={() => void submit()} disabled={submitting} className="mb-3 inline-flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-700 dark:text-amber-300">Reintentar aplicación local</button>}
+      {type === "SALIDA_REGULACION" && <p className="mb-3 rounded-xl border border-theme-border bg-theme-text/[0.04] px-3 py-2 text-xs text-theme-text-muted">Devuelve stock desde Bodega de Mermas a CASA MATRIZ en Bsale. El sistema seleccionará las partidas por FEFO.</p>}
       {type === "SALIDA_REGULACION" && <p className="mb-3 text-xs font-semibold text-theme-text-muted">{submitting ? "Reintegrando..." : "Acción: Reintegrar a Bsale"}</p>}
       {type === "SALIDA_REGULACION" && <p className="mb-3 text-[11px] text-theme-text-muted">Tipo seleccionado: Regularización / Reintegro a Bsale</p>}
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><button type="button" onClick={onBack} className="inline-flex items-center gap-1 text-xs font-semibold text-theme-text-accent hover:underline"><ArrowLeft className="h-3.5 w-3.5" /> Historial de salidas</button><p className="mt-3 text-[10px] font-bold uppercase tracking-[0.2em] text-theme-accent">Mermas · Control de stock</p><h2 className="mt-1 text-xl font-semibold text-theme-text">Nueva salida</h2><p className="mt-1 text-sm text-theme-text-muted">Retira stock de Mermas mediante FEFO y deja trazabilidad de la operación.</p></div></header>

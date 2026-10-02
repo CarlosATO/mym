@@ -25,9 +25,11 @@ export function WmsShell({ children, profile, permissions, pageTitle, breadcrumb
       permissions={permissions}
       pageTitle={pageTitle}
       breadcrumb={breadcrumb}
-      surfaceMode={compactSurface ? 'compact' : 'standard'}
+      surfaceMode={isMermasContext ? 'none' : compactSurface ? 'compact' : 'standard'}
       showPortalLink
       topbarVariant="module"
+      sidebarVariant={isMermasContext ? 'financial' : 'default'}
+      themeVariant={isMermasContext ? 'financial' : 'default'}
     >
       {children}
     </ModuleShell>

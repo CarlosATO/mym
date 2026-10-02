@@ -517,7 +517,7 @@ export function InternalSalePanel() {
 
   return (
     <div className="min-h-[calc(100vh-7.5rem)] bg-theme-bg p-3 sm:p-5">
-      <header className="mb-4 flex flex-col gap-3 rounded-2xl border border-theme-border bg-theme-surface px-4 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:px-5">
+      <header className="mb-4 flex flex-col gap-3 border-b border-theme-border/70 px-1 pb-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-theme-accent">
             Mermas · Punto de venta

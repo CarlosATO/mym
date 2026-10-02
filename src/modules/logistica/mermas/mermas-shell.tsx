@@ -47,12 +47,11 @@ export function MermasShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-[calc(100vh-7.5rem)] bg-theme-bg p-3 sm:p-5">
-      <div className="mx-auto min-h-[calc(100vh-9.5rem)] max-w-[1600px] overflow-hidden rounded-2xl border border-theme-border bg-theme-surface shadow-sm">
-        <header className="border-b border-theme-border/60 bg-theme-text/[0.012] px-4 py-3 sm:px-5 sm:py-4">
+    <div className="min-h-[calc(100vh-7.5rem)] bg-theme-bg">
+        <header className="border-b border-theme-border/70 bg-theme-surface/60 px-1 py-3 sm:py-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-theme-accent">WMS / Operación</p>
+              <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-theme-accent">Mermas / Operación</p>
               <h1 className="mt-1 text-lg font-semibold text-theme-text">Mermas</h1>
               <p className="mt-0.5 text-xs text-theme-text-muted">Gestión, control y disposición de productos en Merma</p>
             </div>
@@ -68,9 +67,8 @@ export function MermasShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         </header>
-        {(syncMessage || syncError) && <div className={`px-4 pt-3 text-sm sm:px-5 ${syncError ? "text-red-600" : "text-emerald-700 dark:text-emerald-300"}`}>{syncError || syncMessage}</div>}
+        {(syncMessage || syncError) && <div className={`px-1 pt-3 text-sm ${syncError ? "text-red-600" : "text-emerald-700 dark:text-emerald-300"}`}>{syncError || syncMessage}</div>}
         {children}
-      </div>
     </div>
   );
 }
