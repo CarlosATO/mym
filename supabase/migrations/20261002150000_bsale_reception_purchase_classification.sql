@@ -1,4 +1,5 @@
-CREATE VIEW integraciones.vw_bsale_reception_purchase_classification AS
+CREATE VIEW integraciones.vw_bsale_reception_purchase_classification
+WITH (security_invoker = true) AS
 WITH source_rows AS (
     SELECT
         d.company_id,
@@ -93,9 +94,14 @@ SELECT
     END AS purchase_validity_reason
 FROM classified;
 
-GRANT SELECT ON integraciones.vw_bsale_reception_purchase_classification TO authenticated, service_role;
+REVOKE ALL ON integraciones.vw_bsale_reception_purchase_classification
+FROM anon, authenticated;
 
-CREATE VIEW integraciones.vw_bsale_variant_last_purchase_cost AS
+GRANT SELECT ON integraciones.vw_bsale_reception_purchase_classification
+TO service_role;
+
+CREATE VIEW integraciones.vw_bsale_variant_last_purchase_cost
+WITH (security_invoker = true) AS
 WITH ranked AS (
     SELECT
         classification.company_id,
@@ -131,4 +137,8 @@ SELECT
 FROM ranked
 WHERE row_number = 1;
 
-GRANT SELECT ON integraciones.vw_bsale_variant_last_purchase_cost TO authenticated, service_role;
+REVOKE ALL ON integraciones.vw_bsale_variant_last_purchase_cost
+FROM anon, authenticated;
+
+GRANT SELECT ON integraciones.vw_bsale_variant_last_purchase_cost
+TO service_role;
