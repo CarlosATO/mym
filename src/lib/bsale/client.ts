@@ -178,5 +178,32 @@ export async function bsaleFetchAll<T>(
   return allItems
 }
 
+export async function bsaleFetchAllForCompany<T>(
+  options: BsaleFetchForCompanyOptions,
+  onPage?: (page: number, items: T[]) => void | Promise<void>,
+): Promise<T[]> {
+  const LIMIT = 50
+  let offset = 0
+  let totalCount: number | null = null
+  const allItems: T[] = []
+  let page = 0
+
+  while (totalCount === null || offset < totalCount) {
+    const result = await bsaleFetchForCompany<T>({ ...options, params: { ...options.params, limit: LIMIT, offset } })
+    totalCount = result.count
+    const items = result.items || []
+    allItems.push(...items)
+    page++
+    if (onPage) await onPage(page, items)
+    if (items.length < LIMIT) {
+      if (allItems.length < totalCount) throw new Error(`Respuesta incompleta de Bsale para ${options.path}: recibidos ${allItems.length} de ${totalCount}`)
+      break
+    }
+    offset += LIMIT
+  }
+  if (totalCount !== null && allItems.length < totalCount) throw new Error(`Respuesta incompleta de Bsale para ${options.path}: recibidos ${allItems.length} de ${totalCount}`)
+  return allItems
+}
+
 export { normalizeSku }
 export type { BsaleResponse }
