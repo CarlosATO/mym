@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildStatementRows, hasStatementInformation } from '../src/lib/control-financiero/statement.ts'
+import { buildStatementRows, getSalesNetDetailScope, hasStatementInformation } from '../src/lib/control-financiero/statement.ts'
 
 const sales = {
   company_id: 'company-a', year: 2026, currency: 'CLP', source: 'sales', data_through: '2026-09-30', has_information: true,
@@ -49,4 +49,11 @@ test('recognizes real monthly values even when an HTTP 200 payload omits the inf
   assert.equal(hasStatementInformation({ ...sales, has_information: false }, null), true)
   assert.equal(hasStatementInformation(null, { ...cogs, has_information: false }), true)
   assert.equal(hasStatementInformation({ ...sales, has_information: false, months: sales.months.map(month => ({ ...month, amount: null })) }, null), false)
+})
+
+test('opens only available sales cells and maps monthly and YTD columns correctly', () => {
+  assert.deepEqual(getSalesNetDetailScope(0, '100.00'), { month: 1 })
+  assert.deepEqual(getSalesNetDetailScope(8, '100.00'), { month: 9 })
+  assert.deepEqual(getSalesNetDetailScope(12, '300.00'), { month: null })
+  assert.equal(getSalesNetDetailScope(9, null), null)
 })

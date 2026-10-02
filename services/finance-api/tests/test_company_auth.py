@@ -15,18 +15,27 @@ SERVER_PERMISSION_CODE = "control_finance.read"
 
 
 class FakeResult:
-    def __init__(self, allowed: bool) -> None:
+    def __init__(self, allowed: bool, permission: bool | None = None) -> None:
         self.allowed = allowed
+        self.permission = allowed if permission is None else permission
 
     def scalar_one(self) -> bool:
         return self.allowed
 
+    def mappings(self):
+        return self
+
+    def one(self):
+        return {"has_access": self.allowed, "has_permission": self.permission}
+
 
 class FakeSession:
-    def __init__(self, allowed: bool) -> None:
+    def __init__(self, allowed: bool, permission: bool | None = None) -> None:
         self.allowed = allowed
+        self.permission = permission
         self.statement = None
         self.parameters = None
+        self.execute_calls = 0
 
     def __enter__(self) -> "FakeSession":
         return self
@@ -35,9 +44,10 @@ class FakeSession:
         return None
 
     def execute(self, statement, parameters):
+        self.execute_calls += 1
         self.statement = str(statement)
         self.parameters = parameters
-        return FakeResult(self.allowed)
+        return FakeResult(self.allowed, self.permission)
 
 
 class FailingSession(FakeSession):
@@ -167,21 +177,47 @@ def test_company_permission_allows_server_defined_permission(monkeypatch) -> Non
     session = FakeSession(allowed=True)
     dependency = _permission_dependency(monkeypatch, session)
 
-    result = dependency(_permission_context())
+    result = dependency(
+        auth.AuthenticatedUser("user-123"),
+        COMPANY_ID,
+    )
 
     assert result == _permission_context()
     assert session.statement == (
-        "SELECT core.has_permission_for_company("
-        ":user_id, :company_id, :permission_code)"
+        "SELECT core.has_company_access(:user_id, :company_id) AS has_access, "
+        "core.has_permission_for_company(:user_id, :company_id, :permission_code) "
+        "AS has_permission"
     )
     assert session.parameters["permission_code"] == SERVER_PERMISSION_CODE
+    assert session.execute_calls == 1
+
+
+def test_company_permission_checks_access_and_permission_in_one_query(monkeypatch) -> None:
+    session = FakeSession(allowed=True)
+    dependency = _permission_dependency(monkeypatch, session)
+
+    dependency(auth.AuthenticatedUser("user-123"), COMPANY_ID)
+
+    assert "has_company_access" in session.statement
+    assert "has_permission_for_company" in session.statement
+    assert session.execute_calls == 1
+
+
+def test_company_permission_denies_company_without_access(monkeypatch) -> None:
+    dependency = _permission_dependency(monkeypatch, FakeSession(allowed=False, permission=True))
+
+    with pytest.raises(company.HTTPException) as error:
+        dependency(auth.AuthenticatedUser("user-123"), COMPANY_ID)
+
+    assert error.value.status_code == 403
+    assert error.value.detail == "User does not have access to this company"
 
 
 def test_company_permission_denies_false_result(monkeypatch) -> None:
-    dependency = _permission_dependency(monkeypatch, FakeSession(allowed=False))
+    dependency = _permission_dependency(monkeypatch, FakeSession(allowed=True, permission=False))
 
     with pytest.raises(company.HTTPException) as error:
-        dependency(_permission_context())
+        dependency(auth.AuthenticatedUser("user-123"), COMPANY_ID)
 
     assert error.value.status_code == 403
 
@@ -190,7 +226,7 @@ def test_company_permission_returns_503_on_technical_failure(monkeypatch) -> Non
     dependency = _permission_dependency(monkeypatch, FailingSession(allowed=True))
 
     with pytest.raises(company.HTTPException) as error:
-        dependency(_permission_context())
+        dependency(auth.AuthenticatedUser("user-123"), COMPANY_ID)
 
     assert error.value.status_code == 503
     assert error.value.detail == "Company permission verification unavailable"
@@ -224,7 +260,13 @@ def test_financial_sales_uses_control_finance_permission(monkeypatch) -> None:
             "total_ytd": "0.00",
         },
     )
-    app.dependency_overrides[company.get_authorized_company_context] = lambda: context
+    financial_route = next(
+        route
+        for route in financial.router.routes
+        if route.path == "/financial/income-statement/sales-net"
+    )
+    permission_dependency = financial_route.dependant.dependencies[0].call
+    app.dependency_overrides[permission_dependency] = lambda: context
 
     try:
         response = client.get(
@@ -232,7 +274,7 @@ def test_financial_sales_uses_control_finance_permission(monkeypatch) -> None:
             headers={"X-Company-Id": COMPANY_ID},
         )
     finally:
-        app.dependency_overrides.pop(company.get_authorized_company_context, None)
+        app.dependency_overrides.pop(permission_dependency, None)
 
     assert response.status_code == 200
-    assert session.parameters["permission_code"] == financial.CONTROL_FINANCE_VIEW
+    assert session.execute_calls == 0

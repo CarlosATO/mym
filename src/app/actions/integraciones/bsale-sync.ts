@@ -7,6 +7,7 @@ import { syncBsaleClients } from '@/lib/integraciones/bsale-clients-sync'
 import { runCatalogAutoSyncStep } from '@/lib/integraciones/bsale-catalog-auto-sync'
 import { canRefreshClientMetricsSnapshot } from '@/lib/integraciones/client-metrics-refresh-policy'
 import { syncBsaleStockKardex } from '@/lib/integraciones/bsale-stock-kardex'
+import { upsertBsaleDocument, upsertBsaleDocumentDetails } from '@/lib/integraciones/bsale-document-hydration'
 import { createClient as createServerSessionClient } from '@/lib/supabase/server'
 import crypto from 'crypto'
 
@@ -1581,27 +1582,7 @@ async function syncDirectedClient(companyId: string, clientId: number, runId: st
 }
 
 async function upsertDirectedDocument(companyId: string, runId: string, document: DirectedDocument) {
-  const { error } = await integrDb().from('bsale_documents').upsert({
-    company_id: companyId,
-    bsale_id: document.id,
-    number: toNumber(document.number),
-    emission_date: epochToDate(document.emissionDate),
-    generation_date: epochToIso(document.generationDate),
-    total_amount: document.totalAmount ?? null,
-    net_amount: document.netAmount ?? null,
-    tax_amount: document.taxAmount ?? null,
-    exempt_amount: document.exemptAmount ?? null,
-    document_type_id: directedDocumentTypeId(document),
-    client_id: toNumber(document.client?.id ?? document.clientId),
-    office_id: toNumber(document.office?.id ?? document.officeId),
-    state: toNumber(document.state),
-    tracking_number: document.trackingNumber || null,
-    url_pdf: document.urlPdf || null,
-    raw_json: document,
-    bsale_sync_run_id: runId,
-    synced_at: new Date().toISOString(),
-  }, { onConflict: 'company_id,bsale_id', ignoreDuplicates: false })
-  if (error) throw error
+  await upsertBsaleDocument(integrDb(), companyId, runId, document)
 }
 
 async function fetchAndUpsertDirectedDetails(companyId: string, runId: string, document: DirectedDocument) {
@@ -1615,32 +1596,9 @@ async function fetchAndUpsertDirectedDetails(companyId: string, runId: string, d
   const data = await response.json() as { items?: DirectedDetail[] }
   const details = data.items || []
   if (details.length === 0) return 0
-  const records = details.map((detail, index: number) => ({
-    company_id: companyId,
-    bsale_id: detail.id,
-    bsale_document_id: document.id,
-    line_number: detail.lineNumber ?? index,
-    quantity: detail.quantity ?? 0,
-    net_unit_value: detail.netUnitValue ?? detail.netUnitValueRaw ?? 0,
-    total_unit_value: detail.totalUnitValue ?? 0,
-    net_amount: detail.netAmount ?? 0,
-    tax_amount: detail.taxAmount ?? 0,
-    total_amount: detail.totalAmount ?? 0,
-    net_discount: detail.netDiscount ?? 0,
-    variant_id: toNumber(detail.variant?.id),
-    variant_code: detail.variant?.code ? normalizeSku(detail.variant.code) : null,
-    variant_description: detail.variant?.description || null,
-    raw_json: detail,
-    bsale_sync_run_id: runId,
-    synced_at: new Date().toISOString(),
-  }))
-  const { error } = await integrDb().from('bsale_document_details').upsert(records, {
-    onConflict: 'company_id,bsale_id',
-    ignoreDuplicates: false,
-  })
-  if (error) throw error
+  await upsertBsaleDocumentDetails(integrDb(), companyId, runId, document.id, details)
 
-  return records.length
+  return details.length
 }
 
 async function convergeDirectedCustomerIdentity(companyId: string, invoiceNumber: string, customerId: number, scope?: { routeGuideId?: string; settlementId?: string }) {

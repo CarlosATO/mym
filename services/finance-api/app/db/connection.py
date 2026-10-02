@@ -22,9 +22,9 @@ def _sqlalchemy_dsn(dsn: str) -> str:
 def get_engine(dsn: str) -> Engine:
     return create_engine(
         _sqlalchemy_dsn(dsn),
-        pool_size=2,
+        pool_size=5,
         max_overflow=0,
-        pool_timeout=5,
+        pool_timeout=10,
         pool_recycle=1800,
         pool_pre_ping=True,
         connect_args={

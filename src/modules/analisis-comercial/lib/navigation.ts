@@ -1,4 +1,4 @@
-import { BarChart3, Package, Truck, WalletCards } from 'lucide-react'
+import { BarChart3, BookOpenText, Package, Truck, WalletCards } from 'lucide-react'
 import type { BreadcrumbValue, ModuleNavigation } from '@/components/layout/module-shell-types'
 
 const analysisBase = '/dashboard/analisis-comercial'
@@ -65,6 +65,14 @@ export const analisisComercialNavigation: ModuleNavigation = {
           active: { pathname: { prefix: `${analysisBase}/control-financiero/capital-trabajo` } },
           visibility: { anyOf: ['analisis_comercial.control_financiero.view', 'system.admin'] },
         },
+        {
+          id: 'control-financiero-payroll',
+          label: '08  Libro de Remuneraciones',
+          icon: BookOpenText,
+          target: { href: `${analysisBase}/control-financiero/libro-remuneraciones` },
+          active: { pathname: { prefix: `${analysisBase}/control-financiero/libro-remuneraciones` } },
+          visibility: { anyOf: ['analisis_comercial.control_financiero.view', 'system.admin'] },
+        },
       ],
     },
   ],
@@ -74,6 +82,7 @@ export const getAnalisisComercialBreadcrumb: BreadcrumbValue = ({ pathname }) =>
   if (pathname.startsWith(`${analysisBase}/control-financiero/estado-resultados`)) return ['Análisis Comercial', 'Control Financiero', 'Estado de Resultados']
   if (pathname.startsWith(`${analysisBase}/control-financiero/flujo-caja`)) return ['Análisis Comercial', 'Control Financiero', 'Flujo de Caja']
   if (pathname.startsWith(`${analysisBase}/control-financiero/capital-trabajo`)) return ['Análisis Comercial', 'Control Financiero', 'Capital de Trabajo']
+  if (pathname.startsWith(`${analysisBase}/control-financiero/libro-remuneraciones`)) return ['Análisis Comercial', 'Control Financiero', 'Libro de Remuneraciones']
   if (pathname.startsWith(`${analysisBase}/control-financiero`)) return ['Análisis Comercial', 'Control Financiero']
   if (pathname.startsWith(`${analysisBase}/proveedor`)) return ['Análisis Comercial', 'Proveedor 360']
   if (pathname.startsWith(`${analysisBase}/producto`)) return ['Análisis Comercial', 'Producto 360']

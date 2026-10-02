@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     database_runtime_dsn: SecretStr | None = None
     supabase_url: str | None = None
     supabase_anon_key: SecretStr | None = None
+    supabase_service_role_key: SecretStr | None = None
 
     model_config = SettingsConfigDict(
         env_prefix="",

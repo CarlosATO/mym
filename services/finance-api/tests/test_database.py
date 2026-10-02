@@ -48,3 +48,22 @@ def test_check_database_without_dsn_does_not_create_engine(monkeypatch) -> None:
     monkeypatch.setattr(connection, "get_engine", fail_if_called)
 
     assert connection.check_database(Settings()) is False
+
+
+def test_engine_uses_bounded_pool_for_runtime_pooler(monkeypatch) -> None:
+    captured = {}
+
+    def fake_create_engine(url, **kwargs):
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return object()
+
+    connection.get_engine.cache_clear()
+    monkeypatch.setattr(connection, "create_engine", fake_create_engine)
+
+    connection.get_engine("postgresql://user:password@example.test/db")
+
+    assert captured["kwargs"]["pool_size"] == 5
+    assert captured["kwargs"]["max_overflow"] == 0
+    assert captured["kwargs"]["pool_timeout"] == 10
+    connection.get_engine.cache_clear()

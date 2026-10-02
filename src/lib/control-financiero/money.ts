@@ -29,6 +29,21 @@ export function subtractMoney(left: string | null, right: string | null) {
   return formatDecimal({ integer: leftInteger - rightInteger, scale })
 }
 
+export function addMoney(left: string | null, right: string | null) {
+  const leftParts = parseDecimal(left)
+  const rightParts = parseDecimal(right)
+  if (!leftParts) return right
+  if (!rightParts) return left
+  const scale = Math.max(leftParts.scale, rightParts.scale)
+  const leftInteger = leftParts.integer * BigInt(10) ** BigInt(scale - leftParts.scale)
+  const rightInteger = rightParts.integer * BigInt(10) ** BigInt(scale - rightParts.scale)
+  return formatDecimal({ integer: leftInteger + rightInteger, scale })
+}
+
+export function sumMoney(values: Array<string | null | undefined>) {
+  return values.reduce<string | null>((total, value) => addMoney(total, value ?? null), '0') ?? '0'
+}
+
 export function percentageOf(value: string | null, denominator: string | null) {
   const valueParts = parseDecimal(value)
   const denominatorParts = parseDecimal(denominator)

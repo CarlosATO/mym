@@ -28,6 +28,11 @@ const viewHeaders = [
     title: 'Capital de Trabajo',
     description: 'Seguimiento de recursos y obligaciones operativas.',
   },
+  {
+    path: `${basePath}/libro-remuneraciones`,
+    title: 'Libro de Remuneraciones',
+    description: 'Preview y carga controlada de remuneraciones en CLP.',
+  },
 ]
 
 export function ControlFinancieroShell({ children, activeCompany }: { children: React.ReactNode; activeCompany: Company | null }) {

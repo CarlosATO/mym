@@ -1,0 +1,69 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { buildStatementRows } from '../src/lib/control-financiero/statement.ts'
+
+const sales = {
+  company_id: 'company',
+  year: 2026,
+  currency: 'CLP',
+  source: 'test',
+  data_through: '2026-10-31',
+  has_information: true,
+  documents_count: 1,
+  lines_count: 1,
+  months: Array.from({ length: 12 }, (_, index) => ({ month: index + 1, amount: '1000.00' })),
+  total_ytd: '12000.00',
+}
+
+const expenses = {
+  companyId: 'company',
+  year: 2026,
+  currency: 'CLP',
+  source: 'comercial.financial_bank_movements',
+  dataThrough: '2026-09-29',
+  months: Array.from({ length: 12 }, (_, index) => ({
+    month: index + 1,
+    status: index < 9 ? 'AVAILABLE' : 'MISSING',
+    softwareSubscriptions: index < 9 ? '10.00' : null,
+    officeConsumption: index < 9 ? '0.00' : null,
+    vehicleOperating: index === 1 ? '20.00' : index < 9 ? '0.00' : null,
+    notaryServices: index === 2 ? '4.00' : index < 9 ? '0.00' : null,
+    bankFees: index < 9 ? '5.00' : null,
+    operatingIdentifiedTotal: index < 9 ? '39.00' : null,
+    financialInterest: index === 5 ? '6.00' : index < 9 ? '0.00' : null,
+    nonOperatingIdentifiedTotal: index === 5 ? '6.00' : index < 9 ? '0.00' : null,
+  })),
+  coverage: { availableMonths: [1, 2, 3, 4, 5, 6, 7, 8, 9], missingMonths: [10, 11, 12], latestAvailableMonth: 9, coverageStatus: 'INCOMPLETE' },
+  ytd: {
+    status: 'INCOMPLETE', availableMonths: [1, 2, 3, 4, 5, 6, 7, 8, 9], missingMonths: [10, 11, 12], latestAvailableMonth: 9,
+    softwareSubscriptions: '90.00', officeConsumption: '0.00', vehicleOperating: '20.00', notaryServices: '4.00', bankFees: '45.00', operatingIdentifiedTotal: '159.00', financialInterest: '6.00', nonOperatingIdentifiedTotal: '6.00',
+  },
+}
+
+test('adds identified operating and non-operating groups without operational result', () => {
+  const rows = buildStatementRows(sales, null, null, 10, expenses)
+  const operating = rows.find(row => row.label === 'GASTOS OPERACIONALES IDENTIFICADOS')
+  const nonOperating = rows.find(row => row.label === 'GASTOS FINANCIEROS / NO OPERACIONALES')
+  assert.deepEqual(operating?.children?.map(row => row.label), [
+    'Software y suscripciones',
+    'Gastos de oficina y consumo interno',
+    'Combustible y gastos de vehículo',
+     'Servicios notariales',
+     'Gastos bancarios',
+     'Seguros',
+     'Telecomunicaciones e Internet',
+     'Servicios profesionales y externos',
+  ])
+  assert.equal(operating?.ytd, '159.00')
+  assert.equal(nonOperating?.children?.[0].ytd, '6.00')
+  assert.equal(rows.some(row => row.label === 'Resultado Operacional'), false)
+})
+
+test('renders missing expense months as null and compares YTD with covered-period sales', () => {
+  const rows = buildStatementRows(sales, null, null, 10, expenses)
+  const operating = rows.find(row => row.label === 'GASTOS OPERACIONALES IDENTIFICADOS')
+  assert.equal(operating?.values[8], '39.00')
+  assert.equal(operating?.values[9], null)
+  assert.equal(operating?.ytdMissing, 1)
+  assert.equal(operating?.percentageYtd, 159 / 9000 * 100)
+})

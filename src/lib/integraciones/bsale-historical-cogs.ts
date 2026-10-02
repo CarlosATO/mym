@@ -295,7 +295,14 @@ export async function upsertDocumentCostDetails(companyId: string, records: Bsal
   if (!records.length) return
   records.forEach(record => assertRecordCompany(companyId, record.company_id))
   const database = clientOrDefault(client)
-  for (const record of records) await upsertOne(database, 'bsale_document_cost_details', record as unknown as Record<string, unknown>, 'company_id,bsale_document_id,cost_detail_key')
+  const { error } = await database.schema('integraciones').from('bsale_document_cost_details').upsert(records.map(record => ({
+    ...record,
+    updated_at: new Date().toISOString(),
+  })) as unknown as Record<string, unknown>[], {
+    onConflict: 'company_id,bsale_document_id,cost_detail_key',
+    ignoreDuplicates: false,
+  })
+  if (error) throw new Error(`Error upserting bsale_document_cost_details: ${error.message}`)
 }
 
 export async function upsertCreditNoteReturn(companyId: string, record: BsaleCreditNoteReturnRecord, client?: PersistenceClient) {
