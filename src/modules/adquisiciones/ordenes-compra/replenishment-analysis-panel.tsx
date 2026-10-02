@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Check, FileSpreadsheet, Loader2, X } from 'lucide-react'
+import { AlertTriangle, Check, Loader2, X } from 'lucide-react'
 import { getReplenishmentDatasetFromBsale } from '@/app/actions/integraciones/bsale-dataset'
 import { getReplenishmentAvailabilityDaily, getReplenishmentKardexHistory } from '@/app/actions/integraciones/bsale-dataset'
 import type { ReplenishmentAvailabilityDaily, ReplenishmentDataset, ReplenishmentKardexEvent, ReplenishmentKardexHistoryPayload } from '@/app/actions/integraciones/bsale-dataset'
@@ -39,7 +39,8 @@ import { ReplenishmentTable } from './replenishment-table'
 import { ReplenishmentAnalyticsSheet } from './replenishment-analytics-sheet'
 import { getPurchaseOrderProductCatalogCached } from './purchase-order-product-cache'
 import { prefetchPurchaseOrderWarehouses } from './warehouse-cache'
-import { getVisibleReplenishmentExcelRows, parseReplenishmentExcel, type ImportedRowStatus, type ReplenishmentExcelImportPreview } from './replenishment-excel-import'
+import { buildReplenishmentExcelPreparation, parseReplenishmentExcel, type ReplenishmentExcelImportPreview } from './replenishment-excel-import'
+import { ReplenishmentExcelImportDialog } from './replenishment-excel-import-dialog'
 
 const COMPANY_ID = 'd1000000-0000-0000-0000-000000000001'
 const DEFAULT_PERIOD_IDX = 3
@@ -679,40 +680,12 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
     setError('')
     try {
       const catalog = await getPurchaseOrderProductCatalogCached()
-      const catalogBySku = new Map(catalog.map(product => [product.sku.trim().toUpperCase(), product]))
       const suppliers = await getSuppliers()
-      const providerName = excelImportPreview.provider
-      const normalizedProvider = providerName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase()
-      const supplierMatches = normalizedProvider && normalizedProvider !== 'PROVEEDOR POR SELECCIONAR'
-        ? suppliers.filter(supplier => [supplier.business_name, supplier.fantasy_name].filter(Boolean).some(name =>
-          name!.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase() === normalizedProvider
-        ))
-        : []
-      const supplier = supplierMatches.length === 1
-        ? { id: supplierMatches[0].id, name: supplierMatches[0].business_name }
-        : undefined
-      const items = excelImportPreview.rows
-        .filter(row => row.status === 'VALIDO' && row.quantity !== null && row.quantity > 0)
-        .map(row => {
-          const product = catalogBySku.get(row.sku.trim().toUpperCase())
-          const cost = product?.last_purchase_unit_cost
-          return {
-            product_id: product?.id ?? row.productId!,
-            sku: row.sku,
-            product_description: row.product || product?.description || row.sku,
-            unit: product?.unit_of_measure || 'UNIDAD',
-            quantity: row.quantity!,
-            unit_price: cost !== null && cost !== undefined && Number.isFinite(cost) && cost > 0 ? cost : 0,
-            reference_unit_cost: cost !== null && cost !== undefined && Number.isFinite(cost) ? cost : 0,
-            discount_percent: 0,
-            tax_rate: product?.tax_rate || 19,
-          }
-        })
-      if (items.length === 0) return
+      const preparation = buildReplenishmentExcelPreparation(excelImportPreview, catalog, suppliers)
+      if (preparation.items.length === 0) return
       sessionStorage.setItem(REPLENISHMENT_PO_PREPARATION_KEY, JSON.stringify({
         source: 'EXCEL',
-        supplier,
-        items,
+        ...preparation,
       }))
       setExcelImportPreview(null)
       onNavigateToPo?.()
@@ -721,16 +694,6 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
     } finally {
       setExcelImportLoading(false)
     }
-  }
-
-  function importStatusLabel(status: ImportedRowStatus): string {
-    return {
-      VALIDO: 'Válido',
-      SKU_NO_ENCONTRADO: 'SKU no encontrado',
-      CANTIDAD_INVALIDA: 'Cantidad inválida',
-      DUPLICADO: 'Duplicado',
-      NO_CONFIRMADO: 'No confirmado',
-    }[status]
   }
 
   // ─── Labels de semanas ───────────────────────────────────────────
@@ -946,7 +909,7 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   // ─── Handlers de exportación Excel (despues de todas las derivaciones) ─
   function buildExcelRow(r: SkuRow): ReplenishmentExcelRow {
     const critical = r.sku.alerta === 'Quiebre crítico' || r.sku.alerta === 'Demanda histórica sin stock'
-    const unitCost = canonicalCostForSku(canonicalCostBySku.current, r.sku.SKU)
+    const unitCost = Number.isFinite(r.sku.costo_unitario) ? r.sku.costo_unitario : 0
     return {
       sku: r.sku.SKU,
       product: getProductName(r.sku),
@@ -1027,9 +990,6 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
   }
 
   const hasResults = hasQuery && !error && !loading && filtered.length > 0
-  const visibleExcelImportRows = excelImportPreview
-    ? getVisibleReplenishmentExcelRows(excelImportPreview.rows, showAllExcelImportRows)
-    : []
   const canClearVisibleQuantities = filtered.some(row => row.confirmedQty > 0 || confirmedSet.has(row.sku.SKU))
 
   return (
@@ -1250,63 +1210,14 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
       />
 
       {excelImportPreview && (
-        <div className="fixed inset-0 z-[1250] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
-          <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-2xl">
-            <div className="flex items-center justify-between border-b border-theme-border px-5 py-4">
-              <div className="flex min-w-0 items-center gap-3">
-                <FileSpreadsheet className="h-5 w-5 shrink-0 text-theme-accent" />
-                <div className="min-w-0">
-                  <h3 className="truncate text-base font-bold text-theme-text">Previsualización de OC desde archivo</h3>
-                  <p className="truncate text-xs text-theme-text-muted" title={excelImportPreview.fileName}>{excelImportPreview.fileName}</p>
-                </div>
-              </div>
-              <button type="button" onClick={() => setExcelImportPreview(null)} className="rounded p-1 text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text" aria-label="Cerrar previsualización">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <div className="grid grid-cols-2 gap-2 border-b border-theme-border bg-theme-bg/30 p-4 text-xs sm:grid-cols-5">
-              <div><span className="text-theme-text-muted">Formato</span><strong className="block text-theme-text">{excelImportPreview.format}</strong></div>
-              <div><span className="text-theme-text-muted">Proveedor</span><strong className="block truncate text-theme-text" title={excelImportPreview.provider}>{excelImportPreview.provider}</strong></div>
-              <div><span className="text-theme-text-muted">Filas</span><strong className="block text-theme-text">{excelImportPreview.totalRows}</strong></div>
-              <div><span className="text-theme-text-muted">Válidas</span><strong className="block text-emerald-600">{excelImportPreview.validRows}</strong></div>
-              <div><span className="text-theme-text-muted">Errores / ignoradas</span><strong className="block text-theme-text">{excelImportPreview.errorRows} / {excelImportPreview.ignoredRows}</strong></div>
-            </div>
-            <div className="border-b border-theme-border px-5 py-3 text-xs text-theme-text-muted">
-              Selección basada en: <strong className="text-theme-text">{excelImportPreview.selectionBasis === 'CONFIRMADO_Y_CANTIDAD' ? 'Confirmado = Sí y Cantidad > 0' : 'Cantidad > 0 (sin columna Confirmado)'}</strong>
-            </div>
-            <div className="flex items-center justify-between gap-3 border-b border-theme-border px-5 py-3 text-xs">
-              <span className="text-theme-text-muted">Mostrando {visibleExcelImportRows.length} de {excelImportPreview.totalRows} filas</span>
-              <button type="button" onClick={() => setShowAllExcelImportRows(prev => !prev)} className="rounded-lg border border-theme-accent/30 px-3 py-1.5 font-semibold text-theme-accent hover:bg-theme-accent/10">
-                {showAllExcelImportRows ? 'Mostrar solo válidas y errores' : `Mostrar todas las filas (${excelImportPreview.totalRows})`}
-              </button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-auto">
-              <table className="w-full min-w-[720px] text-xs">
-                <thead className="sticky top-0 bg-theme-surface text-left text-[10px] uppercase tracking-wider text-theme-text-muted">
-                  <tr><th className="px-4 py-2.5">Fila</th><th className="px-4 py-2.5">SKU</th><th className="px-4 py-2.5">Producto</th><th className="px-4 py-2.5 text-right">Cantidad</th><th className="px-4 py-2.5">Estado</th></tr>
-                </thead>
-                <tbody>
-                  {visibleExcelImportRows.map(row => (
-                    <tr key={`${row.rowNumber}-${row.sku}`} className="border-t border-theme-border/60">
-                      <td className="px-4 py-2 text-theme-text-muted">{row.rowNumber}</td>
-                      <td className="px-4 py-2 font-mono font-semibold text-theme-text">{row.sku}</td>
-                      <td className="max-w-[360px] truncate px-4 py-2 text-theme-text" title={row.product}>{row.product || '—'}</td>
-                      <td className="px-4 py-2 text-right tabular-nums text-theme-text">{row.quantity ?? '—'}</td>
-                      <td className={`px-4 py-2 font-semibold ${row.status === 'VALIDO' ? 'text-emerald-600' : row.status === 'NO_CONFIRMADO' ? 'text-theme-text-muted' : 'text-red-600'}`} title={row.reason}>{importStatusLabel(row.status)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="flex items-center justify-between gap-3 border-t border-theme-border px-5 py-3">
-              <p className="text-xs text-theme-text-muted">Esta etapa no crea ninguna OC. Solo se transferirán las filas válidas.</p>
-              <div className="flex gap-2">
-                <button type="button" onClick={() => { setExcelImportPreview(null); setShowAllExcelImportRows(false) }} className="rounded-lg border border-theme-border px-4 py-2 text-xs font-semibold text-theme-text hover:bg-theme-text/5">Cerrar</button>
-                <button type="button" disabled={excelImportLoading || excelImportPreview.validRows === 0} onClick={handlePrepareExcelPurchaseOrder} className="rounded-lg bg-theme-accent px-4 py-2 text-xs font-bold text-white hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-50">Preparar Orden de Compra</button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <ReplenishmentExcelImportDialog
+          preview={excelImportPreview}
+          loading={excelImportLoading}
+          showAll={showAllExcelImportRows}
+          onShowAllChange={setShowAllExcelImportRows}
+          onClose={() => { setExcelImportPreview(null); setShowAllExcelImportRows(false) }}
+          onPrepare={handlePrepareExcelPurchaseOrder}
+        />
       )}
       {excelImportLoading && <div className="fixed bottom-5 left-1/2 z-[1300] -translate-x-1/2 rounded-full border border-theme-border bg-theme-surface px-4 py-2 text-xs font-semibold text-theme-text shadow-lg">Analizando archivo...</div>}
     </div>

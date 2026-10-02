@@ -22,6 +22,8 @@ import { buildPurchaseOrderFileNameBase } from '@/lib/adquisiciones/purchase-ord
 import { getActiveCompany, type Company } from '@/app/actions/companies'
 import { OperationalTableResizeHandle, shouldIgnoreOperationalRowDoubleClick, useOperationalTableWidths, type OperationalTableColumn } from '@/components/ui/operational-table'
 import { ReplenishmentAnalysisPanel } from './replenishment-analysis-panel'
+import { buildReplenishmentExcelPreparation, parseReplenishmentExcel, type ReplenishmentExcelImportPreview } from './replenishment-excel-import'
+import { ReplenishmentExcelImportDialog } from './replenishment-excel-import-dialog'
 import { PurchaseOrderSupplierReview } from './purchase-order-supplier-review'
 import { createClient as createBrowserClient } from '@/lib/supabase/client'
 import { formatCivilDate } from '@/lib/datetime'
@@ -148,8 +150,12 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const [isMarkingSent, setIsMarkingSent] = useState(false)
   const [downloadingPdf, setDownloadingPdf] = useState(false)
   const [downloadingExcel, setDownloadingExcel] = useState(false)
+  const [excelImportPreview, setExcelImportPreview] = useState<ReplenishmentExcelImportPreview | null>(null)
+  const [excelImportLoading, setExcelImportLoading] = useState(false)
+  const [showAllExcelImportRows, setShowAllExcelImportRows] = useState(false)
   const submittingRef = useRef(false)
   const productInputRef = useRef<HTMLInputElement>(null)
+  const excelImportInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     fetch('/logo-transparent.png')
@@ -419,6 +425,31 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
 
   function msg(text: string) { setMessage(text); setTimeout(() => setMessage(''), 3500) }
 
+  function applyReplenishmentPreparation(payload: ReplenishmentPreparationPayload) {
+    sessionStorage.removeItem(REPLENISHMENT_PO_PREPARATION_KEY)
+    setForm(prev => ({ ...prev, supplier_id: payload.supplier?.id ?? '', po_type: 'PRODUCTOS', currency: 'CLP' }))
+    setReplenishmentSupplierName(payload.supplier?.name ?? '')
+    setIsReplenishmentPreparation(payload.source === 'REPLENISHMENT')
+    setItems(payload.items.map(item => ({
+      tempId: newTempId(),
+      item_type: 'PRODUCT' as const,
+      product_id: item.product_id,
+      sku: item.sku,
+      description: item.product_description,
+      unit: item.unit || 'UNIDAD',
+      quantity: item.quantity,
+      unit_price: item.unit_price,
+      reference_unit_cost: item.reference_unit_cost ?? item.unit_price,
+      discount_percent: item.discount_percent ?? 0,
+      tax_rate: item.tax_rate,
+      warehouse_id: '',
+      notes: '',
+    })))
+    setEditId(null)
+    draftHandledRef.current = true
+    setView('form')
+  }
+
   useEffect(() => {
     if (!prepareReplenishment || typeof window === 'undefined') return
 
@@ -438,32 +469,54 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         return
       }
 
-      sessionStorage.removeItem(REPLENISHMENT_PO_PREPARATION_KEY)
-      setForm(prev => ({ ...prev, supplier_id: payload.supplier?.id ?? '', po_type: 'PRODUCTOS', currency: 'CLP' }))
-      setReplenishmentSupplierName(payload.supplier?.name ?? '')
-      setIsReplenishmentPreparation(payload.source === 'REPLENISHMENT')
-      setItems(payload.items.map(item => ({
-        tempId: newTempId(),
-        item_type: 'PRODUCT' as const,
-        product_id: item.product_id,
-        sku: item.sku,
-        description: item.product_description,
-        unit: item.unit || 'UNIDAD',
-        quantity: item.quantity,
-        unit_price: item.unit_price,
-        reference_unit_cost: item.reference_unit_cost ?? item.unit_price,
-        discount_percent: item.discount_percent ?? 0,
-        tax_rate: item.tax_rate,
-        warehouse_id: '',
-        notes: '',
-      })))
-      setEditId(null)
-      draftHandledRef.current = true
-      setView('form')
+       applyReplenishmentPreparation(payload)
     } catch {
       msg('La preparación de la orden de compra ya no está disponible.')
     }
   }, [prepareReplenishment])
+
+  async function handleExcelImportChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    setExcelImportLoading(true)
+    setMessage('')
+    try {
+      const catalog = await getPurchaseOrderProductCatalogCached()
+      setExcelImportPreview(await parseReplenishmentExcel(file, catalog))
+      setShowAllExcelImportRows(false)
+    } catch (error) {
+      setExcelImportPreview(null)
+      setShowAllExcelImportRows(false)
+      msg(error instanceof Error ? error.message : 'No se pudo analizar el archivo Excel.')
+    } finally {
+      setExcelImportLoading(false)
+    }
+  }
+
+  async function handlePrepareExcelPurchaseOrder() {
+    if (!excelImportPreview || excelImportPreview.validRows === 0) return
+    setExcelImportLoading(true)
+    setMessage('')
+    try {
+      const catalog = await getPurchaseOrderProductCatalogCached()
+      const availableSuppliers = suppliers.length > 0 ? suppliers : await getSuppliers()
+      const preparation = buildReplenishmentExcelPreparation(excelImportPreview, catalog, availableSuppliers)
+      if (preparation.items.length === 0) return
+      const payload: ReplenishmentPreparationPayload = {
+        source: 'EXCEL',
+        ...preparation,
+      }
+      sessionStorage.setItem(REPLENISHMENT_PO_PREPARATION_KEY, JSON.stringify(payload))
+      setExcelImportPreview(null)
+      setShowAllExcelImportRows(false)
+      applyReplenishmentPreparation(payload)
+    } catch (error) {
+      msg(error instanceof Error ? error.message : 'No se pudo preparar la Orden de Compra desde el archivo.')
+    } finally {
+      setExcelImportLoading(false)
+    }
+  }
 
   // Auto-recovery check when opening New PO form
   useEffect(() => {
@@ -1856,6 +1909,10 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
               <BarChart3 className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Análisis de reposición</span>
             </button>
+            <button type="button" onClick={() => excelImportInputRef.current?.click()} className="flex h-8 items-center justify-center gap-1.5 rounded-md border border-[#72383D]/35 px-2.5 text-xs font-semibold text-[#72383D] transition-all hover:bg-[#72383D]/10">
+              <FileSpreadsheet className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Crear OC desde archivo</span>
+            </button>
             <button onClick={() => { resetForm(); setView('form') }} className="ml-auto flex h-8 items-center justify-center gap-1.5 rounded-md bg-[#72383D] px-3 text-xs font-bold text-[#EFE9E1] transition-all hover:bg-[#5D2E32] md:ml-0">
               <Plus className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Crear OC</span>
@@ -1898,6 +1955,18 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
           </div>
         )}
       </div>
+
+      <input ref={excelImportInputRef} type="file" accept=".xlsx,.xls" onChange={handleExcelImportChange} className="hidden" />
+      {excelImportPreview && (
+        <ReplenishmentExcelImportDialog
+          preview={excelImportPreview}
+          loading={excelImportLoading}
+          showAll={showAllExcelImportRows}
+          onShowAllChange={setShowAllExcelImportRows}
+          onClose={() => { setExcelImportPreview(null); setShowAllExcelImportRows(false) }}
+          onPrepare={handlePrepareExcelPurchaseOrder}
+        />
+      )}
 
       {refreshing && <div role="status" aria-live="polite" className="pointer-events-none absolute left-1/2 top-20 z-50 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-theme-border bg-theme-surface/95 px-3 py-1.5 text-[11px] font-semibold text-theme-text-muted shadow-md">Actualizando...</div>}
 

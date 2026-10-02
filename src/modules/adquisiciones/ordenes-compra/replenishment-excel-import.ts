@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx'
 import type { PurchaseOrderCatalogProduct } from '@/app/actions/adquisiciones/products'
+import type { Supplier } from '@/app/actions/adquisiciones/suppliers'
 
 export type ReplenishmentExcelFormat = 'COMPRA' | 'VENTAS' | 'COMPLETA'
 export type ImportedRowStatus = 'VALIDO' | 'SKU_NO_ENCONTRADO' | 'CANTIDAD_INVALIDA' | 'DUPLICADO' | 'NO_CONFIRMADO'
@@ -9,6 +10,7 @@ export interface ReplenishmentExcelImportRow {
   sku: string
   product: string
   quantity: number | null
+  unitPrice: number | null
   productId: string | null
   status: ImportedRowStatus
   reason: string
@@ -24,6 +26,57 @@ export interface ReplenishmentExcelImportPreview {
   errorRows: number
   selectionBasis: 'CONFIRMADO_Y_CANTIDAD' | 'CANTIDAD'
   rows: ReplenishmentExcelImportRow[]
+}
+
+export interface ReplenishmentExcelPreparation {
+  supplier?: { id: string; name: string }
+  items: Array<{
+    product_id: string
+    sku: string
+    product_description: string
+    unit: string
+    quantity: number
+    unit_price: number
+    reference_unit_cost: number
+    discount_percent: number
+    tax_rate: number
+  }>
+}
+
+export function buildReplenishmentExcelPreparation(
+  preview: ReplenishmentExcelImportPreview,
+  catalog: PurchaseOrderCatalogProduct[],
+  suppliers: Supplier[],
+): ReplenishmentExcelPreparation {
+  const catalogBySku = new Map(catalog.map(product => [product.sku.trim().toUpperCase(), product]))
+  const normalizedProvider = preview.provider.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase()
+  const supplierMatches = normalizedProvider && normalizedProvider !== 'PROVEEDOR POR SELECCIONAR'
+    ? suppliers.filter(supplier => [supplier.business_name, supplier.fantasy_name].filter(Boolean).some(name =>
+      name!.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase() === normalizedProvider
+    ))
+    : []
+  const supplier = supplierMatches.length === 1
+    ? { id: supplierMatches[0].id, name: supplierMatches[0].business_name }
+    : undefined
+  const items = preview.rows
+    .filter(row => row.status === 'VALIDO' && row.quantity !== null && row.quantity > 0)
+    .map(row => {
+      const product = catalogBySku.get(row.sku.trim().toUpperCase())
+      const cost = product?.last_purchase_unit_cost
+      return {
+        product_id: product?.id ?? row.productId!,
+        sku: row.sku,
+        product_description: row.product || product?.description || row.sku,
+        unit: product?.unit_of_measure || 'UNIDAD',
+        quantity: row.quantity!,
+        unit_price: row.unitPrice !== null && Number.isFinite(row.unitPrice) ? row.unitPrice : 0,
+        reference_unit_cost: cost !== null && cost !== undefined && Number.isFinite(cost) ? cost : 0,
+        discount_percent: 0,
+        tax_rate: product?.tax_rate || 19,
+      }
+    })
+
+  return { supplier, items }
 }
 
 export function getVisibleReplenishmentExcelRows(rows: ReplenishmentExcelImportRow[], showAll: boolean): ReplenishmentExcelImportRow[] {
@@ -55,8 +108,23 @@ function text(value: unknown): string {
 
 function numberValue(value: unknown): number | null {
   if (typeof value === 'number') return Number.isFinite(value) ? value : null
-  const raw = text(value).replace(/\s/g, '').replace(/\./g, '').replace(',', '.')
+  let raw = text(value).replace(/\s/g, '')
   if (!raw) return null
+  // XLSX normally returns our exported numeric cells as numbers. For values
+  // edited as text, only interpret separators when their shape is unambiguous.
+  raw = raw.replace(/[^0-9,.-]/g, '')
+  const commaIndex = raw.lastIndexOf(',')
+  const dotIndex = raw.lastIndexOf('.')
+  if (commaIndex >= 0 && dotIndex >= 0) {
+    if (commaIndex > dotIndex) raw = raw.replace(/\./g, '').replace(',', '.')
+    else raw = raw.replace(/,/g, '')
+  } else if (commaIndex >= 0) {
+    const decimals = raw.length - commaIndex - 1
+    raw = decimals > 0 && decimals <= 2 ? raw.replace(',', '.') : raw.replace(/,/g, '')
+  } else if (dotIndex >= 0) {
+    const decimals = raw.length - dotIndex - 1
+    raw = decimals === 3 ? raw.replace('.', '') : raw
+  }
   const parsed = Number(raw)
   return Number.isFinite(parsed) ? parsed : null
 }
@@ -68,7 +136,7 @@ function isConfirmed(value: unknown): boolean {
 function formatFromHeaders(headers: string[]): ReplenishmentExcelFormat {
   const normalized = headers.map(normalize)
   const hasSalesMetrics = normalized.some(header =>
-    header.includes('total vendido') || header.includes('promedio semanal') || header.includes('costo unitario') || header.startsWith('ventas bloque')
+    header.includes('total vendido') || header.includes('promedio semanal') || header.startsWith('ventas bloque')
   )
   const hasAmount = normalized.some(header => header.includes('monto confirmado') || header.includes('monto estimado') || header.includes('monto conf'))
   if (hasSalesMetrics && hasAmount) return 'COMPLETA'
@@ -131,6 +199,7 @@ export async function parseReplenishmentExcel(file: File, catalog: PurchaseOrder
   const suggestedColumn = headerIndex(detail.headers, ['sugerido', 'cantidad sugerida'])
   const quantityColumn = headerIndex(detail.headers, ['cantidad confirmada', 'cantidad seleccionada', 'cantidad'])
   const confirmedColumn = headerIndex(detail.headers, ['confirmado', 'confirmacion'])
+  const priceColumn = headerIndex(detail.headers, ['costo unitario'])
   if (skuColumn < 0 || productColumn < 0 || quantityColumn < 0) {
     throw new Error('El archivo debe contener encabezados SKU, Producto y Cantidad.')
   }
@@ -147,16 +216,17 @@ export async function parseReplenishmentExcel(file: File, catalog: PurchaseOrder
     const sku = text(row[skuColumn])
     const product = text(row[productColumn])
     const quantity = numberValue(row[quantityColumn])
+    const unitPrice = priceColumn >= 0 ? numberValue(row[priceColumn]) : null
     const catalogProduct = catalogBySku.get(normalize(sku))
     const confirmed = confirmedColumn < 0 || isConfirmed(row[confirmedColumn])
     const suggested = suggestedColumn >= 0 ? numberValue(row[suggestedColumn]) : null
     void suggested
 
-    if (!confirmed) return { rowNumber: index + 2, sku, product, quantity, productId: catalogProduct?.id ?? null, status: 'NO_CONFIRMADO', reason: 'La fila no está confirmada.' }
-    if (quantity === null || quantity <= 0) return { rowNumber: index + 2, sku, product, quantity, productId: catalogProduct?.id ?? null, status: 'CANTIDAD_INVALIDA', reason: 'La cantidad debe ser mayor que 0.' }
-    if ((skuCounts.get(normalize(sku)) ?? 0) > 1) return { rowNumber: index + 2, sku, product, quantity, productId: catalogProduct?.id ?? null, status: 'DUPLICADO', reason: 'El SKU aparece más de una vez en el archivo.' }
-    if (!catalogProduct) return { rowNumber: index + 2, sku, product, quantity, productId: null, status: 'SKU_NO_ENCONTRADO', reason: 'El SKU no existe en el catálogo ERP.' }
-    return { rowNumber: index + 2, sku, product: product || catalogProduct.description, quantity, productId: catalogProduct.id, status: 'VALIDO', reason: 'Línea candidata para OC.' }
+    if (!confirmed) return { rowNumber: index + 2, sku, product, quantity, unitPrice, productId: catalogProduct?.id ?? null, status: 'NO_CONFIRMADO', reason: 'La fila no está confirmada.' }
+    if (quantity === null || quantity <= 0) return { rowNumber: index + 2, sku, product, quantity, unitPrice, productId: catalogProduct?.id ?? null, status: 'CANTIDAD_INVALIDA', reason: 'La cantidad debe ser mayor que 0.' }
+    if ((skuCounts.get(normalize(sku)) ?? 0) > 1) return { rowNumber: index + 2, sku, product, quantity, unitPrice, productId: catalogProduct?.id ?? null, status: 'DUPLICADO', reason: 'El SKU aparece más de una vez en el archivo.' }
+    if (!catalogProduct) return { rowNumber: index + 2, sku, product, quantity, unitPrice, productId: null, status: 'SKU_NO_ENCONTRADO', reason: 'El SKU no existe en el catálogo ERP.' }
+    return { rowNumber: index + 2, sku, product: product || catalogProduct.description, quantity, unitPrice, productId: catalogProduct.id, status: 'VALIDO', reason: 'Línea candidata para OC.' }
   })
 
   return {

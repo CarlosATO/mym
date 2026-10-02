@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import * as XLSX from 'xlsx'
-import { getVisibleReplenishmentExcelRows, parseReplenishmentExcel } from '../src/modules/adquisiciones/ordenes-compra/replenishment-excel-import.ts'
+import { buildReplenishmentExcelPreparation, getVisibleReplenishmentExcelRows, parseReplenishmentExcel } from '../src/modules/adquisiciones/ordenes-compra/replenishment-excel-import.ts'
 
 const catalog = [
   { id: 'product-1', sku: 'SKU-1', description: 'Producto uno' },
@@ -54,6 +54,47 @@ test('usa Cantidad, no Sugerido, preserva el valor manual y valida estados', asy
   assert.equal(preview.rows[2].status, 'SKU_NO_ENCONTRADO')
   assert.equal(preview.rows[3].status, 'DUPLICADO')
   assert.equal(preview.rows[5].status, 'CANTIDAD_INVALIDA')
+})
+
+test('importa Costo unitario como precio autoritativo sin cambiar la selección', async () => {
+  const preview = await parseReplenishmentExcel(excelFile('precios.xlsx', ['SKU', 'Producto', 'Costo unitario', 'Cantidad', 'Confirmado'], [
+    ['SKU-1', 'Uno', 17500, 1, 'SI'],
+    ['SKU-2', 'Dos', '15.122,00', 1, 'NO'],
+  ]), catalog)
+  assert.equal(preview.rows[0].unitPrice, 17500)
+  assert.equal(preview.rows[0].status, 'VALIDO')
+  assert.equal(preview.rows[1].unitPrice, 15122)
+  assert.equal(preview.rows[1].status, 'NO_CONFIRMADO')
+})
+
+test('conserva el cero y admite formato de miles propio del Excel', async () => {
+  const preview = await parseReplenishmentExcel(excelFile('precios-cero.xlsx', ['SKU', 'Producto', 'Costo unitario', 'Cantidad', 'Confirmado'], [
+    ['SKU-1', 'Uno', 0, 1, 'SI'],
+    ['SKU-2', 'Dos', '18.147', 1, 'SI'],
+  ]), catalog)
+  assert.equal(preview.rows[0].unitPrice, 0)
+  assert.equal(preview.rows[1].unitPrice, 18147)
+})
+
+test('el payload preparado es el mismo para ambos puntos de entrada', async () => {
+  const file = excelFile('equivalente.xlsx', ['SKU', 'Producto', 'Costo unitario', 'Cantidad', 'Confirmado'], [
+    ['SKU-1', 'Uno', 5000, 2, 'Sí'],
+    ['SKU-2', 'Dos', 10000, 3, 'Sí'],
+    ['SKU-3', 'No entra', 9000, 1, 'No'],
+    ['SKU-4', 'Cantidad cero', 7000, 0, 'Sí'],
+  ])
+  const previewFromAnalysis = await parseReplenishmentExcel(file, catalog)
+  const previewFromPurchaseOrders = await parseReplenishmentExcel(file, catalog)
+  const suppliers = [{ id: 'supplier-1', business_name: 'Proveedor Uno', fantasy_name: null }]
+  assert.deepEqual(
+    buildReplenishmentExcelPreparation(previewFromAnalysis, catalog, suppliers),
+    buildReplenishmentExcelPreparation(previewFromPurchaseOrders, catalog, suppliers),
+  )
+  const preparation = buildReplenishmentExcelPreparation(previewFromAnalysis, catalog, suppliers)
+  assert.deepEqual(preparation.items.map(item => ({ sku: item.sku, quantity: item.quantity, unit_price: item.unit_price })), [
+    { sku: 'SKU-1', quantity: 2, unit_price: 5000 },
+    { sku: 'SKU-2', quantity: 3, unit_price: 10000 },
+  ])
 })
 
 test('sin Confirmado selecciona por Cantidad > 0 y deja proveedor sin inventar', async () => {

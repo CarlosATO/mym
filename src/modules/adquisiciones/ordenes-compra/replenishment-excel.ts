@@ -296,7 +296,7 @@ function buildDetalleSheetV2(opts: ReplenishmentExcelOptionsV2): XLSX.WorkSheet 
 
   // Las columnas operativas siempre acompañan la vista exportada.
   const exportVisibleFixedCols = FIXED_COLUMNS.filter(
-    id => visibleFixedCols.includes(id) || ALWAYS_VISIBLE_COLUMNS.includes(id),
+    id => visibleFixedCols.includes(id) || ALWAYS_VISIBLE_COLUMNS.includes(id) || id === 'costo',
   )
   const exportCols = exportVisibleFixedCols.filter(id => !SKIP_COLS.has(id))
 
