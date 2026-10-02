@@ -136,7 +136,7 @@ function MermaOperations() {
     pendingCount: pending,
     ensureRequestsLoaded,
     ensureWarehouseLoaded,
-    invalidateRequests,
+    invalidateMermaMovementViews,
     invalidateWarehouse,
     pricingSettings,
     updatePricingSettings,
@@ -502,7 +502,13 @@ function MermaOperations() {
             onCreated={(requestCode) => {
               setIncidentsOpen(false);
               setMessage(`${requestCode} creada correctamente.`);
-              void invalidateRequests().then(() => ensureRequestsLoaded(search, true));
+              void (async () => {
+                await invalidateMermaMovementViews();
+                await Promise.all([
+                  ensureRequestsLoaded(search, true),
+                  bootstrap.canViewWarehouse ? ensureWarehouseLoaded(true) : Promise.resolve(),
+                ]);
+              })();
             }}
            />
          )}
