@@ -292,7 +292,7 @@ export async function syncBsaleReceptionsDelta(options: {
   })
 
   try {
-    runId = await (deps.createRun || defaultCreateRun)(options.companyId, options.trigger, baseMetadata())
+    runId = await (deps.createRun || defaultCreateRun)(options.companyId, options.trigger, baseMetadata(false))
     const headers = await (deps.fetchHeaders || fetchHeaders)(options.companyId, window.from, window.to)
     counts.receptions_fetched = headers.length
     const headerRows = headers.map(reception => ({

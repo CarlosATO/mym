@@ -62,6 +62,7 @@ function dependencies(overrides = {}) {
     fetchedHeaders: 0,
     fetchedDetails: 0,
     finished: [],
+    createdMetadata: null,
     headerPayloads: [],
     detailPayloads: [],
   }
@@ -70,7 +71,7 @@ function dependencies(overrides = {}) {
     getLastSuccessfulRun: async () => null,
     acquireLock: async () => { state.acquired++; return true },
     releaseLock: async () => { state.released++ },
-    createRun: async () => { state.created++; return 'run-1' },
+    createRun: async (_companyId, _trigger, metadata) => { state.created++; state.createdMetadata = metadata; return 'run-1' },
     finishRun: async (_runId, status, metadata, message) => { state.finished.push({ status, metadata, message }) },
     fetchHeaders: async () => { state.fetchedHeaders++; return [{ id: 1, admissionDate: 1790899200 }] },
     fetchDetails: async () => { state.fetchedDetails++; return [{ id: 10, quantity: 2, cost: 100, variant: { id: 7 } }] },
@@ -118,6 +119,23 @@ test('delta normal calcula ventana, termina SUCCESS y avanza watermark', async (
   assert.equal(result.status, 'SUCCESS')
   assert.equal(state.finished[0].status, 'SUCCESS')
   assert.equal(state.finished[0].metadata.watermark_admission_date, '2026-10-02')
+})
+
+test('el watermark solo existe después de SUCCESS, incluso con merge de metadata', async () => {
+  const success = dependencies({ getLastSuccessfulRun: async () => ({ metadata: { watermark_admission_date: '2026-10-01' } }) })
+  await run({}, success.deps)
+  assert.equal('watermark_admission_date' in success.state.createdMetadata, false)
+  assert.equal(success.state.finished[0].metadata.watermark_admission_date, '2026-10-02')
+  assert.equal({ ...success.state.createdMetadata, ...success.state.finished[0].metadata }.watermark_admission_date, '2026-10-02')
+
+  const failed = dependencies({
+    getLastSuccessfulRun: async () => ({ metadata: { watermark_admission_date: '2026-10-01' } }),
+    fetchHeaders: async () => { throw new Error('header failure') },
+  })
+  await run({}, failed.deps)
+  assert.equal('watermark_admission_date' in failed.state.createdMetadata, false)
+  assert.equal('watermark_admission_date' in failed.state.finished[0].metadata, false)
+  assert.equal('watermark_admission_date' in { ...failed.state.createdMetadata, ...failed.state.finished[0].metadata }, false)
 })
 
 test('backfill explícito ignora cooldown pero respeta lock', async () => {
