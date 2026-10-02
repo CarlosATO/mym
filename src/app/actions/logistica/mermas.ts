@@ -3585,6 +3585,18 @@ export type MermasAnalytics = {
   };
   monthly: MermaAnalyticsResult["monthly"];
   products: MermaAnalyticsResult["products"];
+  sales: {
+    total_value: number;
+    recovered_value: number;
+    units: number;
+    products: number;
+    lines: Array<{
+      sku: string;
+      name: string;
+      units: number;
+      value: number;
+    }>;
+  };
 };
 
 function santiagoCivilDate(value: string | null) {
@@ -3701,6 +3713,43 @@ export async function getMermasAnalytics(from: string, to: string): Promise<{ da
       }),
       labels,
     });
+    const internalSalesQuery = await database
+      .from("internal_sales")
+      .select("id, total_amount, created_at, status")
+      .eq("company_id", authorization.companyId)
+      .neq("status", "REVERSED")
+      .gte("created_at", `${from}T00:00:00Z`)
+      .lt("created_at", `${addCivilDays(to, 1)}T00:00:00Z`);
+    const sales = {
+      total_value: 0,
+      recovered_value: 0,
+      units: 0,
+      products: 0,
+      lines: [] as Array<{ sku: string; name: string; units: number; value: number }>,
+    };
+    if (!internalSalesQuery.error && internalSalesQuery.data?.length) {
+      const saleIds = internalSalesQuery.data.map((sale) => sale.id as string);
+      const { data: saleLines, error: saleLinesError } = await database
+        .from("internal_sale_lines")
+        .select("sale_id, bsale_variant_id, sku_snapshot, product_name_snapshot, quantity, line_total")
+        .eq("company_id", authorization.companyId)
+        .in("sale_id", saleIds);
+      if (!saleLinesError) {
+        const linesByProduct = new Map<string, { sku: string; name: string; units: number; value: number }>();
+        for (const sale of internalSalesQuery.data) sales.total_value += Number(sale.total_amount) || 0;
+        sales.recovered_value = sales.total_value;
+        for (const line of saleLines ?? []) {
+          const sku = String(line.sku_snapshot ?? `BS-${line.bsale_variant_id}`);
+          const current = linesByProduct.get(sku) ?? { sku, name: String(line.product_name_snapshot ?? "Producto Bsale"), units: 0, value: 0 };
+          current.units += Number(line.quantity) || 0;
+          current.value += Number(line.line_total) || 0;
+          linesByProduct.set(sku, current);
+        }
+        sales.lines = [...linesByProduct.values()].sort((a, b) => b.value - a.value);
+        sales.units = sales.lines.reduce((sum, line) => sum + line.units, 0);
+        sales.products = sales.lines.length;
+      }
+    }
     return {
       data: {
         from,
@@ -3713,6 +3762,7 @@ export async function getMermasAnalytics(from: string, to: string): Promise<{ da
         },
         monthly: analytics.monthly,
         products: analytics.products,
+        sales,
       },
     };
   } catch (error) {
