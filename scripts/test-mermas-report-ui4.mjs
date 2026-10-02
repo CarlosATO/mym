@@ -9,7 +9,7 @@ test('report keeps a compact executive structure', () => {
   assert.match(report, /min-h-\[calc\(100vh-7\.5rem\)\].*p-2 sm:p-3/)
   assert.match(report, /title="Merma mensual"/)
   assert.match(report, /Merma bruta/)
-  assert.match(report, /Reintegrado/)
+  assert.match(report, /Reintegro Bsale/)
   assert.match(report, /Merma neta/)
 })
 
@@ -17,7 +17,7 @@ test('report exposes internal merma sales separately from Bsale recoveries', () 
   assert.match(report, /Venta de merma/)
   assert.match(report, /Recuperado por venta/)
   assert.match(report, /Venta interna/)
-  assert.match(report, /Reintegrado Bsale/)
+  assert.match(report, /Reintegro Bsale/)
   assert.doesNotMatch(report, /title="Comercialización de merma"/)
 })
 
