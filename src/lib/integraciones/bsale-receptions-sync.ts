@@ -1,6 +1,4 @@
 import { createClient } from '@supabase/supabase-js'
-import { bsaleFetchAllForCompany } from '@/lib/bsale/client'
-import { getBsaleConfigForCompany } from '@/lib/bsale/company-config'
 import {
   createSyncRun,
   finishSyncRun,
@@ -39,8 +37,8 @@ export type ReceptionSyncResult = {
   receptionsUpserted?: number
   detailsFetched?: number
   detailsUpserted?: number
-  affectedVariantIds?: number[]
-  affectedVariantCount?: number
+  touchedVariantIds?: number[]
+  touchedVariantCount?: number
 }
 
 type SyncMetadata = {
@@ -54,8 +52,9 @@ type SyncMetadata = {
   receptions_fetched: number
   details_fetched: number
   details_upserted: number
-  affected_variant_ids: number[]
-  affected_variant_count: number
+  touched_variant_ids: number[]
+  touched_variant_count: number
+  rows_processed: number
 }
 
 type LastSuccessfulRun = { finished_at?: string | null; metadata?: Partial<SyncMetadata> | null }
@@ -181,8 +180,8 @@ async function defaultFinishRun(runId: string, status: 'SUCCESS' | 'FAILED', met
     runId,
     status,
     readCount: metadata.receptions_fetched + metadata.details_fetched,
-    insertedCount: metadata.rows_upserted,
-    updatedCount: metadata.rows_upserted,
+    insertedCount: 0,
+    updatedCount: 0,
     errorCount: status === 'FAILED' ? 1 : 0,
     message,
     metadata,
@@ -190,6 +189,7 @@ async function defaultFinishRun(runId: string, status: 'SUCCESS' | 'FAILED', met
 }
 
 async function fetchHeaders(companyId: string, from: string, to: string) {
+  const { bsaleFetchAllForCompany } = await import('../bsale/client')
   const headers: BsaleReception[] = []
   for (const date of listUtcDates(from, to)) {
     const admissiondate = String(Math.floor(new Date(`${date}T00:00:00Z`).getTime() / 1000))
@@ -203,6 +203,7 @@ async function fetchHeaders(companyId: string, from: string, to: string) {
 }
 
 async function fetchDetails(companyId: string, receptionId: number) {
+  const { bsaleFetchAllForCompany } = await import('../bsale/client')
   return bsaleFetchAllForCompany<BsaleReceptionDetail>({
     companyId,
     path: `/stocks/receptions/${receptionId}/details.json`,
@@ -236,6 +237,7 @@ async function resolveVariantCodes(companyId: string, variantIds: number[], cach
     }
     for (const id of unresolved.filter(candidate => !cache.has(candidate))) {
       try {
+        const { getBsaleConfigForCompany } = await import('../bsale/company-config')
         const { baseUrl, accessToken } = getBsaleConfigForCompany(companyId)
         const response = await fetch(`${baseUrl}/variants/${id}.json`, { headers: { access_token: accessToken, Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) })
         const body = response.ok ? await response.json() as { code?: string | null } : null
@@ -279,13 +281,14 @@ export async function syncBsaleReceptionsDelta(options: {
 
   let runId: string | undefined
   const counts = { receptions_fetched: 0, details_fetched: 0, details_upserted: 0, rows_upserted: 0 }
-  const affected = new Set<number>()
+  const touched = new Set<number>()
   const variantCache = new Map<number, string | null>()
   const finish = deps.finishRun || defaultFinishRun
-  const baseMetadata = (): SyncMetadata => ({
+  const baseMetadata = (includeWatermark = true): SyncMetadata => ({
     sync_kind: 'RECEPTIONS', window_from: window.from, window_to: window.to, overlap_days: window.backfill ? 0 : OVERLAP_DAYS,
-    backfill: window.backfill, watermark_admission_date: window.to, ...counts,
-    affected_variant_ids: Array.from(affected).sort((a, b) => a - b), affected_variant_count: affected.size,
+    backfill: window.backfill, ...(includeWatermark ? { watermark_admission_date: window.to } : {}), ...counts,
+    touched_variant_ids: Array.from(touched).sort((a, b) => a - b), touched_variant_count: touched.size,
+    rows_processed: counts.receptions_fetched + counts.details_fetched,
   })
 
   try {
@@ -296,7 +299,7 @@ export async function syncBsaleReceptionsDelta(options: {
       company_id: options.companyId, bsale_id: Number(reception.id), admission_date: epochToIso(reception.admissionDate),
       raw_admission_date: reception.rawAdmissionDate || dateFromEpoch(reception.admissionDate), document: reception.document || null,
       document_number: reception.documentNumber ? String(reception.documentNumber) : null, note: reception.note || null,
-      office_id: Number(reception.office?.id || 0) || null, raw_json: reception, bsale_sync_run_id: null,
+      office_id: Number(reception.office?.id || 0) || null, raw_json: reception,
       synced_at: now().toISOString(), updated_at: now().toISOString(),
     }))
     await (deps.upsertHeaders || upsertHeaders)(headerRows)
@@ -308,11 +311,11 @@ export async function syncBsaleReceptionsDelta(options: {
       const codeMap = await (deps.resolveVariantCodes || resolveVariantCodes)(options.companyId, variantIds, variantCache)
       const detailRows = detailResults.flatMap(({ reception, details }) => details.map(detail => {
         const variantId = Number(detail.variant?.id || 0) || null
-        if (variantId) affected.add(variantId)
+        if (variantId) touched.add(variantId)
         return {
           company_id: options.companyId, bsale_id: Number(detail.id), bsale_reception_id: Number(reception.id),
           quantity: toNum(detail.quantity), cost: toNum(detail.cost), variant_stock: toNum(detail.variantStock), variant_id: variantId,
-          variant_code: variantId ? codeMap.get(variantId) || null : null, raw_json: detail, bsale_sync_run_id: null,
+          variant_code: variantId ? codeMap.get(variantId) || null : null, raw_json: detail,
           synced_at: now().toISOString(), updated_at: now().toISOString(),
         }
       }))
@@ -323,11 +326,11 @@ export async function syncBsaleReceptionsDelta(options: {
     }
 
     await finish(runId, 'SUCCESS', baseMetadata())
-    return { success: true, status: 'SUCCESS', runId, window, receptionsFetched: counts.receptions_fetched, receptionsUpserted: headers.length, detailsFetched: counts.details_fetched, detailsUpserted: counts.details_upserted, affectedVariantIds: Array.from(affected), affectedVariantCount: affected.size }
+    return { success: true, status: 'SUCCESS', runId, window, receptionsFetched: counts.receptions_fetched, receptionsUpserted: headers.length, detailsFetched: counts.details_fetched, detailsUpserted: counts.details_upserted, touchedVariantIds: Array.from(touched), touchedVariantCount: touched.size }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Error inesperado sincronizando recepciones Bsale'
-    if (runId) await finish(runId, 'FAILED', baseMetadata(), message)
-    return { success: false, status: 'FAILED', runId, window, message, affectedVariantIds: Array.from(affected), affectedVariantCount: affected.size }
+    if (runId) await finish(runId, 'FAILED', baseMetadata(false), message)
+    return { success: false, status: 'FAILED', runId, window, message, touchedVariantIds: Array.from(touched), touchedVariantCount: touched.size }
   } finally {
     await (deps.releaseLock || (companyId => releaseSyncLock(companyId, 'BSALE', 'RECEPTIONS')))(options.companyId)
   }
