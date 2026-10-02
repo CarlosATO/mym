@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { BarChart3, ChevronRight, CircleAlert, Download, Eye, FileBarChart, Loader2, RefreshCw, TrendingDown, TrendingUp, Users, X } from "lucide-react";
+import { BarChart3, ChevronRight, CircleAlert, Download, Eye, Loader2, Minus, RefreshCw, TrendingDown, TrendingUp, Users, X } from "lucide-react";
 import {
   getMermasAnalytics,
   getWorkerMonthlyAccountReport,
@@ -10,6 +10,7 @@ import {
 } from "@/app/actions/logistica/mermas";
 import { formatInstantInSantiago } from "@/lib/datetime";
 import { createWorkerDebtReportPdfBlob } from "@/lib/pdf/generate-worker-debt-report-pdf";
+import { getImpactPercentage, getMonthlyDisplayState, getRecoveryRate, isFullyRecoveredProduct } from "./mermas-report-utils";
 
 const money = new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 });
 const number = new Intl.NumberFormat("es-CL", { maximumFractionDigits: 1 });
@@ -20,6 +21,21 @@ function formatMoney(value: number) {
 
 function formatNumber(value: number) {
   return number.format(value);
+}
+
+function formatSignedMoney(value: number) {
+  return value < 0 ? `-${formatMoney(Math.abs(value))}` : formatMoney(value);
+}
+
+function formatMonth(value: string) {
+  const [year, month] = value.split("-").map(Number);
+  return new Intl.DateTimeFormat("es-CL", { month: "short", year: "numeric" }).format(new Date(year, month - 1, 1));
+}
+
+function periodDays(from: string, to: string) {
+  const start = new Date(`${from}T00:00:00Z`).getTime();
+  const end = new Date(`${to}T00:00:00Z`).getTime();
+  return Math.max(1, Math.round((end - start) / 86400000) + 1);
 }
 
 function civilDate(date: Date) {
@@ -59,7 +75,6 @@ export function MermasReport() {
   const [analytics, setAnalytics] = useState<MermasAnalytics | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(true);
   const [analyticsError, setAnalyticsError] = useState("");
-  const [metric, setMetric] = useState<"cost" | "units">("cost");
   const [year, setYear] = useState(() => new Date().getFullYear());
   const [month, setMonth] = useState(() => new Date().getMonth() + 1);
   const [debt, setDebt] = useState<WorkerMonthlyReport | null>(null);
@@ -123,8 +138,9 @@ export function MermasReport() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
-  const monthMaximum = useMemo(() => Math.max(...(analytics?.monthly ?? []).map((item) => Math.abs(item[metric])), 1), [analytics, metric]);
-  const rankedProducts = useMemo(() => [...(analytics?.products ?? [])].sort((a, b) => b[metric] - a[metric]).slice(0, 10), [analytics, metric]);
+  const [showAllProducts, setShowAllProducts] = useState(false);
+  const rankedProducts = useMemo(() => [...(analytics?.products ?? [])].sort((a, b) => b.net_cost - a.net_cost || b.gross_cost - a.gross_cost), [analytics]);
+  const recoveryProducts = useMemo(() => [...(analytics?.products ?? [])].filter((row) => row.returned_units > 0 || row.returned_cost > 0).sort((a, b) => b.returned_cost - a.returned_cost), [analytics]);
   return (
     <div className="mermas-report min-h-[calc(100vh-7.5rem)] bg-theme-bg p-3 sm:p-5">
       <div className="mermas-report-screen mx-auto max-w-[1500px] overflow-hidden">
@@ -133,7 +149,7 @@ export function MermasReport() {
             <div>
               <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-theme-accent">Mermas · Reportes</p>
               <h1 className="mt-1 text-xl font-semibold tracking-tight text-theme-text">Informe de Mermas</h1>
-              <p className="mt-0.5 text-xs text-theme-text-muted">Análisis económico, operacional y cuentas de trabajadores.</p>
+              <p className="mt-0.5 text-xs text-theme-text-muted">Impacto económico, recuperación y productos con mayor pérdida.</p>
             </div>
             {tab === "debt" && debt && <button type="button" onClick={() => void handlePreviewPdf()} disabled={previewLoading} className="print-hide inline-flex items-center gap-2 rounded-xl border border-theme-border px-3 py-2 text-xs font-semibold text-theme-text hover:bg-theme-text/5 disabled:opacity-50"><Eye className="h-4 w-4" /> {previewLoading ? "Generando PDF..." : "Vista previa PDF"}</button>}
           </div>
@@ -145,29 +161,23 @@ export function MermasReport() {
 
         {tab === "analysis" ? (
           <section className="space-y-3 p-4 sm:p-5" aria-label="Análisis de Mermas">
-            <div className="print-hide flex flex-wrap items-end gap-2 rounded-xl border border-theme-border bg-theme-bg p-2.5">
+            <div className="print-hide flex flex-wrap items-end gap-2 border-b border-theme-border pb-3">
               <label className="grid gap-1 text-[11px] font-semibold uppercase tracking-wide text-theme-text-muted">Desde<input type="date" value={from} max={to} onChange={(event) => setFrom(event.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-sm font-normal normal-case tracking-normal text-theme-text" /></label>
               <label className="grid gap-1 text-[11px] font-semibold uppercase tracking-wide text-theme-text-muted">Hasta<input type="date" value={to} min={from} onChange={(event) => setTo(event.target.value)} className="h-9 rounded-lg border border-theme-border bg-theme-surface px-2 text-sm font-normal normal-case tracking-normal text-theme-text" /></label>
               <button type="button" onClick={() => void loadAnalytics()} disabled={analyticsLoading} className="inline-flex h-9 items-center gap-2 rounded-lg bg-theme-accent px-3 text-xs font-semibold text-white hover:bg-theme-accent-hover disabled:opacity-50"><RefreshCw className={analyticsLoading ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} /> Actualizar</button>
+              <span className="ml-auto pb-2 text-[11px] text-theme-text-muted">Período analizado: <strong className="text-theme-text">{periodDays(from, to)} días</strong></span>
             </div>
             {analyticsError && <ErrorMessage message={analyticsError} />}
             {analyticsLoading && !analytics ? <LoadingMessage text="Cargando análisis de Mermas..." /> : analytics && <>
-              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                <Kpi label="Costo merma neta" value={formatMoney(analytics.totals.net_cost)} icon={<TrendingDown className="h-4 w-4" />} accent />
-                <Kpi label="Costo merma bruta" value={formatMoney(analytics.totals.gross_cost)} icon={<FileBarChart className="h-4 w-4" />} />
-                <Kpi label="Reintegros Bsale" value={formatMoney(analytics.totals.returned_cost)} icon={<TrendingUp className="h-4 w-4" />} />
-                <Kpi label="Unidades netas" value={formatNumber(analytics.totals.net_units)} icon={<PackageIcon />} />
-                <Kpi label="Variación vs período anterior" value={analytics.totals.cost_variation === null ? "Sin base" : `${analytics.totals.cost_variation >= 0 ? "+" : ""}${analytics.totals.cost_variation.toFixed(1)}%`} icon={analytics.totals.cost_variation !== null && analytics.totals.cost_variation >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />} />
+              <div className="grid gap-3 xl:grid-cols-[1.45fr_1fr]">
+                <ExecutiveKpi totals={analytics.totals} />
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-2"><SecondaryKpi label="Merma bruta" value={formatMoney(analytics.totals.gross_cost)} units={analytics.totals.gross_units} subtext="Consumos registrados como merma" /><SecondaryKpi label="Reintegrado" value={formatMoney(analytics.totals.returned_cost)} units={analytics.totals.returned_units} subtext="Mercadería recuperada" /><SecondaryKpi label="Tasa de recuperación" value={getRecoveryRate(analytics.totals.gross_cost, analytics.totals.returned_cost) === null ? "Sin base" : `${getRecoveryRate(analytics.totals.gross_cost, analytics.totals.returned_cost)!.toFixed(1)}%`} subtext="Del costo bruto recuperado" /><SecondaryKpi label="Productos afectados" value={formatNumber(analytics.totals.products)} subtext="Productos con actividad en el período" /></div>
               </div>
-              {analytics.totals.uncosted_lines > 0 && <p className="flex items-center gap-2 text-xs text-amber-700 dark:text-amber-300"><CircleAlert className="h-4 w-4" /> {analytics.totals.uncosted_lines} registros sin costo histórico ({formatNumber(analytics.totals.uncosted_units)} unidades), excluidos del costo económico.</p>}
-              <p className="rounded-xl border border-theme-border bg-theme-bg px-3 py-2 text-xs text-theme-text-muted">Merma bruta: <strong className="text-theme-text">{formatNumber(analytics.totals.gross_units)} unidades / {formatMoney(analytics.totals.gross_cost)}</strong> · Reintegrada: <strong className="text-theme-text">{formatNumber(analytics.totals.returned_units)} unidades / {formatMoney(analytics.totals.returned_cost)}</strong> · Merma neta: <strong className="text-theme-accent">{formatNumber(analytics.totals.net_units)} unidades / {formatMoney(analytics.totals.net_cost)}</strong></p>
-              {analytics.totals.inconsistencies.length > 0 && <p className="flex items-center gap-2 text-xs text-amber-700 dark:text-amber-300"><CircleAlert className="h-4 w-4" /> Se detectaron {analytics.totals.inconsistencies.length} inconsistencias: reintegros superiores al consumo original.</p>}
-              <div className="grid gap-3 xl:grid-cols-[1.35fr_1fr]">
-                <Panel title="Evolución mensual" action={<div className="print-hide inline-flex rounded-lg border border-theme-border p-0.5"><button type="button" onClick={() => setMetric("cost")} className={`rounded-md px-2 py-1 text-[11px] font-semibold ${metric === "cost" ? "bg-theme-text text-theme-surface" : "text-theme-text-muted"}`}>Costo $</button><button type="button" onClick={() => setMetric("units")} className={`rounded-md px-2 py-1 text-[11px] font-semibold ${metric === "units" ? "bg-theme-text text-theme-surface" : "text-theme-text-muted"}`}>Unidades</button></div>}>
-                  <div className="flex h-[230px] items-end justify-center gap-2 overflow-x-auto pt-3">{analytics.monthly.map((item) => { const value = item[metric]; return <div key={item.month} className={`${analytics.monthly.length === 1 ? "w-28 flex-none" : "min-w-12 flex-1"} flex max-w-24 flex-col items-center gap-1.5`}><span className="text-[10px] tabular-nums text-theme-text-muted">{metric === "cost" ? formatMoney(value).replace(/\s/g, "") : formatNumber(value)}</span><div className="flex h-32 w-full items-end rounded-t-md bg-theme-accent/10"><div className="w-full rounded-t-md bg-theme-accent transition-all" style={{ height: `${Math.max((value / monthMaximum) * 100, 3)}%` }} /></div><span className="text-[10px] text-theme-text-muted">{item.month.slice(5)}</span></div>; })}</div>
-                </Panel>
-              </div>
-              <Ranking title={metric === "cost" ? "Productos con mayor costo económico" : "Productos con mayor cantidad de unidades"} rows={rankedProducts} value={metric} action={<div className="print-hide inline-flex rounded-lg border border-theme-border p-0.5"><button type="button" onClick={() => setMetric("cost")} className={`rounded-md px-2 py-1 text-[11px] font-semibold ${metric === "cost" ? "bg-theme-text text-theme-surface" : "text-theme-text-muted"}`}>Mayor costo</button><button type="button" onClick={() => setMetric("units")} className={`rounded-md px-2 py-1 text-[11px] font-semibold ${metric === "units" ? "bg-theme-text text-theme-surface" : "text-theme-text-muted"}`}>Mayor cantidad</button></div>} />
+              <ExecutiveEquation totals={analytics.totals} />
+              <MonthlyEvolution monthly={analytics.monthly} />
+              <ImpactTable rows={showAllProducts ? rankedProducts : rankedProducts.slice(0, 10)} totalNetCost={analytics.totals.net_cost} hasMore={rankedProducts.length > 10} showAll={showAllProducts} onToggle={() => setShowAllProducts((value) => !value)} />
+              <RecoveryTable rows={recoveryProducts} />
+              {(analytics.totals.uncosted_lines > 0 || analytics.totals.inconsistencies.length > 0) && <DataQuality totals={analytics.totals} />}
             </>}
           </section>
         ) : (
@@ -209,8 +219,45 @@ function WorkerDrawer({ worker, onClose }: { worker: WorkerMonthlyReport["worker
   return <div className="fixed inset-0 z-50 flex justify-end bg-black/25" role="dialog" aria-modal="true" aria-label={`Detalle de ${worker.name}`}><button type="button" aria-label="Cerrar detalle" onClick={onClose} className="absolute inset-0 cursor-default" /><aside className="relative h-full w-full max-w-2xl overflow-y-auto border-l border-theme-border bg-theme-surface p-5 shadow-2xl sm:p-7"><div className="flex items-start justify-between gap-4"><div><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-theme-accent">Detalle mensual</p><h2 className="mt-1 text-xl font-semibold text-theme-text">{worker.name}</h2><p className="mt-1 text-sm text-theme-text-muted">RUT {worker.rut}</p></div><button type="button" onClick={onClose} className="rounded-lg p-2 text-theme-text-muted hover:bg-theme-text/5"><X className="h-5 w-5" /></button></div><div className="mt-6 grid grid-cols-2 gap-3"><MiniMetric label="Saldo inicial" value={formatMoney(worker.opening_balance)} /><MiniMetric label="Saldo final" value={formatMoney(worker.closing_balance)} accent /></div><div className="mt-7"><h3 className="text-sm font-semibold text-theme-text">Movimientos del período</h3><div className="mt-3 space-y-2">{worker.movements.length === 0 ? <p className="rounded-xl border border-dashed border-theme-border p-5 text-sm text-theme-text-muted">Sin movimientos en el período.</p> : worker.movements.map((movement, index) => <div key={`${movement.date}-${index}`} className="rounded-xl border border-theme-border p-3"><div className="flex flex-wrap items-center justify-between gap-2"><span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase ${movementClass(movement.type)}`}>{movementLabel(movement.type)}</span><span className="text-xs text-theme-text-muted">{formatInstantInSantiago(movement.date)}</span></div><div className="mt-2 grid grid-cols-2 gap-2 text-xs"><span className="text-theme-text-muted">Origen <b className="text-theme-text">{movement.source_type}</b></span><span className="text-theme-text-muted">Referencia <b className="text-theme-text">{movement.reference_number ?? "-"}</b></span><span className="text-theme-text-muted">Monto <b className="text-theme-text">{formatMoney(movement.amount)}</b></span><span className="text-theme-text-muted">Efecto <b className={movement.balance_effect < 0 ? "text-emerald-700 dark:text-emerald-300" : "text-theme-text"}>{formatMoney(movement.balance_effect)}</b></span></div></div>)}</div></div></aside></div>;
 }
 
-function Kpi({ label, value, icon, accent = false }: { label: string; value: string; icon?: React.ReactNode; accent?: boolean }) {
-  return <div className="rounded-xl border border-theme-border bg-theme-bg p-4"><div className="flex items-center justify-between text-theme-text-muted"><span className="text-[10px] font-semibold uppercase tracking-[0.12em]">{label}</span>{icon}</div><p className={`mt-2 text-lg font-bold tabular-nums ${accent ? "text-theme-accent" : "text-theme-text"}`}>{value}</p></div>;
+function ExecutiveKpi({ totals }: { totals: MermasAnalytics["totals"] }) {
+  const variation = totals.cost_variation;
+  const variationTone = variation === null ? "text-theme-text-muted" : variation > 0 ? "text-rose-700 dark:text-rose-300" : "text-emerald-700 dark:text-emerald-300";
+  const variationLabel = variation === null ? "Sin base" : variation > 0 ? `-${variation.toFixed(1)}% vs. período anterior` : `+${Math.abs(variation).toFixed(1)}% vs. período anterior`;
+  return <div className="rounded-2xl border border-theme-accent/35 bg-theme-accent/[0.06] p-5 sm:p-6"><div className="flex items-start justify-between gap-3"><div><p className="text-[11px] font-bold uppercase tracking-[0.2em] text-theme-accent">Merma neta</p><p className="mt-3 text-3xl font-semibold tracking-tight text-theme-text sm:text-4xl">{formatSignedMoney(totals.net_cost)}</p><p className="mt-1 text-sm tabular-nums text-theme-text-muted">{formatNumber(totals.net_units)} unidades</p></div><TrendingDown className="h-5 w-5 text-theme-accent" /></div><div className="mt-5 flex items-center justify-between gap-3 border-t border-theme-accent/15 pt-3 text-xs"><span className="text-theme-text-muted">Pérdida efectiva después de reintegros</span><span className={`inline-flex items-center gap-1 font-semibold ${variationTone}`}>{variation === null ? <Minus className="h-3.5 w-3.5" /> : variation > 0 ? <TrendingDown className="h-3.5 w-3.5" /> : <TrendingUp className="h-3.5 w-3.5" />}{variationLabel}</span></div></div>;
+}
+
+function SecondaryKpi({ label, value, units, subtext }: { label: string; value: string; units?: number; subtext: string }) {
+  return <div className="border-l-2 border-theme-border px-3 py-2"><p className="text-[10px] font-bold uppercase tracking-[0.16em] text-theme-text-muted">{label}</p><p className="mt-1 text-xl font-semibold tabular-nums text-theme-text">{value}</p>{units !== undefined && <p className="text-xs tabular-nums text-theme-text-muted">{formatNumber(units)} unidades</p>}<p className="mt-2 text-[11px] leading-4 text-theme-text-muted">{subtext}</p></div>;
+}
+
+function ExecutiveEquation({ totals }: { totals: MermasAnalytics["totals"] }) {
+  return <section className="border-y border-theme-border py-4" aria-label="Ecuación ejecutiva"><div className="grid items-center gap-3 sm:grid-cols-[1fr_auto_1fr_auto_1fr]"><EquationValue label="Merma bruta" cost={totals.gross_cost} units={totals.gross_units} /><span className="text-center text-xl font-light text-theme-text-muted">−</span><EquationValue label="Reintegrado" cost={totals.returned_cost} units={totals.returned_units} /><span className="text-center text-xl font-light text-theme-text-muted">=</span><EquationValue label="Merma neta" cost={totals.net_cost} units={totals.net_units} accent /></div></section>;
+}
+
+function EquationValue({ label, cost, units, accent = false }: { label: string; cost: number; units: number; accent?: boolean }) {
+  return <div className="rounded-xl bg-theme-surface/55 px-3 py-3"><p className={`text-[10px] font-bold uppercase tracking-[0.16em] ${accent ? "text-theme-accent" : "text-theme-text-muted"}`}>{label}</p><p className={`mt-1 text-lg font-semibold tabular-nums ${accent ? "text-theme-accent" : "text-theme-text"}`}>{formatSignedMoney(cost)}</p><p className="text-xs tabular-nums text-theme-text-muted">{formatNumber(units)} unidades</p></div>;
+}
+
+function MonthlyEvolution({ monthly }: { monthly: MermasAnalytics["monthly"] }) {
+  const rows = monthly.map(getMonthlyDisplayState);
+  const maximum = Math.max(...rows.flatMap((row) => [row.gross_cost, row.returned_cost]), 1);
+  return <Panel title="Evolución mensual" subtitle="Lectura económica del período, sin convertir reintegros en merma negativa."><div className="space-y-4">{rows.length === 0 ? <p className="text-sm text-theme-text-muted">Sin movimientos mensuales en el período.</p> : rows.map((row) => <div key={row.month} className="grid gap-3 border-b border-theme-border/70 pb-4 last:border-b-0 last:pb-0 sm:grid-cols-[110px_1fr_150px] sm:items-center"><div><p className="text-sm font-semibold capitalize text-theme-text">{formatMonth(row.month)}</p><p className="mt-1 text-[11px] text-theme-text-muted">{formatNumber(row.net_units)} unidades netas</p></div><div className="space-y-2"><MonthlyBar label="Merma bruta" value={row.gross_cost} maximum={maximum} tone="bg-theme-accent" /><MonthlyBar label="Reintegrado" value={row.returned_cost} maximum={maximum} tone="bg-emerald-600/70" /></div><div className="sm:text-right"><p className="text-[10px] font-bold uppercase tracking-[0.14em] text-theme-text-muted">Merma neta</p><p className={`mt-1 text-base font-semibold tabular-nums ${row.net_cost < 0 ? "text-emerald-700 dark:text-emerald-300" : "text-theme-text"}`}>{formatSignedMoney(row.net_cost)}</p>{row.isCrossPeriodRecovery && <p className="mt-1 text-[10px] leading-4 text-theme-text-muted">Reintegro de merma originada en otro período</p>}</div></div>)}</div><div className="mt-5 overflow-x-auto border-t border-theme-border pt-3"><table className="w-full min-w-[560px] text-xs"><thead className="text-left text-[10px] uppercase tracking-wider text-theme-text-muted"><tr><th className="px-2 py-2">Mes</th><th className="px-2 py-2 text-right">Merma bruta</th><th className="px-2 py-2 text-right">Reintegrado</th><th className="px-2 py-2 text-right">Merma neta</th></tr></thead><tbody className="divide-y divide-theme-border/60">{rows.map((row) => <tr key={`table-${row.month}`}><td className="px-2 py-2 font-medium capitalize text-theme-text">{formatMonth(row.month)}</td><td className="px-2 py-2 text-right tabular-nums text-theme-text">{formatMoney(row.gross_cost)}</td><td className="px-2 py-2 text-right tabular-nums text-theme-text">{formatMoney(row.returned_cost)}</td><td className={`px-2 py-2 text-right font-semibold tabular-nums ${row.net_cost < 0 ? "text-emerald-700 dark:text-emerald-300" : "text-theme-text"}`}>{formatSignedMoney(row.net_cost)}</td></tr>)}</tbody></table></div></Panel>;
+}
+
+function MonthlyBar({ label, value, maximum, tone }: { label: string; value: number; maximum: number; tone: string }) {
+  return <div className="grid grid-cols-[94px_1fr_82px] items-center gap-2 text-[11px]"><span className="text-theme-text-muted">{label}</span><div className="h-2 rounded-full bg-theme-text/[0.06]"><div className={`h-2 rounded-full ${tone}`} style={{ width: value > 0 ? `${Math.max(value / maximum * 100, 2)}%` : "0%" }} /></div><span className="text-right tabular-nums text-theme-text">{formatMoney(value)}</span></div>;
+}
+
+function ImpactTable({ rows, totalNetCost, hasMore, showAll, onToggle }: { rows: MermasAnalytics["products"]; totalNetCost: number; hasMore: boolean; showAll: boolean; onToggle: () => void }) {
+  return <Panel title="Productos con mayor impacto" subtitle="Ordenados por costo neto; los productos totalmente recuperados permanecen visibles."><div className="overflow-x-auto"><table className="w-full min-w-[900px] text-xs"><thead className="border-b border-theme-border text-left text-[10px] uppercase tracking-wider text-theme-text-muted"><tr><th className="px-3 py-2">SKU</th><th className="px-3 py-2">Producto</th><th className="px-3 py-2 text-right">Merma bruta</th><th className="px-3 py-2 text-right">Reintegrado</th><th className="px-3 py-2 text-right">Merma neta</th><th className="px-3 py-2 text-right">Costo neto</th><th className="px-3 py-2 text-right">% costo neto</th></tr></thead><tbody className="divide-y divide-theme-border/60">{rows.map((row) => { const recovered = isFullyRecoveredProduct(row); const impact = getImpactPercentage(row.net_cost, totalNetCost); return <tr key={row.sku} className="hover:bg-theme-text/[0.025]"><td className="px-3 py-2 font-mono text-theme-text-muted">{row.sku}</td><td className="px-3 py-2 font-medium text-theme-text"><div>{row.name}</div>{recovered && <span className="mt-1 inline-flex rounded-full bg-emerald-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Recuperado</span>}</td><td className="px-3 py-2 text-right tabular-nums">{formatNumber(row.gross_units)} / {formatMoney(row.gross_cost)}</td><td className="px-3 py-2 text-right tabular-nums">{formatNumber(row.returned_units)} / {formatMoney(row.returned_cost)}</td><td className="px-3 py-2 text-right tabular-nums">{formatNumber(row.net_units)} / {formatSignedMoney(row.net_cost)}</td><td className="px-3 py-2 text-right font-semibold tabular-nums text-theme-text">{formatSignedMoney(row.net_cost)}</td><td className="px-3 py-2 text-right tabular-nums text-theme-text-muted">{impact === null ? "Sin base" : `${impact.toFixed(1)}%`}</td></tr>})}</tbody></table></div>{hasMore && <button type="button" onClick={onToggle} className="print-hide mt-3 text-xs font-semibold text-theme-accent hover:underline">{showAll ? "Ver menos" : "Ver todos"}</button>}</Panel>;
+}
+
+function RecoveryTable({ rows }: { rows: MermasAnalytics["products"] }) {
+  return <Panel title="Recuperaciones del período" subtitle="Mercadería reintegrada, ordenada por valor recuperado.">{rows.length === 0 ? <p className="text-sm text-theme-text-muted">Sin reintegros en el período.</p> : <div className="overflow-x-auto"><table className="w-full min-w-[680px] text-xs"><thead className="border-b border-theme-border text-left text-[10px] uppercase tracking-wider text-theme-text-muted"><tr><th className="px-3 py-2">SKU</th><th className="px-3 py-2">Producto</th><th className="px-3 py-2 text-right">Unidades reintegradas</th><th className="px-3 py-2 text-right">Valor recuperado</th><th className="px-3 py-2 text-right">Neto restante</th></tr></thead><tbody className="divide-y divide-theme-border/60">{rows.map((row) => <tr key={`recovery-${row.sku}`}><td className="px-3 py-2 font-mono text-theme-text-muted">{row.sku}</td><td className="px-3 py-2 font-medium text-theme-text">{row.name}</td><td className="px-3 py-2 text-right tabular-nums">{formatNumber(row.returned_units)}</td><td className="px-3 py-2 text-right font-semibold tabular-nums text-emerald-700 dark:text-emerald-300">{formatMoney(row.returned_cost)}</td><td className="px-3 py-2 text-right tabular-nums text-theme-text">{formatNumber(row.net_units)} / {formatSignedMoney(row.net_cost)}</td></tr>)}</tbody></table></div>}</Panel>;
+}
+
+function DataQuality({ totals }: { totals: MermasAnalytics["totals"] }) {
+  return <div className="border-l-2 border-amber-500/70 bg-amber-500/[0.06] px-4 py-3 text-xs text-amber-800 dark:text-amber-200"><div className="flex items-center gap-2 font-bold uppercase tracking-[0.14em]"><CircleAlert className="h-4 w-4" /> Calidad de datos</div><div className="mt-2 space-y-1">{totals.uncosted_lines > 0 && <p>{totals.uncosted_lines} líneas sin costo histórico ({formatNumber(totals.uncosted_units)} unidades)</p>}{totals.inconsistencies.length > 0 && <p>{totals.inconsistencies.length} {totals.inconsistencies.length === 1 ? "inconsistencia" : "inconsistencias"} en reintegros</p>}</div></div>;
 }
 
 function MiniMetric({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) {
@@ -221,12 +268,8 @@ function DebtMetric({ label, value, accent = false }: { label: string; value: st
   return <div className="min-w-[145px] flex-1 border-b border-r border-theme-border px-3 py-2 last:border-r-0 sm:border-b-0"><p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-theme-text-muted">{label}</p><p className={`mt-0.5 text-sm font-bold tabular-nums ${accent ? "text-theme-accent" : "text-theme-text"}`}>{value}</p></div>;
 }
 
-function Panel({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
-  return <div className="rounded-2xl border border-theme-border bg-theme-surface p-4 sm:p-5"><div className="flex items-center justify-between gap-3"><h2 className="text-sm font-semibold text-theme-text">{title}</h2>{action}</div><div className="mt-4">{children}</div></div>;
-}
-
-function Ranking({ title, rows, value, action }: { title: string; rows: MermasAnalytics["products"]; value: "cost" | "units"; action?: React.ReactNode }) {
-  return <Panel title={title} action={action}><div className="overflow-x-auto rounded-xl border border-theme-border"><table className="w-full min-w-[760px] text-xs"><thead className="bg-theme-bg text-left text-[10px] uppercase tracking-wider text-theme-text-muted"><tr><th className="px-3 py-2">SKU</th><th className="px-3 py-2">Producto</th><th className="px-3 py-2 text-right">Bruto</th><th className="px-3 py-2 text-right">Reintegrado</th><th className="px-3 py-2 text-right">Neto</th><th className="px-3 py-2 text-right">Costo neto</th></tr></thead><tbody className="divide-y divide-theme-border/70">{rows.map((row) => <tr key={row.sku}><td className="px-3 py-2 font-mono text-theme-text-muted">{row.sku}</td><td className="px-3 py-2 font-medium text-theme-text">{row.name}</td><td className="px-3 py-2 text-right tabular-nums">{formatNumber(row.gross_units)}</td><td className="px-3 py-2 text-right tabular-nums">{formatNumber(row.returned_units)}</td><td className={`px-3 py-2 text-right tabular-nums ${value === "units" ? "font-bold text-theme-text" : "text-theme-text-muted"}`}>{formatNumber(row.net_units)}</td><td className={`px-3 py-2 text-right tabular-nums ${value === "cost" ? "font-bold text-theme-text" : "text-theme-text-muted"}`}>{formatMoney(row.net_cost)}</td></tr>)}</tbody></table></div></Panel>;
+function Panel({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
+  return <section className="border-t border-theme-border py-4 sm:py-5"><div><h2 className="text-sm font-semibold text-theme-text">{title}</h2>{subtitle && <p className="mt-1 text-xs text-theme-text-muted">{subtitle}</p>}</div><div className="mt-4">{children}</div></section>;
 }
 
 function LoadingMessage({ text }: { text: string }) {
@@ -235,8 +278,4 @@ function LoadingMessage({ text }: { text: string }) {
 
 function ErrorMessage({ message }: { message: string }) {
   return <p className="rounded-xl bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">{message}</p>;
-}
-
-function PackageIcon() {
-  return <span className="text-sm font-bold">u.</span>;
 }
