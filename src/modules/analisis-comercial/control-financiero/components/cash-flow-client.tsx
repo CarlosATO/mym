@@ -2234,9 +2234,11 @@ function ImportCartola({
               {MONTHS[finalPreview.month - 1]} {finalPreview.year} · CIERRE DEFINITIVO
             </p>
             <p>Existentes: <strong>{finalPreview.existingCount}</strong></p>
+            <p>Coincidentes: <strong>{finalPreview.matchedCount}</strong></p>
             <p>Filas en cartola: <strong>{finalPreview.rowsInFile}</strong></p>
             <p>Nuevas: <strong>{finalPreview.newCount}</strong></p>
             <p>Conflictos: <strong className={finalPreview.conflictCount ? "text-red-700" : ""}>{finalPreview.conflictCount}</strong></p>
+            <p>Ambiguos: <strong className={finalPreview.ambiguousCount ? "text-red-700" : ""}>{finalPreview.ambiguousCount}</strong></p>
             <p>Saldo inicial: <strong>{money(finalPreview.detectedOpeningBalance)}</strong></p>
             <p>Saldo cierre: <strong>{money(finalPreview.closingBalance)}</strong></p>
             <p>Diferencia inicial: <strong className={finalPreview.openingDifference ? "text-red-700" : "text-green-700"}>{money(finalPreview.openingDifference)}</strong></p>

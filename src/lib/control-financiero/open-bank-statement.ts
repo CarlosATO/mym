@@ -8,6 +8,11 @@ export type OpenMovementKey = {
 
 function canonical(value: unknown) { return String(value ?? '').trim().replace(/\s+/g, ' ').toUpperCase() }
 
+function numericCanonical(value: unknown) {
+  const number = Number(value)
+  return Number.isFinite(number) ? String(number) : canonical(value)
+}
+
 function digest(parts: unknown[]) { return createHash('sha256').update(parts.map(canonical).join('|')).digest('hex') }
 
 /**
@@ -36,6 +41,133 @@ export function buildOpenMovementKeys(accountId: string, movements: ParsedBankMo
 export type ExistingOpenMovement = {
   movement_identity: string
   movement_content_hash: string
+}
+
+export type ExistingFinalCloseMovement = ExistingOpenMovement & {
+  transaction_date: string
+  operation_description: string
+  credit_amount: number | string
+  debit_amount: number | string
+  balance_after: number | string
+  source_row_number: number
+}
+
+export type FinalCloseDiff = {
+  matchedExisting: number
+  newRows: number[]
+  conflicts: number[]
+  existingMissing: number[]
+  ambiguous: number[]
+  newIndexes: number[]
+  conflictIndexes: number[]
+  existingMissingIndexes: number[]
+  ambiguousIndexes: number[]
+  matchedByFile: Map<number, ExistingFinalCloseMovement>
+}
+
+function finalCloseEconomicKey(
+  accountId: string,
+  movement: Pick<ParsedBankMovement, 'date' | 'description' | 'debit' | 'credit' | 'balance'>,
+) {
+  return [
+    accountId,
+    movement.date,
+    canonical(movement.description),
+    numericCanonical(movement.debit),
+    numericCanonical(movement.credit),
+    numericCanonical(movement.balance),
+  ].join('|')
+}
+
+function finalCloseExistingEconomicKey(
+  accountId: string,
+  movement: Pick<ExistingFinalCloseMovement, 'transaction_date' | 'operation_description' | 'debit_amount' | 'credit_amount' | 'balance_after'>,
+) {
+  return finalCloseEconomicKey(accountId, {
+    date: movement.transaction_date,
+    description: movement.operation_description,
+    debit: Number(movement.debit_amount),
+    credit: Number(movement.credit_amount),
+    balance: Number(movement.balance_after),
+  })
+}
+
+function finalCloseEconomicBase(
+  accountId: string,
+  movement: Pick<ParsedBankMovement, 'date' | 'description'>,
+) {
+  return [accountId, movement.date, canonical(movement.description)].join('|')
+}
+
+function finalCloseExistingBase(
+  accountId: string,
+  movement: Pick<ExistingFinalCloseMovement, 'transaction_date' | 'operation_description'>,
+) {
+  return finalCloseEconomicBase(accountId, {
+    date: movement.transaction_date,
+    description: movement.operation_description,
+  })
+}
+
+/** Matches a definitive semicolon export to OPEN rows without format metadata. */
+export function compareFinalCloseMovements(
+  accountId: string,
+  movements: ParsedBankMovement[],
+  existing: ExistingFinalCloseMovement[],
+): FinalCloseDiff {
+  const exact = new Map<string, number[]>()
+  const base = new Map<string, number[]>()
+  existing.forEach((row, index) => {
+    const exactKey = finalCloseExistingEconomicKey(accountId, row)
+    exact.set(exactKey, [...(exact.get(exactKey) ?? []), index])
+    const baseKey = finalCloseExistingBase(accountId, row)
+    base.set(baseKey, [...(base.get(baseKey) ?? []), index])
+  })
+  const used = new Set<number>()
+  const newRows: number[] = []
+  const conflicts: number[] = []
+  const existingMissing: number[] = []
+  const ambiguous: number[] = []
+  const result: FinalCloseDiff = {
+    matchedExisting: 0,
+    newRows,
+    conflicts,
+    existingMissing,
+    ambiguous,
+    newIndexes: newRows,
+    conflictIndexes: conflicts,
+    existingMissingIndexes: existingMissing,
+    ambiguousIndexes: ambiguous,
+    matchedByFile: new Map(),
+  }
+  movements.forEach((movement, index) => {
+    const exactCandidates = exact.get(finalCloseEconomicKey(accountId, movement)) ?? []
+    const availableExact = exactCandidates.filter(candidate => !used.has(candidate))
+    if (availableExact.length === 1 && exactCandidates.length === 1) {
+      const existingIndex = availableExact[0]
+      used.add(existingIndex)
+      result.matchedExisting += 1
+      result.matchedByFile.set(index, existing[existingIndex])
+      return
+    }
+    if (exactCandidates.length > 0) {
+      result.ambiguous.push(index)
+      return
+    }
+    const baseCandidates = base.get(finalCloseEconomicBase(accountId, movement)) ?? []
+    const availableBase = baseCandidates.filter(candidate => !used.has(candidate))
+    if (availableBase.length > 1) {
+      result.ambiguous.push(index)
+    } else if (availableBase.length === 1) {
+      result.conflicts.push(index)
+    } else {
+      result.newRows.push(index)
+    }
+  })
+  existing.forEach((_row, index) => {
+    if (!used.has(index)) result.existingMissing.push(index)
+  })
+  return result
 }
 
 export type OpenDiff = {

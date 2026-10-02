@@ -15,7 +15,9 @@ import {
 } from "@/lib/control-financiero/bank-statement-parser";
 import {
   buildOpenMovementKeys,
+  compareFinalCloseMovements,
   compareOpenMovements,
+  type ExistingFinalCloseMovement,
 } from "@/lib/control-financiero/open-bank-statement";
 import { resolveLatestKnownBalances } from "@/lib/control-financiero/current-balance";
 import { todayInSantiago } from "@/lib/datetime";
@@ -191,6 +193,9 @@ type ExistingOpenRow = {
   credit_amount: number | string;
   debit_amount: number | string;
   transaction_date: string;
+  operation_description: string;
+  balance_after: number | string;
+  source_row_number: number;
 };
 
 async function loadOpenContext(
@@ -239,7 +244,7 @@ async function loadOpenContext(
     const result = await db()
       .from("financial_bank_movements")
       .select(
-        "movement_identity,movement_content_hash,credit_amount,debit_amount,transaction_date",
+        "movement_identity,movement_content_hash,credit_amount,debit_amount,transaction_date,operation_description,balance_after,source_row_number",
       )
       .eq("company_id", companyId)
       .eq("bank_account_id", accountId)
@@ -317,19 +322,19 @@ export async function previewFinancialBankStatement(formData: FormData) {
           ok: false as const,
           message: "La cuenta de la cartola no coincide con la cuenta seleccionada.",
         };
-      const keys = buildOpenMovementKeys(accountId, parsed.movements);
-      const diff = compareOpenMovements(keys, context.existingRows);
+      const diff = compareFinalCloseMovements(
+        accountId,
+        parsed.movements,
+        context.existingRows as ExistingFinalCloseMovement[],
+      );
       const previousClosingBalance = Number(
         context.previous?.closing_balance ?? context.period.opening_balance,
       );
       const openingDifference = parsed.openingBalance - previousClosingBalance;
-      const fileIdentitySet = new Set(keys.map((key) => key.movement_identity));
-      const existingNotInFileCount = context.existingRows.filter(
-        (row) => !fileIdentitySet.has(row.movement_identity),
-      ).length;
       const canConfirm =
-        diff.conflicts === 0 &&
-        existingNotInFileCount === 0 &&
+        diff.conflictIndexes.length === 0 &&
+        diff.existingMissingIndexes.length === 0 &&
+        diff.ambiguousIndexes.length === 0 &&
         parsed.validations.globalDifference === 0 &&
         parsed.validations.rowDifference === 0 &&
         openingDifference === 0;
@@ -346,19 +351,21 @@ export async function previewFinancialBankStatement(formData: FormData) {
           periodStatus: "OPEN" as const,
           existingCount: context.existingRows.length,
           rowsInFile: parsed.rowCount,
-          newCount: diff.new,
-          conflictCount: diff.conflicts,
+          matchedCount: diff.matchedExisting,
+          newCount: diff.newIndexes.length,
+          conflictCount: diff.conflictIndexes.length,
+          ambiguousCount: diff.ambiguousIndexes.length,
           previousClosingBalance,
           detectedOpeningBalance: parsed.openingBalance,
           openingDifference,
           closingBalance: parsed.closingBalance,
           globalDifference: parsed.validations.globalDifference,
           rowDifference: parsed.validations.rowDifference,
-          existingNotInFileCount,
+          existingNotInFileCount: diff.existingMissingIndexes.length,
           movementCount: parsed.rowCount,
           canConfirm,
-          conflictIndexes: diff.conflictIndexes,
-          conflicts: diff.conflictIndexes.map((index) => ({
+          conflictIndexes: [...diff.conflictIndexes, ...diff.ambiguousIndexes],
+          conflicts: [...diff.conflictIndexes, ...diff.ambiguousIndexes].map((index) => ({
             index,
             date: parsed.movements[index].date,
             description: parsed.movements[index].description,
@@ -764,22 +771,35 @@ export async function confirmFinalFinancialBankStatement(input: {
     input.parsed.validations.rowDifference !== 0
   )
     return { ok: false as const, message: "La cartola definitiva no concilia." };
-  const keys = buildOpenMovementKeys(input.accountId, input.parsed.movements);
-  const diff = compareOpenMovements(keys, context.existingRows);
+  const diff = compareFinalCloseMovements(
+    input.accountId,
+    input.parsed.movements,
+    context.existingRows as ExistingFinalCloseMovement[],
+  );
   const previousClosingBalance = Number(
     context.previous?.closing_balance ?? context.period.opening_balance,
   );
   const openingDifference = input.parsed.openingBalance - previousClosingBalance;
-  const fileIdentitySet = new Set(keys.map((key) => key.movement_identity));
-  const existingNotInFileCount = context.existingRows.filter(
-    (row) => !fileIdentitySet.has(row.movement_identity),
-  ).length;
-  if (diff.conflicts || existingNotInFileCount || openingDifference !== 0)
+  if (
+    diff.conflictIndexes.length ||
+    diff.ambiguousIndexes.length ||
+    diff.existingMissingIndexes.length ||
+    openingDifference !== 0
+  )
     return {
       ok: false as const,
-      message: `La cartola definitiva no coincide con el período OPEN. Conflictos: ${diff.conflicts}; filas ausentes: ${existingNotInFileCount}; diferencia inicial: ${openingDifference}.`,
+      message: `La cartola definitiva no coincide con el período OPEN. Conflictos: ${diff.conflictIndexes.length}; ambiguos: ${diff.ambiguousIndexes.length}; filas ausentes: ${diff.existingMissingIndexes.length}; diferencia inicial: ${openingDifference}.`,
     };
-  const movements = input.parsed.movements.map((row, index) => ({
+  const generatedKeys = buildOpenMovementKeys(input.accountId, input.parsed.movements);
+  const movements = input.parsed.movements.map((row, index) => {
+    const matched = diff.matchedByFile.get(index);
+    const key = matched
+      ? {
+          movement_identity: matched.movement_identity,
+          movement_content_hash: matched.movement_content_hash,
+        }
+      : generatedKeys[index];
+    return {
     transaction_date: row.date,
     operation_description: row.description,
     credit_amount: row.credit,
@@ -791,10 +811,11 @@ export async function confirmFinalFinancialBankStatement(input: {
     cashier: row.cashier,
     source_row_number: row.sourceRowNumber,
     fingerprint: buildBankMovementFingerprint(input.accountId, row),
-    movement_identity: keys[index].movement_identity,
-    movement_content_hash: keys[index].movement_content_hash,
+    movement_identity: key.movement_identity,
+    movement_content_hash: key.movement_content_hash,
     raw_payload: row.raw,
-  }));
+    };
+  });
   const { data, error } = await db().rpc("finalize_financial_bank_statement_open", {
     p_company_id: companyId,
     p_bank_account_id: input.accountId,
@@ -805,9 +826,9 @@ export async function confirmFinalFinancialBankStatement(input: {
         parser: "bank-statement-definitive-semicolon-v1",
         order: input.parsed.order,
         account_holder: input.parsed.accountHolder,
-        existing_count: diff.existing,
-        new_count: diff.new,
-        conflict_count: diff.conflicts,
+        existing_count: diff.matchedExisting,
+        new_count: diff.newIndexes.length,
+        conflict_count: diff.conflictIndexes.length + diff.ambiguousIndexes.length,
       },
     },
     p_period: {
