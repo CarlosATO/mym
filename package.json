@@ -16,6 +16,7 @@
     "test:financial-detail-cache": "node --experimental-strip-types --test scripts/test-financial-detail-cache.mjs",
     "test:financial-bank-statement": "node --experimental-strip-types --test scripts/test-financial-bank-statement.mjs",
     "test:financial-open-bank-statement": "node --experimental-strip-types --test scripts/test-financial-open-bank-statement.mjs",
+    "test:financial-final-close": "node --experimental-strip-types --test scripts/test-financial-final-close-contract.mjs",
     "test:financial-reconciliation-previous-balance": "node --test scripts/test-financial-reconciliation-previous-balance.mjs",
     "test:financial-cash-flow-refresh": "node --test scripts/test-financial-cash-flow-refresh.mjs",
     "test:financial-personnel": "node --experimental-strip-types --test scripts/test-financial-personnel.mjs",

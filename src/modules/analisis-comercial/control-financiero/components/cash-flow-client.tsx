@@ -14,6 +14,7 @@ import {
 import {
   confirmFinancialBankStatement,
   confirmOpenFinancialBankStatement,
+  confirmFinalFinancialBankStatement,
   createFinancialBankAccount,
   previewFinancialBankStatement,
   updateFinancialBankReconciliationDifference,
@@ -1902,7 +1903,7 @@ function ImportCartola({
   onConfirmed: () => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [mode, setMode] = useState<"OPEN" | "CLOSED">("CLOSED");
+  const [mode, setMode] = useState<"OPEN" | "CLOSED" | "FINAL_CLOSE">("CLOSED");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [message, setMessage] = useState("");
@@ -1944,7 +1945,9 @@ function ImportCartola({
         const result =
           preview.mode === "OPEN"
             ? await confirmOpenFinancialBankStatement(input)
-            : await confirmFinancialBankStatement(input);
+            : preview.mode === "FINAL_CLOSE"
+              ? await confirmFinalFinancialBankStatement(input)
+              : await confirmFinancialBankStatement(input);
         if (result.ok) onConfirmed();
         else setMessage(result.message);
       } catch (error) {
@@ -1974,6 +1977,7 @@ function ImportCartola({
       }
     });
   const openPreview = preview?.mode === "OPEN" ? preview.openPreview : null;
+  const finalPreview = preview?.mode === "FINAL_CLOSE" ? preview.finalPreview : null;
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-[#322D29]/40 p-4 sm:pt-12">
       <div className="w-full max-w-3xl border border-[#D1C7BD] bg-[#FAF8F5] p-5 shadow-xl">
@@ -1994,7 +1998,7 @@ function ImportCartola({
             Cerrar
           </button>
         </div>
-        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        <div className="mt-4 grid gap-2 sm:grid-cols-3">
           <button
             type="button"
             onClick={() => {
@@ -2006,6 +2010,19 @@ function ImportCartola({
             <strong>Actualizar mes actual</strong>
             <span className="mt-1 block text-[#322D29]/60">
               Período abierto, acumulativo e incremental.
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMode("FINAL_CLOSE");
+              setPreview(null);
+            }}
+            className={`border p-3 text-left text-xs ${mode === "FINAL_CLOSE" ? "border-[#72383D] bg-[#F3E8E4]" : "border-[#D1C7BD] bg-white"}`}
+          >
+            <strong>Cerrar mes con cartola definitiva</strong>
+            <span className="mt-1 block text-[#322D29]/60">
+              Reemplaza el estado OPEN y bloquea nuevas cargas.
             </span>
           </button>
           <button
@@ -2211,6 +2228,23 @@ function ImportCartola({
             </p>
           </div>
         )}
+        {finalPreview && (
+          <div className="mt-4 grid gap-2 border border-[#AC9C8D] bg-white p-4 text-xs sm:grid-cols-2">
+            <p className="sm:col-span-2 font-semibold uppercase tracking-[0.1em]">
+              {MONTHS[finalPreview.month - 1]} {finalPreview.year} · CIERRE DEFINITIVO
+            </p>
+            <p>Existentes: <strong>{finalPreview.existingCount}</strong></p>
+            <p>Filas en cartola: <strong>{finalPreview.rowsInFile}</strong></p>
+            <p>Nuevas: <strong>{finalPreview.newCount}</strong></p>
+            <p>Conflictos: <strong className={finalPreview.conflictCount ? "text-red-700" : ""}>{finalPreview.conflictCount}</strong></p>
+            <p>Saldo inicial: <strong>{money(finalPreview.detectedOpeningBalance)}</strong></p>
+            <p>Saldo cierre: <strong>{money(finalPreview.closingBalance)}</strong></p>
+            <p>Diferencia inicial: <strong className={finalPreview.openingDifference ? "text-red-700" : "text-green-700"}>{money(finalPreview.openingDifference)}</strong></p>
+            <p>Diferencia global: <strong className={finalPreview.globalDifference ? "text-red-700" : "text-green-700"}>{money(finalPreview.globalDifference)}</strong></p>
+            <p>Diferencia fila a fila: <strong className={finalPreview.rowDifference ? "text-red-700" : "text-green-700"}>{money(finalPreview.rowDifference)}</strong></p>
+            {finalPreview.existingNotInFileCount > 0 && <p className="sm:col-span-2 text-red-700">Movimientos existentes ausentes: {finalPreview.existingNotInFileCount}</p>}
+          </div>
+        )}
         <div className="mt-4 border-t border-[#D1C7BD] pt-4">
           <p className="text-[10px] uppercase tracking-[0.13em] text-[#AC9C8D]">
             ¿No existe la cuenta?
@@ -2251,7 +2285,7 @@ function ImportCartola({
             {message}
           </p>
         )}
-        {openPreview && !openPreview.canConfirm && (
+        {((openPreview && !openPreview.canConfirm) || (finalPreview && !finalPreview.canConfirm)) && (
           <p className="mt-4 border border-red-200 bg-red-50 p-3 text-xs text-red-800">
             Confirmación bloqueada: existen conflictos, faltantes o una
             inconsistencia de movimientos.
@@ -2274,7 +2308,8 @@ function ImportCartola({
             disabled={
               pending ||
               !preview ||
-              (preview.mode === "OPEN" && !preview.openPreview.canConfirm)
+              (preview.mode === "OPEN" && !preview.openPreview.canConfirm) ||
+              (preview.mode === "FINAL_CLOSE" && !preview.finalPreview.canConfirm)
             }
             onClick={confirm}
           >

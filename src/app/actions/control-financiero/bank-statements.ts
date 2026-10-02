@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   parseBankStatement,
+  parseDefinitiveBankStatement,
   parseCurrentBankStatementXls,
   type ParsedBankMovement,
   type ParsedBankStatement,
@@ -55,7 +56,7 @@ export type CashFlowMovement = {
   reviewed_by: string | null;
   reviewed_at: string | null;
 };
-export type ImportMode = "CLOSED" | "OPEN";
+export type ImportMode = "CLOSED" | "OPEN" | "FINAL_CLOSE";
 export type FinancialBankReconciliationDifference = {
   id: string;
   company_id: string;
@@ -180,6 +181,10 @@ function parseHistoricalFile(bytes: Uint8Array) {
   return parseBankStatement(new TextDecoder("windows-1252").decode(bytes));
 }
 
+function parseDefinitiveFile(bytes: Uint8Array) {
+  return parseDefinitiveBankStatement(new TextDecoder("windows-1252").decode(bytes));
+}
+
 type ExistingOpenRow = {
   movement_identity: string;
   movement_content_hash: string;
@@ -248,8 +253,13 @@ async function loadOpenContext(
 export async function previewFinancialBankStatement(formData: FormData) {
   const { companyId } = await authenticatedContext();
   const file = formData.get("file");
+  const requestedMode = formData.get("mode");
   const mode =
-    formData.get("mode") === "OPEN" ? ("OPEN" as const) : ("CLOSED" as const);
+    requestedMode === "OPEN"
+      ? ("OPEN" as const)
+      : requestedMode === "FINAL_CLOSE"
+        ? ("FINAL_CLOSE" as const)
+        : ("CLOSED" as const);
   if (!(file instanceof File))
     return { ok: false as const, message: "Selecciona una cartola." };
   try {
@@ -282,7 +292,81 @@ export async function previewFinancialBankStatement(formData: FormData) {
         ok: false as const,
         message: "Selecciona una cuenta para actualizar el mes actual.",
       };
-    const parsed = parseCurrentBankStatementXls(bytes);
+    const parsed =
+      mode === "FINAL_CLOSE"
+        ? parseDefinitiveFile(bytes)
+        : parseCurrentBankStatementXls(bytes);
+    if (mode === "FINAL_CLOSE") {
+      const context = await loadOpenContext(
+        companyId,
+        accountId,
+        parsed.year,
+        parsed.month,
+      );
+      if (context.period?.status !== "OPEN")
+        return {
+          ok: false as const,
+          message: "El cierre definitivo sólo aplica a un período OPEN existente.",
+        };
+      if (
+        parsed.accountNumber &&
+        normalizeAccount(parsed.accountNumber) !==
+          normalizeAccount(context.account.account_number)
+      )
+        return {
+          ok: false as const,
+          message: "La cuenta de la cartola no coincide con la cuenta seleccionada.",
+        };
+      const keys = buildOpenMovementKeys(accountId, parsed.movements);
+      const diff = compareOpenMovements(keys, context.existingRows);
+      const previousClosingBalance = Number(
+        context.previous?.closing_balance ?? context.period.opening_balance,
+      );
+      const openingDifference = parsed.openingBalance - previousClosingBalance;
+      const fileIdentitySet = new Set(keys.map((key) => key.movement_identity));
+      const existingNotInFileCount = context.existingRows.filter(
+        (row) => !fileIdentitySet.has(row.movement_identity),
+      ).length;
+      const canConfirm =
+        diff.conflicts === 0 &&
+        existingNotInFileCount === 0 &&
+        parsed.validations.globalDifference === 0 &&
+        parsed.validations.rowDifference === 0 &&
+        openingDifference === 0;
+      return {
+        ok: true as const,
+        mode,
+        filename: file.name,
+        fileHash,
+        parsed,
+        finalPreview: {
+          year: parsed.year,
+          month: parsed.month,
+          account: context.account,
+          periodStatus: "OPEN" as const,
+          existingCount: context.existingRows.length,
+          rowsInFile: parsed.rowCount,
+          newCount: diff.new,
+          conflictCount: diff.conflicts,
+          previousClosingBalance,
+          detectedOpeningBalance: parsed.openingBalance,
+          openingDifference,
+          closingBalance: parsed.closingBalance,
+          globalDifference: parsed.validations.globalDifference,
+          rowDifference: parsed.validations.rowDifference,
+          existingNotInFileCount,
+          movementCount: parsed.rowCount,
+          canConfirm,
+          conflictIndexes: diff.conflictIndexes,
+          conflicts: diff.conflictIndexes.map((index) => ({
+            index,
+            date: parsed.movements[index].date,
+            description: parsed.movements[index].description,
+            balance: parsed.movements[index].balance,
+          })),
+        },
+      };
+    }
     const currentDate = todayInSantiago();
     const currentYear = Number(currentDate.slice(0, 4));
     const currentMonth = Number(currentDate.slice(5, 7));
@@ -647,6 +731,98 @@ export async function confirmOpenFinancialBankStatement(input: {
       },
     },
   );
+  if (error) return { ok: false as const, message: error.message };
+  revalidatePath(CASH_FLOW_PATH);
+  return { ok: true as const, result: data };
+}
+
+export async function confirmFinalFinancialBankStatement(input: {
+  accountId: string;
+  filename: string;
+  fileHash: string;
+  parsed: ParsedBankStatement;
+}) {
+  const { companyId, user } = await authenticatedContext();
+  if (input.parsed.sourceFormat !== "HISTORICAL_SEMICOLON")
+    return { ok: false as const, message: "La cartola no corresponde al formato definitivo." };
+  const context = await loadOpenContext(
+    companyId,
+    input.accountId,
+    input.parsed.year,
+    input.parsed.month,
+  );
+  if (context.period?.status !== "OPEN")
+    return { ok: false as const, message: "El período debe estar OPEN para cerrarlo definitivamente." };
+  if (
+    input.parsed.accountNumber &&
+    normalizeAccount(input.parsed.accountNumber) !==
+      normalizeAccount(context.account.account_number)
+  )
+    return { ok: false as const, message: "La cuenta de la cartola no coincide con la cuenta seleccionada." };
+  if (
+    input.parsed.validations.globalDifference !== 0 ||
+    input.parsed.validations.rowDifference !== 0
+  )
+    return { ok: false as const, message: "La cartola definitiva no concilia." };
+  const keys = buildOpenMovementKeys(input.accountId, input.parsed.movements);
+  const diff = compareOpenMovements(keys, context.existingRows);
+  const previousClosingBalance = Number(
+    context.previous?.closing_balance ?? context.period.opening_balance,
+  );
+  const openingDifference = input.parsed.openingBalance - previousClosingBalance;
+  const fileIdentitySet = new Set(keys.map((key) => key.movement_identity));
+  const existingNotInFileCount = context.existingRows.filter(
+    (row) => !fileIdentitySet.has(row.movement_identity),
+  ).length;
+  if (diff.conflicts || existingNotInFileCount || openingDifference !== 0)
+    return {
+      ok: false as const,
+      message: `La cartola definitiva no coincide con el período OPEN. Conflictos: ${diff.conflicts}; filas ausentes: ${existingNotInFileCount}; diferencia inicial: ${openingDifference}.`,
+    };
+  const movements = input.parsed.movements.map((row, index) => ({
+    transaction_date: row.date,
+    operation_description: row.description,
+    credit_amount: row.credit,
+    debit_amount: row.debit,
+    balance_after: row.balance,
+    document_number: row.documentNumber,
+    transaction_number: row.transactionNumber,
+    branch: row.branch,
+    cashier: row.cashier,
+    source_row_number: row.sourceRowNumber,
+    fingerprint: buildBankMovementFingerprint(input.accountId, row),
+    movement_identity: keys[index].movement_identity,
+    movement_content_hash: keys[index].movement_content_hash,
+    raw_payload: row.raw,
+  }));
+  const { data, error } = await db().rpc("finalize_financial_bank_statement_open", {
+    p_company_id: companyId,
+    p_bank_account_id: input.accountId,
+    p_import: {
+      original_filename: input.filename,
+      file_hash: input.fileHash,
+      metadata: {
+        parser: "bank-statement-definitive-semicolon-v1",
+        order: input.parsed.order,
+        account_holder: input.parsed.accountHolder,
+        existing_count: diff.existing,
+        new_count: diff.new,
+        conflict_count: diff.conflicts,
+      },
+    },
+    p_period: {
+      year: input.parsed.year,
+      month: input.parsed.month,
+      opening_balance: input.parsed.openingBalance,
+      total_credits: input.parsed.totalCredits,
+      total_debits: input.parsed.totalDebits,
+      closing_balance: input.parsed.closingBalance,
+      first_transaction_date: input.parsed.firstTransactionDate,
+      last_transaction_date: input.parsed.lastTransactionDate,
+    },
+    p_movements: movements,
+    p_imported_by: user.id,
+  });
   if (error) return { ok: false as const, message: error.message };
   revalidatePath(CASH_FLOW_PATH);
   return { ok: true as const, result: data };

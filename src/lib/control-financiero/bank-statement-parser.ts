@@ -122,6 +122,15 @@ export function parseBankStatement(input: string): ParsedBankStatement {
   }
 }
 
+/** Parses the definitive semicolon-delimited bank statement export. */
+export function parseDefinitiveBankStatement(input: string): ParsedBankStatement {
+  const parsed = parseBankStatement(input)
+  if (parsed.sourceFormat !== 'HISTORICAL_SEMICOLON') {
+    throw new Error('La cartola no corresponde al formato definitivo semicolon.')
+  }
+  return parsed
+}
+
 function parseCurrentAmount(value: unknown): number {
   if (typeof value === 'number') return Math.abs(Math.round(value))
   const compact = String(value ?? '').trim().replace(/\s/g, '').replace(/\./g, '').replace(',', '.')
