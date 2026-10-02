@@ -28,6 +28,7 @@ interface AppTopbarProps {
 // Mapa de rutas → nombre de ubicación (orden importa: más específico primero)
 const ROUTE_NAMES: { prefix: string; name: string }[] = [
   { prefix: '/dashboard/adquisiciones',    name: 'Adquisiciones' },
+  { prefix: '/dashboard/logistica/mermas', name: 'Mermas' },
   { prefix: '/dashboard/logistica',        name: 'WMS · Logística' },
   { prefix: '/dashboard/comercial',        name: 'Comercial' },
   { prefix: '/dashboard/analisis-comercial', name: 'Análisis Comercial' },
@@ -58,7 +59,8 @@ export function AppTopbar({ profile, activeCompany, permissions, moduleName }: A
   const locationName = moduleName ?? getLocationName(pathname)
   const isAnalysisCommercialSurface = pathname.startsWith('/dashboard/analisis-comercial')
   const isAdquisicionesSurface = pathname.startsWith('/dashboard/adquisiciones')
-  const usesExecutiveTheme = isAnalysisCommercialSurface || isAdquisicionesSurface
+  const isMermasSurface = pathname.startsWith('/dashboard/logistica/mermas')
+  const usesExecutiveTheme = isAnalysisCommercialSurface || isAdquisicionesSurface || isMermasSurface
   const isFinancialSurface = pathname.startsWith('/dashboard/analisis-comercial/control-financiero')
   const visibleCompanyName = isFinancialSurface ? getFinancialCompanyDisplayName(activeCompany) : (activeCompany.trade_name || activeCompany.business_name)
 
