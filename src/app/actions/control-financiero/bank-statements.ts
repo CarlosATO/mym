@@ -196,6 +196,7 @@ type ExistingOpenRow = {
   operation_description: string;
   balance_after: number | string;
   source_row_number: number;
+  document_number: string | null;
 };
 
 async function loadOpenContext(
@@ -244,7 +245,7 @@ async function loadOpenContext(
     const result = await db()
       .from("financial_bank_movements")
       .select(
-        "movement_identity,movement_content_hash,credit_amount,debit_amount,transaction_date,operation_description,balance_after,source_row_number",
+        "movement_identity,movement_content_hash,credit_amount,debit_amount,transaction_date,operation_description,balance_after,source_row_number,document_number",
       )
       .eq("company_id", companyId)
       .eq("bank_account_id", accountId)

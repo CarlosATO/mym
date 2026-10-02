@@ -40,6 +40,7 @@ function existingFrom(movementValue, index, overrides = {}) {
     debit_amount: movementValue.debit,
     balance_after: movementValue.balance,
     source_row_number: index + 10,
+    document_number: movementValue.documentNumber,
     ...overrides,
   }
 }
@@ -51,9 +52,9 @@ test('definitive parser accepts the semicolon export and requires exact reconcil
   assert.equal(parsed.validations.rowDifference, 0)
 })
 
-test('cross-format match ignores document, transaction, branch and cashier metadata', () => {
+test('cross-format match ignores metadata and balance ordering', () => {
   const current = movement(0, { documentNumber: 'DOC-A', branch: 'CANAL A', transactionNumber: null })
-  const definitive = { ...current, documentNumber: 'DOC-B', branch: 'SUCURSAL B', transactionNumber: 'TRN-B', cashier: 'CAJA B' }
+  const definitive = { ...current, documentNumber: 'DOC-B', branch: 'SUCURSAL B', transactionNumber: 'TRN-B', cashier: 'CAJA B', balance: 999999 }
   const existing = existingFrom(current, 0)
   const result = compareFinalCloseMovements(accountId, [definitive], [existing])
   assert.equal(result.matchedExisting, 1)
@@ -61,6 +62,17 @@ test('cross-format match ignores document, transaction, branch and cashier metad
   assert.deepEqual(result.existingMissingIndexes, [])
   assert.equal(result.matchedByFile.get(0)?.movement_identity, existing.movement_identity)
   assert.equal(result.matchedByFile.get(0)?.movement_content_hash, existing.movement_content_hash)
+})
+
+test('normalizes accents, colon spacing, truncation and trailing stars', () => {
+  const existing = existingFrom(movement(0, { description: 'Traspaso De: Jorge Ignacio Abarzua Poblete' }), 0)
+  const file = movement(0, { description: 'TRASPASO DE:JORGE IGNACIO ABARZUA' })
+  const starExisting = existingFrom(movement(1, { description: 'Giro Cajero Automático             *' }), 1)
+  const starFile = movement(1, { description: 'GIRO CAJERO AUTOMATICO' })
+  const result = compareFinalCloseMovements(accountId, [file, starFile], [existing, starExisting])
+  assert.equal(result.matchedExisting, 2)
+  assert.deepEqual(result.conflicts, [])
+  assert.deepEqual(result.ambiguous, [])
 })
 
 test('matches 388 equivalent rows and returns only 24 genuinely new rows', () => {
@@ -81,29 +93,48 @@ test('matches 388 equivalent rows and returns only 24 genuinely new rows', () =>
   assert.equal(result.ambiguousIndexes.length, 0)
 })
 
-test('blocks missing and ambiguous economic matches', () => {
+test('matches identical duplicate movements as a multiset', () => {
   const first = movement(0)
-  const second = movement(1)
-  const missing = compareFinalCloseMovements(accountId, [first], [existingFrom(first, 0), existingFrom(second, 1)])
-  assert.equal(missing.existingMissingIndexes.length, 1)
-
-  const duplicate = existingFrom(first, 0, { movement_identity: 'existing-identity-duplicate' })
-  const ambiguous = compareFinalCloseMovements(accountId, [first], [existingFrom(first, 0), duplicate])
-  assert.deepEqual(ambiguous.ambiguousIndexes, [0])
-  assert.equal(ambiguous.matchedExisting, 0)
+  const second = { ...first, sourceRowNumber: 3 }
+  const existing = [existingFrom(first, 0), existingFrom(second, 1, { movement_identity: 'existing-identity-duplicate' })]
+  const result = compareFinalCloseMovements(accountId, [first, second], existing)
+  assert.equal(result.matchedExisting, 2)
+  assert.deepEqual(result.ambiguous, [])
+  assert.deepEqual(result.existingMissing, [])
 })
 
-test('blocks real economic changes without treating format metadata as a conflict', () => {
+test('matches repeated amount buckets by description', () => {
+  const existing = Array.from({ length: 7 }, (_, index) => existingFrom(
+    movement(index, { date: '2026-09-01', description: `PAGO CONTRAPARTE ${index}`, debit: 20000, credit: 0 }),
+    index,
+  ))
+  const file = [...existing].reverse().map((row, index) => movement(index, {
+    description: row.operation_description,
+    date: row.transaction_date,
+    debit: Number(row.debit_amount),
+    credit: Number(row.credit_amount),
+    balance: 700000 + index,
+  }))
+  const result = compareFinalCloseMovements(accountId, file, existing)
+  assert.equal(result.matchedExisting, 7)
+  assert.deepEqual(result.conflicts, [])
+})
+
+test('handles cardinality changes and blocks real economic changes', () => {
   const original = movement(0)
   const existing = existingFrom(original, 0)
+  const extra = movement(1)
+  const surplus = compareFinalCloseMovements(accountId, [original, extra], [existing])
+  const missing = compareFinalCloseMovements(accountId, [original], [existing, existingFrom(extra, 1)])
   const amountChanged = compareFinalCloseMovements(accountId, [{ ...original, debit: 999 }], [existing])
-  const balanceChanged = compareFinalCloseMovements(accountId, [{ ...original, balance: 999999 }], [existing])
   const descriptionChanged = compareFinalCloseMovements(accountId, [{ ...original, description: 'OTRO MOVIMIENTO' }], [existing])
-  assert.deepEqual(amountChanged.conflictIndexes, [0])
-  assert.deepEqual(balanceChanged.conflictIndexes, [0])
-  assert.deepEqual(descriptionChanged.newIndexes, [0])
+  assert.equal(surplus.matchedExisting, 1)
+  assert.deepEqual(surplus.newRows, [1])
+  assert.deepEqual(missing.existingMissing, [1])
+  assert.deepEqual(amountChanged.newRows, [0])
+  assert.deepEqual(amountChanged.conflicts, [])
+  assert.deepEqual(descriptionChanged.conflicts, [0])
   assert.equal(amountChanged.existingMissingIndexes.length, 1)
-  assert.equal(balanceChanged.existingMissingIndexes.length, 1)
   assert.equal(descriptionChanged.existingMissingIndexes.length, 1)
 })
 

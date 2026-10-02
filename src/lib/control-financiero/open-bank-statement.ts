@@ -50,6 +50,7 @@ export type ExistingFinalCloseMovement = ExistingOpenMovement & {
   debit_amount: number | string
   balance_after: number | string
   source_row_number: number
+  document_number?: string | null
 }
 
 export type FinalCloseDiff = {
@@ -65,65 +66,75 @@ export type FinalCloseDiff = {
   matchedByFile: Map<number, ExistingFinalCloseMovement>
 }
 
-function finalCloseEconomicKey(
+function normalizeFinalCloseDescription(value: unknown) {
+  return String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s*:\s*/g, ':')
+    .replace(/\*+$/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function finalCloseDescriptionsCompatible(existing: unknown, file: unknown) {
+  const normalizedExisting = normalizeFinalCloseDescription(existing)
+  const normalizedFile = normalizeFinalCloseDescription(file)
+  return Boolean(
+    normalizedExisting &&
+      normalizedFile &&
+      (normalizedExisting === normalizedFile ||
+        normalizedExisting.startsWith(normalizedFile) ||
+        normalizedFile.startsWith(normalizedExisting)),
+  )
+}
+
+function finalCloseBucketKey(
   accountId: string,
-  movement: Pick<ParsedBankMovement, 'date' | 'description' | 'debit' | 'credit' | 'balance'>,
+  movement: Pick<ParsedBankMovement, 'date' | 'debit' | 'credit'>,
 ) {
   return [
     accountId,
     movement.date,
-    canonical(movement.description),
     numericCanonical(movement.debit),
     numericCanonical(movement.credit),
-    numericCanonical(movement.balance),
   ].join('|')
 }
 
-function finalCloseExistingEconomicKey(
+function finalCloseExistingBucketKey(
   accountId: string,
-  movement: Pick<ExistingFinalCloseMovement, 'transaction_date' | 'operation_description' | 'debit_amount' | 'credit_amount' | 'balance_after'>,
+  movement: Pick<ExistingFinalCloseMovement, 'transaction_date' | 'debit_amount' | 'credit_amount'>,
 ) {
-  return finalCloseEconomicKey(accountId, {
+  return finalCloseBucketKey(accountId, {
     date: movement.transaction_date,
-    description: movement.operation_description,
     debit: Number(movement.debit_amount),
     credit: Number(movement.credit_amount),
-    balance: Number(movement.balance_after),
   })
 }
 
-function finalCloseEconomicBase(
-  accountId: string,
-  movement: Pick<ParsedBankMovement, 'date' | 'description'>,
-) {
-  return [accountId, movement.date, canonical(movement.description)].join('|')
+function finalCloseDocumentMatches(existing: ExistingFinalCloseMovement, file: ParsedBankMovement) {
+  const existingDocument = String(existing.document_number ?? '').replace(/\D/g, '')
+  const fileDocument = String(file.documentNumber ?? '').replace(/\D/g, '')
+  return Boolean(existingDocument && fileDocument && !/^0+$/.test(existingDocument) && !/^0+$/.test(fileDocument) && existingDocument === fileDocument)
 }
 
-function finalCloseExistingBase(
-  accountId: string,
-  movement: Pick<ExistingFinalCloseMovement, 'transaction_date' | 'operation_description'>,
-) {
-  return finalCloseEconomicBase(accountId, {
-    date: movement.transaction_date,
-    description: movement.operation_description,
-  })
-}
-
-/** Matches a definitive semicolon export to OPEN rows without format metadata. */
+/** Matches definitive rows as a multiset, independent of intraday balance order. */
 export function compareFinalCloseMovements(
   accountId: string,
   movements: ParsedBankMovement[],
   existing: ExistingFinalCloseMovement[],
 ): FinalCloseDiff {
-  const exact = new Map<string, number[]>()
-  const base = new Map<string, number[]>()
+  const existingBuckets = new Map<string, number[]>()
+  const fileBuckets = new Map<string, number[]>()
   existing.forEach((row, index) => {
-    const exactKey = finalCloseExistingEconomicKey(accountId, row)
-    exact.set(exactKey, [...(exact.get(exactKey) ?? []), index])
-    const baseKey = finalCloseExistingBase(accountId, row)
-    base.set(baseKey, [...(base.get(baseKey) ?? []), index])
+    const key = finalCloseExistingBucketKey(accountId, row)
+    existingBuckets.set(key, [...(existingBuckets.get(key) ?? []), index])
   })
-  const used = new Set<number>()
+  movements.forEach((row, index) => {
+    const key = finalCloseBucketKey(accountId, row)
+    fileBuckets.set(key, [...(fileBuckets.get(key) ?? []), index])
+  })
   const newRows: number[] = []
   const conflicts: number[] = []
   const existingMissing: number[] = []
@@ -140,32 +151,63 @@ export function compareFinalCloseMovements(
     ambiguousIndexes: ambiguous,
     matchedByFile: new Map(),
   }
-  movements.forEach((movement, index) => {
-    const exactCandidates = exact.get(finalCloseEconomicKey(accountId, movement)) ?? []
-    const availableExact = exactCandidates.filter(candidate => !used.has(candidate))
-    if (availableExact.length === 1 && exactCandidates.length === 1) {
-      const existingIndex = availableExact[0]
-      used.add(existingIndex)
+  const matchedExistingIndexes = new Set<number>()
+  const bucketKeys = new Set([...existingBuckets.keys(), ...fileBuckets.keys()])
+  for (const key of bucketKeys) {
+    const existingIndexes = [...(existingBuckets.get(key) ?? [])].sort(
+      (left, right) => existing[left].source_row_number - existing[right].source_row_number || left - right,
+    )
+    const fileIndexes = [...(fileBuckets.get(key) ?? [])].sort((left, right) => left - right)
+    if (!existingIndexes.length) {
+      newRows.push(...fileIndexes)
+      continue
+    }
+    const fileToExisting = new Map<number, number>()
+    const compatibleFiles = (existingIndex: number) => fileIndexes
+      .filter(fileIndex => finalCloseDescriptionsCompatible(existing[existingIndex].operation_description, movements[fileIndex].description))
+      .sort((left, right) => {
+        const documentDifference = Number(finalCloseDocumentMatches(existing[existingIndex], movements[right])) - Number(finalCloseDocumentMatches(existing[existingIndex], movements[left]))
+        return documentDifference || left - right
+      })
+    const assign = (existingPosition: number, seen: Set<number>): boolean => {
+      const existingIndex = existingIndexes[existingPosition]
+      for (const fileIndex of compatibleFiles(existingIndex)) {
+        if (seen.has(fileIndex)) continue
+        seen.add(fileIndex)
+        const previousExistingPosition = fileToExisting.get(fileIndex)
+        if (previousExistingPosition === undefined || assign(previousExistingPosition, seen)) {
+          fileToExisting.set(fileIndex, existingPosition)
+          return true
+        }
+      }
+      return false
+    }
+    existingIndexes.forEach((_existingIndex, existingPosition) => assign(existingPosition, new Set()))
+    for (const [fileIndex, existingPosition] of fileToExisting) {
+      const existingIndex = existingIndexes[existingPosition]
+      matchedExistingIndexes.add(existingIndex)
       result.matchedExisting += 1
-      result.matchedByFile.set(index, existing[existingIndex])
-      return
+      result.matchedByFile.set(fileIndex, existing[existingIndex])
     }
-    if (exactCandidates.length > 0) {
-      result.ambiguous.push(index)
-      return
+    const matchedFileIndexes = new Set(fileToExisting.keys())
+    const matchedCount = matchedFileIndexes.size
+    for (const fileIndex of fileIndexes) {
+      if (matchedFileIndexes.has(fileIndex)) continue
+      const hasCompatibleExisting = existingIndexes.some(existingIndex =>
+        finalCloseDescriptionsCompatible(existing[existingIndex].operation_description, movements[fileIndex].description),
+      )
+      if (fileIndexes.length > existingIndexes.length) {
+        if (hasCompatibleExisting || matchedCount === existingIndexes.length) newRows.push(fileIndex)
+        else conflicts.push(fileIndex)
+      } else if (hasCompatibleExisting) {
+        ambiguous.push(fileIndex)
+      } else {
+        conflicts.push(fileIndex)
+      }
     }
-    const baseCandidates = base.get(finalCloseEconomicBase(accountId, movement)) ?? []
-    const availableBase = baseCandidates.filter(candidate => !used.has(candidate))
-    if (availableBase.length > 1) {
-      result.ambiguous.push(index)
-    } else if (availableBase.length === 1) {
-      result.conflicts.push(index)
-    } else {
-      result.newRows.push(index)
-    }
-  })
+  }
   existing.forEach((_row, index) => {
-    if (!used.has(index)) result.existingMissing.push(index)
+    if (!matchedExistingIndexes.has(index)) existingMissing.push(index)
   })
   return result
 }
