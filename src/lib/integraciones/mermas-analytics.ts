@@ -29,6 +29,8 @@ export type MermaAnalyticsProduct = {
   net_cost: number
   units: number
   cost: number
+  entries: Array<{ date: string; units: number; cost: number }>
+  returns: Array<{ date: string; units: number; value: number }>
 }
 
 export type MermaAnalyticsResult = {
@@ -61,7 +63,7 @@ function inPeriod(date: string, from: string, to: string) {
 }
 
 function emptyProduct(label: ProductLabel) {
-  return { ...label, gross_units: 0, gross_cost: 0, returned_units: 0, returned_cost: 0, net_units: 0, net_cost: 0, units: 0, cost: 0 }
+  return { ...label, gross_units: 0, gross_cost: 0, returned_units: 0, returned_cost: 0, net_units: 0, net_cost: 0, units: 0, cost: 0, entries: [], returns: [] }
 }
 
 export function calculateMermasAnalytics(input: {
@@ -114,6 +116,7 @@ export function calculateMermasAnalytics(input: {
     if (gross && inPeriod(gross.date, input.from, input.to)) {
       product.gross_units += grossUnits
       product.gross_cost += grossCost
+      product.entries.push({ date: gross.date, units: grossUnits, cost: grossCost })
       currentGrossUnits += grossUnits
       currentGrossCost += grossCost
       const bucket = addMonthly(gross.date.slice(0, 7))
@@ -134,6 +137,7 @@ export function calculateMermasAnalytics(input: {
       }
       product.returned_units += line.quantity
       product.returned_cost += line.quantity * line.unitCost
+      product.returns.push({ date: line.date, units: line.quantity, value: line.quantity * line.unitCost })
       currentReturnedUnits += line.quantity
       currentReturnedCost += line.quantity * line.unitCost
       const bucket = addMonthly(line.date.slice(0, 7))

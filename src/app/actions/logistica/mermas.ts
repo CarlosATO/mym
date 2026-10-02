@@ -3595,6 +3595,7 @@ export type MermasAnalytics = {
       name: string;
       units: number;
       value: number;
+      entries: Array<{ date: string; units: number; value: number }>;
     }>;
   };
 };
@@ -3725,7 +3726,7 @@ export async function getMermasAnalytics(from: string, to: string): Promise<{ da
       recovered_value: 0,
       units: 0,
       products: 0,
-      lines: [] as Array<{ sku: string; name: string; units: number; value: number }>,
+      lines: [] as Array<{ sku: string; name: string; units: number; value: number; entries: Array<{ date: string; units: number; value: number }> }>,
     };
     if (!internalSalesQuery.error && internalSalesQuery.data?.length) {
       const saleIds = internalSalesQuery.data.map((sale) => sale.id as string);
@@ -3735,14 +3736,16 @@ export async function getMermasAnalytics(from: string, to: string): Promise<{ da
         .eq("company_id", authorization.companyId)
         .in("sale_id", saleIds);
       if (!saleLinesError) {
-        const linesByProduct = new Map<string, { sku: string; name: string; units: number; value: number }>();
+        const linesByProduct = new Map<string, { sku: string; name: string; units: number; value: number; entries: Array<{ date: string; units: number; value: number }> }>();
         for (const sale of internalSalesQuery.data) sales.total_value += Number(sale.total_amount) || 0;
         sales.recovered_value = sales.total_value;
         for (const line of saleLines ?? []) {
           const sku = String(line.sku_snapshot ?? `BS-${line.bsale_variant_id}`);
-          const current = linesByProduct.get(sku) ?? { sku, name: String(line.product_name_snapshot ?? "Producto Bsale"), units: 0, value: 0 };
+          const sale = internalSalesQuery.data.find((candidate) => candidate.id === line.sale_id);
+          const current = linesByProduct.get(sku) ?? { sku, name: String(line.product_name_snapshot ?? "Producto Bsale"), units: 0, value: 0, entries: [] };
           current.units += Number(line.quantity) || 0;
           current.value += Number(line.line_total) || 0;
+          current.entries.push({ date: String(sale?.created_at ?? ""), units: Number(line.quantity) || 0, value: Number(line.line_total) || 0 });
           linesByProduct.set(sku, current);
         }
         sales.lines = [...linesByProduct.values()].sort((a, b) => b.value - a.value);

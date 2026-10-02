@@ -26,3 +26,18 @@ export function getMonthlyDisplayState(row: MermasMonthlyRow) {
     isCrossPeriodRecovery: row.gross_cost === 0 && row.returned_cost > 0,
   }
 }
+
+export function getAverageDaysBetweenEntries(entries: Array<{ date: string }>) {
+  const dates = [...new Set(entries.map((entry) => entry.date))].sort()
+  if (dates.length < 2) return null
+  const totalDays = dates.slice(1).reduce((sum, date, index) => {
+    const previous = new Date(`${dates[index]}T00:00:00Z`).getTime()
+    const current = new Date(`${date}T00:00:00Z`).getTime()
+    return sum + Math.round((current - previous) / 86400000)
+  }, 0)
+  return totalDays / (dates.length - 1)
+}
+
+export function getLastEntryDate(entries: Array<{ date: string }>) {
+  return entries.reduce<string | null>((latest, entry) => (!latest || entry.date > latest ? entry.date : latest), null)
+}
