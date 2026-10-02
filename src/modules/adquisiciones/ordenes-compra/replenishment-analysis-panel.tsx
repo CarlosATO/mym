@@ -1173,6 +1173,8 @@ export function ReplenishmentAnalysisPanel({ onBack, onNavigateToPo }: Props) {
                       <p className="mt-2 text-sm text-theme-text">
                         {prepareResult.code === 'MULTIPLE_SUPPLIERS'
                           ? 'Una Orden de Compra solo puede contener productos de un mismo proveedor.'
+                          : prepareResult.code === 'CANONICAL_COST_LOOKUP_FAILED'
+                            ? 'No se pudieron obtener los costos de compra. Intenta nuevamente.'
                           : 'Estos productos deben tener un proveedor válido antes de preparar la OC.'}
                       </p>
                     </div>

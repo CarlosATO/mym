@@ -813,6 +813,11 @@ export type PrepareReplenishmentPurchaseOrderResult =
       code: 'UNRESOLVED_SUPPLIER'
       items: ReplenishmentPurchaseOrderUnresolvedItem[]
     }
+  | {
+      success: false
+      code: 'CANONICAL_COST_LOOKUP_FAILED'
+      items: ReplenishmentPurchaseOrderUnresolvedItem[]
+    }
 
 export async function prepareReplenishmentPurchaseOrder(
   req: PrepareReplenishmentPurchaseOrderRequest,
@@ -833,7 +838,7 @@ export async function prepareReplenishmentPurchaseOrder(
   const skus = Array.from(new Set(selectedItems.map(item => item.sku)))
   const [{ data: products, error: productsError }, { data: mappings, error: mappingsError }] = await Promise.all([
     db.from('products')
-      .select('id, sku, description, unit_of_measure, tax_rate')
+      .select('id, sku, description, unit_of_measure, tax_rate, bsale_variant_id')
       .eq('company_id', companyId)
       .in('sku', skus),
     db.from('product_supplier_mappings')
@@ -948,7 +953,8 @@ export async function prepareReplenishmentPurchaseOrder(
   const variantIds = Array.from(new Set(
     resolved
       .map(entry => entry.product.bsale_variant_id)
-      .filter((variantId): variantId is number => variantId !== null),
+      .filter((variantId): variantId is number =>
+        typeof variantId === 'number' && Number.isFinite(variantId)),
   ))
   const integrations = db.schema('integraciones')
   for (let offset = 0; offset < variantIds.length; offset += 500) {
@@ -961,7 +967,7 @@ export async function prepareReplenishmentPurchaseOrder(
     if (canonicalCostsError) {
       return {
         success: false,
-        code: 'UNRESOLVED_SUPPLIER',
+        code: 'CANONICAL_COST_LOOKUP_FAILED',
         items: selectedItems.map(item => ({ sku: item.sku, product_name: item.product_name })),
       }
     }
