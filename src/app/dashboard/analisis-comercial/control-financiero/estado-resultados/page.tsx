@@ -1,7 +1,8 @@
-import { getFinanceCogs, getFinanceExpenses, getFinancePersonnel, getFinanceSalesNet, getFinanceSalesNetByFamily } from '@/lib/control-financiero/finance-api'
+import { getFinanceCogs, getFinanceExpenses, getFinancePersonnel, getFinanceReceivables, getFinanceSalesNet, getFinanceSalesNetByFamily } from '@/lib/control-financiero/finance-api'
 import { buildFinancialFamilyGroups } from '@/lib/control-financiero/family-groups'
 import { buildStatementRows, getCommonCoverage, hasStatementInformation } from '@/lib/control-financiero/statement'
 import { FinancialMatrix } from '../financial-matrix'
+import { ReceivablesSection } from '../receivables-drilldown'
 
 const MONTHS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
 
@@ -31,18 +32,20 @@ function ApiError({ status, message }: { status: number; message: string }) {
 }
 
 export default async function EstadoResultadosPage() {
-  const [salesResult, cogsResult, familyResult, personnelResult, expensesResult] = await Promise.all([
+  const [salesResult, cogsResult, familyResult, personnelResult, expensesResult, receivablesResult] = await Promise.all([
     getFinanceSalesNet(2026),
     getFinanceCogs(2026),
     getFinanceSalesNetByFamily(2026),
     getFinancePersonnel(2026),
     getFinanceExpenses(2026),
+    getFinanceReceivables(2026),
   ])
   const sales = salesResult.ok ? salesResult.data : null
   const cogs = cogsResult.ok ? cogsResult.data : null
   const families = familyResult.ok ? familyResult.data.families : []
   const personnel = personnelResult.ok ? personnelResult.data : null
   const expenses = expensesResult.ok ? expensesResult.data : null
+  const receivables = receivablesResult.ok ? receivablesResult.data : null
   const normalizedFamilies = familyResult.ok
     ? buildFinancialFamilyGroups(families, [])
     : { groups: [], individuals: [] }
@@ -134,14 +137,15 @@ export default async function EstadoResultadosPage() {
                 )
               })}
             </div>
-            <FinancialMatrix
+             <FinancialMatrix
                rows={rows}
                groups={normalizedFamilies.groups}
                companyId={familyResult.ok ? familyResult.data.company_id : ''}
                  year={2026}
                  horizonMonth={reportThroughMonth}
                  familyUnavailable={!familyResult.ok}
-             />
+              />
+             {receivables && <ReceivablesSection data={receivables} year={2026} />}
             {cogs && <p className="mt-3 text-[10px] text-[#322D29]/60">Costo de Ventas = costo bruto menos reversión COGS de Notas de Crédito. Los indicadores señalan períodos con cobertura incompleta.</p>}
             </>
           )}

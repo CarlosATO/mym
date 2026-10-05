@@ -184,6 +184,18 @@ export type FinanceExpensesResponse = {
   historicalCoverageNote: string
 }
 
+export type FinanceReceivablesResponse = {
+  company_id: string
+  year: number
+  currency: 'CLP'
+  source: string
+  data_through: string | null
+  effective_date: string | null
+  has_information: boolean
+  months: Array<{ month: number; receivable_amount: string | null; overdue_amount: string | null }>
+  actual: { receivable_amount: string; overdue_amount: string; pending_documents: number }
+}
+
 export type FinanceApiResult =
   | { ok: true; data: FinanceSalesNetResponse }
   | { ok: false; status: number; message: string }
@@ -198,6 +210,59 @@ export type FinancePersonnelApiResult =
 
 export type FinanceExpensesApiResult =
   | { ok: true; data: FinanceExpensesResponse }
+  | { ok: false; status: number; message: string }
+
+export type FinanceReceivablesApiResult =
+  | { ok: true; data: FinanceReceivablesResponse }
+  | { ok: false; status: number; message: string }
+
+export type FinanceReceivablesEvent = {
+  type: 'PAYMENT' | 'CREDIT_NOTE'
+  date: string | null
+  amount: string
+  payment_type: string | null
+  operation: string | null
+  reference: string | null
+}
+
+export type FinanceReceivablesAnalysis = {
+  company_id: string
+  year: number
+  period: number
+  period_start: string
+  close_date: string
+  currency: 'CLP'
+  source: string
+  summary: {
+    receivable_amount: string
+    overdue_amount: string
+    closing_receivable_amount: string
+    closing_overdue_amount: string
+    pending_documents: number
+    clients: number
+  }
+  daily: Array<{ date: string; receivable_amount: string; overdue_amount: string; pending_documents: number }>
+  documents: Array<{
+    document_id: number
+    emission_date: string
+    folio: number | null
+    document_type_name: string | null
+    total_amount: string
+    net_amount: string | null
+    tax_amount: string | null
+    expiration_date: string | null
+    pending_amount: string
+    client_id: number
+    client_code: string | null
+    client_name: string | null
+    url_pdf: string | null
+    overdue: boolean
+    events: FinanceReceivablesEvent[]
+  }>
+}
+
+export type FinanceReceivablesAnalysisApiResult =
+  | { ok: true; data: FinanceReceivablesAnalysis }
   | { ok: false; status: number; message: string }
 
 export type FinanceSalesNetDetailItem = {
@@ -396,6 +461,31 @@ export async function getFinanceExpenses(year: number): Promise<FinanceExpensesA
       return { ok: false, status: response.status, message: await readFinanceApiError(response, 'No se pudieron cargar los gastos identificados.') }
     }
     return { ok: true, data: await response.json() as FinanceExpensesResponse }
+  } catch (error) {
+    return financeApiFailure(error, 'Finance API no está disponible.')
+  }
+}
+
+export async function getFinanceReceivables(year: number): Promise<FinanceReceivablesApiResult> {
+  try {
+    const response = await getFinanceApiResponse(`/financial/income-statement/receivables?year=${year}`)
+    if (!response.ok) {
+      return { ok: false, status: response.status, message: await readFinanceApiError(response, 'No se pudo cargar la posición de cobranza.') }
+    }
+    return { ok: true, data: await response.json() as FinanceReceivablesResponse }
+  } catch (error) {
+    return financeApiFailure(error, 'Finance API no está disponible.')
+  }
+}
+
+export async function getFinanceReceivablesAnalysis(year: number, period: number): Promise<FinanceReceivablesAnalysisApiResult> {
+  try {
+    const query = new URLSearchParams({ year: String(year), period: String(period) })
+    const response = await getFinanceApiResponse(`/financial/income-statement/receivables/analysis?${query.toString()}`)
+    if (!response.ok) {
+      return { ok: false, status: response.status, message: await readFinanceApiError(response, 'No se pudo cargar el análisis de cobranza.') }
+    }
+    return { ok: true, data: await response.json() as FinanceReceivablesAnalysis }
   } catch (error) {
     return financeApiFailure(error, 'Finance API no está disponible.')
   }

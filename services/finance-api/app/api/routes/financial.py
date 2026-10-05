@@ -1,10 +1,11 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.financial.cogs import get_monthly_cogs
 from app.financial.expenses import get_monthly_expenses
 from app.financial.personnel import get_monthly_personnel
+from app.financial.receivables import get_receivables, get_receivables_analysis
 from app.financial.sales import (
     get_monthly_net_sales,
     get_sales_net_by_family,
@@ -56,6 +57,30 @@ def monthly_expenses(
     ),
 ) -> dict[str, Any]:
     return get_monthly_expenses(context.company_id, year)
+
+
+@router.get("/income-statement/receivables")
+def receivables(
+    year: int = Query(default=2026, ge=2000, le=2100),
+    context: AuthorizedCompanyContext = Depends(
+        require_company_permission(CONTROL_FINANCE_VIEW)
+    ),
+) -> dict[str, Any]:
+    return get_receivables(context.company_id, year)
+
+
+@router.get("/income-statement/receivables/analysis")
+def receivables_analysis(
+    year: int = Query(default=2026, ge=2000, le=2100),
+    period: int = Query(default=0, ge=0, le=12),
+    context: AuthorizedCompanyContext = Depends(
+        require_company_permission(CONTROL_FINANCE_VIEW)
+    ),
+) -> dict[str, Any]:
+    try:
+        return get_receivables_analysis(context.company_id, year, period)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.get("/income-statement/sales-net/detail")
