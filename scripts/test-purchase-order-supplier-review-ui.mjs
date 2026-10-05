@@ -103,7 +103,7 @@ test('supplier review confirms explicitly and only after local validation', () =
   assert.match(review, /hasPendingPrice = lines\.some\(line => !Number\.isFinite\(line\.unit_price\) \|\| line\.unit_price <= 0\)/)
   assert.match(review, /hasInvalidQuantity = lines\.some\(line => !Number\.isFinite\(line\.quantity\) \|\| line\.quantity <= 0\)/)
   assert.match(review, /Guarda la revisión antes de confirmar la OC\./)
-  assert.match(review, /Existen productos con precio pendiente\./)
+  assert.match(review, /Existen líneas con precio pendiente\./)
   assert.match(review, /Existen líneas con cantidad inválida\./)
   assert.doesNotMatch(validationSource, /modified_count|removed_count|added_count|total_difference/)
 

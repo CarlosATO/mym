@@ -102,6 +102,8 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
   const [selectedProduct, setSelectedProduct] = useState<PurchaseOrderCatalogProduct | null>(null)
   const [newQuantity, setNewQuantity] = useState('1')
   const [newUnitPrice, setNewUnitPrice] = useState('0')
+  const [servicePickerOpen, setServicePickerOpen] = useState(false)
+  const [newService, setNewService] = useState({ description: '', quantity: '1', unitPrice: '0', discountPercent: '0', taxRate: '19', notes: '' })
   const [productPickerOpen, setProductPickerOpen] = useState(false)
   const [newProductModalOpen, setNewProductModalOpen] = useState(false)
   const [dirty, setDirty] = useState(false)
@@ -170,7 +172,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
   const confirmDisabledReason = dirty
     ? 'Guarda la revisión antes de confirmar la OC.'
     : hasPendingPrice
-      ? 'Existen productos con precio pendiente.'
+      ? 'Existen líneas con precio pendiente.'
       : hasInvalidQuantity
         ? 'Existen líneas con cantidad inválida.'
         : ''
@@ -247,6 +249,29 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
     setError('')
   }
 
+  function addService() {
+    const description = newService.description.trim()
+    const quantity = Number(newService.quantity)
+    const unitPrice = Number(newService.unitPrice)
+    const discountPercent = Number(newService.discountPercent)
+    const taxRate = Number(newService.taxRate)
+    if (!description) { setError('La descripción del servicio es obligatoria.'); return }
+    if (!Number.isFinite(quantity) || quantity <= 0) { setError('La cantidad debe ser mayor que cero.'); return }
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) { setError('El precio unitario no puede ser negativo.'); return }
+    if (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100) { setError('El descuento debe estar entre 0 y 100.'); return }
+    if (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100) { setError('El IVA debe estar entre 0 y 100.'); return }
+    setLines(current => [...current, {
+      item_id: `new-${++newItemSequence.current}`, client_id: `new-${newItemSequence.current}`, line_number: current.length + 1,
+      item_type: 'SERVICE', product_id: null, sku: null, product_description: description, unit: null,
+      quantity, unit_price: unitPrice, discount_percent: discountPercent, discount_amount: 0, tax_rate: taxRate,
+      tax_amount: 0, line_total: 0, notes: newService.notes.trim() || null,
+    }])
+    setNewService({ description: '', quantity: '1', unitPrice: '0', discountPercent: '0', taxRate: '19', notes: '' })
+    setServicePickerOpen(false)
+    setDirty(true)
+    setError('')
+  }
+
   function addCreatedProduct(product: LocalCreatedProduct, quantity: number, unitPrice: number) {
     setLines(current => [...current, {
       item_id: `new-${++newItemSequence.current}`,
@@ -290,6 +315,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
         item_id: line.item_id?.startsWith('new-') ? null : line.item_id,
         item_type: line.item_type,
         product_id: line.product_id,
+        product_description: line.item_type === 'SERVICE' ? line.product_description : undefined,
         quantity: line.quantity,
         unit_price: line.unit_price,
         discount_percent: line.discount_percent,
@@ -395,9 +421,11 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
          </table>
        </section>
 
-        {!productPickerOpen && <section className="mb-4 border border-[#D1C7BD] bg-white/70 p-3">
-          <button type="button" onClick={() => void openCatalog()} disabled={catalogLoading} className="inline-flex items-center gap-1.5 rounded-md border border-[#72383D]/40 px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#72383D]/10 disabled:opacity-50"><Plus className="h-3.5 w-3.5" /> {catalogLoading ? 'Cargando catálogo...' : 'Agregar producto'}</button>
-        </section>}
+         {!productPickerOpen && <section className="mb-4 flex flex-wrap gap-2 border border-[#D1C7BD] bg-white/70 p-3">
+           <button type="button" onClick={() => void openCatalog()} disabled={catalogLoading} className="inline-flex items-center gap-1.5 rounded-md border border-[#72383D]/40 px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#72383D]/10 disabled:opacity-50"><Plus className="h-3.5 w-3.5" /> {catalogLoading ? 'Cargando catálogo...' : 'Agregar producto'}</button>
+           <button type="button" onClick={() => setServicePickerOpen(true)} className="inline-flex items-center gap-1.5 rounded-md border border-[#72383D]/40 px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#72383D]/10"><Plus className="h-3.5 w-3.5" /> Agregar servicio</button>
+         </section>}
+         {servicePickerOpen && <section className="mb-4 border border-[#D1C7BD] bg-white/70 p-3"><div className="mb-2 flex items-center justify-between"><span className="text-xs font-semibold text-[#6D625B]">Nuevo servicio</span><button type="button" onClick={() => setServicePickerOpen(false)} className="rounded-md border border-[#D1C7BD] px-2 py-1 text-[11px] font-semibold text-[#6D625B]">Cerrar</button></div><div className="grid gap-2 md:grid-cols-5"><label className="text-[10px] font-semibold md:col-span-2">Descripción *<input value={newService.description} onChange={event => setNewService(prev => ({ ...prev, description: event.target.value }))} className={`${inputClass} mt-1`} /></label><label className="text-[10px] font-semibold">Cantidad<input type="number" min="0.01" step="0.01" value={newService.quantity} onChange={event => setNewService(prev => ({ ...prev, quantity: event.target.value }))} className={`${inputClass} mt-1`} /></label><label className="text-[10px] font-semibold">Precio<input type="number" min="0" step="0.01" value={newService.unitPrice} onChange={event => setNewService(prev => ({ ...prev, unitPrice: event.target.value }))} className={`${inputClass} mt-1`} /></label><label className="text-[10px] font-semibold">Dto %<input type="number" min="0" max="100" step="0.01" value={newService.discountPercent} onChange={event => setNewService(prev => ({ ...prev, discountPercent: event.target.value }))} className={`${inputClass} mt-1`} /></label><label className="text-[10px] font-semibold">IVA %<input type="number" min="0" max="100" step="0.01" value={newService.taxRate} onChange={event => setNewService(prev => ({ ...prev, taxRate: event.target.value }))} className={`${inputClass} mt-1`} /></label></div><label className="mt-2 block text-[10px] font-semibold">Observaciones<textarea rows={2} value={newService.notes} onChange={event => setNewService(prev => ({ ...prev, notes: event.target.value }))} className={`${inputClass} mt-1 h-auto py-1`} /></label><div className="mt-2 flex justify-end"><button type="button" onClick={addService} className="rounded-md bg-[#72383D] px-3 py-2 text-xs font-semibold text-white">Agregar servicio</button></div></section>}
          {productPickerOpen && !selectedProduct && <section className="mb-4 max-w-2xl border border-[#D1C7BD] bg-white/70 p-3">
           <div className="mb-2 flex items-center justify-between gap-2"><span className="text-xs font-semibold text-[#6D625B]">Buscar producto</span><button type="button" onClick={closeProductPicker} className="rounded-md border border-[#D1C7BD] px-2 py-1 text-[11px] font-semibold text-[#6D625B] hover:bg-[#EFE9E1]">Cerrar</button></div>
           <div className="relative"><Search className="absolute left-2 top-2 h-3.5 w-3.5 text-[#AC9C8D]" /><input autoFocus value={catalogQuery} onChange={event => setCatalogQuery(event.target.value)} placeholder="Buscar por SKU, descripción o código de barra" className={`${inputClass} pl-7`} /></div>

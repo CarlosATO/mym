@@ -214,6 +214,10 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const [pendingProduct, setPendingProduct] = useState<PurchaseOrderCatalogProduct | null>(null)
   const [pendingQuantity, setPendingQuantity] = useState('1')
   const [pendingUnitPrice, setPendingUnitPrice] = useState('')
+  const [showServiceForm, setShowServiceForm] = useState(false)
+  const [serviceDraft, setServiceDraft] = useState({
+    description: '', quantity: '1', unitPrice: '', discountPercent: '0', taxRate: '19', notes: '',
+  })
 
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null)
@@ -679,6 +683,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     setPendingProduct(null)
     setPendingQuantity('1')
     setPendingUnitPrice('')
+    setShowServiceForm(false)
+    setServiceDraft({ description: '', quantity: '1', unitPrice: '', discountPercent: '0', taxRate: '19', notes: '' })
     productLoadingMoreRef.current = false
     setShowAuthorizerForm(false)
     setReplenishmentSupplierName('')
@@ -762,8 +768,13 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     const invalidPriceItems = items.filter(item => item.quantity > 0 && (!Number.isFinite(item.unit_price) || item.unit_price <= 0))
     if (invalidPriceItems.length > 0) {
       setInvalidPriceItemIds(new Set(invalidPriceItems.map(item => item.tempId)))
-      msg('Hay productos sin precio unitario. Complete el precio antes de emitir la orden.')
+      msg('Hay líneas sin precio unitario. Complete el precio antes de emitir la orden.')
       linePriceInputRefs.current[invalidPriceItems[0].tempId]?.focus()
+      return
+    }
+    const invalidLine = items.find(item => !item.description.trim() || item.quantity <= 0 || item.discount_percent < 0 || item.discount_percent > 100 || item.tax_rate < 0 || item.tax_rate > 100 || (item.item_type === 'SERVICE' ? Boolean(item.product_id) : !item.product_id))
+    if (invalidLine) {
+      msg('Revisa descripción, cantidad, descuento, IVA y tipo de línea antes de emitir la orden.')
       return
     }
     submittingRef.current = true
@@ -1073,6 +1084,26 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     productSearchRequestSequence.current += 1
   }
 
+  function addServiceToItems() {
+    const description = serviceDraft.description.trim()
+    const quantity = Number(serviceDraft.quantity)
+    const unitPrice = Number(serviceDraft.unitPrice)
+    const discountPercent = Number(serviceDraft.discountPercent)
+    const taxRate = Number(serviceDraft.taxRate)
+    if (!description) { msg('La descripción del servicio es obligatoria.'); return }
+    if (!Number.isFinite(quantity) || quantity <= 0) { msg('Ingresa una cantidad mayor a 0.'); return }
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) { msg('Ingresa un precio unitario válido.'); return }
+    if (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100) { msg('El descuento debe estar entre 0 y 100.'); return }
+    if (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100) { msg('El IVA debe estar entre 0 y 100.'); return }
+    setItems(prev => [...prev, {
+      tempId: newTempId(), item_type: 'SERVICE', product_id: '', sku: '', description,
+      unit: '', quantity, unit_price: unitPrice, discount_percent: discountPercent, tax_rate: taxRate,
+      warehouse_id: '', notes: serviceDraft.notes.trim(),
+    }])
+    setServiceDraft({ description: '', quantity: '1', unitPrice: '', discountPercent: '0', taxRate: '19', notes: '' })
+    setShowServiceForm(false)
+  }
+
   function focusProductSearch() {
     if (!form.supplier_id) {
       msg('Selecciona primero un proveedor para agregar productos.')
@@ -1192,7 +1223,9 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         supplier_phone: supplier?.contact_phone || undefined,
         supplier_address: supplier?.address || undefined,
         warehouse_name: warehouse?.name || undefined,
-        po_type: form.po_type,
+        po_type: items.some(item => item.item_type === 'SERVICE')
+           ? items.some(item => item.item_type === 'PRODUCT') ? 'MIXTA' : 'SERVICIOS'
+           : 'PRODUCTOS',
         currency: form.currency,
         payment_terms: form.payment_terms || undefined,
         requester_name: 'Usuario actual',
@@ -1465,14 +1498,6 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                 )}
               </div>
               <div className="space-y-1">
-                  <label className="text-[10px] font-semibold text-[#6D625B]">Tipo OC</label>
-                <select value={form.po_type} onChange={e => setForm(p => ({ ...p, po_type: e.target.value }))} className={selectClass}>
-                  <option value="PRODUCTOS" className="bg-white dark:bg-emerald-900">Productos</option>
-                  <option value="SERVICIOS" className="bg-white dark:bg-emerald-900">Servicios</option>
-                  <option value="MIXTA" className="bg-white dark:bg-emerald-900">Mixta</option>
-                </select>
-              </div>
-              <div className="space-y-1">
                   <label className="text-[10px] font-semibold text-[#6D625B]">Moneda</label>
                 <select value={form.currency} onChange={e => setForm(p => ({ ...p, currency: e.target.value }))} className={selectClass}>
                   <option value="CLP" className="bg-white dark:bg-emerald-900">CLP</option>
@@ -1538,15 +1563,22 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                    <h3 className="text-sm font-bold uppercase tracking-wide text-[#322D29]">Líneas de la orden</h3>
                    <p className="mt-0.5 text-[10px] text-[#AC9C8D]">Productos y servicios incluidos</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={focusProductSearch}
-                   className="inline-flex h-8 items-center justify-center gap-1.5 self-start rounded-md border border-[#72383D]/40 bg-[#EFE9E1] px-3 text-xs font-semibold text-[#72383D] transition-colors hover:bg-[#F5EDEE] sm:self-auto"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  Agregar producto
-                </button>
-              </div>
+                 <div className="flex flex-wrap gap-2 self-start sm:self-auto">
+                   <button type="button" onClick={focusProductSearch} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-[#72383D]/40 bg-[#EFE9E1] px-3 text-xs font-semibold text-[#72383D] transition-colors hover:bg-[#F5EDEE]"><Plus className="h-3.5 w-3.5" />Agregar producto</button>
+                   <button type="button" onClick={() => setShowServiceForm(value => !value)} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-[#72383D]/40 bg-[#EFE9E1] px-3 text-xs font-semibold text-[#72383D] transition-colors hover:bg-[#F5EDEE]"><Plus className="h-3.5 w-3.5" />Agregar servicio</button>
+                 </div>
+               </div>
+
+               {showServiceForm && <div className="mb-3 border border-[#D1C7BD] bg-[#F7F4F0] p-3">
+                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(180px,1.5fr)_90px_120px_90px_90px] sm:items-end">
+                   <label className="text-[10px] font-semibold text-[#6D625B]">Descripción del servicio *<input value={serviceDraft.description} onChange={event => setServiceDraft(prev => ({ ...prev, description: event.target.value }))} className="mt-1 h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-xs" /></label>
+                   <label className="text-[10px] font-semibold text-[#6D625B]">Cantidad<input type="number" min="0.001" step="0.001" value={serviceDraft.quantity} onChange={event => setServiceDraft(prev => ({ ...prev, quantity: event.target.value }))} className="mt-1 h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs" /></label>
+                   <label className="text-[10px] font-semibold text-[#6D625B]">Precio unitario<input type="number" min="0" step="0.01" value={serviceDraft.unitPrice} onChange={event => setServiceDraft(prev => ({ ...prev, unitPrice: event.target.value }))} className="mt-1 h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs" /></label>
+                   <label className="text-[10px] font-semibold text-[#6D625B]">Descuento %<input type="number" min="0" max="100" step="0.01" value={serviceDraft.discountPercent} onChange={event => setServiceDraft(prev => ({ ...prev, discountPercent: event.target.value }))} className="mt-1 h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs" /></label>
+                   <label className="text-[10px] font-semibold text-[#6D625B]">IVA %<input type="number" min="0" max="100" step="0.01" value={serviceDraft.taxRate} onChange={event => setServiceDraft(prev => ({ ...prev, taxRate: event.target.value }))} className="mt-1 h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs" /></label>
+                 </div>
+                 <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end"><label className="flex-1 text-[10px] font-semibold text-[#6D625B]">Observaciones<textarea value={serviceDraft.notes} onChange={event => setServiceDraft(prev => ({ ...prev, notes: event.target.value }))} rows={2} className="mt-1 w-full rounded-md border border-[#D1C7BD] bg-white px-2 py-1 text-xs" /></label><button type="button" onClick={addServiceToItems} className="h-8 rounded-md bg-[#72383D] px-3 text-xs font-bold text-white">Agregar servicio</button></div>
+               </div>}
 
                <div ref={productRef} className="relative mb-3">
                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#AC9C8D]" />

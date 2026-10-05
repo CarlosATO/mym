@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 const root = new URL('..', import.meta.url)
-const migration = await readFile(new URL('supabase/migrations/20260930210000_adquisiciones_confirm_supplier_review.sql', root), 'utf8')
+const migration = await readFile(new URL('supabase/migrations/20260930185030_adquisiciones_confirm_supplier_review.sql', root), 'utf8')
 const action = await readFile(new URL('src/app/actions/adquisiciones/purchase-orders.ts', root), 'utf8')
 const review = await readFile(new URL('src/modules/adquisiciones/ordenes-compra/purchase-order-supplier-review.tsx', root), 'utf8')
 
@@ -49,5 +49,5 @@ test('server action authenticates, scopes company, and calls only confirmation R
   assert.match(source, /p_user_id: user\.id/)
   assert.match(source, /p_company_id: companyId/)
   assert.doesNotMatch(source, /update_purchase_order_status/)
-  assert.doesNotMatch(review, /confirmPurchaseOrderSupplierReview/)
+  assert.match(review, /confirmPurchaseOrderSupplierReview/)
 })

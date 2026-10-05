@@ -414,6 +414,7 @@ export interface SupplierReviewItemInput {
   item_id?: string | null
   item_type: 'PRODUCT' | 'SERVICE'
   product_id?: string | null
+  product_description?: string | null
   quantity: number
   unit_price: number
   discount_percent?: number | null
@@ -521,6 +522,7 @@ export async function updateSentPurchaseOrderReview(poId: string, data: Supplier
         item_id: item.item_id || null,
         item_type: item.item_type,
         product_id: item.product_id || null,
+        product_description: item.product_description ?? null,
         quantity: item.quantity,
         unit_price: item.unit_price,
         discount_percent: item.discount_percent ?? null,
