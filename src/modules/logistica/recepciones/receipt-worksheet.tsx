@@ -18,6 +18,7 @@ interface ReceiptWorksheetProps {
 interface ItemSplit {
   id: string
   quantity: number
+  condition: 'CONFORME' | 'DANADO' | 'RECHAZADO' | 'FALTANTE'
   location_id: string
   lot_number: string
   expiration_date: string
@@ -38,6 +39,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
   const [documentNumber, setDocumentNumber] = useState<string>('')
   const [documentDate, setDocumentDate] = useState<string>(new Date().toISOString().substring(0, 10))
   const [documentNotes, setDocumentNotes] = useState<string>('')
+  const [idempotencyKey] = useState(() => `receipt:${poId}:${crypto.randomUUID()}`)
 
   // Attachment state
   const [uploadingFile, setUploadingFile] = useState(false)
@@ -89,7 +91,8 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
           initialInputs[item.id] = [
             {
               id: `split-${Date.now()}-${Math.random()}`,
-              quantity: item.item_type === 'PRODUCT' ? Number(item.quantity_pending) : 1,
+              quantity: Number(item.quantity_pending || 0),
+              condition: 'CONFORME',
               location_id: defaultLocId,
               lot_number: '',
               expiration_date: '',
@@ -120,6 +123,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
     const newSplit: ItemSplit = {
       id: `split-${Date.now()}-${Math.random()}`,
       quantity: 0,
+      condition: 'CONFORME',
       location_id: defaultLocId,
       lot_number: '',
       expiration_date: '',
@@ -257,6 +261,11 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
       return
     }
 
+    if (!['FA', 'GD'].includes(documentType) || !documentNumber.trim()) {
+      toast.error('Debe indicar si el documento es FACTURA o GUIA y registrar su número.')
+      return
+    }
+
     // Prepare payload items
     const payloadItems: any[] = []
     let hasReceivingActivity = false
@@ -267,8 +276,10 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
 
       // Validate quantities sum for this item
       let sumQty = 0
-      splits.forEach(s => {
-        sumQty += Number(s.quantity || 0)
+       splits.forEach(s => {
+         if (s.condition === 'CONFORME' || s.condition === 'DANADO') {
+           sumQty += Number(s.quantity || 0)
+         }
       })
 
       const qtyPending = Number(item.quantity_pending || 0)
@@ -285,7 +296,8 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
         hasReceivingActivity = true
 
         // CONFORME enter stock, require location if WAREHOUSE
-        if (receivingType === 'WAREHOUSE' && item.item_type === 'PRODUCT') {
+        if (receivingType === 'WAREHOUSE' && item.item_type === 'PRODUCT'
+          && (split.condition === 'CONFORME' || split.condition === 'DANADO')) {
           if (!split.location_id) {
             toast.error(`Debe seleccionar una ubicación para el producto "${item.product_description}".`)
             return
@@ -300,13 +312,13 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
 
         payloadItems.push({
           purchase_order_item_id: item.id,
-          quantity_received: qty,
-          quantity_rejected: 0,
-          quantity_missing: 0,
-          location_id: receivingType === 'WAREHOUSE' ? split.location_id : null,
+          quantity_received: split.condition === 'CONFORME' || split.condition === 'DANADO' ? qty : 0,
+          quantity_rejected: split.condition === 'RECHAZADO' ? qty : 0,
+          quantity_missing: split.condition === 'FALTANTE' ? qty : 0,
+          location_id: receivingType === 'WAREHOUSE' && (split.condition === 'CONFORME' || split.condition === 'DANADO') ? split.location_id : null,
           lot_number: item.item_type === 'PRODUCT' ? split.lot_number || null : null,
           expiration_date: item.item_type === 'PRODUCT' ? split.expiration_date || null : null,
-          condition: 'CONFORME',
+          condition: split.condition,
           notes: split.notes || null,
           rejection_reason: null,
           difference_reason: null
@@ -325,11 +337,12 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
         purchase_order_id: poDetail.po.id,
         receiving_type: receivingType,
         warehouse_id: receivingType === 'WAREHOUSE' ? mainWarehouseId : null,
-        notes: generalNotes,
+         notes: generalNotes,
         document_type: documentType,
         document_number: documentNumber || null,
         document_date: documentDate || null,
-        items: payloadItems,
+         items: payloadItems,
+         idempotency_key: idempotencyKey,
         attachment: attachment ? {
           ...attachment,
           notes: documentNotes || attachment.notes || ''
@@ -507,9 +520,6 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
               >
                 <option value="GD">GD - Guía de Despacho</option>
                 <option value="FA">FA - Factura</option>
-                <option value="FOTO">FOTO - Captura fotográfica</option>
-                <option value="EVIDENCIA">EVIDENCIA - Archivo de Prueba</option>
-                <option value="OTRO">OTRO - Documento diverso</option>
               </select>
             </div>
 
@@ -652,7 +662,9 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
                   let sumActualRec = 0
                   splits.forEach(s => {
                     sumQty += Number(s.quantity || 0)
-                    sumActualRec += Number(s.quantity || 0)
+                     if (s.condition === 'CONFORME' || s.condition === 'DANADO') {
+                       sumActualRec += Number(s.quantity || 0)
+                     }
                   })
 
                   const price = Number(item.unit_price || 0)
@@ -690,7 +702,8 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
 
                       {/* Sub-rows for Splits (Lotes / Partidas) */}
                       {splits.map((split, sIdx) => {
-                        const requiresLocation = receivingType === 'WAREHOUSE' && item.item_type === 'PRODUCT'
+                         const requiresLocation = receivingType === 'WAREHOUSE' && item.item_type === 'PRODUCT'
+                           && (split.condition === 'CONFORME' || split.condition === 'DANADO')
 
                         return (
                           <tr key={split.id} className="border-b border-theme-border/40 hover:bg-theme-text/[0.01] transition-colors bg-theme-text/[0.005]">
@@ -720,9 +733,19 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
                               />
                             </td>
 
-                            {/* Splits details inputs aligned on rest of columns */}
-                            <td colSpan={5} className="py-1.5 px-4">
-                              <div className="flex items-center gap-3">
+                             {/* Splits details inputs aligned on rest of columns */}
+                             <td colSpan={5} className="py-1.5 px-4">
+                               <div className="flex items-center gap-3">
+                                 <select
+                                   value={split.condition}
+                                   onChange={e => updateSplitField(item.id, split.id, 'condition', e.target.value)}
+                                   className={cn(erpSelectClass, 'h-7 rounded px-1.5 text-[11px] font-bold')}
+                                 >
+                                   <option value="CONFORME">Conforme</option>
+                                   <option value="DANADO">Dañado</option>
+                                   <option value="RECHAZADO">Rechazado</option>
+                                   <option value="FALTANTE">Faltante</option>
+                                 </select>
                                 {requiresLocation && whLocs.length > 0 && (
                                   <div className="flex items-center gap-1 shrink-0">
                                     <span className="text-[10px] text-theme-text-muted font-bold">Ubic:</span>

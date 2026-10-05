@@ -649,7 +649,7 @@ export function RecepcionesPanel() {
   useEffect(() => { loadPOs() }, [loadPOs])
 
   const filteredPOs = pos.filter(po => {
-    if (filterTab === 'PENDING' && po.status !== 'EMITIDA') return false
+    if (filterTab === 'PENDING' && !['CONFIRMADA', 'RECEPCION_PARCIAL'].includes(po.status)) return false
     if (filterTab === 'PARTIAL' && po.status !== 'RECEPCION_PARCIAL') return false
     if (filterTab === 'RECEIVED' && po.status !== 'RECEPCION_TOTAL') return false
     const s = search.toLowerCase()
@@ -670,7 +670,7 @@ export function RecepcionesPanel() {
 
   const counts = {
     all: pos.length,
-    pending: pos.filter(p => p.status === 'EMITIDA').length,
+    pending: pos.filter(p => ['CONFIRMADA', 'RECEPCION_PARCIAL'].includes(p.status)).length,
     partial: pos.filter(p => p.status === 'RECEPCION_PARCIAL').length,
     received: pos.filter(p => p.status === 'RECEPCION_TOTAL').length,
   }

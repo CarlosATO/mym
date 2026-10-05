@@ -59,7 +59,7 @@ export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]>
     .from('purchase_orders')
     .select('id, correlative, issue_date, po_type, grand_total, status, receipt_status, supplier_id, warehouse_id')
     .eq('company_id', companyId)
-    .in('status', ['EMITIDA', 'RECEPCION_PARCIAL', 'RECEPCION_TOTAL'])
+    .in('status', ['CONFIRMADA', 'RECEPCION_PARCIAL', 'RECEPCION_TOTAL'])
     .order('created_at', { ascending: false })
     .limit(200)
   if (process.env.NODE_ENV === 'development') console.timeEnd('getPendingReceivablePOs:base')
@@ -203,6 +203,29 @@ export async function getPurchaseOrderForReceipt(poId: string) {
     return null
   }
 
+  const receiptDb = logDb()
+  const { data: priorReceipts } = await receiptDb
+    .from('purchase_receipts')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('purchase_order_id', poId)
+    .eq('status', 'COMPLETED')
+  const receiptIds = (priorReceipts ?? []).map(receipt => receipt.id)
+  const { data: priorItems } = receiptIds.length
+    ? await receiptDb
+      .from('purchase_receipt_items')
+      .select('purchase_order_item_id, quantity_received, quantity_rejected, quantity_missing')
+      .in('receipt_id', receiptIds)
+    : { data: [] as Array<{ purchase_order_item_id: string; quantity_received: number; quantity_rejected: number; quantity_missing: number }> }
+  const accountedByItem = new Map<string, number>()
+  for (const receiptItem of priorItems ?? []) {
+    accountedByItem.set(
+      receiptItem.purchase_order_item_id,
+      (accountedByItem.get(receiptItem.purchase_order_item_id) ?? 0)
+        + Number(receiptItem.quantity_received || 0),
+    )
+  }
+
   return {
     po: {
       ...po,
@@ -218,7 +241,7 @@ export async function getPurchaseOrderForReceipt(poId: string) {
     items: (items ?? []).map(item => ({
       ...item,
       quantity_received: Number(item.quantity_received || 0),
-      quantity_pending: Number(item.quantity || 0) - Number(item.quantity_received || 0)
+      quantity_pending: Math.max(0, Number(item.quantity || 0) - (accountedByItem.get(item.id) ?? Number(item.quantity_received || 0)))
     }))
   }
 }
@@ -315,13 +338,12 @@ export async function createPurchaseReceipt(data: {
     mime_type: string
     notes?: string
   } | null
+  idempotency_key: string
 }) {
+  const authorization = await requireWmsPermission('logistica.receptions.create')
+  const user = authorization.user
+  const companyId = authorization.companyId
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'No autorizado' }
-
-  const companyId = await getActiveCompanyId()
-  if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
 
   const { data: { session } } = await supabase.auth.getSession()
 
@@ -362,8 +384,18 @@ export async function createPurchaseReceipt(data: {
       rejection_reason: it.rejection_reason || null,
       difference_reason: it.difference_reason || null
     })),
-    p_user_id: user.id
-  })
+     p_user_id: user.id,
+     p_idempotency_key: data.idempotency_key,
+     p_attachment: data.attachment ? {
+       document_type: data.document_type,
+       storage_bucket: data.attachment.storage_bucket || 'recepciones',
+       storage_path: data.attachment.storage_path || null,
+       file_name: data.attachment.file_name,
+       file_size: data.attachment.file_size,
+       mime_type: data.attachment.mime_type,
+       notes: data.attachment.notes || null,
+     } : null
+   })
 
   if (error) {
     console.error('createPurchaseReceipt error:', error)
@@ -372,37 +404,6 @@ export async function createPurchaseReceipt(data: {
 
   const r = result as { success: boolean; error?: string; receipt_id?: string; receipt_number?: string }
   if (!r.success) return { error: r.error || 'Error al guardar recepción' }
-
-  // If there's an attachment, insert into logistica.receipt_documents
-  if (data.attachment && r.receipt_id) {
-    let docType = data.document_type || 'OTRO'
-    if (docType === 'FOTO') {
-      docType = 'EVIDENCIA'
-    }
-
-    const { error: docError } = await db
-      .from('receipt_documents')
-      .insert({
-        company_id: companyId,
-        receipt_id: r.receipt_id,
-        document_type: docType as any,
-        document_number: data.document_number || null,
-        file_url: null, // Removed per request, use signed URLs from storage_path
-        storage_bucket: data.attachment.storage_bucket || 'recepciones',
-        storage_path: data.attachment.storage_path || null,
-        document_date: data.document_date || null,
-        file_name: data.attachment.file_name,
-        file_size: data.attachment.file_size,
-        mime_type: data.attachment.mime_type,
-        notes: data.attachment.notes || null,
-        created_by: user.id
-      })
-
-    if (docError) {
-      console.error('Error inserting receipt document metadata:', docError)
-      return { error: `Recepción creada, pero falló el registro del documento: ${docError.message}` }
-    }
-  }
 
   return { success: true, receipt_id: r.receipt_id, receipt_number: r.receipt_number }
 }
