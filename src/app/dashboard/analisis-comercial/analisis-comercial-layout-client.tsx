@@ -1,6 +1,7 @@
 'use client'
 
 import { ModuleShell } from '@/components/layout/module-shell'
+import type { Company } from '@/app/actions/companies'
 import {
   analisisComercialIdentity,
   analisisComercialNavigation,
@@ -11,15 +12,17 @@ interface AnalisisComercialLayoutClientProps {
   children: React.ReactNode
   profile: { nombre: string; apellido: string; email: string; roles: { name: string } }
   permissions: string[]
+  activeCompany: Company | null
 }
 
-export function AnalisisComercialLayoutClient({ children, profile, permissions }: AnalisisComercialLayoutClientProps) {
+export function AnalisisComercialLayoutClient({ children, profile, permissions, activeCompany }: AnalisisComercialLayoutClientProps) {
   return (
     <ModuleShell
       identity={analisisComercialIdentity}
       navigation={analisisComercialNavigation}
       profile={profile}
       permissions={permissions}
+      activeCompany={activeCompany}
       pageTitle="Análisis Comercial"
       breadcrumb={getAnalisisComercialBreadcrumb}
       surfaceMode="none"

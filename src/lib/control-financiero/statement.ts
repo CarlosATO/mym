@@ -19,7 +19,26 @@ export type StatementRow = {
   group?: boolean
   children?: StatementRow[]
   sectionKey?: 'personnel' | 'operating-expenses' | 'non-operating-expenses'
+  drilldownKey?: StatementDrilldownKey
 }
+
+export type StatementDrilldownKey =
+  | 'PERSONNEL_GROUP'
+  | 'PERSONNEL_FORMAL'
+  | 'PERSONNEL_EMPLOYER'
+  | 'PERSONNEL_OFF_BOOK'
+  | 'PERSONNEL_OTHER'
+  | 'OPERATING_GROUP'
+  | 'EXPENSE_SOFTWARE_SUBSCRIPTIONS'
+  | 'EXPENSE_OFFICE_CONSUMPTION'
+  | 'EXPENSE_VEHICLE_OPERATING'
+  | 'EXPENSE_NOTARY'
+  | 'EXPENSE_BANK_FEES'
+  | 'EXPENSE_INSURANCE'
+  | 'EXPENSE_TELECOM'
+  | 'EXPENSE_EXTERNAL_SERVICES'
+  | 'NON_OPERATING_GROUP'
+  | 'EXPENSE_FINANCIAL_INTEREST'
 
 export type SalesNetDetailScope = { month: number } | { month: null }
 
@@ -265,6 +284,7 @@ export function buildStatementRows(
       ytdMonths: FinancePersonnelResponse['months'],
       denominator: string | null,
       incomplete = false,
+      drilldownKey?: StatementDrilldownKey,
     ): StatementRow => ({
       label,
       values: personnelMonths.map(value),
@@ -275,6 +295,7 @@ export function buildStatementRows(
        ytdLabel: incomplete ? periodLabel : `ACUMULADO · ENE–${PERIOD_MONTHS[reportThroughMonth - 1]}`,
       percentageLabel: incomplete ? `sobre ventas ${periodText}` : `sobre ventas enero–${['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'][reportThroughMonth - 1]}`,
       ytdTooltip: incomplete ? `Fuente disponible hasta ${periodText}.` : undefined,
+      drilldownKey,
     })
 
     rows.push({
@@ -289,11 +310,12 @@ export function buildStatementRows(
       ytdTooltip: `Acumulado disponible ${periodText}. Faltan remuneraciones de los meses restantes del período mostrado para completar YTD.`,
       group: true,
       sectionKey: 'personnel',
+      drilldownKey: 'PERSONNEL_GROUP',
       children: [
-        child('Remuneraciones formales', month => month.formalEarnings, payrollMonths, payrollSalesYtd, true),
-        child('Cargas del empleador', month => month.employerContributions, payrollMonths, payrollSalesYtd, true),
-        child('Personal fuera de libro', month => month.offBook, visiblePersonnelMonths, visibleSalesYtd),
-        child('Otros laborales', month => month.salariesOther, visiblePersonnelMonths, visibleSalesYtd),
+        child('Remuneraciones formales', month => month.formalEarnings, payrollMonths, payrollSalesYtd, true, 'PERSONNEL_FORMAL'),
+        child('Cargas del empleador', month => month.employerContributions, payrollMonths, payrollSalesYtd, true, 'PERSONNEL_EMPLOYER'),
+        child('Personal fuera de libro', month => month.offBook, visiblePersonnelMonths, visibleSalesYtd, false, 'PERSONNEL_OFF_BOOK'),
+        child('Otros laborales', month => month.salariesOther, visiblePersonnelMonths, visibleSalesYtd, false, 'PERSONNEL_OTHER'),
       ],
     })
   }
@@ -314,9 +336,10 @@ export function buildStatementRows(
     const expenseChild = (
       label: string,
       field: keyof FinanceExpensesTotals,
+      drilldownKey: StatementDrilldownKey,
     ): StatementRow => ({
       label,
-      values: expenseMonths.map(month => month[field] as string | null),
+      values: expenseMonths.map(month => month.status === 'AVAILABLE' ? month[field] as string | null : null),
       ytd: expenses.ytd[field] as string | null,
       percentageYtd: percentageOf(expenses.ytd[field] as string | null, expenseSalesYtd),
       missing,
@@ -324,16 +347,17 @@ export function buildStatementRows(
       ytdLabel: periodLabel,
       percentageLabel: `sobre ventas ${periodText}`,
       ytdTooltip: expenses.coverage.coverageStatus !== 'COMPLETE' ? `Fuente bancaria disponible hasta ${periodText}.` : undefined,
+      drilldownKey,
     })
     const operatingChildren = [
-      expenseChild('Software y suscripciones', 'softwareSubscriptions'),
-      expenseChild('Gastos de oficina y consumo interno', 'officeConsumption'),
-      expenseChild('Combustible y gastos de vehículo', 'vehicleOperating'),
-      expenseChild('Servicios notariales', 'notaryServices'),
-      expenseChild('Gastos bancarios', 'bankFees'),
-      expenseChild('Seguros', 'insurance'),
-      expenseChild('Telecomunicaciones e Internet', 'telecom'),
-      expenseChild('Servicios profesionales y externos', 'externalServices'),
+      expenseChild('Software y suscripciones', 'softwareSubscriptions', 'EXPENSE_SOFTWARE_SUBSCRIPTIONS'),
+      expenseChild('Gastos de oficina y consumo interno', 'officeConsumption', 'EXPENSE_OFFICE_CONSUMPTION'),
+      expenseChild('Combustible y gastos de vehículo', 'vehicleOperating', 'EXPENSE_VEHICLE_OPERATING'),
+      expenseChild('Servicios notariales', 'notaryServices', 'EXPENSE_NOTARY'),
+      expenseChild('Gastos bancarios', 'bankFees', 'EXPENSE_BANK_FEES'),
+      expenseChild('Seguros', 'insurance', 'EXPENSE_INSURANCE'),
+      expenseChild('Telecomunicaciones e Internet', 'telecom', 'EXPENSE_TELECOM'),
+      expenseChild('Servicios profesionales y externos', 'externalServices', 'EXPENSE_EXTERNAL_SERVICES'),
     ]
     rows.push({
       label: 'GASTOS OPERACIONALES IDENTIFICADOS',
@@ -347,6 +371,7 @@ export function buildStatementRows(
       ytdTooltip: `Gastos operacionales: cobertura parcial. Se muestran sólo partidas identificadas con impacto en resultados. Fuente bancaria disponible hasta ${periodText}.`,
       group: true,
       sectionKey: 'operating-expenses',
+      drilldownKey: 'OPERATING_GROUP',
       children: operatingChildren,
     })
     rows.push({
@@ -361,7 +386,8 @@ export function buildStatementRows(
       ytdTooltip: expenses.coverage.coverageStatus !== 'COMPLETE' ? `Fuente bancaria disponible hasta ${periodText}.` : undefined,
       group: true,
       sectionKey: 'non-operating-expenses',
-      children: [expenseChild('Intereses y gastos financieros', 'financialInterest')],
+      drilldownKey: 'NON_OPERATING_GROUP',
+      children: [expenseChild('Intereses y gastos financieros', 'financialInterest', 'EXPENSE_FINANCIAL_INTEREST')],
     })
   }
 

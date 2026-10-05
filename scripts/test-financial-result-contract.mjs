@@ -72,6 +72,24 @@ test('keeps calculated result rows unavailable after common coverage', () => {
   assert.deepEqual(managerial?.values.slice(8, 10), [null, null])
 })
 
+test('exposes stable drill-down keys without changing statement amounts', () => {
+  const rows = buildStatementRows(sales, cogs, personnel, 10, expenses)
+  const personnelRow = rows.find(row => row.label === 'GASTOS DE PERSONAL')
+  const operatingRow = rows.find(row => row.label === 'GASTOS OPERACIONALES IDENTIFICADOS')
+  const financialRow = rows.find(row => row.label === 'GASTOS FINANCIEROS / NO OPERACIONALES')
+  assert.equal(personnelRow?.drilldownKey, 'PERSONNEL_GROUP')
+  assert.deepEqual(personnelRow?.children?.map(child => child.drilldownKey), [
+    'PERSONNEL_FORMAL',
+    'PERSONNEL_EMPLOYER',
+    'PERSONNEL_OFF_BOOK',
+    'PERSONNEL_OTHER',
+  ])
+  assert.equal(operatingRow?.drilldownKey, 'OPERATING_GROUP')
+  assert.equal(financialRow?.drilldownKey, 'NON_OPERATING_GROUP')
+  assert.equal(operatingRow?.children?.[0]?.values[7], '0')
+  assert.equal(operatingRow?.children?.[0]?.values[8], null)
+})
+
 test('does not discard common coverage when COGS has an incomplete quality flag', () => {
   const incompleteCogs = {
     ...cogs,

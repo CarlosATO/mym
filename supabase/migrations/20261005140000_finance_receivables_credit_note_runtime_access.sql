@@ -1,0 +1,3 @@
+GRANT SELECT
+ON TABLE integraciones.bsale_credit_note_returns
+TO petgroup_backend_runtime;

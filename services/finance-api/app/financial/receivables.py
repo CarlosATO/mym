@@ -42,21 +42,6 @@ RECEIVABLES_SQL = text(
           AND d.sign_for_sales IN (1, -1)
           AND d.business_category IN ('sale', 'reversal')
           AND d.client_id IS NOT NULL
-    ), valid_payments AS (
-        SELECT
-            p.company_id,
-            p.bsale_document_id,
-            p.payment_date,
-            p.amount_applied
-        FROM integraciones.vw_bsale_receivables_payments p
-        WHERE p.company_id = :company_id
-          AND p.state = 0
-          AND p.amount_applied > 0
-          AND p.payment_date IS NOT NULL
-          AND (
-              p.is_credit_payment IS TRUE
-              OR (p.is_credit_payment IS FALSE AND p.payment_type_raw_json ->> 'isClientCredit' = '0')
-          )
     ), reference_candidates AS (
         SELECT
             links.credit_note_bsale_id,
@@ -99,12 +84,37 @@ RECEIVABLES_SQL = text(
     ), document_credits AS (
         SELECT
             company_id,
+            credit_note_bsale_id,
             bsale_document_id,
             emission_date,
             SUM(total_amount) AS credit_amount
         FROM reference_candidates
         WHERE target_count = 1
-        GROUP BY company_id, bsale_document_id, emission_date
+        GROUP BY company_id, credit_note_bsale_id, bsale_document_id, emission_date
+    ), valid_payments AS (
+        SELECT
+            p.company_id,
+            p.bsale_document_id,
+            p.payment_date,
+            p.amount_applied
+        FROM integraciones.vw_bsale_receivables_payments p
+        LEFT JOIN integraciones.bsale_credit_note_returns cnr
+          ON cnr.company_id = p.company_id
+         AND cnr.bsale_return_id = p.payment_return_id
+        LEFT JOIN document_credits dc
+          ON dc.company_id = p.company_id
+         AND dc.bsale_document_id = p.bsale_document_id
+         AND dc.credit_note_bsale_id = cnr.bsale_credit_note_id
+         AND ROUND(dc.credit_amount, 0) = ROUND(p.amount_applied, 0)
+        WHERE p.company_id = :company_id
+          AND p.state = 0
+          AND p.amount_applied > 0
+          AND p.payment_date IS NOT NULL
+          AND dc.credit_note_bsale_id IS NULL
+          AND (
+              p.is_credit_payment IS TRUE
+              OR (p.is_credit_payment IS FALSE AND p.payment_type_raw_json ->> 'isClientCredit' = '0')
+          )
     ), periods AS (
         SELECT
             month_number,
@@ -240,11 +250,6 @@ WITH eligible_documents AS (
       AND d.emission_date < make_date(:year + 1, 1, 1)
       AND d.include_in_replenishment = TRUE AND d.sign_for_sales IN (1, -1)
       AND d.business_category IN ('sale', 'reversal') AND d.client_id IS NOT NULL
-), valid_payments AS (
-    SELECT p.* FROM integraciones.vw_bsale_receivables_payments p
-    WHERE p.company_id = :company_id AND p.state = 0 AND p.amount_applied > 0
-      AND p.payment_date IS NOT NULL
-      AND (p.is_credit_payment IS TRUE OR (p.is_credit_payment IS FALSE AND p.payment_type_raw_json ->> 'isClientCredit' = '0'))
 ), reference_candidates AS (
     SELECT links.credit_note_bsale_id, links.company_id, links.bsale_document_id,
            links.emission_date, links.total_amount,
@@ -269,6 +274,20 @@ WITH eligible_documents AS (
     SELECT company_id, credit_note_bsale_id, bsale_document_id, emission_date, SUM(total_amount) AS credit_amount
     FROM reference_candidates WHERE target_count = 1
     GROUP BY company_id, credit_note_bsale_id, bsale_document_id, emission_date
+), valid_payments AS (
+    SELECT p.* FROM integraciones.vw_bsale_receivables_payments p
+    LEFT JOIN integraciones.bsale_credit_note_returns cnr
+      ON cnr.company_id = p.company_id
+     AND cnr.bsale_return_id = p.payment_return_id
+    LEFT JOIN document_credits dc
+      ON dc.company_id = p.company_id
+     AND dc.bsale_document_id = p.bsale_document_id
+     AND dc.credit_note_bsale_id = cnr.bsale_credit_note_id
+     AND ROUND(dc.credit_amount, 0) = ROUND(p.amount_applied, 0)
+    WHERE p.company_id = :company_id AND p.state = 0 AND p.amount_applied > 0
+      AND p.payment_date IS NOT NULL
+      AND dc.credit_note_bsale_id IS NULL
+      AND (p.is_credit_payment IS TRUE OR (p.is_credit_payment IS FALSE AND p.payment_type_raw_json ->> 'isClientCredit' = '0'))
 ), payment_totals AS (
     SELECT p.bsale_document_id, SUM(p.amount_applied) AS paid_amount
     FROM valid_payments p
@@ -405,10 +424,9 @@ ORDER BY days.day
 ANALYSIS_EVENTS_SQL = text(ANALYSIS_BASE_CTE + """
 SELECT 'PAYMENT' AS event_type, p.bsale_document_id AS document_id, p.payment_date AS event_date,
        p.amount_applied AS amount, p.payment_type_name, p.operation_number, NULL::text AS reference
-FROM integraciones.vw_bsale_receivables_payments p
-WHERE p.company_id = :company_id AND p.state = 0 AND p.bsale_document_id = ANY(:document_ids)
-  AND p.amount_applied > 0 AND p.payment_date IS NOT NULL AND p.payment_date <= :close_date
-  AND (p.is_credit_payment IS TRUE OR (p.is_credit_payment IS FALSE AND p.payment_type_raw_json ->> 'isClientCredit' = '0'))
+ FROM valid_payments p
+ WHERE p.company_id = :company_id AND p.bsale_document_id = ANY(:document_ids)
+   AND p.payment_date <= :close_date
 UNION ALL
 SELECT 'CREDIT_NOTE', c.bsale_document_id, c.emission_date, c.credit_amount,
        NULL, NULL, c.credit_note_bsale_id::text

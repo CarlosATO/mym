@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { getActiveCompany } from '@/app/actions/companies'
 import { AccessDenied } from '@/components/access-denied'
 import { AnalisisComercialLayoutClient } from './analisis-comercial-layout-client'
 
@@ -26,5 +27,7 @@ export default async function Layout({ children }: { children: React.ReactNode }
     ? { ...profile, roles: { name: (profile.roles as { name?: string } | null)?.name ?? '' } }
     : { nombre: '', apellido: '', email: '', roles: { name: '' } }
 
-  return <AnalisisComercialLayoutClient profile={profileWithRole} permissions={permissionCodes}>{children}</AnalisisComercialLayoutClient>
+  const activeCompany = await getActiveCompany()
+
+  return <AnalisisComercialLayoutClient profile={profileWithRole} permissions={permissionCodes} activeCompany={activeCompany}>{children}</AnalisisComercialLayoutClient>
 }

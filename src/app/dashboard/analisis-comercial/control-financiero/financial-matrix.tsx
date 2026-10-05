@@ -4,10 +4,14 @@ import { Fragment, useEffect, useRef, useState, useTransition } from 'react'
 import { AlertCircle, ChevronRight } from 'lucide-react'
 import { loadSalesNetDetail } from '@/app/actions/control-financiero/sales-net-detail'
 import { loadSalesDocumentLines } from '@/app/actions/control-financiero/sales-document-lines'
-import { buildSalesFamilyRows, type SalesFamilyRow, type StatementRow } from '@/lib/control-financiero/statement'
+import { loadStatementDrilldown, type StatementDrilldownResponse } from '@/app/actions/control-financiero/statement-drilldown'
+import { getFinancialMovementClassificationContext } from '@/app/actions/control-financiero/classification'
+import { buildSalesFamilyRows, type SalesFamilyRow, type StatementDrilldownKey, type StatementRow } from '@/lib/control-financiero/statement'
 import type { FinanceSalesDocumentLinesResponse, FinanceSalesNetDetailResponse, FinanceSalesNetDetailItem, SalesFamilyGroup } from '@/lib/control-financiero/finance-api'
 import { SalesNetDetailCache, type SalesNetDetailCacheKey } from '@/lib/control-financiero/sales-net-detail-cache'
 import { SalesDocumentLinesCache, type SalesDocumentLinesCacheKey } from '@/lib/control-financiero/sales-document-lines-cache'
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { FinancialMovementReadOnlyReview } from '@/modules/analisis-comercial/control-financiero/components/financial-movement-read-only-review'
 
 const MONTHS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
 const MONTHS_FULL = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
@@ -18,6 +22,13 @@ type Selection = {
   familyKey: string | null
   providerKey: string | null
   familyName: string | null
+  month: number | null
+  scope: 'MONTH' | 'YTD'
+}
+
+type ExpenseSelection = {
+  key: StatementDrilldownKey
+  label: string
   month: number | null
   scope: 'MONTH' | 'YTD'
 }
@@ -113,6 +124,17 @@ export function FinancialMatrix({
   const [detailPage, setDetailPage] = useState(1)
   const [hasMore, setHasMore] = useState(false)
   const [documentLineStates, setDocumentLineStates] = useState<Record<string, { open: boolean; loading: boolean; error: string | null; data: FinanceSalesDocumentLinesResponse | null }>>({})
+  const [expenseOpen, setExpenseOpen] = useState(false)
+  const [expenseLoading, setExpenseLoading] = useState(false)
+  const [expenseError, setExpenseError] = useState<string | null>(null)
+  const [expenseDetail, setExpenseDetail] = useState<Extract<StatementDrilldownResponse, { ok: true }> | null>(null)
+  const [expenseSelection, setExpenseSelection] = useState<ExpenseSelection | null>(null)
+  const [expenseView, setExpenseView] = useState<'detail' | 'movement-review'>('detail')
+  const [movementReview, setMovementReview] = useState<Awaited<ReturnType<typeof getFinancialMovementClassificationContext>> | null>(null)
+  const [movementReviewLoading, setMovementReviewLoading] = useState(false)
+  const [movementReviewError, setMovementReviewError] = useState<string | null>(null)
+  const expenseScrollTop = useRef(0)
+  const expenseContentRef = useRef<HTMLDivElement>(null)
   const requestId = useRef(0)
   const detailCache = useRef(new SalesNetDetailCache())
   const documentLinesCache = useRef(new SalesDocumentLinesCache())
@@ -264,6 +286,38 @@ export function FinancialMatrix({
     })
   }
 
+  function selectExpenseCell(row: StatementRow, month: number | null, value: string | null) {
+    if (!row.drilldownKey || value === null) return
+    setOpen(false)
+    setExpenseOpen(true)
+    setExpenseLoading(true)
+    setExpenseError(null)
+    setExpenseDetail(null)
+    setExpenseView('detail')
+    setMovementReview(null)
+    setMovementReviewError(null)
+    setExpenseSelection({ key: row.drilldownKey, label: row.label, month, scope: month === null ? 'YTD' : 'MONTH' })
+    loadStatementDrilldown({
+      year,
+      month,
+      scope: month === null ? 'YTD' : 'MONTH',
+      key: row.drilldownKey,
+      expectedTotal: value,
+      throughMonth: horizonMonth,
+    }).then(result => {
+      if (result.ok) {
+        setExpenseDetail(result)
+        setExpenseError(null)
+      } else {
+        setExpenseDetail(null)
+        setExpenseError(result.message)
+      }
+    }).catch(caughtError => {
+      setExpenseDetail(null)
+      setExpenseError(caughtError instanceof Error ? caughtError.message : 'No se pudo cargar el detalle del Estado de Resultados.')
+    }).finally(() => setExpenseLoading(false))
+  }
+
   function closeInspector() {
     requestId.current += 1
     setOpen(false)
@@ -273,14 +327,47 @@ export function FinancialMatrix({
     setHasMore(false)
   }
 
+  function closeExpenseInspector() {
+    setExpenseOpen(false)
+    setExpenseSelection(null)
+    setExpenseDetail(null)
+    setExpenseError(null)
+    setExpenseView('detail')
+    setMovementReview(null)
+    setMovementReviewError(null)
+  }
+
+  function openMovementReview(movementId: string) {
+    expenseScrollTop.current = expenseContentRef.current?.scrollTop ?? 0
+    setExpenseView('movement-review')
+    setMovementReviewLoading(true)
+    setMovementReviewError(null)
+    void getFinancialMovementClassificationContext(movementId).then(setMovementReview).catch(caughtError => {
+      setMovementReview(null)
+      setMovementReviewError(caughtError instanceof Error ? caughtError.message : 'No se pudo cargar la revisión del movimiento.')
+    }).finally(() => setMovementReviewLoading(false))
+  }
+
+  function backToExpenseDetail() {
+    setExpenseView('detail')
+    setMovementReview(null)
+    setMovementReviewError(null)
+    requestAnimationFrame(() => {
+      if (expenseContentRef.current) expenseContentRef.current.scrollTop = expenseScrollTop.current
+    })
+  }
+
   useEffect(() => {
-    if (!open) return
+    if (!open && !expenseOpen) return
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') closeInspector()
+      if (event.key === 'Escape') {
+        if (expenseOpen) closeExpenseInspector()
+        else closeInspector()
+      }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [open])
+  }, [open, expenseOpen])
 
   const inspectorWidth = 'clamp(340px, 38vw, 660px)'
   const activeMonth = selection?.month ?? null
@@ -338,6 +425,23 @@ export function FinancialMatrix({
     )
   }
 
+  function renderExpenseValue(row: StatementRow, value: string | null, month: number | null) {
+    const active = expenseSelection?.key === row.drilldownKey
+      && (month === null ? expenseSelection?.scope === 'YTD' : expenseSelection?.month === month)
+    return (
+      <button
+        type="button"
+        title="Doble clic para abrir el detalle"
+        aria-label={`${row.label} ${month === null ? 'YTD' : MONTHS_FULL[month - 1]}. Doble clic para abrir el detalle`}
+        onDoubleClick={() => selectExpenseCell(row, month, value)}
+        disabled={value === null}
+        className={`w-full rounded px-1 text-right tabular-nums outline-none transition-colors hover:text-[#72383D] hover:underline focus-visible:ring-2 focus-visible:ring-[#72383D]/45 disabled:cursor-default ${active ? 'bg-[#CFE4F1] font-semibold text-[#355C7D]' : ''} ${valueTone(value)}`}
+      >
+        {formatClp(value)}
+      </button>
+    )
+  }
+
   function renderStatementRow(row: StatementRow) {
     const className = rowClass(row)
     return (
@@ -345,12 +449,12 @@ export function FinancialMatrix({
         <th className={`sticky left-0 z-10 px-4 py-2 text-left text-[#322D29] ${cellClass(row)}`}>{displayLabel(row.label)}</th>
         {row.values.slice(0, horizonMonth).map((value, index) => (
           <td key={`${row.label}-${index}`} className={`px-2.5 py-2 text-right align-middle tabular-nums ${className} ${open && selection?.row === 'sales' && activeMonth === index + 1 ? 'bg-[#CFE4F1]' : ''}`}>
-            {row.label === 'Ventas Netas' ? renderSalesValue(value, index) : formatClp(value)}
+            {row.label === 'Ventas Netas' ? renderSalesValue(value, index) : row.drilldownKey ? renderExpenseValue(row, value, index + 1) : formatClp(value)}
             <CoverageIndicator count={row.missing[index]} />
           </td>
         ))}
         <td title={row.ytdTooltip} className={`sticky right-[95px] z-10 w-[135px] border-l border-[#D1C7BD] px-2.5 py-2 text-right font-semibold tabular-nums ${className} ${activeYtd && selection?.row === 'sales' ? 'bg-[#CFE4F1]' : ''}`}>
-          {row.label === 'Ventas Netas' ? renderSalesValue(row.ytd, 12) : formatClp(row.ytd)}
+           {row.label === 'Ventas Netas' ? renderSalesValue(row.ytd, 12) : row.drilldownKey ? renderExpenseValue(row, row.ytd, null) : formatClp(row.ytd)}
           <CoverageIndicator count={row.ytdMissing} />
         </td>
         <td className={`sticky right-0 z-10 w-[95px] border-l border-[#D1C7BD] px-2.5 py-2 text-right tabular-nums text-[#72383D] ${className}`}>
@@ -381,15 +485,15 @@ export function FinancialMatrix({
               {row.label}
             </button>
           </th>
-           {row.values.slice(0, horizonMonth).map((value, index) => <td key={`${row.label}-${index}`} className={`px-2.5 py-2 text-right align-middle tabular-nums ${groupTone} ${valueTone(value)}`}>{formatClp(value)}<CoverageIndicator count={row.missing[index]} /></td>)}
-           <td title={row.ytdTooltip} className={`sticky right-[95px] z-10 w-[135px] border-l border-[#D1C7BD] px-2.5 py-2 text-right font-semibold tabular-nums ${groupTone} ${valueTone(row.ytd)}`}>{formatClp(row.ytd)}<CoverageIndicator count={row.ytdMissing} /></td>
+            {row.values.slice(0, horizonMonth).map((value, index) => <td key={`${row.label}-${index}`} className={`px-2.5 py-2 text-right align-middle tabular-nums ${groupTone} ${valueTone(value)}`}>{renderExpenseValue(row, value, index + 1)}<CoverageIndicator count={row.missing[index]} /></td>)}
+            <td title={row.ytdTooltip} className={`sticky right-[95px] z-10 w-[135px] border-l border-[#D1C7BD] px-2.5 py-2 text-right font-semibold tabular-nums ${groupTone} ${valueTone(row.ytd)}`}>{renderExpenseValue(row, row.ytd, null)}<CoverageIndicator count={row.ytdMissing} /></td>
           <td className={`sticky right-0 z-10 w-[95px] border-l border-[#D1C7BD] px-2.5 py-2 text-right tabular-nums text-[#72383D] ${groupTone}`}>{formatPercentage(row.percentageYtd)}</td>
         </tr>
         {isExpanded && row.children?.map(child => (
           <tr key={child.label} className="bg-white">
             <th className="sticky left-0 z-10 bg-white px-4 py-2 pl-10 text-left font-normal text-[#322D29]">{child.label}</th>
-             {child.values.slice(0, horizonMonth).map((value, index) => <td key={`${child.label}-${index}`} className="px-2.5 py-2 text-right align-middle tabular-nums">{formatClp(value)}<CoverageIndicator count={child.missing[index]} /></td>)}
-             <td title={child.ytdTooltip} className="sticky right-[95px] z-10 w-[135px] border-l border-[#D1C7BD] bg-white px-2.5 py-2 text-right font-semibold tabular-nums">{formatClp(child.ytd)}<CoverageIndicator count={child.ytdMissing} /></td>
+              {child.values.slice(0, horizonMonth).map((value, index) => <td key={`${child.label}-${index}`} className="px-2.5 py-2 text-right align-middle tabular-nums">{renderExpenseValue(child, value, index + 1)}<CoverageIndicator count={child.missing[index]} /></td>)}
+              <td title={child.ytdTooltip} className="sticky right-[95px] z-10 w-[135px] border-l border-[#D1C7BD] bg-white px-2.5 py-2 text-right font-semibold tabular-nums">{renderExpenseValue(child, child.ytd, null)}<CoverageIndicator count={child.ytdMissing} /></td>
              <td className="sticky right-0 z-10 w-[95px] border-l border-[#D1C7BD] bg-white px-2.5 py-2 text-right tabular-nums text-[#72383D]">{formatPercentage(child.percentageYtd)}</td>
           </tr>
         ))}
@@ -446,7 +550,7 @@ export function FinancialMatrix({
   }
 
   return (
-    <div className="relative" style={{ paddingRight: open ? inspectorWidth : undefined }}>
+    <div className="relative" style={{ paddingRight: open || expenseOpen ? inspectorWidth : undefined }}>
       <div className="overflow-x-auto border border-[#D1C7BD] bg-white shadow-[0_2px_8px_rgba(50,45,41,0.03)]">
         <table className="isolate table-fixed border-collapse text-[12px]" style={{ width: `${260 + horizonMonth * 110 + 135 + 95}px`, minWidth: `${260 + horizonMonth * 110 + 135 + 95}px` }}>
           <colgroup>
@@ -609,6 +713,73 @@ export function FinancialMatrix({
             )}
           </div>
         </aside>
+      )}
+      {expenseOpen && (
+        <Sheet open={expenseOpen} onOpenChange={open => { if (!open) closeExpenseInspector() }}>
+          <SheetContent side="right" style={{ width: inspectorWidth }} className="flex h-screen w-full flex-col overflow-hidden border-[#D1C7BD] bg-[#EFE9E1] p-0 text-[#322D29] sm:max-w-none">
+          {expenseView === 'movement-review' ? (
+            <>
+              <SheetHeader className="shrink-0 border-b border-[#D1C7BD] bg-white px-5 py-4 text-left">
+                <button type="button" className="mb-3 w-fit text-xs font-semibold text-[#72383D] hover:underline" onClick={backToExpenseDetail}>← Volver al detalle P&amp;L</button>
+                <SheetTitle className="text-lg font-semibold text-[#322D29]">Revisión del movimiento</SheetTitle>
+                <SheetDescription className="text-xs text-[#322D29]/60">Contexto de clasificación existente. Esta vista es sólo lectura desde el Estado de Resultados.</SheetDescription>
+              </SheetHeader>
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                {movementReviewLoading && <p className="px-5 py-6 text-sm text-[#322D29]/60">Cargando revisión...</p>}
+                {movementReviewError && <p className="px-5 py-6 text-sm text-[#72383D]">{movementReviewError}</p>}
+                {movementReview && <FinancialMovementReadOnlyReview context={movementReview} />}
+              </div>
+            </>
+          ) : (
+            <>
+          <header className="sticky top-0 z-10 flex shrink-0 items-start border-b border-[#D1C7BD] bg-white px-5 py-4">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#AC9C8D]">Detalle P&amp;L · Solo lectura</p>
+              <h2 className="mt-1 text-lg font-semibold">{expenseSelection?.label ?? 'Estado de Resultados'} · {expenseSelection?.month === null ? `YTD ${year}` : expenseSelection?.month ? `${MONTHS_FULL[expenseSelection.month - 1]} ${year}` : year}</h2>
+              <p className="mt-1 text-xs text-[#322D29]/60">Doble clic en una línea para inspeccionar sus movimientos y registros fuente.</p>
+            </div>
+          </header>
+          <div ref={expenseContentRef} className="min-h-0 flex-1 overflow-y-auto">
+            {expenseLoading && <div className="border-b border-[#D1C7BD] px-5 py-3 text-xs text-[#322D29]/60">Cargando detalle...</div>}
+            {expenseError && <div className="m-5 border border-[#72383D]/25 bg-white/45 px-4 py-4 text-sm text-[#72383D]">{expenseError}</div>}
+            {!expenseError && expenseDetail && (
+              <>
+                <div className="grid grid-cols-3 gap-px border-b border-[#D1C7BD] bg-[#D1C7BD]">
+                  <div className="bg-[#EFE9E1] px-4 py-3"><p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#AC9C8D]">Total</p><p className="mt-1 text-base font-semibold tabular-nums">{formatClp(expenseDetail.total)}</p></div>
+                  <div className="bg-[#EFE9E1] px-4 py-3"><p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#AC9C8D]">Registros</p><p className="mt-1 text-base font-semibold tabular-nums">{expenseDetail.items.length.toLocaleString('es-CL')}</p></div>
+                  <div className="bg-[#EFE9E1] px-4 py-3"><p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#AC9C8D]">Control</p><p className="mt-1 text-base font-semibold text-[#355C7D]">Reconciliado</p></div>
+                </div>
+                <p className="border-b border-[#D1C7BD] px-5 py-3 text-xs text-[#322D29]/75">Cobertura: {expenseDetail.coveredMonths.map(month => MONTHS[month - 1]).join(', ') || 'sin meses'} · Total igual a la celda origen.</p>
+                {expenseDetail.items.length === 0 ? (
+                  <div className="m-5 border border-dashed border-[#AC9C8D]/70 bg-white/35 px-5 py-12 text-center text-sm text-[#322D29]/60">No hay movimientos o registros para este período.</div>
+                ) : (
+                  <div className="divide-y divide-[#D1C7BD]/70">
+                    {expenseDetail.items.map(item => (
+                      <article key={`${item.source}-${item.id}`} className="px-5 py-3 hover:bg-white/60">
+                        <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.08em] text-[#322D29]/60">
+                          <span>{formatDate(item.date)}</span>
+                          <span>{item.source === 'PAYROLL' ? 'Libro de remuneraciones' : item.category ?? 'Movimiento bancario'}</span>
+                          <strong className={`text-xs normal-case tracking-normal ${valueTone(item.amount)}`}>{formatClp(item.amount)}</strong>
+                        </div>
+                        <p className="mt-1 text-sm font-semibold">{item.workerName ?? item.beneficiary ?? item.counterparty ?? item.description}</p>
+                        <p className="mt-1 text-xs text-[#322D29]/65">{item.source === 'PAYROLL' ? `RUT: ${item.workerRut ?? '—'} · Haberes: ${formatClp(item.earnings)} · Cargas: ${formatClp(item.employerContributions)} · Archivo: ${item.importFilename ?? '—'}` : `${item.description}${item.counterparty ? ` · Contraparte: ${item.counterparty}` : ''}`}</p>
+                        {item.source === 'BANK' && (
+                          <>
+                            <p className="mt-1 text-[10px] text-[#322D29]/55">Clasificación: {item.classificationSource ?? '—'} · Revisión: {item.reviewStatus ?? '—'}{item.note ? ` · Nota: ${item.note}` : ''}{item.beneficiary ? ` · Beneficiario: ${item.beneficiary} (${item.paymentConcept ?? '—'})` : ''}</p>
+                            <button type="button" className="mt-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#72383D] underline-offset-2 hover:underline" onClick={() => openMovementReview(item.id)}>Revisión del movimiento</button>
+                          </>
+                        )}
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+          </>
+          )}
+          </SheetContent>
+        </Sheet>
       )}
     </div>
   )

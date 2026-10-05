@@ -27,6 +27,13 @@ def _pending(documents, payments, credits, cutoff):
     return sum(amount for amount, _ in result), sum(amount for amount, overdue in result if overdue)
 
 
+def _pending_with_credit_note_dedup(total, monetary_payments, credit_notes, payment_credit_note_ids):
+    linked_credit_note_ids = set(payment_credit_note_ids)
+    paid = sum(amount for amount, credit_note_id in monetary_payments if credit_note_id not in linked_credit_note_ids)
+    credited = sum(amount for credit_note_id, amount in credit_notes if credit_note_id in linked_credit_note_ids or credit_note_id not in payment_credit_note_ids)
+    return max(total - paid - credited, 0)
+
+
 def test_receivables_query_reuses_sales_eligibility_and_valid_payment_rules() -> None:
     sql = str(RECEIVABLES_SQL)
     assert "vw_bsale_receivables_documents" in sql
@@ -47,6 +54,55 @@ def test_receivables_query_reuses_sales_eligibility_and_valid_payment_rules() ->
     assert "date_trunc('month', CAST(:effective_date AS date))" in sql
     assert "THEN CAST(:effective_date AS date)" in sql
     assert "periods.is_available" in sql
+
+
+def test_receivables_deduplicates_only_identified_credit_note_payments() -> None:
+    sql = str(RECEIVABLES_SQL)
+    assert "bsale_credit_note_returns" in sql
+    assert "p.payment_return_id" in sql
+    assert "cnr.bsale_credit_note_id" in sql
+    assert "dc.credit_note_bsale_id = cnr.bsale_credit_note_id" in sql
+    assert "dc.bsale_document_id = p.bsale_document_id" in sql
+    assert "dc.credit_note_bsale_id IS NULL" in sql
+    assert "ROUND(dc.credit_amount, 0) = ROUND(p.amount_applied, 0)" in sql
+    assert "p.state = 0" in sql
+    assert "isClientCredit" in sql
+
+
+def test_credit_note_payment_is_counted_once() -> None:
+    assert _pending_with_credit_note_dedup(
+        100,
+        [(20, 10)],
+        [(10, 20)],
+        [10],
+    ) == 80
+
+
+def test_monetary_payment_and_credit_note_are_each_counted_once() -> None:
+    assert _pending_with_credit_note_dedup(
+        200,
+        [(50, None), (20, 11)],
+        [(11, 30)],
+        [11],
+    ) == 120
+
+
+def test_distinct_credit_notes_with_same_amount_are_not_collapsed() -> None:
+    assert _pending_with_credit_note_dedup(
+        200,
+        [],
+        [(11, 30), (12, 30)],
+        [11, 12],
+    ) == 140
+
+
+def test_unidentified_credit_note_payment_is_not_deduplicated_by_amount() -> None:
+    assert _pending_with_credit_note_dedup(
+        100,
+        [(20, None)],
+        [(10, 20)],
+        [],
+    ) == 60
 
 
 def test_analysis_daily_uses_event_accumulation_instead_of_document_day_cross_join() -> None:

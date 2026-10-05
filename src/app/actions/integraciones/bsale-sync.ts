@@ -1,7 +1,7 @@
 'use server'
 
 import { createClient } from '@supabase/supabase-js'
-import { bsaleFetchAll, normalizeSku } from '@/lib/bsale/client'
+import { bsaleFetchAll, bsaleFetchAllForCompany, normalizeSku } from '@/lib/bsale/client'
 import { getBsaleConfigForCompany } from '@/lib/bsale/company-config'
 import { syncBsaleClients } from '@/lib/integraciones/bsale-clients-sync'
 import { runCatalogAutoSyncStep } from '@/lib/integraciones/bsale-catalog-auto-sync'
@@ -96,6 +96,18 @@ type BsalePreparationDetail = {
   totalAmount?: number | string | null
   netDiscount?: number | string | null
   variant?: { id?: number | string | null; code?: string | null; description?: string | null } | null
+}
+
+type BsaleDocumentPayment = {
+  amount?: number | string | null
+}
+
+function saleConditionIdFromClientPayload(payload: unknown): number | null {
+  const saleCondition = (payload as { sale_condition?: { id?: number | string | null; href?: string | null } } | null)?.sale_condition
+  const match = saleCondition?.href?.match(/\/([0-9]+)(?:\.json)?$/)
+  if (match) return Number(match[1])
+  const directId = Number(saleCondition?.id)
+  return Number.isFinite(directId) ? directId : null
 }
 
 type BsalePreparationCard = { nv_bsale_id: number | string | null }
@@ -1148,6 +1160,7 @@ async function syncDocuments(
   detailErrors: number
   sellerSync: { scanned: number; upserted: number; empty: number; errors: number }
   pages: number
+  documentPaymentErrors: number
 }> {
   const db = integrDb()
   
@@ -1166,6 +1179,42 @@ async function syncDocuments(
   const { documents, pages } = await fetchAllDocuments(companyId, runId, dateFrom, dateTo)
   console.log(`[syncSales] Documents fetched: ${documents.length} in ${pages} pages`)
 
+  const clientIds = [...new Set(documents
+    .map((document: any) => Number(document.client?.id ?? document.clientId))
+    .filter(Number.isFinite))]
+  const saleConditions = new Map<number, number | null>()
+  for (let i = 0; i < clientIds.length; i += 200) {
+    const { data, error } = await db
+      .from('bsale_clients')
+      .select('bsale_client_id, raw_payload')
+      .eq('company_id', companyId)
+      .in('bsale_client_id', clientIds.slice(i, i + 200))
+    if (error) throw new Error(`Error leyendo condiciones de venta: ${error.message}`)
+    for (const row of data || []) {
+      saleConditions.set(Number(row.bsale_client_id), saleConditionIdFromClientPayload(row.raw_payload))
+    }
+  }
+
+  const documentPaymentAmounts = new Map<number, number | null>()
+  let documentPaymentErrors = 0
+  for (let i = 0; i < documents.length; i += 3) {
+    const batch = documents.slice(i, i + 3)
+    const results = await Promise.all(batch.map(async (document: any) => {
+      try {
+        const payments = await bsaleFetchAllForCompany<BsaleDocumentPayment>({
+          companyId,
+          path: `/documents/${document.id}/payments.json`,
+        })
+        return { id: Number(document.id), amount: payments.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0) }
+      } catch (error) {
+        documentPaymentErrors++
+        console.error(`[syncSales] Error fetching document payments for ${document.id}:`, error instanceof Error ? error.message : error)
+        return { id: Number(document.id), amount: null }
+      }
+    }))
+    for (const result of results) documentPaymentAmounts.set(result.id, result.amount)
+  }
+
   // Upsert documents in batches
   let docsCount = 0
   let documentErrors = 0
@@ -1181,6 +1230,8 @@ async function syncDocuments(
       emission_date: d.emissionDate ? new Date(d.emissionDate * 1000).toISOString().slice(0, 10) : null,
       generation_date: d.generationDate ? new Date(d.generationDate * 1000).toISOString() : null,
       total_amount: d.totalAmount ?? null,
+      document_level_payments_amount: documentPaymentAmounts.get(Number(d.id)) ?? null,
+      sale_condition_id: saleConditions.get(Number(d.client?.id ?? d.clientId)) ?? null,
       net_amount: d.netAmount ?? null,
       tax_amount: d.taxAmount ?? null,
       exempt_amount: d.exemptAmount ?? null,
@@ -1427,7 +1478,7 @@ async function syncDocuments(
 
   console.log(`[syncSales] FINAL: docs=${documents.length} OK=${finalOk} (${coverage}%) NoDet=${finalNoDet} Err=${finalErr} details=${detailsCount}`)
 
-  return { docsCount, documentErrors, detailsCount, detailErrors: finalErr, sellerSync, pages }
+  return { docsCount, documentErrors, detailsCount, detailErrors: finalErr, sellerSync, pages, documentPaymentErrors }
 }
 
 type DirectedDocument = {
@@ -2108,14 +2159,16 @@ export async function syncBsaleSales(
       document_sellers: result.sellerSync.upserted,
       document_seller_errors: result.sellerSync.errors,
       pages: result.pages,
+      document_payment_errors: result.documentPaymentErrors,
     }
 
-    const syncStatus = result.documentErrors > 0 || result.detailErrors > 0 ? 'PARTIAL' : 'COMPLETED'
+    const syncStatus = result.documentErrors > 0 || result.detailErrors > 0 || result.documentPaymentErrors > 0 ? 'PARTIAL' : 'COMPLETED'
     await finishSyncRun(runId, syncStatus, {
       documents: result.docsCount,
       document_errors: result.documentErrors,
       document_details_count: result.detailsCount,
       detail_errors: result.detailErrors,
+      document_payment_errors: result.documentPaymentErrors,
     })
 
     return { success: true, runId, counts }
