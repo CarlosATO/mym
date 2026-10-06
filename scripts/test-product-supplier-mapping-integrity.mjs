@@ -48,6 +48,11 @@ test('active mapping uniqueness permits retired legacy rows during repair', () =
 
 test('targeted sync scopes every read/write to target SKUs', () => {
   const targetSkus = ['SKU-A', 'SKU-B', 'SKU-C']
+  const simulatedMappings = [
+    ...Array.from({ length: 3697 }, (_, index) => ({ sku: `OTHER-${index}` })),
+    ...targetSkus.map(sku => ({ sku })),
+  ]
+  assert.deepEqual(simulatedMappings.filter(mapping => isSkuInScope(mapping.sku, targetSkus)).map(mapping => mapping.sku), targetSkus)
   assert.equal(isSkuInScope('SKU-A', targetSkus), true)
   assert.equal(isSkuInScope('SKU-B', targetSkus), true)
   assert.equal(isSkuInScope('SKU-C', targetSkus), true)
