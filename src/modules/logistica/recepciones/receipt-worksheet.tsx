@@ -9,6 +9,7 @@ import { toast } from 'sonner'
 import * as LucideIcons from 'lucide-react'
 import { erpInputClass, erpSelectClass } from '@/lib/form-styles'
 import { cn } from '@/lib/utils'
+import { receiptItemSku } from '@/lib/logistica/receipt-display'
 
 interface ReceiptWorksheetProps {
   poId: string
@@ -756,7 +757,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
                         exceedsPending && "bg-red-500/[0.02]"
                       )}>
                         <td className="py-2.5 px-4 text-center font-bold text-theme-text">{idx + 1}</td>
-                        <td className="py-2.5 px-4 text-theme-text font-mono">{item.sku || item.product_id?.substring(0,8) || '—'}</td>
+                        <td className="py-2.5 px-4 text-theme-text font-mono">{receiptItemSku(item)}</td>
                         <td className="py-2.5 px-4">
                           <p className="font-semibold text-theme-text text-xs leading-normal">{item.product_description}</p>
                           {exceedsPending && (

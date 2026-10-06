@@ -5,6 +5,7 @@ import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { getActiveCompanyId } from '@/app/actions/companies'
 import { requireWmsPermission } from './authorization'
 import { getPurchaseReceiptOperation, getPurchaseReceiptSyncSettings, reconcilePurchaseReceiptOperation, syncPurchaseReceipt } from '@/lib/integraciones/bsale-purchase-receipt-orchestrator'
+import { enrichReceiptItemsWithProducts } from '@/lib/logistica/receipt-display'
 
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
@@ -204,6 +205,12 @@ export async function getPurchaseOrderForReceipt(poId: string) {
     return null
   }
 
+  const productIds = Array.from(new Set((items ?? []).map(item => item.product_id).filter(Boolean)))
+  const { data: products, error: productsError } = productIds.length
+    ? await db.from('products').select('id, sku').in('id', productIds)
+    : { data: [], error: null }
+  if (productsError) console.error('getPurchaseOrderForReceipt Products error:', productsError)
+
   const receiptDb = logDb()
   const { data: priorReceipts } = await receiptDb
     .from('purchase_receipts')
@@ -239,7 +246,7 @@ export async function getPurchaseOrderForReceipt(poId: string) {
       warehouse_name: warehouseName,
       requester_name: requester ? `${requester.nombre} ${requester.apellido}` : 'Usuario'
     },
-    items: (items ?? []).map(item => ({
+    items: enrichReceiptItemsWithProducts(items ?? [], products ?? []).map(item => ({
       ...item,
       quantity_received: Number(item.quantity_received || 0),
       quantity_pending: Math.max(0, Number(item.quantity || 0) - (accountedByItem.get(item.id) ?? Number(item.quantity_received || 0)))

@@ -16,6 +16,8 @@ import {
 } from 'lucide-react'
 import { erpInputClass } from '@/lib/form-styles'
 import { cn } from '@/lib/utils'
+import { formatCivilDate } from '@/lib/datetime'
+import { receiptItemSku } from '@/lib/logistica/receipt-display'
 
 type FilterTab = 'ALL' | 'PENDING' | 'PARTIAL' | 'RECEIVED'
 
@@ -226,7 +228,7 @@ function DetailPanel({
         <div className="flex items-center gap-4 px-5 py-2 text-[11px] text-theme-text-muted border-t border-theme-border/40">
           <span className="flex items-center gap-1">
             <Calendar className="w-3 h-3" />
-            {new Date(summary.issue_date).toLocaleDateString('es-CL')}
+            {formatCivilDate(summary.issue_date)}
           </span>
           {summary.warehouse_name && (
             <span className="flex items-center gap-1">
@@ -313,6 +315,7 @@ function DetailPanel({
                         <tr key={item.id} className="border-b border-theme-border/40 hover:bg-theme-text/[0.02]">
                           <td className="px-3 py-2">
                             <p className="font-medium text-theme-text truncate max-w-[200px]" title={item.product_description}>{item.product_description}</p>
+                            {item.item_type === 'PRODUCT' && <p className="font-mono text-[10px] text-theme-text-muted">SKU {receiptItemSku(item)}</p>}
                           </td>
                           <td className="px-3 py-2 text-right text-theme-text-muted">{fmt(Number(item.unit_price || 0))}</td>
                           <td className="px-3 py-2 text-right">{qOrd}</td>
@@ -360,7 +363,7 @@ function DetailPanel({
                               </span>
                             </td>
                             <td className="px-3 py-1.5 text-theme-text">{ri.lot_number || '—'}</td>
-                            <td className="px-3 py-1.5 text-theme-text-muted">{ri.expiration_date ? new Date(ri.expiration_date).toLocaleDateString('es-CL') : '—'}</td>
+                            <td className="px-3 py-1.5 text-theme-text-muted">{formatCivilDate(ri.expiration_date) || '—'}</td>
                             <td className="px-3 py-1.5 text-theme-text-muted">{ri.locations?.name || ri.locations?.code || '—'}</td>
                             <td className="px-3 py-1.5 text-right font-semibold text-emerald-600 dark:text-emerald-400">{ri.quantity_received}</td>
                           </tr>
@@ -495,7 +498,7 @@ function TrayTable({
                       <p className="truncate font-medium text-theme-text" title={po.supplier_name}>{po.supplier_name}</p>
                     </td>
                     <td className="px-4 py-2.5 text-theme-text-muted whitespace-nowrap">
-                      {new Date(po.issue_date).toLocaleDateString('es-CL')}
+                      {formatCivilDate(po.issue_date)}
                     </td>
                     <td className="px-4 py-2.5 text-theme-text-muted max-w-[120px]">
                       <p className="truncate">{po.warehouse_name || '—'}</p>
