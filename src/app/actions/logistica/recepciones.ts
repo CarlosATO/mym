@@ -4,7 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { getActiveCompanyId } from '@/app/actions/companies'
 import { requireWmsPermission } from './authorization'
-import { getPurchaseReceiptOperation, reconcilePurchaseReceiptOperation, syncPurchaseReceipt } from '@/lib/integraciones/bsale-purchase-receipt-orchestrator'
+import { getPurchaseReceiptOperation, getPurchaseReceiptSyncSettings, reconcilePurchaseReceiptOperation, syncPurchaseReceipt } from '@/lib/integraciones/bsale-purchase-receipt-orchestrator'
 
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
@@ -409,7 +409,20 @@ export async function createPurchaseReceipt(data: {
   const r = result as { success: boolean; error?: string; receipt_id?: string; receipt_number?: string }
   if (!r.success) return { error: r.error || 'Error al guardar recepción' }
 
-  // BSale is intentionally manual-only. Local success must never trigger a remote POST.
+  const settings = await getPurchaseReceiptSyncSettings(companyId)
+  if (settings.enabled && settings.autoSyncEnabled) {
+    try {
+      const bsale = await syncPurchaseReceipt(companyId, user.id, r.receipt_id!)
+      return { success: true, receipt_id: r.receipt_id, receipt_number: r.receipt_number, bsale }
+    } catch (syncError) {
+      return {
+        success: true,
+        receipt_id: r.receipt_id,
+        receipt_number: r.receipt_number,
+        bsale: { status: 'RECONCILIATION_REQUIRED' as const, operationId: '', receptionId: null, error: syncError instanceof Error ? syncError.message : 'No se pudo iniciar la sincronización BSale.', payload: null },
+      }
+    }
+  }
   return {
     success: true,
     receipt_id: r.receipt_id,

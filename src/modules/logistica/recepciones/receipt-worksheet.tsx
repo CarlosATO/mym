@@ -363,7 +363,15 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
         return
       }
 
-      toast.success(`Recepción ${res.receipt_number} registrada en PetGroup. Sincronización BSale pendiente.`)
+      if (res.bsale?.status === 'CONFIRMED') {
+        toast.success(`Recepción ${res.receipt_number} registrada y sincronizada con BSale.`)
+      } else if (res.bsale?.status === 'FAILED') {
+        toast.success(`Recepción ${res.receipt_number} registrada en PetGroup. Error de sincronización BSale.`)
+      } else if (res.bsale?.status === 'RECONCILIATION_REQUIRED') {
+        toast.success(`Recepción ${res.receipt_number} registrada en PetGroup. BSale requiere conciliación.`)
+      } else {
+        toast.success(`Recepción ${res.receipt_number} registrada en PetGroup. Sincronización BSale pendiente.`)
+      }
       
       sessionStorage.setItem('mym_receipt_success', JSON.stringify({
         poId: poDetail.po.id,

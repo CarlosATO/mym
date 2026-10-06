@@ -12,6 +12,14 @@ export function autoSyncIsAllowed(settings: { enabled: boolean; autoSyncEnabled:
   return settings.enabled && settings.autoSyncEnabled
 }
 
+export async function syncAfterLocalReceipt<T>(
+  settings: { enabled: boolean; autoSyncEnabled: boolean },
+  sync: () => Promise<T>,
+) {
+  if (!autoSyncIsAllowed(settings)) return { status: 'PENDING' as const, result: null }
+  return { status: 'SYNCED' as const, result: await sync() }
+}
+
 export function chooseUniqueReconciliationCandidate(compatibleIds: number[]) {
   return compatibleIds.length === 1 ? compatibleIds[0] : null
 }

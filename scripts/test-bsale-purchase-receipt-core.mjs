@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { reconcilePurchaseReceipt, autoSyncIsAllowed, buildPurchaseReceiptNote, buildPurchaseReceiptPayload, chooseUniqueReconciliationCandidate, numericDocumentNumber, sendPurchaseReceipt, verifyPurchaseReceipt } from '../src/lib/integraciones/bsale-purchase-receipt-core.ts'
+import { reconcilePurchaseReceipt, autoSyncIsAllowed, buildPurchaseReceiptNote, buildPurchaseReceiptPayload, chooseUniqueReconciliationCandidate, numericDocumentNumber, sendPurchaseReceipt, syncAfterLocalReceipt, verifyPurchaseReceipt } from '../src/lib/integraciones/bsale-purchase-receipt-core.ts'
 
 const base = { documentType: 'FA', documentNumber: '4545', officeId: 1, receiptNumber: 'REC-000001', poCorrelative: 'OC-2026-000031', serviceVariantId: 4554 }
 test('note preserves identifiers and truncates unicode observation to 100 chars', () => {
@@ -67,6 +67,19 @@ test('manual-only setting and candidate ambiguity are enforced', () => {
   assert.equal(chooseUniqueReconciliationCandidate([123, 456]), null)
   assert.equal(chooseUniqueReconciliationCandidate([]), null)
 })
+test('settings control immediate sync without changing local success', async () => {
+  let posts = 0
+  const sync = async () => { posts += 1; return { status: 'CONFIRMED', receptionId: 11370 } }
+  assert.equal((await syncAfterLocalReceipt({ enabled: false, autoSyncEnabled: true }, sync)).status, 'PENDING')
+  assert.equal((await syncAfterLocalReceipt({ enabled: true, autoSyncEnabled: false }, sync)).status, 'PENDING')
+  assert.equal(posts, 0)
+  assert.deepEqual((await syncAfterLocalReceipt({ enabled: true, autoSyncEnabled: true }, sync)).result, { status: 'CONFIRMED', receptionId: 11370 })
+  assert.equal(posts, 1)
+  const failed = await syncAfterLocalReceipt({ enabled: true, autoSyncEnabled: true }, async () => ({ status: 'FAILED', error: '4xx' }))
+  assert.equal(failed.result.status, 'FAILED')
+  const timeout = await syncAfterLocalReceipt({ enabled: true, autoSyncEnabled: true }, async () => ({ status: 'RECONCILIATION_REQUIRED', error: 'timeout' }))
+  assert.equal(timeout.result.status, 'RECONCILIATION_REQUIRED')
+})
 test('durable claim permits one POST under double execution', async () => {
   let claimed = false
   let posts = 0
@@ -81,6 +94,7 @@ test('durable claim permits one POST under double execution', async () => {
 })
 test('migration contract enforces company isolation, permission and unique local receipt', () => {
   const sql = readFileSync(new URL('../supabase/migrations/20261006110000_logistica_bsale_purchase_receipt_operations.sql', import.meta.url), 'utf8')
+  const activation = readFileSync(new URL('../supabase/migrations/20261006130000_logistica_enable_bsale_purchase_receipt_auto_sync_caylo.sql', import.meta.url), 'utf8')
   const actions = readFileSync(new URL('../src/app/actions/logistica/recepciones.ts', import.meta.url), 'utf8')
   const createBody = actions.slice(actions.indexOf('export async function createPurchaseReceipt'), actions.indexOf('export async function getPurchaseReceiptBsaleStatus'))
   assert.match(sql, /auto_sync_enabled boolean NOT NULL DEFAULT false/)
@@ -90,5 +104,9 @@ test('migration contract enforces company isolation, permission and unique local
   assert.match(sql, /USING \(core\.has_company_access\(auth\.uid\(\), company_id\)/)
   assert.match(sql, /La empresa no tiene configuración de Recepciones BSale/)
   assert.match(createBody, /status: 'PENDING'/)
-  assert.equal(createBody.includes('syncPurchaseReceipt('), false)
+  assert.match(createBody, /syncPurchaseReceipt\(companyId, user\.id, r\.receipt_id!\)/)
+  assert.equal(createBody.includes('bsaleWriteForCompany'), false)
+  assert.match(createBody, /getPurchaseReceiptSyncSettings\(companyId\)/)
+  assert.match(activation, /auto_sync_enabled = true/)
+  assert.match(activation, /d1000000-0000-0000-0000-000000000001/)
 })

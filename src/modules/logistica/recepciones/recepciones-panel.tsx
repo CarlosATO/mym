@@ -57,7 +57,7 @@ function BsaleStatus({ receipt, onRefresh }: { receipt: any; onRefresh: () => vo
   }
   return <div className="flex items-center gap-2 mt-1">
     <span className="text-[10px] font-semibold text-theme-text-muted">{labels[status] ?? status}{status === 'CONFIRMED' && receipt.bsale?.receptionId ? ` · ID ${receipt.bsale.receptionId}` : ''}</span>
-    {status !== 'CONFIRMED' && status !== 'SENDING' && <button onClick={run} disabled={busy} className="text-[10px] text-theme-accent font-bold hover:underline">{busy ? 'Procesando...' : status === 'RECONCILIATION_REQUIRED' ? 'Reconciliar' : 'Sincronizar'}</button>}
+    {status !== 'CONFIRMED' && status !== 'SENDING' && <button onClick={run} disabled={busy} className="text-[10px] text-theme-accent font-bold hover:underline">{busy ? 'Procesando...' : status === 'RECONCILIATION_REQUIRED' ? 'Reconciliar' : status === 'FAILED' ? 'Reintentar' : 'Sincronizar'}</button>}
     {receipt.bsale?.payload && <details className="text-[10px]"><summary className="cursor-pointer text-theme-accent">Preview</summary><pre className="absolute z-10 mt-1 max-w-[420px] max-h-56 overflow-auto rounded border border-theme-border bg-theme-surface p-2 text-[9px]">{JSON.stringify(receipt.bsale.payload, null, 2)}</pre></details>}
   </div>
 }

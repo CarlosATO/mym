@@ -5,6 +5,18 @@ import { chooseUniqueReconciliationCandidate, reconcilePurchaseReceipt, sendPurc
 type Operation = { operation_id: string; status: 'PREPARED' | 'SENDING' | 'CONFIRMED' | 'FAILED' | 'RECONCILIATION_REQUIRED'; reception_id: number | null; error: string | null; payload: PurchaseReceiptPayload | null }
 function parse(value: unknown): Operation { return value as Operation }
 
+export type PurchaseReceiptSyncSettings = { enabled: boolean; autoSyncEnabled: boolean }
+
+export async function getPurchaseReceiptSyncSettings(companyId: string): Promise<PurchaseReceiptSyncSettings> {
+  const { data, error } = await createAdminClient().schema('integraciones')
+    .from('bsale_purchase_receipt_settings')
+    .select('enabled,auto_sync_enabled')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error || !data) return { enabled: false, autoSyncEnabled: false }
+  return { enabled: data.enabled === true, autoSyncEnabled: data.auto_sync_enabled === true }
+}
+
 async function finish(db: ReturnType<typeof createAdminClient>, id: string, result: { status: string; receptionId: number | null; error: string | null }) {
   const { data, error } = await db.schema('integraciones').rpc('finish_bsale_purchase_receipt_operation', { p_operation_id: id, p_status: result.status, p_reception_id: result.receptionId, p_error: result.error })
   if (error) throw new Error(error.message)
