@@ -363,11 +363,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
         return
       }
 
-      if (res.bsale?.status === 'CONFIRMED') {
-        toast.success(`Recepción ${res.receipt_number} registrada y sincronizada con BSale.`)
-      } else {
-        toast.success(`Recepción ${res.receipt_number} registrada en PetGroup. Sincronización BSale pendiente.`)
-      }
+      toast.success(`Recepción ${res.receipt_number} registrada en PetGroup. Sincronización BSale pendiente.`)
       
       sessionStorage.setItem('mym_receipt_success', JSON.stringify({
         poId: poDetail.po.id,

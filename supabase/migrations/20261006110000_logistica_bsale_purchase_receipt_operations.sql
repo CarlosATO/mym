@@ -3,13 +3,15 @@ CREATE TABLE integraciones.bsale_purchase_receipt_settings (
   company_id uuid PRIMARY KEY REFERENCES core.companies(id) ON DELETE CASCADE,
   office_id integer CHECK (office_id IS NULL OR office_id > 0),
   service_variant_id integer NOT NULL CHECK (service_variant_id > 0),
+  enabled boolean NOT NULL DEFAULT true,
+  auto_sync_enabled boolean NOT NULL DEFAULT false,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-INSERT INTO integraciones.bsale_purchase_receipt_settings(company_id, office_id, service_variant_id)
-VALUES ('d1000000-0000-0000-0000-000000000001', 1, 4554)
-ON CONFLICT (company_id) DO UPDATE SET office_id = EXCLUDED.office_id, service_variant_id = EXCLUDED.service_variant_id, updated_at = now();
+INSERT INTO integraciones.bsale_purchase_receipt_settings(company_id, office_id, service_variant_id, enabled, auto_sync_enabled)
+VALUES ('d1000000-0000-0000-0000-000000000001', 1, 4554, true, false)
+ON CONFLICT (company_id) DO UPDATE SET office_id = EXCLUDED.office_id, service_variant_id = EXCLUDED.service_variant_id, enabled = EXCLUDED.enabled, auto_sync_enabled = EXCLUDED.auto_sync_enabled, updated_at = now();
 
 CREATE TABLE integraciones.bsale_purchase_receipt_operations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -17,7 +19,7 @@ CREATE TABLE integraciones.bsale_purchase_receipt_operations (
   purchase_receipt_id uuid NOT NULL REFERENCES logistica.purchase_receipts(id) ON DELETE RESTRICT,
   correlation_code text NOT NULL,
   status text NOT NULL DEFAULT 'PREPARED' CHECK (status IN ('PREPARED','SENDING','CONFIRMED','FAILED','RECONCILIATION_REQUIRED')),
-  office_id integer NOT NULL CHECK (office_id > 0),
+  office_id integer CHECK (office_id IS NULL OR office_id > 0),
   payload_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
   bsale_reception_id bigint,
   error_message text,
@@ -52,6 +54,11 @@ BEGIN
   IF NOT FOUND THEN
     INSERT INTO integraciones.bsale_purchase_receipt_operations(company_id, purchase_receipt_id, correlation_code, office_id, status, error_message, created_by)
       VALUES (r.company_id, r.id, r.receipt_number, NULL, 'FAILED', 'La empresa no tiene configuración de Recepciones BSale', p_user_id) RETURNING * INTO o;
+    RETURN jsonb_build_object('operation_id', o.id, 'status', o.status, 'reception_id', NULL, 'error', o.error_message, 'payload', o.payload_snapshot);
+  END IF;
+  IF NOT s.enabled THEN
+    INSERT INTO integraciones.bsale_purchase_receipt_operations(company_id, purchase_receipt_id, correlation_code, office_id, status, error_message, created_by)
+      VALUES (r.company_id, r.id, r.receipt_number, s.office_id, 'FAILED', 'La integración de Recepciones BSale está deshabilitada', p_user_id) RETURNING * INTO o;
     RETURN jsonb_build_object('operation_id', o.id, 'status', o.status, 'reception_id', NULL, 'error', o.error_message, 'payload', o.payload_snapshot);
   END IF;
   IF r.document_type = 'FA' THEN v_doc := 'FACTURA'; ELSIF r.document_type = 'GD' THEN v_doc := 'GUÍA'; ELSE

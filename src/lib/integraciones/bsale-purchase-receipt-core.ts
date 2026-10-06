@@ -8,6 +8,14 @@ export type PurchaseReceiptPayload = {
 
 export type PurchaseReceiptSnapshot = PurchaseReceiptPayload
 
+export function autoSyncIsAllowed(settings: { enabled: boolean; autoSyncEnabled: boolean }) {
+  return settings.enabled && settings.autoSyncEnabled
+}
+
+export function chooseUniqueReconciliationCandidate(compatibleIds: number[]) {
+  return compatibleIds.length === 1 ? compatibleIds[0] : null
+}
+
 export type AcceptedReceiptLine = { itemType: 'PRODUCT' | 'SERVICE'; condition: 'CONFORME' | 'DANADO' | 'RECHAZADO' | 'FALTANTE'; variantId?: number | null; quantity: number; netAmount: number }
 
 export function buildPurchaseReceiptPayload(input: { documentType: string; documentNumber: string | number; officeId: number; receiptNumber: string; poCorrelative: string; observation?: string | null; serviceVariantId: number; lines: AcceptedReceiptLine[] }): PurchaseReceiptPayload {

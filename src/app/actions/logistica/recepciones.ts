@@ -409,13 +409,13 @@ export async function createPurchaseReceipt(data: {
   const r = result as { success: boolean; error?: string; receipt_id?: string; receipt_number?: string }
   if (!r.success) return { error: r.error || 'Error al guardar recepción' }
 
-  let bsale
-  try {
-    bsale = await syncPurchaseReceipt(companyId, user.id, r.receipt_id!)
-  } catch (syncError) {
-    bsale = { status: 'RECONCILIATION_REQUIRED' as const, operationId: '', receptionId: null, error: syncError instanceof Error ? syncError.message : 'No se pudo iniciar la sincronización BSale.', payload: null }
+  // BSale is intentionally manual-only. Local success must never trigger a remote POST.
+  return {
+    success: true,
+    receipt_id: r.receipt_id,
+    receipt_number: r.receipt_number,
+    bsale: { status: 'PENDING' as const, operationId: null, receptionId: null, error: null, payload: null },
   }
-  return { success: true, receipt_id: r.receipt_id, receipt_number: r.receipt_number, bsale }
 }
 
 export async function getPurchaseReceiptBsaleStatus(receiptId: string) {

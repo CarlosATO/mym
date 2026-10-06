@@ -1,6 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createBsalePurchaseReceiptDependencies } from './bsale-purchase-receipt-adapter'
-import { reconcilePurchaseReceipt, sendPurchaseReceipt, type PurchaseReceiptPayload } from './bsale-purchase-receipt-core'
+import { chooseUniqueReconciliationCandidate, reconcilePurchaseReceipt, sendPurchaseReceipt, type PurchaseReceiptPayload } from './bsale-purchase-receipt-core'
 
 type Operation = { operation_id: string; status: 'PREPARED' | 'SENDING' | 'CONFIRMED' | 'FAILED' | 'RECONCILIATION_REQUIRED'; reception_id: number | null; error: string | null; payload: PurchaseReceiptPayload | null }
 function parse(value: unknown): Operation { return value as Operation }
@@ -50,8 +50,9 @@ export async function reconcilePurchaseReceiptOperation(companyId: string, userI
       const checked = await reconcilePurchaseReceipt(snapshot, remote, id)
       if (checked.status === 'CONFIRMED') compatible.push(id)
     }
-    result = compatible.length === 1
-      ? { status: 'CONFIRMED' as const, receptionId: compatible[0], error: null }
+    const uniqueCandidate = chooseUniqueReconciliationCandidate(compatible)
+    result = uniqueCandidate !== null
+      ? { status: 'CONFIRMED' as const, receptionId: uniqueCandidate, error: null }
       : { status: 'RECONCILIATION_REQUIRED' as const, receptionId: null, error: compatible.length > 1 ? 'Existen múltiples candidatos BSale compatibles.' : 'No existe un candidato BSale compatible; se requiere reintento explícito.', }
   }
   if (result.status !== 'CONFIRMED') return { status: 'RECONCILIATION_REQUIRED' as const, operationId, receptionId: result.receptionId, error: result.error, payload: snapshot }
