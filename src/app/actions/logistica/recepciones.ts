@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { getActiveCompanyId } from '@/app/actions/companies'
 import { requireWmsPermission } from './authorization'
+import { getPurchaseReceiptOperation, reconcilePurchaseReceiptOperation, syncPurchaseReceipt } from '@/lib/integraciones/bsale-purchase-receipt-orchestrator'
 
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
@@ -282,6 +283,9 @@ export async function getPurchaseOrderReceiptDetails(poId: string) {
     }
     return rest;
   });
+  const authorization = await requireWmsPermission('logistica.receptions.create')
+  const receiptStatuses = await Promise.all(receipts.map((receipt: any) => getPurchaseReceiptOperation(authorization.companyId, receipt.id, authorization.user.id)))
+  receipts.forEach((receipt: any, index: number) => { receipt.bsale = receiptStatuses[index] })
 
   // Calculate totals
   const totalOrdered = baseData.items.reduce((acc, i) => acc + Number(i.quantity || 0), 0)
@@ -405,7 +409,28 @@ export async function createPurchaseReceipt(data: {
   const r = result as { success: boolean; error?: string; receipt_id?: string; receipt_number?: string }
   if (!r.success) return { error: r.error || 'Error al guardar recepción' }
 
-  return { success: true, receipt_id: r.receipt_id, receipt_number: r.receipt_number }
+  let bsale
+  try {
+    bsale = await syncPurchaseReceipt(companyId, user.id, r.receipt_id!)
+  } catch (syncError) {
+    bsale = { status: 'RECONCILIATION_REQUIRED' as const, operationId: '', receptionId: null, error: syncError instanceof Error ? syncError.message : 'No se pudo iniciar la sincronización BSale.', payload: null }
+  }
+  return { success: true, receipt_id: r.receipt_id, receipt_number: r.receipt_number, bsale }
+}
+
+export async function getPurchaseReceiptBsaleStatus(receiptId: string) {
+  const authorization = await requireWmsPermission('logistica.receptions.create')
+  return getPurchaseReceiptOperation(authorization.companyId, receiptId, authorization.user.id)
+}
+
+export async function reconcilePurchaseReceiptBsale(operationId: string) {
+  const authorization = await requireWmsPermission('logistica.receptions.create')
+  return reconcilePurchaseReceiptOperation(authorization.companyId, authorization.user.id, operationId)
+}
+
+export async function syncPurchaseReceiptBsale(receiptId: string) {
+  const authorization = await requireWmsPermission('logistica.receptions.create')
+  return syncPurchaseReceipt(authorization.companyId, authorization.user.id, receiptId)
 }
 
 export interface KardexMovement {

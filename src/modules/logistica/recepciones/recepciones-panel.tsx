@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import {
   getPendingReceivablePOs,
   getPurchaseOrderReceiptDetails,
+  syncPurchaseReceiptBsale,
+  reconcilePurchaseReceiptBsale,
   type PurchaseOrderPending
 } from '@/app/actions/logistica/recepciones'
 import {
@@ -39,6 +41,25 @@ function StatusBadge({ status }: { status: string }) {
       <AlertCircle className="w-2.5 h-2.5" /> Pendiente
     </span>
   )
+}
+
+function BsaleStatus({ receipt, onRefresh }: { receipt: any; onRefresh: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const status = receipt.bsale?.status ?? 'PENDING'
+  const labels: Record<string, string> = { PENDING: 'Pendiente BSale', PREPARED: 'Pendiente BSale', SENDING: 'Enviando', CONFIRMED: 'Sincronizada', FAILED: 'Error', RECONCILIATION_REQUIRED: 'Requiere conciliación' }
+  async function run() {
+    setBusy(true)
+    try {
+      if (status === 'RECONCILIATION_REQUIRED' && receipt.bsale?.operationId) await reconcilePurchaseReceiptBsale(receipt.bsale.operationId)
+      else await syncPurchaseReceiptBsale(receipt.id)
+      onRefresh()
+    } finally { setBusy(false) }
+  }
+  return <div className="flex items-center gap-2 mt-1">
+    <span className="text-[10px] font-semibold text-theme-text-muted">{labels[status] ?? status}{status === 'CONFIRMED' && receipt.bsale?.receptionId ? ` · ID ${receipt.bsale.receptionId}` : ''}</span>
+    {status !== 'CONFIRMED' && status !== 'SENDING' && <button onClick={run} disabled={busy} className="text-[10px] text-theme-accent font-bold hover:underline">{busy ? 'Procesando...' : status === 'RECONCILIATION_REQUIRED' ? 'Reconciliar' : 'Sincronizar'}</button>}
+    {receipt.bsale?.payload && <details className="text-[10px]"><summary className="cursor-pointer text-theme-accent">Preview</summary><pre className="absolute z-10 mt-1 max-w-[420px] max-h-56 overflow-auto rounded border border-theme-border bg-theme-surface p-2 text-[9px]">{JSON.stringify(receipt.bsale.payload, null, 2)}</pre></details>}
+  </div>
 }
 
 // ─── Detail Skeleton ──────────────────────────────────────────────────────────
@@ -249,6 +270,7 @@ function DetailPanel({
                               {rec.received_at ? new Date(rec.received_at).toLocaleDateString('es-CL') : '—'}
                             </span>
                           </div>
+                          <BsaleStatus receipt={rec} onRefresh={() => getPurchaseOrderReceiptDetails(summary.id).then(res => res && setDetail(res))} />
                           {doc && (
                             <p className="text-[10px] text-theme-text-muted mt-0.5 flex items-center gap-1 truncate">
                               <Paperclip className="w-2.5 h-2.5 shrink-0" />
