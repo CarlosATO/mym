@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { getActiveCompanyId } from '@/app/actions/companies'
+import { syncProductSupplierMappings } from '@/lib/integraciones/bsale-auto-mapping'
 
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
@@ -838,13 +839,14 @@ export async function prepareReplenishmentPurchaseOrder(
 
   const db = adqAdmin()
   const skus = Array.from(new Set(selectedItems.map(item => item.sku)))
+  await syncProductSupplierMappings(companyId, { dryRun: false, skus })
   const [{ data: products, error: productsError }, { data: mappings, error: mappingsError }] = await Promise.all([
     db.from('products')
       .select('id, sku, description, unit_of_measure, tax_rate, bsale_variant_id')
       .eq('company_id', companyId)
       .in('sku', skus),
     db.from('product_supplier_mappings')
-      .select('id, sku, product_id, supplier_id, is_preferred')
+      .select('id, sku, product_id, supplier_id, bsale_variant_id, is_preferred')
       .eq('company_id', companyId)
       .eq('is_active', true)
       .in('sku', skus),
@@ -871,6 +873,7 @@ export async function prepareReplenishmentPurchaseOrder(
     sku: string
     product_id: string | null
     supplier_id: string | null
+    bsale_variant_id: number | null
     is_preferred: boolean
   }>
   const productsBySku = new Map<string, typeof productRows>()
@@ -897,11 +900,14 @@ export async function prepareReplenishmentPurchaseOrder(
     const productMappings = product
       ? (mappingsBySku.get(item.sku) ?? []).filter(mapping => mapping.product_id === product.id)
       : []
-    const preferredMappings = productMappings.filter(mapping => mapping.is_preferred)
+    const variantMappings = product
+      ? productMappings.filter(mapping => mapping.bsale_variant_id === product.bsale_variant_id)
+      : []
+    const preferredMappings = variantMappings.filter(mapping => mapping.is_preferred)
     const selectedMapping = preferredMappings.length === 1
       ? preferredMappings[0]
-      : preferredMappings.length === 0 && productMappings.length === 1
-        ? productMappings[0]
+      : preferredMappings.length === 0 && variantMappings.length === 1
+        ? variantMappings[0]
         : null
     if (!product || !selectedMapping?.product_id || !selectedMapping.supplier_id) {
       unresolvedItems.push({ sku: item.sku, product_name: item.product_name })

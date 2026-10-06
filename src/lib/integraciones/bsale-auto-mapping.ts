@@ -10,6 +10,17 @@ function adqDb() {
   })
 }
 
+async function fetchAllRows<T>(buildQuery: () => any): Promise<T[]> {
+  const pageSize = 1000
+  const rows: T[] = []
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await buildQuery().range(from, from + pageSize - 1)
+    if (error) throw error
+    rows.push(...((data || []) as T[]))
+    if (!data || data.length < pageSize) return rows
+  }
+}
+
 export interface AutoMappingResult {
   productsScanned: number
   productsWithProductType: number
@@ -23,6 +34,16 @@ export interface AutoMappingResult {
   productsWithoutResolvedSupplier: number
   operativeSuppliersWithoutParent: number
   errors: string[]
+}
+
+export function isProductSupplierMappingCoherent(
+  mapping: { company_id: string; sku: string; product_id: string | null; bsale_variant_id: number | null },
+  product: { company_id: string | null; sku: string; id: string; bsale_variant_id: number | null },
+) {
+  return mapping.company_id === product.company_id
+    && mapping.sku === product.sku
+    && mapping.product_id === product.id
+    && mapping.bsale_variant_id === product.bsale_variant_id
 }
 
 export async function syncProductSupplierMappings(
@@ -50,18 +71,21 @@ export async function syncProductSupplierMappings(
 
   try {
     // 1. Leer productos (todos o solo los SKUs objetivo)
-    let query = db
-      .from('products')
-      .select('id, sku, bsale_product_type_name, bsale_variant_id, is_active')
-      .eq('company_id', companyId)
-    if (targetSkus && targetSkus.length > 0) {
-      query = query.in('sku', targetSkus)
-    }
-    const { data: products, error: prodErr } = await query
-
-    if (prodErr) throw new Error(`Error leyendo products: ${prodErr.message}`)
-
-    const allProducts = products || []
+    const allProducts = await fetchAllRows<{
+      id: string
+      company_id: string | null
+      sku: string
+      bsale_product_type_name: string | null
+      bsale_variant_id: number | null
+      is_active: boolean
+    }>(() => {
+      let query = db
+        .from('products')
+        .select('id, company_id, sku, bsale_product_type_name, bsale_variant_id, is_active')
+        .eq('company_id', companyId)
+      if (targetSkus && targetSkus.length > 0) query = query.in('sku', targetSkus)
+      return query.order('id')
+    })
     result.productsScanned = allProducts.length
 
     const withProductType = allProducts.filter(p => p.bsale_product_type_name)
@@ -70,43 +94,125 @@ export async function syncProductSupplierMappings(
 
     // 2. Leer todos los suppliers BSALE_OPERATIVE (globales + empresa)
     const orFilter = `company_id.is.null,company_id.eq.${companyId}`
-    const { data: suppliers, error: supErr } = await db
+    const allSuppliers = await fetchAllRows<{
+      id: string
+      business_name: string
+      company_id: string | null
+      parent_supplier_id: string | null
+      supplier_kind: string
+    }>(() => db
       .from('suppliers')
       .select('id, business_name, company_id, parent_supplier_id, supplier_kind')
       .eq('supplier_kind', 'BSALE_OPERATIVE')
       .or(orFilter)
-
-    if (supErr) throw new Error(`Error leyendo suppliers: ${supErr.message}`)
-
-    const allSuppliers = suppliers || []
+      .order('id'))
     result.operativeSuppliersFound = allSuppliers.length
     result.operativeSuppliersWithoutParent = allSuppliers.filter(s => !s.parent_supplier_id).length
 
     // 3. Leer todos los suppliers REAL (para detectar conflictos manuales)
-    const { data: realSuppliers, error: realErr } = await db
+    const realSuppliers = await fetchAllRows<{ id: string }>(() => db
       .from('suppliers')
-      .select('id, business_name, company_id')
+      .select('id')
       .eq('supplier_kind', 'REAL')
       .or(orFilter)
+      .order('id'))
 
-    if (realErr) throw new Error(`Error leyendo suppliers REAL: ${realErr.message}`)
-
-    const realSupplierIds = new Set((realSuppliers || []).map(s => s.id))
+    const realSupplierIds = new Set(realSuppliers.map(s => s.id))
 
     // 4. Leer mappings activos existentes
-    const { data: existingMappings, error: mapErr } = await db
+    type ExistingMapping = {
+      id: string
+      company_id: string
+      sku: string
+      product_id: string | null
+      supplier_id: string
+      bsale_variant_id: number | null
+      is_preferred: boolean
+    }
+    const existingMappings = await fetchAllRows<ExistingMapping>(() => db
       .from('product_supplier_mappings')
-      .select('id, sku, supplier_id, is_active, is_preferred')
+      .select('id, company_id, sku, product_id, supplier_id, bsale_variant_id, is_active, is_preferred')
       .eq('company_id', companyId)
       .eq('is_active', true)
+      .order('id'))
 
-    if (mapErr) throw new Error(`Error leyendo mappings: ${mapErr.message}`)
+    const productById = new Map(allProducts.map(product => [product.id, product]))
+    const productsBySku = new Map<string, typeof allProducts>()
+    const productsByVariant = new Map<number, typeof allProducts>()
+    for (const product of allProducts) {
+      const skuKey = `${product.company_id}|${product.sku}`
+      productsBySku.set(skuKey, [...(productsBySku.get(skuKey) || []), product])
+      if (product.bsale_variant_id !== null && product.bsale_variant_id !== undefined) {
+        productsByVariant.set(product.bsale_variant_id, [...(productsByVariant.get(product.bsale_variant_id) || []), product])
+      }
+    }
 
-    const existingBySku = new Map<string, { id: string; sku: string; supplier_id: string; is_preferred: boolean }[]>()
-    for (const m of (existingMappings || [])) {
-      const arr = existingBySku.get(m.sku) || []
-      arr.push(m)
-      existingBySku.set(m.sku, arr)
+    const mappingPlans = (existingMappings || []).map(rawMapping => {
+      const mapping = { ...rawMapping }
+      const skuProducts = productsBySku.get(`${companyId}|${mapping.sku}`) || []
+      const productBySku = skuProducts.length === 1 ? skuProducts[0] : null
+      const productByMappingId = mapping.product_id ? productById.get(mapping.product_id) : null
+      const productByMappingVariant = mapping.bsale_variant_id === null
+        ? null
+        : (productsByVariant.get(mapping.bsale_variant_id) || []).find(product => product.company_id === companyId) || null
+      const targetProduct = productBySku
+        || (productByMappingId?.company_id === companyId ? productByMappingId : null)
+        || productByMappingVariant
+      return { mapping, targetProduct }
+    })
+
+    const plansByTarget = new Map<string, typeof mappingPlans>()
+    for (const plan of mappingPlans) {
+      if (!plan.targetProduct) continue
+      const targetKey = `${plan.mapping.company_id}|${plan.mapping.supplier_id}|${plan.targetProduct.sku}`
+      plansByTarget.set(targetKey, [...(plansByTarget.get(targetKey) || []), plan])
+    }
+
+    const existingBySku = new Map<string, ExistingMapping[]>()
+    for (const plans of plansByTarget.values()) {
+      const orderedPlans = [...plans].sort((a, b) => Number(b.mapping.is_preferred) - Number(a.mapping.is_preferred) || a.mapping.id.localeCompare(b.mapping.id))
+      const keeper = orderedPlans[0]
+
+      for (const duplicate of orderedPlans.slice(1)) {
+        if (!dryRun) {
+          const { error: deactivateErr } = await db.from('product_supplier_mappings').update({ is_active: false }).eq('id', duplicate.mapping.id)
+          if (deactivateErr) result.errors.push(`Error desactivando mapping duplicado ${duplicate.mapping.id}: ${deactivateErr.message}`)
+        }
+      }
+
+      const { mapping, targetProduct } = keeper
+
+      if (!targetProduct) {
+        continue
+      }
+
+      if (!isProductSupplierMappingCoherent(mapping, targetProduct)) {
+        const repair = {
+          product_id: targetProduct.id,
+          sku: targetProduct.sku,
+          bsale_variant_id: targetProduct.bsale_variant_id,
+        }
+        if (!dryRun) {
+          const { error: repairErr } = await db.from('product_supplier_mappings').update(repair).eq('id', mapping.id)
+          if (repairErr) {
+            result.errors.push(`Error reparando mapping ${mapping.id}: ${repairErr.message}`)
+            continue
+          }
+        }
+        Object.assign(mapping, repair)
+        result.mappingsUpdated++
+      }
+
+      const arr = existingBySku.get(mapping.sku) || []
+      arr.push(mapping)
+      existingBySku.set(mapping.sku, arr)
+    }
+
+    for (const plan of mappingPlans.filter(plan => !plan.targetProduct)) {
+      if (!dryRun) {
+        const { error: deactivateErr } = await db.from('product_supplier_mappings').update({ is_active: false }).eq('id', plan.mapping.id)
+        if (deactivateErr) result.errors.push(`Error desactivando mapping sin producto ${plan.mapping.id}: ${deactivateErr.message}`)
+      }
     }
 
     // 5. Construir índice de suppliers por business_name
@@ -282,7 +388,7 @@ async function processMapping(
   companyId: string,
   product: { id: string; sku: string; bsale_product_type_name?: string | null; bsale_variant_id?: number | null },
   supplier: { id: string; business_name: string; parent_supplier_id?: string | null },
-  existingBySku: Map<string, { id: string; sku: string; supplier_id: string; is_preferred: boolean }[]>,
+  existingBySku: Map<string, { id: string; company_id: string; sku: string; product_id: string | null; supplier_id: string; bsale_variant_id: number | null; is_preferred: boolean }[]>,
   realSupplierIds: Set<string>,
   result: AutoMappingResult,
   dryRun: boolean,
@@ -294,7 +400,7 @@ async function processMapping(
 
   if (existingForSku && existingForSku.length > 0) {
     // Ya existe mapping activo para este SKU
-    const mappedToThisSupplier = existingForSku.find(m => m.supplier_id === supplier.id)
+    const mappedToThisSupplier = existingForSku.find(m => m.supplier_id === supplier.id && m.product_id === product.id && m.bsale_variant_id === product.bsale_variant_id)
     if (mappedToThisSupplier) {
       result.mappingsSkippedExisting++
       return
