@@ -13,6 +13,52 @@ from app.db.connection import get_session_factory
 
 MONEY_QUANTUM = Decimal("0.01")
 RECEIVABLES_SOURCE = "BSale documentos + pagos válidos"
+SNAPSHOT_SOURCE = "BSALE_UNPAID_DOCUMENTS_SNAPSHOT"
+HISTORICAL_SOURCE = "BSALE_DOCUMENTS_PAYMENTS_HISTORICAL"
+
+RECEIVABLE_SNAPSHOT_SQL = text(
+    """
+    SELECT r.id AS run_id, r.snapshot_at, r.snapshot_date,
+           r.status AS snapshot_status,
+           r.clients_total, r.clients_success, r.clients_unqueryable, r.clients_error,
+           r.coverage_percent, r.documents_total,
+           COALESCE(SUM(d.total_amount_owed), 0) AS receivable_amount,
+           COALESCE(SUM(d.total_amount_owed) FILTER (WHERE d.expiration_date < r.snapshot_date), 0) AS overdue_amount,
+           COUNT(d.id) AS pending_documents
+    FROM integraciones.bsale_receivable_snapshot_runs r
+    LEFT JOIN integraciones.bsale_receivable_snapshot_documents d
+      ON d.run_id = r.id AND d.company_id = r.company_id
+    WHERE r.company_id = :company_id
+      AND r.source = 'BSALE_UNPAID_DOCUMENTS'
+      AND r.status = 'COMPLETED'
+    GROUP BY r.id, r.snapshot_at, r.snapshot_date, r.status,
+             r.clients_total, r.clients_success, r.clients_unqueryable, r.clients_error,
+             r.coverage_percent, r.documents_total
+    ORDER BY r.snapshot_at DESC
+    LIMIT 1
+    """
+)
+
+RECEIVABLE_SNAPSHOT_DOCUMENTS_SQL = text(
+    """
+    SELECT d.bsale_document_id AS document_id, d.emission_date, d.folio,
+           NULL::text AS document_type_name, d.total_amount, NULL::numeric AS net_amount,
+           NULL::numeric AS tax_amount, d.expiration_date,
+           d.total_amount_owed AS pending_amount, d.client_id,
+           c.code AS client_code,
+           COALESCE(NULLIF(c.name, ''), NULLIF(c.company, ''), concat_ws(' ', c.first_name, c.last_name)) AS client_name,
+           NULL::text AS url_pdf, d.expiration_date < r.snapshot_date AS overdue,
+           d.status AS source_status
+    FROM integraciones.bsale_receivable_snapshot_documents d
+    JOIN integraciones.bsale_receivable_snapshot_runs r
+      ON r.id = d.run_id AND r.company_id = d.company_id
+    LEFT JOIN integraciones.vw_bsale_receivables_clients c
+      ON c.company_id = d.company_id AND c.bsale_id = d.client_id
+    WHERE d.company_id = :company_id AND d.run_id = :run_id
+           AND d.total_amount_owed > 0
+    ORDER BY d.total_amount_owed DESC, d.emission_date, d.folio
+    """
+)
 
 
 RECEIVABLES_SQL = text(
@@ -197,6 +243,7 @@ def build_receivables_response(
     rows: list[dict[str, Any]],
     data_through: Any,
     effective_date: Any,
+    actual_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     through = _date_string(data_through)
     effective = _date_string(effective_date)
@@ -211,6 +258,13 @@ def build_receivables_response(
         for month in range(1, 13)
     ]
     actual = row_by_month.get(0)
+    actual_payload = {
+        "receivable_amount": _money_string(actual["receivable_amount"]) if actual else "0.00",
+        "overdue_amount": _money_string(actual["overdue_amount"]) if actual else "0.00",
+        "pending_documents": int(actual.get("pending_documents", 0)) if actual else 0,
+    }
+    if actual_metadata:
+        actual_payload.update(actual_metadata)
     return {
         "company_id": str(company_id),
         "year": year,
@@ -220,11 +274,7 @@ def build_receivables_response(
         "effective_date": effective,
         "has_information": data_through is not None,
         "months": months,
-        "actual": {
-            "receivable_amount": _money_string(actual["receivable_amount"]) if actual else "0.00",
-            "overdue_amount": _money_string(actual["overdue_amount"]) if actual else "0.00",
-            "pending_documents": int(actual.get("pending_documents", 0)) if actual else 0,
-        },
+        "actual": actual_payload,
     }
 
 
@@ -233,12 +283,41 @@ def get_receivables(company_id: UUID, year: int) -> dict[str, Any]:
     if settings.database_runtime_dsn is None:
         raise RuntimeError("DATABASE_RUNTIME_DSN no está configurado")
     with get_session_factory(settings.database_runtime_dsn.get_secret_value())() as session:
+        snapshot = session.execute(
+            RECEIVABLE_SNAPSHOT_SQL, {"company_id": company_id}
+        ).mappings().first()
         rows = session.execute(
             RECEIVABLES_SQL,
             {"company_id": company_id, "year": year, "effective_date": date.today()},
         ).mappings().all()
     data_through = rows[-1]["data_through"] if rows else None
-    return build_receivables_response(company_id, year, rows, data_through, date.today())
+    actual_metadata = {"receivables_source": HISTORICAL_SOURCE}
+    if snapshot:
+        rows = [row for row in rows if int(row["month"]) != 0]
+        rows.append({
+            "month": 0,
+            "receivable_amount": snapshot["receivable_amount"],
+            "overdue_amount": snapshot["overdue_amount"],
+            "pending_documents": snapshot["pending_documents"],
+        })
+        actual_metadata = {
+            "source": SNAPSHOT_SOURCE,
+            "receivables_source": SNAPSHOT_SOURCE,
+            "snapshot_run_id": str(snapshot["run_id"]),
+            "snapshot_at": _date_string(snapshot["snapshot_at"]),
+            "snapshot_date": _date_string(snapshot["snapshot_date"]),
+            "snapshot_status": snapshot["snapshot_status"],
+            "clients_total": int(snapshot["clients_total"]),
+            "clients_success": int(snapshot["clients_success"]),
+            "clients_unqueryable": int(snapshot["clients_unqueryable"]),
+            "clients_error": int(snapshot["clients_error"]),
+            "coverage_percent": float(snapshot["coverage_percent"] or 0),
+            "is_provisional": int(snapshot["clients_unqueryable"] or 0) > 0
+            or int(snapshot["clients_error"] or 0) > 0,
+        }
+    return build_receivables_response(
+        company_id, year, rows, data_through, date.today(), actual_metadata
+    )
 
 
 ANALYSIS_BASE_CTE = """
@@ -458,6 +537,57 @@ def get_receivables_analysis(company_id: UUID, year: int, period: int) -> dict[s
         "start_date": start_date,
     }
     with get_session_factory(settings.database_runtime_dsn.get_secret_value())() as session:
+        if period == 0:
+            snapshot = session.execute(
+                RECEIVABLE_SNAPSHOT_SQL, {"company_id": company_id}
+            ).mappings().first()
+            if snapshot:
+                documents = session.execute(
+                    RECEIVABLE_SNAPSHOT_DOCUMENTS_SQL,
+                    {"company_id": company_id, "run_id": snapshot["run_id"]},
+                ).mappings().all()
+                close_date = snapshot["snapshot_date"]
+                document_payload = []
+                for row in documents:
+                    item = dict(row)
+                    item["emission_date"] = _date_string(item["emission_date"])
+                    item["expiration_date"] = _date_string(item["expiration_date"])
+                    for key in ("total_amount", "net_amount", "tax_amount", "pending_amount"):
+                        item[key] = _money_string(item[key]) if item[key] is not None else None
+                    item["events"] = []
+                    document_payload.append(item)
+                return {
+                    "company_id": str(company_id), "year": year, "period": period,
+                    "period_start": start_date.isoformat(), "close_date": _date_string(close_date),
+                    "currency": "CLP", "source": SNAPSHOT_SOURCE,
+                    "receivables_source": SNAPSHOT_SOURCE,
+                    "snapshot_run_id": str(snapshot["run_id"]),
+                    "snapshot_at": _date_string(snapshot["snapshot_at"]),
+                    "snapshot_date": _date_string(snapshot["snapshot_date"]),
+                    "snapshot_status": snapshot["snapshot_status"],
+                    "clients_total": int(snapshot["clients_total"]),
+                    "clients_success": int(snapshot["clients_success"]),
+                    "clients_unqueryable": int(snapshot["clients_unqueryable"]),
+                    "clients_error": int(snapshot["clients_error"]),
+                    "coverage_percent": float(snapshot["coverage_percent"] or 0),
+                    "is_provisional": int(snapshot["clients_unqueryable"] or 0) > 0
+                    or int(snapshot["clients_error"] or 0) > 0,
+                    "summary": {
+                        "receivable_amount": _money_string(snapshot["receivable_amount"]),
+                        "overdue_amount": _money_string(snapshot["overdue_amount"]),
+                        "closing_receivable_amount": _money_string(snapshot["receivable_amount"]),
+                        "closing_overdue_amount": _money_string(snapshot["overdue_amount"]),
+                        "pending_documents": int(snapshot["pending_documents"]),
+                        "clients": len({row["client_id"] for row in documents}),
+                    },
+                    "daily": [{
+                        "date": _date_string(close_date),
+                        "receivable_amount": _money_string(snapshot["receivable_amount"]),
+                        "overdue_amount": _money_string(snapshot["overdue_amount"]),
+                        "pending_documents": int(snapshot["pending_documents"]),
+                    }],
+                    "documents": document_payload,
+                }
         daily = session.execute(ANALYSIS_DAILY_SQL, params).mappings().all()
         documents = session.execute(ANALYSIS_DOCUMENTS_SQL, params).mappings().all()
         document_ids = [int(row["document_id"]) for row in documents]
@@ -489,6 +619,7 @@ def get_receivables_analysis(company_id: UUID, year: int, period: int) -> dict[s
         "company_id": str(company_id), "year": year, "period": period,
         "period_start": start_date.isoformat(), "close_date": close_date.isoformat(),
         "currency": "CLP", "source": RECEIVABLES_SOURCE,
+        "receivables_source": HISTORICAL_SOURCE,
         "summary": {
             "receivable_amount": _money_string(sum((row["receivable_amount"] for row in daily), Decimal(0))),
             "overdue_amount": _money_string(sum((row["overdue_amount"] for row in daily), Decimal(0))),

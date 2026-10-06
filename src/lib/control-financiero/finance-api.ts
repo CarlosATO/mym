@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { getActiveCompanyId } from '@/app/actions/companies'
+import type { FinanceReceivablesSource } from './types'
 
 export type FinanceMonthlyAmount = {
   month: number
@@ -193,7 +194,23 @@ export type FinanceReceivablesResponse = {
   effective_date: string | null
   has_information: boolean
   months: Array<{ month: number; receivable_amount: string | null; overdue_amount: string | null }>
-  actual: { receivable_amount: string; overdue_amount: string; pending_documents: number }
+  actual: {
+    receivable_amount: string
+    overdue_amount: string
+    pending_documents: number
+    source?: string
+    snapshot_run_id?: string
+    snapshot_at?: string
+    snapshot_date?: string
+    receivables_source?: FinanceReceivablesSource
+    snapshot_status?: string
+    clients_total?: number
+    clients_success?: number
+    clients_unqueryable?: number
+    clients_error?: number
+    coverage_percent?: number
+    is_provisional?: boolean
+  }
 }
 
 export type FinanceApiResult =
@@ -233,6 +250,17 @@ export type FinanceReceivablesAnalysis = {
   close_date: string
   currency: 'CLP'
   source: string
+  snapshot_run_id?: string
+  snapshot_at?: string
+  snapshot_date?: string
+  receivables_source?: FinanceReceivablesSource
+  snapshot_status?: string
+  clients_total?: number
+  clients_success?: number
+  clients_unqueryable?: number
+  clients_error?: number
+  coverage_percent?: number
+  is_provisional?: boolean
   summary: {
     receivable_amount: string
     overdue_amount: string
@@ -257,6 +285,7 @@ export type FinanceReceivablesAnalysis = {
     client_name: string | null
     url_pdf: string | null
     overdue: boolean
+    source_status?: string | null
     events: FinanceReceivablesEvent[]
   }>
 }

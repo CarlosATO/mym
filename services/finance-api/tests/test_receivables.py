@@ -5,7 +5,11 @@ from uuid import UUID
 from app.financial.receivables import (
     ANALYSIS_DAILY_SQL,
     ANALYSIS_DOCUMENTS_SQL,
+    RECEIVABLE_SNAPSHOT_DOCUMENTS_SQL,
+    RECEIVABLE_SNAPSHOT_SQL,
     RECEIVABLES_SQL,
+    HISTORICAL_SOURCE,
+    SNAPSHOT_SOURCE,
     build_receivables_response,
 )
 
@@ -54,6 +58,44 @@ def test_receivables_query_reuses_sales_eligibility_and_valid_payment_rules() ->
     assert "date_trunc('month', CAST(:effective_date AS date))" in sql
     assert "THEN CAST(:effective_date AS date)" in sql
     assert "periods.is_available" in sql
+
+
+def test_actual_uses_latest_completed_snapshot() -> None:
+    sql = str(RECEIVABLE_SNAPSHOT_SQL)
+    assert "source = 'BSALE_UNPAID_DOCUMENTS'" in sql
+    assert SNAPSHOT_SOURCE == "BSALE_UNPAID_DOCUMENTS_SNAPSHOT"
+    assert SNAPSHOT_SOURCE != HISTORICAL_SOURCE
+    assert "status = 'COMPLETED'" in sql
+    assert "ORDER BY r.snapshot_at DESC" in sql
+    assert "LIMIT 1" in sql
+    assert "SUM(d.total_amount_owed)" in sql
+    assert "AS receivable_amount" in sql
+    assert "d.expiration_date < r.snapshot_date" in sql
+    assert "SUM(d.total_amount_owed) FILTER (WHERE d.expiration_date < r.snapshot_date)" in sql
+    assert "SUM(d.total_amount_owed) FILTER (WHERE d.status = 'OVERDUE')" not in sql
+    assert "clients_unqueryable" in sql
+    assert "coverage_percent" in sql
+
+
+def test_actual_drilldown_reads_the_same_snapshot_run() -> None:
+    sql = str(RECEIVABLE_SNAPSHOT_DOCUMENTS_SQL)
+    assert "d.run_id = :run_id" in sql
+    assert "d.total_amount_owed AS pending_amount" in sql
+    assert "d.expiration_date < r.snapshot_date AS overdue" in sql
+    assert "d.status AS source_status" in sql
+
+
+def test_bsale_overdue_boundary_is_strictly_before_cutoff() -> None:
+    cutoff = date(2026, 10, 6)
+    assert date(2026, 10, 5) < cutoff
+    assert not date(2026, 10, 6) < cutoff
+    assert not date(2026, 10, 7) < cutoff
+
+
+def test_historical_overdue_keeps_strict_close_date_semantics() -> None:
+    sql = str(RECEIVABLES_SQL)
+    assert "document_positions.expiration_date < document_positions.close_date" in sql
+    assert "d.pending_amount > 0 AND d.expiration_date < :close_date AS overdue" in str(ANALYSIS_DOCUMENTS_SQL)
 
 
 def test_receivables_deduplicates_only_identified_credit_note_payments() -> None:

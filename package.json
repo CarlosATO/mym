@@ -12,6 +12,8 @@
     "build": "next build",
     "start": "next start",
     "test:bsale-client-metrics-refresh": "node --experimental-strip-types --test scripts/test-bsale-client-metrics-refresh.mjs",
+    "test:cobranza-v2": "node --test scripts/test-cobranza-v2-contract.mjs",
+    "test:cobranza-2b": "node --test scripts/test-cobranza-2b-contract.mjs",
     "test:control-financiero-family-groups": "node --experimental-strip-types --test scripts/test-control-financiero-family-groups.mjs",
     "test:financial-detail-cache": "node --experimental-strip-types --test scripts/test-financial-detail-cache.mjs",
     "test:financial-bank-statement": "node --experimental-strip-types --test scripts/test-financial-bank-statement.mjs",

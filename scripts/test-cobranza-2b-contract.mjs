@@ -1,0 +1,155 @@
+import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import test from 'node:test'
+
+const migration = await readFile(new URL('../supabase/migrations/20261006170000_collection_payments_etapa_2b.sql', import.meta.url), 'utf8')
+const action = await readFile(new URL('../src/app/actions/comercial/cobranza-workflow.ts', import.meta.url), 'utf8')
+const gateway = await readFile(new URL('../src/lib/bsale/collection-payments.ts', import.meta.url), 'utf8')
+const view = await readFile(new URL('../src/modules/analisis-comercial/views/cobranza.tsx', import.meta.url), 'utf8')
+const metrics = await readFile(new URL('../src/modules/analisis-comercial/lib/cobranza-metrics.ts', import.meta.url), 'utf8')
+const reconciliationScript = await readFile(new URL('./reconcile-existing-collection-payment-99943.mjs', import.meta.url), 'utf8')
+
+test('CLOSED es etapa interna y no selector manual', () => {
+  assert.match(migration, /'CLOSED'/)
+  assert.match(view, /kanbanStages[\s\S]*CLOSED/)
+  assert.match(view, /const stages:/)
+  assert.doesNotMatch(view.match(/const stages:[\s\S]*?\n\]/)?.[0] ?? '', /CLOSED/)
+})
+test('cierre automático depende de saldo cliente cero', () => assert.match(action, /reconciled\.clientBalance === 0[\s\S]*stage: 'CLOSED'/))
+test('cierre registra PAYMENT_CLOSED y metadata', () => assert.match(action, /event_type: 'PAYMENT_CLOSED'[\s\S]*previous_balance[\s\S]*payment_ids/))
+test('reapertura usa snapshot posterior y evento', () => {
+  assert.match(action, /REOPENED_BY_NEW_DEBT/)
+  assert.match(action, /snapshotAt/)
+})
+test('POST usa documentId y paymentTypeId documentados', () => assert.match(gateway, /path: '\/payments\.json'[\s\S]*body: payload/))
+test('no se envía folio como documentId', () => assert.doesNotMatch(action, /documentId:\s*[^,\n]*folio/))
+test('preflight precede al POST', () => assert.ok(action.indexOf('prepareCollectionPayment({ documentId') < action.indexOf('gateway.createPayment(')))
+test('lock local se crea antes de preflight', () => assert.ok(action.indexOf("from('collection_payment_attempts').insert") < action.indexOf('prepareCollectionPayment({ documentId')))
+test('attempt pasa por SUBMITTING', () => assert.match(action, /status: 'SUBMITTING'/))
+test('éxito reconcilia payment, documento y cliente', () => assert.match(action, /getPayment\(input\.paymentId\)[\s\S]*getDocumentPayments[\s\S]*getUnpaidDocuments/))
+test('CONFIRMED sólo se escribe después de reconciliar', () => assert.ok(action.indexOf('reconcileCollectionPayment') < action.indexOf("status: 'CONFIRMED'")))
+test('timeout no reintenta POST y marca UNKNOWN', () => {
+  assert.match(action, /postAttempted = true[\s\S]*status: 'UNKNOWN'/)
+  assert.match(action, /COLLECTION_PAYMENT_UNKNOWN/)
+})
+test('respuesta ambigua queda REQUIRES_REVIEW bloqueada', () => {
+  assert.match(migration, /'REQUIRES_REVIEW'/)
+  assert.match(migration, /'UNKNOWN', 'REQUIRES_REVIEW'/)
+})
+test('FAILED libera el lock', () => assert.match(action, /eq\('id', attemptId\)\.eq\('status', 'CREATED'\)/))
+test('batch se procesa secuencialmente', () => assert.match(action, /for \(const document of prepared\.documents\)[\s\S]*await registerCollectionPayment/))
+test('batch soporta COMPLETED, PARTIAL, UNKNOWN y FAILED', () => assert.match(migration, /COMPLETED.*PARTIAL.*UNKNOWN.*FAILED/s))
+test('batch relaciona attempts', () => assert.match(migration, /batch_id uuid NULL REFERENCES comercial\.collection_payment_batches/))
+test('pago parcial no cierra mientras queda deuda', () => assert.match(action, /if \(reconciled\.clientBalance === 0\)/))
+test('pago total cliente usa documentos individuales', () => assert.match(action, /documentId: document\.documentId[\s\S]*amount: document\.balance/))
+test('applications se deduplican por payment y documento', () => {
+  assert.match(gateway, /dedupeCollectionPaymentApplications/)
+  assert.match(action, /const allocationsByKey = new Map[\s\S]*const key = `\$\{id\}:\$\{application\.documentId\}`/)
+  assert.match(action, /const applicationSources = \[payment, \.\.\.documentPayments\]/)
+})
+test('fixture payment 99943-like produce una sola aplicación 91576', () => {
+  assert.match(gateway, /payment\.documents \?\? \[\]/)
+  assert.match(gateway, /if \(!unique\.has\(candidate\.id\)\)/)
+  assert.match(action, /documentApplication = applications\.find\(application => application\.documentId === Number\(attempt\.bsale_document_id\)\)/)
+})
+test('recordDate se serializa como Unix seconds y no como fecha string', () => {
+  assert.match(gateway, /recordDate: number/)
+  assert.match(gateway, /calendarDateToUnixSeconds/)
+  assert.match(action, /const recordDateUnix = calendarDateToUnixSeconds\(recordDate\)/)
+  assert.match(action, /recordDate: recordDateUnix, amount:/)
+  assert.match(action, /request_payload: \{ recordDate, recordDateUnix/)
+  assert.doesNotMatch(action, /createPayment\(\{ recordDate, amount:/)
+})
+test('reconciliación dirigida sólo lee Bsale y confirma el attempt existente', () => {
+  const reconcileBlock = action.match(/export async function reconcileExistingCollectionPayment[\s\S]*?\n}\n\nasync function upsertDirectedPayment/)?.[0] ?? ''
+  assert.match(action, /gateway\.getPayment\(input\.paymentId\)/)
+  assert.match(action, /gateway\.getDocumentPayments\(input\.documentId\)/)
+  assert.match(action, /gateway\.getUnpaidDocuments\(input\.clientId\)/)
+  assert.doesNotMatch(reconcileBlock, /createPayment/)
+  assert.match(reconcileBlock, /status: 'CONFIRMED'/)
+  assert.match(reconcileBlock, /bsale_payment_id: input\.paymentId/)
+  assert.match(reconcileBlock, /post_balance: reconciled\.postBalance/)
+})
+test('script controlado del payment 99943 no ejecuta POST', () => {
+  assert.match(reconciliationScript, /method: 'GET'/)
+  assert.doesNotMatch(reconciliationScript, /method: 'POST'/)
+  assert.match(reconciliationScript, /postExecuted: false/)
+})
+test('overlay persistente reconstruye saldo y evita double-apply con snapshot posterior', () => {
+  assert.match(action, /getCollectionPaymentOverlay\(clientIds: number\[\], snapshotAt\?/)
+  assert.match(action, /eq\('status', 'CONFIRMED'\)[\s\S]*gt\('confirmed_at', snapshotAt\)/)
+  assert.match(metrics, /applyCobranzaPaymentOverlay/)
+  assert.match(view, /getCollectionPaymentOverlay\(/)
+  assert.match(view, /applyCobranzaPaymentOverlay\(data\.documents, paymentOverlay\)/)
+})
+test('sync dirigido usa tablas locales idempotentes', () => assert.match(action, /bsale_payments.*upsert[\s\S]*bsale_document_payments.*upsert/s))
+test('auditoría no incluye token', () => {
+  assert.match(action, /ANALISIS_COMERCIAL_COBRANZA/)
+  assert.doesNotMatch(action, /accessToken|BSALE_ACCESS_TOKEN|Authorization/)
+})
+test('auditoría de Cobranza separa action corto y event_type detallado', () => {
+  assert.match(action, /type CollectionAuditAction = 'INSERT' \| 'STATUS_CHANGE' \| 'UPDATE'/)
+  assert.match(action, /action: input\.action/)
+  assert.match(action, /event_type: input\.eventType/)
+  assert.doesNotMatch(action, /action: 'COLLECTION_[A-Z_]+'/)
+  for (const shortAction of ['INSERT', 'STATUS_CHANGE', 'UPDATE']) assert.ok(shortAction.length <= 20)
+})
+test('eventos de auditoría detallados conservan submitted, confirmed, failed, unknown y batch', () => {
+  for (const eventType of ['COLLECTION_PAYMENT_SUBMITTED', 'COLLECTION_PAYMENT_CONFIRMED', 'COLLECTION_PAYMENT_FAILED', 'COLLECTION_PAYMENT_UNKNOWN', 'COLLECTION_PAYMENT_BATCH_COMPLETED', 'COLLECTION_PAYMENT_BATCH_PARTIAL', 'COLLECTION_CUSTOMER_CLOSED']) {
+    assert.match(action, new RegExp(eventType))
+  }
+  assert.match(action, /eventType: 'COLLECTION_PAYMENT_SUBMITTED'/)
+  assert.match(action, /eventType: 'COLLECTION_PAYMENT_CONFIRMED'/)
+  assert.match(action, /eventType: 'COLLECTION_CUSTOMER_CLOSED'/)
+})
+test('auditoría previa bloquea POST y auditoría posterior no clasifica FAILED', () => {
+  assert.match(action, /await auditCollectionEvent\(\{ userId: user\.id, action: 'INSERT'/)
+  assert.match(action, /let postAttempted = false/)
+  assert.match(action, /postAttempted = true[\s\S]*gateway\.createPayment/)
+  assert.match(action, /if \(!postAttempted\)[\s\S]*status: 'FAILED'/)
+  assert.match(action, /if \(!postAttempted\)[\s\S]*throw cause[\s\S]*status: 'REQUIRES_REVIEW'/)
+  assert.match(action, /status: 'UNKNOWN'/)
+  assert.match(action, /auditCollectionEventBestEffort/)
+})
+test('botón real requiere confirmación y se deshabilita procesando', () => assert.match(view, /disabled=\{paymentProcessing\}[\s\S]*CONFIRMAR PAGO EN BSALE/))
+test('FAILED visible no permite retry automático en el modal', () => {
+  assert.match(view, /No se pudo registrar el pago/)
+  assert.match(view, /El pago NO fue confirmado en Bsale/)
+  assert.match(view, /paymentStatus === 'FAILED'/)
+  assert.match(view, /paymentStatus === 'UNKNOWN' \|\| paymentStatus === 'FAILED'/)
+})
+test('pago total muestra batch secuencial', () => assert.match(view, /procesarán los documentos secuencialmente/))
+test('documentos muestran saldo pendiente sin input de monto', () => {
+  assert.match(view, /Saldo pendiente/)
+  assert.doesNotMatch(view, /Monto pago/)
+})
+test('pago individual ofrece total o parcial dentro del modal', () => {
+  assert.match(view, /Pago total de esta factura/)
+  assert.match(view, /Pago parcial/)
+  assert.match(view, /Monto parcial/)
+  assert.doesNotMatch(view, /Usar saldo total/)
+})
+test('pago parcial comienza vacío y muestra máximo live en CLP', () => {
+  assert.match(view, /setPaymentMode\('PARTIAL'\); setPartialAmount\(''\)/)
+  assert.match(view, /Saldo máximo disponible: \{money\(paymentPreview\.liveBalance\)\}/)
+  assert.match(view, /inputMode="numeric" value=\{clpInput\(partialAmount\)\}/)
+  assert.doesNotMatch(view, /type="number"[^>]*value=\{partialAmount\}/)
+})
+test('pago parcial muestra saldo posterior y tipo de pago', () => {
+  assert.match(view, /Saldo estimado posterior:/)
+  assert.match(view, /Tipo de pago:.*Pago parcial/)
+})
+test('preflight y escritura bloquean acciones con feedback inmediato', () => {
+  assert.match(view, /Consultando saldo en Bsale/)
+  assert.match(view, /Registrando y verificando/)
+  assert.match(view, /disabled=\{paymentBusy\}/)
+})
+test('resultado UNKNOWN no ofrece retry automático', () => {
+  assert.match(view, /Estado incierto: no reintentes automáticamente/)
+  assert.match(view, /paymentStatus === 'UNKNOWN'/)
+})
+test('batch muestra resultado por documento', () => assert.match(view, /batchResult\.results\.map/))
+test('tests no contienen llamadas reales a Bsale', async () => {
+  const testSource = await readFile(new URL('./test-cobranza-2b-contract.mjs', import.meta.url), 'utf8')
+  assert.doesNotMatch(testSource, /from ['"].*collection-payments/)
+})
