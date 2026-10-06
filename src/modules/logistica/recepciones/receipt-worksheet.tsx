@@ -45,7 +45,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
   const [documentNumber, setDocumentNumber] = useState<string>('')
   const [documentDate, setDocumentDate] = useState<string>(new Date().toISOString().substring(0, 10))
   const [documentNotes, setDocumentNotes] = useState<string>('')
-  const [idempotencyKey] = useState(() => `receipt:${poId}:${crypto.randomUUID()}`)
+  const [idempotencyKey] = useState(() => crypto.randomUUID())
 
   // Attachment state
   const [uploadingFile, setUploadingFile] = useState(false)
