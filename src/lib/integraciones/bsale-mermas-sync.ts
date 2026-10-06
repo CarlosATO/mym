@@ -5,6 +5,7 @@ import {
   tryAcquireSyncLock,
   type SyncTriggerType,
 } from "./sync-core";
+import { classifyBsaleMermaConsumption } from "./bsale-mermas-exclusion-core";
 
 type BsaleConsumption = {
   id: number;
@@ -31,6 +32,7 @@ type SyncResult = {
   newDetails: number;
   newMovements: number;
   completedRequests: number;
+  excluded: number;
   error?: string;
 };
 
@@ -82,6 +84,7 @@ export async function syncBsaleMermas(params: {
       newDetails: 0,
       newMovements: 0,
       completedRequests: 0,
+      excluded: 0,
       error: "Ya existe una sincronización de Mermas en curso.",
     };
 
@@ -100,14 +103,28 @@ export async function syncBsaleMermas(params: {
 
     const activation = state?.activation_date ?? "2026-09-10";
     const watermark = Number(state?.high_watermark ?? 0);
+    const { data: exclusionRows, error: exclusionsError } = await database
+      .schema("mermas")
+      .from("bsale_consumption_exclusions")
+      .select("consumption_id")
+      .eq("company_id", params.companyId);
+    if (exclusionsError) {
+      throw new Error(
+        `No se pudieron leer las exclusiones de consumos: ${exclusionsError.message}`,
+      );
+    }
+    const excludedIds = new Set(
+      (exclusionRows ?? []).map((row) => Number(row.consumption_id)),
+    );
     const headers = await bsaleFetchAll<BsaleConsumption>(
       "/stocks/consumptions.json",
     );
     const eligible = headers.filter((header) => {
       const typeId = numberOrNull(header.consumptionTypeId);
       const date = consumptionDate(header.consumptionDate);
+      const decision = classifyBsaleMermaConsumption(header.id, typeId, excludedIds);
       return (
-        typeId === 2 &&
+        decision.accepted &&
         date !== null &&
         date.toISOString().slice(0, 10) >= activation &&
         header.id >= Math.max(0, watermark - overlap)
@@ -118,6 +135,10 @@ export async function syncBsaleMermas(params: {
     let newDetails = 0;
     let newMovements = 0;
     let completedRequests = 0;
+    const excluded = headers.filter((header) => {
+      const typeId = numberOrNull(header.consumptionTypeId);
+      return classifyBsaleMermaConsumption(header.id, typeId, excludedIds).excluded;
+    }).length;
     let highWatermark = watermark;
     for (const summary of headers) {
       if (summary.id > highWatermark) highWatermark = summary.id;
@@ -175,6 +196,7 @@ export async function syncBsaleMermas(params: {
       newDetails,
       newMovements,
       completedRequests,
+      excluded,
     };
   } catch (error) {
     return {
@@ -184,6 +206,7 @@ export async function syncBsaleMermas(params: {
       newDetails: 0,
       newMovements: 0,
       completedRequests: 0,
+      excluded: 0,
       error:
         error instanceof Error
           ? error.message
