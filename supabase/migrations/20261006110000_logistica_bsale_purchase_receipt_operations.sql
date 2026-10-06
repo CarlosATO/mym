@@ -91,3 +91,16 @@ CREATE OR REPLACE FUNCTION integraciones.finish_bsale_purchase_receipt_operation
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, integraciones AS $$ BEGIN IF p_status NOT IN ('CONFIRMED','FAILED','RECONCILIATION_REQUIRED') THEN RAISE EXCEPTION 'Estado inválido'; END IF; UPDATE integraciones.bsale_purchase_receipt_operations SET status=p_status, bsale_reception_id=p_reception_id, error_message=nullif(btrim(p_error),''), confirmed_at=CASE WHEN p_status='CONFIRMED' THEN now() ELSE confirmed_at END WHERE id=p_operation_id AND status='SENDING'; IF NOT FOUND THEN RAISE EXCEPTION 'La operación no está en SENDING'; END IF; RETURN (SELECT jsonb_build_object('operation_id',id,'status',status,'reception_id',bsale_reception_id,'error',error_message,'payload',payload_snapshot) FROM integraciones.bsale_purchase_receipt_operations WHERE id=p_operation_id); END $$;
 REVOKE ALL ON FUNCTION integraciones.prepare_bsale_purchase_receipt_operation(uuid,uuid), integraciones.claim_bsale_purchase_receipt_operation(uuid), integraciones.finish_bsale_purchase_receipt_operation(uuid,text,bigint,text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION integraciones.prepare_bsale_purchase_receipt_operation(uuid,uuid), integraciones.claim_bsale_purchase_receipt_operation(uuid), integraciones.finish_bsale_purchase_receipt_operation(uuid,text,bigint,text) TO service_role;
+
+CREATE OR REPLACE FUNCTION integraciones.retry_failed_bsale_purchase_receipt_operation(p_operation_id uuid, p_user_id uuid)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, core, portal, integraciones AS $$
+DECLARE o integraciones.bsale_purchase_receipt_operations%ROWTYPE;
+BEGIN
+  SELECT * INTO o FROM integraciones.bsale_purchase_receipt_operations WHERE id = p_operation_id FOR UPDATE;
+  IF NOT FOUND OR NOT core.has_company_access(p_user_id, o.company_id) OR NOT core.has_permission_for_company(p_user_id, o.company_id, 'logistica.receptions.create') THEN RAISE EXCEPTION 'Operación no encontrada o no autorizada'; END IF;
+  IF o.status <> 'FAILED' THEN RETURN jsonb_build_object('status', o.status, 'operation_id', o.id, 'reception_id', o.bsale_reception_id, 'error', o.error_message, 'payload', o.payload_snapshot); END IF;
+  UPDATE integraciones.bsale_purchase_receipt_operations SET status='PREPARED', error_message=NULL, bsale_reception_id=NULL WHERE id=o.id;
+  RETURN jsonb_build_object('status','PREPARED','operation_id',o.id,'reception_id',NULL,'error',NULL,'payload',o.payload_snapshot);
+END $$;
+REVOKE ALL ON FUNCTION integraciones.retry_failed_bsale_purchase_receipt_operation(uuid,uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION integraciones.retry_failed_bsale_purchase_receipt_operation(uuid,uuid) TO service_role;

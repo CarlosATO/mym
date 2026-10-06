@@ -17,7 +17,11 @@ export async function syncPurchaseReceipt(companyId: string, userId: string, rec
   if (prepareError) return { status: 'FAILED' as const, operationId: '', receptionId: null, error: prepareError.message, payload: null }
   const operation = parse(prepared)
   if (operation.status === 'CONFIRMED') return { status: 'CONFIRMED' as const, operationId: operation.operation_id, receptionId: operation.reception_id, error: null, payload: operation.payload }
-  if (operation.status === 'FAILED') return { status: 'FAILED' as const, operationId: operation.operation_id, receptionId: operation.reception_id, error: operation.error ?? 'Operación fallida.', payload: operation.payload }
+  if (operation.status === 'FAILED') {
+    const { error } = await db.schema('integraciones').rpc('retry_failed_bsale_purchase_receipt_operation', { p_operation_id: operation.operation_id, p_user_id: userId })
+    if (error) return { status: 'FAILED' as const, operationId: operation.operation_id, receptionId: null, error: error.message, payload: operation.payload }
+    return syncPurchaseReceipt(companyId, userId, receiptId)
+  }
   if (operation.status === 'RECONCILIATION_REQUIRED') return reconcilePurchaseReceiptOperation(companyId, userId, operation.operation_id)
   if (operation.status === 'SENDING') return { status: 'SENDING' as const, operationId: operation.operation_id, receptionId: operation.reception_id, error: operation.error, payload: operation.payload }
   const { data: claim, error: claimError } = await db.schema('integraciones').rpc('claim_bsale_purchase_receipt_operation', { p_operation_id: operation.operation_id })
