@@ -1816,8 +1816,9 @@ function MermaDetail({ requestId }: { requestId: string }) {
                 <th className="px-3 py-2">Cant.</th>
                 <th className="px-3 py-2">Motivo</th>
                 <th className="px-3 py-2">Vencimiento</th>
-                <th className="px-3 py-2">Lote</th>
-                <th className="px-3 py-2">Observación</th>
+                 <th className="px-3 py-2">Lote</th>
+                 <th className="px-3 py-2">Stock WMS / Origen</th>
+                 <th className="px-3 py-2">Observación</th>
                 <th className="px-3 py-2">Evidencia</th>
               </tr>
             </thead>
@@ -1841,9 +1842,20 @@ function MermaDetail({ requestId }: { requestId: string }) {
                   <td className="px-3 py-2 text-theme-text-muted">
                     {formatCivilDate(line.expiration_date)}
                   </td>
-                  <td className="px-3 py-2 text-theme-text-muted">
-                    {line.lot || "-"}
-                  </td>
+                   <td className="px-3 py-2 text-theme-text-muted">
+                     {line.lot || "-"}
+                   </td>
+                   <td className="px-3 py-2 text-xs text-theme-text-muted">
+                     {(request.wms_allocations ?? [])
+                       .filter((allocation) => allocation.request_line_id === line.id)
+                       .map((allocation) => (
+                         <div key={`${allocation.request_line_id}-${allocation.source_receipt_item_id}`}>
+                           {allocation.quantity} u. · {allocation.location_code} · {allocation.source_receipt_number}
+                           <span className="ml-1 text-[10px] uppercase text-theme-accent">{allocation.status}</span>
+                         </div>
+                       ))}
+                     {!request.wms_allocations?.some((allocation) => allocation.request_line_id === line.id) && "Pendiente de asignación"}
+                   </td>
                   <td className="px-3 py-2 text-theme-text-muted">
                     {line.observation || "-"}
                   </td>

@@ -45,6 +45,8 @@ export type MermaProduct = {
   is_pack: boolean;
   stock_available: number | null;
   stock_last_synced_at: string | null;
+  wms_stock_available: number | null;
+  wms_location_count: number;
 };
 
 export type MermaPricingSettings = {
@@ -1262,6 +1264,18 @@ export async function getMermasProductsCatalog(): Promise<{
   const casaMatrizStockRows = stockRows.filter(
     (row) => row.office_id === casaMatrizOfficeId,
   );
+  const wmsDb = db("logistica");
+  const { data: wmsRows } = await wmsDb
+    .from("v_stock_by_location")
+    .select("product_id, location_id, quantity")
+    .eq("company_id", authorization.companyId);
+  const wmsByProduct = new Map<string, { quantity: number; locations: Set<string> }>();
+  for (const row of (wmsRows ?? []) as Array<{ product_id: string; location_id: string; quantity: number | string }>) {
+    const current = wmsByProduct.get(row.product_id) ?? { quantity: 0, locations: new Set<string>() };
+    current.quantity += Number(row.quantity);
+    current.locations.add(row.location_id);
+    wmsByProduct.set(row.product_id, current);
+  }
   const stockByVariant = new Map<
     number,
     { total: number; validRows: number; lastSyncedAt: string | null }
@@ -1301,6 +1315,8 @@ export async function getMermasProductsCatalog(): Promise<{
         : null,
       stock_last_synced_at:
         stockByVariant.get(product.bsale_variant_id)?.lastSyncedAt ?? null,
+      wms_stock_available: wmsByProduct.get(product.id)?.quantity ?? null,
+      wms_location_count: wmsByProduct.get(product.id)?.locations.size ?? 0,
     })),
   };
 }
@@ -1435,6 +1451,16 @@ export type MermaRequest = {
   bsale_association?: MermaBsaleAssociation | null;
   authorization_ready?: boolean;
   can_cancel?: boolean;
+  wms_allocations?: MermaWmsAllocation[];
+};
+
+export type MermaWmsAllocation = {
+  request_line_id: string;
+  quantity: number;
+  location_code: string;
+  source_receipt_number: string;
+  source_receipt_item_id: string;
+  status: "RESERVED" | "APPLIED" | "RELEASED";
 };
 
 export type MermaRequestEvidence = {
@@ -1499,6 +1525,18 @@ export async function searchMermasProducts(
   const { data: products, error } = await query;
   if (error)
     return { data: [], error: "No se pudo consultar el catálogo operativo" };
+  const { data: wmsRows } = await db("logistica")
+    .from("v_stock_by_location")
+    .select("product_id, location_id, quantity")
+    .eq("company_id", authorization.companyId)
+    .in("product_id", (products ?? []).map((product) => product.id));
+  const wmsByProduct = new Map<string, { quantity: number; locations: Set<string> }>();
+  for (const row of (wmsRows ?? []) as Array<{ product_id: string; location_id: string; quantity: number | string }>) {
+    const current = wmsByProduct.get(row.product_id) ?? { quantity: 0, locations: new Set<string>() };
+    current.quantity += Number(row.quantity);
+    current.locations.add(row.location_id);
+    wmsByProduct.set(row.product_id, current);
+  }
   return {
     data: (products ?? []).map((product) => ({
       id: product.id,
@@ -1510,6 +1548,8 @@ export async function searchMermasProducts(
       is_pack: product.bsale_product_classification === 3,
       stock_available: null,
       stock_last_synced_at: null,
+      wms_stock_available: wmsByProduct.get(product.id)?.quantity ?? null,
+      wms_location_count: wmsByProduct.get(product.id)?.locations.size ?? 0,
     })),
   };
 }
@@ -1608,6 +1648,33 @@ export async function getMermasRequest(
   if (linesError)
     return { data: null, error: "No se pudieron cargar las líneas" };
   const lineIds = (lines ?? []).map((line) => line.id);
+  const { data: wmsAllocationRows } = lineIds.length
+    ? await requestDb
+        .from("wms_allocations")
+        .select("request_line_id, quantity, location_id, source_receipt_id, source_receipt_item_id, status")
+        .eq("company_id", authorization.companyId)
+        .in("request_line_id", lineIds)
+    : { data: [] as Array<{ request_line_id: string; quantity: number; location_id: string; source_receipt_id: string; source_receipt_item_id: string; status: "RESERVED" | "APPLIED" | "RELEASED" }> };
+  const locationIds = [...new Set((wmsAllocationRows ?? []).map((row) => row.location_id))];
+  const receiptIds = [...new Set((wmsAllocationRows ?? []).map((row) => row.source_receipt_id))];
+  const [{ data: wmsLocations }, { data: wmsReceipts }] = await Promise.all([
+    locationIds.length
+      ? db("logistica").from("locations").select("id, code").in("id", locationIds)
+      : Promise.resolve({ data: [] as Array<{ id: string; code: string }> }),
+    receiptIds.length
+      ? db("logistica").from("purchase_receipts").select("id, receipt_number").in("id", receiptIds)
+      : Promise.resolve({ data: [] as Array<{ id: string; receipt_number: string }> }),
+  ]);
+  const locationCodes = new Map((wmsLocations ?? []).map((row) => [row.id, row.code]));
+  const receiptNumbers = new Map((wmsReceipts ?? []).map((row) => [row.id, row.receipt_number]));
+  const wmsAllocations: MermaWmsAllocation[] = (wmsAllocationRows ?? []).map((row) => ({
+    request_line_id: row.request_line_id,
+    quantity: Number(row.quantity),
+    location_code: locationCodes.get(row.location_id) ?? row.location_id,
+    source_receipt_number: receiptNumbers.get(row.source_receipt_id) ?? row.source_receipt_id,
+    source_receipt_item_id: row.source_receipt_item_id,
+    status: row.status,
+  }));
   const { data: evidenceRows } = lineIds.length
     ? await requestDb
         .from("evidence")
@@ -1704,6 +1771,7 @@ export async function getMermasRequest(
         company?.trade_name || company?.business_name || "Empresa activa",
        lines: (lines ?? []) as MermaLine[],
        evidence: requestEvidence,
+       wms_allocations: wmsAllocations,
         bsale_association: bsaleConsumption
           ? { ...bsaleConsumption, line_count: associationLineCount ?? 0 }
           : null,

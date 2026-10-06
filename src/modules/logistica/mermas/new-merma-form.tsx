@@ -127,9 +127,22 @@ function LegacyNewMermaForm() {
         );
         return;
       }
+      const wmsStock = line.product!.wms_stock_available;
+      if (wmsStock === null || wmsStock <= 0) {
+        setError(
+          `No hay stock WMS disponible para ${line.product!.sku}. No se puede solicitar.`,
+        );
+        return;
+      }
       if (requested > stock) {
         setError(
           `La cantidad solicitada para ${line.product!.sku} supera el stock disponible en Bsale (${stock} unidades).`,
+        );
+        return;
+      }
+      if (requested > wmsStock) {
+        setError(
+          `La cantidad solicitada para ${line.product!.sku} supera el stock WMS disponible (${wmsStock} unidades).`,
         );
         return;
       }
@@ -375,7 +388,10 @@ function MermaGridRow({
                 Stock Bsale:{" "}
                 {line.product.stock_available === null
                   ? "Sin información"
-                  : line.product.stock_available}
+                   : line.product.stock_available}
+              </span>
+              <span className="ml-2 text-[10px] font-semibold text-theme-accent">
+                WMS: {line.product.wms_stock_available ?? "—"} u. · {line.product.wms_location_count} ubic.
               </span>
             </span>
             <button
@@ -410,7 +426,10 @@ function MermaGridRow({
           <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-48 overflow-auto rounded-lg border border-theme-border bg-theme-surface shadow-xl">
             {results.map((product) => {
               const selectable =
-                product.stock_available !== null && product.stock_available > 0;
+                product.stock_available !== null &&
+                product.stock_available > 0 &&
+                product.wms_stock_available !== null &&
+                product.wms_stock_available > 0;
               return (
                 <button
                   type="button"
@@ -440,6 +459,9 @@ function MermaGridRow({
                       : product.stock_available === 0
                         ? "SIN STOCK"
                         : `Stock Bsale: ${product.stock_available}`}
+                  </span>
+                  <span className="ml-2 text-[10px] font-semibold text-theme-accent">
+                    WMS: {product.wms_stock_available ?? "—"} u. · {product.wms_location_count} ubic.
                   </span>
                 </button>
               );
