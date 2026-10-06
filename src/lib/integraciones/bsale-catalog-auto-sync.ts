@@ -23,7 +23,7 @@ export async function runCatalogAutoSyncStep(
   let productTypesResult: any = { status: '', stats: {} }
   let productsResult: any = { status: '', stats: {} }
   let mappingResult: AutoMappingResult = {
-    productsScanned: 0, productsWithProductType: 0,
+    productsScanned: 0, mappingsScanned: 0, productsWithProductType: 0,
     operativeSuppliersFound: 0, operativeSuppliersCreated: 0,
     mappingsCreated: 0, mappingsUpdated: 0,
     mappingsSkippedExisting: 0, mappingsSkippedManualConflict: 0,

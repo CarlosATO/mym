@@ -21,8 +21,13 @@ async function fetchAllRows<T>(buildQuery: () => any): Promise<T[]> {
   }
 }
 
+export function isSkuInScope(sku: string, targetSkus?: string[]) {
+  return !targetSkus || targetSkus.length === 0 || targetSkus.includes(sku)
+}
+
 export interface AutoMappingResult {
   productsScanned: number
+  mappingsScanned: number
   productsWithProductType: number
   operativeSuppliersFound: number
   operativeSuppliersCreated: number
@@ -50,12 +55,14 @@ export async function syncProductSupplierMappings(
   companyId: string,
   options?: { dryRun?: boolean; skus?: string[] }
 ): Promise<AutoMappingResult> {
-  const dryRun = options?.dryRun ?? false
-  const targetSkus = options?.skus
+    const dryRun = options?.dryRun ?? false
+    const targetSkus = options?.skus
+    const targeted = Boolean(targetSkus && targetSkus.length > 0)
   const db = adqDb()
 
   const result: AutoMappingResult = {
     productsScanned: 0,
+    mappingsScanned: 0,
     productsWithProductType: 0,
     operativeSuppliersFound: 0,
     operativeSuppliersCreated: 0,
@@ -129,12 +136,16 @@ export async function syncProductSupplierMappings(
       bsale_variant_id: number | null
       is_preferred: boolean
     }
-    const existingMappings = await fetchAllRows<ExistingMapping>(() => db
-      .from('product_supplier_mappings')
-      .select('id, company_id, sku, product_id, supplier_id, bsale_variant_id, is_active, is_preferred')
-      .eq('company_id', companyId)
-      .eq('is_active', true)
-      .order('id'))
+    const existingMappings = await fetchAllRows<ExistingMapping>(() => {
+      let query = db
+        .from('product_supplier_mappings')
+        .select('id, company_id, sku, product_id, supplier_id, bsale_variant_id, is_active, is_preferred')
+        .eq('company_id', companyId)
+        .eq('is_active', true)
+      if (targeted) query = query.in('sku', targetSkus!)
+      return query.order('id')
+    })
+    result.mappingsScanned = existingMappings.length
 
     const productById = new Map(allProducts.map(product => [product.id, product]))
     const productsBySku = new Map<string, typeof allProducts>()
@@ -174,6 +185,8 @@ export async function syncProductSupplierMappings(
       const keeper = orderedPlans[0]
 
       for (const duplicate of orderedPlans.slice(1)) {
+        if (!duplicate.targetProduct) continue
+        if (!isSkuInScope(duplicate.mapping.sku, targetSkus) || !isSkuInScope(duplicate.targetProduct.sku, targetSkus)) continue
         if (!dryRun) {
           const { error: deactivateErr } = await db.from('product_supplier_mappings').update({ is_active: false }).eq('id', duplicate.mapping.id)
           if (deactivateErr) result.errors.push(`Error desactivando mapping duplicado ${duplicate.mapping.id}: ${deactivateErr.message}`)
@@ -183,6 +196,11 @@ export async function syncProductSupplierMappings(
       const { mapping, targetProduct } = keeper
 
       if (!targetProduct) {
+        continue
+      }
+
+      if (!isSkuInScope(mapping.sku, targetSkus) || !isSkuInScope(targetProduct.sku, targetSkus)) {
+        result.errors.push(`Mapping fuera de scope dirigido omitido: ${mapping.id}`)
         continue
       }
 
@@ -209,6 +227,7 @@ export async function syncProductSupplierMappings(
     }
 
     for (const plan of mappingPlans.filter(plan => !plan.targetProduct)) {
+      if (!isSkuInScope(plan.mapping.sku, targetSkus)) continue
       if (!dryRun) {
         const { error: deactivateErr } = await db.from('product_supplier_mappings').update({ is_active: false }).eq('id', plan.mapping.id)
         if (deactivateErr) result.errors.push(`Error desactivando mapping sin producto ${plan.mapping.id}: ${deactivateErr.message}`)
@@ -260,7 +279,7 @@ export async function syncProductSupplierMappings(
               // Continuar con el nuevo supplier
               const sk = newSup
               // Intentar crear mapping
-              await processMapping(db, companyId, product, sk, existingBySku, realSupplierIds, result, dryRun)
+              await processMapping(db, companyId, product, sk, existingBySku, realSupplierIds, result, dryRun, targetSkus)
             }
           } catch (err: any) {
             result.errors.push(`Error creando supplier ${typeName}: ${err.message}`)
@@ -271,7 +290,7 @@ export async function syncProductSupplierMappings(
         continue
       }
 
-      await processMapping(db, companyId, product, supplier, existingBySku, realSupplierIds, result, dryRun)
+      await processMapping(db, companyId, product, supplier, existingBySku, realSupplierIds, result, dryRun, targetSkus)
     }
   } catch (err: any) {
     result.errors.push(`Error general en auto-mapping: ${err.message}`)
@@ -392,9 +411,10 @@ async function processMapping(
   realSupplierIds: Set<string>,
   result: AutoMappingResult,
   dryRun: boolean,
+  targetSkus?: string[],
 ) {
   const sku = product.sku
-  if (!sku) return
+  if (!sku || !isSkuInScope(sku, targetSkus)) return
 
   const existingForSku = existingBySku.get(sku)
 
@@ -414,10 +434,11 @@ async function processMapping(
     }
 
     // Mapping a otro BSALE_OPERATIVE → posible cambio de product_type
-    // Desactivar el mapping anterior y crear el nuevo
-    if (!dryRun) {
-      for (const old of existingForSku) {
-        await db.from('product_supplier_mappings').update({ is_active: false }).eq('id', old.id)
+      // Desactivar el mapping anterior y crear el nuevo
+      if (!dryRun) {
+        for (const old of existingForSku) {
+          if (!isSkuInScope(old.sku, targetSkus)) continue
+          await db.from('product_supplier_mappings').update({ is_active: false }).eq('id', old.id)
       }
       existingBySku.delete(sku)
     }

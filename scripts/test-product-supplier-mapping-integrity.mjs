@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { isSkuInScope } from '../src/lib/integraciones/bsale-auto-mapping.ts'
 
 const mapping = await readFile(new URL('../src/lib/integraciones/bsale-auto-mapping.ts', import.meta.url), 'utf8')
 const purchaseOrders = await readFile(new URL('../src/app/actions/adquisiciones/purchase-orders.ts', import.meta.url), 'utf8')
@@ -43,4 +44,15 @@ test('active mapping uniqueness permits retired legacy rows during repair', () =
   assert.match(followUpMigration, /DROP CONSTRAINT IF EXISTS product_supplier_mappings_company_id_supplier_id_sku_key/)
   assert.match(followUpMigration, /WHERE is_active = true/)
   assert.match(followUpMigration, /NEW\.is_active = false/)
+})
+
+test('targeted sync scopes every read/write to target SKUs', () => {
+  const targetSkus = ['SKU-A', 'SKU-B', 'SKU-C']
+  assert.equal(isSkuInScope('SKU-A', targetSkus), true)
+  assert.equal(isSkuInScope('SKU-B', targetSkus), true)
+  assert.equal(isSkuInScope('SKU-C', targetSkus), true)
+  assert.equal(isSkuInScope('SKU-D', targetSkus), false)
+  assert.match(mapping, /query\.in\('sku', targetSkus!\)/)
+  assert.match(mapping, /isSkuInScope\(mapping\.sku, targetSkus\)/)
+  assert.match(mapping, /isSkuInScope\(old\.sku, targetSkus\)/)
 })
