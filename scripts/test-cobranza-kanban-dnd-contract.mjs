@@ -106,3 +106,30 @@ test('clientes son los únicos datos del contexto DnD', () => {
   assert.match(view, /clients=\{sortedClients\.filter/)
   assert.match(view, /sortedInvoices\.filter/)
 })
+
+test('Kanban responsive conserva ancho y permite scroll horizontal', () => {
+  assert.match(view, /overflow-x-auto pb-2/)
+  assert.match(view, /min-w-\[1240px\]/)
+  assert.match(view, /grid-cols-\[repeat\(5,minmax\(240px,1fr\)\)\]/)
+  assert.match(view, /className=\{`min-w-\[240px\]/)
+})
+
+test('tarjeta conserva acciones rápidas sin comprimir controles', () => {
+  assert.match(card, /flex flex-wrap gap-1 border/)
+  assert.match(card, /min-w-\[100px\] flex-1 border.*Copiar mensaje/)
+  assert.match(card, /min-w-\[100px\] flex-1 border.*Agregar nota/)
+})
+
+test('KPI usa cuatro columnas sólo cuando el ancho lo permite', () => {
+  assert.match(view, /mt-4 grid gap-1\.5 sm:grid-cols-2 xl:grid-cols-4/)
+})
+
+test('toolbar admite wrap y mantiene búsqueda legible', () => {
+  assert.match(view, /flex w-full flex-wrap items-center gap-1\.5 lg:w-auto/)
+  assert.match(view, /w-full min-w-\[220px\].*sm:w-52/)
+})
+
+test('padding de Cobranza aprovecha mejor el ancho medio', () => {
+  assert.match(view, /px-4 py-5 sm:px-5 sm:py-6 lg:px-6/)
+  assert.match(view, /bg-\[#FCFBF9\] p-4 .* lg:p-5/)
+})

@@ -296,15 +296,15 @@ function ClientKanbanCard({
   const stopCardInteraction = (event: React.SyntheticEvent) => event.stopPropagation()
   return (
     <div ref={isOverlay ? undefined : setNodeRef} style={style} {...(!isOverlay ? listeners : {})} {...(!isOverlay ? attributes : {})} onDoubleClick={isOverlay ? undefined : onOpen} onKeyDown={isOverlay ? undefined : event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() } }} role="button" tabIndex={0} aria-label={`Abrir detalle de ${client.name}`} className={className}>
-      <div className="flex items-start justify-between gap-2"><span className="text-xs font-semibold">{client.name}</span><Priority value={client.priority} /></div>
+      <div className="flex items-start justify-between gap-2"><span className="min-w-0 break-words text-xs font-semibold">{client.name}</span><Priority value={client.priority} /></div>
       <p className="mt-2 text-[10px] text-[#322D29]/55">{client.pendingDocuments} doc{client.pendingDocuments === 1 ? '' : 's'} · {client.oldestDaysOverdue} días</p>
       <p className={`mt-1 text-sm font-semibold tabular-nums ${stage === 'CLOSED' ? 'text-[#322D29]' : 'text-[#8A4B4B]'}`}>{stage === 'CLOSED' ? '$0 · Pagado' : `Vencida ${money(client.overdueAmount)}`}</p>
       {stage !== 'CLOSED' && client.totalAmount !== client.overdueAmount && <p className="mt-0.5 text-[10px] text-[#322D29]/55 tabular-nums">Total {money(client.totalAmount)}</p>}
       {stage === 'PAYMENT_COMMITMENT' && workflow?.commitment_at && <p className="mt-2 text-[10px] text-[#806238]">Compromiso {dateLabel(workflow.commitment_at)} · {money(workflow.commitment_amount ?? null)}</p>}
       {stage === 'FOLLOW_UP' && workflow?.next_action_at && <p className="mt-2 text-[10px] text-[#806238]">Seguimiento {dateLabel(workflow.next_action_at)}</p>}
-      {!isOverlay && <div className="mt-2 flex gap-1 border-t border-[#D1C7BD]/70 pt-2">
-        <button type="button" onPointerDown={stopCardInteraction} onClick={copyMessage} className="min-w-0 flex-1 border border-[#72383D]/25 px-1.5 py-1 text-[9px] font-semibold text-[#72383D] hover:bg-[#F5EDE9]">{copied ? 'Mensaje copiado' : 'Copiar mensaje'}</button>
-        <button type="button" onPointerDown={stopCardInteraction} onClick={event => { event.stopPropagation(); onAddNote() }} className="min-w-0 flex-1 border border-[#D1C7BD] px-1.5 py-1 text-[9px] font-semibold text-[#322D29] hover:bg-[#F5F0EA]">Agregar nota</button>
+      {!isOverlay && <div className="mt-2 flex flex-wrap gap-1 border-t border-[#D1C7BD]/70 pt-2">
+        <button type="button" onPointerDown={stopCardInteraction} onClick={copyMessage} className="min-w-[100px] flex-1 border border-[#72383D]/25 px-1.5 py-1 text-[9px] font-semibold text-[#72383D] hover:bg-[#F5EDE9]">{copied ? 'Mensaje copiado' : 'Copiar mensaje'}</button>
+        <button type="button" onPointerDown={stopCardInteraction} onClick={event => { event.stopPropagation(); onAddNote() }} className="min-w-[100px] flex-1 border border-[#D1C7BD] px-1.5 py-1 text-[9px] font-semibold text-[#322D29] hover:bg-[#F5F0EA]">Agregar nota</button>
       </div>}
     </div>
   )
@@ -325,7 +325,7 @@ function ClientKanbanColumn({
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `collection-stage-${stage.key}`, data: { stage: stage.key }, disabled: stage.key === 'CLOSED' })
   return (
-    <section ref={setNodeRef} className={`min-w-[230px] border bg-[#F5F0EA] transition-colors ${isOver && stage.key !== 'CLOSED' ? 'border-[#72383D] bg-[#F1E4DD]' : 'border-[#D1C7BD]'}`}>
+    <section ref={setNodeRef} className={`min-w-[240px] border bg-[#F5F0EA] transition-colors ${isOver && stage.key !== 'CLOSED' ? 'border-[#72383D] bg-[#F1E4DD]' : 'border-[#D1C7BD]'}`}>
       <header className="border-b border-[#D1C7BD] px-3 py-2"><div className="flex items-center justify-between"><h3 className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#72383D]">{stage.label}</h3><span className="text-[10px] text-[#322D29]/50">{clients.length}</span></div></header>
       <div className="space-y-2 p-2">
         {clients.map(client => <ClientKanbanCard key={client.key} client={client} stage={stage.key} workflow={workflow[client.clientId]} onOpen={() => onOpen(client)} onAddNote={() => onAddNote(client)} />)}
@@ -723,7 +723,7 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
     }
   }, [data])
   if (error || !data) {
-    return <main className="min-h-[430px] bg-[#EFE9E1] px-5 py-5 sm:px-7 sm:py-6"><div className="border border-[#72383D]/25 bg-white/60 px-5 py-8 text-sm text-[#72383D]">{error ?? 'No hay datos de cobranza disponibles.'}</div></main>
+    return <main className="min-h-[430px] bg-[#EFE9E1] px-4 py-5 sm:px-5 sm:py-6 lg:px-6"><div className="border border-[#72383D]/25 bg-white/60 px-5 py-8 text-sm text-[#72383D]">{error ?? 'No hay datos de cobranza disponibles.'}</div></main>
   }
   const isSnapshot = data.receivables_source === FINANCE_RECEIVABLES_SNAPSHOT_SOURCE
   const normalizedQuery = normalize(query.trim())
@@ -805,8 +805,8 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
   const overdueClients = clients.filter(client => client.overdueAmount > 0).length
 
   return (
-    <main className="min-h-[430px] bg-[#EFE9E1] px-5 py-5 sm:px-7 sm:py-6">
-      <section className="border border-[#D1C7BD] bg-[#FCFBF9] p-4 shadow-[0_8px_24px_rgba(50,45,41,0.05)] sm:p-5">
+    <main className="min-h-[430px] bg-[#EFE9E1] px-4 py-5 sm:px-5 sm:py-6 lg:px-6">
+      <section className="border border-[#D1C7BD] bg-[#FCFBF9] p-4 shadow-[0_8px_24px_rgba(50,45,41,0.05)] lg:p-5">
         <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#D1C7BD] pb-4">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#72383D]">Cobranza</p>
@@ -818,7 +818,7 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
           </div>
         </div>
 
-        <div className="mt-4 grid gap-1.5 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-4 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-4">
           <Kpi label="CxC total" value={money(totalAmount)} />
           <Kpi label="CxC vencida" value={money(overdueAmount)} />
           <Kpi label="Clientes con saldo" value={clients.length.toLocaleString('es-CL')} />
@@ -826,15 +826,15 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
         </div>
 
         <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-b border-[#D1C7BD] pb-3">
-          <div>
+          <div className="min-w-0">
             <h2 className="text-sm font-semibold text-[#322D29]">Cobranza priorizada</h2>
             <p className="mt-0.5 text-[10px] text-[#322D29]/50">Ordenada por deuda vencida, antigüedad y saldo total.</p>
           </div>
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex w-full flex-wrap items-center gap-1.5 lg:w-auto">
              <div className="flex items-center gap-1 border border-[#D1C7BD] bg-white p-0.5 text-[10px] font-semibold"><span className="px-1 text-[#322D29]/45">Vista</span><button type="button" onClick={() => changeView('CLIENTS')} className={`px-1.5 py-1 ${viewMode === 'CLIENTS' ? 'bg-[#72383D] text-white' : 'text-[#72383D]'}`}>Clientes</button><button type="button" onClick={() => changeView('INVOICES')} className={`px-1.5 py-1 ${viewMode === 'INVOICES' ? 'bg-[#72383D] text-white' : 'text-[#72383D]'}`}>Facturas</button></div>
              <label className="relative">
                <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#322D29]/40" />
-               <input value={query} onChange={event => setQuery(event.target.value)} placeholder={viewMode === 'CLIENTS' ? 'Buscar cliente' : 'Buscar cliente o folio'} className="h-8 w-44 border border-[#D1C7BD] bg-white pl-7 pr-2 text-xs outline-none focus:border-[#72383D]" />
+                <input value={query} onChange={event => setQuery(event.target.value)} placeholder={viewMode === 'CLIENTS' ? 'Buscar cliente' : 'Buscar cliente o folio'} className="h-8 w-full min-w-[220px] border border-[#D1C7BD] bg-white pl-7 pr-2 text-xs outline-none focus:border-[#72383D] sm:w-52" />
              </label>
             <select value={scope} onChange={event => setScope(event.target.value as 'all' | 'overdue')} className="h-8 border border-[#D1C7BD] bg-white px-2 text-xs text-[#322D29]">
               <option value="overdue">Con deuda vencida</option>
@@ -853,16 +853,18 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
          </div>
 
            {viewMode === 'CLIENTS' ? <DndContext sensors={sensors} onDragStart={handleDragStart} onDragCancel={() => setActiveDragClientId(null)} onDragEnd={handleDragEnd}>
-             <div className="mt-3 grid gap-2 overflow-x-auto pb-1 md:grid-cols-5">
-               {kanbanStages.map(stage => <ClientKanbanColumn key={stage.key} stage={stage} clients={sortedClients.filter(client => (workflow[client.clientId]?.stage ?? 'TO_MANAGE') === stage.key)} workflow={workflow} onOpen={selectClient} onAddNote={setQuickNoteClient} />)}
-             </div>
+              <div className="mt-3 overflow-x-auto pb-2">
+                <div className="grid min-w-[1240px] grid-cols-[repeat(5,minmax(240px,1fr))] gap-2">
+                {kanbanStages.map(stage => <ClientKanbanColumn key={stage.key} stage={stage} clients={sortedClients.filter(client => (workflow[client.clientId]?.stage ?? 'TO_MANAGE') === stage.key)} workflow={workflow} onOpen={selectClient} onAddNote={setQuickNoteClient} />)}
+                </div>
+              </div>
              <DragOverlay>
                {activeDragClientId ? (() => { const client = clients.find(candidate => candidate.clientId === activeDragClientId); if (!client) return null; return <ClientKanbanCard client={client} stage={workflow[client.clientId]?.stage ?? 'TO_MANAGE'} workflow={workflow[client.clientId]} onOpen={() => undefined} onAddNote={() => undefined} isOverlay /> })() : null}
              </DragOverlay>
-           </DndContext> : <div className="mt-3 grid gap-2 overflow-x-auto pb-1 md:grid-cols-5">
+            </DndContext> : <div className="mt-3 overflow-x-auto pb-2"><div className="grid min-w-[1240px] grid-cols-[repeat(5,minmax(240px,1fr))] gap-2">
              {kanbanStages.map(stage => {
                const stageInvoices = sortedInvoices.filter(invoice => (workflow[invoice.client_id]?.stage ?? 'TO_MANAGE') === stage.key)
-               return <section key={stage.key} className="min-w-[230px] border border-[#D1C7BD] bg-[#F5F0EA]">
+                return <section key={stage.key} className="min-w-[240px] border border-[#D1C7BD] bg-[#F5F0EA]">
                  <header className="border-b border-[#D1C7BD] px-3 py-2"><div className="flex items-center justify-between"><h3 className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#72383D]">{stage.label}</h3><span className="text-[10px] text-[#322D29]/50">{stageInvoices.length}</span></div></header>
                  <div className="space-y-2 p-2">
                    {stageInvoices.map(invoice => { const client = clients.find(candidate => candidate.clientId === invoice.client_id); if (!client) return null; return <div key={invoice.key} role="button" tabIndex={0} onDoubleClick={() => selectClient(client, invoice.document_id)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectClient(client, invoice.document_id) } }} className="w-full cursor-pointer border border-[#D1C7BD] bg-white p-2.5 text-left hover:border-[#72383D]">
@@ -875,7 +877,7 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
                  </div>
                </section>
              })}
-           </div>}
+            </div></div>}
            <CollectionStageDialog key={`drop-stage-${pendingDrop?.client.clientId ?? 'closed'}-${pendingDrop?.nextStage ?? ''}`} open={Boolean(pendingDrop)} clientName={pendingDrop?.client.name ?? ''} clientTotal={pendingDrop?.client.totalAmount ?? 0} currentStage={pendingDrop?.currentStage ?? 'TO_MANAGE'} nextStage={pendingDrop?.nextStage ?? null} onOpenChange={open => { if (!open) setPendingDrop(null) }} onSave={saveDroppedStage} />
            <QuickInteractionDialog key={`quick-note-${quickNoteClient?.clientId ?? 'closed'}`} open={Boolean(quickNoteClient)} clientName={quickNoteClient?.name ?? ''} onOpenChange={open => { if (!open) setQuickNoteClient(null) }} onSave={saveQuickInteraction} />
            {quickNoteFeedback && <p className="fixed bottom-4 right-4 z-40 border border-[#66856B]/40 bg-[#EDF4EC] px-3 py-2 text-xs text-[#426247] shadow-sm">Nota guardada</p>}
