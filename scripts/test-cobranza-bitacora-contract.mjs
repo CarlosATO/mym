@@ -13,11 +13,11 @@ test('TO_MANAGE pasa por el modal y acepta nota o vacío', () => {
 })
 
 test('las etapas conservan sus requisitos', () => {
-  assert.match(view, /pendingStage === 'PAYMENT_COMMITMENT'/)
+  assert.match(view, /nextStage === 'PAYMENT_COMMITMENT'/)
   assert.match(view, /!commitmentAt \|\| !Number\.isFinite\(amount\) \|\| amount <= 0/)
-  assert.match(view, /pendingStage === 'FOLLOW_UP'/)
+  assert.match(view, /nextStage === 'FOLLOW_UP'/)
   assert.match(view, /!nextActionAt/)
-  assert.match(view, /stage: pendingStage, note: stageNote/)
+  assert.match(view, /stage: nextStage,[\s\S]*note,/)
 })
 
 test('registrar gestión valida whitelist y descripción server-side', () => {
@@ -52,5 +52,5 @@ test('UI evita doble submit y refresca después de guardar gestión', () => {
   assert.match(view, /if \(interactionProcessing\) return/)
   assert.match(view, /await registerCollectionInteraction/)
   assert.match(view, /await refreshHistory\(\)/)
-  assert.match(view, /Guardar gestión/)
+  assert.match(view, /Guardar nota/)
 })

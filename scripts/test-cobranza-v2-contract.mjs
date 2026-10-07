@@ -53,7 +53,7 @@ test('selector de etapa usa Popover y conserva las cuatro etiquetas', () => {
 })
 test('compromiso y seguimiento exigen sus datos', () => {
   assert.match(view, /!commitmentAt \|\| !Number\.isFinite\(amount\) \|\| amount <= 0/)
-  assert.match(view, /amount > client\.totalAmount/)
+  assert.match(view, /amount > clientTotal/)
   assert.match(view, /!nextActionAt/)
 })
 test('bitácora filtra empresa y cliente, ordena reciente y limita carga', () => {
@@ -84,11 +84,11 @@ test('bitácora tiene estado vacío, refresco post gestión y vista limitada', (
   assert.match(view, /getCollectionCustomerHistory\(client\.clientId\)/)
 })
 test('guardar etapa cierra sólo el modal tras persistencia exitosa', () => {
-  assert.match(view, /const \[stageProcessing, setStageProcessing\] = useState\(false\)/)
-  assert.match(view, /try \{[\s\S]*await onStageChange[\s\S]*setPendingStage\(null\)/)
-  assert.match(view, /catch \(cause\)[\s\S]*setStageError[\s\S]*return/)
-  assert.match(view, /open && !stageProcessing\) setPendingStage\(null\)/)
-  assert.match(view, /disabled=\{stageProcessing\}[\s\S]*Guardar etapa/)
+  assert.match(view, /const \[processing, setProcessing\] = useState\(false\)/)
+  assert.match(view, /try \{[\s\S]*await onSave[\s\S]*setPendingStage\(null\)/)
+  assert.match(view, /catch \(cause\)[\s\S]*setError/)
+  assert.match(view, /!value && !processing/)
+  assert.match(view, /disabled=\{processing\}[\s\S]*Guardar cambio/)
 })
 test('guardar etapa mantiene el Sheet del cliente y actualiza workflow', () => {
   assert.match(view, /<Sheet open=\{Boolean\(selectedClient\)\}/)

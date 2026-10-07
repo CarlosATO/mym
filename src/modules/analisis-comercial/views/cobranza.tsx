@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { DndContext, DragOverlay, PointerSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
 import { Check, Clipboard, LoaderCircle, Search, X } from 'lucide-react'
 import {
   Sheet,
@@ -40,6 +41,14 @@ type WorkflowState = {
   commitment_amount?: number | string | null
 }
 
+type StageChangeInput = {
+  stage: CollectionStage
+  note?: string
+  commitmentAt?: string
+  commitmentAmount?: number
+  nextActionAt?: string
+}
+
 const money = (value: number | string | null) => {
   if (value === null) return '—'
   return `$${new Intl.NumberFormat('es-CL', { maximumFractionDigits: 0 }).format(Number(value))}`
@@ -71,6 +80,17 @@ const historyTitle = (event: CollectionHistoryEvent) => {
 }
 
 const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+
+const buildCollectionMessage = (client: CobranzaClient) => {
+  const allDocumentsOverdue = client.totalAmount === client.overdueAmount
+  const documentSummary = client.documents.length <= 3
+    ? ` Detalle: ${client.documents.map(document => `factura ${document.folio ?? document.document_id} por ${money(document.pending_amount)}`).join('; ')}.`
+    : ''
+  const balanceMessage = allDocumentsOverdue
+    ? `mantiene un saldo pendiente de ${money(client.totalAmount)} correspondiente a ${client.pendingDocuments} documento${client.pendingDocuments === 1 ? '' : 's'}, actualmente vencido${client.pendingDocuments === 1 ? '' : 's'}.`
+    : `mantiene un saldo pendiente de ${money(client.totalAmount)}, de los cuales ${money(client.overdueAmount)} se encuentra vencido, correspondiente a ${client.pendingDocuments} documento${client.pendingDocuments === 1 ? '' : 's'}.`
+  return `Hola ${client.name}, junto con saludar, según nuestros registros ${balanceMessage}${documentSummary} ¿Nos podría confirmar una fecha estimada de pago? Gracias.`
+}
 
 function Kpi({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return (
@@ -106,6 +126,215 @@ function StagePicker({ stage, onChange }: { stage: CollectionStage; onChange: (s
   )
 }
 
+function CollectionStageDialog({
+  open,
+  clientName,
+  clientTotal,
+  currentStage,
+  nextStage,
+  onOpenChange,
+  onSave,
+}: {
+  open: boolean
+  clientName: string
+  clientTotal: number
+  currentStage: CollectionStage
+  nextStage: CollectionStage | null
+  onOpenChange: (open: boolean) => void
+  onSave: (input: StageChangeInput) => Promise<void>
+}) {
+  const [commitmentAt, setCommitmentAt] = useState('')
+  const [commitmentAmount, setCommitmentAmount] = useState('')
+  const [nextActionAt, setNextActionAt] = useState('')
+  const [note, setNote] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [processing, setProcessing] = useState(false)
+
+  const confirm = async () => {
+    if (!nextStage || processing) return
+    if (nextStage === 'PAYMENT_COMMITMENT') {
+      const amount = Number(commitmentAmount)
+      if (!commitmentAt || !Number.isFinite(amount) || amount <= 0) {
+        setError('Ingresa una fecha y un monto comprometido mayor que cero.')
+        return
+      }
+      if (amount > clientTotal) {
+        setError(`El monto no puede superar la deuda pendiente de ${money(clientTotal)}.`)
+        return
+      }
+    }
+    if (nextStage === 'FOLLOW_UP' && !nextActionAt) {
+      setError('Ingresa la fecha próxima de seguimiento.')
+      return
+    }
+    setProcessing(true)
+    setError(null)
+    try {
+      await onSave({
+        stage: nextStage,
+        note,
+        commitmentAt: nextStage === 'PAYMENT_COMMITMENT' ? commitmentAt : undefined,
+        commitmentAmount: nextStage === 'PAYMENT_COMMITMENT' ? Number(commitmentAmount) : undefined,
+        nextActionAt: nextStage === 'FOLLOW_UP' ? nextActionAt : undefined,
+      })
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo guardar la etapa.')
+    } finally {
+      setProcessing(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={value => { if (!value && !processing) onOpenChange(false) }}>
+      <DialogContent className="border-[#D1C7BD] bg-[#FCFBF9] text-[#322D29]">
+        <DialogHeader>
+          <DialogTitle>Actualizar etapa de cobranza</DialogTitle>
+          <DialogDescription>{clientName}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <p className="text-xs"><strong>Etapa actual:</strong> {stageLabel(currentStage)}</p>
+          <p className="text-xs"><strong>Nueva etapa:</strong> {stageLabel(nextStage)}</p>
+          {nextStage === 'PAYMENT_COMMITMENT' && <>
+            <label className="block text-xs font-semibold">Fecha comprometida *<input type="date" value={commitmentAt} onChange={event => setCommitmentAt(event.target.value)} disabled={processing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>
+            <label className="block text-xs font-semibold">Monto comprometido *<input type="number" min="1" value={commitmentAmount} onChange={event => setCommitmentAmount(event.target.value)} disabled={processing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>
+            <p className="text-[10px] text-[#322D29]/55">Máximo permitido: {money(clientTotal)}</p>
+          </>}
+          {nextStage === 'FOLLOW_UP' && <label className="block text-xs font-semibold">Próxima fecha de gestión *<input type="date" value={nextActionAt} onChange={event => setNextActionAt(event.target.value)} disabled={processing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>}
+          <label className="block text-xs font-semibold">Comentario / nota de gestión <span className="font-normal text-[#322D29]/50">(opcional)</span><textarea value={note} onChange={event => setNote(event.target.value)} disabled={processing} rows={3} className="mt-1 w-full resize-none border border-[#D1C7BD] bg-white p-2 text-xs" /></label>
+          {error && <p className="text-xs text-[#8A4B4B]">{error}</p>}
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" disabled={processing} onClick={() => onOpenChange(false)}>Cancelar</Button>
+          <Button type="button" disabled={processing} onClick={() => void confirm()}>{processing ? 'Guardando cambio…' : 'Guardar cambio'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function QuickInteractionDialog({
+  open,
+  clientName,
+  onOpenChange,
+  onSave,
+}: {
+  open: boolean
+  clientName: string
+  onOpenChange: (open: boolean) => void
+  onSave: (input: { type: CollectionInteractionType; body: string }) => Promise<void>
+}) {
+  const [type, setType] = useState<CollectionInteractionType>('NOTE')
+  const [body, setBody] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [processing, setProcessing] = useState(false)
+
+  const save = async () => {
+    if (processing) return
+    setProcessing(true)
+    setError(null)
+    try {
+      await onSave({ type, body })
+      setType('NOTE')
+      setBody('')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo guardar la nota.')
+    } finally {
+      setProcessing(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={value => { if (!value && !processing) onOpenChange(false) }}>
+      <DialogContent className="border-[#D1C7BD] bg-[#FCFBF9] text-[#322D29]">
+        <DialogHeader>
+          <DialogTitle>Agregar nota</DialogTitle>
+          <DialogDescription>{clientName}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <label className="block text-xs font-semibold">Tipo<select value={type} onChange={event => setType(event.target.value as CollectionInteractionType)} disabled={processing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs"><option value="NOTE">Nota</option><option value="CALL">Llamada</option><option value="MESSAGE">Mensaje / WhatsApp</option><option value="EMAIL">Correo</option></select></label>
+          <label className="block text-xs font-semibold">Descripción<textarea required maxLength={2000} value={body} onChange={event => setBody(event.target.value)} disabled={processing} rows={4} className="mt-1 w-full resize-none border border-[#D1C7BD] bg-white p-2 text-xs" /></label>
+          {error && <p className="text-xs text-[#8A4B4B]">{error}</p>}
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" disabled={processing} onClick={() => onOpenChange(false)}>Cancelar</Button>
+          <Button type="button" disabled={processing} onClick={() => void save()}>{processing ? 'Guardando nota…' : 'Guardar nota'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ClientKanbanCard({
+  client,
+  stage,
+  workflow,
+  onOpen,
+  onAddNote,
+  isOverlay = false,
+}: {
+  client: CobranzaClient
+  stage: CollectionStage
+  workflow?: WorkflowState
+  onOpen: () => void
+  onAddNote: () => void
+  isOverlay?: boolean
+}) {
+  const [copied, setCopied] = useState(false)
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: `collection-client-${client.clientId}`,
+    data: { clientId: client.clientId, stage },
+    disabled: isOverlay,
+  })
+  const style = transform && !isOverlay ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined
+  const className = `w-full border border-[#D1C7BD] bg-white p-2.5 text-left transition-shadow ${isOverlay ? 'pointer-events-none shadow-xl ring-2 ring-[#72383D]' : isDragging ? 'cursor-grabbing opacity-45 shadow-lg' : 'cursor-grab hover:border-[#72383D] hover:shadow-sm'}`
+  const copyMessage = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
+    await navigator.clipboard.writeText(buildCollectionMessage(client))
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1800)
+  }
+  const stopCardInteraction = (event: React.SyntheticEvent) => event.stopPropagation()
+  return (
+    <div ref={isOverlay ? undefined : setNodeRef} style={style} {...(!isOverlay ? listeners : {})} {...(!isOverlay ? attributes : {})} onDoubleClick={isOverlay ? undefined : onOpen} onKeyDown={isOverlay ? undefined : event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() } }} role="button" tabIndex={0} aria-label={`Abrir detalle de ${client.name}`} className={className}>
+      <div className="flex items-start justify-between gap-2"><span className="text-xs font-semibold">{client.name}</span><Priority value={client.priority} /></div>
+      <p className="mt-2 text-[10px] text-[#322D29]/55">{client.pendingDocuments} doc{client.pendingDocuments === 1 ? '' : 's'} · {client.oldestDaysOverdue} días</p>
+      <p className={`mt-1 text-sm font-semibold tabular-nums ${stage === 'CLOSED' ? 'text-[#322D29]' : 'text-[#8A4B4B]'}`}>{stage === 'CLOSED' ? '$0 · Pagado' : `Vencida ${money(client.overdueAmount)}`}</p>
+      {stage !== 'CLOSED' && client.totalAmount !== client.overdueAmount && <p className="mt-0.5 text-[10px] text-[#322D29]/55 tabular-nums">Total {money(client.totalAmount)}</p>}
+      {stage === 'PAYMENT_COMMITMENT' && workflow?.commitment_at && <p className="mt-2 text-[10px] text-[#806238]">Compromiso {dateLabel(workflow.commitment_at)} · {money(workflow.commitment_amount ?? null)}</p>}
+      {stage === 'FOLLOW_UP' && workflow?.next_action_at && <p className="mt-2 text-[10px] text-[#806238]">Seguimiento {dateLabel(workflow.next_action_at)}</p>}
+      {!isOverlay && <div className="mt-2 flex gap-1 border-t border-[#D1C7BD]/70 pt-2">
+        <button type="button" onPointerDown={stopCardInteraction} onClick={copyMessage} className="min-w-0 flex-1 border border-[#72383D]/25 px-1.5 py-1 text-[9px] font-semibold text-[#72383D] hover:bg-[#F5EDE9]">{copied ? 'Mensaje copiado' : 'Copiar mensaje'}</button>
+        <button type="button" onPointerDown={stopCardInteraction} onClick={event => { event.stopPropagation(); onAddNote() }} className="min-w-0 flex-1 border border-[#D1C7BD] px-1.5 py-1 text-[9px] font-semibold text-[#322D29] hover:bg-[#F5F0EA]">Agregar nota</button>
+      </div>}
+    </div>
+  )
+}
+
+function ClientKanbanColumn({
+  stage,
+  clients,
+  workflow,
+  onOpen,
+  onAddNote,
+}: {
+  stage: { key: CollectionStage; label: string }
+  clients: CobranzaClient[]
+  workflow: Record<number, WorkflowState>
+  onOpen: (client: CobranzaClient) => void
+  onAddNote: (client: CobranzaClient) => void
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: `collection-stage-${stage.key}`, data: { stage: stage.key }, disabled: stage.key === 'CLOSED' })
+  return (
+    <section ref={setNodeRef} className={`min-w-[230px] border bg-[#F5F0EA] transition-colors ${isOver && stage.key !== 'CLOSED' ? 'border-[#72383D] bg-[#F1E4DD]' : 'border-[#D1C7BD]'}`}>
+      <header className="border-b border-[#D1C7BD] px-3 py-2"><div className="flex items-center justify-between"><h3 className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#72383D]">{stage.label}</h3><span className="text-[10px] text-[#322D29]/50">{clients.length}</span></div></header>
+      <div className="space-y-2 p-2">
+        {clients.map(client => <ClientKanbanCard key={client.key} client={client} stage={stage.key} workflow={workflow[client.clientId]} onOpen={() => onOpen(client)} onAddNote={() => onAddNote(client)} />)}
+        {clients.length === 0 && <p className="px-2 py-5 text-center text-[10px] text-[#322D29]/45">Sin clientes</p>}
+      </div>
+    </section>
+  )
+}
+
 function ClientPanel({
   client,
   cutoffDate,
@@ -120,7 +349,7 @@ function ClientPanel({
   stage: CollectionStage
   focusedDocumentId?: number | null
   onPaymentReconciled?: (documentId: number, documentBalance: number, clientBalance: number) => void
-  onStageChange: (input: { stage: CollectionStage; note?: string; commitmentAt?: string; commitmentAmount?: number; nextActionAt?: string }) => Promise<void>
+  onStageChange: (input: StageChangeInput) => Promise<void>
   onClose: () => void
 }) {
   const [copied, setCopied] = useState(false)
@@ -138,12 +367,6 @@ function ClientPanel({
   const [batchError, setBatchError] = useState<string | null>(null)
   const [batchResult, setBatchResult] = useState<{ status: string; expectedTotal: number; confirmedTotal: number; failed: number; unknown: number; results: Array<{ documentId: number; folio: number | string | null; amount: number; status: 'CONFIRMED' | 'FAILED' | 'UNKNOWN'; message?: string }> } | null>(null)
   const [pendingStage, setPendingStage] = useState<CollectionStage | null>(null)
-  const [commitmentAt, setCommitmentAt] = useState('')
-  const [commitmentAmount, setCommitmentAmount] = useState('')
-  const [nextActionAt, setNextActionAt] = useState('')
-  const [stageNote, setStageNote] = useState('')
-  const [stageError, setStageError] = useState<string | null>(null)
-  const [stageProcessing, setStageProcessing] = useState(false)
   const [interactionOpen, setInteractionOpen] = useState(false)
   const [interactionType, setInteractionType] = useState<CollectionInteractionType>('NOTE')
   const [interactionBody, setInteractionBody] = useState('')
@@ -154,14 +377,7 @@ function ClientPanel({
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [historyHasMore, setHistoryHasMore] = useState(false)
   const [historyExpanded, setHistoryExpanded] = useState(false)
-  const allDocumentsOverdue = client.totalAmount === client.overdueAmount
-  const documentSummary = client.documents.length <= 3
-    ? ` Detalle: ${client.documents.map(document => `factura ${document.folio ?? document.document_id} por ${money(document.pending_amount)}`).join('; ')}.`
-    : ''
-  const balanceMessage = allDocumentsOverdue
-    ? `mantiene un saldo pendiente de ${money(client.totalAmount)} correspondiente a ${client.pendingDocuments} documento${client.pendingDocuments === 1 ? '' : 's'}, actualmente vencido${client.pendingDocuments === 1 ? '' : 's'}.`
-    : `mantiene un saldo pendiente de ${money(client.totalAmount)}, de los cuales ${money(client.overdueAmount)} se encuentra vencido, correspondiente a ${client.pendingDocuments} documento${client.pendingDocuments === 1 ? '' : 's'}.`
-  const message = `Hola ${client.name}, junto con saludar, según nuestros registros ${balanceMessage}${documentSummary} ¿Nos podría confirmar una fecha estimada de pago? Gracias.`
+  const message = buildCollectionMessage(client)
 
   const copyMessage = async () => {
     await navigator.clipboard.writeText(message)
@@ -270,11 +486,6 @@ function ClientPanel({
   }
 
   const requestStage = async (nextStage: CollectionStage) => {
-    setStageError(null)
-    setStageNote('')
-    setCommitmentAt('')
-    setCommitmentAmount('')
-    setNextActionAt('')
     setPendingStage(nextStage)
   }
 
@@ -295,57 +506,8 @@ function ClientPanel({
     }
   }
 
-  const confirmStage = async () => {
-    if (!pendingStage) return
-    if (pendingStage === 'PAYMENT_COMMITMENT') {
-      const amount = Number(commitmentAmount)
-      if (!commitmentAt || !Number.isFinite(amount) || amount <= 0) {
-        setStageError('Ingresa una fecha y un monto comprometido mayor que cero.')
-        return
-      }
-      if (amount > client.totalAmount) {
-        setStageError(`El monto no puede superar la deuda pendiente de ${money(client.totalAmount)}.`)
-        return
-      }
-      setStageProcessing(true)
-      try {
-        await onStageChange({ stage: pendingStage, note: stageNote, commitmentAt, commitmentAmount: amount })
-      } catch (cause) {
-        setStageError(cause instanceof Error ? cause.message : 'No se pudo guardar la etapa.')
-        return
-      } finally {
-        setStageProcessing(false)
-      }
-    } else if (pendingStage === 'FOLLOW_UP') {
-      if (!nextActionAt) {
-        setStageError('Ingresa la fecha próxima de seguimiento.')
-        return
-      }
-      setStageProcessing(true)
-      try {
-        await onStageChange({ stage: pendingStage, note: stageNote, nextActionAt })
-      } catch (cause) {
-        setStageError(cause instanceof Error ? cause.message : 'No se pudo guardar la etapa.')
-        return
-      } finally {
-        setStageProcessing(false)
-      }
-    } else {
-      setStageProcessing(true)
-      try {
-        await onStageChange({ stage: pendingStage, note: stageNote })
-      } catch (cause) {
-        setStageError(cause instanceof Error ? cause.message : 'No se pudo guardar la etapa.')
-        return
-      } finally {
-        setStageProcessing(false)
-      }
-    }
-    setCommitmentAt('')
-    setCommitmentAmount('')
-    setNextActionAt('')
-    setStageNote('')
-    setStageError(null)
+  const saveStage = async (input: StageChangeInput) => {
+    await onStageChange(input)
     setPendingStage(null)
     await refreshHistory()
   }
@@ -378,42 +540,19 @@ function ClientPanel({
         </button>
         <button type="button" disabled={paymentBusy} onClick={() => void prepareBatch()} className="mt-2 inline-flex items-center gap-2 border border-[#72383D]/30 bg-white px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">{batchPreparing && <LoaderCircle className="h-3 w-3 animate-spin" />}{batchPreparing ? 'Consultando saldos en Bsale…' : 'Registrar pago total'}</button>
         {batchError && <p className="mt-2 text-[10px] text-[#8A4B4B]">{batchError}</p>}
-        <button type="button" disabled={paymentBusy} onClick={() => { setInteractionError(null); setInteractionOpen(true) }} className="mt-2 inline-flex items-center gap-2 border border-[#72383D]/30 bg-white px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">Registrar gestión</button>
+        <button type="button" disabled={paymentBusy} onClick={() => { setInteractionError(null); setInteractionOpen(true) }} className="mt-2 inline-flex items-center gap-2 border border-[#72383D]/30 bg-white px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">Agregar nota</button>
 
         <div className="mt-4 border border-[#D1C7BD] bg-white p-3">
           <label className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#72383D]">Etapa de cobranza</label>
           <StagePicker stage={stage} onChange={requestStage} />
         </div>
 
-        <Dialog open={Boolean(pendingStage)} onOpenChange={open => { if (!open && !stageProcessing) setPendingStage(null) }}>
-          <DialogContent className="border-[#D1C7BD] bg-[#FCFBF9] text-[#322D29]">
-            <DialogHeader>
-              <DialogTitle>Guardar etapa</DialogTitle>
-              <DialogDescription>Registra el cambio de etapa y, opcionalmente, un comentario de gestión.</DialogDescription>
-            </DialogHeader>
-            <div className="space-y-3">
-              <p className="text-xs"><strong>Etapa actual:</strong> {stageLabel(stage)}</p>
-              <p className="text-xs"><strong>Nueva etapa:</strong> {stageLabel(pendingStage)}</p>
-              {pendingStage === 'PAYMENT_COMMITMENT' && <>
-                <label className="block text-xs font-semibold">Fecha comprometida<input type="date" value={commitmentAt} onChange={event => setCommitmentAt(event.target.value)} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>
-                <label className="block text-xs font-semibold">Monto comprometido<input type="number" min="1" value={commitmentAmount} onChange={event => setCommitmentAmount(event.target.value)} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>
-                <p className="text-[10px] text-[#322D29]/55">Máximo permitido: {money(client.totalAmount)}</p>
-              </>}
-              {pendingStage === 'FOLLOW_UP' && <label className="block text-xs font-semibold">Próxima fecha de seguimiento<input type="date" value={nextActionAt} onChange={event => setNextActionAt(event.target.value)} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>}
-              <label className="block text-xs font-semibold">Comentario / nota de gestión <span className="font-normal text-[#322D29]/50">(opcional)</span><textarea value={stageNote} onChange={event => setStageNote(event.target.value)} rows={3} className="mt-1 w-full resize-none border border-[#D1C7BD] bg-white p-2 text-xs" /></label>
-              {stageError && <p className="text-xs text-[#8A4B4B]">{stageError}</p>}
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" disabled={stageProcessing} onClick={() => setPendingStage(null)}>Cancelar</Button>
-              <Button type="button" disabled={stageProcessing} onClick={() => void confirmStage()}>{stageProcessing ? 'Guardando etapa…' : 'Guardar etapa'}</Button>
-            </DialogFooter>
-         </DialogContent>
-        </Dialog>
+        <CollectionStageDialog key={`drawer-stage-${pendingStage ?? 'closed'}`} open={Boolean(pendingStage)} clientName={client.name} clientTotal={client.totalAmount} currentStage={stage} nextStage={pendingStage} onOpenChange={open => { if (!open) setPendingStage(null) }} onSave={saveStage} />
 
         <Dialog open={interactionOpen} onOpenChange={open => { if (!open && !interactionProcessing) setInteractionOpen(false) }}>
           <DialogContent className="border-[#D1C7BD] bg-[#FCFBF9] text-[#322D29]">
             <DialogHeader>
-              <DialogTitle>Registrar gestión</DialogTitle>
+              <DialogTitle>Agregar nota</DialogTitle>
               <DialogDescription>Registra una interacción sin cambiar la etapa de cobranza.</DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
@@ -423,7 +562,7 @@ function ClientPanel({
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" disabled={interactionProcessing} onClick={() => setInteractionOpen(false)}>Cancelar</Button>
-              <Button type="button" disabled={interactionProcessing} onClick={() => void confirmInteraction()}>{interactionProcessing ? 'Guardando gestión…' : 'Guardar gestión'}</Button>
+              <Button type="button" disabled={interactionProcessing} onClick={() => void confirmInteraction()}>{interactionProcessing ? 'Guardando nota…' : 'Guardar nota'}</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -513,18 +652,18 @@ function ClientPanel({
            {historyLoading && <p className="px-3 py-4 text-[10px] text-[#322D29]/50">Cargando historial…</p>}
            {!historyLoading && historyError && <p className="px-3 py-4 text-[10px] text-[#8A4B4B]">{historyError}</p>}
            {!historyLoading && !historyError && history.length === 0 && <p className="px-3 py-4 text-[10px] text-[#322D29]/50">Aún no hay gestiones registradas.</p>}
-           {!historyLoading && !historyError && history.length > 0 && <div className="divide-y divide-[#D1C7BD]/70">
-             {history.map(event => <article key={event.id} className="border-l-2 border-[#B38A55] px-3 py-3 text-xs">
-               <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
-                 <p className="font-semibold text-[#322D29]">{historyTitle(event)}</p>
-                 <time className="text-[10px] text-[#322D29]/50">{dateTimeLabel(event.createdAt)}</time>
-               </div>
-               <p className="mt-1 text-[10px] text-[#72383D]">{event.actorName}</p>
-               {event.eventType === 'STAGE_CHANGED' && (event.fromStage || event.toStage) && <p className="mt-1 text-[11px] text-[#322D29]">{stageLabel(event.fromStage) ?? 'Inicio'} → {stageLabel(event.toStage)}</p>}
-               {event.eventType === 'COMMITMENT' && (event.commitmentDate || event.commitmentAmount !== null) && <p className="mt-1 text-[10px] text-[#806238]">{event.commitmentDate && <>Fecha: {dateLabel(event.commitmentDate)}</>}{event.commitmentDate && event.commitmentAmount !== null && ' · '}{event.commitmentAmount !== null && <>Monto: {money(event.commitmentAmount)}</>}</p>}
-               {event.nextActionAt && <p className="mt-1 text-[10px] text-[#806238]">Próxima gestión: {dateLabel(event.nextActionAt)}</p>}
-               {event.note && <p className="mt-2 border-l-2 border-[#D1C7BD] pl-2 text-[11px] italic text-[#322D29]/75">“{event.note}”</p>}
-             </article>)}
+            {!historyLoading && !historyError && history.length > 0 && <div className="divide-y divide-[#D1C7BD]/70">
+              {history.map(event => <article key={event.id} className="border-l-2 border-[#B38A55] px-3 py-3 text-xs">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
+                  <p className="font-bold uppercase tracking-[0.08em] text-[10px] text-[#72383D]">{historyTitle(event)}</p>
+                  <time className="text-[10px] text-[#322D29]/50">{dateTimeLabel(event.createdAt)}</time>
+                </div>
+                <p className="mt-1 text-[10px] font-medium text-[#322D29]/60">{event.actorName}</p>
+                {event.eventType === 'STAGE_CHANGED' && (event.fromStage || event.toStage) && <p className="mt-2 text-[11px] text-[#322D29]">{stageLabel(event.fromStage) ?? 'Inicio'} → {stageLabel(event.toStage)}</p>}
+                {event.eventType === 'COMMITMENT' && (event.commitmentDate || event.commitmentAmount !== null) && <p className="mt-2 text-[10px] text-[#806238]">{event.commitmentDate && <>Fecha: {dateLabel(event.commitmentDate)}</>}{event.commitmentDate && event.commitmentAmount !== null && ' · '}{event.commitmentAmount !== null && <>Monto: {money(event.commitmentAmount)}</>}</p>}
+                {event.nextActionAt && <p className="mt-2 text-[10px] text-[#806238]">Próxima gestión: {dateLabel(event.nextActionAt)}</p>}
+                {event.note && <p className="mt-3 whitespace-pre-wrap border-l-2 border-[#72383D] bg-[#F5EDE9] px-3 py-2 text-[13px] leading-5 text-[#322D29]">{event.note}</p>}
+              </article>)}
            </div>}
            {!historyLoading && !historyError && historyHasMore && <button type="button" onClick={() => { setHistoryExpanded(true); void refreshHistory(100) }} className="border-t border-[#D1C7BD] px-3 py-2 text-[10px] font-semibold text-[#72383D] hover:bg-[#F5F0EA]">Ver historial completo</button>}
          </section>
@@ -549,6 +688,11 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
   const [settledDocumentIds, setSettledDocumentIds] = useState<number[]>([])
   const [workflow, setWorkflow] = useState<Record<number, WorkflowState>>({})
   const [paymentOverlay, setPaymentOverlay] = useState<CollectionPaymentOverlay[]>([])
+  const [activeDragClientId, setActiveDragClientId] = useState<number | null>(null)
+  const [pendingDrop, setPendingDrop] = useState<{ client: CobranzaClient; currentStage: CollectionStage; nextStage: CollectionStage } | null>(null)
+  const [quickNoteClient, setQuickNoteClient] = useState<CobranzaClient | null>(null)
+  const [quickNoteFeedback, setQuickNoteFeedback] = useState(false)
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }))
 
   const cutoffDate = data ? data.snapshot_date ?? data.close_date : ''
   const overlayDocuments = data ? applyCobranzaPaymentOverlay(data.documents, paymentOverlay) : []
@@ -616,6 +760,42 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
     setSelectedClient(client)
     setSelectedDocumentId(documentId ?? null)
   }
+  const saveQuickInteraction = async (input: { type: CollectionInteractionType; body: string }) => {
+    if (!quickNoteClient) return
+    await registerCollectionInteraction({ clientId: quickNoteClient.clientId, ...input })
+    setQuickNoteClient(null)
+    setQuickNoteFeedback(true)
+    window.setTimeout(() => setQuickNoteFeedback(false), 1800)
+  }
+  const handleDragStart = (event: DragStartEvent) => {
+    if (viewMode !== 'CLIENTS') return
+    setActiveDragClientId(Number(event.active.data.current?.clientId))
+  }
+  const handleDragEnd = (event: DragEndEvent) => {
+    setActiveDragClientId(null)
+    if (viewMode !== 'CLIENTS' || !event.over) return
+    const clientId = Number(event.active.data.current?.clientId)
+    const nextStage = event.over.data.current?.stage as CollectionStage | undefined
+    const client = clients.find(candidate => candidate.clientId === clientId)
+    const currentStage = workflow[clientId]?.stage ?? 'TO_MANAGE'
+    if (!client || !nextStage || nextStage === 'CLOSED' || nextStage === currentStage) return
+    setPendingDrop({ client, currentStage, nextStage })
+  }
+  const saveDroppedStage = async (input: StageChangeInput) => {
+    if (!pendingDrop) return
+    await updateCollectionStage({ clientId: pendingDrop.client.clientId, ...input })
+    setWorkflow(current => ({
+      ...current,
+      [pendingDrop.client.clientId]: {
+        ...current[pendingDrop.client.clientId],
+        stage: input.stage,
+        commitment_at: input.commitmentAt ?? null,
+        commitment_amount: input.commitmentAmount ?? null,
+        next_action_at: input.nextActionAt ?? null,
+      },
+    }))
+    setPendingDrop(null)
+  }
   const changeView = (nextView: ViewMode) => {
     setViewMode(nextView)
     setSortMode(nextView === 'CLIENTS' ? 'overdue-desc' : 'due-asc')
@@ -672,32 +852,33 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
            </div>
          </div>
 
-          <div className="mt-3 grid gap-2 overflow-x-auto pb-1 md:grid-cols-5">
-           {kanbanStages.map(stage => {
-             const stageClients = sortedClients.filter(client => (workflow[client.clientId]?.stage ?? 'TO_MANAGE') === stage.key)
-             const stageInvoices = sortedInvoices.filter(invoice => (workflow[invoice.client_id]?.stage ?? 'TO_MANAGE') === stage.key)
-             return <section key={stage.key} className="min-w-[230px] border border-[#D1C7BD] bg-[#F5F0EA]">
-               <header className="border-b border-[#D1C7BD] px-3 py-2"><div className="flex items-center justify-between"><h3 className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#72383D]">{stage.label}</h3><span className="text-[10px] text-[#322D29]/50">{viewMode === 'CLIENTS' ? stageClients.length : stageInvoices.length}</span></div></header>
-               <div className="space-y-2 p-2">
-                 {viewMode === 'CLIENTS' && stageClients.map(client => <button key={client.key} type="button" onClick={() => selectClient(client)} className="w-full border border-[#D1C7BD] bg-white p-2.5 text-left hover:border-[#72383D]">
-                  <div className="flex items-start justify-between gap-2"><span className="text-xs font-semibold">{client.name}</span><Priority value={client.priority} /></div>
-                  <p className="mt-2 text-[10px] text-[#322D29]/55">{client.pendingDocuments} doc{client.pendingDocuments === 1 ? '' : 's'} · {client.oldestDaysOverdue} días</p>
-                  <p className={`mt-1 text-sm font-semibold tabular-nums ${stage.key === 'CLOSED' ? 'text-[#322D29]' : 'text-[#8A4B4B]'}`}>{stage.key === 'CLOSED' ? '$0 · Pagado' : `Vencida ${money(client.overdueAmount)}`}</p>
-                  {stage.key !== 'CLOSED' && client.totalAmount !== client.overdueAmount && <p className="mt-0.5 text-[10px] text-[#322D29]/55 tabular-nums">Total {money(client.totalAmount)}</p>}
-                  {stage.key === 'PAYMENT_COMMITMENT' && workflow[client.clientId]?.commitment_at && <p className="mt-2 text-[10px] text-[#806238]">Compromiso {dateLabel(workflow[client.clientId]?.commitment_at ?? null)} · {money(workflow[client.clientId]?.commitment_amount ?? null)}</p>}
-                  {stage.key === 'FOLLOW_UP' && workflow[client.clientId]?.next_action_at && <p className="mt-2 text-[10px] text-[#806238]">Seguimiento {dateLabel(workflow[client.clientId]?.next_action_at ?? null)}</p>}
-                 </button>)}
-                 {viewMode === 'INVOICES' && stageInvoices.map(invoice => { const client = clients.find(candidate => candidate.clientId === invoice.client_id); if (!client) return null; return <div key={invoice.key} role="button" tabIndex={0} onClick={() => selectClient(client, invoice.document_id)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') selectClient(client, invoice.document_id) }} className="w-full cursor-pointer border border-[#D1C7BD] bg-white p-2.5 text-left hover:border-[#72383D]">
-                   <div className="flex items-start justify-between gap-2"><div><p className="text-xs font-semibold">{invoice.clientName}</p><p className="mt-1 text-[10px] text-[#322D29]/60">Factura #{invoice.folio ?? invoice.document_id}</p></div><Priority value={invoice.priority} /></div>
-                   <p className="mt-2 text-[10px] text-[#322D29]/55">Emitida {dateLabel(invoice.emission_date)} · Vence {dateLabel(invoice.expiration_date)}</p>
-                   <p className={`mt-1 text-[10px] ${invoice.overdue ? 'text-[#8A4B4B]' : 'text-[#322D29]/55'}`}>{invoice.overdue ? `${invoice.daysOverdue} días vencida` : 'Por vencer'}</p>
-                   <div className="mt-1 flex items-center justify-between gap-2"><strong className="text-sm tabular-nums">{money(invoice.pending_amount)}</strong><button type="button" onClick={event => { event.stopPropagation(); selectClient(client, invoice.document_id) }} className="border border-[#72383D]/30 px-2 py-1 text-[10px] font-semibold text-[#72383D]">Registrar pago</button></div>
-                 </div> })}
-                 {(viewMode === 'CLIENTS' ? stageClients.length : stageInvoices.length) === 0 && <p className="px-2 py-5 text-center text-[10px] text-[#322D29]/45">{viewMode === 'CLIENTS' ? 'Sin clientes' : 'Sin facturas pendientes'}</p>}
-              </div>
-            </section>
-          })}
-        </div>
+           {viewMode === 'CLIENTS' ? <DndContext sensors={sensors} onDragStart={handleDragStart} onDragCancel={() => setActiveDragClientId(null)} onDragEnd={handleDragEnd}>
+             <div className="mt-3 grid gap-2 overflow-x-auto pb-1 md:grid-cols-5">
+               {kanbanStages.map(stage => <ClientKanbanColumn key={stage.key} stage={stage} clients={sortedClients.filter(client => (workflow[client.clientId]?.stage ?? 'TO_MANAGE') === stage.key)} workflow={workflow} onOpen={selectClient} onAddNote={setQuickNoteClient} />)}
+             </div>
+             <DragOverlay>
+               {activeDragClientId ? (() => { const client = clients.find(candidate => candidate.clientId === activeDragClientId); if (!client) return null; return <ClientKanbanCard client={client} stage={workflow[client.clientId]?.stage ?? 'TO_MANAGE'} workflow={workflow[client.clientId]} onOpen={() => undefined} onAddNote={() => undefined} isOverlay /> })() : null}
+             </DragOverlay>
+           </DndContext> : <div className="mt-3 grid gap-2 overflow-x-auto pb-1 md:grid-cols-5">
+             {kanbanStages.map(stage => {
+               const stageInvoices = sortedInvoices.filter(invoice => (workflow[invoice.client_id]?.stage ?? 'TO_MANAGE') === stage.key)
+               return <section key={stage.key} className="min-w-[230px] border border-[#D1C7BD] bg-[#F5F0EA]">
+                 <header className="border-b border-[#D1C7BD] px-3 py-2"><div className="flex items-center justify-between"><h3 className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#72383D]">{stage.label}</h3><span className="text-[10px] text-[#322D29]/50">{stageInvoices.length}</span></div></header>
+                 <div className="space-y-2 p-2">
+                   {stageInvoices.map(invoice => { const client = clients.find(candidate => candidate.clientId === invoice.client_id); if (!client) return null; return <div key={invoice.key} role="button" tabIndex={0} onDoubleClick={() => selectClient(client, invoice.document_id)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectClient(client, invoice.document_id) } }} className="w-full cursor-pointer border border-[#D1C7BD] bg-white p-2.5 text-left hover:border-[#72383D]">
+                     <div className="flex items-start justify-between gap-2"><div><p className="text-xs font-semibold">{invoice.clientName}</p><p className="mt-1 text-[10px] text-[#322D29]/60">Factura #{invoice.folio ?? invoice.document_id}</p></div><Priority value={invoice.priority} /></div>
+                     <p className="mt-2 text-[10px] text-[#322D29]/55">Emitida {dateLabel(invoice.emission_date)} · Vence {dateLabel(invoice.expiration_date)}</p>
+                     <p className={`mt-1 text-[10px] ${invoice.overdue ? 'text-[#8A4B4B]' : 'text-[#322D29]/55'}`}>{invoice.overdue ? `${invoice.daysOverdue} días vencida` : 'Por vencer'}</p>
+                     <div className="mt-1 flex items-center justify-between gap-2"><strong className="text-sm tabular-nums">{money(invoice.pending_amount)}</strong><button type="button" onClick={event => { event.stopPropagation(); selectClient(client, invoice.document_id) }} className="border border-[#72383D]/30 px-2 py-1 text-[10px] font-semibold text-[#72383D]">Registrar pago</button></div>
+                   </div> })}
+                   {stageInvoices.length === 0 && <p className="px-2 py-5 text-center text-[10px] text-[#322D29]/45">Sin facturas pendientes</p>}
+                 </div>
+               </section>
+             })}
+           </div>}
+           <CollectionStageDialog key={`drop-stage-${pendingDrop?.client.clientId ?? 'closed'}-${pendingDrop?.nextStage ?? ''}`} open={Boolean(pendingDrop)} clientName={pendingDrop?.client.name ?? ''} clientTotal={pendingDrop?.client.totalAmount ?? 0} currentStage={pendingDrop?.currentStage ?? 'TO_MANAGE'} nextStage={pendingDrop?.nextStage ?? null} onOpenChange={open => { if (!open) setPendingDrop(null) }} onSave={saveDroppedStage} />
+           <QuickInteractionDialog key={`quick-note-${quickNoteClient?.clientId ?? 'closed'}`} open={Boolean(quickNoteClient)} clientName={quickNoteClient?.name ?? ''} onOpenChange={open => { if (!open) setQuickNoteClient(null) }} onSave={saveQuickInteraction} />
+           {quickNoteFeedback && <p className="fixed bottom-4 right-4 z-40 border border-[#66856B]/40 bg-[#EDF4EC] px-3 py-2 text-xs text-[#426247] shadow-sm">Nota guardada</p>}
         <p className="mt-2 text-[10px] text-[#322D29]/45">Vencida según Bsale: vencimiento anterior al corte. Una factura que vence el día del corte permanece como adeudada.</p>
       </section>
 
