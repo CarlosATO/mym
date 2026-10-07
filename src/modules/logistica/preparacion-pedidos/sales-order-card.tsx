@@ -6,11 +6,11 @@ import { useDraggable } from '@dnd-kit/core'
 
 interface SalesOrderCardProps {
   card: SalesOrderPreparationCardInfo
-  onClick?: () => void
+  onDoubleClick?: () => void
   isOverlay?: boolean
 }
 
-export function SalesOrderCard({ card, onClick, isOverlay }: SalesOrderCardProps) {
+export function SalesOrderCard({ card, onDoubleClick, isOverlay }: SalesOrderCardProps) {
   const emitDate = new Date(card.nv_emission_date).toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })
   const routeDate = card.route_date
     ? new Date(card.route_date).toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })
@@ -46,12 +46,6 @@ export function SalesOrderCard({ card, onClick, isOverlay }: SalesOrderCardProps
       case 'IN_AUDIT':
         wrapperClasses += "bg-purple-50/50 dark:bg-purple-500/5 border-purple-200 dark:border-purple-500/20 hover:border-purple-300 dark:hover:border-purple-500/40"
         break
-      case 'INVOICED_READY_FOR_ROUTE':
-        wrapperClasses += "bg-green-50/50 dark:bg-green-500/5 border-green-200 dark:border-green-500/20 hover:border-green-300 dark:hover:border-green-500/40"
-        break
-      case 'CANCELLED':
-        wrapperClasses += "bg-red-50/50 dark:bg-red-500/5 border-red-200 dark:border-red-500/20 hover:border-red-300 dark:hover:border-red-500/40"
-        break
       default:
         wrapperClasses += "bg-theme-panel border-theme-border/80 hover:border-theme-accent/60"
     }
@@ -63,7 +57,16 @@ export function SalesOrderCard({ card, onClick, isOverlay }: SalesOrderCardProps
       style={style}
       {...(!isOverlay ? listeners : {})}
       {...(!isOverlay ? attributes : {})}
-      onClick={!isOverlay ? onClick : undefined}
+       onDoubleClick={!isOverlay ? onDoubleClick : undefined}
+       onKeyDown={!isOverlay ? event => {
+         if (event.key === 'Enter' || event.key === ' ') {
+           event.preventDefault()
+           onDoubleClick?.()
+         }
+       } : undefined}
+       role={!isOverlay ? 'button' : undefined}
+       tabIndex={!isOverlay ? 0 : undefined}
+       aria-label={!isOverlay ? `Abrir detalle de NV ${card.nv_folio}` : undefined}
       className={wrapperClasses}
     >
       {/* Header row */}

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useMemo } from 'react'
-import { Search, SlidersHorizontal, KanbanSquare, Loader2, RotateCcw, Lock, RefreshCw } from 'lucide-react'
+import { Search, SlidersHorizontal, KanbanSquare, Loader2, RotateCcw, RefreshCw } from 'lucide-react'
 import { 
   getSalesOrderPreparationBoard, 
   getSalesOrderPreparationItems,
@@ -17,6 +17,7 @@ import { getMovementRule } from './movement-rules'
 import { MovementObservationDialog } from './movement-observation-dialog'
 import { moveSalesOrderPreparationCard } from '@/app/actions/logistica/sales-order-preparation'
 import { toast } from 'sonner'
+import { getActiveCompanyId } from '@/app/actions/companies'
 
 type KanbanColumn = {
   id: string
@@ -25,7 +26,6 @@ type KanbanColumn = {
   colorBody: string
   badge: string
   dot: string
-  locked?: boolean
 }
 
 const COLUMNS: KanbanColumn[] = [
@@ -53,29 +53,11 @@ const COLUMNS: KanbanColumn[] = [
     badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
     dot: 'bg-purple-500',
   },
-  {
-    id: 'INVOICED_READY_FOR_ROUTE',
-    title: 'Facturada / Lista',
-    colorHeader: 'bg-theme-base border-slate-300 dark:border-theme-border/80',
-    colorBody: 'bg-theme-base/30',
-    badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
-    dot: 'bg-green-500',
-    locked: true,
-  },
-  {
-    id: 'CANCELLED',
-    title: 'Canceladas',
-    colorHeader: 'bg-theme-base border-slate-300 dark:border-theme-border/80',
-    colorBody: 'bg-theme-base/30',
-    badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
-    dot: 'bg-red-500',
-  },
 ]
 
 function DroppableColumn({ col, colCards, onOpenCardDetails }: { col: KanbanColumn, colCards: SalesOrderPreparationCardInfo[], onOpenCardDetails: (c: SalesOrderPreparationCardInfo) => void }) {
   const { setNodeRef, isOver } = useDroppable({
     id: col.id,
-    disabled: col.locked
   })
 
   return (
@@ -84,7 +66,6 @@ function DroppableColumn({ col, colCards, onOpenCardDetails }: { col: KanbanColu
       <div className={`flex-none flex items-center justify-between px-3 py-2.5 border-b ${col.colorHeader}`}>
         <div className="flex items-center gap-2 min-w-0">
           <div className={`w-2 h-2 rounded-full ${col.dot} shrink-0`} />
-          {col.locked && <Lock className="w-3 h-3 text-theme-text-muted/60 shrink-0" />}
           <h3 className="text-xs font-bold text-theme-text leading-tight truncate">{col.title}</h3>
         </div>
         <span className={`ml-2 shrink-0 px-2 py-0.5 rounded text-[10px] font-bold border ${col.badge}`}>
@@ -94,22 +75,14 @@ function DroppableColumn({ col, colCards, onOpenCardDetails }: { col: KanbanColu
 
       {/* Column body */}
       <div className={`flex-1 overflow-y-auto p-2 space-y-2 ${col.colorBody}`}>
-        {col.locked && colCards.length === 0 && (
-          <div className="pt-4 px-2 text-center">
-            <Lock className="w-4 h-4 text-theme-text-muted/40 mx-auto mb-1.5" />
-            <p className="text-[10px] text-theme-text-muted/60 leading-snug">
-              Movimiento automático al detectar factura en Bsale.
-            </p>
-          </div>
-        )}
-        {colCards.length === 0 && !col.locked && (
+          {colCards.length === 0 && (
           <p className="pt-6 text-center text-[10px] font-medium text-theme-text-muted/60">Sin tarjetas</p>
         )}
         {colCards.map(card => (
           <SalesOrderCard
             key={card.card_id}
             card={card}
-            onClick={() => onOpenCardDetails(card)}
+            onDoubleClick={() => onOpenCardDetails(card)}
           />
         ))}
       </div>
@@ -118,8 +91,7 @@ function DroppableColumn({ col, colCards, onOpenCardDetails }: { col: KanbanColu
 }
 
 export function SalesOrderPreparationPanel() {
-  const companyId = 'd1000000-0000-0000-0000-000000000001'
-
+  const [companyId, setCompanyId] = useState<string | null>(null)
   const [cards, setCards] = useState<SalesOrderPreparationCardInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -172,7 +144,14 @@ export function SalesOrderPreparationPanel() {
 
   const loadBoard = async () => {
     setLoading(true)
-    const res = await getSalesOrderPreparationBoard(companyId)
+    const activeCompanyId = await getActiveCompanyId()
+    if (!activeCompanyId) {
+      setError('No se pudo determinar la empresa activa.')
+      setLoading(false)
+      return
+    }
+    setCompanyId(activeCompanyId)
+    const res = await getSalesOrderPreparationBoard(activeCompanyId)
     if (res.error) {
       setError(res.error)
     } else {
@@ -188,9 +167,10 @@ export function SalesOrderPreparationPanel() {
 
   useEffect(() => {
     loadBoard()
-  }, [companyId])
+  }, [])
 
   const openCardDetails = async (card: SalesOrderPreparationCardInfo) => {
+    if (!companyId) return
     setSelectedCard(card)
     setLoadingItems(true)
     const res = await getSalesOrderPreparationItems(companyId, card.nv_bsale_id)
@@ -378,25 +358,26 @@ export function SalesOrderPreparationPanel() {
         ) : error ? (
           <div className="h-full flex items-center justify-center text-red-500 text-sm font-medium">{error}</div>
         ) : (
-          /* Grid de 5 columnas, todas en pantalla, sin scroll horizontal */
-          <div className="grid grid-cols-5 gap-4 h-full p-4">
-            <DndContext 
+          <DndContext
               sensors={sensors}
               onDragStart={handleDragStart} 
               onDragEnd={handleDragEnd}
               onDragCancel={handleDragCancel}
             >
-              {COLUMNS.map(col => {
-                const colCards = filteredCards.filter(c => c.status === col.id)
-                return <DroppableColumn key={col.id} col={col} colCards={colCards} onOpenCardDetails={openCardDetails} />
-              })}
+              <div className="h-full overflow-x-auto p-4">
+                <div className="grid h-full min-w-[1000px] grid-cols-[repeat(3,minmax(320px,1fr))] gap-4">
+                  {COLUMNS.map(col => {
+                    const colCards = filteredCards.filter(c => c.status === col.id)
+                    return <DroppableColumn key={col.id} col={col} colCards={colCards} onOpenCardDetails={openCardDetails} />
+                  })}
+                </div>
+              </div>
               <DragOverlay zIndex={9999}>
                 {activeCard ? (
                   <SalesOrderCard card={activeCard} isOverlay />
                 ) : null}
               </DragOverlay>
             </DndContext>
-          </div>
         )}
       </div>
 

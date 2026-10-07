@@ -26,6 +26,8 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onCardM
   const [isMoving, setIsMoving] = useState(false)
   const [moveError, setMoveError] = useState<string | null>(null)
 
+  // This loader synchronizes the drawer history when the selected card changes.
+  /* eslint-disable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
   useEffect(() => {
     if (card?.company_id && card?.nv_bsale_id) {
       getSalesOrderClientData(card.company_id, card.nv_bsale_id).then((res) => {
@@ -52,6 +54,7 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onCardM
     setObservation('')
     setMoveError(null)
   }, [card?.card_id])
+  /* eslint-enable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
 
   if (!card) return null
 
@@ -169,8 +172,6 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onCardM
                   {card.status === 'PENDING_ROUTE_PREP' && 'Pendiente / Próxima ruta'}
                   {card.status === 'IN_PREPARATION' && 'En preparación'}
                   {card.status === 'IN_AUDIT' && 'En auditoría'}
-                  {card.status === 'INVOICED_READY_FOR_ROUTE' && 'Lista para despacho'}
-                  {card.status === 'CANCELLED' && 'Cancelada'}
                 </p>
                 {card.route_date && (
                   <p className="text-xs text-theme-text-muted mt-1">Ruta: {new Date(card.route_date).toLocaleDateString('es-CL')}</p>
@@ -183,8 +184,6 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onCardM
                 ${card.status === 'PENDING_ROUTE_PREP' ? 'bg-orange-500/10 text-orange-500' : ''}
                 ${card.status === 'IN_PREPARATION' ? 'bg-blue-500/10 text-blue-500' : ''}
                 ${card.status === 'IN_AUDIT' ? 'bg-purple-500/10 text-purple-500' : ''}
-                ${card.status === 'INVOICED_READY_FOR_ROUTE' ? 'bg-green-500/10 text-green-500' : ''}
-                ${card.status === 'CANCELLED' ? 'bg-red-500/10 text-red-500' : ''}
               `}>
                 {card.status.replace(/_/g, ' ')}
               </div>
@@ -211,7 +210,7 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onCardM
                   <div>
                     <p className="text-sm font-medium text-theme-text">No facturada</p>
                     <p className="text-xs text-theme-text-muted mt-1">
-                      Factura asociada aún no detectada desde Bsale. El movimiento a columna "Facturada" ocurrirá automáticamente.
+                       Factura asociada aún no detectada desde Bsale. El estado operativo se actualizará automáticamente cuando corresponda.
                     </p>
                   </div>
                 </div>
@@ -358,12 +357,6 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onCardM
               <button onClick={() => handleMove('PENDING_ROUTE_PREP', MOVEMENT_RULES.IN_AUDIT.PENDING_ROUTE_PREP.backward, MOVEMENT_RULES.IN_AUDIT.PENDING_ROUTE_PREP.label)} disabled={isMoving} className="flex-1 py-2 bg-orange-600 hover:bg-orange-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
                 {MOVEMENT_RULES.IN_AUDIT.PENDING_ROUTE_PREP.label}
               </button>
-            </div>
-          )}
-
-          {!pendingMoveAction && card.status === 'INVOICED_READY_FOR_ROUTE' && (
-            <div className="mb-3 text-center text-xs text-theme-text-muted bg-theme-border/20 p-2 rounded-lg">
-              Movimiento automático al detectar factura en Bsale. Sin acciones manuales.
             </div>
           )}
 
