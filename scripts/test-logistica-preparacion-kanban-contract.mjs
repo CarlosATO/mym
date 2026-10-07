@@ -7,6 +7,7 @@ const panel = await readFile(new URL('sales-order-preparation-panel.tsx', root),
 const card = await readFile(new URL('sales-order-card.tsx', root), 'utf8')
 const rules = await readFile(new URL('movement-rules.ts', root), 'utf8')
 const actions = await readFile(new URL('../../../app/actions/logistica/sales-order-preparation.ts', root), 'utf8')
+const drawer = await readFile(new URL('sales-order-drawer.tsx', root), 'utf8')
 
 test('el tablero sólo declara las tres columnas operacionales', () => {
   assert.deepEqual([...panel.matchAll(/id: '([^']+)'/g)].map(match => match[1]), [
@@ -24,7 +25,7 @@ test('las transiciones operacionales y retrocesos conservan sus reglas', () => {
   assert.match(rules, /IN_PREPARATION:[\s\S]*PENDING_ROUTE_PREP: \{ allowed: true, backward: true/)
   assert.match(rules, /IN_AUDIT:[\s\S]*IN_PREPARATION: \{ allowed: true, backward: true/)
   assert.match(panel, /if \(rule\?\.backward\) \{[\s\S]*setPendingMovement/)
-  assert.match(panel, /await executeMove\(card, toStatus\)/)
+  assert.match(panel, /await transitionCard\(card, toStatus\)/)
 })
 
 test('drag no abre accidentalmente el drawer y el detalle sigue accesible', () => {
@@ -32,6 +33,35 @@ test('drag no abre accidentalmente el drawer y el detalle sigue accesible', () =
   assert.match(card, /onDoubleClick={!isOverlay \? onDoubleClick : undefined}/)
   assert.match(card, /onKeyDown={!isOverlay/)
   assert.doesNotMatch(card, /onClick={!isOverlay \? onClick/)
+})
+
+test('la transición actualiza localmente y no recarga el board', () => {
+  assert.match(panel, /setCards\(current => current\.map\(item => item\.card_id === card\.card_id \? \{ \.\.\.item, status: toStatus \} : item\)\)/)
+  assert.match(panel, /setCards\(current => current\.map\(item => item\.card_id === card\.card_id \? \{ \.\.\.item, status: fromStatus \} : item\)\)/)
+  assert.match(panel, /const transitionCard = async/)
+  assert.doesNotMatch(panel.match(/const transitionCard[\s\S]*?\n  }/)?.[0] ?? '', /loadBoard\(\)/)
+})
+
+test('la mutación por tarjeta evita concurrencia y mantiene contadores derivados', () => {
+  assert.match(panel, /pendingCardIds\.has\(card\.card_id\)/)
+  assert.match(panel, /pendingCardIds=\{pendingCardIds\}/)
+  assert.match(panel, /\{colCards\.length\}/)
+  assert.match(card, /disabled: isOverlay \|\| isPending/)
+})
+
+test('el drawer comparte la transición del tablero y usa estados humanos', () => {
+  assert.match(panel, /onTransition=\{transitionCard\}/)
+  assert.match(drawer, /onTransition: \(card: SalesOrderPreparationCardInfo, toStatus: string/)
+  assert.match(drawer, /await onTransition\(card, toStatus, obs\)/)
+  assert.match(drawer, /const statusLabel =/)
+  assert.doesNotMatch(drawer, /Pendiente \/ Próxima ruta/)
+  assert.doesNotMatch(drawer, /\{card\.status\.replace\(/)
+})
+
+test('búsqueda y filtros son locales y no cargan datos por tarjeta', () => {
+  assert.match(panel, /useMemo\(\(\) => cards\.filter/)
+  assert.match(panel, /onChange=\{e => setSearchTerm\(e\.target\.value\)\}/)
+  assert.doesNotMatch(panel.match(/function DroppableColumn[\s\S]*?\n}\n\nexport function/)?.[0] ?? '', /getSalesOrderPreparation/)
 })
 
 test('el board no recibe company_id hardcodeado ni hace fetch por tarjeta', () => {

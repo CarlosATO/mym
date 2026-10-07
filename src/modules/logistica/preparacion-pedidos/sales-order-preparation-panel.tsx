@@ -39,7 +39,7 @@ const COLUMNS: KanbanColumn[] = [
   },
   {
     id: 'IN_PREPARATION',
-    title: 'En Preparación',
+    title: 'En preparación',
     colorHeader: 'bg-theme-base border-slate-300 dark:border-theme-border/80',
     colorBody: 'bg-theme-base/30',
     badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
@@ -47,7 +47,7 @@ const COLUMNS: KanbanColumn[] = [
   },
   {
     id: 'IN_AUDIT',
-    title: 'En Auditoría',
+    title: 'En auditoría',
     colorHeader: 'bg-theme-base border-slate-300 dark:border-theme-border/80',
     colorBody: 'bg-theme-base/30',
     badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
@@ -55,26 +55,23 @@ const COLUMNS: KanbanColumn[] = [
   },
 ]
 
-function DroppableColumn({ col, colCards, onOpenCardDetails }: { col: KanbanColumn, colCards: SalesOrderPreparationCardInfo[], onOpenCardDetails: (c: SalesOrderPreparationCardInfo) => void }) {
+function DroppableColumn({ col, colCards, pendingCardIds, onOpenCardDetails }: { col: KanbanColumn, colCards: SalesOrderPreparationCardInfo[], pendingCardIds: Set<string>, onOpenCardDetails: (c: SalesOrderPreparationCardInfo) => void }) {
   const { setNodeRef, isOver } = useDroppable({
     id: col.id,
   })
 
   return (
-    <div ref={setNodeRef} className={`flex flex-col rounded-lg border border-slate-300 dark:border-theme-border/80 bg-theme-panel shadow-sm overflow-hidden min-w-0 transition-all ${isOver ? 'ring-2 ring-theme-accent ring-inset' : ''}`}>
+    <section ref={setNodeRef} className={`min-w-[240px] border bg-[#F5F0EA] transition-colors ${isOver ? 'border-[#72383D] bg-[#F1E4DD]' : 'border-[#D1C7BD]'}`}>
       {/* Column header */}
-      <div className={`flex-none flex items-center justify-between px-3 py-2.5 border-b ${col.colorHeader}`}>
-        <div className="flex items-center gap-2 min-w-0">
-          <div className={`w-2 h-2 rounded-full ${col.dot} shrink-0`} />
-          <h3 className="text-xs font-bold text-theme-text leading-tight truncate">{col.title}</h3>
+      <div className="border-b border-[#D1C7BD] px-3 py-2">
+        <div className="flex items-center justify-between">
+          <h3 className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#72383D]">{col.title}</h3>
+          <span className="text-[10px] text-[#322D29]/50">{colCards.length}</span>
         </div>
-        <span className={`ml-2 shrink-0 px-2 py-0.5 rounded text-[10px] font-bold border ${col.badge}`}>
-          {colCards.length}
-        </span>
       </div>
 
       {/* Column body */}
-      <div className={`flex-1 overflow-y-auto p-2 space-y-2 ${col.colorBody}`}>
+      <div className="space-y-2 p-2">
           {colCards.length === 0 && (
           <p className="pt-6 text-center text-[10px] font-medium text-theme-text-muted/60">Sin tarjetas</p>
         )}
@@ -82,11 +79,12 @@ function DroppableColumn({ col, colCards, onOpenCardDetails }: { col: KanbanColu
           <SalesOrderCard
             key={card.card_id}
             card={card}
+            isPending={pendingCardIds.has(card.card_id)}
             onDoubleClick={() => onOpenCardDetails(card)}
           />
         ))}
       </div>
-    </div>
+    </section>
   )
 }
 
@@ -113,6 +111,8 @@ export function SalesOrderPreparationPanel() {
   const [activeCard, setActiveCard] = useState<SalesOrderPreparationCardInfo | null>(null)
   const [pendingMovement, setPendingMovement] = useState<{ card: SalesOrderPreparationCardInfo, fromStatus: string, toStatus: string, label: string } | null>(null)
   const [isMoving, setIsMoving] = useState(false)
+  const [pendingCardIds, setPendingCardIds] = useState<Set<string>>(new Set())
+  const [transitionError, setTransitionError] = useState<string | null>(null)
   const [isSyncing, setIsSyncing] = useState(false)
 
   const handleSyncBsale = async () => {
@@ -182,21 +182,40 @@ export function SalesOrderPreparationPanel() {
     setLoadingItems(false)
   }
 
-  const executeMove = async (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string) => {
+  const transitionCard = async (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string) => {
+    if (pendingCardIds.has(card.card_id) || card.status === toStatus) return false
+    const fromStatus = card.status
+    setTransitionError(null)
+    setPendingCardIds(current => new Set(current).add(card.card_id))
+    setCards(current => current.map(item => item.card_id === card.card_id ? { ...item, status: toStatus } : item))
+    setSelectedCard(current => current?.card_id === card.card_id ? { ...current, status: toStatus } : current)
     setIsMoving(true)
-    const res = await moveSalesOrderPreparationCard({
-      cardId: card.card_id,
-      toStatus,
-      observation
-    })
-    setIsMoving(false)
-
-    if (!res.ok) {
-      toast.error(`Error al mover: ${res.error ?? 'Desconocido'}`)
-    } else {
+    try {
+      const res = await moveSalesOrderPreparationCard({ cardId: card.card_id, toStatus, observation })
+      if (!res.ok) {
+        setCards(current => current.map(item => item.card_id === card.card_id ? { ...item, status: fromStatus } : item))
+        setSelectedCard(current => current?.card_id === card.card_id ? { ...current, status: fromStatus } : current)
+        setTransitionError(res.error ?? 'No se pudo guardar el cambio.')
+        toast.error(`Error al mover: ${res.error ?? 'Desconocido'}`)
+        return false
+      }
       toast.success(`NV #${card.nv_folio} movida exitosamente`)
       setPendingMovement(null)
-      loadBoard()
+      return true
+    } catch (cause) {
+      setCards(current => current.map(item => item.card_id === card.card_id ? { ...item, status: fromStatus } : item))
+      setSelectedCard(current => current?.card_id === card.card_id ? { ...current, status: fromStatus } : current)
+      const message = cause instanceof Error ? cause.message : 'No se pudo guardar el cambio.'
+      setTransitionError(message)
+      toast.error(`Error al mover: ${message}`)
+      return false
+    } finally {
+      setPendingCardIds(current => {
+        const next = new Set(current)
+        next.delete(card.card_id)
+        return next
+      })
+      setIsMoving(false)
     }
   }
 
@@ -232,7 +251,7 @@ export function SalesOrderPreparationPanel() {
     if (rule?.backward) {
       setPendingMovement({ card, fromStatus, toStatus, label: rule.label })
     } else {
-      await executeMove(card, toStatus)
+      await transitionCard(card, toStatus)
     }
   }
 
@@ -263,21 +282,21 @@ export function SalesOrderPreparationPanel() {
   const syncTime = syncRun?.completed_at || syncRun?.started_at
 
   return (
-    <div className="flex flex-col h-[calc(100vh-110px)] w-full overflow-hidden">
+    <div className="flex flex-col h-[calc(100vh-110px)] w-full overflow-hidden bg-[#EFE9E1] text-[#322D29]">
       {/* ── Header / Toolbar ── */}
-      <div className="flex-none px-4 py-2 border-b border-theme-border bg-theme-panel shadow-sm z-10">
+      <div className="flex-none px-4 py-2 border-b border-[#D1C7BD] bg-[#FCFBF9] shadow-sm z-10">
         <div className="flex items-center gap-2 whitespace-nowrap">
           
           <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
             <div className="flex items-center gap-1.5 shrink-0">
-              <KanbanSquare className="w-4 h-4 text-theme-accent shrink-0" />
-            <h1 className="text-sm font-bold text-theme-text">Preparación de Pedidos</h1>
-              <span className="px-1.5 py-0.5 rounded bg-theme-base text-theme-text-muted text-[10px] font-bold border border-theme-border/50 shrink-0">
+              <KanbanSquare className="w-4 h-4 text-[#72383D] shrink-0" />
+            <h1 className="text-sm font-semibold text-[#322D29]">Preparación de Pedidos</h1>
+              <span className="px-1.5 py-0.5 bg-[#F5F0EA] text-[#322D29]/55 text-[10px] font-bold border border-[#D1C7BD] shrink-0">
                 {filteredCards.length}
               </span>
             </div>
 
-            <div className="text-[11px] text-theme-text-muted font-medium">
+            <div className="text-[11px] text-[#322D29]/55 font-medium">
               {syncRun ? `Último sync: OK · ${syncTrigger} ${syncTime ? new Date(syncTime).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : ''}` : 'Sin evidencia de sync'}
             </div>
           </div>
@@ -289,8 +308,8 @@ export function SalesOrderPreparationPanel() {
               disabled={isSyncing}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-bold border transition-colors ${
                 isSyncing
-                  ? 'bg-theme-base border-theme-border text-theme-text-muted opacity-80 cursor-not-allowed'
-                  : 'bg-theme-accent text-white hover:bg-theme-accent/90 border-transparent shadow-sm'
+                   ? 'bg-[#F5F0EA] border-[#D1C7BD] text-[#322D29]/50 opacity-80 cursor-not-allowed'
+                   : 'bg-[#72383D] text-white hover:bg-[#612F34] border-transparent shadow-sm'
               }`}
             >
               {isSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
@@ -304,12 +323,12 @@ export function SalesOrderPreparationPanel() {
                 placeholder="Buscar folio, cliente..."
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
-                className="w-full pl-8 pr-2 py-1.5 bg-theme-base border border-theme-border rounded text-[11px] text-theme-text font-medium focus:outline-none focus:border-theme-accent transition-colors placeholder:text-theme-text-muted/70"
+                className="w-full pl-8 pr-2 py-1.5 bg-white border border-[#D1C7BD] text-[#322D29] font-medium focus:outline-none focus:border-[#72383D] transition-colors placeholder:text-[#322D29]/40"
               />
             </div>
             <button
               onClick={() => setShowAdvanced(v => !v)}
-              className={`flex items-center gap-1 px-2.5 py-1.5 rounded border text-[11px] font-bold transition-colors ${showAdvanced ? 'bg-theme-accent/10 border-theme-accent/30 text-theme-accent' : 'bg-theme-base border-theme-border text-theme-text-muted hover:bg-theme-border/40'}`}
+               className={`flex items-center gap-1 px-2.5 py-1.5 border text-[11px] font-bold transition-colors ${showAdvanced ? 'bg-[#F5EDE9] border-[#72383D]/30 text-[#72383D]' : 'bg-white border-[#D1C7BD] text-[#322D29]/55 hover:bg-[#F5F0EA]'}`}
             >
               <SlidersHorizontal className="w-3.5 h-3.5" />
               Filtros
@@ -349,7 +368,7 @@ export function SalesOrderPreparationPanel() {
       </div>
 
       {/* ── Kanban Board ── */}
-      <div className="flex-1 overflow-x-auto overflow-y-hidden bg-slate-100/80 dark:bg-theme-base/40">
+      <div className="flex-1 overflow-x-auto overflow-y-hidden bg-[#EFE9E1]">
         {loading ? (
           <div className="h-full flex flex-col items-center justify-center text-theme-text-muted space-y-3">
             <Loader2 className="w-7 h-7 animate-spin text-theme-accent" />
@@ -368,13 +387,13 @@ export function SalesOrderPreparationPanel() {
                 <div className="grid h-full min-w-[1000px] grid-cols-[repeat(3,minmax(320px,1fr))] gap-4">
                   {COLUMNS.map(col => {
                     const colCards = filteredCards.filter(c => c.status === col.id)
-                    return <DroppableColumn key={col.id} col={col} colCards={colCards} onOpenCardDetails={openCardDetails} />
+                     return <DroppableColumn key={col.id} col={col} colCards={colCards} pendingCardIds={pendingCardIds} onOpenCardDetails={openCardDetails} />
                   })}
                 </div>
               </div>
               <DragOverlay zIndex={9999}>
                 {activeCard ? (
-                  <SalesOrderCard card={activeCard} isOverlay />
+                   <SalesOrderCard card={activeCard} isOverlay isPending={pendingCardIds.has(activeCard.card_id)} />
                 ) : null}
               </DragOverlay>
             </DndContext>
@@ -386,9 +405,7 @@ export function SalesOrderPreparationPanel() {
         items={selectedItems}
         isLoadingItems={loadingItems}
         onClose={() => setSelectedCard(null)}
-        onCardMoved={() => {
-          loadBoard()
-        }}
+        onTransition={transitionCard}
       />
       
       <MovementObservationDialog
@@ -396,11 +413,12 @@ export function SalesOrderPreparationPanel() {
         onClose={() => setPendingMovement(null)}
         onConfirm={(obs) => {
           if (pendingMovement) {
-            executeMove(pendingMovement.card, pendingMovement.toStatus, obs)
+             void transitionCard(pendingMovement.card, pendingMovement.toStatus, obs)
           }
         }}
         label={pendingMovement?.label ?? ''}
         isMoving={isMoving}
+        error={transitionError}
       />
 
     </div>

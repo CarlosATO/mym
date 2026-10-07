@@ -1,10 +1,9 @@
 'use client'
 
 import { X, MapPin, Package, User, FileText, FileCheck, CheckCircle2, Printer } from 'lucide-react'
-import { SalesOrderPreparationCardInfo, SalesOrderPreparationItem, getSalesOrderClientData, SalesOrderClientData, moveSalesOrderPreparationCard, getSalesOrderPreparationMovements, SalesOrderPreparationMovement } from '@/app/actions/logistica/sales-order-preparation'
+import { SalesOrderPreparationCardInfo, SalesOrderPreparationItem, getSalesOrderClientData, SalesOrderClientData, getSalesOrderPreparationMovements, SalesOrderPreparationMovement } from '@/app/actions/logistica/sales-order-preparation'
 import { SalesOrderPrintDocument } from './components/sales-order-print-document'
 import { useState, useEffect } from 'react'
-import { toast } from 'sonner'
 import { MOVEMENT_RULES } from './movement-rules'
 
 interface SalesOrderDrawerProps {
@@ -12,10 +11,12 @@ interface SalesOrderDrawerProps {
   items: SalesOrderPreparationItem[]
   isLoadingItems: boolean
   onClose: () => void
-  onCardMoved?: () => void
+  onTransition: (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string) => Promise<boolean>
 }
 
-export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onCardMoved }: SalesOrderDrawerProps) {
+const statusLabel = (status: string) => status === 'PENDING_ROUTE_PREP' ? 'Pendiente' : status === 'IN_PREPARATION' ? 'En preparación' : status === 'IN_AUDIT' ? 'En auditoría' : 'Estado operativo'
+
+export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTransition }: SalesOrderDrawerProps) {
   const [clientData, setClientData] = useState<SalesOrderClientData | null>(null)
   
   const [movements, setMovements] = useState<SalesOrderPreparationMovement[]>([])
@@ -65,27 +66,20 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onCardM
       setMoveError(null)
       return
     }
-    executeMove(toStatus)
+    void executeMove(toStatus)
   }
 
   const executeMove = async (toStatus: string, obs?: string) => {
     setIsMoving(true)
     setMoveError(null)
-    const res = await moveSalesOrderPreparationCard({
-      cardId: card.card_id,
-      toStatus,
-      observation: obs
-    })
+    const ok = await onTransition(card, toStatus, obs)
     setIsMoving(false)
-    if (!res.ok) {
-      setMoveError(res.error ?? 'Error desconocido')
-      toast.error(`Error al mover: ${res.error ?? 'Desconocido'}`)
+    if (!ok) {
+      setMoveError('No se pudo guardar el cambio. La tarjeta volvió a su estado anterior.')
       return
     }
-    toast.success(`NV #${card.nv_folio} movida exitosamente`)
     setPendingMoveAction(null)
     await loadMovements()
-    if (onCardMoved) onCardMoved()
   }
 
   const dateStr = new Date(card.nv_emission_date).toLocaleDateString('es-CL', { day: 'numeric', month: 'long', year: 'numeric' })
@@ -111,16 +105,16 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onCardM
       </div>
 
       <div 
-        className="fixed inset-0 bg-theme-base/80 backdrop-blur-sm z-50 transition-opacity drawer-no-print" 
+        className="fixed inset-0 bg-[#322D29]/35 backdrop-blur-sm z-50 transition-opacity drawer-no-print"
         onClick={onClose} 
       />
       
-      <div className="fixed inset-y-0 right-0 z-50 w-full max-w-xl bg-theme-panel border-l border-theme-border shadow-2xl flex flex-col transition-transform transform drawer-no-print">
+      <div className="fixed inset-y-0 right-0 z-50 w-full max-w-xl bg-[#EFE9E1] border-l border-[#D1C7BD] shadow-2xl flex flex-col transition-transform transform drawer-no-print">
         {/* Header */}
-        <div className="flex-none px-6 py-4 border-b border-theme-border bg-theme-panel-hover/50 flex items-center justify-between">
+        <div className="flex-none px-5 py-4 border-b border-[#D1C7BD] bg-white flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold text-theme-text flex items-center gap-2">
-              <FileText className="w-5 h-5 text-theme-accent" />
+               <FileText className="w-5 h-5 text-[#72383D]" />
               NV #{card.nv_folio}
             </h2>
             <p className="text-sm text-theme-text-muted mt-0.5">
@@ -136,10 +130,10 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onCardM
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+         <div className="flex-1 overflow-y-auto p-5 space-y-5">
           
           {/* Info Client & Route */}
-          <div className="bg-theme-border/20 rounded-xl p-4 space-y-4">
+           <div className="border border-[#D1C7BD] bg-white p-4 space-y-4">
             <div>
               <p className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider mb-1">Cliente</p>
               <p className="font-medium text-theme-text text-sm">{card.client_name}</p>
@@ -166,12 +160,10 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onCardM
             <h3 className="text-sm font-semibold text-theme-text uppercase tracking-wider flex items-center gap-2">
               Estado Operativo
             </h3>
-            <div className="bg-theme-border/20 rounded-xl p-4 flex items-center justify-between">
+             <div className="border border-[#D1C7BD] bg-white p-4 flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-theme-text">
-                  {card.status === 'PENDING_ROUTE_PREP' && 'Pendiente / Próxima ruta'}
-                  {card.status === 'IN_PREPARATION' && 'En preparación'}
-                  {card.status === 'IN_AUDIT' && 'En auditoría'}
+                  {statusLabel(card.status)}
                 </p>
                 {card.route_date && (
                   <p className="text-xs text-theme-text-muted mt-1">Ruta: {new Date(card.route_date).toLocaleDateString('es-CL')}</p>
@@ -180,12 +172,12 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onCardM
                   Preparación: {firstPrepMovement ? new Date(firstPrepMovement.created_at).toLocaleString('es-CL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Sin iniciar'}
                 </p>
               </div>
-              <div className={`px-3 py-1 rounded-full text-xs font-semibold
-                ${card.status === 'PENDING_ROUTE_PREP' ? 'bg-orange-500/10 text-orange-500' : ''}
-                ${card.status === 'IN_PREPARATION' ? 'bg-blue-500/10 text-blue-500' : ''}
-                ${card.status === 'IN_AUDIT' ? 'bg-purple-500/10 text-purple-500' : ''}
+               <div className={`px-2 py-0.5 border text-[9px] font-semibold uppercase tracking-[0.08em]
+                 ${card.status === 'PENDING_ROUTE_PREP' ? 'border-[#AC9C8D]/30 bg-[#F5F0EA] text-[#6B625C]' : ''}
+                 ${card.status === 'IN_PREPARATION' ? 'border-[#B38A55]/40 bg-[#F6EFE2] text-[#806238]' : ''}
+                 ${card.status === 'IN_AUDIT' ? 'border-[#72383D]/30 bg-[#F5EDE9] text-[#72383D]' : ''}
               `}>
-                {card.status.replace(/_/g, ' ')}
+                {statusLabel(card.status)}
               </div>
             </div>
           </div>
@@ -284,9 +276,9 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onCardM
                       {new Date(m.created_at).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                     </p>
                     <p className="mt-1">
-                      <span className="text-theme-text-muted/60">{m.from_status ? m.from_status.replace(/_/g, ' ') : 'N/A'}</span>
+                       <span className="text-theme-text-muted/60">{m.from_status ? statusLabel(m.from_status) : 'Inicio'}</span>
                       <span className="mx-1">→</span>
-                      <span className="font-semibold text-theme-accent">{m.to_status.replace(/_/g, ' ')}</span>
+                       <span className="font-semibold text-theme-accent">{statusLabel(m.to_status)}</span>
                     </p>
                     {m.observation && <p className="mt-1 italic opacity-80 text-orange-400">Obs: {m.observation}</p>}
                   </div>

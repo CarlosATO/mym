@@ -34,7 +34,7 @@ export function MovementObservationDialog({ isOpen, onClose, onConfirm, label, i
           onChange={e => setObservation(e.target.value)}
         />
         
-        {error && <p className="text-xs text-red-500 mb-4">{error}</p>}
+        {error && <p className="text-xs text-[#8A4B4B] mb-4">{error}</p>}
         
         <div className="flex gap-3 mt-auto">
           <button 
