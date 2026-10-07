@@ -427,7 +427,7 @@ SELECT
     (SELECT COUNT(d.id) FROM integraciones.bsale_document_details d WHERE d.company_id = nv.company_id AND d.bsale_document_id = nv.bsale_id) AS products_count,
     (SELECT SUM(d.quantity) FROM integraciones.bsale_document_details d WHERE d.company_id = nv.company_id AND d.bsale_document_id = nv.bsale_id) AS total_quantity,
     invoice_link.invoice_bsale_id,
-    invoice.number AS invoice_folio,
+    invoice.number::text AS invoice_folio,
     invoice.emission_date AS invoice_emission_date,
     (invoice_link.invoice_bsale_id IS NOT NULL) AS is_invoiced,
     nv.client_id AS client_bsale_id,
