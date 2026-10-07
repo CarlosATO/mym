@@ -1,4 +1,4 @@
-import { BarChart3, BookOpenText, Package, Truck, WalletCards } from 'lucide-react'
+import { BarChart3, BookOpenText, HandCoins, Package, Truck, WalletCards } from 'lucide-react'
 import type { BreadcrumbValue, ModuleNavigation } from '@/components/layout/module-shell-types'
 
 const analysisBase = '/dashboard/analisis-comercial'
@@ -17,15 +17,22 @@ export const analisisComercialNavigation: ModuleNavigation = {
           active: { pathname: { exact: analysisBase } },
         },
         {
+          id: 'cobranza',
+          label: '02  Cobranza',
+          icon: HandCoins,
+          target: { href: `${analysisBase}/cobranza` },
+          active: { pathname: { prefix: `${analysisBase}/cobranza` } },
+        },
+        {
           id: 'proveedor-360',
-          label: '02  Proveedor 360',
+          label: '03  Proveedor 360',
           icon: Truck,
           target: { href: `${analysisBase}/proveedor` },
           active: { pathname: { prefix: `${analysisBase}/proveedor` } },
         },
         {
           id: 'producto-360',
-          label: '03  Producto 360',
+          label: '04  Producto 360',
           icon: Package,
           target: { href: `${analysisBase}/producto` },
           active: { pathname: { prefix: `${analysisBase}/producto` } },
@@ -38,7 +45,7 @@ export const analisisComercialNavigation: ModuleNavigation = {
       items: [
         {
           id: 'control-financiero-summary',
-          label: '04  Resumen financiero',
+          label: '05  Resumen financiero',
           icon: WalletCards,
           target: { href: `${analysisBase}/control-financiero` },
           active: { pathname: { exact: `${analysisBase}/control-financiero` } },
@@ -46,28 +53,28 @@ export const analisisComercialNavigation: ModuleNavigation = {
         },
         {
           id: 'control-financiero-results',
-          label: '05  Estado de Resultados',
+          label: '06  Estado de Resultados',
           target: { href: `${analysisBase}/control-financiero/estado-resultados` },
           active: { pathname: { prefix: `${analysisBase}/control-financiero/estado-resultados` } },
           visibility: { anyOf: ['analisis_comercial.control_financiero.view', 'system.admin'] },
         },
         {
           id: 'control-financiero-cash-flow',
-          label: '06  Flujo de Caja',
+          label: '07  Flujo de Caja',
           target: { href: `${analysisBase}/control-financiero/flujo-caja` },
           active: { pathname: { prefix: `${analysisBase}/control-financiero/flujo-caja` } },
           visibility: { anyOf: ['analisis_comercial.control_financiero.view', 'system.admin'] },
         },
         {
           id: 'control-financiero-working-capital',
-          label: '07  Capital de Trabajo',
+          label: '08  Capital de Trabajo',
           target: { href: `${analysisBase}/control-financiero/capital-trabajo` },
           active: { pathname: { prefix: `${analysisBase}/control-financiero/capital-trabajo` } },
           visibility: { anyOf: ['analisis_comercial.control_financiero.view', 'system.admin'] },
         },
         {
           id: 'control-financiero-payroll',
-          label: '08  Libro de Remuneraciones',
+          label: '09  Libro de Remuneraciones',
           icon: BookOpenText,
           target: { href: `${analysisBase}/control-financiero/libro-remuneraciones` },
           active: { pathname: { prefix: `${analysisBase}/control-financiero/libro-remuneraciones` } },
@@ -84,6 +91,7 @@ export const getAnalisisComercialBreadcrumb: BreadcrumbValue = ({ pathname }) =>
   if (pathname.startsWith(`${analysisBase}/control-financiero/capital-trabajo`)) return ['Análisis Comercial', 'Control Financiero', 'Capital de Trabajo']
   if (pathname.startsWith(`${analysisBase}/control-financiero/libro-remuneraciones`)) return ['Análisis Comercial', 'Control Financiero', 'Libro de Remuneraciones']
   if (pathname.startsWith(`${analysisBase}/control-financiero`)) return ['Análisis Comercial', 'Control Financiero']
+  if (pathname.startsWith(`${analysisBase}/cobranza`)) return ['Análisis Comercial', 'Cobranza']
   if (pathname.startsWith(`${analysisBase}/proveedor`)) return ['Análisis Comercial', 'Proveedor 360']
   if (pathname.startsWith(`${analysisBase}/producto`)) return ['Análisis Comercial', 'Producto 360']
   return ['Análisis Comercial']
