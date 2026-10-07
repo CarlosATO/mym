@@ -8,6 +8,7 @@ import { runCatalogAutoSyncStep } from '@/lib/integraciones/bsale-catalog-auto-s
 import { canRefreshClientMetricsSnapshot } from '@/lib/integraciones/client-metrics-refresh-policy'
 import { syncBsaleStockKardex } from '@/lib/integraciones/bsale-stock-kardex'
 import { upsertBsaleDocument, upsertBsaleDocumentDetails } from '@/lib/integraciones/bsale-document-hydration'
+import { normalizeBsaleRelatedDetailId } from '@/lib/integraciones/bsale-invoice-sales-order-link'
 import { createClient as createServerSessionClient } from '@/lib/supabase/server'
 import crypto from 'crypto'
 
@@ -87,6 +88,7 @@ type BsalePreparationReference = {
 type BsalePreparationDetail = {
   id: number
   lineNumber?: number | null
+  relatedDetailId?: number | string | null
   quantity?: number | string | null
   netUnitValue?: number | string | null
   netUnitValueRaw?: number | string | null
@@ -1323,6 +1325,7 @@ async function syncDocuments(
               company_id: companyId,
               bsale_id: det.id,
               bsale_document_id: doc.id,
+              related_detail_bsale_id: normalizeBsaleRelatedDetailId(det.relatedDetailId),
               line_number: det.lineNumber ?? idx,
               quantity: det.quantity ?? 0,
               net_unit_value: det.netUnitValue ?? det.netUnitValueRaw ?? 0,
@@ -2303,9 +2306,9 @@ export async function releaseSyncLock(companyId: string, lockName: string, runId
 async function materializePreparationAfterSalesSync(companyId: string) {
   const { data, error } = await integrDb()
     .schema('logistica')
-    .rpc('materialize_bodega_preparation_cards', { p_company_id: companyId })
+    .rpc('reconcile_bodega_preparation_cards', { p_company_id: companyId })
 
-  if (error) throw new Error(`Error materializando preparación: ${error.message}`)
+  if (error) throw new Error(`Error reconciliando preparación: ${error.message}`)
   return data as {
     discovered?: number
     skipped_invoiced?: number
@@ -2663,6 +2666,7 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
 
     let offset = 0
     const bsaleDocsMap = new Map<number, BsalePreparationDocument>()
+    const invoiceDocsMap = new Map<number, BsalePreparationDocument>()
 
     const { baseUrl: prepBase, headers: prepHeaders } = bsaleConfig(companyId)
 
@@ -2713,6 +2717,9 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
       if (!Array.isArray(data.items)) throw new Error('Bsale invoice discovery response missing items')
 
       for (const invoice of data.items.filter(isBsalePreparationDocument)) {
+        if (Number(invoice.documentTypeId ?? invoice.document_type?.id) === 5) {
+          invoiceDocsMap.set(invoice.id, invoice)
+        }
         try {
           const refsResponse = await fetch(`${prepBase}/documents/${invoice.id}/references.json`, {
             headers: prepHeaders,
@@ -2754,7 +2761,12 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
       invoiceOffset += 50
     }
 
-    const allDocs = Array.from(bsaleDocsMap.values())
+    // Invoice details are part of the canonical NV -> Factura resolver because
+    // BSale exposes the source line through relatedDetailId.
+    const allDocs = [
+      ...Array.from(bsaleDocsMap.values()),
+      ...Array.from(invoiceDocsMap.values()),
+    ]
 
     let detailErrors = 0
     let detailsCount = 0
@@ -2815,9 +2827,10 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
 
            const detailRecords = details.map((detail, idx) => ({
              company_id: companyId,
-            bsale_id: detail.id,
-            bsale_document_id: doc.id,
-            line_number: detail.lineNumber ?? idx,
+             bsale_id: detail.id,
+             bsale_document_id: doc.id,
+             related_detail_bsale_id: normalizeBsaleRelatedDetailId(detail.relatedDetailId),
+             line_number: detail.lineNumber ?? idx,
             quantity: detail.quantity ?? 0,
             net_unit_value: detail.netUnitValue ?? detail.netUnitValueRaw ?? 0,
             total_unit_value: detail.totalUnitValue ?? 0,

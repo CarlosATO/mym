@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 // @ts-expect-error Standalone Node harnesses use explicit TypeScript extensions.
 import { getBsaleConfigForCompany } from '../bsale/company-config.ts'
+import { normalizeBsaleRelatedDetailId } from './bsale-invoice-sales-order-link'
 
 export interface BsaleDocumentPayload {
   id: number
@@ -26,6 +27,7 @@ export interface BsaleDocumentPayload {
 interface BsaleDocumentDetailPayload {
   id?: number | string | null
   lineNumber?: number | null
+  relatedDetailId?: number | string | null
   quantity?: number | string | null
   netUnitValue?: number | string | null
   netUnitValueRaw?: number | string | null
@@ -88,6 +90,7 @@ export function mapBsaleDocumentDetails(companyId: string, runId: string | null,
     company_id: companyId,
     bsale_id: numberOrNull(detail.id),
     bsale_document_id: documentId,
+    related_detail_bsale_id: normalizeBsaleRelatedDetailId(detail.relatedDetailId),
     line_number: detail.lineNumber ?? index,
     quantity: detail.quantity ?? 0,
     net_unit_value: detail.netUnitValue ?? detail.netUnitValueRaw ?? 0,
