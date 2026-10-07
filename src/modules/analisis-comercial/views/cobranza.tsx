@@ -22,7 +22,7 @@ import { Button } from '@/components/ui/button'
 import type { FinanceReceivablesAnalysis } from '@/lib/control-financiero/finance-api'
 import { FINANCE_RECEIVABLES_SNAPSHOT_SOURCE } from '@/lib/control-financiero/types'
 import { applyCobranzaPaymentOverlay, buildCobranzaClients, buildCobranzaInvoices, type CobranzaClient } from '../lib/cobranza-metrics'
-import { getCollectionCustomerHistory, getCollectionPaymentOverlay, getCollectionWorkflow, prepareCollectionCustomerBatch, prepareCollectionPayment, registerCollectionCustomerBatch, registerCollectionPayment, reopenCollectionCustomersWithDebt, updateCollectionStage, type CollectionHistoryEvent, type CollectionPaymentOverlay, type CollectionStage } from '@/app/actions/comercial/cobranza-workflow'
+import { getCollectionCustomerHistory, getCollectionPaymentOverlay, getCollectionWorkflow, prepareCollectionCustomerBatch, prepareCollectionPayment, registerCollectionCustomerBatch, registerCollectionInteraction, registerCollectionPayment, reopenCollectionCustomersWithDebt, updateCollectionStage, type CollectionHistoryEvent, type CollectionInteractionType, type CollectionPaymentOverlay, type CollectionStage } from '@/app/actions/comercial/cobranza-workflow'
 
 const stages: Array<{ key: CollectionStage; label: string }> = [
   { key: 'TO_MANAGE', label: 'Por gestionar' },
@@ -65,6 +65,7 @@ const historyTitle = (event: CollectionHistoryEvent) => {
   if (event.eventType === 'REOPENED_BY_NEW_DEBT') return 'Cobranza reabierta por nueva deuda'
   if (event.eventType === 'NOTE') return 'Nota de cobranza'
   if (event.eventType === 'CALL') return 'Llamada de cobranza'
+  if (event.eventType === 'MESSAGE') return 'Mensaje / WhatsApp'
   if (event.eventType === 'EMAIL') return 'Correo de cobranza'
   return 'Gestión de cobranza'
 }
@@ -143,6 +144,11 @@ function ClientPanel({
   const [stageNote, setStageNote] = useState('')
   const [stageError, setStageError] = useState<string | null>(null)
   const [stageProcessing, setStageProcessing] = useState(false)
+  const [interactionOpen, setInteractionOpen] = useState(false)
+  const [interactionType, setInteractionType] = useState<CollectionInteractionType>('NOTE')
+  const [interactionBody, setInteractionBody] = useState('')
+  const [interactionError, setInteractionError] = useState<string | null>(null)
+  const [interactionProcessing, setInteractionProcessing] = useState(false)
   const [history, setHistory] = useState<CollectionHistoryEvent[]>([])
   const [historyLoading, setHistoryLoading] = useState(true)
   const [historyError, setHistoryError] = useState<string | null>(null)
@@ -264,17 +270,29 @@ function ClientPanel({
   }
 
   const requestStage = async (nextStage: CollectionStage) => {
-    if (nextStage === 'TO_MANAGE') {
-      await onStageChange({ stage: nextStage })
-      await refreshHistory()
-      return
-    }
     setStageError(null)
     setStageNote('')
     setCommitmentAt('')
     setCommitmentAmount('')
     setNextActionAt('')
     setPendingStage(nextStage)
+  }
+
+  const confirmInteraction = async () => {
+    if (interactionProcessing) return
+    setInteractionProcessing(true)
+    setInteractionError(null)
+    try {
+      await registerCollectionInteraction({ clientId: client.clientId, type: interactionType, body: interactionBody })
+      setInteractionBody('')
+      setInteractionType('NOTE')
+      setInteractionOpen(false)
+      await refreshHistory()
+    } catch (cause) {
+      setInteractionError(cause instanceof Error ? cause.message : 'No se pudo guardar la gestión.')
+    } finally {
+      setInteractionProcessing(false)
+    }
   }
 
   const confirmStage = async () => {
@@ -323,13 +341,13 @@ function ClientPanel({
         setStageProcessing(false)
       }
     }
-    await refreshHistory()
     setCommitmentAt('')
     setCommitmentAmount('')
     setNextActionAt('')
     setStageNote('')
     setStageError(null)
     setPendingStage(null)
+    await refreshHistory()
   }
 
   return (
@@ -360,6 +378,7 @@ function ClientPanel({
         </button>
         <button type="button" disabled={paymentBusy} onClick={() => void prepareBatch()} className="mt-2 inline-flex items-center gap-2 border border-[#72383D]/30 bg-white px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">{batchPreparing && <LoaderCircle className="h-3 w-3 animate-spin" />}{batchPreparing ? 'Consultando saldos en Bsale…' : 'Registrar pago total'}</button>
         {batchError && <p className="mt-2 text-[10px] text-[#8A4B4B]">{batchError}</p>}
+        <button type="button" disabled={paymentBusy} onClick={() => { setInteractionError(null); setInteractionOpen(true) }} className="mt-2 inline-flex items-center gap-2 border border-[#72383D]/30 bg-white px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">Registrar gestión</button>
 
         <div className="mt-4 border border-[#D1C7BD] bg-white p-3">
           <label className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#72383D]">Etapa de cobranza</label>
@@ -369,22 +388,42 @@ function ClientPanel({
         <Dialog open={Boolean(pendingStage)} onOpenChange={open => { if (!open && !stageProcessing) setPendingStage(null) }}>
           <DialogContent className="border-[#D1C7BD] bg-[#FCFBF9] text-[#322D29]">
             <DialogHeader>
-              <DialogTitle>{stages.find(option => option.key === pendingStage)?.label}</DialogTitle>
-              <DialogDescription>Completa los datos de gestión para guardar esta etapa.</DialogDescription>
+              <DialogTitle>Guardar etapa</DialogTitle>
+              <DialogDescription>Registra el cambio de etapa y, opcionalmente, un comentario de gestión.</DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
+              <p className="text-xs"><strong>Etapa actual:</strong> {stageLabel(stage)}</p>
+              <p className="text-xs"><strong>Nueva etapa:</strong> {stageLabel(pendingStage)}</p>
               {pendingStage === 'PAYMENT_COMMITMENT' && <>
                 <label className="block text-xs font-semibold">Fecha comprometida<input type="date" value={commitmentAt} onChange={event => setCommitmentAt(event.target.value)} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>
                 <label className="block text-xs font-semibold">Monto comprometido<input type="number" min="1" value={commitmentAmount} onChange={event => setCommitmentAmount(event.target.value)} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>
                 <p className="text-[10px] text-[#322D29]/55">Máximo permitido: {money(client.totalAmount)}</p>
               </>}
               {pendingStage === 'FOLLOW_UP' && <label className="block text-xs font-semibold">Próxima fecha de seguimiento<input type="date" value={nextActionAt} onChange={event => setNextActionAt(event.target.value)} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>}
-              <label className="block text-xs font-semibold">Nota <textarea value={stageNote} onChange={event => setStageNote(event.target.value)} rows={3} className="mt-1 w-full resize-none border border-[#D1C7BD] bg-white p-2 text-xs" /></label>
+              <label className="block text-xs font-semibold">Comentario / nota de gestión <span className="font-normal text-[#322D29]/50">(opcional)</span><textarea value={stageNote} onChange={event => setStageNote(event.target.value)} rows={3} className="mt-1 w-full resize-none border border-[#D1C7BD] bg-white p-2 text-xs" /></label>
               {stageError && <p className="text-xs text-[#8A4B4B]">{stageError}</p>}
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" disabled={stageProcessing} onClick={() => setPendingStage(null)}>Cancelar</Button>
               <Button type="button" disabled={stageProcessing} onClick={() => void confirmStage()}>{stageProcessing ? 'Guardando etapa…' : 'Guardar etapa'}</Button>
+            </DialogFooter>
+         </DialogContent>
+        </Dialog>
+
+        <Dialog open={interactionOpen} onOpenChange={open => { if (!open && !interactionProcessing) setInteractionOpen(false) }}>
+          <DialogContent className="border-[#D1C7BD] bg-[#FCFBF9] text-[#322D29]">
+            <DialogHeader>
+              <DialogTitle>Registrar gestión</DialogTitle>
+              <DialogDescription>Registra una interacción sin cambiar la etapa de cobranza.</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <label className="block text-xs font-semibold">Tipo<select value={interactionType} onChange={event => setInteractionType(event.target.value as CollectionInteractionType)} disabled={interactionProcessing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs"><option value="NOTE">Nota</option><option value="CALL">Llamada</option><option value="MESSAGE">Mensaje / WhatsApp</option><option value="EMAIL">Correo</option></select></label>
+              <label className="block text-xs font-semibold">Descripción<textarea required maxLength={2000} value={interactionBody} onChange={event => setInteractionBody(event.target.value)} disabled={interactionProcessing} rows={4} className="mt-1 w-full resize-none border border-[#D1C7BD] bg-white p-2 text-xs" /></label>
+              {interactionError && <p className="text-xs text-[#8A4B4B]">{interactionError}</p>}
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" disabled={interactionProcessing} onClick={() => setInteractionOpen(false)}>Cancelar</Button>
+              <Button type="button" disabled={interactionProcessing} onClick={() => void confirmInteraction()}>{interactionProcessing ? 'Guardando gestión…' : 'Guardar gestión'}</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

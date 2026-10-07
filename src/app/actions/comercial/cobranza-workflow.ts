@@ -9,6 +9,7 @@ import { calendarDateToUnixSeconds, createCollectionPaymentGateway, dedupeCollec
 const db = () => createAdminClient().schema('comercial')
 
 export type CollectionStage = 'TO_MANAGE' | 'IN_PROGRESS' | 'PAYMENT_COMMITMENT' | 'FOLLOW_UP' | 'CLOSED'
+export type CollectionInteractionType = 'NOTE' | 'CALL' | 'MESSAGE' | 'EMAIL'
 
 export type CollectionHistoryEvent = {
   id: string
@@ -180,6 +181,29 @@ export async function updateCollectionStage(input: {
       created_by: user.id,
     })
   if (event.error) throw new Error(event.error.message)
+  return { ok: true as const }
+}
+
+export async function registerCollectionInteraction(input: {
+  clientId: number
+  type: CollectionInteractionType
+  body: string
+}) {
+  const { companyId, user } = await context()
+  if (!Number.isInteger(input.clientId) || input.clientId <= 0) throw new Error('Cliente de cobranza inválido.')
+  if (!['NOTE', 'CALL', 'MESSAGE', 'EMAIL'].includes(input.type)) throw new Error('Tipo de gestión inválido.')
+  const body = input.body.trim()
+  if (!body) throw new Error('La descripción de la gestión es obligatoria.')
+  if (body.length > 2000) throw new Error('La descripción no puede superar los 2000 caracteres.')
+  const { error } = await db().from('collection_customer_events').insert({
+    company_id: companyId,
+    client_id: input.clientId,
+    event_type: input.type,
+    body,
+    metadata: {},
+    created_by: user.id,
+  })
+  if (error) throw new Error(error.message)
   return { ok: true as const }
 }
 
