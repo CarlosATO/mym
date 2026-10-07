@@ -10,10 +10,9 @@ interface WmsShellProps {
   pageTitle: string
   breadcrumb: string[]
   permissions: string[]
-  compactSurface?: boolean
 }
 
-export function WmsShell({ children, profile, permissions, pageTitle, breadcrumb, compactSurface = false }: WmsShellProps) {
+export function WmsShell({ children, profile, permissions, pageTitle, breadcrumb }: WmsShellProps) {
   const pathname = usePathname()
   const isMermasContext = pathname.startsWith('/dashboard/logistica/mermas')
 
@@ -25,11 +24,11 @@ export function WmsShell({ children, profile, permissions, pageTitle, breadcrumb
       permissions={permissions}
       pageTitle={pageTitle}
       breadcrumb={breadcrumb}
-      surfaceMode={isMermasContext ? 'none' : compactSurface ? 'compact' : 'standard'}
+      surfaceMode="none"
       showPortalLink
       topbarVariant="module"
-      sidebarVariant={isMermasContext ? 'financial' : 'default'}
-      themeVariant={isMermasContext ? 'financial' : 'default'}
+      sidebarVariant="financial"
+      themeVariant="financial"
     >
       {children}
     </ModuleShell>

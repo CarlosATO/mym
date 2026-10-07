@@ -132,7 +132,7 @@ export function LogisticaLayoutClient({ children, profile, permissions }: Logist
     content = <AccessDenied />
   } else if (activeTab === 'inicio') {
     content = (
-      <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px]">
+        <div className="min-h-[300px] border border-[#D1C7BD] bg-[#FCFBF9] p-4 shadow-[0_8px_24px_rgba(50,45,41,0.05)] lg:p-5">
         <div className="max-w-xl">
           <h2 className="text-lg font-semibold text-theme-text">WMS · Warehouse Management System</h2>
           <p className="text-sm text-theme-text-muted/60 mt-2">
@@ -153,7 +153,7 @@ export function LogisticaLayoutClient({ children, profile, permissions }: Logist
       content = <DispatchCalendarSettings isSuperUser={profile.roles?.name === 'SUPER_USUARIO'} />
     } else {
       content = (
-        <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px] flex flex-col justify-between">
+        <div className="flex min-h-[300px] flex-col justify-between border border-[#D1C7BD] bg-[#FCFBF9] p-4 shadow-[0_8px_24px_rgba(50,45,41,0.05)] lg:p-5">
           <div>
             <h2 className="text-lg font-semibold text-theme-text">Parámetros Operativos</h2>
             <p className="text-sm text-theme-text-muted/60 mt-2">Gestión y configuración base del módulo WMS.</p>
@@ -175,7 +175,7 @@ export function LogisticaLayoutClient({ children, profile, permissions }: Logist
       content = <RouteGuidesPanel />
     } else {
       content = (
-        <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px] flex flex-col justify-between">
+        <div className="flex min-h-[300px] flex-col justify-between border border-[#D1C7BD] bg-[#FCFBF9] p-4 shadow-[0_8px_24px_rgba(50,45,41,0.05)] lg:p-5">
           <div>
             <h2 className="text-lg font-semibold text-theme-text">Movimientos de Inventario</h2>
             <p className="text-sm text-theme-text-muted/60 mt-2">Acción de movimiento físico de mercadería.</p>
@@ -195,7 +195,7 @@ export function LogisticaLayoutClient({ children, profile, permissions }: Logist
       content = <KardexPanel />
     } else {
       content = (
-        <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px] flex flex-col justify-between">
+        <div className="flex min-h-[300px] flex-col justify-between border border-[#D1C7BD] bg-[#FCFBF9] p-4 shadow-[0_8px_24px_rgba(50,45,41,0.05)] lg:p-5">
           <div>
             <h2 className="text-lg font-semibold text-theme-text">Consulta de Trazabilidad</h2>
             <p className="text-sm text-theme-text-muted/60 mt-2">Trazabilidad histórica de stock.</p>
@@ -208,7 +208,7 @@ export function LogisticaLayoutClient({ children, profile, permissions }: Logist
     }
   } else {
     content = (
-      <div className="rounded-2xl border border-theme-border bg-theme-text/5 p-6 lg:p-8 min-h-[300px] flex flex-col justify-between">
+      <div className="flex min-h-[300px] flex-col justify-between border border-[#D1C7BD] bg-[#FCFBF9] p-4 shadow-[0_8px_24px_rgba(50,45,41,0.05)] lg:p-5">
         <div>
           <h2 className="text-lg font-semibold text-theme-text">Módulo WMS</h2>
           <p className="text-sm text-theme-text-muted/60 mt-2">Sección en desarrollo.</p>
@@ -236,7 +236,7 @@ export function LogisticaLayoutClient({ children, profile, permissions }: Logist
   const currentPage = pageHeaders[activeActionId] ?? pageHeaders.resumen
 
   return (
-    <WmsShell pageTitle={currentPage.title} breadcrumb={currentPage.breadcrumb} profile={profile} permissions={permissions} compactSurface={activeActionId === 'calendario_despacho'}>
+    <WmsShell pageTitle={currentPage.title} breadcrumb={currentPage.breadcrumb} profile={profile} permissions={permissions}>
       {content}
     </WmsShell>
   )

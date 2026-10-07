@@ -317,7 +317,7 @@ export function SalesOrderPreparationPanel() {
             </button>
 
             <div className="relative w-40 ml-2">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-text-muted" />
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#322D29]/40" />
               <input
                 type="text"
                 placeholder="Buscar folio, cliente..."
@@ -338,11 +338,11 @@ export function SalesOrderPreparationPanel() {
 
         {/* Filters Expansion */}
         {showAdvanced && (
-          <div className="flex items-center gap-2 mt-3 pt-3 border-t border-theme-border/50">
+          <div className="flex items-center gap-2 mt-3 pt-3 border-t border-[#D1C7BD]">
             <select
               value={filterCity}
               onChange={e => setFilterCity(e.target.value)}
-              className="py-1.5 px-2 bg-theme-base border border-theme-border rounded text-[11px] font-medium text-theme-text focus:outline-none focus:border-theme-accent"
+              className="py-1.5 px-2 bg-white border border-[#D1C7BD] text-[11px] font-medium text-[#322D29] focus:outline-none focus:border-[#72383D]"
             >
               <option value="">Todas las comunas</option>
               {cities.map(c => <option key={c} value={c}>{c}</option>)}
@@ -350,7 +350,7 @@ export function SalesOrderPreparationPanel() {
             <select
               value={filterSeller}
               onChange={e => setFilterSeller(e.target.value)}
-              className="py-1.5 px-2 bg-theme-base border border-theme-border rounded text-[11px] font-medium text-theme-text focus:outline-none focus:border-theme-accent"
+              className="py-1.5 px-2 bg-white border border-[#D1C7BD] text-[11px] font-medium text-[#322D29] focus:outline-none focus:border-[#72383D]"
             >
               <option value="">Todos los vendedores</option>
               {sellers.map(s => <option key={s} value={s}>{s}</option>)}
@@ -358,7 +358,7 @@ export function SalesOrderPreparationPanel() {
             {hasFilters && (
               <button
                 onClick={clearFilters}
-                className="flex items-center gap-1 px-2 py-1.5 text-[10px] font-bold text-theme-text-muted hover:text-theme-text transition-colors ml-auto bg-theme-base rounded border border-transparent hover:border-theme-border"
+                className="flex items-center gap-1 px-2 py-1.5 text-[10px] font-bold text-[#322D29]/55 hover:text-[#322D29] transition-colors ml-auto bg-white border border-transparent hover:border-[#D1C7BD]"
               >
                 <RotateCcw className="w-3.5 h-3.5" /> Limpiar filtros
               </button>
@@ -370,12 +370,12 @@ export function SalesOrderPreparationPanel() {
       {/* ── Kanban Board ── */}
       <div className="flex-1 overflow-x-auto overflow-y-hidden bg-[#EFE9E1]">
         {loading ? (
-          <div className="h-full flex flex-col items-center justify-center text-theme-text-muted space-y-3">
-            <Loader2 className="w-7 h-7 animate-spin text-theme-accent" />
+            <div className="h-full flex flex-col items-center justify-center text-[#322D29]/55 space-y-3">
+             <Loader2 className="w-7 h-7 animate-spin text-[#72383D]" />
             <p className="text-sm font-medium">Cargando tablero…</p>
           </div>
         ) : error ? (
-          <div className="h-full flex items-center justify-center text-red-500 text-sm font-medium">{error}</div>
+          <div className="h-full flex items-center justify-center text-[#8A4B4B] text-sm font-medium">{error}</div>
         ) : (
           <DndContext
               sensors={sensors}

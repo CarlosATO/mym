@@ -59,8 +59,9 @@ export function AppTopbar({ profile, activeCompany, permissions, moduleName }: A
   const locationName = moduleName ?? getLocationName(pathname)
   const isAnalysisCommercialSurface = pathname.startsWith('/dashboard/analisis-comercial')
   const isAdquisicionesSurface = pathname.startsWith('/dashboard/adquisiciones')
+  const isWmsSurface = pathname.startsWith('/dashboard/logistica')
   const isMermasSurface = pathname.startsWith('/dashboard/logistica/mermas')
-  const usesExecutiveTheme = isAnalysisCommercialSurface || isAdquisicionesSurface || isMermasSurface
+  const usesExecutiveTheme = isAnalysisCommercialSurface || isAdquisicionesSurface || isWmsSurface || isMermasSurface
   const isFinancialSurface = pathname.startsWith('/dashboard/analisis-comercial/control-financiero')
   const visibleCompanyName = isFinancialSurface ? getFinancialCompanyDisplayName(activeCompany) : (activeCompany.trade_name || activeCompany.business_name)
 
