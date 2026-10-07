@@ -115,9 +115,6 @@ export function NewMermaForm() {
       } else if (line.product.stock_available <= 0) {
         next.product = "El producto no tiene stock disponible en Bsale.";
       }
-      if (line.product && (line.product.wms_stock_available === null || line.product.wms_stock_available <= 0)) {
-        next.product = "El producto no tiene stock disponible en WMS.";
-      }
       if (Number(line.quantity) <= 0 || !Number.isFinite(Number(line.quantity))) {
         next.quantity = "Ingresa una cantidad válida.";
       }
@@ -148,13 +145,6 @@ export function NewMermaForm() {
         (requestedByVariant.get(product.id) ?? 0) > product.stock_available
       ) {
         next.quantity = "La cantidad acumulada supera el stock disponible en Bsale.";
-      }
-      if (
-        product &&
-        product.wms_stock_available !== null &&
-        (requestedByVariant.get(product.id) ?? 0) > product.wms_stock_available
-      ) {
-        next.quantity = "La cantidad acumulada supera el stock disponible en WMS.";
       }
     });
     setLineErrors(errors);
@@ -494,7 +484,9 @@ function EvidenceLine({
                       : `Stock Bsale: ${line.product.stock_available}`}
                 </span>
                 <span className="ml-2 text-[10px] font-semibold text-theme-accent">
-                  WMS: {line.product.wms_stock_available ?? "—"} u. · {line.product.wms_location_count} ubic.
+                  WMS: {line.product.wms_stock_available != null && line.product.wms_stock_available > 0
+                    ? `${line.product.wms_stock_available} u. · ${line.product.wms_location_count} ubic.`
+                    : "Sin trazabilidad"}
                 </span>
               </span>
               <button
@@ -562,9 +554,7 @@ function EvidenceLine({
                     const selectable =
                       !product.is_pack &&
                       product.stock_available !== null &&
-                      product.stock_available > 0 &&
-                      product.wms_stock_available !== null &&
-                      product.wms_stock_available > 0;
+                      product.stock_available > 0;
                     return <button
                     type="button"
                     key={product.id}
@@ -594,7 +584,9 @@ function EvidenceLine({
                         : `Stock Bsale: ${product.stock_available}`}
                     </span>
                     <span className="ml-2 text-[10px] font-semibold text-theme-accent">
-                      WMS: {product.wms_stock_available ?? "—"} u. · {product.wms_location_count} ubic.
+                      WMS: {product.wms_stock_available != null && product.wms_stock_available > 0
+                        ? `${product.wms_stock_available} u. · ${product.wms_location_count} ubic.`
+                        : "Sin trazabilidad"}
                     </span>
                     {product.is_pack && (
                       <span className="mt-1 block text-[10px] text-amber-700">

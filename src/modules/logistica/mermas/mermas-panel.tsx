@@ -1854,7 +1854,7 @@ function MermaDetail({ requestId }: { requestId: string }) {
                            <span className="ml-1 text-[10px] uppercase text-theme-accent">{allocation.status}</span>
                          </div>
                        ))}
-                     {!request.wms_allocations?.some((allocation) => allocation.request_line_id === line.id) && "Pendiente de asignación"}
+                      {!request.wms_allocations?.some((allocation) => allocation.request_line_id === line.id) && "Sin trazabilidad WMS"}
                    </td>
                   <td className="px-3 py-2 text-theme-text-muted">
                     {line.observation || "-"}
