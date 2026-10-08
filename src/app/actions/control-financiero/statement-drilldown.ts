@@ -48,7 +48,11 @@ export type StatementDrilldownItem = {
   classificationSource: string | null
   reviewStatus: string | null
   note: string | null
-  source: 'BANK' | 'PAYROLL'
+  accountingPeriod: string | null
+  documentNumber: string | null
+  sourceType: string | null
+  status: string | null
+  source: 'BANK' | 'PAYROLL' | 'RECOGNIZED'
   workerRut: string | null
   workerName: string | null
   earnings: string | null
@@ -113,6 +117,10 @@ function bankItem(row: any, categoryName: string | null, personnel: any | null):
     classificationSource: row.classification_source ?? null,
     reviewStatus: row.review_status ?? null,
     note: row.classification_note ?? null,
+    accountingPeriod: null,
+    documentNumber: null,
+    sourceType: null,
+    status: null,
     source: 'BANK',
     workerRut: null,
     workerName: null,
@@ -136,6 +144,10 @@ function payrollItem(row: any, importRow: any, amount: number): StatementDrilldo
     classificationSource: null,
     reviewStatus: null,
     note: null,
+    accountingPeriod: null,
+    documentNumber: null,
+    sourceType: null,
+    status: null,
     source: 'PAYROLL',
     workerRut: row.worker_rut_original ?? null,
     workerName: row.worker_name_snapshot ?? null,
@@ -145,6 +157,33 @@ function payrollItem(row: any, importRow: any, amount: number): StatementDrilldo
     paymentConcept: null,
     payrollStatus: null,
     importFilename: importRow.source_filename ?? null,
+  }
+}
+
+function recognizedExpenseItem(row: any, categoryName: string | null): StatementDrilldownItem {
+  return {
+    id: row.id,
+    date: row.document_date ?? `${row.period_year}-${String(row.period_month).padStart(2, '0')}-01`,
+    amount: money(row.recognized_amount),
+    description: row.description,
+    category: categoryName,
+    counterparty: row.counterparty_name ?? null,
+    classificationSource: row.source_type ?? null,
+    reviewStatus: row.status ?? null,
+    note: row.notes ?? null,
+    accountingPeriod: `${row.period_year}-${String(row.period_month).padStart(2, '0')}`,
+    documentNumber: row.document_number ?? null,
+    sourceType: row.source_type ?? null,
+    status: row.status ?? null,
+    source: 'RECOGNIZED',
+    workerRut: null,
+    workerName: null,
+    earnings: null,
+    employerContributions: null,
+    beneficiary: null,
+    paymentConcept: null,
+    payrollStatus: null,
+    importFilename: null,
   }
 }
 
@@ -216,7 +255,7 @@ export async function loadStatementDrilldown(input: {
             ? (payrollImports ?? []).map((row: any) => Number(row.period_month))
             : Array.from({ length: Math.min(input.throughMonth, 12) }, (_, index) => index + 1),
       )
-    if (isExpense && monthSet.size === 0) return { ok: false, message: 'No hay cobertura bancaria para el período solicitado.' }
+    if (isExpense && monthSet.size === 0) return { ok: false, message: 'No hay cobertura financiera para el período solicitado.' }
 
     const items: StatementDrilldownItem[] = []
 
@@ -248,6 +287,21 @@ export async function loadStatementDrilldown(input: {
         if (isExpense && row.transaction_date >= FINANCIAL_DAILY_REVIEW_CUTOFF && row.review_status !== 'REVIEWED') continue
         if (isPersonnel && !monthSet.has(movementMonth)) continue
         items.push(bankItem(row, category?.name ?? null, personnelByMovement.get(row.id) ?? null))
+      }
+      if (isExpense && requestedCategoryIds.length > 0) {
+        const recognizedResult = await db()
+          .from('financial_expense_entries')
+          .select('id,period_year,period_month,recognized_amount,category_id,description,counterparty_name,source_type,document_date,document_number,notes,status')
+          .eq('company_id', companyId)
+          .eq('period_year', input.year)
+          .eq('status', 'POSTED')
+          .in('category_id', requestedCategoryIds)
+          .order('period_month', { ascending: true })
+        if (recognizedResult.error) throw new Error(recognizedResult.error.message)
+        for (const row of recognizedResult.data ?? []) {
+          if (!monthSet.has(Number(row.period_month))) continue
+          items.push(recognizedExpenseItem(row, categoryById.get(row.category_id)?.name ?? null))
+        }
       }
     }
 

@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { buildStatementRows } from '../src/lib/control-financiero/statement.ts'
+
+const financeApiExpenses = await readFile(new URL('../services/finance-api/app/financial/expenses.py', import.meta.url), 'utf8')
+const drilldown = await readFile(new URL('../src/app/actions/control-financiero/statement-drilldown.ts', import.meta.url), 'utf8')
 
 const sales = {
   company_id: 'company',
@@ -66,4 +70,15 @@ test('renders missing expense months as null and compares YTD with covered-perio
   assert.equal(operating?.values[9], null)
   assert.equal(operating?.ytdMissing, 1)
   assert.equal(operating?.percentageYtd, 159 / 9000 * 100)
+})
+
+test('recognized expenses use POSTED accounting periods and expose drilldown traceability', () => {
+  assert.match(financeApiExpenses, /expense\.status = 'POSTED'/)
+  assert.match(financeApiExpenses, /expense\.period_year = :year/)
+  assert.match(financeApiExpenses, /period_month AS month/)
+  assert.match(financeApiExpenses, /available_periods/)
+  assert.match(financeApiExpenses, /financial_expense_bank_links/)
+  assert.match(financeApiExpenses, /allocated_amount/)
+  assert.match(drilldown, /source: 'RECOGNIZED'/)
+  assert.match(drilldown, /document_number/)
 })

@@ -7,6 +7,8 @@ const allowlistMigration = await readFile(new URL('../supabase/migrations/202610
 const actions = await readFile(new URL('../src/app/actions/control-financiero/recognized-expenses.ts', import.meta.url), 'utf8')
 const page = await readFile(new URL('../src/app/dashboard/analisis-comercial/control-financiero/gastos-reconocidos/page.tsx', import.meta.url), 'utf8')
 const client = await readFile(new URL('../src/modules/analisis-comercial/control-financiero/components/recognized-expenses-client.tsx', import.meta.url), 'utf8')
+const financeExpenses = await readFile(new URL('../services/finance-api/app/financial/expenses.py', import.meta.url), 'utf8')
+const drilldown = await readFile(new URL('../src/app/actions/control-financiero/statement-drilldown.ts', import.meta.url), 'utf8')
 
 test('recognized expense model is independent and multi-bank capable', () => {
   assert.match(migration, /create table comercial\.financial_expense_entries/)
@@ -36,8 +38,14 @@ test('server actions enforce company and functional write permission', () => {
   assert.match(actions, /idempotencyKey/)
 })
 
-test('UI exposes the independent recognized-expense workflow without P&L integration', () => {
+test('recognized posted expenses integrate with P&L without coupling the UI', () => {
   assert.match(client, /Gastos Reconocidos/)
   assert.match(client, /createRecognizedExpense|postRecognizedExpense|voidRecognizedExpense/)
   assert.doesNotMatch(page, /estado-resultados|statement|expenses\.py/)
+  assert.match(financeExpenses, /financial_expense_entries/)
+  assert.match(financeExpenses, /expense\.status = 'POSTED'/)
+  assert.match(financeExpenses, /expense\.period_year = :year/)
+  assert.match(financeExpenses, /period_month AS month/)
+  assert.match(drilldown, /source: 'RECOGNIZED'/)
+  assert.match(drilldown, /document_number/)
 })

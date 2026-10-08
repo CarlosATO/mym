@@ -17,7 +17,7 @@ from app.db.connection import get_session_factory
 
 logger = logging.getLogger(__name__)
 FINANCIAL_DAILY_REVIEW_CUTOFF = date(2026, 10, 1)
-EXPENSES_SOURCE = "comercial.financial_bank_movements"
+EXPENSES_SOURCE = "comercial.financial_bank_movements + comercial.financial_expense_entries"
 EXPENSE_CATEGORIES = (
     "EXPENSE_SOFTWARE_SUBSCRIPTIONS",
     "EXPENSE_OFFICE_CONSUMPTION",
@@ -48,8 +48,8 @@ MONTHLY_EXPENSES_SQL = text(
             'EXPENSE_BANK_FEES',
             'EXPENSE_FINANCIAL_INTEREST',
             'EXPENSE_INSURANCE',
-            'EXPENSE_TELECOM',
-            'EXPENSE_EXTERNAL_SERVICES'
+             'EXPENSE_TELECOM',
+             'EXPENSE_EXTERNAL_SERVICES'
           )
           AND NOT EXISTS (
             SELECT 1
@@ -59,29 +59,82 @@ MONTHLY_EXPENSES_SQL = text(
               AND child.is_active
           )
     ),
-    movements AS (
+    bank_movements AS (
         SELECT
             EXTRACT(MONTH FROM movement.transaction_date)::integer AS month,
             category.code AS category_code,
-            COALESCE(SUM(movement.debit_amount), 0)::numeric AS amount
+            COALESCE(SUM(GREATEST(
+              movement.debit_amount - COALESCE((
+                SELECT SUM(link.allocated_amount)
+                FROM comercial.financial_expense_bank_links AS link
+                JOIN comercial.financial_expense_entries AS linked_expense
+                  ON linked_expense.company_id = link.company_id
+                 AND linked_expense.id = link.expense_entry_id
+                WHERE link.company_id = movement.company_id
+                  AND link.bank_movement_id = movement.id
+                  AND linked_expense.status = 'POSTED'
+              ), 0), 0
+            )), 0)::numeric AS amount
         FROM comercial.financial_bank_movements AS movement
         JOIN comercial.financial_categories AS category
           ON category.company_id = movement.company_id
          AND category.id = movement.category_id
-        JOIN approved_categories AS approved
-          ON approved.code = category.code
+         JOIN approved_categories AS approved
+           ON approved.code = category.code
         WHERE movement.company_id = :company_id
           AND movement.transaction_date >= :date_from
-          AND movement.transaction_date < :date_to
-          AND (movement.transaction_date < DATE '2026-10-01' OR movement.review_status = 'REVIEWED')
-        GROUP BY EXTRACT(MONTH FROM movement.transaction_date)::integer, category.code
+           AND movement.transaction_date < :date_to
+            AND category.affects_pnl_directly
+            AND movement.direction = 'DEBE'
+           AND (movement.transaction_date < DATE '2026-10-01' OR movement.review_status = 'REVIEWED')
+           AND NOT EXISTS (
+             SELECT 1
+             FROM comercial.financial_loan_payments AS loan_payment
+             WHERE loan_payment.company_id = movement.company_id
+               AND loan_payment.bank_movement_id = movement.id
+               AND loan_payment.status IN ('POSTED', 'VOIDED')
+           )
+          GROUP BY movement.id, EXTRACT(MONTH FROM movement.transaction_date)::integer, category.code
+    ),
+    recognized_movements AS (
+        SELECT
+            period_month AS month,
+            category.code AS category_code,
+            COALESCE(SUM(expense.recognized_amount), 0)::numeric AS amount
+        FROM comercial.financial_expense_entries AS expense
+        JOIN comercial.financial_categories AS category
+          ON category.company_id = expense.company_id
+         AND category.id = expense.category_id
+        WHERE expense.company_id = :company_id
+          AND expense.period_year = :year
+          AND expense.status = 'POSTED'
+          AND category.code IN (SELECT code FROM approved_categories)
+        GROUP BY period_month, category.code
+    ),
+    available_periods AS (
+        SELECT company_id, month, last_transaction_date
+        FROM comercial.financial_statement_periods
+        WHERE company_id = :company_id
+          AND year = :year
+        UNION
+        SELECT :company_id, month, NULL::date
+        FROM recognized_movements
+    ),
+    movements AS (
+        SELECT month, category_code, SUM(amount)::numeric AS amount
+        FROM (
+          SELECT month, category_code, amount FROM bank_movements
+          UNION ALL
+          SELECT month, category_code, amount FROM recognized_movements
+        ) sources
+        GROUP BY month, category_code
     )
     SELECT
         statement.month,
         statement.last_transaction_date,
         movements.category_code,
         movements.amount
-    FROM comercial.financial_statement_periods AS statement
+        FROM available_periods AS statement
     LEFT JOIN movements
       ON movements.month = statement.month
     WHERE statement.company_id = :company_id
@@ -160,13 +213,14 @@ def _get_expenses_from_supabase(settings: Any, company_id: UUID, year: int) -> d
         settings,
         "financial_categories",
         {
-            "select": "id,code",
+            "select": "id,code,affects_pnl_directly",
             "company_id": f"eq.{company}",
             "is_active": "eq.true",
             "code": f"in.({','.join(EXPENSE_CATEGORIES)})",
         },
     )
     category_codes = {row["id"]: row["code"] for row in categories}
+    direct_category_ids = {row["id"] for row in categories if row.get("affects_pnl_directly") is True}
     if set(category_codes.values()) != set(EXPENSE_CATEGORIES):
         raise RuntimeError("Required expense categories are unavailable")
 
@@ -184,13 +238,49 @@ def _get_expenses_from_supabase(settings: Any, company_id: UUID, year: int) -> d
         settings,
         "financial_bank_movements",
         [
-            ("select", "transaction_date,debit_amount,category_id,review_status"),
+            ("select", "id,transaction_date,debit_amount,category_id,review_status"),
             ("company_id", f"eq.{company}"),
             ("transaction_date", f"gte.{year}-01-01"),
             ("transaction_date", f"lt.{year + 1}-01-01"),
             ("category_id", f"in.({','.join(category_codes)})"),
+            ("direction", "eq.DEBE"),
         ],
     )
+    recognized_rows = _supabase_get(
+        settings,
+        "financial_expense_entries",
+        [
+            ("select", "id,period_month,category_id,recognized_amount,status"),
+            ("company_id", f"eq.{company}"),
+            ("period_year", f"eq.{year}"),
+            ("status", "eq.POSTED"),
+            ("category_id", f"in.({','.join(category_codes)})"),
+        ],
+    )
+    posted_expense_ids = {row.get("id") for row in recognized_rows if row.get("id") and row.get("status") == "POSTED"}
+    linked_rows = _supabase_get(
+        settings,
+        "financial_expense_bank_links",
+        [
+            ("select", "bank_movement_id,expense_entry_id"),
+            ("company_id", f"eq.{company}"),
+        ],
+    )
+    loan_payment_rows = _supabase_get(
+        settings,
+        "financial_loan_payments",
+        [
+            ("select", "bank_movement_id,status"),
+            ("company_id", f"eq.{company}"),
+            ("bank_movement_id", "not.is.null"),
+        ],
+    )
+    loan_linked_bank_ids = {row.get("bank_movement_id") for row in loan_payment_rows if row.get("bank_movement_id") and row.get("status") in {"POSTED", "VOIDED"}}
+    allocated_by_bank_id: dict[str, Decimal] = {}
+    for row in linked_rows:
+        if row.get("bank_movement_id") and row.get("expense_entry_id") in posted_expense_ids:
+            bank_id = str(row["bank_movement_id"])
+            allocated_by_bank_id[bank_id] = allocated_by_bank_id.get(bank_id, Decimal("0")) + _money(row.get("allocated_amount"))
     pending_rows = _supabase_get(
         settings,
         "financial_bank_movements",
@@ -225,16 +315,34 @@ def _get_expenses_from_supabase(settings: Any, company_id: UUID, year: int) -> d
 
     aggregates: dict[tuple[int, str], Decimal] = {}
     for row in bank_rows:
+        if row.get("id") in loan_linked_bank_ids:
+            continue
         month = date.fromisoformat(row["transaction_date"]).month
         category = category_codes[row["category_id"]]
+        if row.get("category_id") not in direct_category_ids:
+            continue
         if date.fromisoformat(row["transaction_date"]) >= FINANCIAL_DAILY_REVIEW_CUTOFF and row.get("review_status") != "REVIEWED":
             continue
+        residual = max(Decimal("0"), _money(row.get("debit_amount")) - allocated_by_bank_id.get(str(row.get("id")), Decimal("0")))
+        if residual == 0:
+            continue
         key = (month, category)
-        aggregates[key] = aggregates.get(key, Decimal("0")) + _money(row.get("debit_amount"))
+        aggregates[key] = aggregates.get(key, Decimal("0")) + residual
+    for row in recognized_rows:
+        if row.get("period_month") is None or row.get("category_id") not in category_codes:
+            continue
+        key = (int(row["period_month"]), category_codes[row["category_id"]])
+        aggregates[key] = aggregates.get(key, Decimal("0")) + _money(row.get("recognized_amount"))
     movement_rows = [
         {"month": month, "category_code": category, "amount": amount}
         for (month, category), amount in sorted(aggregates.items())
     ]
+    covered_months = {int(row["month"]) for row in statement_rows}
+    statement_rows.extend(
+        {"month": int(row["period_month"]), "last_transaction_date": None}
+        for row in recognized_rows
+        if row.get("period_month") is not None and int(row["period_month"]) not in covered_months
+    )
     return build_expenses_response(company_id, year, statement_rows, movement_rows, len(pending_rows), historical_pending_amount)
 
 

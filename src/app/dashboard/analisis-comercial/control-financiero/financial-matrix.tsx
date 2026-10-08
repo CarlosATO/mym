@@ -758,11 +758,14 @@ export function FinancialMatrix({
                       <article key={`${item.source}-${item.id}`} className="px-5 py-3 hover:bg-white/60">
                         <div className="flex items-center justify-between gap-3 text-[10px] uppercase tracking-[0.08em] text-[#322D29]/60">
                           <span>{formatDate(item.date)}</span>
-                          <span>{item.source === 'PAYROLL' ? 'Libro de remuneraciones' : item.category ?? 'Movimiento bancario'}</span>
+                          <span>{item.source === 'PAYROLL' ? 'Libro de remuneraciones' : item.source === 'RECOGNIZED' ? `Gasto reconocido · ${item.sourceType ?? '—'}` : item.category ?? 'Movimiento bancario'}</span>
                           <strong className={`text-xs normal-case tracking-normal ${valueTone(item.amount)}`}>{formatClp(item.amount)}</strong>
                         </div>
                         <p className="mt-1 text-sm font-semibold">{item.workerName ?? item.beneficiary ?? item.counterparty ?? item.description}</p>
                         <p className="mt-1 text-xs text-[#322D29]/65">{item.source === 'PAYROLL' ? `RUT: ${item.workerRut ?? '—'} · Haberes: ${formatClp(item.earnings)} · Cargas: ${formatClp(item.employerContributions)} · Archivo: ${item.importFilename ?? '—'}` : `${item.description}${item.counterparty ? ` · Contraparte: ${item.counterparty}` : ''}`}</p>
+                        {item.source === 'RECOGNIZED' && (
+                          <p className="mt-1 text-[10px] text-[#322D29]/55">Período: {item.accountingPeriod ?? '—'} · Documento: {item.documentNumber ?? '—'} · Estado: {item.status ?? '—'} · Fuente: {item.sourceType ?? '—'}{item.note ? ` · Nota: ${item.note}` : ''}</p>
+                        )}
                         {item.source === 'BANK' && (
                           <>
                             <p className="mt-1 text-[10px] text-[#322D29]/55">Clasificación: {item.classificationSource ?? '—'} · Revisión: {item.reviewStatus ?? '—'}{item.note ? ` · Nota: ${item.note}` : ''}{item.beneficiary ? ` · Beneficiario: ${item.beneficiary} (${item.paymentConcept ?? '—'})` : ''}</p>
