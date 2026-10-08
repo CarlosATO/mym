@@ -8,7 +8,7 @@ import { syncBsaleProductTypes } from '@/lib/integraciones/bsale-product-types-s
 import { syncBsaleProducts } from '@/lib/integraciones/bsale-products-sync'
 import { syncBsaleReceptions } from '@/lib/integraciones/bsale-receptions-sync'
 import { getSyncStatus as getStatus } from '@/lib/integraciones/sync-core'
-import { runReplenishmentBsaleSync } from '@/app/actions/integraciones/bsale-sync'
+import { runFullWarehouseBsaleRefresh, runReplenishmentBsaleSync } from '@/app/actions/integraciones/bsale-sync'
 import { createClient } from '@supabase/supabase-js'
 import { syncBsaleStockKardex } from '@/lib/integraciones/bsale-stock-kardex'
 
@@ -175,6 +175,7 @@ export type BsaleSalesSyncRunSummary = {
   documents_count: number | null
   document_details_count: number | null
   stocks_count: number | null
+  metrics?: Record<string, number> | null
 }
 
 export type BsaleSalesSyncHealth = {
@@ -243,6 +244,48 @@ export async function getBsaleSalesSyncHealth(): Promise<BsaleSalesSyncHealth> {
   }
 }
 
+export type WarehousePreparationSyncHealth = {
+  latestRun: BsaleSalesSyncRunSummary | null
+  latestSuccessfulRun: BsaleSalesSyncRunSummary | null
+  lastSuccessAgeMinutes: number | null
+  isFresh: boolean
+}
+
+export async function getWarehousePreparationSyncHealth(): Promise<WarehousePreparationSyncHealth> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) {
+    return { latestRun: null, latestSuccessfulRun: null, lastSuccessAgeMinutes: null, isFresh: false }
+  }
+
+  const admin = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  )
+  const runs = admin.schema('integraciones').from('bsale_sync_runs')
+  const columns = 'id, status, trigger, started_at, completed_at, error_message, documents_count, document_details_count, stocks_count, metrics'
+  const [latestResult, successfulResult] = await Promise.all([
+    runs.select(columns).eq('company_id', companyId).eq('trigger', 'WAREHOUSE_OPERATIONAL').order('started_at', { ascending: false }).limit(1).maybeSingle(),
+    runs.select(columns).eq('company_id', companyId).eq('trigger', 'WAREHOUSE_OPERATIONAL').eq('status', 'COMPLETED').order('completed_at', { ascending: false }).limit(1).maybeSingle(),
+  ])
+  if (latestResult.error || successfulResult.error) {
+    throw new Error(`Error leyendo salud operacional de Bodega: ${(latestResult.error || successfulResult.error)?.message}`)
+  }
+
+  const latestSuccessfulRun = successfulResult.data as BsaleSalesSyncRunSummary | null
+  const lastCompletedAt = latestSuccessfulRun?.completed_at || latestSuccessfulRun?.started_at || null
+  const lastSuccessAgeMinutes = lastCompletedAt
+    ? Math.round((Date.now() - new Date(lastCompletedAt).getTime()) / 60000)
+    : null
+
+  return {
+    latestRun: latestResult.data as BsaleSalesSyncRunSummary | null,
+    latestSuccessfulRun,
+    lastSuccessAgeMinutes,
+    isFresh: lastSuccessAgeMinutes !== null && lastSuccessAgeMinutes <= 90,
+  }
+}
+
 export type LatestBsaleSyncRun = {
   id: string
   status: string
@@ -280,4 +323,43 @@ export async function forceSyncBsaleReplenishment() {
   if (!companyId) throw new Error('Empresa no activa')
 
   return runReplenishmentBsaleSync(companyId, 'MANUAL')
+}
+
+export async function forceFullWarehouseBsaleRefresh(params?: { confirm?: boolean }) {
+  await requireSuperUsuario()
+  if (params?.confirm !== true) {
+    throw new Error('El FULL Warehouse requiere confirmación explícita: { confirm: true }.')
+  }
+  const companyId = await getActiveCompanyId()
+  if (!companyId) throw new Error('Empresa no activa')
+  return runFullWarehouseBsaleRefresh(companyId)
+}
+
+export async function getWarehouseFullSyncHealth(): Promise<WarehousePreparationSyncHealth> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { latestRun: null, latestSuccessfulRun: null, lastSuccessAgeMinutes: null, isFresh: false }
+
+  const admin = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } },
+  )
+  const runs = admin.schema('integraciones').from('bsale_sync_runs')
+  const columns = 'id, status, trigger, started_at, completed_at, error_message, documents_count, document_details_count, stocks_count, metrics'
+  const [latestResult, successfulResult] = await Promise.all([
+    runs.select(columns).eq('company_id', companyId).eq('trigger', 'WAREHOUSE_FULL').order('started_at', { ascending: false }).limit(1).maybeSingle(),
+    runs.select(columns).eq('company_id', companyId).eq('trigger', 'WAREHOUSE_FULL').eq('status', 'COMPLETED').order('completed_at', { ascending: false }).limit(1).maybeSingle(),
+  ])
+  if (latestResult.error || successfulResult.error) {
+    throw new Error(`Error leyendo salud FULL de Bodega: ${(latestResult.error || successfulResult.error)?.message}`)
+  }
+  const latestSuccessfulRun = successfulResult.data as BsaleSalesSyncRunSummary | null
+  const lastCompletedAt = latestSuccessfulRun?.completed_at || latestSuccessfulRun?.started_at || null
+  const lastSuccessAgeMinutes = lastCompletedAt ? Math.round((Date.now() - new Date(lastCompletedAt).getTime()) / 60000) : null
+  return {
+    latestRun: latestResult.data as BsaleSalesSyncRunSummary | null,
+    latestSuccessfulRun,
+    lastSuccessAgeMinutes,
+    isFresh: lastSuccessAgeMinutes !== null && lastSuccessAgeMinutes <= 1440,
+  }
 }

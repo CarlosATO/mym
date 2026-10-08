@@ -12,7 +12,7 @@ import { normalizeBsaleRelatedDetailId } from '@/lib/integraciones/bsale-invoice
 import { createClient as createServerSessionClient } from '@/lib/supabase/server'
 import crypto from 'crypto'
 
-const WAREHOUSE_PREP_SYNC_TRIGGER = 'WAREHOUSE_PREP'
+const WAREHOUSE_OPERATIONAL_SYNC_TRIGGER = 'WAREHOUSE_OPERATIONAL'
 
 /** Resuelve baseUrl + headers HTTP para BSale según companyId. */
 function bsaleConfig(companyId: string) {
@@ -73,16 +73,11 @@ type BsalePreparationDocument = {
   officeId?: number | string | null
   trackingNumber?: string | null
   urlPdf?: string | null
-}
-
-type BsalePreparationReference = {
-  id: number
-  referenceDocumentId?: number | string | null
-  number?: number | string | null
-  referenceDocumentTypeId?: number | string | null
-  referenceCode?: string | null
-  reason?: string | null
-  date?: number | null
+  details?: {
+    count?: number | null
+    limit?: number | null
+    items?: unknown[]
+  } | BsalePreparationDetail[] | null
 }
 
 type BsalePreparationDetail = {
@@ -112,13 +107,9 @@ function saleConditionIdFromClientPayload(payload: unknown): number | null {
   return Number.isFinite(directId) ? directId : null
 }
 
-type BsalePreparationCard = { nv_bsale_id: number | string | null }
+type BsalePreparationBoardRow = { nv_bsale_id: number | string | null }
 
 function isBsalePreparationDocument(value: unknown): value is BsalePreparationDocument {
-  return typeof value === 'object' && value !== null && typeof (value as { id?: unknown }).id === 'number'
-}
-
-function isBsalePreparationReference(value: unknown): value is BsalePreparationReference {
   return typeof value === 'object' && value !== null && typeof (value as { id?: unknown }).id === 'number'
 }
 
@@ -301,7 +292,8 @@ async function finishSyncRun(
   runId: string,
   status: 'COMPLETED' | 'PARTIAL' | 'FAILED',
   counts: Record<string, number>,
-  errorMessage?: string
+  errorMessage?: string,
+  metrics?: Record<string, number>
 ) {
   const db = integrDb()
   const update: any = {
@@ -315,6 +307,7 @@ async function finishSyncRun(
   if (counts.costs !== undefined) update.costs_count = counts.costs
   if (counts.documents !== undefined) update.documents_count = counts.documents
   if (counts.document_details_count !== undefined) update.document_details_count = counts.document_details_count
+  if (metrics !== undefined) update.metrics = metrics
 
   await db.from('bsale_sync_runs').update(update).eq('id', runId)
 }
@@ -323,6 +316,28 @@ function toNumber(value: unknown): number | null {
   if (value === null || value === undefined || value === '') return null
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+export const PREPARATION_REFRESH_CONCURRENCY = 6
+
+export async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let nextIndex = 0
+  const workerCount = Math.min(Math.max(1, concurrency), items.length)
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const index = nextIndex++
+      if (index >= items.length) return
+      results[index] = await worker(items[index], index)
+    }
+  }))
+
+  return results
 }
 
 function epochToIso(value: unknown): string | null {
@@ -649,6 +664,35 @@ async function syncSellers(companyId: string, runId: string): Promise<number> {
   return count
 }
 
+async function syncSellersForCompanyFull(companyId: string, runId: string): Promise<{ count: number; pages: number }> {
+  const db = integrDb()
+  let count = 0
+  let pages = 0
+
+  await bsaleFetchAllForCompany<BsaleDocumentSeller & { state?: number }>({ companyId, path: '/users.json' }, async (_page, batch) => {
+    pages++
+    const records = batch.map((seller) => ({
+      company_id: companyId,
+      bsale_id: seller.id,
+      name: seller.firstName ? `${seller.firstName} ${seller.lastName || ''}`.trim() : seller.name || '',
+      email: seller.email || null,
+      active: seller.state === 0,
+      raw_json: seller,
+      bsale_sync_run_id: runId,
+      synced_at: new Date().toISOString(),
+    }))
+    if (!records.length) return
+    const { error } = await db.from('bsale_sellers').upsert(records, {
+      onConflict: 'company_id,bsale_id',
+      ignoreDuplicates: false,
+    })
+    if (error) throw new Error(`Error sincronizando vendedores FULL: ${error.message}`)
+    count += records.length
+  })
+
+  return { count, pages }
+}
+
 function resolveDocumentTypeId(doc: BsaleDocumentForSellerSync) {
   return doc.documentTypeId ?? (doc.document_type?.id != null ? Number(doc.document_type.id) : null)
 }
@@ -807,7 +851,7 @@ async function syncCommercialCustomerFromHydratedClient(companyId: string, clien
   if (insertErr) throw insertErr
 }
 
-async function hydrateOrphanClients(companyId: string, runId: string): Promise<{ hydrated: number; errors: number; orphanIds: number[] }> {
+async function hydrateOrphanClients(companyId: string, runId: string, requestedClientIds?: number[]): Promise<{ hydrated: number; errors: number; orphanIds: number[] }> {
   const db = integrDb()
   let hydrated = 0
   let errors = 0
@@ -824,7 +868,9 @@ async function hydrateOrphanClients(companyId: string, runId: string): Promise<{
     .eq('company_id', companyId)
 
   const existingSet = new Set((existingClients || []).map((c: any) => c.bsale_client_id))
-  const orphanIds = [...new Set((docClients || []).map((d: any) => d.client_id).filter((id: number) => !existingSet.has(id)))]
+  const orphanIds = requestedClientIds
+    ? [...new Set(requestedClientIds.filter(Number.isFinite))]
+    : [...new Set((docClients || []).map((d: any) => d.client_id).filter((id: number) => !existingSet.has(id)))]
 
   if (orphanIds.length === 0) return { hydrated: 0, errors: 0, orphanIds: [] }
 
@@ -2313,7 +2359,50 @@ async function materializePreparationAfterSalesSync(companyId: string) {
     discovered?: number
     skipped_invoiced?: number
     created?: number
+    relations_created?: number
+    closed_invoiced?: number
+    closed_cancelled?: number
+    movements_created?: number
   }
+}
+
+async function fetchPreparationDocumentDetails(
+  baseUrl: string,
+  headers: Record<string, string>,
+  documentId: number,
+  onRequest?: () => void
+): Promise<BsalePreparationDetail[]> {
+  const details: BsalePreparationDetail[] = []
+  let offset = 0
+  const limit = 50
+
+  while (true) {
+    const url = `${baseUrl}/documents/${documentId}/details.json?limit=${limit}&offset=${offset}`
+    onRequest?.()
+    const response = await fetch(url, { headers, signal: AbortSignal.timeout(20000) })
+    if (!response.ok) throw new Error(`Detalles Bsale HTTP ${response.status}`)
+    const data = await response.json() as { items?: unknown[] }
+    if (!Array.isArray(data.items)) throw new Error('Respuesta de detalles Bsale sin items')
+    details.push(...data.items.filter(isBsalePreparationDetail))
+    if (data.items.length < limit) break
+    offset += limit
+  }
+
+  return details
+}
+
+function completeExpandedPreparationDetails(document: BsalePreparationDocument): BsalePreparationDetail[] | null {
+  if (Array.isArray(document.details)) {
+    return document.details.filter(isBsalePreparationDetail)
+  }
+  const envelope = document.details
+  if (!envelope || !Array.isArray(envelope.items)) return null
+  const items = envelope.items.filter(isBsalePreparationDetail)
+  const reportedCount = Number(envelope.count)
+  // Bsale's expand envelope is limited (observed limit: 25). Never accept a
+  // truncated expansion; fall back to the paginated details endpoint.
+  if (!Number.isFinite(reportedCount) || reportedCount !== items.length) return null
+  return items
 }
 
 type WorkerBsaleBoletaReconciliation = {
@@ -2445,6 +2534,22 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       }
     }
 
+    // The generic replenishment run discovers recent sales, but it must also
+    // refresh every open warehouse card so historical NVs cannot go stale.
+    let preparationRefresh: Awaited<ReturnType<typeof syncBsaleSalesOrdersForPreparation>> | null = null;
+    if (finalStatus !== 'FAILED') {
+      try {
+        preparationRefresh = await syncBsaleSalesOrdersForPreparation(companyId);
+        if (!preparationRefresh.success) {
+          finalStatus = 'PARTIAL';
+          errorMessage += (errorMessage ? ' | ' : '') + (preparationRefresh.error || 'Preparation refresh failed');
+        }
+      } catch (preparationRefreshErr: unknown) {
+        finalStatus = 'PARTIAL';
+        errorMessage += (errorMessage ? ' | ' : '') + 'Preparation refresh: ' + (preparationRefreshErr instanceof Error ? preparationRefreshErr.message : String(preparationRefreshErr));
+      }
+    }
+
     // 4. Sync payments after documents because payment allocations reference document IDs.
     let paymentTypesResult = { count: 0, errors: 0 };
     let paymentsResult = { payments: 0, documentPayments: 0, days: 0, errors: 0 };
@@ -2566,6 +2671,7 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       payments: paymentsResult,
       payment_types: paymentTypesResult,
       preparation: preparationResult,
+      preparation_refresh: preparationRefresh,
       orphans: orphanResult,
       worker_account_boletas: workerAccountReconciliation,
       stocks: stockCount
@@ -2607,11 +2713,28 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
 
 export async function syncBsaleSalesOrdersForPreparation(companyId: string): Promise<{
   success: boolean
-  counts?: { discovery: number, refresh: number, details: number, detail_errors: number, reference_errors: number, missing_details: number, new_cards: number, skipped_invoiced: number }
+  counts?: {
+    discovery: number
+    refresh: number
+    get_requests: number
+    documents: number
+    details: number
+    detail_errors: number
+    reference_errors: number
+    missing_details: number
+    new_cards: number
+    skipped_invoiced: number
+    relations_created: number
+    closed_invoiced: number
+    closed_cancelled: number
+    duration_ms: number
+    errors: number
+  }
   error?: string
 }> {
+  const startTime = Date.now()
   if (!companyId) return { success: false, error: 'company_id es requerido' }
-  const runTrigger = WAREHOUSE_PREP_SYNC_TRIGGER
+  const runTrigger = WAREHOUSE_OPERATIONAL_SYNC_TRIGGER
   const lockName = 'bsale_operational_prep_sync'
   let run: SyncRun | null = null
 
@@ -2626,14 +2749,14 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
     }
 
     const db = integrDb()
-    const admin = await createServerSessionClient()
+    const admin = integrDb()
 
-    // 1. Descubrimiento incremental. Only a completed WAREHOUSE_PREP run is a
+    // 1. Descubrimiento incremental. Only a completed operational run is a
     // valid checkpoint; failed or partial runs are intentionally ignored.
     const { data: checkpoint } = await db.from('bsale_sync_runs')
       .select('completed_at')
       .eq('company_id', companyId)
-      .eq('trigger', WAREHOUSE_PREP_SYNC_TRIGGER)
+      .eq('trigger', WAREHOUSE_OPERATIONAL_SYNC_TRIGGER)
       .eq('status', 'COMPLETED')
       .not('completed_at', 'is', null)
       .order('completed_at', { ascending: false })
@@ -2669,9 +2792,11 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
     const invoiceDocsMap = new Map<number, BsalePreparationDocument>()
 
     const { baseUrl: prepBase, headers: prepHeaders } = bsaleConfig(companyId)
+    let bsaleGetRequests = 0
 
     while (true) {
-      const url = `${prepBase}/documents.json?documenttypeid=23&limit=50&offset=${offset}&generationdaterange=${rangeEncoded}`
+      const url = `${prepBase}/documents.json?documenttypeid=23&limit=50&offset=${offset}&generationdaterange=${rangeEncoded}&expand=details`
+      bsaleGetRequests++
       const response = await fetch(url, { headers: prepHeaders, signal: AbortSignal.timeout(30000) })
       if (!response.ok) throw new Error(`Bsale discovery error ${response.status}`)
       const data = await response.json() as { items?: unknown[] }
@@ -2687,30 +2812,48 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
     const discoveryCount = bsaleDocsMap.size
 
     // 2. Refresco: NV activas en Preparación (no finalizadas)
-    const { data: activeCards } = await admin.schema('logistica').from('sales_order_preparation_cards')
+    // The board view is the operational contract. The base table contains
+    // legacy/invoiced rows that must never be refreshed every 30 minutes.
+    const { data: activeCards } = await admin.schema('logistica').from('vw_sales_order_preparation_board')
       .select('nv_bsale_id')
       .eq('company_id', companyId)
       .in('status', ['PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT'])
 
-    const activeNvIds = [...new Set((activeCards || []).map((c: BsalePreparationCard) => Number(c.nv_bsale_id)).filter(Number.isFinite))]
-      .filter(id => !bsaleDocsMap.has(id))
-
-    for (const bsaleId of activeNvIds) {
-       const url = `${prepBase}/documents/${bsaleId}.json`
-       const response = await fetch(url, { headers: prepHeaders, signal: AbortSignal.timeout(15000) })
-       if (response.ok) {
-         const doc = await response.json() as unknown
-         if (isBsalePreparationDocument(doc)) bsaleDocsMap.set(doc.id, doc)
-       }
+    const activeNvIds = [...new Set((activeCards || []).map((c: BsalePreparationBoardRow) => Number(c.nv_bsale_id)).filter(Number.isFinite))]
+    let refreshErrors = 0
+    const refreshedDocuments = await mapWithConcurrency(
+      activeNvIds,
+      PREPARATION_REFRESH_CONCURRENCY,
+      async (bsaleId) => {
+        const url = `${prepBase}/documents/${bsaleId}.json?expand=details`
+        bsaleGetRequests++
+        const response = await fetch(url, { headers: prepHeaders, signal: AbortSignal.timeout(15000) })
+        if (!response.ok) {
+          refreshErrors++
+          console.error(`[syncBsaleSalesOrdersForPreparation] Refresh NV ${bsaleId} HTTP ${response.status}`)
+          return null
+        }
+        const doc = await response.json() as unknown
+        if (!isBsalePreparationDocument(doc)) {
+          refreshErrors++
+          console.error(`[syncBsaleSalesOrdersForPreparation] Refresh NV ${bsaleId} respuesta inválida`)
+          return null
+        }
+        return doc
+      }
+    )
+    for (const doc of refreshedDocuments) {
+      if (doc) bsaleDocsMap.set(doc.id, doc)
     }
     const refreshCount = activeNvIds.length
 
-    // Refresh invoice references before materializing. This closes the race
-    // where an invoice is issued before Bodega discovers the NV.
-    let referenceErrors = 0
+    // Invoice details are sufficient for the canonical NV -> Factura resolver;
+    // references are maintained by the generic commercial sync, not Bodega.
+    const referenceErrors = 0
     let invoiceOffset = 0
     while (true) {
-      const url = `${prepBase}/documents.json?documenttypeid=5&limit=50&offset=${invoiceOffset}&generationdaterange=${rangeEncoded}`
+      const url = `${prepBase}/documents.json?documenttypeid=5&limit=50&offset=${invoiceOffset}&generationdaterange=${rangeEncoded}&expand=details`
+      bsaleGetRequests++
       const response = await fetch(url, { headers: prepHeaders, signal: AbortSignal.timeout(30000) })
       if (!response.ok) throw new Error(`Bsale invoice discovery error ${response.status}`)
       const data = await response.json() as { items?: unknown[] }
@@ -2720,41 +2863,6 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
         if (Number(invoice.documentTypeId ?? invoice.document_type?.id) === 5) {
           invoiceDocsMap.set(invoice.id, invoice)
         }
-        try {
-          const refsResponse = await fetch(`${prepBase}/documents/${invoice.id}/references.json`, {
-            headers: prepHeaders,
-            signal: AbortSignal.timeout(15000),
-          })
-          if (!refsResponse.ok) throw new Error(`HTTP ${refsResponse.status}`)
-          const refsData = await refsResponse.json() as { items?: unknown[] }
-          const refs = Array.isArray(refsData.items) ? refsData.items.filter(isBsalePreparationReference) : []
-          if (refs.length === 0) continue
-
-          const refRecords = refs.map((ref) => ({
-            company_id: companyId,
-            source_key: `invoice:${invoice.id}:reference:${ref.id}`,
-            bsale_id: ref.id,
-            bsale_document_id: invoice.id,
-            source_document_type_id: 5,
-            source_document_number: invoice.number ?? null,
-            referenced_document_id: ref.referenceDocumentId ?? null,
-            referenced_document_number: ref.number ?? null,
-            referenced_document_type_id: ref.referenceDocumentTypeId ?? null,
-            reference_code: ref.referenceCode ?? null,
-            reference_reason: ref.reason ?? null,
-            reference_date: ref.date ? new Date(ref.date * 1000).toISOString() : null,
-            raw_json: ref,
-            bsale_sync_run_id: runId,
-            synced_at: new Date().toISOString(),
-          }))
-          const { error: refsError } = await db.from('bsale_document_references').upsert(refRecords, {
-            onConflict: 'company_id,source_key',
-          })
-          if (refsError) throw new Error(refsError.message)
-        } catch (error) {
-          referenceErrors++
-          console.error(`[syncBsaleSalesOrdersForPreparation] Invoice references error for ${invoice.id}:`, error instanceof Error ? error.message : error)
-        }
       }
 
       if (data.items.length < 50) break
@@ -2763,10 +2871,10 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
 
     // Invoice details are part of the canonical NV -> Factura resolver because
     // BSale exposes the source line through relatedDetailId.
-    const allDocs = [
+    const allDocs = Array.from(new Map([
       ...Array.from(bsaleDocsMap.values()),
       ...Array.from(invoiceDocsMap.values()),
-    ]
+    ].map((doc) => [doc.id, doc] as const)).values())
 
     let detailErrors = 0
     let detailsCount = 0
@@ -2803,27 +2911,26 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
          }
       }
 
-      const sellerSync = await syncDocumentSellersForDocuments(companyId, allDocs)
-      detailErrors += sellerSync.errors
-
       // Detalles y reconciliación. Deletes are only allowed after every page
       // completed successfully and the complete Bsale set is available.
-      for (const doc of allDocs) {
-         try {
-           const details: BsalePreparationDetail[] = []
-           let detailOffset = 0
-           const detailLimit = 50
+      const detailResults = await mapWithConcurrency(
+        allDocs,
+        PREPARATION_REFRESH_CONCURRENCY,
+         async (doc) => {
+           try {
+             const expandedDetails = completeExpandedPreparationDetails(doc)
+             if (expandedDetails) return { doc, details: expandedDetails, error: null }
+             return { doc, details: await fetchPreparationDocumentDetails(prepBase, prepHeaders, doc.id, () => { bsaleGetRequests++ }), error: null }
+          } catch (error) {
+            return { doc, details: [], error: error instanceof Error ? error.message : String(error) }
+          }
+        }
+      )
 
-           while (true) {
-             const url = `${prepBase}/documents/${doc.id}/details.json?limit=${detailLimit}&offset=${detailOffset}`
-             const response = await fetch(url, { headers: prepHeaders, signal: AbortSignal.timeout(20000) })
-             if (!response.ok) throw new Error(`Detalles Bsale HTTP ${response.status}`)
-             const data = await response.json() as { items?: unknown[] }
-             if (!Array.isArray(data.items)) throw new Error('Respuesta de detalles Bsale sin items')
-             details.push(...data.items.filter(isBsalePreparationDetail))
-             if (data.items.length < detailLimit) break
-             detailOffset += detailLimit
-           }
+      for (const result of detailResults) {
+         const { doc, details, error: detailError } = result
+         try {
+           if (detailError) throw new Error(detailError)
 
            const detailRecords = details.map((detail, idx) => ({
              company_id: companyId,
@@ -2860,25 +2967,39 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
              : await deleteQuery
            if (deleteError) throw new Error(`Detalle delete: ${deleteError.message}`)
            detailsCount += detailRecords.length
-         } catch (error) {
-           detailErrors++
-           console.error(`[syncBsaleSalesOrdersForPreparation] Details error for ${doc.id}:`, error instanceof Error ? error.message : error)
-           // No delete occurs on any fetch, parse, pagination, upsert, or delete failure.
+          } catch (error) {
+            detailErrors++
+            console.error(`[syncBsaleSalesOrdersForPreparation] Details error for ${doc.id}:`, error instanceof Error ? error.message : error)
+            // No delete occurs on any fetch, parse, pagination, upsert, or delete failure.
          }
       }
     }
 
     // Materialization is the existing single preparation projection step.
     const preparationResult = await materializePreparationAfterSalesSync(companyId)
-    const finalStatus = documentErrors > 0 || detailErrors > 0 || referenceErrors > 0 ? 'PARTIAL' : 'COMPLETED'
+    const totalErrors = documentErrors + detailErrors + referenceErrors + refreshErrors
+    const finalStatus = totalErrors > 0 ? 'PARTIAL' : 'COMPLETED'
+    const durationMs = Date.now() - startTime
     await finishSyncRun(runId, finalStatus, {
       documents: allDocs.length - documentErrors,
       document_errors: documentErrors,
       detail_errors: detailErrors,
       document_details_count: detailsCount,
-    }, detailErrors > 0 || documentErrors > 0 || referenceErrors > 0
-      ? `Operational sync partial: document_errors=${documentErrors} detail_errors=${detailErrors} reference_errors=${referenceErrors}`
-      : undefined)
+    }, totalErrors > 0
+      ? `Operational sync partial: document_errors=${documentErrors} detail_errors=${detailErrors} reference_errors=${referenceErrors} refresh_errors=${refreshErrors}`
+      : undefined,
+    {
+      discovery: discoveryCount,
+      cards_refreshed: refreshCount,
+      get_requests: bsaleGetRequests,
+      documents_updated: allDocs.length - documentErrors,
+      details_updated: detailsCount,
+      relations_created: preparationResult?.relations_created || 0,
+      cards_created: preparationResult?.created || 0,
+      cards_closed: (preparationResult?.closed_invoiced || 0) + (preparationResult?.closed_cancelled || 0),
+      errors: totalErrors,
+      duration_ms: durationMs,
+    })
     await releaseSyncLock(companyId, lockName, runId)
 
     return {
@@ -2886,12 +3007,19 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
       counts: {
         discovery: discoveryCount,
         refresh: refreshCount,
+        get_requests: bsaleGetRequests,
+        documents: allDocs.length - documentErrors,
         details: detailsCount,
         detail_errors: detailErrors,
         reference_errors: referenceErrors,
         missing_details: detailErrors,
         new_cards: preparationResult?.created || 0,
         skipped_invoiced: preparationResult?.skipped_invoiced || 0,
+        relations_created: preparationResult?.relations_created || 0,
+        closed_invoiced: preparationResult?.closed_invoiced || 0,
+        closed_cancelled: preparationResult?.closed_cancelled || 0,
+        duration_ms: durationMs,
+        errors: totalErrors,
       },
     }
   } catch (err: unknown) {
@@ -2901,5 +3029,288 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
       await releaseSyncLock(companyId, lockName, run.id).catch(() => {})
     }
     return { success: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+export type WarehouseFullRefreshResult = {
+  success: boolean
+  status: 'COMPLETED' | 'FAILED' | 'PARTIAL' | 'SKIPPED_LOCKED'
+  runId?: string
+  metrics?: Record<string, number>
+  error?: string
+}
+
+/**
+ * Authoritative, read-only-from-Bsale full mirror refresh for Bodega.
+ *
+ * It deliberately does not infer deletions from a missing list item. Every
+ * successful page is upserted immediately, so a retry after a partial failure
+ * is safe and converges without truncating the mirror or preparation history.
+ */
+export async function runFullWarehouseBsaleRefresh(companyId: string): Promise<WarehouseFullRefreshResult> {
+  const startedAt = Date.now()
+  const lockName = 'bsale_warehouse_full_refresh'
+  let run: SyncRun | null = null
+  const metrics: Record<string, number> = {
+    pages: 0,
+    documents_seen: 0,
+    sales_orders_seen: 0,
+    invoices_seen: 0,
+    details_seen: 0,
+    details_from_expand: 0,
+    invoice_reference_requests: 0,
+    document_seller_requests: 0,
+    client_get_requests: 0,
+    documents_updated: 0,
+    open_documents_refreshed: 0,
+    known_documents_refreshed: 0,
+    links_created: 0,
+    cards_created: 0,
+    cards_closed: 0,
+    unresolved_related_details: 0,
+    errors: 0,
+    get_requests: 0,
+    duration_ms: 0,
+  }
+
+  try {
+    if (!companyId) throw new Error('company_id es requerido')
+    run = await createSyncRun(companyId, 'WAREHOUSE_FULL')
+    const runId = run.id
+    const acquired = await acquireSyncLock(companyId, lockName, runId, 60)
+    if (!acquired) {
+      await finishSyncRun(runId, 'FAILED', {}, 'SKIPPED_LOCKED: Full refresh already running', metrics)
+      return { success: false, status: 'SKIPPED_LOCKED', runId, metrics, error: 'Full refresh ya está en curso.' }
+    }
+
+    const db = integrDb()
+    const { baseUrl, headers } = bsaleConfig(companyId)
+    const salesOrders: BsalePreparationDocument[] = []
+    const invoices: BsalePreparationDocument[] = []
+
+    const upsertPage = async (items: BsalePreparationDocument[]) => {
+      if (!items.length) return
+      const records = items.map((doc) => ({
+        company_id: companyId,
+        bsale_id: doc.id,
+        number: doc.number ?? null,
+        emission_date: epochToDate(doc.emissionDate),
+        generation_date: epochToIso(doc.generationDate),
+        total_amount: doc.totalAmount ?? null,
+        net_amount: doc.netAmount ?? null,
+        tax_amount: doc.taxAmount ?? null,
+        exempt_amount: doc.exemptAmount ?? null,
+        document_type_id: Number(doc.documentTypeId ?? doc.document_type?.id) || null,
+        client_id: toNumber(doc.client?.id ?? doc.clientId),
+        office_id: toNumber(doc.office?.id ?? doc.officeId),
+        state: toNumber(doc.state),
+        tracking_number: doc.trackingNumber || null,
+        url_pdf: doc.urlPdf || null,
+        raw_json: doc,
+        bsale_sync_run_id: runId,
+        synced_at: new Date().toISOString(),
+      }))
+      const { error } = await db.from('bsale_documents').upsert(records, {
+        onConflict: 'company_id,bsale_id',
+        ignoreDuplicates: false,
+      })
+      if (error) throw new Error(`Error upserting página FULL: ${error.message}`)
+      metrics.documents_updated += records.length
+    }
+
+    await bsaleFetchAllForCompany<BsalePreparationDocument>(
+      { companyId, path: '/documents.json', params: { documenttypeid: 23, expand: 'details' } },
+      async (page, items) => {
+        metrics.pages++
+        metrics.get_requests++
+        const valid = items.filter(isBsalePreparationDocument)
+        salesOrders.push(...valid)
+        metrics.sales_orders_seen += valid.length
+        metrics.documents_seen += valid.length
+        await upsertPage(valid)
+        console.log(`[runFullWarehouseBsaleRefresh] NV page=${page} items=${valid.length}`)
+      },
+    )
+
+    await bsaleFetchAllForCompany<BsalePreparationDocument>(
+      { companyId, path: '/documents.json', params: { documenttypeid: 5, expand: 'details' } },
+      async (page, items) => {
+        metrics.pages++
+        metrics.get_requests++
+        const valid = items.filter(isBsalePreparationDocument)
+        invoices.push(...valid)
+        metrics.invoices_seen += valid.length
+        metrics.documents_seen += valid.length
+        await upsertPage(valid)
+        console.log(`[runFullWarehouseBsaleRefresh] invoice page=${page} items=${valid.length}`)
+      },
+    )
+
+    // A list is not treated as exhaustive for operational purposes: special
+    // states may be omitted by Bsale. Refresh every open card by ID and merge
+    // the authoritative response into the same upsert path.
+    const listedSalesOrderIds = new Set(salesOrders.map((document) => document.id))
+    const knownMirrorIds = new Set<number>()
+    for (let mirrorOffset = 0; ; mirrorOffset += 1000) {
+      const { data: mirrorPage, error: mirrorError } = await db.from('bsale_documents')
+        .select('bsale_id')
+        .eq('company_id', companyId)
+        .eq('document_type_id', 23)
+        .range(mirrorOffset, mirrorOffset + 999)
+      if (mirrorError) throw new Error(`Error leyendo NV conocidas para FULL: ${mirrorError.message}`)
+      for (const document of mirrorPage || []) knownMirrorIds.add(Number(document.bsale_id))
+      if (!mirrorPage || mirrorPage.length < 1000) break
+    }
+    const knownMissingIds = [...knownMirrorIds].filter((id) => Number.isFinite(id) && !listedSalesOrderIds.has(id))
+
+    const { data: activeCards, error: activeCardsError } = await db.schema('logistica')
+      .from('vw_sales_order_preparation_board')
+      .select('nv_bsale_id')
+      .eq('company_id', companyId)
+      .in('status', ['PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT'])
+    if (activeCardsError) throw new Error(`Error leyendo cards abiertas para FULL: ${activeCardsError.message}`)
+    const activeIds = [...new Set((activeCards || []).map((card: BsalePreparationBoardRow) => Number(card.nv_bsale_id)).filter(Number.isFinite))]
+    const directRefreshIds = [...new Set([...activeIds, ...knownMissingIds])]
+    const openDocuments = await mapWithConcurrency(directRefreshIds, PREPARATION_REFRESH_CONCURRENCY, async (bsaleId) => {
+      try {
+        metrics.get_requests++
+        const response = await fetch(`${baseUrl}/documents/${bsaleId}.json?expand=details`, {
+          method: 'GET', headers, signal: AbortSignal.timeout(20000),
+        })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const document = await response.json() as unknown
+        if (!isBsalePreparationDocument(document)) throw new Error('Respuesta inválida')
+        await upsertPage([document])
+        return document
+      } catch (error) {
+        metrics.errors++
+        console.error(`[runFullWarehouseBsaleRefresh] open NV ${bsaleId}:`, error)
+        return null
+      }
+    })
+    for (const document of openDocuments) {
+      if (!document || Number(document.documentTypeId ?? document.document_type?.id) !== 23) continue
+      const existingIndex = salesOrders.findIndex((existing) => existing.id === document.id)
+      if (existingIndex >= 0) salesOrders[existingIndex] = document
+      else salesOrders.push(document)
+    }
+    metrics.open_documents_refreshed = activeIds.filter((id) => openDocuments.some((document) => document?.id === id)).length
+    metrics.known_documents_refreshed = knownMissingIds.filter((id) => openDocuments.some((document) => document?.id === id)).length
+
+    const uniqueClientIds = [...new Set(salesOrders
+      .map((document) => toNumber(document.client?.id ?? document.clientId))
+      .filter((clientId): clientId is number => clientId !== null))]
+    const clientResult = await hydrateOrphanClients(companyId, runId, uniqueClientIds)
+    metrics.clients_seen = uniqueClientIds.length
+    metrics.client_get_requests = uniqueClientIds.length
+    metrics.get_requests += uniqueClientIds.length
+    metrics.clients_updated = clientResult.hydrated
+    metrics.errors += clientResult.errors
+
+    const sellerResult = await syncSellersForCompanyFull(companyId, runId)
+    metrics.sellers_seen = sellerResult.count
+    metrics.seller_catalog_requests = sellerResult.pages
+    metrics.get_requests += sellerResult.pages
+
+    const allDocuments = [...salesOrders, ...invoices]
+
+    const detailResults = await mapWithConcurrency(
+      allDocuments,
+      PREPARATION_REFRESH_CONCURRENCY,
+      async (doc) => {
+        try {
+          const expandedDetails = completeExpandedPreparationDetails(doc)
+          if (expandedDetails) {
+            metrics.details_from_expand += expandedDetails.length
+            return { doc, details: expandedDetails, error: null }
+          }
+          metrics.get_requests++
+          const details = await fetchPreparationDocumentDetails(baseUrl, headers, doc.id, () => { metrics.get_requests++ })
+          return { doc, details, error: null }
+        } catch (error) {
+          return { doc, details: [], error: error instanceof Error ? error.message : String(error) }
+        }
+      },
+    )
+
+    for (const result of detailResults) {
+      if (result.error) {
+        metrics.errors++
+        console.error(`[runFullWarehouseBsaleRefresh] details ${result.doc.id}: ${result.error}`)
+        continue
+      }
+      const records = result.details.map((detail, index) => ({
+        company_id: companyId,
+        bsale_id: detail.id,
+        bsale_document_id: result.doc.id,
+        related_detail_bsale_id: normalizeBsaleRelatedDetailId(detail.relatedDetailId),
+        line_number: detail.lineNumber ?? index,
+        quantity: detail.quantity ?? 0,
+        net_unit_value: detail.netUnitValue ?? detail.netUnitValueRaw ?? 0,
+        total_unit_value: detail.totalUnitValue ?? 0,
+        net_amount: detail.netAmount ?? 0,
+        tax_amount: detail.taxAmount ?? 0,
+        total_amount: detail.totalAmount ?? 0,
+        net_discount: detail.netDiscount ?? 0,
+        variant_id: toNumber(detail.variant?.id),
+        variant_code: detail.variant?.code ? normalizeSku(detail.variant.code) : null,
+        variant_description: detail.variant?.description || null,
+        raw_json: detail,
+        bsale_sync_run_id: runId,
+        synced_at: new Date().toISOString(),
+      }))
+      if (records.length) {
+        const { error } = await db.from('bsale_document_details').upsert(records, {
+          onConflict: 'company_id,bsale_id',
+          ignoreDuplicates: false,
+        })
+        if (error) {
+          metrics.errors++
+          console.error(`[runFullWarehouseBsaleRefresh] detail upsert ${result.doc.id}: ${error.message}`)
+          continue
+        }
+      }
+      // Details are a current Bsale projection, not preparation history. Only
+      // replace lines for a document after its complete detail pagination succeeded.
+      const fetchedIds = records.map((record) => record.bsale_id)
+      const deleteQuery = db.from('bsale_document_details').delete()
+        .eq('company_id', companyId)
+        .eq('bsale_document_id', result.doc.id)
+      const { error: deleteError } = fetchedIds.length
+        ? await deleteQuery.not('bsale_id', 'in', `(${fetchedIds.join(',')})`)
+        : await deleteQuery
+      if (deleteError) {
+        metrics.errors++
+        console.error(`[runFullWarehouseBsaleRefresh] stale detail cleanup ${result.doc.id}: ${deleteError.message}`)
+        continue
+      }
+      metrics.details_seen += records.length
+    }
+
+    // Never project a partial mirror into the Kanban. Re-running the FULL will
+    // finish the mirror first, then reconcile from a complete Bsale snapshot.
+    const preparation = metrics.errors === 0
+      ? await materializePreparationAfterSalesSync(companyId)
+      : null
+    metrics.links_created = preparation?.relations_created || 0
+    metrics.cards_created = preparation?.created || 0
+    metrics.cards_closed = (preparation?.closed_invoiced || 0) + (preparation?.closed_cancelled || 0)
+    metrics.duration_ms = Date.now() - startedAt
+    const finalStatus = metrics.errors > 0 ? 'PARTIAL' : 'COMPLETED'
+    await finishSyncRun(runId, finalStatus, {
+      documents: metrics.documents_updated,
+      document_details_count: metrics.details_seen,
+    }, metrics.errors ? `Warehouse FULL partial: errors=${metrics.errors}` : undefined, metrics)
+    await releaseSyncLock(companyId, lockName, runId)
+    return { success: metrics.errors === 0, status: finalStatus, runId, metrics }
+  } catch (error) {
+    metrics.errors++
+    metrics.duration_ms = Date.now() - startedAt
+    const message = error instanceof Error ? error.message : String(error)
+    if (run?.id) {
+      await finishSyncRun(run.id, 'FAILED', {}, message, metrics).catch(() => {})
+      await releaseSyncLock(companyId, lockName, run.id).catch(() => {})
+    }
+    return { success: false, status: 'FAILED', runId: run?.id, metrics, error: message }
   }
 }
