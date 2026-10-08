@@ -209,7 +209,47 @@ export async function registerCollectionInteraction(input: {
 
 type BsaleUnpaidDocument = { id?: number; number?: number; totalAmount?: number; totalAmountOwed?: number }
 type BsaleUnpaidDocuments = { overdue_documents?: BsaleUnpaidDocument[]; upcoming_documents?: BsaleUnpaidDocument[] }
-type BsalePaymentType = { id: number; name: string; active?: boolean; dynamicAttributes?: unknown[] }
+type BsalePaymentType = {
+  id: number
+  name: string
+  active?: boolean
+  state?: number
+  dynamicAttributes?: unknown
+  dynamic_attributes?: unknown
+}
+
+type CollectionPaymentType = {
+  id: number
+  label: string
+  name: string
+  dynamicAttributes: unknown
+}
+
+function isBsalePaymentTypeActive(type: BsalePaymentType) {
+  return type.active !== false && type.state !== 1
+}
+
+async function loadCollectionPaymentTypes(companyId: string) {
+  const [typesResponse, configResponse] = await Promise.all([
+    bsaleFetchForCompany<BsalePaymentType>({ companyId, path: '/payment_types.json' }),
+    db().from('collection_payment_type_config').select('bsale_payment_type_id,label,enabled,dynamic_attributes').eq('company_id', companyId).eq('enabled', true),
+  ])
+  if (configResponse.error) throw new Error(configResponse.error.message)
+
+  const configuredTypes = configResponse.data ?? []
+  const availableTypes: CollectionPaymentType[] = configuredTypes.flatMap(config => {
+    const liveType = (typesResponse.items ?? []).find(type => type.id === config.bsale_payment_type_id)
+    if (!liveType || !isBsalePaymentTypeActive(liveType)) return []
+    return [{
+      id: config.bsale_payment_type_id,
+      label: config.label,
+      name: liveType.name,
+      dynamicAttributes: liveType.dynamicAttributes ?? liveType.dynamic_attributes ?? config.dynamic_attributes ?? [],
+    }]
+  })
+  if (availableTypes.length === 0) throw new Error('No hay formas de pago habilitadas y activas en Bsale para la empresa activa.')
+  return { configuredTypes, availableTypes, liveTypes: typesResponse.items ?? [] }
+}
 
 export async function prepareCollectionPayment(input: { documentId: number; amount: number; paymentTypeId?: number }) {
   const { companyId } = await context()
@@ -225,21 +265,21 @@ export async function prepareCollectionPayment(input: { documentId: number; amou
   if (error) throw new Error(error.message)
   if (!document) throw new Error('El documento no pertenece al snapshot de CxC de la empresa activa.')
 
-  const [unpaidResponse, typesResponse, configResponse] = await Promise.all([
+  const [unpaidResponse, paymentTypes] = await Promise.all([
     bsaleFetchResourceForCompany<BsaleUnpaidDocuments>({ companyId, path: `/clients/unpaid_documents.json`, params: { clientid: Number(document.client_id) } }),
-    bsaleFetchForCompany<BsalePaymentType>({ companyId, path: '/payment_types.json' }),
-    db().from('collection_payment_type_config').select('bsale_payment_type_id,label,enabled,dynamic_attributes').eq('company_id', companyId).eq('enabled', true),
+    loadCollectionPaymentTypes(companyId),
   ])
   const liveDocuments = [...(unpaidResponse.overdue_documents ?? []), ...(unpaidResponse.upcoming_documents ?? [])]
   const liveDocument = liveDocuments.find(item => Number(item.id) === Number(input.documentId))
   if (!liveDocument || Number(liveDocument.totalAmountOwed ?? 0) <= 0) throw new Error('El documento ya no está pendiente en Bsale.')
 
-  const configuredTypes = configResponse.data ?? []
-  if (configResponse.error) throw new Error(configResponse.error.message)
-  const selectedConfig = configuredTypes.find(type => input.paymentTypeId === undefined || type.bsale_payment_type_id === input.paymentTypeId)
-  if (!selectedConfig) throw new Error('La forma de pago no está habilitada para la empresa activa.')
-  const liveType = (typesResponse.items ?? []).find(type => type.id === selectedConfig.bsale_payment_type_id)
-  if (!liveType || liveType.active === false) throw new Error('La forma de pago configurada está inactiva en Bsale.')
+  const selectedType = input.paymentTypeId === undefined
+    ? null
+    : paymentTypes.availableTypes.find(type => type.id === input.paymentTypeId) ?? null
+  if (input.paymentTypeId !== undefined && !selectedType) {
+    const configured = paymentTypes.configuredTypes.some(type => type.bsale_payment_type_id === input.paymentTypeId)
+    throw new Error(configured ? 'La forma de pago configurada está inactiva o no existe en Bsale.' : 'La forma de pago no está habilitada para la empresa activa.')
+  }
 
   const liveBalance = Number(liveDocument.totalAmountOwed)
   if (input.amount > liveBalance) throw new Error('El monto supera el saldo vivo consultado en Bsale.')
@@ -253,7 +293,8 @@ export async function prepareCollectionPayment(input: { documentId: number; amou
     clientId: Number(document.client_id),
     folio: document.folio,
     recordDate: new Date().toISOString().slice(0, 10),
-    paymentType: { id: selectedConfig.bsale_payment_type_id, label: selectedConfig.label, name: liveType.name },
+    paymentTypes: paymentTypes.availableTypes,
+    paymentType: selectedType,
     writesBsale: false,
   }
 }
@@ -439,6 +480,7 @@ export async function registerCollectionPayment(input: {
 }) {
   const { companyId, user } = await context()
   if (!(await canRegisterPayment())) throw new Error('No tienes permiso para registrar pagos de cobranza.')
+  if (!Number.isInteger(input.paymentTypeId) || (input.paymentTypeId ?? 0) <= 0) throw new Error('La forma de pago es obligatoria.')
   const idempotencyKey = crypto.randomUUID()
   const recordDate = input.recordDate ?? new Date().toISOString().slice(0, 10)
   const inserted = await db().from('collection_payment_attempts').insert({
@@ -459,6 +501,7 @@ export async function registerCollectionPayment(input: {
 
   try {
     const preflight = await prepareCollectionPayment({ documentId: input.documentId, amount: input.amount, paymentTypeId: input.paymentTypeId })
+    if (!preflight.paymentType) throw new Error('La forma de pago es obligatoria.')
     if (input.clientId !== undefined && input.clientId !== preflight.clientId) throw new Error('El cliente no coincide con el documento Bsale.')
     const recordDateUnix = calendarDateToUnixSeconds(recordDate)
     await db().from('collection_payment_attempts').update({
@@ -546,17 +589,16 @@ export async function prepareCollectionCustomerBatch(clientId: number) {
     balance: Number(document.totalAmountOwed),
   }))
   if (documents.length === 0) throw new Error('No hay documentos pendientes compatibles con Cobranza.')
-  const { data: configured, error: configError } = await db().from('collection_payment_type_config').select('bsale_payment_type_id').eq('company_id', companyId).eq('enabled', true).limit(1).maybeSingle()
-  if (configError) throw new Error(configError.message)
-  if (!configured) throw new Error('No hay una forma de pago habilitada para la empresa activa.')
-  return { clientId, documents, total: documents.reduce((sum, document) => sum + document.balance, 0), paymentTypeId: Number(configured.bsale_payment_type_id) }
+  const paymentTypes = await loadCollectionPaymentTypes(companyId)
+  return { clientId, documents, total: documents.reduce((sum, document) => sum + document.balance, 0), paymentTypes: paymentTypes.availableTypes }
 }
 
-export async function registerCollectionCustomerBatch(input: { clientId: number; paymentTypeId?: number; recordDate?: string }) {
+export async function registerCollectionCustomerBatch(input: { clientId: number; paymentTypeId: number; recordDate?: string }) {
   const { companyId, user } = await context()
   if (!(await canRegisterPayment())) throw new Error('No tienes permiso para registrar pagos de cobranza.')
   const prepared = await prepareCollectionCustomerBatch(input.clientId)
-  const batch = await db().from('collection_payment_batches').insert({ company_id: companyId, client_id: input.clientId, payment_type_id: input.paymentTypeId ?? prepared.paymentTypeId, record_date: input.recordDate ?? new Date().toISOString().slice(0, 10), expected_total: prepared.total, created_by: user.id, status: 'PROCESSING' }).select('id').single()
+  if (!prepared.paymentTypes.some(type => type.id === input.paymentTypeId)) throw new Error('La forma de pago no está habilitada y activa para la empresa activa.')
+  const batch = await db().from('collection_payment_batches').insert({ company_id: companyId, client_id: input.clientId, payment_type_id: input.paymentTypeId, record_date: input.recordDate ?? new Date().toISOString().slice(0, 10), expected_total: prepared.total, created_by: user.id, status: 'PROCESSING' }).select('id').single()
   if (batch.error || !batch.data) throw new Error(batch.error?.message ?? 'No se pudo crear el batch.')
   const batchId = batch.data.id as string
   let confirmedTotal = 0
@@ -571,7 +613,7 @@ export async function registerCollectionCustomerBatch(input: { clientId: number;
   }> = []
   for (const document of prepared.documents) {
     try {
-      const result = await registerCollectionPayment({ documentId: document.documentId, amount: document.balance, paymentTypeId: input.paymentTypeId, clientId: input.clientId, recordDate: input.recordDate, batchId })
+       const result = await registerCollectionPayment({ documentId: document.documentId, amount: document.balance, paymentTypeId: input.paymentTypeId, clientId: input.clientId, recordDate: input.recordDate, batchId })
       confirmedTotal += document.balance
       results.push({ ...document, amount: document.balance, status: 'CONFIRMED' })
       if (!result.ok) failed++

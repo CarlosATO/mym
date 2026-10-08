@@ -135,9 +135,9 @@ test('pago parcial comienza vacío y muestra máximo live en CLP', () => {
   assert.match(view, /inputMode="numeric" value=\{clpInput\(partialAmount\)\}/)
   assert.doesNotMatch(view, /type="number"[^>]*value=\{partialAmount\}/)
 })
-test('pago parcial muestra saldo posterior y tipo de pago', () => {
+test('pago parcial muestra saldo posterior y forma de pago', () => {
   assert.match(view, /Saldo estimado posterior:/)
-  assert.match(view, /Tipo de pago:.*Pago parcial/)
+  assert.match(view, /Forma de pago \*/)
 })
 test('preflight y escritura bloquean acciones con feedback inmediato', () => {
   assert.match(view, /Consultando saldo en Bsale/)

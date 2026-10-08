@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 const migration = await readFile(new URL('../supabase/migrations/20261006140000_collection_workflow_etapa_2a.sql', import.meta.url), 'utf8')
+const paymentTypesMigration = await readFile(new URL('../supabase/migrations/20261008110000_collection_payment_types_caylo.sql', import.meta.url), 'utf8')
 const action = await readFile(new URL('../src/app/actions/comercial/cobranza-workflow.ts', import.meta.url), 'utf8')
 const view = await readFile(new URL('../src/modules/analisis-comercial/views/cobranza.tsx', import.meta.url), 'utf8')
 const metrics = await readFile(new URL('../src/modules/analisis-comercial/lib/cobranza-metrics.ts', import.meta.url), 'utf8')
@@ -34,11 +35,31 @@ test('preflight rechaza monto inválido y exceso de saldo', () => {
 test('preflight acepta pagos parciales y totales dentro del saldo', () => assert.match(action, /liveBalance = Number\(liveDocument\.totalAmountOwed\)/))
 test('preflight valida forma configurada y activa', () => {
   assert.match(action, /collection_payment_type_config/)
-  assert.match(action, /liveType\.active === false/)
+  assert.match(action, /isBsalePaymentTypeActive/)
 })
 test('preflight valida cliente del documento', () => assert.match(action, /Number\(document\.client_id\)/))
 test('la UI no llama Bsale directamente', () => assert.doesNotMatch(view, /payments\.json|bsaleWriteForCompany/))
-test('Caylo sólo habilita TRANSFERENCIA 8', () => assert.match(migration, /d1000000-0000-0000-0000-000000000001', 8, 'TRANSFERENCIA', true/))
+test('Caylo habilita efectivo, cheque y transferencia con IDs Bsale reales', () => {
+  assert.match(paymentTypesMigration, /d1000000-0000-0000-0000-000000000001', 1, 'EFECTIVO', true/)
+  assert.match(paymentTypesMigration, /d1000000-0000-0000-0000-000000000001', 5, 'CHEQUE', true/)
+  assert.match(paymentTypesMigration, /d1000000-0000-0000-0000-000000000001', 8, 'TRANSFERENCIA', true/)
+})
+test('prepare devuelve opciones y no selecciona implícitamente la primera', () => {
+  assert.match(action, /paymentTypes: paymentTypes\.availableTypes/)
+  assert.match(action, /paymentType: selectedType/)
+  assert.match(action, /input\.paymentTypeId === undefined[\s\S]*null/)
+})
+test('la forma de pago es obligatoria al registrar', () => {
+  assert.match(action, /La forma de pago es obligatoria/)
+  assert.match(view, /Forma de pago \*/)
+  assert.match(view, /Selecciona una forma de pago/)
+})
+test('el batch usa una única forma seleccionada en todos sus documentos', () => {
+  assert.match(action, /paymentTypeId: number/)
+  assert.match(action, /payment_type_id: input\.paymentTypeId/)
+  assert.match(action, /registerCollectionPayment\(\{ documentId: document\.documentId[\s\S]*paymentTypeId: input\.paymentTypeId/)
+  assert.match(view, /batchPreview\.paymentTypes\.map/)
+})
 test('formas de pago pertenecen a company_id', () => assert.match(migration, /UNIQUE \(company_id, bsale_payment_type_id\)/))
 test('RLS está habilitado en las cuatro tablas', () => assert.equal((migration.match(/ENABLE ROW LEVEL SECURITY/g) ?? []).length, 4))
 test('tablas sensibles no tienen grants al navegador', () => assert.match(migration, /FROM PUBLIC, anon, authenticated/))
@@ -96,6 +117,17 @@ test('guardar etapa mantiene el Sheet del cliente y actualiza workflow', () => {
   assert.match(view, /setWorkflow\(current => \(\{[\s\S]*stage: input\.stage/)
 })
 test('mensaje no expone detalle técnico de 30\/60\/90', () => assert.doesNotMatch(view, /payload agregado de CxC|consultas N\+1/))
+test('mensaje identifica a CAYLO y conserva una sola fuente', () => {
+  assert.match(view, /CAYLO PREMIUM SPA/)
+  assert.match(view, /documentLabel.*pendiente.*de pago/)
+  assert.match(view, /buildCollectionMessage\(client\)/)
+})
+test('KPI usa el conjunto visible y cambia por vista', () => {
+  assert.match(view, /calculateCobranzaClientKpis\(visibleClients\)/)
+  assert.match(view, /calculateCobranzaInvoiceKpis\(visibleInvoices\)/)
+  assert.doesNotMatch(view, /label="CxC total 2026"/)
+  assert.doesNotMatch(view, /label="CxC vencida 2026"/)
+})
 test('vista Clientes es default y alterna a Facturas', () => {
   assert.match(view, /useState<ViewMode>\('CLIENTS'\)/)
   assert.match(view, /changeView\('INVOICES'\)/)

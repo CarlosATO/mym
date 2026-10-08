@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyCobranzaPaymentOverlay, buildCobranzaClients, cobranzaPriority, daysOverdue } from '../src/modules/analisis-comercial/lib/cobranza-metrics.ts'
+import { applyCobranzaPaymentOverlay, buildCobranzaClients, buildCobranzaInvoices, calculateCobranzaClientKpis, calculateCobranzaInvoiceKpis, cobranzaPriority, daysOverdue } from '../src/modules/analisis-comercial/lib/cobranza-metrics.ts'
 
 const document = (overrides = {}) => ({
   document_id: 1,
@@ -63,4 +63,37 @@ test('overlay es determinista y no modifica el snapshot original', () => {
   assert.equal(snapshot[0].pending_amount, '113940')
   assert.equal(current.length, 0)
   assert.equal(applyCobranzaPaymentOverlay(snapshot, []).length, 1)
+})
+
+test('KPI de clientes suma sólo el conjunto filtrado', () => {
+  const clients = buildCobranzaClients([
+    document({ client_id: 10, pending_amount: '100000', overdue: true }),
+    document({ client_id: 20, document_id: 2, pending_amount: '50000', overdue: false }),
+  ], '2026-10-06')
+  assert.deepEqual(calculateCobranzaClientKpis(clients.slice(0, 1)), {
+    totalAmount: 100000,
+    overdueAmount: 100000,
+    clientsWithBalance: 1,
+    clientsWithOverdueDebt: 1,
+  })
+})
+
+test('KPI de facturas evita doble conteo de clientes', () => {
+  const clients = buildCobranzaClients([
+    document({ client_id: 10, pending_amount: '100000', overdue: true }),
+    document({ client_id: 10, document_id: 2, pending_amount: '50000', overdue: true }),
+    document({ client_id: 20, document_id: 3, pending_amount: '25000', overdue: false }),
+  ], '2026-10-06')
+  const invoices = buildCobranzaInvoices(clients, '2026-10-06')
+  assert.deepEqual(calculateCobranzaInvoiceKpis(invoices.filter(invoice => invoice.client_id === 10)), {
+    totalAmount: 150000,
+    overdueAmount: 150000,
+    clientsWithBalance: 1,
+    clientsWithOverdueDebt: 1,
+  })
+})
+
+test('KPI filtrado sin resultados queda en cero', () => {
+  assert.deepEqual(calculateCobranzaClientKpis([]), { totalAmount: 0, overdueAmount: 0, clientsWithBalance: 0, clientsWithOverdueDebt: 0 })
+  assert.deepEqual(calculateCobranzaInvoiceKpis([]), { totalAmount: 0, overdueAmount: 0, clientsWithBalance: 0, clientsWithOverdueDebt: 0 })
 })

@@ -22,7 +22,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Button } from '@/components/ui/button'
 import type { FinanceReceivablesAnalysis } from '@/lib/control-financiero/finance-api'
 import { FINANCE_RECEIVABLES_SNAPSHOT_SOURCE } from '@/lib/control-financiero/types'
-import { applyCobranzaPaymentOverlay, buildCobranzaClients, buildCobranzaInvoices, type CobranzaClient } from '../lib/cobranza-metrics'
+import { applyCobranzaPaymentOverlay, buildCobranzaClients, buildCobranzaInvoices, calculateCobranzaClientKpis, calculateCobranzaInvoiceKpis, type CobranzaClient } from '../lib/cobranza-metrics'
 import { getCollectionCustomerHistory, getCollectionPaymentOverlay, getCollectionWorkflow, prepareCollectionCustomerBatch, prepareCollectionPayment, registerCollectionCustomerBatch, registerCollectionInteraction, registerCollectionPayment, reopenCollectionCustomersWithDebt, updateCollectionStage, type CollectionHistoryEvent, type CollectionInteractionType, type CollectionPaymentOverlay, type CollectionStage } from '@/app/actions/comercial/cobranza-workflow'
 
 const stages: Array<{ key: CollectionStage; label: string }> = [
@@ -81,14 +81,15 @@ const historyTitle = (event: CollectionHistoryEvent) => {
 
 const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
 
-const buildCollectionMessage = (client: CobranzaClient) => {
+export const buildCollectionMessage = (client: CobranzaClient) => {
   const allDocumentsOverdue = client.totalAmount === client.overdueAmount
   const documentSummary = client.documents.length <= 3
     ? ` Detalle: ${client.documents.map(document => `factura ${document.folio ?? document.document_id} por ${money(document.pending_amount)}`).join('; ')}.`
     : ''
+  const documentLabel = `${client.pendingDocuments} documento${client.pendingDocuments === 1 ? '' : 's'}`
   const balanceMessage = allDocumentsOverdue
-    ? `mantiene un saldo pendiente de ${money(client.totalAmount)} correspondiente a ${client.pendingDocuments} documento${client.pendingDocuments === 1 ? '' : 's'}, actualmente vencido${client.pendingDocuments === 1 ? '' : 's'}.`
-    : `mantiene un saldo pendiente de ${money(client.totalAmount)}, de los cuales ${money(client.overdueAmount)} se encuentra vencido, correspondiente a ${client.pendingDocuments} documento${client.pendingDocuments === 1 ? '' : 's'}.`
+    ? `mantiene ${documentLabel} pendiente${client.pendingDocuments === 1 ? '' : 's'} de pago con la empresa CAYLO PREMIUM SPA por un total de ${money(client.totalAmount)}, actualmente vencido${client.pendingDocuments === 1 ? '' : 's'}.`
+    : `mantiene ${documentLabel} pendiente${client.pendingDocuments === 1 ? '' : 's'} de pago con la empresa CAYLO PREMIUM SPA por un total de ${money(client.totalAmount)}, de los cuales ${money(client.overdueAmount)} se encuentra${client.overdueAmount === 1 ? '' : 'n'} vencido${client.overdueAmount === 1 ? '' : 's'}.`
   return `Hola ${client.name}, junto con saludar, según nuestros registros ${balanceMessage}${documentSummary} ¿Nos podría confirmar una fecha estimada de pago? Gracias.`
 }
 
@@ -353,7 +354,7 @@ function ClientPanel({
   onClose: () => void
 }) {
   const [copied, setCopied] = useState(false)
-  const [paymentPreview, setPaymentPreview] = useState<{ documentId: number; amount: string; liveBalance: number; snapshotBalance: number; paymentType: { id: number; label: string }; recordDate: string } | null>(null)
+  const [paymentPreview, setPaymentPreview] = useState<{ documentId: number; amount: string; liveBalance: number; snapshotBalance: number; paymentTypes: Array<{ id: number; label: string; name: string }>; paymentTypeId: number | null; recordDate: string } | null>(null)
   const [paymentError, setPaymentError] = useState<string | null>(null)
   const [paymentProcessing, setPaymentProcessing] = useState(false)
   const [paymentStatus, setPaymentStatus] = useState<'IDLE' | 'SUCCESS' | 'UNKNOWN' | 'FAILED'>('IDLE')
@@ -361,7 +362,7 @@ function ClientPanel({
   const [paymentMode, setPaymentMode] = useState<'TOTAL' | 'PARTIAL'>('TOTAL')
   const [partialAmount, setPartialAmount] = useState('')
   const [preflightDocumentId, setPreflightDocumentId] = useState<number | null>(null)
-  const [batchPreview, setBatchPreview] = useState<{ documents: Array<{ documentId: number; folio: number | string | null; balance: number }>; total: number; paymentTypeId: number } | null>(null)
+  const [batchPreview, setBatchPreview] = useState<{ documents: Array<{ documentId: number; folio: number | string | null; balance: number }>; total: number; paymentTypes: Array<{ id: number; label: string; name: string }> ; paymentTypeId: number | null } | null>(null)
   const [batchPreparing, setBatchPreparing] = useState(false)
   const [batchProcessing, setBatchProcessing] = useState(false)
   const [batchError, setBatchError] = useState<string | null>(null)
@@ -422,7 +423,8 @@ function ClientPanel({
     setPreflightDocumentId(documentId)
     try {
       const result = await prepareCollectionPayment({ documentId, amount: Number(amount) })
-      setPaymentPreview({ documentId, amount: String(result.liveBalance), liveBalance: result.liveBalance, snapshotBalance: result.snapshotBalance, paymentType: result.paymentType, recordDate: result.recordDate })
+       const defaultType = result.paymentTypes.find(type => type.label.toUpperCase() === 'TRANSFERENCIA') ?? result.paymentTypes[0]
+       setPaymentPreview({ documentId, amount: String(result.liveBalance), liveBalance: result.liveBalance, snapshotBalance: result.snapshotBalance, paymentTypes: result.paymentTypes, paymentTypeId: defaultType?.id ?? null, recordDate: result.recordDate })
     } catch (cause) {
       setPaymentError(cause instanceof Error ? cause.message : 'No se pudo consultar Bsale.')
     } finally {
@@ -442,7 +444,12 @@ function ClientPanel({
         setPaymentError(`Ingresa un monto entre ${money(1)} y ${money(paymentPreview.liveBalance)}.`)
         return
       }
-      const result = await registerCollectionPayment({ documentId: paymentPreview.documentId, amount, paymentTypeId: paymentPreview.paymentType.id, clientId: client.clientId, recordDate: paymentPreview.recordDate })
+       if (!paymentPreview.paymentTypeId) {
+         setPaymentStatus('FAILED')
+         setPaymentError('Selecciona una forma de pago para continuar.')
+         return
+       }
+       const result = await registerCollectionPayment({ documentId: paymentPreview.documentId, amount, paymentTypeId: paymentPreview.paymentTypeId, clientId: client.clientId, recordDate: paymentPreview.recordDate })
       setPaymentResult({ documentBalance: result.documentBalance, clientBalance: result.clientBalance })
       onPaymentReconciled?.(paymentPreview.documentId, result.documentBalance, result.clientBalance)
       setPaymentStatus('SUCCESS')
@@ -462,7 +469,9 @@ function ClientPanel({
     setBatchResult(null)
     setBatchPreparing(true)
     try {
-      setBatchPreview(await prepareCollectionCustomerBatch(client.clientId))
+       const result = await prepareCollectionCustomerBatch(client.clientId)
+       const defaultType = result.paymentTypes.find(type => type.label.toUpperCase() === 'TRANSFERENCIA') ?? result.paymentTypes[0]
+       setBatchPreview({ ...result, paymentTypeId: defaultType?.id ?? null })
     } catch (cause) {
       setBatchError(cause instanceof Error ? cause.message : 'No se pudo preparar el pago total.')
     } finally {
@@ -471,11 +480,14 @@ function ClientPanel({
   }
 
   const confirmBatch = async () => {
-    if (!batchPreview) return
+     if (!batchPreview || !batchPreview.paymentTypeId) {
+       setBatchError('Selecciona una forma de pago para continuar.')
+       return
+     }
     setBatchProcessing(true)
     setBatchError(null)
     try {
-      const result = await registerCollectionCustomerBatch({ clientId: client.clientId, paymentTypeId: batchPreview.paymentTypeId })
+       const result = await registerCollectionCustomerBatch({ clientId: client.clientId, paymentTypeId: batchPreview.paymentTypeId })
       setBatchResult(result)
       result.results.filter(item => item.status === 'CONFIRMED').forEach(item => onPaymentReconciled?.(item.documentId, 0, 0))
     } catch (cause) {
@@ -584,7 +596,7 @@ function ClientPanel({
                 </div>
                 <p><strong>Monto a registrar:</strong> {paymentMode === 'TOTAL' ? money(paymentPreview.liveBalance) : partialAmount ? money(Number(partialAmount)) : '—'}</p>
                 {paymentMode === 'PARTIAL' && Number(partialAmount) > 0 && Number(partialAmount) <= paymentPreview.liveBalance && <p><strong>Saldo estimado posterior:</strong> {money(paymentPreview.liveBalance - Number(partialAmount))}</p>}
-               <p><strong>Tipo de pago:</strong> {paymentMode === 'PARTIAL' ? 'Pago parcial' : paymentPreview.paymentType.label}</p>
+               <label className="block text-xs font-semibold">Forma de pago *<select value={paymentPreview.paymentTypeId ?? ''} onChange={event => setPaymentPreview(current => current ? { ...current, paymentTypeId: event.target.value ? Number(event.target.value) : null } : current)} disabled={paymentProcessing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs"><option value="">Selecciona una forma de pago</option>{paymentPreview.paymentTypes.map(type => <option key={type.id} value={type.id}>{type.label}</option>)}</select></label>
               <p><strong>Fecha:</strong> {dateLabel(paymentPreview.recordDate)}</p>
               <p className="mt-3 border border-[#B38A55]/40 bg-[#F6EFE2] px-3 py-2 text-[11px] text-[#806238]">Esta acción registrará un pago real en Bsale.</p>
             </div>}
@@ -604,11 +616,12 @@ function ClientPanel({
               <DialogTitle>Registrar pago total</DialogTitle>
               <DialogDescription>Se procesarán los documentos secuencialmente, uno por uno.</DialogDescription>
             </DialogHeader>
-             {batchPreview && <div className="space-y-2 text-xs">
+               {batchPreview && <div className="space-y-2 text-xs">
               <p className="font-semibold">{client.name}</p>
               {batchPreview.documents.map(document => <div key={document.documentId} className="flex justify-between border-b border-[#D1C7BD]/70 py-1"><span>Factura {document.folio ?? document.documentId}</span><strong>{money(document.balance)}</strong></div>)}
-              <div className="flex justify-between pt-1 text-sm font-bold"><span>TOTAL</span><span>{money(batchPreview.total)}</span></div>
-              <p className="mt-3 border border-[#B38A55]/40 bg-[#F6EFE2] px-3 py-2 text-[11px] text-[#806238]">Se registrarán {batchPreview.documents.length} pagos reales en Bsale por un total de {money(batchPreview.total)}.</p>
+               <div className="flex justify-between pt-1 text-sm font-bold"><span>TOTAL</span><span>{money(batchPreview.total)}</span></div>
+               <label className="mt-3 block text-xs font-semibold">Forma de pago *<select value={batchPreview.paymentTypeId ?? ''} onChange={event => setBatchPreview(current => current ? { ...current, paymentTypeId: event.target.value ? Number(event.target.value) : null } : current)} disabled={batchProcessing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs"><option value="">Selecciona una forma de pago</option>{batchPreview.paymentTypes.map(type => <option key={type.id} value={type.id}>{type.label}</option>)}</select></label>
+               <p className="mt-3 border border-[#B38A55]/40 bg-[#F6EFE2] px-3 py-2 text-[11px] text-[#806238]">Se registrarán {batchPreview.documents.length} pagos reales en Bsale por un total de {money(batchPreview.total)}.</p>
             </div>}
              {batchProcessing && <p className="border border-[#B38A55]/40 bg-[#F6EFE2] px-3 py-2 text-[11px] text-[#806238]">Procesando pagos secuencialmente y verificando cada documento. No cierres esta ventana.</p>}
              {batchResult && <div className="space-y-1 border border-[#D1C7BD] bg-[#F5F0EA] px-3 py-2 text-[11px]"><p className="font-semibold">Batch {batchResult.status}: {money(batchResult.confirmedTotal)} confirmado de {money(batchResult.expectedTotal)}.</p>{batchResult.results.map(result => <p key={result.documentId} className={result.status === 'CONFIRMED' ? 'text-[#426247]' : 'text-[#8A4B4B]'}>Factura {result.folio ?? result.documentId}: {result.status === 'CONFIRMED' ? 'confirmada' : result.status === 'UNKNOWN' ? 'estado incierto' : 'fallida'}</p>)}</div>}
@@ -800,9 +813,9 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
     setViewMode(nextView)
     setSortMode(nextView === 'CLIENTS' ? 'overdue-desc' : 'due-asc')
   }
-  const totalAmount = Number(data.summary.closing_receivable_amount)
-  const overdueAmount = Number(data.summary.closing_overdue_amount)
-  const overdueClients = clients.filter(client => client.overdueAmount > 0).length
+  const kpis = viewMode === 'CLIENTS'
+    ? calculateCobranzaClientKpis(visibleClients)
+    : calculateCobranzaInvoiceKpis(visibleInvoices)
 
   return (
     <main className="min-h-[430px] bg-[#EFE9E1] px-4 py-5 sm:px-5 sm:py-6 lg:px-6">
@@ -819,10 +832,10 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
         </div>
 
         <div className="mt-4 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-4">
-          <Kpi label="CxC total 2026" value={money(totalAmount)} />
-          <Kpi label="CxC vencida 2026" value={money(overdueAmount)} />
-          <Kpi label="Clientes con saldo 2026" value={clients.length.toLocaleString('es-CL')} />
-          <Kpi label="Clientes con deuda vencida 2026" value={overdueClients.toLocaleString('es-CL')} />
+           <Kpi label="CxC total" value={money(kpis.totalAmount)} />
+           <Kpi label="CxC vencida" value={money(kpis.overdueAmount)} />
+           <Kpi label="Clientes con saldo" value={kpis.clientsWithBalance.toLocaleString('es-CL')} />
+           <Kpi label="Clientes con deuda vencida" value={kpis.clientsWithOverdueDebt.toLocaleString('es-CL')} />
         </div>
 
         <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-b border-[#D1C7BD] pb-3">

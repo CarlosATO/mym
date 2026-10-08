@@ -29,6 +29,13 @@ export type CobranzaPaymentOverlay = {
   pendingAmount: number
 }
 
+export type CobranzaKpis = {
+  totalAmount: number
+  overdueAmount: number
+  clientsWithBalance: number
+  clientsWithOverdueDebt: number
+}
+
 const amount = (value: string) => Number(value || 0)
 
 export function daysOverdue(expirationDate: string | null, cutoffDate: string): number {
@@ -112,4 +119,24 @@ export function buildCobranzaInvoices(clients: CobranzaClient[], cutoffDate: str
     daysOverdue: document.overdue ? daysOverdue(document.expiration_date, cutoffDate) : 0,
     priority: client.priority,
   })))
+}
+
+export function calculateCobranzaClientKpis(clients: CobranzaClient[]): CobranzaKpis {
+  return clients.reduce((kpis, client) => ({
+    totalAmount: kpis.totalAmount + client.totalAmount,
+    overdueAmount: kpis.overdueAmount + client.overdueAmount,
+    clientsWithBalance: kpis.clientsWithBalance + 1,
+    clientsWithOverdueDebt: kpis.clientsWithOverdueDebt + (client.overdueAmount > 0 ? 1 : 0),
+  }), { totalAmount: 0, overdueAmount: 0, clientsWithBalance: 0, clientsWithOverdueDebt: 0 })
+}
+
+export function calculateCobranzaInvoiceKpis(invoices: CobranzaInvoice[]): CobranzaKpis {
+  const clientsWithBalance = new Set(invoices.map(invoice => invoice.client_id))
+  const clientsWithOverdueDebt = new Set(invoices.filter(invoice => invoice.overdue).map(invoice => invoice.client_id))
+  return {
+    totalAmount: invoices.reduce((total, invoice) => total + amount(invoice.pending_amount), 0),
+    overdueAmount: invoices.reduce((total, invoice) => total + (invoice.overdue ? amount(invoice.pending_amount) : 0), 0),
+    clientsWithBalance: clientsWithBalance.size,
+    clientsWithOverdueDebt: clientsWithOverdueDebt.size,
+  }
 }
