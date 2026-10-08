@@ -36,9 +36,11 @@ export type StatementDrilldownKey =
   | 'EXPENSE_BANK_FEES'
   | 'EXPENSE_INSURANCE'
   | 'EXPENSE_TELECOM'
-  | 'EXPENSE_EXTERNAL_SERVICES'
+   | 'EXPENSE_EXTERNAL_SERVICES'
+  | 'EXPENSE_OTHER'
   | 'NON_OPERATING_GROUP'
   | 'EXPENSE_FINANCIAL_INTEREST'
+  | 'OTHER_INCOME'
 
 export type SalesNetDetailScope = { month: number } | { month: null }
 
@@ -349,6 +351,19 @@ export function buildStatementRows(
       ytdTooltip: expenses.coverage.coverageStatus !== 'COMPLETE' ? `Fuente bancaria disponible hasta ${periodText}.` : undefined,
       drilldownKey,
     })
+    const otherIncomeRow: StatementRow = {
+      label: 'Otros ingresos',
+      values: expenseMonths.map(month => month.status === 'AVAILABLE' ? month.otherIncome ?? '0' : null),
+      ytd: expenses.ytd.otherIncome ?? '0',
+      percentageYtd: percentageOf(expenses.ytd.otherIncome ?? '0', expenseSalesYtd),
+      missing,
+      ytdMissing,
+      ytdLabel: periodLabel,
+      percentageLabel: `sobre ventas ${periodText}`,
+      ytdTooltip: expenses.coverage.coverageStatus !== 'COMPLETE' ? `Fuente de entradas externas disponible hasta ${periodText}.` : undefined,
+      drilldownKey: 'OTHER_INCOME',
+    }
+    rows.push(otherIncomeRow)
     const operatingChildren = [
       expenseChild('Software y suscripciones', 'softwareSubscriptions', 'EXPENSE_SOFTWARE_SUBSCRIPTIONS'),
       expenseChild('Gastos de oficina y consumo interno', 'officeConsumption', 'EXPENSE_OFFICE_CONSUMPTION'),
@@ -358,6 +373,7 @@ export function buildStatementRows(
       expenseChild('Seguros', 'insurance', 'EXPENSE_INSURANCE'),
       expenseChild('Telecomunicaciones e Internet', 'telecom', 'EXPENSE_TELECOM'),
       expenseChild('Servicios profesionales y externos', 'externalServices', 'EXPENSE_EXTERNAL_SERVICES'),
+      expenseChild('Otros gastos reconocidos', 'otherExpenses', 'EXPENSE_OTHER'),
     ]
     rows.push({
       label: 'GASTOS OPERACIONALES IDENTIFICADOS',
@@ -404,11 +420,15 @@ export function buildStatementRows(
   const personnelRow = rows.find(row => row.label === 'GASTOS DE PERSONAL')
   const operatingRow = rows.find(row => row.label === 'GASTOS OPERACIONALES IDENTIFICADOS')
   const financialRow = rows.find(row => row.label === 'GASTOS FINANCIEROS / NO OPERACIONALES')
+  const otherIncomeRow = rows.find(row => row.drilldownKey === 'OTHER_INCOME')
   if (commonCoverage.months.length && marginRow && personnelRow && operatingRow && financialRow) {
     const coveredSales = sumCovered(salesValues)
-    const operatingValues = commonValues(marginRow.values).map((margin, index) =>
-      subtractMoney(subtractMoney(margin, commonValues(personnelRow.values)[index]), commonValues(operatingRow.values)[index]),
-    )
+    const operatingValues = commonValues(marginRow.values).map((margin, index) => {
+      const afterExpenses = subtractMoney(subtractMoney(margin, commonValues(personnelRow.values)[index]), commonValues(operatingRow.values)[index])
+      return afterExpenses === null
+        ? null
+        : sumMoney([afterExpenses, otherIncomeRow ? commonValues(otherIncomeRow.values)[index] : null])
+    })
     const resultOperational: StatementRow = {
       label: 'RESULTADO OPERACIONAL',
       values: operatingValues,

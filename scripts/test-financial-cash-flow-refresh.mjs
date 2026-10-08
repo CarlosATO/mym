@@ -10,7 +10,7 @@ const page = fs.readFileSync('src/app/dashboard/analisis-comercial/control-finan
 test('cash flow mutations use path invalidation instead of refresh navigation', () => {
   assert.doesNotMatch(client, /router\.refresh\(\)|window\.location\.(reload|href)/)
   assert.match(bankActions, /const CASH_FLOW_PATH = .*flujo-caja/)
-  assert.equal((bankActions.match(/revalidatePath\(CASH_FLOW_PATH\)/g) ?? []).length, 4)
+  assert.equal((bankActions.match(/revalidatePath\(CASH_FLOW_PATH\)/g) ?? []).length, 5)
   assert.equal((classificationActions.match(/revalidatePath\(CASH_FLOW_PATH\)/g) ?? []).length, 6)
 })
 

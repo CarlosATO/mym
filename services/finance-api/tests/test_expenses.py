@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from app.financial import expenses
-from app.financial.expenses import EXPENSE_CATEGORIES, MONTHLY_EXPENSES_SQL, build_expenses_response
+from app.financial.expenses import EXPENSE_CATEGORIES, MONTHLY_EXPENSES_SQL, OTHER_INCOME_CATEGORY, OTHER_INCOME_SQL, build_expenses_response
 from app.main import app
 
 
@@ -45,12 +45,26 @@ def test_expenses_response_includes_posted_manual_expense_amounts() -> None:
         [{"month": 1, "last_transaction_date": date(2026, 1, 30)}],
         [
             {"month": 1, "category_code": "EXPENSE_SOFTWARE_SUBSCRIPTIONS", "amount": Decimal("100")},
+            {"month": 1, "category_code": "EXPENSE_OTHER", "amount": Decimal("40")},
         ],
     )
-    assert response["months"][0]["softwareSubscriptions"] == "100.00"
-    assert response["months"][0]["operatingIdentifiedTotal"] == "100.00"
+    assert response["months"][0]["otherExpenses"] == "40.00"
+    assert response["months"][0]["operatingIdentifiedTotal"] == "140.00"
     assert response["months"][1]["status"] == "MISSING"
     assert response["months"][1]["operatingIdentifiedTotal"] is None
+
+
+def test_expenses_response_includes_other_income_separately_from_sales_and_expenses() -> None:
+    response = build_expenses_response(
+        COMPANY_ID,
+        2026,
+        [{"month": 1, "last_transaction_date": date(2026, 1, 30)}],
+        [{"month": 1, "category_code": "EXPENSE_OTHER", "amount": Decimal("40")}],
+        other_income_rows=[{"month": 1, "amount": Decimal("250")}],
+    )
+    assert response["months"][0]["otherIncome"] == "250.00"
+    assert response["months"][0]["operatingIdentifiedTotal"] == "40.00"
+    assert response["ytd"]["otherIncome"] == "250.00"
 
 
 def test_expenses_distinguish_covered_zero_from_missing_and_ytd_is_incomplete() -> None:
@@ -89,6 +103,11 @@ def test_expenses_query_has_company_scope_and_explicit_allowlist() -> None:
     assert "available_periods" in sql
     assert "GREATEST" in sql
     assert "movement.direction = 'DEBE'" in sql
+    other_sql = str(OTHER_INCOME_SQL)
+    assert OTHER_INCOME_CATEGORY in other_sql
+    assert "inflow.company_id = :company_id" in other_sql
+    assert "inflow.entry_type = 'OTHER_INCOME'" in other_sql
+    assert "inflow.status = 'POSTED'" in other_sql
 
 
 def test_expenses_endpoint_requires_authentication() -> None:

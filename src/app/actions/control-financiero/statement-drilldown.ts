@@ -21,6 +21,7 @@ const EXPENSE_CODES = [
   'EXPENSE_INSURANCE',
   'EXPENSE_TELECOM',
   'EXPENSE_EXTERNAL_SERVICES',
+  'EXPENSE_OTHER',
 ] as const
 
 const OPERATING_CODES = new Set(EXPENSE_CODES.filter(code => code !== 'EXPENSE_FINANCIAL_INTEREST'))
@@ -35,6 +36,7 @@ const EXPENSE_KEY_CODES: Partial<Record<StatementDrilldownKey, string>> = {
   EXPENSE_INSURANCE: 'EXPENSE_INSURANCE',
   EXPENSE_TELECOM: 'EXPENSE_TELECOM',
   EXPENSE_EXTERNAL_SERVICES: 'EXPENSE_EXTERNAL_SERVICES',
+  EXPENSE_OTHER: 'EXPENSE_OTHER',
   EXPENSE_FINANCIAL_INTEREST: 'EXPENSE_FINANCIAL_INTEREST',
 }
 
@@ -52,7 +54,7 @@ export type StatementDrilldownItem = {
   documentNumber: string | null
   sourceType: string | null
   status: string | null
-  source: 'BANK' | 'PAYROLL' | 'RECOGNIZED'
+  source: 'BANK' | 'PAYROLL' | 'RECOGNIZED' | 'RECOGNIZED_INCOME'
   workerRut: string | null
   workerName: string | null
   earnings: string | null
@@ -187,6 +189,33 @@ function recognizedExpenseItem(row: any, categoryName: string | null): Statement
   }
 }
 
+function recognizedIncomeItem(row: any, categoryName: string | null): StatementDrilldownItem {
+  return {
+    id: row.id,
+    date: row.document_date ?? `${row.period_year}-${String(row.period_month).padStart(2, '0')}-01`,
+    amount: money(row.amount),
+    description: row.description,
+    category: categoryName,
+    counterparty: row.counterparty_name ?? null,
+    classificationSource: row.entry_type ?? null,
+    reviewStatus: row.status ?? null,
+    note: row.notes ?? null,
+    accountingPeriod: `${row.period_year}-${String(row.period_month).padStart(2, '0')}`,
+    documentNumber: row.document_number ?? null,
+    sourceType: row.entry_type ?? null,
+    status: row.status ?? null,
+    source: 'RECOGNIZED_INCOME',
+    workerRut: null,
+    workerName: null,
+    earnings: null,
+    employerContributions: null,
+    beneficiary: null,
+    paymentConcept: null,
+    payrollStatus: null,
+    importFilename: null,
+  }
+}
+
 export async function loadStatementDrilldown(input: {
   year: number
   month: number | null
@@ -202,7 +231,8 @@ export async function loadStatementDrilldown(input: {
 
     const isExpense = input.key.startsWith('EXPENSE_') || input.key === 'OPERATING_GROUP' || input.key === 'NON_OPERATING_GROUP'
     const isPersonnel = input.key.startsWith('PERSONNEL_')
-    if (!isExpense && !isPersonnel) return { ok: false, message: 'La fila seleccionada no tiene detalle financiero.' }
+    const isRecognizedIncome = input.key === 'OTHER_INCOME'
+    if (!isExpense && !isPersonnel && !isRecognizedIncome) return { ok: false, message: 'La fila seleccionada no tiene detalle financiero.' }
 
     const categoriesResult = await db()
       .from('financial_categories')
@@ -219,7 +249,9 @@ export async function loadStatementDrilldown(input: {
         : input.key === 'NON_OPERATING_GROUP'
           ? ['EXPENSE_FINANCIAL_INTEREST']
           : [EXPENSE_KEY_CODES[input.key]].filter(Boolean) as string[]
-      : input.key === 'PERSONNEL_OFF_BOOK'
+        : isRecognizedIncome
+          ? ['INCOME_OTHER_CASH']
+          : input.key === 'PERSONNEL_OFF_BOOK'
         ? ['EXPENSE_PERSONNEL_OFF_BOOK']
         : input.key === 'PERSONNEL_OTHER'
           ? ['EXPENSE_SALARIES_OTHER']
@@ -322,6 +354,29 @@ export async function loadStatementDrilldown(input: {
             ? Number(row.total_employer_contributions ?? 0)
             : Number(row.total_earnings ?? 0) + Number(row.total_employer_contributions ?? 0)
         items.push(payrollItem(row, importRow, amount))
+      }
+    }
+
+    if (isRecognizedIncome) {
+      const fromMonth = input.scope === 'MONTH' ? input.month as number : 1
+      const toMonth = input.scope === 'MONTH' ? (input.month as number) + 1 : Math.min(input.throughMonth + 1, 13)
+      const inflowResult = requestedCategoryIds.length === 0
+        ? { data: [], error: null }
+        : await db()
+          .from('financial_inflow_entries')
+          .select('id,period_year,period_month,amount,category_id,description,counterparty_name,entry_type,document_date,document_number,notes,status')
+          .eq('company_id', companyId)
+          .eq('period_year', input.year)
+          .eq('entry_type', 'OTHER_INCOME')
+          .eq('status', 'POSTED')
+          .in('category_id', requestedCategoryIds)
+          .gte('period_month', fromMonth)
+          .lt('period_month', toMonth)
+          .order('period_month', { ascending: true })
+      if (inflowResult.error) throw new Error(inflowResult.error.message)
+      for (const row of inflowResult.data ?? []) {
+        if (!monthSet.has(Number(row.period_month))) continue
+        items.push(recognizedIncomeItem(row, categoryById.get(row.category_id)?.name ?? null))
       }
     }
 

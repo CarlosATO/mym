@@ -80,6 +80,13 @@ export const analisisComercialNavigation: ModuleNavigation = {
           active: { pathname: { prefix: `${analysisBase}/control-financiero/libro-remuneraciones` } },
           visibility: { anyOf: ['analisis_comercial.control_financiero.view', 'system.admin'] },
         },
+        {
+          id: 'control-financiero-movements',
+          label: '10  Movimientos financieros',
+          target: { href: `${analysisBase}/control-financiero/movimientos` },
+          active: { pathname: { prefix: `${analysisBase}/control-financiero/movimientos` } },
+          visibility: { anyOf: ['analisis_comercial.control_financiero.view', 'system.admin'] },
+        },
       ],
     },
   ],
@@ -90,6 +97,7 @@ export const getAnalisisComercialBreadcrumb: BreadcrumbValue = ({ pathname }) =>
   if (pathname.startsWith(`${analysisBase}/control-financiero/flujo-caja`)) return ['Análisis Comercial', 'Control Financiero', 'Flujo de Caja']
   if (pathname.startsWith(`${analysisBase}/control-financiero/capital-trabajo`)) return ['Análisis Comercial', 'Control Financiero', 'Capital de Trabajo']
   if (pathname.startsWith(`${analysisBase}/control-financiero/libro-remuneraciones`)) return ['Análisis Comercial', 'Control Financiero', 'Libro de Remuneraciones']
+  if (pathname.startsWith(`${analysisBase}/control-financiero/movimientos`)) return ['Análisis Comercial', 'Control Financiero', 'Movimientos financieros']
   if (pathname.startsWith(`${analysisBase}/control-financiero`)) return ['Análisis Comercial', 'Control Financiero']
   if (pathname.startsWith(`${analysisBase}/cobranza`)) return ['Análisis Comercial', 'Cobranza']
   if (pathname.startsWith(`${analysisBase}/proveedor`)) return ['Análisis Comercial', 'Proveedor 360']

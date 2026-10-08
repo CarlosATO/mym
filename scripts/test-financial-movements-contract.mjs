@@ -1,0 +1,158 @@
+import assert from 'node:assert/strict'
+import { readdir, readFile } from 'node:fs/promises'
+import test from 'node:test'
+
+const root = new URL('..', import.meta.url)
+const read = async path => readFile(new URL(path, root), 'utf8')
+const migrationFiles = await readdir(new URL('supabase/migrations/', root))
+const migration = await read('supabase/migrations/20261007130000_financial_movements_v1.sql')
+const inflowMigration = await read('supabase/migrations/20261008100000_financial_inflow_entries.sql')
+const bsaleMigration = await read('supabase/migrations/20261007100000_bsale_cobranza_webhook_overrides.sql')
+const expensesApi = await read('services/finance-api/app/financial/expenses.py')
+const actions = await read('src/app/actions/control-financiero/financial-movements.ts')
+const inflowActions = await read('src/app/actions/control-financiero/financial-inflows.ts')
+const page = await read('src/app/dashboard/analisis-comercial/control-financiero/movimientos/page.tsx')
+const view = await read('src/modules/analisis-comercial/control-financiero/components/financial-movements-client.tsx')
+const navigation = await read('src/modules/analisis-comercial/lib/navigation.ts')
+const statement = await read('src/lib/control-financiero/statement.ts')
+const drilldown = await read('src/app/actions/control-financiero/statement-drilldown.ts')
+
+test('migration creates company-scoped petty cash and loan models', () => {
+  for (const table of ['financial_cash_accounts', 'financial_cash_movements', 'financial_loans', 'financial_loan_payments']) assert.match(migration, new RegExp(`create table comercial\\.${table}`))
+  assert.match(migration, /unique \(company_id, idempotency_key\)/g)
+  assert.match(migration, /check \(principal_amount \+ interest_amount \+ fee_amount = total_amount\)/)
+  assert.match(migration, /p_principal_amount > v_original - v_paid/)
+})
+
+test('financial expense source supports controlled manual, petty cash and loan entries', () => {
+  assert.match(migration, /MANUAL', 'BANK_LINKED', 'IMPORT', 'PETTY_CASH', 'LOAN'/)
+  for (const code of ['EXPENSE_SOFTWARE_SUBSCRIPTIONS', 'EXPENSE_OFFICE_CONSUMPTION', 'EXPENSE_VEHICLE_OPERATING', 'EXPENSE_NOTARY', 'EXPENSE_EXTERNAL_SERVICES', 'EXPENSE_INSURANCE', 'EXPENSE_TELECOM', 'EXPENSE_OTHER', 'EXPENSE_FINANCIAL_INTEREST']) assert.match(migration, new RegExp(code))
+  assert.match(migration, /'PETTY_CASH', 'petty_cash:'/)
+  assert.match(migration, /'LOAN', 'loan_payment:'/)
+  const manualAllowlist = migration.slice(migration.indexOf('financial_expense_recognition_allowed_codes'), migration.indexOf('create table comercial.financial_cash_accounts'))
+  assert.doesNotMatch(manualAllowlist, /EXPENSE_FINANCIAL_INTEREST.*EXPENSE_OTHER/s)
+  assert.match(migration, /validate_financial_cash_expense_category/)
+})
+
+test('petty cash accounting rules are explicit', () => {
+  assert.match(migration, /create_financial_cash_funding/)
+  assert.match(migration, /create_financial_cash_expense/)
+  assert.match(migration, /v_balance < p_amount/)
+  assert.match(migration, /source_type, source_reference, notes/)
+  assert.doesNotMatch(view, /Caja chica/)
+})
+
+test('loan accounting rules separate principal and P&L expenses', () => {
+  assert.match(migration, /create_financial_loan_payment/)
+  assert.match(migration, /'Interés de préstamo'/)
+  assert.match(migration, /'Comisión o gasto financiero de préstamo'/)
+  assert.doesNotMatch(migration.slice(migration.indexOf('create or replace function comercial.create_financial_loan('), migration.indexOf('create or replace function comercial.create_financial_loan_payment')), /financial_expense_entries/)
+})
+
+test('external inflows have an isolated auditable lifecycle and preserve loan separation', () => {
+  assert.match(inflowMigration, /create table comercial\.financial_inflow_entries/)
+  assert.match(inflowMigration, /OWNER_CONTRIBUTION.*OTHER_INCOME/)
+  assert.match(inflowMigration, /DRAFT.*POSTED.*VOIDED/)
+  for (const field of ['period_year', 'period_month', 'amount', 'category_id', 'counterparty_name', 'document_date', 'document_number', 'idempotency_key']) assert.match(inflowMigration, new RegExp(field))
+  assert.match(inflowMigration, /code = 'INCOME_OTHER_CASH'/)
+  assert.match(inflowMigration, /affects_pnl_directly/)
+  assert.match(inflowMigration, /category_id is null/)
+  assert.match(inflowMigration, /create_financial_inflow_draft/)
+  assert.match(inflowMigration, /post_financial_inflow/)
+  assert.match(inflowMigration, /void_financial_inflow/)
+  assert.doesNotMatch(inflowMigration, /financial_loans/)
+  assert.match(inflowActions, /createAndPostFinancialInflow/)
+  assert.match(inflowActions, /manage_inflows/)
+  assert.match(inflowActions, /listFinancialInflows/)
+})
+
+test('Finance API combines posted recognized expenses and protects BANK_LINKED double count', () => {
+  assert.match(expensesApi, /financial_expense_entries/)
+  assert.match(expensesApi, /expense\.status = 'POSTED'/)
+  assert.match(expensesApi, /financial_expense_bank_links/)
+  assert.match(expensesApi, /linked_expense\.status = 'POSTED'/)
+  assert.match(expensesApi, /EXPENSE_OTHER/)
+  assert.match(expensesApi, /allocated_amount/)
+  assert.match(expensesApi, /residual = max/)
+  assert.match(expensesApi, /loan_linked_bank_ids/)
+  assert.match(expensesApi, /financial_inflow_entries/)
+  assert.match(expensesApi, /entry_type.*OTHER_INCOME/)
+  assert.match(expensesApi, /status.*POSTED/)
+})
+
+test('OTHER_INCOME is included in EERR with a dedicated drilldown source', () => {
+  assert.match(statement, /otherIncome/)
+  assert.match(statement, /'OTHER_INCOME'/)
+  assert.match(drilldown, /RECOGNIZED_INCOME/)
+  assert.match(drilldown, /financial_inflow_entries/)
+  assert.match(drilldown, /entry_type.*OTHER_INCOME/)
+  assert.match(drilldown, /status.*POSTED/)
+  assert.doesNotMatch(drilldown, /OWNER_CONTRIBUTION.*items\.push/s)
+})
+
+test('migration version, grants, seed and company isolation are explicit', () => {
+  assert.equal(migrationFiles.filter(file => file.startsWith('20261007130000')).length, 1)
+  assert.ok(migrationFiles.includes('20261007130000_financial_movements_v1.sql'))
+  assert.match(bsaleMigration, /Directed Bsale signals/)
+  assert.match(migration, /create_financial_loan_payment\(uuid, uuid, date, numeric, numeric, numeric, numeric, text, jsonb, text, uuid, uuid\)/)
+  assert.match(migration, /grant execute on function[\s\S]*create_financial_loan_payment[\s\S]*to service_role/)
+  assert.match(migration, /idempotency_key text not null/)
+  assert.match(migration, /unique \(company_id, idempotency_key\)/)
+  assert.match(migration, /d1000000-0000-0000-0000-000000000001.*Caja Chica Caylo/s)
+  assert.doesNotMatch(migration, /LIKE '%caylo%'/)
+  assert.doesNotMatch(migration, /auth\.users order by created_at/)
+  assert.match(migration, /foreign key \(company_id, bank_movement_id\) references comercial\.financial_bank_movements\(company_id, id\)/g)
+})
+
+test('void and loan lifecycle rules preserve history and recalculate balances', () => {
+  assert.match(migration, /void_financial_cash_movement/)
+  assert.match(migration, /v_movement->>'movement_type' <> 'EXPENSE'/)
+  assert.match(migration, /void_financial_loan_payment/)
+  assert.match(migration, /status = 'VOIDED'/)
+  assert.match(migration, /void_financial_loan/)
+  assert.match(migration, /No se puede anular un préstamo con cuotas POSTED/)
+  assert.match(migration, /sum\(principal_amount\).*status = 'POSTED'/s)
+})
+
+test('Movimientos page exposes the two operational inputs and preserves loan management', () => {
+  assert.match(page, /listRecognizedExpenses/)
+  assert.match(page, /getFinancialMovementsDashboard/)
+  assert.match(view, /Registrar gasto/)
+  assert.match(view, /Registrar entrada/)
+  assert.match(view, /Préstamos/)
+  assert.match(view, /Préstamo recibido/)
+  assert.match(view, /Aporte de socio/)
+  assert.match(view, /Otro ingreso/)
+  assert.match(view, /createAndPostFinancialInflow/)
+  assert.match(view, /FinancialInflowsHistory/)
+  assert.doesNotMatch(view, /Movimiento caja chica/)
+  assert.doesNotMatch(view, />\s*Registrar préstamo\s*</)
+  assert.match(view, /<RecognizedExpensesClient/)
+})
+
+test('responsive financial movements use wrapping KPI/actions and scrollable tables', () => {
+  assert.match(view, /sm:grid-cols-2 xl:grid-cols-4/)
+  assert.match(view, /flex flex-wrap/)
+  assert.match(view, /overflow-x-auto/)
+  assert.match(view, /max-h-\[92vh\] w-full/)
+})
+
+test('navigation and statement include Movimientos and the current other-income semantics', () => {
+  assert.match(navigation, /10  Movimientos financieros/)
+  assert.match(navigation, /Movimientos financieros/)
+  assert.match(statement, /OTHER_INCOME/)
+  assert.match(statement, /otherIncome/)
+})
+
+test('server actions enforce separate cash and loan permissions and revalidate route', () => {
+  assert.match(actions, /manage_cash/)
+  assert.match(actions, /manage_loans/)
+  assert.match(actions, /create_financial_cash_expense/)
+  assert.match(actions, /create_financial_loan_payment/)
+  assert.match(actions, /revalidatePath\(PATH\)/)
+  assert.match(actions, /control_financiero\.view/)
+  assert.match(actions, /voidPettyCashExpense/)
+  assert.match(actions, /voidFinancialLoanPayment/)
+  assert.match(actions, /voidFinancialLoan/)
+  assert.match(actions, /idempotencyKey: string/)
+})

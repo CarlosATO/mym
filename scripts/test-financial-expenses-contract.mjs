@@ -55,8 +55,9 @@ test('adds identified operating and non-operating groups without operational res
      'Servicios notariales',
      'Gastos bancarios',
      'Seguros',
-     'Telecomunicaciones e Internet',
-     'Servicios profesionales y externos',
+      'Telecomunicaciones e Internet',
+      'Servicios profesionales y externos',
+      'Otros gastos reconocidos',
   ])
   assert.equal(operating?.ytd, '159.00')
   assert.equal(nonOperating?.children?.[0].ytd, '6.00')

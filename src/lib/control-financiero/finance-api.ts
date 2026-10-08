@@ -143,9 +143,11 @@ export type FinanceExpensesMonthly = {
   insurance: string | null
   telecom: string | null
   externalServices: string | null
+  otherExpenses: string | null
   operatingIdentifiedTotal: string | null
   financialInterest: string | null
   nonOperatingIdentifiedTotal: string | null
+  otherIncome: string | null
 }
 
 export type FinanceExpensesTotals = {
@@ -157,9 +159,11 @@ export type FinanceExpensesTotals = {
   insurance: string | null
   telecom: string | null
   externalServices: string | null
+  otherExpenses: string | null
   operatingIdentifiedTotal: string | null
   financialInterest: string | null
   nonOperatingIdentifiedTotal: string | null
+  otherIncome: string | null
 }
 
 export type FinanceExpensesCoverage = {

@@ -28,7 +28,9 @@ EXPENSE_CATEGORIES = (
     "EXPENSE_INSURANCE",
     "EXPENSE_TELECOM",
     "EXPENSE_EXTERNAL_SERVICES",
+    "EXPENSE_OTHER",
 )
+OTHER_INCOME_CATEGORY = "INCOME_OTHER_CASH"
 OPERATING_CATEGORIES = EXPENSE_CATEGORIES[:5] + EXPENSE_CATEGORIES[6:]
 MONEY_QUANTUM = Decimal("0.01")
 
@@ -49,7 +51,8 @@ MONTHLY_EXPENSES_SQL = text(
             'EXPENSE_FINANCIAL_INTEREST',
             'EXPENSE_INSURANCE',
              'EXPENSE_TELECOM',
-             'EXPENSE_EXTERNAL_SERVICES'
+             'EXPENSE_EXTERNAL_SERVICES',
+             'EXPENSE_OTHER'
           )
           AND NOT EXISTS (
             SELECT 1
@@ -112,12 +115,12 @@ MONTHLY_EXPENSES_SQL = text(
         GROUP BY period_month, category.code
     ),
     available_periods AS (
-        SELECT company_id, month, last_transaction_date
+        SELECT month, last_transaction_date
         FROM comercial.financial_statement_periods
         WHERE company_id = :company_id
           AND year = :year
         UNION
-        SELECT :company_id, month, NULL::date
+        SELECT month, NULL::date
         FROM recognized_movements
     ),
     movements AS (
@@ -152,6 +155,23 @@ REVIEW_SUMMARY_SQL = text(
       )), 0)::numeric AS pending_historical_amount
     FROM comercial.financial_bank_movements
     WHERE company_id = :company_id
+    """
+)
+
+OTHER_INCOME_SQL = text(
+    """
+    SELECT period_month AS month, amount
+    FROM comercial.financial_inflow_entries AS inflow
+    JOIN comercial.financial_categories AS category
+      ON category.company_id = inflow.company_id
+     AND category.id = inflow.category_id
+    WHERE inflow.company_id = :company_id
+      AND inflow.period_year = :year
+      AND inflow.entry_type = 'OTHER_INCOME'
+      AND inflow.status = 'POSTED'
+      AND category.code = 'INCOME_OTHER_CASH'
+      AND category.is_active
+      AND category.affects_pnl_directly
     """
 )
 
@@ -216,13 +236,14 @@ def _get_expenses_from_supabase(settings: Any, company_id: UUID, year: int) -> d
             "select": "id,code,affects_pnl_directly",
             "company_id": f"eq.{company}",
             "is_active": "eq.true",
-            "code": f"in.({','.join(EXPENSE_CATEGORIES)})",
+            "code": f"in.({','.join((*EXPENSE_CATEGORIES, OTHER_INCOME_CATEGORY))})",
         },
     )
     category_codes = {row["id"]: row["code"] for row in categories}
     direct_category_ids = {row["id"] for row in categories if row.get("affects_pnl_directly") is True}
-    if set(category_codes.values()) != set(EXPENSE_CATEGORIES):
+    if not set(EXPENSE_CATEGORIES).issubset(set(category_codes.values())):
         raise RuntimeError("Required expense categories are unavailable")
+    other_income_category_ids = {row["id"] for row in categories if row.get("code") == OTHER_INCOME_CATEGORY and row.get("affects_pnl_directly") is True}
 
     statement_rows = _supabase_get(
         settings,
@@ -255,6 +276,17 @@ def _get_expenses_from_supabase(settings: Any, company_id: UUID, year: int) -> d
             ("period_year", f"eq.{year}"),
             ("status", "eq.POSTED"),
             ("category_id", f"in.({','.join(category_codes)})"),
+        ],
+    )
+    inflow_rows = _supabase_get(
+        settings,
+        "financial_inflow_entries",
+        [
+            ("select", "period_month,amount,entry_type,status,category_id"),
+            ("company_id", f"eq.{company}"),
+            ("period_year", f"eq.{year}"),
+            ("entry_type", "eq.OTHER_INCOME"),
+            ("status", "eq.POSTED"),
         ],
     )
     posted_expense_ids = {row.get("id") for row in recognized_rows if row.get("id") and row.get("status") == "POSTED"}
@@ -338,12 +370,21 @@ def _get_expenses_from_supabase(settings: Any, company_id: UUID, year: int) -> d
         for (month, category), amount in sorted(aggregates.items())
     ]
     covered_months = {int(row["month"]) for row in statement_rows}
-    statement_rows.extend(
-        {"month": int(row["period_month"]), "last_transaction_date": None}
-        for row in recognized_rows
-        if row.get("period_month") is not None and int(row["period_month"]) not in covered_months
-    )
-    return build_expenses_response(company_id, year, statement_rows, movement_rows, len(pending_rows), historical_pending_amount)
+    covered_months = {int(row["month"]) for row in statement_rows}
+    for row in recognized_rows:
+        if row.get("period_month") is not None and int(row["period_month"]) not in covered_months:
+            statement_rows.append({"month": int(row["period_month"]), "last_transaction_date": None})
+            covered_months.add(int(row["period_month"]))
+    for row in inflow_rows:
+        if row.get("period_month") is not None and row.get("category_id") in other_income_category_ids and int(row["period_month"]) not in covered_months:
+            statement_rows.append({"month": int(row["period_month"]), "last_transaction_date": None})
+            covered_months.add(int(row["period_month"]))
+    other_income_rows = [
+        {"month": int(row["period_month"]), "amount": row.get("amount")}
+        for row in inflow_rows
+        if row.get("period_month") is not None and row.get("category_id") in other_income_category_ids
+    ]
+    return build_expenses_response(company_id, year, statement_rows, movement_rows, len(pending_rows), historical_pending_amount, other_income_rows)
 
 
 def build_expenses_response(
@@ -353,6 +394,7 @@ def build_expenses_response(
     movement_rows: list[dict[str, Any]],
     pending_review_count: int = 0,
     pending_historical_amount: Decimal = Decimal("0.00"),
+    other_income_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     covered_months = sorted({int(row["month"]) for row in statement_rows})
     covered_set = set(covered_months)
@@ -368,6 +410,11 @@ def build_expenses_response(
         if category not in EXPENSE_CATEGORIES or month not in covered_set:
             continue
         by_month.setdefault(month, {})[category] = _money(row.get("amount"))
+    other_income_by_month: dict[int, Decimal] = {}
+    for row in other_income_rows or []:
+        month = int(row["month"])
+        if month in covered_set:
+            other_income_by_month[month] = other_income_by_month.get(month, Decimal("0.00")) + _money(row.get("amount"))
 
     def values_for(month: int) -> dict[str, Decimal | None]:
         if month not in covered_set:
@@ -392,9 +439,11 @@ def build_expenses_response(
                 "insurance": _money_string(values[EXPENSE_CATEGORIES[6]]),
                 "telecom": _money_string(values[EXPENSE_CATEGORIES[7]]),
                 "externalServices": _money_string(values[EXPENSE_CATEGORIES[8]]),
+                "otherExpenses": _money_string(values[EXPENSE_CATEGORIES[9]]),
                 "operatingIdentifiedTotal": _money_string(operating),
                 "financialInterest": _money_string(financial),
                 "nonOperatingIdentifiedTotal": _money_string(financial),
+                "otherIncome": _money_string(other_income_by_month.get(month, Decimal("0.00"))),
             }
         )
 
@@ -421,9 +470,11 @@ def build_expenses_response(
         "insurance": _money_string(available_sum("insurance")) if available_rows else None,
         "telecom": _money_string(available_sum("telecom")) if available_rows else None,
         "externalServices": _money_string(available_sum("externalServices")) if available_rows else None,
+        "otherExpenses": _money_string(available_sum("otherExpenses")) if available_rows else None,
         "operatingIdentifiedTotal": _money_string(available_sum("operatingIdentifiedTotal")) if available_rows else None,
         "financialInterest": _money_string(available_sum("financialInterest")) if available_rows else None,
         "nonOperatingIdentifiedTotal": _money_string(available_sum("nonOperatingIdentifiedTotal")) if available_rows else None,
+        "otherIncome": _money_string(_sum([_money(row.get("otherIncome")) for row in available_rows])) if available_rows else None,
     }
     return {
         "companyId": str(company_id),
@@ -458,6 +509,7 @@ def get_monthly_expenses(company_id: UUID, year: int) -> dict[str, Any]:
             return _get_expenses_from_supabase(settings, company_id, year)
         with get_session_factory(settings.database_runtime_dsn.get_secret_value())() as session:
             rows = [dict(row) for row in session.execute(MONTHLY_EXPENSES_SQL, params).mappings().all()]
+            other_income_rows = [dict(row) for row in session.execute(OTHER_INCOME_SQL, params).mappings().all()]
             review_summary = dict(session.execute(REVIEW_SUMMARY_SQL, {"company_id": company_id}).mappings().one())
     except (SQLAlchemyError, OSError, httpx.HTTPError, RuntimeError):
         logger.exception(
@@ -477,6 +529,11 @@ def get_monthly_expenses(company_id: UUID, year: int) -> dict[str, Any]:
         {"month": row["month"], "last_transaction_date": row["last_transaction_date"]}
         for row in rows
     ]
+    covered_months = {int(row["month"]) for row in statement_rows}
+    for row in other_income_rows:
+        if int(row["month"]) not in covered_months:
+            statement_rows.append({"month": int(row["month"]), "last_transaction_date": None})
+            covered_months.add(int(row["month"]))
     movement_rows = [
         row for row in rows if row.get("category_code") is not None
     ]
@@ -487,4 +544,5 @@ def get_monthly_expenses(company_id: UUID, year: int) -> dict[str, Any]:
         movement_rows,
         int(review_summary["pending_review_count"]),
         _money(review_summary["pending_historical_amount"]),
+        other_income_rows,
     )
