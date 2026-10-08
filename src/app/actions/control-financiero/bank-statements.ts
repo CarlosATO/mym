@@ -10,6 +10,8 @@ import {
   parseBankStatement,
   parseDefinitiveBankStatement,
   parseCurrentBankStatementXls,
+  parseItauStatementText,
+  extractItauPdfText,
   type ParsedBankMovement,
   type ParsedBankStatement,
 } from "@/lib/control-financiero/bank-statement-parser";
@@ -34,6 +36,15 @@ export type FinancialBankAccount = {
   account_number: string;
   currency: string;
   is_active: boolean;
+};
+export type FinancialAccountBalance = {
+  accountId: string;
+  bankName: string;
+  maskedAccountNumber: string;
+  balance: number | null;
+  balanceDate: string | null;
+  creditLineUsed: number | null;
+  creditLineAvailable: number | null;
 };
 export type CashFlowMovement = {
   id: string;
@@ -187,6 +198,29 @@ function parseDefinitiveFile(bytes: Uint8Array) {
   return parseDefinitiveBankStatement(new TextDecoder("windows-1252").decode(bytes));
 }
 
+async function parseItauFile(bytes: Uint8Array) {
+  return parseItauStatementText(await extractItauPdfText(bytes));
+}
+
+function importMetadata(parsed: ParsedBankStatement, accountId: string) {
+  return {
+    parser: parsed.sourceFormat,
+    order: parsed.order,
+    account_holder: parsed.accountHolder,
+    bank_name: parsed.bankName,
+    bank_account_id: accountId,
+    ...(parsed.creditLineTotal !== null && parsed.creditLineTotal !== undefined
+      ? { credit_line_total: parsed.creditLineTotal }
+      : {}),
+    ...(parsed.creditLineUsed !== null && parsed.creditLineUsed !== undefined
+      ? { credit_line_used: parsed.creditLineUsed }
+      : {}),
+    ...(parsed.creditLineAvailable !== null && parsed.creditLineAvailable !== undefined
+      ? { credit_line_available: parsed.creditLineAvailable }
+      : {}),
+  };
+}
+
 type ExistingOpenRow = {
   movement_identity: string;
   movement_content_hash: string;
@@ -270,6 +304,12 @@ export async function previewFinancialBankStatement(formData: FormData) {
     return { ok: false as const, message: "Selecciona una cartola." };
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
+    const accountId = String(formData.get("accountId") ?? "");
+    if (!accountId)
+      return {
+        ok: false as const,
+        message: "Selecciona una cuenta para analizar la cartola.",
+      };
     const fileHash = createHash("sha256").update(bytes).digest("hex");
     const { data: alreadyProcessed } = await db()
       .from("financial_imports")
@@ -279,8 +319,36 @@ export async function previewFinancialBankStatement(formData: FormData) {
       .maybeSingle();
     if (alreadyProcessed)
       return { ok: false as const, message: "Este archivo ya fue procesado." };
+    const isItauPdf = file.name.toLowerCase().endsWith(".pdf");
+    const parsed = isItauPdf
+      ? await parseItauFile(bytes)
+      : mode === "FINAL_CLOSE"
+        ? parseDefinitiveFile(bytes)
+        : mode === "OPEN"
+          ? parseCurrentBankStatementXls(bytes)
+          : parseHistoricalFile(bytes);
+    const accountResult = await db()
+      .from("financial_bank_accounts")
+      .select("account_number")
+      .eq("id", accountId)
+      .eq("company_id", companyId)
+      .eq("is_active", true)
+      .maybeSingle();
+    if (accountResult.error || !accountResult.data)
+      return {
+        ok: false as const,
+        message: "La cuenta seleccionada no pertenece a la empresa activa.",
+      };
+    if (
+      parsed.accountNumber &&
+      normalizeAccount(parsed.accountNumber) !==
+        normalizeAccount(accountResult.data.account_number)
+    )
+      return {
+        ok: false as const,
+        message: "La cuenta de la cartola no coincide con la cuenta seleccionada.",
+      };
     if (mode === "CLOSED") {
-      const parsed = parseHistoricalFile(bytes);
       if (
         parsed.validations.globalDifference !== 0 ||
         parsed.validations.rowDifference !== 0
@@ -292,16 +360,6 @@ export async function previewFinancialBankStatement(formData: FormData) {
       return { ok: true as const, mode, filename: file.name, fileHash, parsed };
     }
 
-    const accountId = String(formData.get("accountId") ?? "");
-    if (!accountId)
-      return {
-        ok: false as const,
-        message: "Selecciona una cuenta para actualizar el mes actual.",
-      };
-    const parsed =
-      mode === "FINAL_CLOSE"
-        ? parseDefinitiveFile(bytes)
-        : parseCurrentBankStatementXls(bytes);
     if (mode === "FINAL_CLOSE") {
       const context = await loadOpenContext(
         companyId,
@@ -315,13 +373,12 @@ export async function previewFinancialBankStatement(formData: FormData) {
           message: "El cierre definitivo sólo aplica a un período OPEN existente.",
         };
       if (
-        parsed.accountNumber &&
-        normalizeAccount(parsed.accountNumber) !==
-          normalizeAccount(context.account.account_number)
+        parsed.sourceFormat !== "HISTORICAL_SEMICOLON" &&
+        parsed.sourceFormat !== "ITAU_PDF"
       )
         return {
           ok: false as const,
-          message: "La cuenta de la cartola no coincide con la cuenta seleccionada.",
+          message: "El archivo no corresponde a una cartola definitiva.",
         };
       const diff = compareFinalCloseMovements(
         accountId,
@@ -390,14 +447,12 @@ export async function previewFinancialBankStatement(formData: FormData) {
       parsed.month,
     );
     if (
-      parsed.accountNumber &&
-      normalizeAccount(parsed.accountNumber) !==
-        normalizeAccount(context.account.account_number)
+      parsed.sourceFormat !== "CURRENT_XLS" &&
+      parsed.sourceFormat !== "ITAU_PDF"
     )
       return {
         ok: false as const,
-        message:
-          "La cuenta de la cartola no coincide con la cuenta seleccionada.",
+        message: "El archivo no corresponde a una actualización mensual.",
       };
     const keys = buildOpenMovementKeys(accountId, parsed.movements);
     const diff = compareOpenMovements(keys, context.existingRows);
@@ -547,11 +602,7 @@ export async function confirmFinancialBankStatement(input: {
     p_import: {
       original_filename: input.filename,
       file_hash: input.fileHash,
-      metadata: {
-        parser: "bank-statement-v1",
-        order: input.parsed.order,
-        account_holder: input.parsed.accountHolder,
-      },
+        metadata: importMetadata(input.parsed, input.accountId),
     },
     p_period: {
       year: input.parsed.year,
@@ -578,7 +629,10 @@ export async function confirmOpenFinancialBankStatement(input: {
   parsed: ParsedBankStatement;
 }) {
   const { companyId, user } = await authenticatedContext();
-  if (input.parsed.sourceFormat !== "CURRENT_XLS")
+  if (
+    input.parsed.sourceFormat !== "CURRENT_XLS" &&
+    input.parsed.sourceFormat !== "ITAU_PDF"
+  )
     return {
       ok: false as const,
       message: "El archivo no corresponde al formato de actualización mensual.",
@@ -699,9 +753,11 @@ export async function confirmOpenFinancialBankStatement(input: {
         file_hash: input.fileHash,
         rows_in_file: input.parsed.rowCount,
         metadata: {
-          parser: "bank-statement-current-xls-v1",
-          order: input.parsed.order,
-          account_holder: input.parsed.accountHolder,
+          ...importMetadata(input.parsed, input.accountId),
+          parser:
+            input.parsed.sourceFormat === "ITAU_PDF"
+              ? "ITAU_PDF"
+              : "bank-statement-current-xls-v1",
           existing_count: diff.existing,
           new_count: diff.new,
           conflict_count: diff.conflicts,
@@ -751,7 +807,10 @@ export async function confirmFinalFinancialBankStatement(input: {
   parsed: ParsedBankStatement;
 }) {
   const { companyId, user } = await authenticatedContext();
-  if (input.parsed.sourceFormat !== "HISTORICAL_SEMICOLON")
+  if (
+    input.parsed.sourceFormat !== "HISTORICAL_SEMICOLON" &&
+    input.parsed.sourceFormat !== "ITAU_PDF"
+  )
     return { ok: false as const, message: "La cartola no corresponde al formato definitivo." };
   const context = await loadOpenContext(
     companyId,
@@ -823,10 +882,12 @@ export async function confirmFinalFinancialBankStatement(input: {
     p_import: {
       original_filename: input.filename,
       file_hash: input.fileHash,
-      metadata: {
-        parser: "bank-statement-definitive-semicolon-v1",
-        order: input.parsed.order,
-        account_holder: input.parsed.accountHolder,
+        metadata: {
+          ...importMetadata(input.parsed, input.accountId),
+          parser:
+            input.parsed.sourceFormat === "ITAU_PDF"
+              ? "ITAU_PDF"
+              : "bank-statement-definitive-semicolon-v1",
         existing_count: diff.matchedExisting,
         new_count: diff.newIndexes.length,
         conflict_count: diff.conflictIndexes.length + diff.ambiguousIndexes.length,
@@ -904,6 +965,7 @@ export async function getCashFlowDashboard(
 ): Promise<{
   companyId: string;
   accounts: FinancialBankAccount[];
+  accountBalances: FinancialAccountBalance[];
   currentBalance: number;
   currentDate: string | null;
   annual: {
@@ -965,7 +1027,6 @@ export async function getCashFlowDashboard(
     .eq("company_id", companyId);
   if (accountId) {
     periodsQuery.eq("bank_account_id", accountId);
-    currentPeriodsQuery.eq("bank_account_id", accountId);
   }
   const { data: accounts, error: accountsError } = await accountsQuery;
   const { data: periods, error: periodsError } =
@@ -983,6 +1044,47 @@ export async function getCashFlowDashboard(
     currentPeriods ?? [],
     accountId,
   );
+  const latestAll = resolveLatestKnownBalances(accounts ?? [], currentPeriods ?? []);
+  const { data: imports, error: importsError } = await db()
+    .from("financial_imports")
+    .select("metadata,imported_at")
+    .eq("company_id", companyId)
+    .order("imported_at", { ascending: false })
+    .limit(500);
+  if (importsError) throw new Error(importsError.message);
+  const latestCreditLineByAccount = new Map<
+    string,
+    { used: number | null; available: number | null }
+  >();
+  for (const imported of imports ?? []) {
+    const metadata = imported.metadata as Record<string, unknown> | null;
+    const importedAccountId =
+      typeof metadata?.bank_account_id === "string"
+        ? metadata.bank_account_id
+        : null;
+    if (!importedAccountId || latestCreditLineByAccount.has(importedAccountId))
+      continue;
+    const used = Number(metadata?.credit_line_used);
+    const available = Number(metadata?.credit_line_available);
+    if (Number.isFinite(used) || Number.isFinite(available))
+      latestCreditLineByAccount.set(importedAccountId, {
+        used: Number.isFinite(used) ? used : null,
+        available: Number.isFinite(available) ? available : null,
+      });
+  }
+  const accountBalances = (accounts ?? []).map((account: FinancialBankAccount) => {
+    const latestAccount = latestAll.get(account.id);
+    const creditLine = latestCreditLineByAccount.get(account.id);
+    return {
+      accountId: account.id,
+      bankName: account.bank_name,
+      maskedAccountNumber: `•••• ${account.account_number.slice(-4)}`,
+      balance: latestAccount?.balance ?? null,
+      balanceDate: latestAccount?.date ?? null,
+      creditLineUsed: creditLine?.used ?? null,
+      creditLineAvailable: creditLine?.available ?? null,
+    };
+  });
   const selectedPeriods = (periods ?? []).filter(
     (row: any) => row.month === month,
   );
@@ -1155,6 +1257,7 @@ export async function getCashFlowDashboard(
   return {
     companyId,
     accounts: (accounts ?? []) as FinancialBankAccount[],
+    accountBalances,
     currentBalance: Array.from(latest.values()).reduce(
       (n, row) => n + row.balance,
       0,

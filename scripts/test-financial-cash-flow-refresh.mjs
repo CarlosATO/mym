@@ -28,7 +28,7 @@ test('current filters remain URL-driven', () => {
   assert.match(client, /nextCategory/)
   assert.match(client, /params\.set\("scope", nextScope\)/)
   assert.match(client, /params\.set\("direction", nextDirection\)/)
-  assert.match(client, /query\(year, month, accountId, 1, classificationFilter, search, categoryFilter, nextScope, direction\)/)
+  assert.match(client, /navigateQuery\(year, month, accountId, 1, classificationFilter, search, categoryFilter, nextScope, direction\)/)
 })
 
 test('movement search supports month and year scopes server-side', () => {
@@ -47,11 +47,11 @@ test('movement direction filters use financial amounts server-side', () => {
   assert.match(bankActions, /direction === "credit"\) movementQuery\.gt\("credit_amount", 0\)/)
   assert.match(bankActions, /direction === "debit"\) movementQuery\.gt\("debit_amount", 0\)/)
   assert.match(client, /aria-label="Tipo de movimiento"/)
-  assert.match(client, /query\(year, month, accountId, 1, classificationFilter, search, categoryFilter, scope, nextDirection\)/)
+  assert.match(client, /navigateQuery\(year, month, accountId, 1, classificationFilter, search, categoryFilter, scope, nextDirection\)/)
 })
 
 test('read-only category loading cannot refresh the route from the client', () => {
-  assert.doesNotMatch(client, /useEffect|loadCategories|getFinancialClassificationCategories/)
+  assert.doesNotMatch(client, /loadCategories|getFinancialClassificationCategories/)
   assert.match(page, /getFinancialClassificationCategories/)
   assert.match(page, /categories=\{categories\}/)
 })

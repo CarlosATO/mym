@@ -1,4 +1,8 @@
 import * as XLSX from 'xlsx'
+import { PDFParse } from 'pdf-parse'
+import { getData } from 'pdf-parse/worker'
+
+PDFParse.setWorker(getData())
 
 export type ParsedBankMovement = {
   date: string
@@ -38,17 +42,39 @@ export type ParsedBankStatement = {
     rowDifferenceTotal: number
     rowBalanceValidated: boolean
   }
-  sourceFormat: 'HISTORICAL_SEMICOLON' | 'CURRENT_XLS'
+  sourceFormat: 'HISTORICAL_SEMICOLON' | 'CURRENT_XLS' | 'ITAU_PDF'
+  creditLineTotal?: number | null
+  creditLineUsed?: number | null
+  creditLineAvailable?: number | null
 }
 
 const headers = ['date', 'description', 'debit', 'credit', 'balance', 'documentNumber', 'transactionNumber', 'cashier', 'branch']
 
 function parseAmount(value: string): number {
-  const compact = value.trim().replace(/\s/g, '').replace(/\./g, '').replace(',', '.')
-  if (!compact || /^[-+]?0+(?:[,.]0+)?$/.test(compact)) return 0
+  const compact = value
+    .trim()
+    .replace(/[$()]/g, '')
+    .replace(/\s/g, '')
+    .replace(/\./g, '')
+    .replace(',', '.')
+  if (!compact || compact === '-' || /^[-+]?0+(?:[,.]0+)?$/.test(compact)) return 0
   const amount = Number(compact.replace(/^[+]/, ''))
   if (!Number.isFinite(amount)) throw new Error(`Monto inválido: ${value}`)
   return Math.abs(Math.round(amount))
+}
+
+function parseSignedAmount(value: string): number {
+  const normalized = value
+    .trim()
+    .replace(/\$/g, '')
+    .replace(/[()]/g, '')
+    .replace(/\s/g, '')
+    .replace(/\./g, '')
+    .replace(',', '.')
+  if (!normalized || normalized === '-') return 0
+  const amount = Number(normalized)
+  if (!Number.isFinite(amount)) throw new Error(`Monto inválido: ${value}`)
+  return Math.round(amount) * (value.includes('(') ? -1 : 1)
 }
 
 function parseDate(value: string): string {
@@ -148,6 +174,179 @@ function parseSpreadsheetDate(value: unknown): string {
 }
 
 function normalizedHeader(value: unknown) { return String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ') }
+
+function normalizedItauText(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function itauMetadataAmount(text: string, label: RegExp) {
+  const amountPattern = '([($+-]?\\$?[0-9][0-9.]*[,]?[0-9]*[)]?)'
+  const match = text.match(new RegExp(`${label.source}\\s*[:\\-]?\\s*${amountPattern}`, 'i'))
+  return match ? parseSignedAmount(match[1]) : null
+}
+
+function itauHeaderRowAmounts(text: string, header: RegExp) {
+  const lines = text.split('\n').map(line => line.trim()).filter(Boolean)
+  const headerIndex = lines.findIndex(line => header.test(normalizedItauText(line)))
+  if (headerIndex < 0) return []
+  for (const line of lines.slice(headerIndex + 1, headerIndex + 4)) {
+    const values = line.match(/\$?-?[0-9][0-9.]*/g)
+    if (values?.length) return values.map(parseSignedAmount)
+  }
+  return []
+}
+
+function itauAccountNumber(text: string) {
+  const match = text.match(/(?:numero|n[uú]mero)\s+de\s+cuenta\s*[:#-]?\s*([0-9][0-9 .-]{5,})/i)
+    ?? text.match(/cuenta\s+corriente\s*(?:n[°ºo.]*)?\s*[:#-]?\s*([0-9][0-9 .-]{5,})/i)
+  return match?.[1].replace(/\D/g, '') || null
+}
+
+function itauAccountHolder(text: string) {
+  const match = text.match(/(?:nombre|titular)\s*[:#-]?\s*([^\n]+)/i)
+  return match?.[1]?.trim() || null
+}
+
+function itauPeriodDates(text: string) {
+  const match = text.match(/per[ií]odo[^\n]*?(\d{2}[/-]\d{2}[/-]\d{4})[^\n]*?(?:-|a|al|hasta)[^\n]*?(\d{2}[/-]\d{2}[/-]\d{4})/i)
+  return match ? [parseDate(match[1]), parseDate(match[2])] : []
+}
+
+function parseItauDate(value: string, year: string | null) {
+  if (/^\d{2}[/-]\d{2}[/-]\d{4}$/.test(value)) return parseDate(value)
+  const shortDate = value.match(/^(\d{2})[/-](\d{2})$/)
+  if (!shortDate || !year) throw new Error(`Fecha Itaú inválida: ${value}`)
+  return parseDate(`${shortDate[1]}/${shortDate[2]}/${year}`)
+}
+
+function itauMoneyToken(value: string) {
+  return /^[-+($]?\$?[0-9][0-9.,]*\)?$/.test(value) || value === '-'
+}
+
+function parseItauMovementLine(
+  line: string,
+  sourceRowNumber: number,
+  year: string | null,
+): ParsedBankMovement | null {
+  const tokens = line.trim().split(/\s+/)
+  if (tokens.length < 7 || !/^\d{2}[/-]\d{2}(?:[/-]\d{4})?$/.test(tokens[0])) return null
+  const amountStart = tokens.length - 3
+  if (!tokens.slice(amountStart).every(itauMoneyToken)) return null
+  const date = parseItauDate(tokens[0], year)
+  const transactionNumber = tokens[1] || null
+  const branch = tokens[2] || null
+  const description = tokens.slice(3, amountStart).join(' ').trim()
+  if (!description) return null
+  const credit = parseAmount(tokens[amountStart])
+  const debit = parseAmount(tokens[amountStart + 1])
+  const balance = parseSignedAmount(tokens[amountStart + 2])
+  return {
+    date,
+    description,
+    credit,
+    debit,
+    balance,
+    documentNumber: null,
+    transactionNumber,
+    cashier: null,
+    branch,
+    sourceRowNumber,
+    sequenceNumber: sourceRowNumber,
+    raw: {
+      date: tokens[0],
+      transactionNumber: tokens[1],
+      branch: tokens[2],
+      description,
+      credit: tokens[amountStart],
+      debit: tokens[amountStart + 1],
+      balance: tokens[amountStart + 2],
+    },
+  } satisfies ParsedBankMovement
+}
+
+/** Extracts text from an Itaú Empresas PDF without OCR or external binaries. */
+export async function extractItauPdfText(bytes: Uint8Array) {
+  const parser = new PDFParse({ data: bytes })
+  try {
+    const result = await parser.getText()
+    return result.text
+  } finally {
+    await parser.destroy()
+  }
+}
+
+/** Parses one monthly Itaú Empresas statement from already extracted text. */
+export function parseItauStatementText(input: string): ParsedBankStatement {
+  const text = input.replace(/^\uFEFF/, '').replace(/\r/g, '')
+  if (!/ita[uú]/i.test(text) || !/cartola\s+historica/i.test(normalizedItauText(text)))
+    throw new Error('El PDF no corresponde a una cartola histórica Itaú Empresas.')
+  const periodDates = itauPeriodDates(text)
+  const statementYear = periodDates[0]?.slice(0, 4) ?? null
+  const lines = text.split('\n').map(line => line.trim()).filter(Boolean)
+  const movements = lines
+    .map((line, index) => parseItauMovementLine(line, index + 1, statementYear))
+    .filter((movement): movement is ParsedBankMovement => Boolean(movement))
+  if (!movements.length) throw new Error('No se encontraron movimientos Itaú en el PDF.')
+  const movementPeriods = new Set(movements.map(movement => movement.date.slice(0, 7)))
+  if (movementPeriods.size !== 1)
+    throw new Error('La cartola Itaú debe contener un solo período mensual.')
+  if (periodDates.length === 2 && periodDates[0].slice(0, 7) !== periodDates[1].slice(0, 7))
+    throw new Error('La cartola Itaú debe contener un solo período mensual.')
+  if (periodDates.length === 2 && periodDates[0].slice(0, 7) !== [...movementPeriods][0])
+    throw new Error('El período declarado no coincide con los movimientos Itaú.')
+  const order = detectDirection(movements)
+  const ordered = order === 'ASC' ? movements : [...movements].reverse()
+  const first = ordered[0]
+  const last = ordered[ordered.length - 1]
+  const calculatedOpeningBalance = first.balance - first.credit + first.debit
+  const creditLineValues = itauHeaderRowAmounts(
+    text,
+    /monto\s+l[ií]nea\s+de\s+cr[eé]dito.*monto\s+utilizado/i,
+  )
+  const availableAndOpeningValues = itauHeaderRowAmounts(
+    text,
+    /monto\s+disponible.*saldo\s+anterior\s+cuenta\s+corriente/i,
+  )
+  const openingBalance =
+    availableAndOpeningValues[1] ??
+    itauMetadataAmount(text, /saldo\s+anterior(?:\s+cuenta\s+corriente)?/) ??
+    calculatedOpeningBalance
+  const totalCredits = ordered.reduce((sum, row) => sum + row.credit, 0)
+  const totalDebits = ordered.reduce((sum, row) => sum + row.debit, 0)
+  const closingBalance = last.balance
+  const globalDifference = openingBalance + totalCredits - totalDebits - closingBalance
+  const rowValidation = validateRows(ordered)
+  return {
+    accountNumber: itauAccountNumber(text),
+    accountHolder: itauAccountHolder(text),
+    bankName: 'Itaú',
+    currency: 'CLP',
+    year: Number(first.date.slice(0, 4)),
+    month: Number(first.date.slice(5, 7)),
+    order,
+    openingBalance,
+    totalCredits,
+    totalDebits,
+    closingBalance,
+    firstTransactionDate: first.date,
+    lastTransactionDate: last.date,
+    rowCount: ordered.length,
+    movements: ordered,
+    validations: { globalDifference, ...rowValidation, rowBalanceValidated: rowValidation.rowDifference === 0 },
+    sourceFormat: 'ITAU_PDF',
+    creditLineTotal:
+      creditLineValues[0] ??
+      itauMetadataAmount(text, /monto\s+l[ií]nea\s+de\s+cr[eé]dito/),
+    creditLineUsed:
+      creditLineValues[1] ?? itauMetadataAmount(text, /monto\s+utilizado/),
+    creditLineAvailable:
+      availableAndOpeningValues[0] ?? itauMetadataAmount(text, /monto\s+disponible/),
+  }
+}
 
 /** Parses Banco de Chile's current-month XLS export without persisting it. */
 export function parseCurrentBankStatementXls(input: Uint8Array): ParsedBankStatement {

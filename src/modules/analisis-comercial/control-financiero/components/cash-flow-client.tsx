@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Upload } from "lucide-react";
+import { LoaderCircle, Plus, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -57,14 +57,17 @@ const MONTHS = [
   "NOV",
   "DIC",
 ];
+const ALL_ACCOUNTS = "all";
 const money = (value: number | null | undefined) =>
   value === null || value === undefined
     ? "—"
     : `$${new Intl.NumberFormat("es-CL", { maximumFractionDigits: 0 }).format(value)}`;
 const date = (value: string | null) =>
   value ? value.split("-").reverse().join("-") : "—";
+const bankDisplayName = (value: string) =>
+  value.replace(/^Caylo\s+/i, "").replace(/^Itau$/i, "Itaú");
 const accountLabel = (account: FinancialBankAccount) =>
-  `${account.bank_name} · •••• ${account.account_number.slice(-4)}`;
+  `${bankDisplayName(account.bank_name)} · •••• ${account.account_number.slice(-4)}`;
 const categoryRootOrder = [
   "INCOME",
   "EXPENSE",
@@ -177,6 +180,7 @@ export function CashFlowClient({
   accountId?: string;
 }) {
   const router = useRouter();
+  const [isFiltering, startFiltering] = useTransition();
   const [importOpen, setImportOpen] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
   const [auditData, setAuditData] = useState<PendingDebitAudit | null>(null);
@@ -247,6 +251,10 @@ export function CashFlowClient({
   const [importAccountId, setImportAccountId] = useState(
     initialImportAccountId,
   );
+  const pendingAccountRef = useRef<string | null>(null);
+  const [selectedAccountId, setSelectedAccountId] = useState(
+    accountId ?? ALL_ACCOUNTS,
+  );
   const selectedAccount = data.accounts.find(
     (account) => account.id === accountId,
   );
@@ -260,6 +268,20 @@ export function CashFlowClient({
   const scope = data.pageFilters.scope;
   const direction = data.pageFilters.direction;
   const groups = categoryGroups(categories);
+
+  useEffect(() => {
+    const nextAccountId = accountId ?? ALL_ACCOUNTS;
+    if (
+      pendingAccountRef.current === null ||
+      pendingAccountRef.current === nextAccountId
+    ) {
+      pendingAccountRef.current = null;
+      setSelectedAccountId(nextAccountId);
+    }
+    setClassificationFilter(data.pageFilters.classificationFilter);
+    setSearch(data.pageFilters.search);
+    setCategoryFilter(data.pageFilters.categoryId ?? "");
+  }, [accountId, data.pageFilters]);
 
   const loadAudit = (nextPage = 1, nextSearch = auditSearch) =>
     startAudit(async () => {
@@ -355,7 +377,7 @@ export function CashFlowClient({
       setAuditSelected([]);
       setAuditOpen(false);
       setAuditData(null);
-      router.push(
+      navigate(
         query(
           year,
           month,
@@ -391,7 +413,7 @@ export function CashFlowClient({
       setAuditPreviewOpen(false);
       setAuditOpen(false);
       setAuditData(null);
-      router.push(
+      navigate(
         query(
           year,
           month,
@@ -422,7 +444,8 @@ export function CashFlowClient({
       year: String(nextYear),
       month: String(nextMonth),
     });
-    if (nextAccount) params.set("account", nextAccount);
+    if (nextAccount && nextAccount !== ALL_ACCOUNTS)
+      params.set("account", nextAccount);
     if (nextPage > 1) params.set("page", String(nextPage));
     if (nextFilter !== "ALL") params.set("classification", nextFilter);
     if (nextSearch.trim()) params.set("search", nextSearch.trim());
@@ -431,19 +454,34 @@ export function CashFlowClient({
     params.set("direction", nextDirection);
     return `?${params.toString()}`;
   };
+  const navigate = (url: string) => {
+    if (isFiltering) return;
+    startFiltering(() => router.push(url));
+  };
+  const navigateQuery = (
+    nextYear: number,
+    nextMonth: number,
+    nextAccount = accountId,
+    nextPage = 1,
+    nextFilter = data.pageFilters.classificationFilter,
+    nextSearch = data.pageFilters.search,
+    nextCategory = data.pageFilters.categoryId ?? "",
+    nextScope = scope,
+    nextDirection = direction,
+  ) => navigate(query(
+    nextYear,
+    nextMonth,
+    nextAccount,
+    nextPage,
+    nextFilter,
+    nextSearch,
+    nextCategory,
+    nextScope,
+    nextDirection,
+  ));
   const applyFilters = (event: React.FormEvent) => {
     event.preventDefault();
-    router.push(
-      query(
-        year,
-        month,
-        accountId,
-        1,
-        classificationFilter,
-        search,
-        categoryFilter,
-      ),
-    );
+    navigateQuery(year, month, accountId, 1, classificationFilter, search, categoryFilter);
   };
   const openMovement = (movement: CashFlowDashboard["movements"][number]) =>
     startClassification(async () => {
@@ -645,99 +683,135 @@ export function CashFlowClient({
   );
 
   return (
-    <main className="min-h-[430px] bg-[#EFE9E1] px-5 py-5 sm:px-7 sm:py-6">
-      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#AC9C8D]/60 pb-4">
+    <main className="min-h-[430px] bg-[#EFE9E1] px-4 py-2 sm:px-6 sm:py-3">
+      <div className="flex flex-wrap items-center justify-between gap-1.5 border-b border-[#AC9C8D]/60 pb-1.5">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#72383D]">
             Tesorería · Cartola bancaria
           </p>
-          <h2 className="mt-1 text-xl font-semibold">Flujo de Caja</h2>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <select
             aria-label="Cuenta bancaria"
-            value={accountId ?? ""}
+            value={selectedAccountId}
+            disabled={isFiltering}
             onChange={(event) => {
-              const next = event.target.value || undefined;
+              const next = event.target.value;
+              const nextAccount = next === ALL_ACCOUNTS ? ALL_ACCOUNTS : next;
+              const accountForImport =
+                nextAccount === ALL_ACCOUNTS ? undefined : nextAccount;
+              pendingAccountRef.current = next;
+              setSelectedAccountId(next);
               setImportAccountId(
-                next ?? (bankAccounts.length === 1 ? bankAccounts[0].id : ""),
+                accountForImport ??
+                  (bankAccounts.length === 1 ? bankAccounts[0].id : ""),
               );
-              router.push(
-                  query(year, month, next, 1, classificationFilter, search, categoryFilter, scope, direction),
-                );
+              navigateQuery(year, month, nextAccount, 1, classificationFilter, search, categoryFilter, scope, direction);
             }}
-            className="h-8 border border-[#AC9C8D] bg-white px-2 text-xs"
+            className="h-8 min-w-64 border border-[#AC9C8D] bg-white px-2 text-xs"
           >
-            <option value="">Todas las cuentas</option>
+            <option value={ALL_ACCOUNTS}>Todas las cuentas</option>
             {bankAccounts.map((account) => (
               <option key={account.id} value={account.id}>
                 {accountLabel(account)}
               </option>
             ))}
           </select>
-           <Button type="button" size="sm" onClick={() => setImportOpen(true)}>
+           <Button type="button" size="sm" disabled={isFiltering} onClick={() => setImportOpen(true)}>
              <Upload /> Importar cartola
            </Button>
-           <Button type="button" size="sm" variant="outline" onClick={openAudit}>
+           <Button type="button" size="sm" variant="outline" disabled={isFiltering} onClick={openAudit}>
              Auditar pendientes
            </Button>
         </div>
       </div>
-      <section className="mt-5 border border-[#72383D] bg-[#72383D] px-5 py-5 text-white">
-        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-white/65">
-          Saldo bancario actual
-        </p>
-        <p className="mt-1 text-3xl font-semibold tabular-nums">
-          {money(data.currentBalance)}
-        </p>
-        <p className="mt-1 text-[11px] text-white/70">
-          Actualizado al {date(data.currentDate)} · cobertura bancaria
-          confirmada
-        </p>
+      <section className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="border border-[#72383D] bg-[#72383D] px-3 py-2 text-white sm:col-span-2 xl:col-span-1">
+          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-white/65">
+            Saldo total bancos
+          </p>
+          <p className="mt-0 text-2xl font-semibold leading-7 tabular-nums">
+            {money(data.currentBalance)}
+          </p>
+          <p className="text-[11px] text-white/70">
+            Actualizado al {date(data.currentDate)} · cobertura bancaria confirmada
+          </p>
+        </div>
+        {data.accountBalances.map((account) => (
+          <div
+            key={account.accountId}
+            className="border border-[#D1C7BD] bg-white px-3 py-2"
+          >
+            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#72383D]">
+              {bankDisplayName(account.bankName)} · {account.maskedAccountNumber}
+            </p>
+            <p className="mt-0 text-xl font-semibold leading-6 tabular-nums">
+              {money(account.balance)}
+            </p>
+            <p className="text-[11px] text-[#322D29]/55">
+              Actualizado al {date(account.balanceDate)}
+            </p>
+            {(account.creditLineUsed !== null || account.creditLineAvailable !== null) && (
+              <div className="mt-1 flex flex-wrap gap-x-3 border-t border-[#D1C7BD] pt-1 text-[11px] leading-4 text-[#322D29]/70">
+                <span>Línea utilizada: {money(account.creditLineUsed)}</span>
+                <span>Disponible: {money(account.creditLineAvailable)}</span>
+              </div>
+            )}
+          </div>
+        ))}
       </section>
-      <section className="mt-4 border border-[#D1C7BD] bg-white px-4 py-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
+      <section className="mt-2 border border-[#D1C7BD] bg-white px-3 py-2">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0">
+          <div className="flex flex-wrap items-baseline gap-x-3">
             <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#AC9C8D]">
               Resumen anual · {year}
             </p>
-            <p className="mt-1 text-xs text-[#322D29]/60">{coverage}</p>
+            <p className="text-xs text-[#322D29]/60">{coverage}</p>
           </div>
           <p className="text-xs text-[#322D29]/60">
             {data.annual.movements.toLocaleString("es-CL")} movimientos
           </p>
         </div>
-        <div className="mt-4 grid gap-px border border-[#D1C7BD] bg-[#D1C7BD] sm:grid-cols-4">
+        <div className="mt-1.5 grid gap-px border border-[#D1C7BD] bg-[#D1C7BD] sm:grid-cols-4">
           {[
             ["Saldo inicial", money(data.annual.openingBalance)],
             ["Haber YTD", money(data.annual.credits)],
             ["Debe YTD", money(data.annual.debits)],
             ["Flujo neto YTD", money(annualNet)],
           ].map(([label, value]) => (
-            <div key={label} className="bg-[#FAF8F5] px-3 py-3">
+            <div key={label} className="bg-[#FAF8F5] px-2.5 py-1.5">
               <p className="text-[10px] uppercase text-[#AC9C8D]">{label}</p>
-              <p className="mt-1 font-semibold tabular-nums">{value}</p>
+              <p className="mt-0.5 font-semibold tabular-nums">{value}</p>
             </div>
           ))}
         </div>
       </section>
-      <div className="mt-5 flex flex-wrap items-center gap-1 border-b border-[#D1C7BD] pb-2">
-        <form className="flex flex-wrap gap-2" onSubmit={applyFilters}>
+      <div className="mt-2 flex flex-wrap items-center gap-1 border-b border-[#D1C7BD] pb-1">
+        {isFiltering && (
+          <span
+            role="status"
+            className="inline-flex items-center gap-1.5 border border-[#D1C7BD] bg-white px-2 py-0.5 text-[11px] font-semibold text-[#72383D]"
+          >
+            <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+            Actualizando…
+          </span>
+        )}
+        <form className="flex flex-wrap gap-1" onSubmit={applyFilters}>
           <input
             aria-label="Buscar operación"
             placeholder="Buscar operación"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            className="h-8 w-48 border border-[#AC9C8D] bg-white px-2 text-xs"
+            disabled={isFiltering}
+            className="h-8 w-44 border border-[#AC9C8D] bg-white px-2 text-xs"
           />
           <select
             aria-label="Ámbito de búsqueda"
             value={scope}
+            disabled={isFiltering}
             onChange={(event) => {
               const nextScope = event.target.value as "month" | "year";
-              router.push(
-                query(year, month, accountId, 1, classificationFilter, search, categoryFilter, nextScope, direction),
-              );
+              navigateQuery(year, month, accountId, 1, classificationFilter, search, categoryFilter, nextScope, direction);
             }}
             className="h-8 border border-[#AC9C8D] bg-white px-2 text-xs"
           >
@@ -749,11 +823,12 @@ export function CashFlowClient({
             <select
               aria-label="Revisión"
               value={classificationFilter}
-              onChange={(event) =>
-                setClassificationFilter(
-                  event.target.value as typeof classificationFilter,
-                )
-              }
+              disabled={isFiltering}
+              onChange={(event) => {
+                const nextFilter = event.target.value as typeof classificationFilter;
+                setClassificationFilter(nextFilter);
+                navigateQuery(year, month, accountId, 1, nextFilter, search, categoryFilter, scope, direction);
+              }}
               className="bg-transparent text-xs outline-none"
             >
               <option value="ALL">Todos</option>
@@ -765,11 +840,10 @@ export function CashFlowClient({
           <select
             aria-label="Tipo de movimiento"
             value={direction}
+            disabled={isFiltering}
             onChange={(event) => {
               const nextDirection = event.target.value as "all" | "credit" | "debit";
-              router.push(
-                query(year, month, accountId, 1, classificationFilter, search, categoryFilter, scope, nextDirection),
-              );
+              navigateQuery(year, month, accountId, 1, classificationFilter, search, categoryFilter, scope, nextDirection);
             }}
             className="h-8 border border-[#AC9C8D] bg-white px-2 text-xs"
           >
@@ -780,7 +854,12 @@ export function CashFlowClient({
           <select
             aria-label="Categoría financiera"
             value={categoryFilter}
-            onChange={(event) => setCategoryFilter(event.target.value)}
+            disabled={isFiltering}
+            onChange={(event) => {
+              const nextCategory = event.target.value;
+              setCategoryFilter(nextCategory);
+              navigateQuery(year, month, accountId, 1, classificationFilter, search, nextCategory, scope, direction);
+            }}
             className="h-8 max-w-56 border border-[#AC9C8D] bg-white px-2 text-xs"
           >
             <option value="">Todas las categorías</option>
@@ -794,17 +873,17 @@ export function CashFlowClient({
               </optgroup>
             ))}
           </select>
-          <Button type="submit" size="sm" variant="outline">
+          <Button type="submit" size="sm" variant="outline" disabled={isFiltering}>
             Filtrar
           </Button>
         </form>
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-wrap gap-0.5">
           {MONTHS.map((label, index) =>
             month === index + 1 ? (
               <span
                 key={label}
                 aria-current="page"
-                className="bg-[#72383D] px-2 py-1 text-[11px] font-semibold text-white"
+                 className="bg-[#72383D] px-1.5 py-0.5 text-[11px] font-semibold text-white"
               >
                 {label}
               </span>
@@ -812,7 +891,12 @@ export function CashFlowClient({
               <a
                 key={label}
                 href={query(year, index + 1)}
-                className="px-2 py-1 text-[11px] font-semibold text-[#322D29]/55"
+                aria-disabled={isFiltering}
+                onClick={(event) => {
+                  event.preventDefault();
+                  navigateQuery(year, index + 1);
+                }}
+                 className="px-1.5 py-0.5 text-[11px] font-semibold text-[#322D29]/55"
               >
                 {label}
               </a>
@@ -820,15 +904,15 @@ export function CashFlowClient({
           )}
         </div>
       </div>
-      <section className="mt-4 border border-[#D1C7BD] bg-white">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#D1C7BD] px-4 py-3">
-          <div>
+       <section className={`mt-2 border border-[#D1C7BD] bg-white transition-opacity ${isFiltering ? "opacity-60" : ""}`}>
+         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-[#D1C7BD] px-3 py-1.5">
+           <div className="flex flex-wrap items-baseline gap-x-3">
             <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#72383D]">
               {scope === "year"
                 ? `Resultados de búsqueda · ${year}`
                 : `${MONTHS[month - 1]} ${year}`}
             </p>
-            <p className="mt-1 text-xs text-[#322D29]/60">
+              <p className="text-xs text-[#322D29]/60">
               Estado:{" "}
               {data.monthly
                 ? data.monthly.status === "OPEN"
@@ -839,7 +923,7 @@ export function CashFlowClient({
             </p>
           </div>
           {data.monthly && (
-            <div className="text-right text-xs">
+             <div className="text-right text-xs leading-4">
               Haber {money(data.monthly.credits)} · Debe{" "}
               {money(data.monthly.debits)}
             </div>
@@ -866,9 +950,9 @@ export function CashFlowClient({
                 String(data.monthly.pendingMovements),
               ],
             ].map(([label, value]) => (
-              <div key={label} className="bg-[#FAF8F5] px-3 py-3">
+                <div key={label} className="bg-[#FAF8F5] px-2.5 py-1.5">
                 <p className="text-[10px] uppercase text-[#AC9C8D]">{label}</p>
-                <p className="mt-1 font-semibold tabular-nums">{value}</p>
+                <p className="mt-0.5 font-semibold tabular-nums">{value}</p>
               </div>
             ))}
           </div>
@@ -910,10 +994,12 @@ export function CashFlowClient({
             data={data}
             year={year}
             month={month}
-            accountId={accountId}
-            scope={scope}
-            query={query}
-            onSelect={openMovement}
+           accountId={accountId}
+           scope={scope}
+           query={query}
+           onNavigate={navigate}
+           isNavigating={isFiltering}
+           onSelect={openMovement}
           />
         )}
       </section>
@@ -1494,6 +1580,8 @@ function MovementTable({
   accountId,
   scope,
   query,
+  onNavigate,
+  isNavigating,
   onSelect,
 }: {
   data: CashFlowDashboard;
@@ -1512,6 +1600,8 @@ function MovementTable({
     scope?: "month" | "year",
     direction?: "all" | "credit" | "debit",
   ) => string;
+  onNavigate: (url: string) => void;
+  isNavigating: boolean;
   onSelect: (movement: CashFlowDashboard["movements"][number]) => void;
 }) {
   const pages = Math.max(1, Math.ceil(data.movementTotal / data.pageSize));
@@ -1584,12 +1674,24 @@ function MovementTable({
         <div className="flex gap-2">
           <a
             className="border border-[#AC9C8D] px-2 py-1"
+            aria-disabled={isNavigating || data.page <= 1}
+            onClick={(event) => {
+              event.preventDefault();
+              if (isNavigating || data.page <= 1) return;
+              onNavigate(query(year, month, accountId, Math.max(1, data.page - 1), data.pageFilters.classificationFilter, data.pageFilters.search, data.pageFilters.categoryId ?? "", scope, data.pageFilters.direction));
+            }}
             href={query(year, month, accountId, Math.max(1, data.page - 1), data.pageFilters.classificationFilter, data.pageFilters.search, data.pageFilters.categoryId ?? "", scope, data.pageFilters.direction)}
           >
             Anterior
           </a>
           <a
             className="border border-[#AC9C8D] px-2 py-1"
+            aria-disabled={isNavigating || data.page >= pages}
+            onClick={(event) => {
+              event.preventDefault();
+              if (isNavigating || data.page >= pages) return;
+              onNavigate(query(year, month, accountId, Math.min(pages, data.page + 1), data.pageFilters.classificationFilter, data.pageFilters.search, data.pageFilters.categoryId ?? "", scope, data.pageFilters.direction));
+            }}
             href={query(year, month, accountId, Math.min(pages, data.page + 1), data.pageFilters.classificationFilter, data.pageFilters.search, data.pageFilters.categoryId ?? "", scope, data.pageFilters.direction)}
           >
             Siguiente
@@ -2066,7 +2168,7 @@ function ImportCartola({
             <input
               ref={fileInputRef}
               type="file"
-              accept={mode === "OPEN" ? ".xls,.xlsx" : ".xls,.csv,text/plain"}
+              accept={mode === "OPEN" ? ".xls,.xlsx,.pdf" : ".xls,.csv,.pdf,text/plain"}
               hidden
               onChange={(event) => {
                 setSelectedFile(event.target.files?.[0] ?? null);
@@ -2220,12 +2322,21 @@ function ImportCartola({
         {preview?.mode === "CLOSED" && (
           <div className="mt-4 border border-[#AC9C8D] bg-white p-4 text-xs">
             <strong>
-              {MONTHS[preview.parsed.month - 1]} {preview.parsed.year} · CERRADO
+              {preview.parsed.bankName ?? "Banco no identificado"} · {MONTHS[preview.parsed.month - 1]} {preview.parsed.year} · CERRADO
             </strong>
-            <p className="mt-2">
-              Movimientos detectados: {preview.parsed.rowCount} · Saldo cierre:{" "}
-              {money(preview.parsed.closingBalance)}
-            </p>
+            <div className="mt-2 grid gap-1 sm:grid-cols-2">
+              <p>Cuenta: {preview.parsed.accountNumber ? `•••• ${preview.parsed.accountNumber.slice(-4)}` : "—"}</p>
+              <p>Movimientos: {preview.parsed.rowCount}</p>
+              <p>Saldo inicial: {money(preview.parsed.openingBalance)}</p>
+              <p>Créditos: {money(preview.parsed.totalCredits)}</p>
+              <p>Débitos: {money(preview.parsed.totalDebits)}</p>
+              <p>Saldo final: {money(preview.parsed.closingBalance)}</p>
+            </div>
+            {(preview.parsed.creditLineUsed !== null && preview.parsed.creditLineUsed !== undefined || preview.parsed.creditLineAvailable !== null && preview.parsed.creditLineAvailable !== undefined) && (
+              <p className="mt-2 border-t border-[#D1C7BD] pt-2">
+                Línea utilizada: {money(preview.parsed.creditLineUsed)} · Línea disponible: {money(preview.parsed.creditLineAvailable)}
+              </p>
+            )}
           </div>
         )}
         {finalPreview && (
