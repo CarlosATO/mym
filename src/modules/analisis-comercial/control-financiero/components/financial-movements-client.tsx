@@ -114,7 +114,7 @@ export function FinancialMovementsClient({
               type="button"
               onClick={() => {
                 setTab("movements");
-                document.getElementById("expense-form")?.scrollIntoView({ behavior: "smooth" });
+                setModal("recognized-expense");
               }}
               className="inline-flex min-h-8 items-center gap-1.5 bg-[#72383D] px-2.5 py-1.5 text-xs font-semibold text-white"
             >
@@ -182,6 +182,8 @@ export function FinancialMovementsClient({
               year={year}
               month={month}
               initialFilters={{ status: "", source: "", search: "" }}
+              formOpen={modal === "recognized-expense"}
+              onFormOpenChange={(open) => setModal(open ? "recognized-expense" : null)}
             />
             <FinancialInflowsHistory
               inflows={initialData.inflows}
