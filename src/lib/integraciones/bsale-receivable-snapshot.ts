@@ -77,7 +77,40 @@ export interface SnapshotBatchResult {
   clients: SnapshotClientRow[]
   documents: SnapshotDocumentRow[]
   totalAmountOwed: number
-  status: 'COMPLETED' | 'PARTIAL'
+  status: 'RUNNING' | 'COMPLETED' | 'PARTIAL'
+  remainingClientIds: number[]
+  skippedClientIds: number[]
+}
+
+export function selectPendingClientIds(clientIds: number[], processedClientIds: number[], limit: number): number[] {
+  const processed = new Set(processedClientIds)
+  return [...new Set(clientIds)]
+    .filter(clientId => Number.isFinite(clientId) && !processed.has(clientId))
+    .sort((left, right) => left - right)
+    .slice(0, Math.min(Math.max(limit, 0), 20))
+}
+
+export function snapshotCoveragePercent(processedClients: number, clientsTotal: number): number {
+  if (clientsTotal <= 0) return 100
+  return Math.round((processedClients / clientsTotal) * 10000) / 100
+}
+
+export function snapshotRunStatus(clientsTotal: number, processedClients: number, clientsError: number) {
+  if (processedClients < clientsTotal) return 'RUNNING' as const
+  return clientsError > 0 ? 'PARTIAL' as const : 'COMPLETED' as const
+}
+
+export async function collectPagedRows<T>(
+  fetchPage: (offset: number, pageSize: number) => Promise<T[]>,
+  pageSize = 1000,
+): Promise<T[]> {
+  if (!Number.isInteger(pageSize) || pageSize < 1) throw new Error('pageSize debe ser un entero positivo.')
+  const rows: T[] = []
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await fetchPage(offset, pageSize)
+    rows.push(...page)
+    if (page.length < pageSize) return rows
+  }
 }
 
 export type SnapshotFetchJson = (path: string) => Promise<UnpaidDocumentsPayload>
@@ -207,10 +240,13 @@ async function processClient(context: SnapshotContext, clientId: number): Promis
     .select('bsale_client_id, raw_payload')
     .eq('company_id', companyId)
     .eq('bsale_client_id', clientId)
-    .single()
+    .maybeSingle()
   if (clientError) throw clientError
 
-  const { clientState, commerciallyBlocked } = resolveClientState(client)
+  const { clientState, commerciallyBlocked } = resolveClientState(client || {
+    bsale_client_id: clientId,
+    raw_payload: null,
+  })
 
   try {
     const payload = await fetchJson(`/clients/unpaid_documents.json?clientid=${clientId}`)
@@ -342,6 +378,117 @@ export async function snapshotReceivablesForClients({
     documents,
     totalAmountOwed: documents.reduce((sum, document) => sum + document.total_amount_owed, 0),
     status: clientsError > 0 ? 'PARTIAL' : 'COMPLETED',
+    remainingClientIds: [],
+    skippedClientIds: [],
+  }
+}
+
+export async function snapshotReceivablesBatch({
+  db,
+  companyId,
+  clientIds,
+  runId,
+  limit,
+  fetchJson,
+  now = new Date(),
+}: {
+  db: SupabaseClient<any, any, any>
+  companyId: string
+  clientIds: number[]
+  runId?: string
+  limit: number
+  fetchJson: SnapshotFetchJson
+  now?: Date
+}): Promise<SnapshotBatchResult> {
+  const uniqueClientIds = [...new Set(clientIds)].filter(Number.isFinite).sort((left, right) => left - right)
+  if (!uniqueClientIds.length) throw new Error('El universo CxC no contiene clientes candidatos.')
+
+  let run: {
+    runId: string
+    snapshotAt: string
+    snapshotDate: string
+    clientsTotal: number
+    clientsSuccess: number
+    clientsUnqueryable: number
+    clientsError: number
+    documentsTotal: number
+    totalAmountOwed: number
+  }
+  if (runId) {
+    const { data, error } = await db.schema('integraciones')
+      .from('bsale_receivable_snapshot_runs')
+      .select('id, company_id, snapshot_at, snapshot_date, status, clients_total, clients_success, clients_unqueryable, clients_error, documents_total, total_amount_owed')
+      .eq('id', runId)
+      .single()
+    if (error) throw error
+    if (data.company_id !== companyId) throw new Error('El run_id pertenece a otra compañía.')
+    if (data.status !== 'RUNNING') throw new Error(`El run_id no está RUNNING: ${data.status}`)
+    if (Number(data.clients_total) !== uniqueClientIds.length) {
+      throw new Error('El universo actual no coincide con clients_total del run existente.')
+    }
+    run = {
+      runId: String(data.id),
+      snapshotAt: String(data.snapshot_at),
+      snapshotDate: String(data.snapshot_date),
+      clientsTotal: Number(data.clients_total),
+      clientsSuccess: Number(data.clients_success || 0),
+      clientsUnqueryable: Number(data.clients_unqueryable || 0),
+      clientsError: Number(data.clients_error || 0),
+      documentsTotal: Number(data.documents_total || 0),
+      totalAmountOwed: Number(data.total_amount_owed || 0),
+    }
+  } else {
+    const created = await createRun(db, companyId, uniqueClientIds.length, now)
+    run = {
+      ...created,
+      clientsTotal: uniqueClientIds.length,
+      clientsSuccess: 0,
+      clientsUnqueryable: 0,
+      clientsError: 0,
+      documentsTotal: 0,
+      totalAmountOwed: 0,
+    }
+  }
+
+  const { data: processedRows, error: processedError } = await db.schema('integraciones')
+    .from('bsale_receivable_snapshot_clients')
+    .select('client_id')
+    .eq('run_id', run.runId)
+  if (processedError) throw processedError
+  const processedClientIds = (processedRows || []).map(row => Number(row.client_id))
+  const batchClientIds = selectPendingClientIds(uniqueClientIds, processedClientIds, limit)
+  const skippedClientIds = uniqueClientIds.filter(clientId => processedClientIds.includes(clientId))
+  const context = { db, companyId, fetchJson, runId: run.runId, snapshotAt: run.snapshotAt, snapshotDate: run.snapshotDate }
+  const results: SnapshotRunResult[] = []
+  for (const clientId of batchClientIds) results.push(await processClient(context, clientId))
+
+  const clients = results.map(result => result.client)
+  const documents = results.flatMap(result => result.documents)
+  const clientsSuccess = clients.filter(client => client.result === 'SUCCESS').length
+  const clientsUnqueryable = clients.filter(client => client.result === 'UNPAID_DOCUMENTS_CLIENT_INVALID').length
+  const clientsError = clients.filter(client => client.result === 'HTTP_ERROR').length
+  const processedClients = processedClientIds.length + clients.length
+  const status = snapshotRunStatus(run.clientsTotal, processedClients, run.clientsError + clientsError)
+  await finishRun(db, run.runId, {
+    status,
+    clientsSuccess: run.clientsSuccess + clientsSuccess,
+    clientsUnqueryable: run.clientsUnqueryable + clientsUnqueryable,
+    clientsError: run.clientsError + clientsError,
+    documentsTotal: run.documentsTotal + documents.length,
+    totalAmountOwed: run.totalAmountOwed + documents.reduce((sum, document) => sum + document.total_amount_owed, 0),
+    coveragePercent: snapshotCoveragePercent(processedClients, run.clientsTotal),
+    completedAt: status === 'RUNNING' ? null : new Date().toISOString(),
+  })
+
+  const processedAfterBatch = new Set([...processedClientIds, ...batchClientIds])
+  return {
+    runId: run.runId,
+    clients,
+    documents,
+    totalAmountOwed: documents.reduce((sum, document) => sum + document.total_amount_owed, 0),
+    status,
+    remainingClientIds: uniqueClientIds.filter(clientId => !processedAfterBatch.has(clientId)),
+    skippedClientIds,
   }
 }
 
@@ -354,13 +501,14 @@ async function finishRun(
   db: SupabaseClient<any, any, any>,
   runId: string,
   values: {
-    status: 'COMPLETED' | 'PARTIAL'
+    status: 'RUNNING' | 'COMPLETED' | 'PARTIAL'
     clientsSuccess?: number
     clientsUnqueryable?: number
     clientsError?: number
     documentsTotal?: number
     totalAmountOwed?: number
     coveragePercent?: number
+    completedAt?: string | null
   },
 ) {
   const result = await db.schema('integraciones').from('bsale_receivable_snapshot_runs')
@@ -372,7 +520,7 @@ async function finishRun(
       documents_total: values.documentsTotal ?? 0,
       total_amount_owed: values.totalAmountOwed ?? 0,
       coverage_percent: values.coveragePercent ?? null,
-      completed_at: new Date().toISOString(),
+      completed_at: values.completedAt === undefined ? new Date().toISOString() : values.completedAt,
     })
     .eq('id', runId)
   if (result.error) throw result.error

@@ -819,10 +819,10 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
         </div>
 
         <div className="mt-4 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-4">
-          <Kpi label="CxC total" value={money(totalAmount)} />
-          <Kpi label="CxC vencida" value={money(overdueAmount)} />
-          <Kpi label="Clientes con saldo" value={clients.length.toLocaleString('es-CL')} />
-          <Kpi label="Clientes con deuda vencida" value={overdueClients.toLocaleString('es-CL')} />
+          <Kpi label="CxC total 2026" value={money(totalAmount)} />
+          <Kpi label="CxC vencida 2026" value={money(overdueAmount)} />
+          <Kpi label="Clientes con saldo 2026" value={clients.length.toLocaleString('es-CL')} />
+          <Kpi label="Clientes con deuda vencida 2026" value={overdueClients.toLocaleString('es-CL')} />
         </div>
 
         <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-b border-[#D1C7BD] pb-3">
