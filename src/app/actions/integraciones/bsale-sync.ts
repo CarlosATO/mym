@@ -11,6 +11,12 @@ import { upsertBsaleDocument, upsertBsaleDocumentDetails } from '@/lib/integraci
 import { normalizeBsaleRelatedDetailId } from '@/lib/integraciones/bsale-invoice-sales-order-link'
 import { createClient as createServerSessionClient } from '@/lib/supabase/server'
 import crypto from 'crypto'
+import type {
+  DirectedBsaleDocumentResult,
+  DirectedBsaleDocumentStatus,
+  DirectedBsaleSyncResult,
+  WarehouseFullRefreshResult,
+} from '@/lib/integraciones/bsale-sync-types'
 
 const WAREHOUSE_OPERATIONAL_SYNC_TRIGGER = 'WAREHOUSE_OPERATIONAL'
 
@@ -175,35 +181,6 @@ type BsalePaymentsSyncOptions = {
   mode?: 'incremental' | 'backfill'
 }
 
-export type DirectedBsaleDocumentStatus =
-  | 'READY'
-  | 'NOT_FOUND'
-  | 'INVALID_DOCUMENT'
-  | 'AMBIGUOUS'
-  | 'DETAILS_UNAVAILABLE'
-  | 'CUSTOMER_UNAVAILABLE'
-  | 'ERROR'
-
-export interface DirectedBsaleDocumentResult {
-  invoice_number: string
-  status: DirectedBsaleDocumentStatus
-  bsale_document_id?: number
-  customer_bsale_id?: number | null
-  details_count?: number
-  error?: string
-  customer_identity_updated?: number
-  settlement_identity_updated?: number
-}
-
-export interface DirectedBsaleSyncResult {
-  success: boolean
-  requested: number
-  ready: number
-  missing: number
-  documents: DirectedBsaleDocumentResult[]
-  error?: string
-}
-
 type BsalePaymentTypeRecord = {
   company_id: string
   bsale_id: number
@@ -318,9 +295,9 @@ function toNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
-export const PREPARATION_REFRESH_CONCURRENCY = 6
+const PREPARATION_REFRESH_CONCURRENCY = 6
 
-export async function mapWithConcurrency<T, R>(
+async function mapWithConcurrency<T, R>(
   items: T[],
   concurrency: number,
   worker: (item: T, index: number) => Promise<R>
@@ -3030,14 +3007,6 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
     }
     return { success: false, error: err instanceof Error ? err.message : String(err) }
   }
-}
-
-export type WarehouseFullRefreshResult = {
-  success: boolean
-  status: 'COMPLETED' | 'FAILED' | 'PARTIAL' | 'SKIPPED_LOCKED'
-  runId?: string
-  metrics?: Record<string, number>
-  error?: string
 }
 
 /**
