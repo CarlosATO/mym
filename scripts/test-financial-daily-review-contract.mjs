@@ -27,5 +27,5 @@ test('cash flow exposes the four review filters and P&L uses reviewed post-cutof
   assert.match(pAndL, /review_status = 'REVIEWED'/)
   assert.match(pAndL, /EXPENSE_INSURANCE/)
   assert.match(pAndL, /financial_expense_entries/)
-  assert.match(pAndL, /expense\.status = 'POSTED'/)
+  assert.match(pAndL, /financial_expense_bank_links/)
 })

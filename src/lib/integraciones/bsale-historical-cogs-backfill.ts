@@ -10,7 +10,7 @@ import {
 } from './bsale-historical-cogs.ts'
 
 const ELIGIBLE_DOCUMENT_TYPES = new Set([1, 5])
-const COMPLETED_STATUSES = new Set(['OBSERVED', 'MISSING'])
+const COMPLETED_STATUSES = new Set(['OBSERVED', 'ZERO_WITH_EVIDENCE'])
 
 export interface HistoricalCogsDocument {
   bsale_id: number

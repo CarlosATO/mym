@@ -137,11 +137,11 @@ test('responsive financial movements use wrapping KPI/actions and scrollable tab
   assert.match(view, /max-h-\[92vh\] w-full/)
 })
 
-test('navigation and statement include Movimientos and the current other-income semantics', () => {
+test('navigation and statement include Movimientos and EXPENSE_OTHER', () => {
   assert.match(navigation, /10  Movimientos financieros/)
   assert.match(navigation, /Movimientos financieros/)
-  assert.match(statement, /OTHER_INCOME/)
-  assert.match(statement, /otherIncome/)
+  assert.match(statement, /EXPENSE_OTHER/)
+  assert.match(statement, /otherExpenses/)
 })
 
 test('server actions enforce separate cash and loan permissions and revalidate route', () => {

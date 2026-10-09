@@ -25,6 +25,10 @@ import type {
 
 type Tab = "movements" | "loans";
 type EntryType = "loan" | FinancialInflowType;
+type PendingVoid =
+  | { type: "loan"; id: string; label: "préstamo" }
+  | { type: "loan-payment"; id: string; label: "pago de préstamo" }
+  | { type: "inflow"; id: string; label: "entrada" };
 type Dashboard = {
   loans: Loan[];
   monthFinancialExpenses: number;
@@ -63,6 +67,8 @@ export function FinancialMovementsClient({
   >(null);
   const [entryType, setEntryType] = useState<EntryType>("loan");
   const [selectedLoan, setSelectedLoan] = useState<Loan | null>(null);
+  const [pendingVoid, setPendingVoid] = useState<PendingVoid | null>(null);
+  const [voidReason, setVoidReason] = useState("");
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -70,6 +76,8 @@ export function FinancialMovementsClient({
     setModal(null);
     setSelectedLoan(null);
     setEntryType("loan");
+    setPendingVoid(null);
+    setVoidReason("");
     setError("");
   };
   const run = (operation: () => Promise<{ ok: boolean; message?: string }>) =>
@@ -85,8 +93,28 @@ export function FinancialMovementsClient({
         router.refresh();
       }
     });
-  const askVoidReason = (label: string) =>
-    window.prompt(`Motivo obligatorio para anular ${label}`)?.trim() || null;
+  const openVoidModal = (pending: PendingVoid) => {
+    setError("");
+    setVoidReason("");
+    setPendingVoid(pending);
+  };
+  const closeVoidModal = () => {
+    if (isPending) return;
+    setPendingVoid(null);
+    setVoidReason("");
+    setError("");
+  };
+  const confirmVoid = () => {
+    if (!pendingVoid || !voidReason.trim()) return;
+    const reason = voidReason.trim();
+    const operation =
+      pendingVoid.type === "loan"
+        ? () => voidFinancialLoan(pendingVoid.id, reason)
+        : pendingVoid.type === "loan-payment"
+          ? () => voidFinancialLoanPayment(pendingVoid.id, reason)
+          : () => voidFinancialInflow(pendingVoid.id, reason);
+    run(operation);
+  };
   const tabLabel: Record<Tab, string> = {
     movements: "Movimientos",
     loans: "Préstamos",
@@ -147,7 +175,7 @@ export function FinancialMovementsClient({
         </div>
         <div
           id="movement-actions"
-          className="mt-3 flex max-w-full overflow-x-auto border-b border-[#D1C7BD]"
+          className="mt-3 inline-flex max-w-full overflow-x-auto rounded border border-[#D1C7BD]"
           role="tablist"
           aria-label="Movimientos financieros"
         >
@@ -158,7 +186,7 @@ export function FinancialMovementsClient({
               role="tab"
               aria-selected={tab === value}
               onClick={() => setTab(value)}
-              className={`whitespace-nowrap border-b-2 px-3 py-1.5 text-xs font-semibold ${tab === value ? "border-[#72383D] text-[#72383D]" : "border-transparent text-[#322D29]/55 hover:text-[#72383D]"}`}
+              className={`min-w-32 whitespace-nowrap border-r border-[#D1C7BD] px-4 py-2 text-xs font-bold uppercase tracking-wider last:border-r-0 ${tab === value ? "bg-[#72383D] text-white" : "bg-white text-[#72383D] hover:bg-[#F8F4EF]"}`}
             >
               {tabLabel[value]}
             </button>
@@ -184,13 +212,13 @@ export function FinancialMovementsClient({
               initialFilters={{ status: "", source: "", search: "" }}
               formOpen={modal === "recognized-expense"}
               onFormOpenChange={(open) => setModal(open ? "recognized-expense" : null)}
+              embedded
             />
             <FinancialInflowsHistory
               inflows={initialData.inflows}
-              onVoid={(inflow) => {
-                const reason = askVoidReason("la entrada");
-                if (reason) run(() => voidFinancialInflow(inflow.id, reason));
-              }}
+              onVoid={(inflow) =>
+                openVoidModal({ type: "inflow", id: inflow.id, label: "entrada" })
+              }
             />
           </div>
         )}
@@ -202,13 +230,14 @@ export function FinancialMovementsClient({
               setModal("loan-payment");
             }}
             onVoidPayment={(payment) => {
-              const reason = askVoidReason("la cuota");
-              if (reason)
-                run(() => voidFinancialLoanPayment(payment.id, reason));
+              openVoidModal({
+                type: "loan-payment",
+                id: payment.id,
+                label: "pago de préstamo",
+              });
             }}
             onVoidLoan={(loan) => {
-              const reason = askVoidReason("el préstamo");
-              if (reason) run(() => voidFinancialLoan(loan.id, reason));
+              openVoidModal({ type: "loan", id: loan.id, label: "préstamo" });
             }}
           />
         )}
@@ -250,6 +279,18 @@ export function FinancialMovementsClient({
           )}
         </Modal>
       )}
+      {pendingVoid && (
+        <VoidConfirmationModal
+          key={`${pendingVoid.type}-${pendingVoid.id}`}
+          pendingVoid={pendingVoid}
+          reason={voidReason}
+          error={error}
+          busy={isPending}
+          onReasonChange={setVoidReason}
+          onClose={closeVoidModal}
+          onConfirm={confirmVoid}
+        />
+      )}
     </main>
   );
 }
@@ -280,7 +321,7 @@ function Modal({
       <div
         role="dialog"
         aria-modal="true"
-        className="fixed inset-y-0 right-0 flex w-full max-w-md flex-col border-l border-[#D1C7BD] bg-[#FCFBF9] shadow-2xl"
+          className="fixed inset-y-0 right-0 flex max-h-[92vh] w-full max-w-md flex-col border-l border-[#D1C7BD] bg-[#FCFBF9] shadow-2xl"
       >
         <div className="flex shrink-0 items-start justify-between gap-4 border-b border-[#D1C7BD] p-4 sm:p-5">
           <h3 className="text-lg font-semibold">{title}</h3>
@@ -293,6 +334,105 @@ function Modal({
     </div>
   );
 }
+
+function VoidConfirmationModal({
+  pendingVoid,
+  reason,
+  error,
+  busy,
+  onReasonChange,
+  onClose,
+  onConfirm,
+}: {
+  pendingVoid: PendingVoid;
+  reason: string;
+  error: string;
+  busy: boolean;
+  onReasonChange: (value: string) => void;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const title =
+    pendingVoid.type === "loan"
+      ? "Anular préstamo"
+      : pendingVoid.type === "loan-payment"
+        ? "Anular pago de préstamo"
+        : "Anular entrada";
+  const description =
+    pendingVoid.type === "loan"
+      ? "Esta acción dejará el préstamo como anulado y lo excluirá de la deuda financiera activa."
+      : pendingVoid.type === "loan-payment"
+        ? "Esta acción dejará el pago de préstamo como anulado y actualizará la deuda financiera."
+        : "Esta acción dejará la entrada como anulada y la excluirá de los movimientos activos.";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#322D29]/35 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="void-confirmation-title"
+        className="w-full max-w-md border border-[#D1C7BD] bg-[#FCFBF9] shadow-2xl"
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-[#D1C7BD] p-4">
+          <h3 id="void-confirmation-title" className="text-base font-semibold">
+            {title}
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            aria-label="Cerrar"
+            className="text-[#322D29]/70 disabled:opacity-40"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <form
+          className="space-y-4 p-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onConfirm();
+          }}
+        >
+          <p className="text-xs leading-5 text-[#322D29]/75">{description}</p>
+          <FormField label="Motivo de anulación *">
+            <textarea
+              required
+              rows={3}
+              value={reason}
+              onChange={(event) => onReasonChange(event.target.value)}
+              disabled={busy}
+              autoFocus
+            />
+          </FormField>
+          {error && (
+            <p className="border border-[#A45B58]/30 bg-[#F8EDEA] px-3 py-2 text-xs text-[#8A4B4B]">
+              {error}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={busy}
+              className="border border-[#D1C7BD] bg-white px-3 py-2 text-xs font-semibold text-[#322D29] disabled:opacity-40"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={busy || !reason.trim()}
+              className="bg-[#72383D] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+            >
+              {busy ? "Anulando…" : title}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function FormField({
   label,
   children,

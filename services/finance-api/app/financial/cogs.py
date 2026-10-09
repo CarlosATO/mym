@@ -14,7 +14,7 @@ from app.db.connection import get_session_factory
 
 
 COGS_SOURCE = (
-    "integraciones.bsale_document_costs.total_cost + "
+    "integraciones.bsale_document_costs.total_cost - "
     "integraciones.bsale_credit_note_cogs_resolutions.reversal_cogs"
 )
 MONEY_QUANTUM = Decimal("0.01")
@@ -52,11 +52,13 @@ MONTHLY_COGS_SQL = text(
         SELECT
             EXTRACT(MONTH FROM emission_date)::integer AS month,
             SUM(
-                CASE WHEN status = 'OBSERVED' THEN COALESCE(total_cost, 0)
-                     ELSE 0 END
+                CASE WHEN status IN ('OBSERVED', 'ZERO_WITH_EVIDENCE') THEN COALESCE(total_cost, 0)
+                     ELSE NULL END
             )::numeric AS gross_cogs,
             COUNT(*) FILTER (WHERE status = 'OBSERVED')::integer AS observed_document_count,
-            COUNT(*) FILTER (WHERE status IS DISTINCT FROM 'OBSERVED')::integer AS missing_document_count,
+            COUNT(*) FILTER (WHERE status = 'ZERO_WITH_EVIDENCE')::integer AS zero_evidence_document_count,
+            COUNT(*) FILTER (WHERE status IN ('OBSERVED', 'ZERO_WITH_EVIDENCE'))::integer AS resolved_document_count,
+            COUNT(*) FILTER (WHERE status IS DISTINCT FROM 'OBSERVED' AND status IS DISTINCT FROM 'ZERO_WITH_EVIDENCE')::integer AS missing_document_count,
             MAX(emission_date) AS data_through
         FROM sales_costs
         GROUP BY EXTRACT(MONTH FROM emission_date)::integer
@@ -92,6 +94,8 @@ MONTHLY_COGS_SQL = text(
             gross.gross_cogs,
             reversal.credit_note_reversal,
             COALESCE(gross.observed_document_count, 0)::integer AS observed_document_count,
+            COALESCE(gross.zero_evidence_document_count, 0)::integer AS zero_evidence_document_count,
+            COALESCE(gross.resolved_document_count, 0)::integer AS resolved_document_count,
             COALESCE(gross.missing_document_count, 0)::integer AS missing_document_count,
             COALESCE(gross.data_through, reversal.data_through) AS data_through
         FROM gross_monthly AS gross
@@ -100,9 +104,11 @@ MONTHLY_COGS_SQL = text(
     SELECT
         month,
         gross_cogs,
-        credit_note_reversal,
-        observed_document_count,
-        missing_document_count,
+         credit_note_reversal,
+         observed_document_count,
+         zero_evidence_document_count,
+         resolved_document_count,
+         missing_document_count,
         data_through,
         MAX(data_through) OVER () AS overall_data_through
     FROM monthly
@@ -146,6 +152,8 @@ def build_cogs_response(
     ytd_gross = Decimal("0.00")
     ytd_reversal = Decimal("0.00")
     ytd_observed = 0
+    ytd_zero_evidence = 0
+    ytd_resolved = 0
     ytd_missing = 0
 
     for month in range(1, 13):
@@ -162,22 +170,30 @@ def build_cogs_response(
             })
             continue
 
-        gross = _money(row.get("gross_cogs"))
+        raw_gross = row.get("gross_cogs")
         reversal = _money(row.get("credit_note_reversal"))
         observed = int(row.get("observed_document_count") or 0)
+        zero_evidence = int(row.get("zero_evidence_document_count") or 0)
+        resolved = int(row.get("resolved_document_count") or observed + zero_evidence)
         missing = int(row.get("missing_document_count") or 0)
-        ytd_gross += gross
+        gross = _money(raw_gross) if raw_gross is not None else None
+        ytd_gross += gross or Decimal("0.00")
         ytd_reversal += reversal
         ytd_observed += observed
+        ytd_zero_evidence += zero_evidence
+        ytd_resolved += resolved
         ytd_missing += missing
+        net = gross - reversal if gross is not None else None
         months.append({
             "month": month,
             "gross_cogs": _money_string(gross),
             "credit_note_reversal": _money_string(reversal),
-            "net_cogs": _money_string(gross - reversal),
+            "net_cogs": _money_string(net),
             "observed_document_count": observed,
+            "zero_evidence_document_count": zero_evidence,
+            "resolved_document_count": resolved,
             "missing_document_count": missing,
-            "coverage_status": _coverage(observed, missing),
+            "coverage_status": _coverage(resolved, missing),
         })
 
     has_information = data_through is not None
@@ -186,8 +202,10 @@ def build_cogs_response(
         "credit_note_reversal": _money_string(ytd_reversal) if has_information else None,
         "net_cogs": _money_string(ytd_gross - ytd_reversal) if has_information else None,
         "observed_document_count": ytd_observed if has_information else None,
+        "zero_evidence_document_count": ytd_zero_evidence if has_information else None,
+        "resolved_document_count": ytd_resolved if has_information else None,
         "missing_document_count": ytd_missing if has_information else None,
-        "coverage_status": _coverage(ytd_observed, ytd_missing) if has_information else None,
+        "coverage_status": _coverage(ytd_resolved, ytd_missing) if has_information else None,
     }
     return {
         "company_id": str(company_id),

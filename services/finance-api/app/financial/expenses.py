@@ -400,7 +400,11 @@ def build_expenses_response(
     covered_set = set(covered_months)
     missing_months = [month for month in range(1, 13) if month not in covered_set]
     data_through = max(
-        (_date_string(row.get("last_transaction_date")) for row in statement_rows),
+        (
+            value
+            for value in (_date_string(row.get("last_transaction_date")) for row in statement_rows)
+            if value is not None
+        ),
         default=None,
     )
     by_month: dict[int, dict[str, Decimal]] = {}

@@ -84,9 +84,9 @@ export function getCommonCoverage(
     const expenseMonth = expenses?.months.find(item => item.month === month)
     const available = Boolean(
       salesMonth?.amount !== null && salesMonth?.amount !== undefined
-        // Cost coverage is shown separately; a calculated month is still part
-        // of the common period when its cost source is marked incomplete.
+        // Only a complete COGS month can participate in the common result.
         && cogsMonth?.net_cogs !== null && cogsMonth?.net_cogs !== undefined
+        && cogsMonth.coverage_status === 'COMPLETE'
         && personnelMonth?.status === 'AVAILABLE' && personnelMonth.totalPersonnel !== null
         && expenseMonth?.status === 'AVAILABLE'
         && expenseMonth.operatingIdentifiedTotal !== null

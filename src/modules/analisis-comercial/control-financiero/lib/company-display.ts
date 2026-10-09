@@ -32,3 +32,12 @@ export function getFinancialCompanyDisplayName(company: Pick<Company, 'business_
 
   return company.trade_name || company.business_name
 }
+
+export function getFinancialTradeName(company: Pick<Company, 'business_name' | 'trade_name'> | null) {
+  if (!company) return 'MYM DISTRIBUIDORA'
+
+  const sourceNames = [company.business_name, company.trade_name].map(normalizeCompanyLabel)
+  if (sourceNames.some(name => CAYLO_ALIASES.has(name))) return 'MYM DISTRIBUIDORA'
+
+  return company.trade_name || company.business_name
+}

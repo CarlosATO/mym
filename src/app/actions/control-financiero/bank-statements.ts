@@ -24,10 +24,79 @@ import {
 import { resolveLatestKnownBalances } from "@/lib/control-financiero/current-balance";
 import { todayInSantiago } from "@/lib/datetime";
 import { FINANCIAL_DAILY_REVIEW_CUTOFF } from "@/lib/control-financiero/config";
+import { normalizeBankOperation } from "@/lib/control-financiero/classification";
 
 type Db = any;
 const db = () => createAdminClient().schema("comercial") as Db;
 const CASH_FLOW_PATH = "/dashboard/analisis-comercial/control-financiero/flujo-caja";
+
+async function applyAutoDebitRules(
+  companyId: string,
+  accountId: string,
+  movementIdentities: string[],
+  classifiedBy: string,
+) {
+  const identities = [...new Set(movementIdentities.filter(Boolean))];
+  if (!identities.length) return { classifiedCount: 0, conflictCount: 0 };
+  const { data: movements, error: movementError } = await db()
+    .from("financial_bank_movements")
+    .select("id,normalized_description,operation_description")
+    .eq("company_id", companyId)
+    .eq("bank_account_id", accountId)
+    .eq("direction", "DEBE")
+    .gt("debit_amount", 0)
+    .is("category_id", null)
+    .in("movement_identity", identities);
+  if (movementError) throw new Error(movementError.message);
+  const values = [...new Set((movements ?? []).map((movement: any) => movement.normalized_description || normalizeBankOperation(movement.operation_description)))];
+  if (!values.length) return { classifiedCount: 0, conflictCount: 0 };
+  const { data: rules, error: rulesError } = await db()
+    .from("financial_bank_classification_rules")
+    .select("id,match_value,category_id")
+    .eq("company_id", companyId)
+    .eq("bank_account_id", accountId)
+    .eq("direction", "DEBE")
+    .eq("match_type", "EXACT")
+    .eq("mode", "AUTO")
+    .eq("active", true)
+    .in("match_value", values);
+  if (rulesError) throw new Error(rulesError.message);
+  const rulesByValue = new Map<string, any[]>();
+  for (const rule of rules ?? []) rulesByValue.set(rule.match_value, [...(rulesByValue.get(rule.match_value) ?? []), rule]);
+  const groups = new Map<string, { ids: string[]; ruleId: string }>();
+  let conflictCount = 0;
+  for (const movement of movements ?? []) {
+    const value = movement.normalized_description || normalizeBankOperation(movement.operation_description);
+    const matchingRules = rulesByValue.get(value) ?? [];
+    const categoryIds = [...new Set(matchingRules.map((rule) => rule.category_id))];
+    if (categoryIds.length !== 1 || matchingRules.length === 0) {
+      if (categoryIds.length > 1) conflictCount += 1;
+      continue;
+    }
+    const ruleId = matchingRules[0].id;
+    const group: { ids: string[]; ruleId: string } = groups.get(ruleId) ?? { ids: [], ruleId };
+    group.ids.push(movement.id);
+    groups.set(ruleId, group);
+  }
+  let classifiedCount = 0;
+  for (const group of groups.values()) {
+    const rule = (rules ?? []).find((item: any) => item.id === group.ruleId);
+    const { data, error } = await db().rpc("classify_financial_bank_movements", {
+      p_company_id: companyId,
+      p_movement_ids: group.ids,
+      p_category_id: rule.category_id,
+      p_counterparty: null,
+      p_note: null,
+      p_source: "AUTO_RULE",
+      p_rule_id: group.ruleId,
+      p_only_pending: true,
+      p_classified_by: classifiedBy,
+    });
+    if (error) throw new Error(error.message);
+    classifiedCount += Number((data as any)?.updated_count ?? 0);
+  }
+  return { classifiedCount, conflictCount };
+}
 
 export type FinancialBankAccount = {
   id: string;
@@ -43,6 +112,7 @@ export type FinancialAccountBalance = {
   maskedAccountNumber: string;
   balance: number | null;
   balanceDate: string | null;
+  creditLineTotal: number | null;
   creditLineUsed: number | null;
   creditLineAvailable: number | null;
 };
@@ -618,8 +688,14 @@ export async function confirmFinancialBankStatement(input: {
     p_imported_by: user.id,
   });
   if (error) return { ok: false as const, message: error.message };
+  const autoClassification = await applyAutoDebitRules(
+    companyId,
+    input.accountId,
+    movements.map((movement) => movement.movement_identity),
+    user.id,
+  );
   revalidatePath(CASH_FLOW_PATH);
-  return { ok: true as const, result: data };
+  return { ok: true as const, result: { ...(data as any), autoClassification } };
 }
 
 export async function confirmOpenFinancialBankStatement(input: {
@@ -796,8 +872,14 @@ export async function confirmOpenFinancialBankStatement(input: {
     },
   );
   if (error) return { ok: false as const, message: error.message };
+  const autoClassification = await applyAutoDebitRules(
+    companyId,
+    input.accountId,
+    newRows.map(({ key }) => key.movement_identity),
+    user.id,
+  );
   revalidatePath(CASH_FLOW_PATH);
-  return { ok: true as const, result: data };
+  return { ok: true as const, result: { ...(data as any), autoClassification } };
 }
 
 export async function confirmFinalFinancialBankStatement(input: {
@@ -907,8 +989,14 @@ export async function confirmFinalFinancialBankStatement(input: {
     p_imported_by: user.id,
   });
   if (error) return { ok: false as const, message: error.message };
+  const autoClassification = await applyAutoDebitRules(
+    companyId,
+    input.accountId,
+    diff.newIndexes.map((index) => generatedKeys[index].movement_identity),
+    user.id,
+  );
   revalidatePath(CASH_FLOW_PATH);
-  return { ok: true as const, result: data };
+  return { ok: true as const, result: { ...(data as any), autoClassification } };
 }
 
 export async function updateFinancialBankReconciliationDifference(input: {
@@ -1054,7 +1142,7 @@ export async function getCashFlowDashboard(
   if (importsError) throw new Error(importsError.message);
   const latestCreditLineByAccount = new Map<
     string,
-    { used: number | null; available: number | null }
+    { total: number | null; used: number | null; available: number | null }
   >();
   for (const imported of imports ?? []) {
     const metadata = imported.metadata as Record<string, unknown> | null;
@@ -1066,8 +1154,10 @@ export async function getCashFlowDashboard(
       continue;
     const used = Number(metadata?.credit_line_used);
     const available = Number(metadata?.credit_line_available);
-    if (Number.isFinite(used) || Number.isFinite(available))
+    const total = Number(metadata?.credit_line_total);
+    if (Number.isFinite(total) || Number.isFinite(used) || Number.isFinite(available))
       latestCreditLineByAccount.set(importedAccountId, {
+        total: Number.isFinite(total) ? total : null,
         used: Number.isFinite(used) ? used : null,
         available: Number.isFinite(available) ? available : null,
       });
@@ -1081,6 +1171,7 @@ export async function getCashFlowDashboard(
       maskedAccountNumber: `•••• ${account.account_number.slice(-4)}`,
       balance: latestAccount?.balance ?? null,
       balanceDate: latestAccount?.date ?? null,
+      creditLineTotal: creditLine?.total ?? null,
       creditLineUsed: creditLine?.used ?? null,
       creditLineAvailable: creditLine?.available ?? null,
     };

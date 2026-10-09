@@ -9,14 +9,15 @@ import { canRefreshClientMetricsSnapshot } from '@/lib/integraciones/client-metr
 import { syncBsaleStockKardex } from '@/lib/integraciones/bsale-stock-kardex'
 import { upsertBsaleDocument, upsertBsaleDocumentDetails } from '@/lib/integraciones/bsale-document-hydration'
 import { normalizeBsaleRelatedDetailId } from '@/lib/integraciones/bsale-invoice-sales-order-link'
-import { createClient as createServerSessionClient } from '@/lib/supabase/server'
-import crypto from 'crypto'
+import { syncRecentDocumentCogs, type DocumentCogsSyncResult } from '@/lib/integraciones/bsale-document-cogs-sync'
+import { syncRecentCreditNoteCogs, type CreditNoteCogsSyncResult } from '@/lib/integraciones/bsale-credit-note-cogs-sync'
 import type {
   DirectedBsaleDocumentResult,
-  DirectedBsaleDocumentStatus,
   DirectedBsaleSyncResult,
   WarehouseFullRefreshResult,
 } from '@/lib/integraciones/bsale-sync-types'
+import { createClient as createServerSessionClient } from '@/lib/supabase/server'
+import crypto from 'crypto'
 
 const WAREHOUSE_OPERATIONAL_SYNC_TRIGGER = 'WAREHOUSE_OPERATIONAL'
 
@@ -2499,6 +2500,50 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       errorMessage += (errorMessage ? ' | ' : '') + `Ventas: document_errors=${salesRes.counts?.document_errors || 0} detail_errors=${salesRes.counts?.detail_errors || 0}`;
     }
 
+    // 2a. Document COGS runs only after the local document mirror is refreshed.
+    let documentCogsResult: DocumentCogsSyncResult | null = null;
+    let creditNoteCogsResult: CreditNoteCogsSyncResult | null = null;
+    if (salesRes.success && finalStatus !== 'FAILED') {
+      try {
+        const cogsYear = new Date().getUTCFullYear();
+        documentCogsResult = await syncRecentDocumentCogs({
+          companyId,
+          year: cogsYear,
+          client: integrDb() as any,
+          persistenceClient: integrDb() as any,
+          recentDays: 30,
+          catchUpLimit: 100,
+        });
+        if (documentCogsResult.errorsRecent > 0) {
+          finalStatus = 'PARTIAL';
+          errorMessage += (errorMessage ? ' | ' : '') + `Document COGS: recent_errors=${documentCogsResult.errorsRecent}`;
+        }
+      } catch (documentCogsError: unknown) {
+        finalStatus = 'PARTIAL';
+        errorMessage += (errorMessage ? ' | ' : '') + 'Document COGS: ' + (documentCogsError instanceof Error ? documentCogsError.message : String(documentCogsError));
+        console.error('[runReplenishmentBsaleSync] Error en document COGS:', documentCogsError);
+      }
+      try {
+        const cogsYear = new Date().getUTCFullYear();
+        creditNoteCogsResult = await syncRecentCreditNoteCogs({
+          companyId,
+          year: cogsYear,
+          client: integrDb() as any,
+          persistenceClient: integrDb() as any,
+          recentDays: 30,
+          catchUpLimit: 100,
+        });
+        if (creditNoteCogsResult.errors > 0 || creditNoteCogsResult.pendingRecentCreditNotes > 0) {
+          finalStatus = 'PARTIAL';
+          errorMessage += (errorMessage ? ' | ' : '') + `Credit Note COGS: recent_pending=${creditNoteCogsResult.pendingRecentCreditNotes} errors=${creditNoteCogsResult.errors}`;
+        }
+      } catch (creditNoteCogsError: unknown) {
+        finalStatus = 'PARTIAL';
+        errorMessage += (errorMessage ? ' | ' : '') + 'Credit Note COGS: ' + (creditNoteCogsError instanceof Error ? creditNoteCogsError.message : String(creditNoteCogsError));
+        console.error('[runReplenishmentBsaleSync] Error en Credit Note COGS:', creditNoteCogsError);
+      }
+    }
+
     // 3. Materialize eligible sales orders only after their documents are available locally.
     let preparationResult: Awaited<ReturnType<typeof materializePreparationAfterSalesSync>> | null = null;
     if (finalStatus !== 'FAILED') {
@@ -2651,7 +2696,9 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       preparation_refresh: preparationRefresh,
       orphans: orphanResult,
       worker_account_boletas: workerAccountReconciliation,
-      stocks: stockCount
+      stocks: stockCount,
+      document_cogs: documentCogsResult,
+      credit_note_cogs: creditNoteCogsResult,
     };
 
     await finishSyncRun(runId, finalStatus, {
@@ -2662,12 +2709,35 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
        clients_updated: clientStats.updatedCount,
         documents: salesRes.counts?.documents || 0,
         document_errors: salesRes.counts?.document_errors || 0,
-       document_details_count: salesRes.counts?.details || 0,
+        document_details_count: salesRes.counts?.details || 0,
+        costs: documentCogsResult ? documentCogsResult.observed + documentCogsResult.missing : 0,
        detail_errors: salesRes.counts?.detail_errors || 0,
        orphans_hydrated: orphanResult.hydrated,
        stocks: stockCount,
         kardex: kardexResult?.events || 0
-    }, errorMessage || undefined);
+     }, errorMessage || undefined, documentCogsResult || creditNoteCogsResult ? {
+       cogs_eligible_recent: documentCogsResult?.eligibleRecent ?? 0,
+       cogs_observed_recent: documentCogsResult?.observedRecent ?? 0,
+       cogs_missing_recent: documentCogsResult?.missingRecent ?? 0,
+       cogs_no_cost_row_recent: documentCogsResult?.noCostRowRecent ?? 0,
+       cogs_errors_recent: documentCogsResult?.errorsRecent ?? 0,
+       cogs_historical_catchup_selected: documentCogsResult?.historicalCatchUpSelected ?? 0,
+       cogs_requests: documentCogsResult?.requests ?? 0,
+       cogs_retries: documentCogsResult?.retries ?? 0,
+       cogs_rate_limits: documentCogsResult?.rateLimits ?? 0,
+       cogs_transient_errors: documentCogsResult?.transientErrors ?? 0,
+       cogs_observed: documentCogsResult?.observed ?? 0,
+       cogs_missing: documentCogsResult?.missing ?? 0,
+       cogs_errors: documentCogsResult?.errors ?? 0,
+       cogs_nc_eligible: creditNoteCogsResult?.eligibleCreditNotes ?? 0,
+       cogs_nc_resolved: creditNoteCogsResult?.resolvedCreditNotes ?? 0,
+       cogs_nc_pending: creditNoteCogsResult?.pendingCreditNotes ?? 0,
+       cogs_nc_pending_recent: creditNoteCogsResult?.pendingRecentCreditNotes ?? 0,
+       cogs_nc_ambiguous: creditNoteCogsResult?.ambiguousCreditNotes ?? 0,
+       cogs_nc_requests: creditNoteCogsResult?.requests ?? 0,
+       cogs_nc_retries: creditNoteCogsResult?.retries ?? 0,
+       cogs_nc_errors: creditNoteCogsResult?.errors ?? 0,
+     } : undefined);
 
     await releaseSyncLock(companyId, lockName, runId);
 

@@ -184,6 +184,9 @@ export function CashFlowClient({
   const [importOpen, setImportOpen] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
   const [auditData, setAuditData] = useState<PendingDebitAudit | null>(null);
+  const [auditAccountId, setAuditAccountId] = useState(ALL_ACCOUNTS);
+  const [auditCategoryId, setAuditCategoryId] = useState("");
+  const [auditCreateRule, setAuditCreateRule] = useState(false);
   const [auditSearch, setAuditSearch] = useState("");
   const [auditSelected, setAuditSelected] = useState<string[]>([]);
   const [auditPreviewOpen, setAuditPreviewOpen] = useState(false);
@@ -194,6 +197,7 @@ export function CashFlowClient({
   const [auditDetailData, setAuditDetailData] = useState<PendingDebitAuditDetail | null>(null);
   const [auditDetailSelected, setAuditDetailSelected] = useState<string[]>([]);
   const [auditDetailCategoryId, setAuditDetailCategoryId] = useState("");
+  const [auditDetailCreateRule, setAuditDetailCreateRule] = useState(false);
   const [auditDetailBeneficiaries, setAuditDetailBeneficiaries] = useState<Record<string, string>>({});
   const [auditDetailConcepts, setAuditDetailConcepts] = useState<Record<string, "SUELDO" | "QUINCENA" | "BONO" | "ANTICIPO" | "OTRO">>({});
   const [auditDetailPreviewOpen, setAuditDetailPreviewOpen] = useState(false);
@@ -283,12 +287,12 @@ export function CashFlowClient({
     setCategoryFilter(data.pageFilters.categoryId ?? "");
   }, [accountId, data.pageFilters]);
 
-  const loadAudit = (nextPage = 1, nextSearch = auditSearch) =>
+  const loadAudit = (nextPage = 1, nextSearch = auditSearch, nextAccountId = auditAccountId) =>
     startAudit(async () => {
       try {
         const result = await getPendingDebitAudit({
           year,
-          bankAccountId: accountId,
+          bankAccountId: nextAccountId === ALL_ACCOUNTS ? undefined : nextAccountId,
           search: nextSearch,
           page: nextPage,
           pageSize: 50,
@@ -308,8 +312,11 @@ export function CashFlowClient({
 
   const openAudit = () => {
     setAuditOpen(true);
+    setAuditAccountId(ALL_ACCOUNTS);
+    setAuditCategoryId("");
+    setAuditCreateRule(false);
     setAuditSearch("");
-    loadAudit();
+    loadAudit(1, "", ALL_ACCOUNTS);
   };
 
   const openAuditGroup = (group: PendingDebitAudit["groups"][number]) => {
@@ -317,6 +324,7 @@ export function CashFlowClient({
     setAuditDetailData(null);
     setAuditDetailSelected([]);
     setAuditDetailCategoryId("");
+    setAuditDetailCreateRule(false);
     setAuditDetailBeneficiaries({});
     setAuditDetailConcepts({});
     setAuditDetailPreviewOpen(false);
@@ -327,7 +335,7 @@ export function CashFlowClient({
       try {
         const result = await getPendingDebitGroupMovements({
           year,
-          bankAccountId: accountId,
+          bankAccountId: auditAccountId === ALL_ACCOUNTS ? group.bankAccountId : auditAccountId,
           groupKey: group.groupKey,
           page: 1,
           pageSize: 100,
@@ -358,14 +366,14 @@ export function CashFlowClient({
       const selectedCategory = categories.find((category) => category.id === auditDetailCategoryId);
       const result = selectedCategory?.code === "EXPENSE_PERSONNEL_OFF_BOOK"
         ? await classifyOffBookPersonnelMovements({
-            year, bankAccountId: accountId, categoryId: auditDetailCategoryId,
+             year, bankAccountId: auditAccountId === ALL_ACCOUNTS ? auditDetailGroup?.bankAccountId : auditAccountId, categoryId: auditDetailCategoryId,
             details: auditDetailSelected.map((movementId) => ({
               movementId,
               beneficiaryId: auditDetailBeneficiaries[movementId] ?? "",
               paymentConcept: auditDetailConcepts[movementId] ?? "OTRO",
             })),
           })
-        : await classifyPendingDebitMovements({ year, bankAccountId: accountId, movementIds: auditDetailSelected, categoryId: auditDetailCategoryId });
+        : await classifyPendingDebitMovements({ year, bankAccountId: auditAccountId === ALL_ACCOUNTS ? auditDetailGroup?.bankAccountId : auditAccountId, movementIds: auditDetailSelected, categoryId: auditDetailCategoryId, createRule: auditDetailCreateRule });
       if (!result.ok) {
         setAuditDetailMessage(result.message || "No se pudo completar la clasificación. No se realizaron cambios.");
         return;
@@ -398,9 +406,10 @@ export function CashFlowClient({
     startAuditApply(async () => {
       const result = await classifyPendingDebitAudit({
         year,
-        bankAccountId: accountId,
+        bankAccountId: auditAccountId === ALL_ACCOUNTS ? undefined : auditAccountId,
         groupKeys: auditSelected,
-        categoryId: auditData.category.id,
+        categoryId: auditCategoryId,
+        createRule: auditCreateRule,
       });
       if (!result.ok) {
         setAuditMessage(result.message);
@@ -1023,14 +1032,22 @@ export function CashFlowClient({
       )}
       {auditOpen && auditData && (
         <PendingDebitAuditPanel
-          data={auditData}
+           data={auditData}
+           accounts={bankAccounts}
+           accountId={auditAccountId}
+           categories={categories}
+           categoryId={auditCategoryId}
+           createRule={auditCreateRule}
           search={auditSearch}
           selected={auditSelected}
           previewOpen={auditPreviewOpen}
           message={auditMessage}
           loading={auditLoading}
           applying={auditApplying}
-          onSearchChange={setAuditSearch}
+           onSearchChange={setAuditSearch}
+           onAccountChange={(value) => { setAuditAccountId(value); loadAudit(1, auditSearch, value); }}
+           onCategoryChange={setAuditCategoryId}
+           onCreateRuleChange={setAuditCreateRule}
           onSearch={() => loadAudit(1, auditSearch)}
           onClose={() => setAuditOpen(false)}
           onToggle={(key) =>
@@ -1054,10 +1071,12 @@ export function CashFlowClient({
       {auditDetailGroup && auditDetailData && (
         <PendingDebitAuditDetailPanel
           group={auditDetailGroup}
-           data={auditDetailData}
+          account={bankAccounts.find((account) => account.id === auditDetailGroup.bankAccountId)}
+          data={auditDetailData}
            categories={categories}
             beneficiaries={beneficiaries}
-           categoryId={auditDetailCategoryId}
+            categoryId={auditDetailCategoryId}
+            createRule={auditDetailCreateRule}
            beneficiaryValues={auditDetailBeneficiaries}
            conceptValues={auditDetailConcepts}
           selected={auditDetailSelected}
@@ -1073,7 +1092,8 @@ export function CashFlowClient({
                 : [...current, id],
             )
            }
-           onCategoryChange={setAuditDetailCategoryId}
+            onCategoryChange={setAuditDetailCategoryId}
+            onCreateRuleChange={setAuditDetailCreateRule}
            onBeneficiaryChange={(id, value) => setAuditDetailBeneficiaries((current) => ({ ...current, [id]: value }))}
            onConceptChange={(id, value) => setAuditDetailConcepts((current) => ({ ...current, [id]: value }))}
            onApplyBulkDetails={(beneficiaryId, concept) => {
@@ -1704,6 +1724,11 @@ function MovementTable({
 
 function PendingDebitAuditPanel({
   data,
+  accounts,
+  accountId,
+  categories,
+  categoryId,
+  createRule,
   search,
   selected,
   previewOpen,
@@ -1711,6 +1736,9 @@ function PendingDebitAuditPanel({
   loading,
   applying,
   onSearchChange,
+  onAccountChange,
+  onCategoryChange,
+  onCreateRuleChange,
   onSearch,
   onClose,
   onToggle,
@@ -1723,6 +1751,11 @@ function PendingDebitAuditPanel({
   onViewMovements,
 }: {
   data: PendingDebitAudit
+  accounts: FinancialBankAccount[]
+  accountId: string
+  categories: FinancialCategory[]
+  categoryId: string
+  createRule: boolean
   search: string
   selected: string[]
   previewOpen: boolean
@@ -1730,6 +1763,9 @@ function PendingDebitAuditPanel({
   loading: boolean
   applying: boolean
   onSearchChange: (value: string) => void
+  onAccountChange: (value: string) => void
+  onCategoryChange: (value: string) => void
+  onCreateRuleChange: (value: boolean) => void
   onSearch: () => void
   onClose: () => void
   onToggle: (key: string) => void
@@ -1754,13 +1790,17 @@ function PendingDebitAuditPanel({
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#72383D]">Auditoría de tesorería</p>
             <h3 className="mt-1 text-lg font-semibold">Débitos pendientes por contraparte / operación</h3>
-            <p className="mt-1 text-xs text-[#322D29]/65">{data.totalGroups.toLocaleString("es-CL")} grupos pendientes en el alcance actual · sólo DEBE, año seleccionado y cuenta vigente.</p>
+           <p className="mt-1 text-xs text-[#322D29]/65">{data.totalGroups.toLocaleString("es-CL")} grupos pendientes en el alcance actual · sólo DEBE, año seleccionado y movimientos sin categoría.</p>
           </div>
           <button type="button" onClick={onClose} className="text-xs text-[#322D29]/55">Cerrar</button>
         </div>
         <div className="border-b border-[#D1C7BD] px-5 py-3">
           <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => { event.preventDefault(); onSearch(); }}>
             <input aria-label="Buscar grupo pendiente" placeholder="Buscar nombre o descripción" value={search} onChange={(event) => onSearchChange(event.target.value)} className="h-8 w-64 border border-[#AC9C8D] bg-white px-2 text-xs" />
+            <select aria-label="Cuenta bancaria de auditoría" value={accountId} onChange={(event) => onAccountChange(event.target.value)} className="h-8 border border-[#AC9C8D] bg-white px-2 text-xs">
+              <option value={ALL_ACCOUNTS}>Todas las cuentas</option>
+              {accounts.map((account) => <option key={account.id} value={account.id}>{accountLabel(account)}</option>)}
+            </select>
             <Button type="submit" size="sm" variant="outline" disabled={loading}>Buscar</Button>
             <Button type="button" size="sm" variant="outline" onClick={onSelectVisible} disabled={loading || !data.groups.length}>Seleccionar visibles</Button>
             <Button type="button" size="sm" variant="outline" onClick={onDeselect} disabled={!selected.length}>Deseleccionar</Button>
@@ -1770,12 +1810,13 @@ function PendingDebitAuditPanel({
         <div className="max-h-[58vh] overflow-auto">
           <table className="w-full min-w-[900px] text-left text-xs">
             <thead className="sticky top-0 bg-[#F3EFEA] text-[10px] uppercase tracking-[0.1em] text-[#322D29]/55">
-              <tr><th className="w-10 px-4 py-3" /><th className="px-4 py-3">Contraparte / operación</th><th className="px-4 py-3 text-right">Mov.</th><th className="px-4 py-3 text-right">Total débito</th><th className="px-4 py-3">Período</th><th className="px-4 py-3">Montos observados</th><th className="px-4 py-3">Acción</th></tr>
+              <tr><th className="w-10 px-4 py-3" /><th className="px-4 py-3">Banco</th><th className="px-4 py-3">Contraparte / operación</th><th className="px-4 py-3 text-right">Mov.</th><th className="px-4 py-3 text-right">Total débito</th><th className="px-4 py-3">Período</th><th className="px-4 py-3">Montos observados</th><th className="px-4 py-3">Acción</th></tr>
             </thead>
             <tbody>
               {data.groups.map((group) => (
                 <tr key={group.groupKey} className="border-t border-[#EEE8E1] bg-white">
                   <td className="px-4 py-3"><input type="checkbox" aria-label={`Seleccionar ${group.counterparty}`} checked={selected.includes(group.groupKey)} onChange={() => onToggle(group.groupKey)} /></td>
+                  <td className="px-4 py-3"><p className="font-semibold">{group.bankName}</p><p className="mt-1 text-[11px] text-[#322D29]/55">{group.maskedAccountNumber}</p></td>
                   <td className="px-4 py-3"><p className="font-semibold">{group.counterparty}</p><p className="mt-1 text-[11px] text-[#322D29]/55">{group.operationDescription}</p><p className="mt-1 text-[11px] text-[#322D29]/55">{date(group.firstDate)} a {date(group.lastDate)}</p></td>
                   <td className="px-4 py-3 text-right tabular-nums">{group.movementCount}</td>
                   <td className="px-4 py-3 text-right font-semibold tabular-nums">{money(Number(group.totalDebit))}</td>
@@ -1784,7 +1825,7 @@ function PendingDebitAuditPanel({
                   <td className="px-4 py-3"><button type="button" className="font-semibold text-[#72383D] underline" onClick={() => onViewMovements(group)}>Ver movimientos</button></td>
                 </tr>
               ))}
-              {!data.groups.length && <tr><td colSpan={7} className="px-4 py-10 text-center text-[#322D29]/60">No hay grupos pendientes para este alcance.</td></tr>}
+              {!data.groups.length && <tr><td colSpan={8} className="px-4 py-10 text-center text-[#322D29]/60">No hay grupos pendientes para este alcance.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -1794,11 +1835,18 @@ function PendingDebitAuditPanel({
         </div>
         {previewOpen && (
           <div className="border-t border-[#72383D] bg-[#F3E8E4] px-5 py-4 text-xs">
-            <p className="font-semibold">Confirmar clasificación histórica</p>
-            <p className="mt-2">Grupos seleccionados: <strong>{selected.length}</strong> · Movimientos pendientes afectados: <strong>{selectedMovements}</strong> · Monto total: <strong>{money(selectedAmount)}</strong></p>
-            <div className="mt-2 max-h-28 overflow-auto border border-[#D1C7BD] bg-white p-2">{selectedGroups.map((group) => <p key={group.groupKey}>{group.counterparty} · {group.movementCount} movimientos · {money(Number(group.totalDebit))}</p>)}</div>
-            <p className="mt-3 text-[#322D29]/75">Destino: <strong>{data.category.name}</strong>. Sólo movimientos pendientes; ninguna clasificación existente será sobrescrita, no se crearán movimientos ni reglas y no afecta directamente P&amp;L.</p>
-            <div className="mt-3 flex gap-2"><Button type="button" size="sm" disabled={applying} onClick={onApply}>{applying ? "Aplicando..." : "Confirmar y clasificar"}</Button><Button type="button" size="sm" variant="outline" onClick={onCancelPreview}>Cancelar</Button></div>
+             <p className="font-semibold">Confirmar clasificación histórica</p>
+             <p className="mt-2">Grupos seleccionados: <strong>{selected.length}</strong> · Movimientos pendientes afectados: <strong>{selectedMovements}</strong> · Monto total: <strong>{money(selectedAmount)}</strong></p>
+             <div className="mt-2 max-h-28 overflow-auto border border-[#D1C7BD] bg-white p-2">{selectedGroups.map((group) => <p key={group.groupKey}>{group.bankName} · {group.maskedAccountNumber} · {group.counterparty} · {group.movementCount} movimientos · {money(Number(group.totalDebit))}</p>)}</div>
+             <label className="mt-3 block font-semibold">Categoría destino:
+               <select value={categoryId} onChange={(event) => onCategoryChange(event.target.value)} className="mt-1 h-9 w-full border border-[#AC9C8D] bg-white px-2 font-normal">
+                 <option value="">Selecciona una categoría leaf</option>
+                 {debitCategoryGroups(categories).map((group) => <optgroup key={group.root.id} label={group.root.name}>{group.children.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</optgroup>)}
+               </select>
+             </label>
+             <label className="mt-3 flex items-center gap-2"><input type="checkbox" checked={createRule} onChange={(event) => onCreateRuleChange(event.target.checked)} />Crear regla EXACTA AUTO por banco y descripción normalizada</label>
+             <p className="mt-3 text-[#322D29]/75">Sólo movimientos pendientes; ninguna clasificación existente será sobrescrita y no se crearán movimientos. Las reglas conflictivas no se aplican automáticamente.</p>
+             <div className="mt-3 flex gap-2"><Button type="button" size="sm" disabled={applying || !categoryId} onClick={onApply}>{applying ? "Aplicando..." : "Confirmar y clasificar"}</Button><Button type="button" size="sm" variant="outline" onClick={onCancelPreview}>Cancelar</Button></div>
           </div>
         )}
         {message && <p className="border-t border-[#D1C7BD] px-5 py-3 text-xs text-[#52735A]">{message}</p>}
@@ -1809,10 +1857,12 @@ function PendingDebitAuditPanel({
 
 function PendingDebitAuditDetailPanel({
   group,
+  account,
   data,
   categories,
   beneficiaries,
   categoryId,
+  createRule,
   beneficiaryValues,
   conceptValues,
   selected,
@@ -1823,6 +1873,7 @@ function PendingDebitAuditDetailPanel({
   onClose,
   onToggle,
   onCategoryChange,
+  onCreateRuleChange,
   onBeneficiaryChange,
   onConceptChange,
   onApplyBulkDetails,
@@ -1835,10 +1886,12 @@ function PendingDebitAuditDetailPanel({
   onPage,
 }: {
   group: PendingDebitAudit["groups"][number]
+  account?: FinancialBankAccount
   data: PendingDebitAuditDetail
   categories: FinancialCategory[]
   beneficiaries: PersonnelBeneficiary[]
   categoryId: string
+  createRule: boolean
   beneficiaryValues: Record<string, string>
   conceptValues: Record<string, "SUELDO" | "QUINCENA" | "BONO" | "ANTICIPO" | "OTRO">
   selected: string[]
@@ -1849,6 +1902,7 @@ function PendingDebitAuditDetailPanel({
   onClose: () => void
   onToggle: (id: string) => void
   onCategoryChange: (categoryId: string) => void
+  onCreateRuleChange: (value: boolean) => void
   onBeneficiaryChange: (movementId: string, beneficiaryId: string) => void
   onConceptChange: (movementId: string, concept: "SUELDO" | "QUINCENA" | "BONO" | "ANTICIPO" | "OTRO") => void
   onApplyBulkDetails: (beneficiaryId: string, concept: "SUELDO" | "QUINCENA" | "BONO" | "ANTICIPO" | "OTRO") => void
@@ -1878,8 +1932,9 @@ function PendingDebitAuditDetailPanel({
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[#D1C7BD] bg-white px-5 py-4">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#72383D]">Detalle lazy del grupo</p>
-            <h3 className="mt-1 text-lg font-semibold">{counterparty}</h3>
-            <p className="mt-1 text-xs text-[#322D29]/65">Sólo movimientos DEBE que siguen pendientes · {data.totalMovements} movimientos.</p>
+             <h3 className="mt-1 text-lg font-semibold">{counterparty}</h3>
+             <p className="mt-1 text-xs font-semibold text-[#322D29]/70">{account ? accountLabel(account) : `${group.bankName} · ${group.maskedAccountNumber}`}</p>
+             <p className="mt-1 text-xs text-[#322D29]/65">Sólo movimientos DEBE que siguen pendientes · {data.totalMovements} movimientos.</p>
           </div>
           <button type="button" onClick={onClose} className="text-xs text-[#322D29]/55">Cerrar detalle</button>
         </div>
@@ -1932,7 +1987,8 @@ function PendingDebitAuditDetailPanel({
                ))}
              </select>
            </label>
-            {category && <p className="mt-2 text-[#322D29]/70">Afecta flujo de caja: <strong>{category.affects_cash_flow ? "Sí" : "No"}</strong> · Afecta P&amp;L directamente: <strong>{category.affects_pnl_directly ? "Sí" : "No"}</strong></p>}
+             {category && <p className="mt-2 text-[#322D29]/70">Afecta flujo de caja: <strong>{category.affects_cash_flow ? "Sí" : "No"}</strong> · Afecta P&amp;L directamente: <strong>{category.affects_pnl_directly ? "Sí" : "No"}</strong></p>}
+             {!isOffBook && <label className="mt-3 flex items-center gap-2"><input type="checkbox" checked={createRule} onChange={(event) => onCreateRuleChange(event.target.checked)} />Crear regla EXACTA AUTO por banco y descripción normalizada</label>}
             {isOffBook && <div className="mt-3 border-t border-[#D1C7BD] pt-3">
               <p className="font-semibold">Aplicar a seleccionados ({selected.length})</p>
               <div className="mt-1 flex flex-wrap gap-2">

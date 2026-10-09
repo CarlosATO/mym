@@ -216,7 +216,7 @@ def test_posted_recognized_period_is_available_without_bank_period(monkeypatch) 
         if table == "financial_categories":
             return [{"id": str(index), "code": code, "affects_pnl_directly": True} for index, code in enumerate(EXPENSE_CATEGORIES)]
         if table == "financial_statement_periods":
-            return []
+            return [{"month": month, "last_transaction_date": f"2026-{month:02d}-28"} for month in range(1, 10)]
         if table == "financial_bank_movements":
             return []
         if table == "financial_expense_entries":
@@ -227,3 +227,24 @@ def test_posted_recognized_period_is_available_without_bank_period(monkeypatch) 
     response = expenses._get_expenses_from_supabase(settings, COMPANY_ID, 2026)
     assert response["months"][9]["status"] == "AVAILABLE"
     assert response["months"][9]["vehicleOperating"] == "45000.00"
+    assert response["dataThrough"] == "2026-09-28"
+
+
+def test_expenses_response_includes_itau_financial_interest_and_bank_fees() -> None:
+    response = build_expenses_response(
+        COMPANY_ID,
+        2026,
+        [{"month": 1, "last_transaction_date": date(2026, 1, 30)}],
+        [
+            {"month": 1, "category_code": "EXPENSE_FINANCIAL_INTEREST", "amount": Decimal("449698")},
+            {"month": 1, "category_code": "EXPENSE_BANK_FEES", "amount": Decimal("101117")},
+        ],
+    )
+
+    january = response["months"][0]
+    assert january["financialInterest"] == "449698.00"
+    assert january["nonOperatingIdentifiedTotal"] == "449698.00"
+    assert january["bankFees"] == "101117.00"
+    assert january["operatingIdentifiedTotal"] == "101117.00"
+    assert response["ytd"]["financialInterest"] == "449698.00"
+    assert response["ytd"]["bankFees"] == "101117.00"

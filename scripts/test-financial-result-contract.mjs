@@ -90,10 +90,20 @@ test('exposes stable drill-down keys without changing statement amounts', () => 
   assert.equal(operatingRow?.children?.[0]?.values[8], null)
 })
 
-test('does not discard common coverage when COGS has an incomplete quality flag', () => {
+test('does not include COGS incomplete months in common coverage', () => {
   const incompleteCogs = {
     ...cogs,
     months: cogs.months.map(month => month.month <= 8 ? { ...month, coverage_status: 'INCOMPLETE' } : month),
   }
-  assert.deepEqual(getCommonCoverage(sales, incompleteCogs, personnel, expenses).months, months.slice(0, 8))
+  assert.deepEqual(getCommonCoverage(sales, incompleteCogs, personnel, expenses).months, [])
+})
+
+test('accepts a complete month made of observed and zero-evidence COGS', () => {
+  const zeroEvidenceCogs = {
+    ...cogs,
+    months: cogs.months.map(month => month.month === 1
+      ? { ...month, gross_cogs: '500', net_cogs: '500', observed_document_count: 0, zero_evidence_document_count: 1, resolved_document_count: 1, missing_document_count: 0, coverage_status: 'COMPLETE' }
+      : month),
+  }
+  assert.deepEqual(getCommonCoverage(sales, zeroEvidenceCogs, personnel, expenses).months, months.slice(0, 8))
 })

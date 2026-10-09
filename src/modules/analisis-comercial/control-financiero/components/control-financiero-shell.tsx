@@ -33,6 +33,11 @@ const viewHeaders = [
     title: 'Libro de Remuneraciones',
     description: 'Preview y carga controlada de remuneraciones en CLP.',
   },
+  {
+    path: `${basePath}/movimientos`,
+    title: 'Movimientos financieros',
+    description: 'Control de movimientos no automatizados.',
+  },
 ]
 
 export function ControlFinancieroShell({ children, activeCompany }: { children: React.ReactNode; activeCompany: Company | null }) {

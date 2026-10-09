@@ -18,7 +18,7 @@ export async function POST(request: Request) {
   const companyId = 'd1000000-0000-0000-0000-000000000001'
 
   try {
-    const result = await runReplenishmentBsaleSync(companyId)
+    const result = await runReplenishmentBsaleSync(companyId, 'SCHEDULED')
     
     // Check if skipped due to lock
     if (result.status === 'SKIPPED_LOCKED') {

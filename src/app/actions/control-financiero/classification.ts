@@ -254,6 +254,8 @@ export async function createFinancialClassificationRule(input: { movementId: str
 export type PendingDebitAuditGroup = {
   groupKey: string
   bankAccountId: string
+  bankName: string
+  maskedAccountNumber: string
   operationDescription: string
   counterparty: string
   movementCount: number
@@ -287,22 +289,51 @@ export async function getPendingDebitAudit(input: {
     page?: number
     pageSize?: number
   }
-  const category = await db()
-    .from('financial_categories')
-    .select('id,name,affects_cash_flow,affects_pnl_directly')
+  const accountIds = [...new Set((result.groups ?? []).map((group) => group.bankAccountId))]
+  const { data: accounts, error: accountsError } = await db()
+    .from('financial_bank_accounts')
+    .select('id,bank_name,account_number')
     .eq('company_id', companyId)
-    .eq('code', 'EXPENSE_PERSONNEL_CASH')
-    .eq('is_active', true)
-    .maybeSingle()
-  if (category.error) throw new Error(category.error.message)
-  if (!category.data) throw new Error('La categoría de pagos a trabajadores no está disponible.')
+    .in('id', accountIds.length ? accountIds : ['00000000-0000-0000-0000-000000000000'])
+  if (accountsError) throw new Error(accountsError.message)
+  const accountMap = new Map<string, any>((accounts ?? []).map((account: any) => [account.id, account]))
+  const groups = (result.groups ?? []).map((group) => {
+    const account = accountMap.get(group.bankAccountId)
+    return {
+      ...group,
+      bankName: account?.bank_name ?? 'Banco desconocido',
+      maskedAccountNumber: account?.account_number ? `•••• ${account.account_number.slice(-4)}` : '—',
+    }
+  })
   return {
-    groups: result.groups ?? [],
+    groups,
     totalGroups: result.totalGroups ?? 0,
     page: result.page ?? input.page ?? 1,
     pageSize: result.pageSize ?? input.pageSize ?? 50,
-    category: category.data as { id: string; name: string; affects_cash_flow: boolean; affects_pnl_directly: boolean },
   }
+}
+
+async function getDebitCategory(companyId: string, categoryId: string) {
+  const { data, error } = await db()
+    .from('financial_categories')
+    .select('id,parent_id,direction,cash_direction,is_active')
+    .eq('company_id', companyId)
+    .eq('id', categoryId)
+    .eq('is_active', true)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data || !data.parent_id || !['EXPENSE', 'BOTH'].includes(data.direction) || !['DEBIT', 'BOTH'].includes(data.cash_direction ?? '')) {
+    throw new Error('La categoría debe ser una hoja activa de gasto con dirección DEBE.')
+  }
+  const { count, error: childError } = await db()
+    .from('financial_categories')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('parent_id', categoryId)
+    .eq('is_active', true)
+  if (childError) throw new Error(childError.message)
+  if ((count ?? 0) > 0) throw new Error('La categoría debe ser una hoja activa.')
+  return data
 }
 
 export async function classifyPendingDebitAudit(input: {
@@ -310,25 +341,92 @@ export async function classifyPendingDebitAudit(input: {
   bankAccountId?: string
   groupKeys: string[]
   categoryId: string
+  createRule?: boolean
 }) {
   const { companyId, user } = await writeContext()
   const groupKeys = [...new Set(input.groupKeys.filter(Boolean))]
-  const { data, error } = await db().rpc('classify_pending_debit_groups', {
-    p_company_id: companyId,
-    p_year: input.year,
-    p_bank_account_id: input.bankAccountId ?? null,
-    p_group_keys: groupKeys,
-    p_category_id: input.categoryId,
-    p_classified_by: user.id,
-  })
-  if (error) return { ok: false as const, message: error.message }
-  revalidatePath('/dashboard/analisis-comercial/control-financiero/flujo-caja')
-  return { ok: true as const, result: data as {
-    requestedCount: number
-    classifiedCount: number
-    omittedCount: number
-    errorCount: number
-  } }
+  if (!groupKeys.length) return { ok: true as const, result: { requestedCount: 0, classifiedCount: 0, omittedCount: 0, errorCount: 0, rulesCreated: 0 } }
+  try {
+    await getDebitCategory(companyId, input.categoryId)
+    const { data: movements, error: movementError } = await db()
+      .from('financial_bank_movements')
+      .select('id,bank_account_id,direction,debit_amount,normalized_description,operation_description,category_id')
+      .eq('company_id', companyId)
+      .gte('transaction_date', `${input.year}-01-01`)
+      .lt('transaction_date', `${input.year + 1}-01-01`)
+      .eq('direction', 'DEBE')
+      .gt('debit_amount', 0)
+      .is('category_id', null)
+      .in('classification_signature', groupKeys)
+    if (movementError) throw new Error(movementError.message)
+    const scopedMovements = (movements ?? []).filter((movement: any) => !input.bankAccountId || movement.bank_account_id === input.bankAccountId)
+    const accountIds = [...new Set(scopedMovements.map((movement: any) => movement.bank_account_id))]
+    const normalizedValues = [...new Set(scopedMovements.map((movement: any) => movement.normalized_description || normalizeBankOperation(movement.operation_description)))]
+    const { data: existingRules, error: rulesError } = await db()
+      .from('financial_bank_classification_rules')
+      .select('id,bank_account_id,match_value,category_id,mode')
+      .eq('company_id', companyId)
+      .eq('active', true)
+      .eq('direction', 'DEBE')
+      .eq('match_type', 'EXACT')
+      .in('bank_account_id', accountIds.length ? accountIds : ['00000000-0000-0000-0000-000000000000'])
+      .in('match_value', normalizedValues.length ? normalizedValues : [''])
+    if (rulesError) throw new Error(rulesError.message)
+    const rulesByScope = new Map<string, any[]>()
+    for (const rule of existingRules ?? []) {
+      const scope = `${rule.bank_account_id}|${rule.match_value}`
+      rulesByScope.set(scope, [...(rulesByScope.get(scope) ?? []), rule])
+    }
+    const ruleIdsByMovement = new Map<string, string | null>()
+    let rulesCreated = 0
+    for (const movement of scopedMovements as any[]) {
+      const matchValue = movement.normalized_description || normalizeBankOperation(movement.operation_description)
+      const scope = `${movement.bank_account_id}|${matchValue}`
+      const existing = rulesByScope.get(scope) ?? []
+      const existingCategories = [...new Set(existing.map((candidate: any) => candidate.category_id))]
+      let rule = existingCategories.length === 1 ? existing[0] : existing.length ? { id: null, category_id: '__CONFLICT__' } : undefined
+      if (!existing.length && input.createRule) {
+        const { data: created, error: createError } = await db().rpc('create_financial_bank_classification_rule', {
+          p_company_id: companyId,
+          p_name: `Auditoría exacta: ${movement.operation_description}`,
+          p_direction: 'DEBE',
+          p_bank_account_id: movement.bank_account_id,
+          p_match_type: 'EXACT',
+          p_match_value: matchValue,
+          p_category_id: input.categoryId,
+          p_counterparty: null,
+          p_mode: 'AUTO',
+          p_created_by: user.id,
+          p_apply_movement_ids: [],
+        })
+        if (createError) throw new Error(createError.message)
+        rule = { id: (created as any)?.rule_id ?? (created as any)?.id, category_id: input.categoryId, mode: 'AUTO' }
+        rulesByScope.set(scope, [rule])
+        rulesCreated += 1
+      }
+      ruleIdsByMovement.set(movement.id, rule?.category_id === input.categoryId ? rule.id : null)
+    }
+    let classifiedCount = 0
+    for (const [ruleId, ids] of new Map<string | null, string[]>(
+      scopedMovements.reduce((groups: Map<string | null, string[]>, movement: any) => {
+        const ruleId = ruleIdsByMovement.get(movement.id) ?? null
+        groups.set(ruleId, [...(groups.get(ruleId) ?? []), movement.id])
+        return groups
+      }, new Map()),
+    )) {
+      const { data, error } = await db().rpc('classify_financial_bank_movements', {
+        p_company_id: companyId, p_movement_ids: ids, p_category_id: input.categoryId,
+        p_counterparty: null, p_note: null, p_source: 'BULK_EXACT', p_rule_id: ruleId,
+        p_only_pending: true, p_classified_by: user.id,
+      })
+      if (error) throw new Error(error.message)
+      classifiedCount += Number((data as any)?.updated_count ?? 0)
+    }
+    revalidatePath('/dashboard/analisis-comercial/control-financiero/flujo-caja')
+    return { ok: true as const, result: { requestedCount: scopedMovements.length, classifiedCount, omittedCount: scopedMovements.length - classifiedCount, errorCount: 0, rulesCreated } }
+  } catch (error) {
+    return { ok: false as const, message: error instanceof Error ? error.message : 'No se pudo completar la clasificación.' }
+  }
 }
 
 export type PendingDebitAuditMovement = {
@@ -381,25 +479,75 @@ export async function classifyPendingDebitMovements(input: {
   bankAccountId?: string
   movementIds: string[]
   categoryId: string
+  createRule?: boolean
 }) {
   const { companyId, user } = await writeContext()
   const movementIds = [...new Set(input.movementIds.filter(Boolean))]
-  const { data, error } = await db().rpc('classify_pending_debit_movements', {
-    p_company_id: companyId,
-    p_year: input.year,
-    p_bank_account_id: input.bankAccountId ?? null,
-    p_movement_ids: movementIds,
-    p_category_id: input.categoryId,
-    p_classified_by: user.id,
-  })
-  if (error) return { ok: false as const, message: error.message }
-  revalidatePath('/dashboard/analisis-comercial/control-financiero/flujo-caja')
-  return { ok: true as const, result: data as {
-    requestedCount: number
-    classifiedCount: number
-    omittedCount: number
-    errorCount: number
-  } }
+  try {
+    await getDebitCategory(companyId, input.categoryId)
+    const { data: movements, error: movementError } = await db()
+      .from('financial_bank_movements')
+      .select('id,bank_account_id,normalized_description,operation_description')
+      .eq('company_id', companyId)
+      .gte('transaction_date', `${input.year}-01-01`)
+      .lt('transaction_date', `${input.year + 1}-01-01`)
+      .eq('direction', 'DEBE')
+      .gt('debit_amount', 0)
+      .is('category_id', null)
+      .in('id', movementIds.length ? movementIds : ['00000000-0000-0000-0000-000000000000'])
+    if (movementError) throw new Error(movementError.message)
+    const scopedMovements = (movements ?? []).filter((movement: any) => !input.bankAccountId || movement.bank_account_id === input.bankAccountId) as any[]
+    const ruleIds = new Map<string, string | null>()
+    let rulesCreated = 0
+    if (input.createRule) {
+      for (const movement of scopedMovements) {
+        const matchValue = movement.normalized_description || normalizeBankOperation(movement.operation_description)
+        const { data: existing, error: existingError } = await db()
+          .from('financial_bank_classification_rules')
+          .select('id,category_id')
+          .eq('company_id', companyId)
+          .eq('active', true)
+          .eq('bank_account_id', movement.bank_account_id)
+          .eq('direction', 'DEBE')
+          .eq('match_type', 'EXACT')
+          .eq('match_value', matchValue)
+        if (existingError) throw new Error(existingError.message)
+        const matchingCategories = [...new Set((existing ?? []).map((rule: any) => rule.category_id))]
+        let rule = matchingCategories.length === 1 ? existing?.[0] : null
+        if (!(existing ?? []).length) {
+          const { data: created, error: createError } = await db().rpc('create_financial_bank_classification_rule', {
+            p_company_id: companyId, p_name: `Auditoría exacta: ${movement.operation_description}`,
+            p_direction: 'DEBE', p_bank_account_id: movement.bank_account_id, p_match_type: 'EXACT',
+            p_match_value: matchValue, p_category_id: input.categoryId, p_counterparty: null,
+            p_mode: 'AUTO', p_created_by: user.id, p_apply_movement_ids: [],
+          })
+          if (createError) throw new Error(createError.message)
+          rule = { id: (created as any)?.rule_id ?? (created as any)?.id, category_id: input.categoryId }
+          rulesCreated += 1
+        }
+        ruleIds.set(movement.id, rule?.category_id === input.categoryId ? rule.id : null)
+      }
+    }
+    const groups = new Map<string | null, string[]>()
+    for (const movement of scopedMovements) {
+      const ruleId = ruleIds.get(movement.id) ?? null
+      groups.set(ruleId, [...(groups.get(ruleId) ?? []), movement.id])
+    }
+    let classifiedCount = 0
+    for (const [ruleId, ids] of groups) {
+      const { data, error } = await db().rpc('classify_financial_bank_movements', {
+        p_company_id: companyId, p_movement_ids: ids, p_category_id: input.categoryId,
+        p_counterparty: null, p_note: null, p_source: input.createRule ? 'BULK_EXACT' : 'MANUAL', p_rule_id: ruleId,
+        p_only_pending: true, p_classified_by: user.id,
+      })
+      if (error) throw new Error(error.message)
+      classifiedCount += Number((data as any)?.updated_count ?? 0)
+    }
+    revalidatePath('/dashboard/analisis-comercial/control-financiero/flujo-caja')
+    return { ok: true as const, result: { requestedCount: scopedMovements.length, classifiedCount, omittedCount: scopedMovements.length - classifiedCount, errorCount: 0, rulesCreated } }
+  } catch (error) {
+    return { ok: false as const, message: error instanceof Error ? error.message : 'No se pudo completar la clasificación.' }
+  }
 }
 
 export type OffBookPersonnelDetail = { movementId: string; beneficiaryId: string; paymentConcept: 'SUELDO' | 'QUINCENA' | 'BONO' | 'ANTICIPO' | 'OTRO' }

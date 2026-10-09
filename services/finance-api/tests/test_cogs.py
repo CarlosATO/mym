@@ -55,6 +55,44 @@ def test_cogs_marks_month_and_ytd_incomplete_without_zeroing_missing_cost() -> N
     assert response["months"][0]["gross_cogs"] == "100.00"
 
 
+def test_cogs_with_only_missing_documents_has_no_zero_cost() -> None:
+    response = _response([
+        {
+            "month": 10,
+            "gross_cogs": None,
+            "credit_note_reversal": Decimal("0.00"),
+            "observed_document_count": 0,
+            "missing_document_count": 158,
+            "data_through": date(2026, 10, 31),
+        },
+    ], date(2026, 10, 31))
+
+    assert response["months"][9]["gross_cogs"] is None
+    assert response["months"][9]["net_cogs"] is None
+    assert response["months"][9]["coverage_status"] == "INCOMPLETE"
+
+
+def test_zero_with_evidence_is_resolved_and_contributes_zero_cogs() -> None:
+    response = _response([
+        {
+            "month": 1,
+            "gross_cogs": Decimal("0.00"),
+            "credit_note_reversal": Decimal("0.00"),
+            "observed_document_count": 0,
+            "zero_evidence_document_count": 3,
+            "resolved_document_count": 3,
+            "missing_document_count": 0,
+            "data_through": date(2026, 1, 31),
+        },
+    ], date(2026, 1, 31))
+
+    assert response["months"][0]["gross_cogs"] == "0.00"
+    assert response["months"][0]["net_cogs"] == "0.00"
+    assert response["months"][0]["coverage_status"] == "COMPLETE"
+    assert response["months"][0]["zero_evidence_document_count"] == 3
+    assert response["months"][0]["resolved_document_count"] == 3
+
+
 def test_cogs_keeps_future_months_unavailable() -> None:
     response = _response([
         {

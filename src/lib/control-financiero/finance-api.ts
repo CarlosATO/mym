@@ -63,6 +63,8 @@ export type FinanceCogsMonthly = {
   credit_note_reversal: string | null
   net_cogs: string | null
   observed_document_count: number | null
+  zero_evidence_document_count: number | null
+  resolved_document_count: number | null
   missing_document_count: number | null
   coverage_status: 'COMPLETE' | 'INCOMPLETE' | null
 }
@@ -72,6 +74,8 @@ export type FinanceCogsYtd = {
   credit_note_reversal: string | null
   net_cogs: string | null
   observed_document_count: number | null
+  zero_evidence_document_count: number | null
+  resolved_document_count: number | null
   missing_document_count: number | null
   coverage_status: 'COMPLETE' | 'INCOMPLETE' | null
 }
