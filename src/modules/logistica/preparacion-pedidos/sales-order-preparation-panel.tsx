@@ -9,7 +9,7 @@ import {
   SalesOrderPreparationCardInfo,
   SalesOrderPreparationItem,
 } from '@/app/actions/logistica/sales-order-preparation'
-import { getBsaleSalesSyncHealth, type BsaleSalesSyncHealth } from '@/app/actions/integraciones/sync'
+import { getWarehousePreparationSyncHealth, type WarehousePreparationSyncHealth } from '@/app/actions/integraciones/sync'
 import { SalesOrderCard } from './sales-order-card'
 import { SalesOrderDrawer } from './sales-order-drawer'
 import { DndContext, DragEndEvent, DragStartEvent, DragOverlay, useDroppable, useSensor, useSensors, PointerSensor } from '@dnd-kit/core'
@@ -94,7 +94,7 @@ export function SalesOrderPreparationPanel() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   
-  const [syncHealth, setSyncHealth] = useState<BsaleSalesSyncHealth | null>(null)
+  const [syncHealth, setSyncHealth] = useState<WarehousePreparationSyncHealth | null>(null)
 
   // Drawer state
   const [selectedCard, setSelectedCard] = useState<SalesOrderPreparationCardInfo | null>(null)
@@ -122,9 +122,15 @@ export function SalesOrderPreparationPanel() {
       if (!res.ok) {
         toast.error(res.error || 'Error al actualizar Notas de Venta')
       } else {
-        const { new_cards = 0, refresh = 0, skipped_invoiced = 0, detail_errors = 0 } = res.data || {}
+        const {
+          discovery = 0,
+          new_cards = 0,
+          refresh = 0,
+          closed_invoiced = 0,
+          detail_errors = 0,
+        } = res.data || {}
         const suffix = detail_errors > 0 ? ` · ${detail_errors} con error de detalles` : ''
-        toast.success(`Notas de Venta actualizadas · ${new_cards} nuevas · ${refresh} revisadas · ${skipped_invoiced} omitidas por factura${suffix}`)
+        toast.success(`Notas de Venta actualizadas · ${discovery} descubiertas · ${new_cards} nuevas · ${refresh} revisadas · ${closed_invoiced} cerradas${suffix}`)
         await loadBoard()
       }
     } catch (err: unknown) {
@@ -161,13 +167,29 @@ export function SalesOrderPreparationPanel() {
     }
     setLoading(false)
     
-    const [syncResult] = await Promise.all([getBsaleSalesSyncHealth()])
+    const [syncResult] = await Promise.all([getWarehousePreparationSyncHealth()])
     setSyncHealth(syncResult)
   }
 
   useEffect(() => {
     loadBoard()
   }, [])
+
+  useEffect(() => {
+    if (!companyId) return
+    let cancelled = false
+    const refreshBoard = async () => {
+      const res = await getSalesOrderPreparationBoard(companyId)
+      if (cancelled || res.error) return
+      setCards(res.data || [])
+      setSelectedCard(prev => prev ? (res.data?.find(c => c.card_id === prev.card_id) || prev) : prev)
+    }
+    const interval = window.setInterval(() => { void refreshBoard() }, 45_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [companyId])
 
   const openCardDetails = async (card: SalesOrderPreparationCardInfo) => {
     if (!companyId) return

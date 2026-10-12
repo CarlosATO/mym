@@ -19,8 +19,6 @@ import type {
 import { createClient as createServerSessionClient } from '@/lib/supabase/server'
 import crypto from 'crypto'
 
-const WAREHOUSE_OPERATIONAL_SYNC_TRIGGER = 'WAREHOUSE_OPERATIONAL'
-
 /** Resuelve baseUrl + headers HTTP para BSale según companyId. */
 function bsaleConfig(companyId: string) {
   const { baseUrl, accessToken } = getBsaleConfigForCompany(companyId)
@@ -2556,22 +2554,6 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       }
     }
 
-    // The generic replenishment run discovers recent sales, but it must also
-    // refresh every open warehouse card so historical NVs cannot go stale.
-    let preparationRefresh: Awaited<ReturnType<typeof syncBsaleSalesOrdersForPreparation>> | null = null;
-    if (finalStatus !== 'FAILED') {
-      try {
-        preparationRefresh = await syncBsaleSalesOrdersForPreparation(companyId);
-        if (!preparationRefresh.success) {
-          finalStatus = 'PARTIAL';
-          errorMessage += (errorMessage ? ' | ' : '') + (preparationRefresh.error || 'Preparation refresh failed');
-        }
-      } catch (preparationRefreshErr: unknown) {
-        finalStatus = 'PARTIAL';
-        errorMessage += (errorMessage ? ' | ' : '') + 'Preparation refresh: ' + (preparationRefreshErr instanceof Error ? preparationRefreshErr.message : String(preparationRefreshErr));
-      }
-    }
-
     // 4. Sync payments after documents because payment allocations reference document IDs.
     let paymentTypesResult = { count: 0, errors: 0 };
     let paymentsResult = { payments: 0, documentPayments: 0, days: 0, errors: 0 };
@@ -2693,7 +2675,6 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       payments: paymentsResult,
       payment_types: paymentTypesResult,
       preparation: preparationResult,
-      preparation_refresh: preparationRefresh,
       orphans: orphanResult,
       worker_account_boletas: workerAccountReconciliation,
       stocks: stockCount,
@@ -2758,8 +2739,24 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
   }
 }
 
-export async function syncBsaleSalesOrdersForPreparation(companyId: string): Promise<{
+type WarehousePreparationSyncOptions = {
+  trigger: 'WAREHOUSE_INCREMENTAL' | 'WAREHOUSE_OPERATIONAL'
+  discoverRecent: boolean
+  refreshActiveBoard: boolean
+}
+
+const DEFAULT_WAREHOUSE_PREPARATION_SYNC_OPTIONS: WarehousePreparationSyncOptions = {
+  trigger: 'WAREHOUSE_OPERATIONAL',
+  discoverRecent: true,
+  refreshActiveBoard: true,
+}
+
+export async function syncBsaleSalesOrdersForPreparation(
+  companyId: string,
+  options: WarehousePreparationSyncOptions = DEFAULT_WAREHOUSE_PREPARATION_SYNC_OPTIONS,
+): Promise<{
   success: boolean
+  status?: string
   counts?: {
     discovery: number
     refresh: number
@@ -2781,7 +2778,7 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
 }> {
   const startTime = Date.now()
   if (!companyId) return { success: false, error: 'company_id es requerido' }
-  const runTrigger = WAREHOUSE_OPERATIONAL_SYNC_TRIGGER
+  const runTrigger = options.trigger
   const lockName = 'bsale_operational_prep_sync'
   let run: SyncRun | null = null
 
@@ -2792,34 +2789,40 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
     const acquired = await acquireSyncLock(companyId, lockName, runId, 10)
     if (!acquired) {
       await finishSyncRun(runId, 'FAILED', {}, 'SKIPPED_LOCKED: Sync already running')
-      return { success: false, error: 'Ya existe una actualización de Notas de Venta en curso.' }
+      return {
+        success: false,
+        status: 'SKIPPED_LOCKED',
+        error: 'Ya existe una sincronización de Notas de Venta en curso.',
+      }
     }
 
     const db = integrDb()
     const admin = integrDb()
 
-    // 1. Descubrimiento incremental. Only a completed operational run is a
-    // valid checkpoint; failed or partial runs are intentionally ignored.
-    const { data: checkpoint } = await db.from('bsale_sync_runs')
-      .select('completed_at')
-      .eq('company_id', companyId)
-      .eq('trigger', WAREHOUSE_OPERATIONAL_SYNC_TRIGGER)
-      .eq('status', 'COMPLETED')
-      .not('completed_at', 'is', null)
-      .order('completed_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    const { data: localLatest } = await db.from('bsale_documents')
-      .select('generation_date')
-      .eq('company_id', companyId)
-      .eq('document_type_id', 23)
-      .not('generation_date', 'is', null)
-      .order('generation_date', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
     const dateTo = new Date()
+    const { data: checkpoint } = options.discoverRecent
+      ? await db.from('bsale_sync_runs')
+        .select('completed_at')
+        .eq('company_id', companyId)
+        .eq('trigger', 'WAREHOUSE_INCREMENTAL')
+        .eq('status', 'COMPLETED')
+        .not('completed_at', 'is', null)
+        .order('completed_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      : { data: null }
+
+    const { data: localLatest } = options.discoverRecent
+      ? await db.from('bsale_documents')
+        .select('generation_date')
+        .eq('company_id', companyId)
+        .eq('document_type_id', 23)
+        .not('generation_date', 'is', null)
+        .order('generation_date', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      : { data: null }
+
     const checkpointDate = checkpoint?.completed_at
       ? new Date(checkpoint.completed_at)
       : localLatest?.generation_date
@@ -2841,32 +2844,38 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
     const { baseUrl: prepBase, headers: prepHeaders } = bsaleConfig(companyId)
     let bsaleGetRequests = 0
 
-    while (true) {
-      const url = `${prepBase}/documents.json?documenttypeid=23&limit=50&offset=${offset}&generationdaterange=${rangeEncoded}&expand=details`
-      bsaleGetRequests++
-      const response = await fetch(url, { headers: prepHeaders, signal: AbortSignal.timeout(30000) })
-      if (!response.ok) throw new Error(`Bsale discovery error ${response.status}`)
-      const data = await response.json() as { items?: unknown[] }
-      if (!Array.isArray(data.items)) throw new Error('Bsale discovery response missing items')
-      const items = data.items.filter(isBsalePreparationDocument)
-      items.forEach((doc) => {
-        const documentTypeId = Number(doc.documentTypeId ?? doc.document_type?.id)
-        if (documentTypeId === 23 && Number(doc.state) === 0) bsaleDocsMap.set(doc.id, doc)
-      })
-      if (items.length < 50) break
-      offset += 50
+    if (options.discoverRecent) {
+      while (true) {
+        const url = `${prepBase}/documents.json?documenttypeid=23&limit=50&offset=${offset}&generationdaterange=${rangeEncoded}&expand=details`
+        bsaleGetRequests++
+        const response = await fetch(url, { headers: prepHeaders, signal: AbortSignal.timeout(30000) })
+        if (!response.ok) throw new Error(`Bsale discovery error ${response.status}`)
+        const data = await response.json() as { items?: unknown[] }
+        if (!Array.isArray(data.items)) throw new Error('Bsale discovery response missing items')
+        const items = data.items.filter(isBsalePreparationDocument)
+        items.forEach((doc) => {
+          const documentTypeId = Number(doc.documentTypeId ?? doc.document_type?.id)
+          if (documentTypeId === 23 && Number(doc.state) === 0) bsaleDocsMap.set(doc.id, doc)
+        })
+        if (items.length < 50) break
+        offset += 50
+      }
     }
     const discoveryCount = bsaleDocsMap.size
 
     // 2. Refresco: NV activas en Preparación (no finalizadas)
     // The board view is the operational contract. The base table contains
     // legacy/invoiced rows that must never be refreshed every 30 minutes.
-    const { data: activeCards } = await admin.schema('logistica').from('vw_sales_order_preparation_board')
-      .select('nv_bsale_id')
-      .eq('company_id', companyId)
-      .in('status', ['PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT'])
+    const { data: activeCards } = options.refreshActiveBoard
+      ? await admin.schema('logistica').from('vw_sales_order_preparation_board')
+        .select('nv_bsale_id')
+        .eq('company_id', companyId)
+        .in('status', ['PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT'])
+      : { data: [] }
 
-    const activeNvIds = [...new Set((activeCards || []).map((c: BsalePreparationBoardRow) => Number(c.nv_bsale_id)).filter(Number.isFinite))]
+    const activeNvIds = options.refreshActiveBoard
+      ? [...new Set((activeCards || []).map((c: BsalePreparationBoardRow) => Number(c.nv_bsale_id)).filter(Number.isFinite))]
+      : []
     let refreshErrors = 0
     const refreshedDocuments = await mapWithConcurrency(
       activeNvIds,
@@ -2897,23 +2906,24 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
     // Invoice details are sufficient for the canonical NV -> Factura resolver;
     // references are maintained by the generic commercial sync, not Bodega.
     const referenceErrors = 0
-    let invoiceOffset = 0
-    while (true) {
-      const url = `${prepBase}/documents.json?documenttypeid=5&limit=50&offset=${invoiceOffset}&generationdaterange=${rangeEncoded}&expand=details`
-      bsaleGetRequests++
-      const response = await fetch(url, { headers: prepHeaders, signal: AbortSignal.timeout(30000) })
-      if (!response.ok) throw new Error(`Bsale invoice discovery error ${response.status}`)
-      const data = await response.json() as { items?: unknown[] }
-      if (!Array.isArray(data.items)) throw new Error('Bsale invoice discovery response missing items')
+    if (options.discoverRecent) {
+      let invoiceOffset = 0
+      while (true) {
+        const url = `${prepBase}/documents.json?documenttypeid=5&limit=50&offset=${invoiceOffset}&generationdaterange=${rangeEncoded}&expand=details`
+        bsaleGetRequests++
+        const response = await fetch(url, { headers: prepHeaders, signal: AbortSignal.timeout(30000) })
+        if (!response.ok) throw new Error(`Bsale invoice discovery error ${response.status}`)
+        const data = await response.json() as { items?: unknown[] }
+        if (!Array.isArray(data.items)) throw new Error('Bsale invoice discovery response missing items')
 
-      for (const invoice of data.items.filter(isBsalePreparationDocument)) {
-        if (Number(invoice.documentTypeId ?? invoice.document_type?.id) === 5) {
-          invoiceDocsMap.set(invoice.id, invoice)
+        for (const invoice of data.items.filter(isBsalePreparationDocument)) {
+          if (Number(invoice.documentTypeId ?? invoice.document_type?.id) === 5) {
+            invoiceDocsMap.set(invoice.id, invoice)
+          }
         }
+        if (data.items.length < 50) break
+        invoiceOffset += 50
       }
-
-      if (data.items.length < 50) break
-      invoiceOffset += 50
     }
 
     // Invoice details are part of the canonical NV -> Factura resolver because
@@ -3076,6 +3086,54 @@ export async function syncBsaleSalesOrdersForPreparation(companyId: string): Pro
       await releaseSyncLock(companyId, lockName, run.id).catch(() => {})
     }
     return { success: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+export async function runIncrementalWarehouseBsaleRefresh(companyId: string) {
+  return syncBsaleSalesOrdersForPreparation(companyId, {
+    trigger: 'WAREHOUSE_INCREMENTAL',
+    discoverRecent: true,
+    refreshActiveBoard: false,
+  })
+}
+
+export async function runOperationalWarehouseBsaleRefresh(companyId: string) {
+  return syncBsaleSalesOrdersForPreparation(companyId, {
+    trigger: 'WAREHOUSE_OPERATIONAL',
+    discoverRecent: false,
+    refreshActiveBoard: true,
+  })
+}
+
+export async function runManualWarehouseBsaleRefresh(companyId: string) {
+  const incremental = await runIncrementalWarehouseBsaleRefresh(companyId)
+  if (!incremental.success || !incremental.counts) return incremental
+
+  const operational = await runOperationalWarehouseBsaleRefresh(companyId)
+  if (!operational.counts) return operational
+
+  const incrementalCounts = incremental.counts
+  const operationalCounts = operational.counts
+  return {
+    ...operational,
+    counts: {
+      ...operationalCounts,
+      discovery: incrementalCounts.discovery,
+      refresh: operationalCounts.refresh,
+      get_requests: incrementalCounts.get_requests + operationalCounts.get_requests,
+      documents: incrementalCounts.documents + operationalCounts.documents,
+      details: incrementalCounts.details + operationalCounts.details,
+      detail_errors: incrementalCounts.detail_errors + operationalCounts.detail_errors,
+      reference_errors: incrementalCounts.reference_errors + operationalCounts.reference_errors,
+      missing_details: incrementalCounts.missing_details + operationalCounts.missing_details,
+      new_cards: incrementalCounts.new_cards + operationalCounts.new_cards,
+      skipped_invoiced: incrementalCounts.skipped_invoiced + operationalCounts.skipped_invoiced,
+      relations_created: incrementalCounts.relations_created + operationalCounts.relations_created,
+      closed_invoiced: incrementalCounts.closed_invoiced + operationalCounts.closed_invoiced,
+      closed_cancelled: incrementalCounts.closed_cancelled + operationalCounts.closed_cancelled,
+      errors: incrementalCounts.errors + operationalCounts.errors,
+      duration_ms: incrementalCounts.duration_ms + operationalCounts.duration_ms,
+    },
   }
 }
 

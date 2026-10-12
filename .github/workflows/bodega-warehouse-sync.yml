@@ -1,0 +1,55 @@
+name: Bodega Warehouse Sync
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+    - cron: '0,30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bodega-warehouse-sync
+  cancel-in-progress: false
+
+jobs:
+  incremental:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/5 * * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Trigger Bodega incremental sync
+        env:
+          SYNC_URL: ${{ secrets.PRODUCTION_SYNC_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SYNC_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "Missing PRODUCTION_SYNC_URL or CRON_SECRET"
+            exit 1
+          fi
+          curl --fail-with-body --silent --show-error --max-time 420 \
+            -X POST "${SYNC_URL%/api/cron/sync-replenishment}/api/cron/warehouse-incremental" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H 'Content-Type: application/json'
+
+  operational:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0,30 * * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Trigger Bodega operational refresh
+        env:
+          SYNC_URL: ${{ secrets.PRODUCTION_SYNC_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SYNC_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "Missing PRODUCTION_SYNC_URL or CRON_SECRET"
+            exit 1
+          fi
+          curl --fail-with-body --silent --show-error --max-time 660 \
+            -X POST "${SYNC_URL%/api/cron/sync-replenishment}/api/cron/warehouse-operational" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H 'Content-Type: application/json'

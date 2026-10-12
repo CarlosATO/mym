@@ -16,6 +16,7 @@
     "test:cobranza-2b": "node --test scripts/test-cobranza-2b-contract.mjs",
     "test:logistica-preparacion-kanban": "node --test scripts/test-logistica-preparacion-kanban-contract.mjs",
     "test:bodega-v2-operational-freshness": "node --test scripts/test-bodega-v2-operational-freshness.mjs",
+    "test:bodega-warehouse-sync": "node --test scripts/test-bodega-warehouse-sync.mjs",
     "audit:bsale-warehouse-full": "node scripts/audit-bsale-warehouse-full.mjs",
     "audit:bsale-expand": "node scripts/audit-bsale-expand.mjs",
     "test:control-financiero-family-groups": "node --experimental-strip-types --test scripts/test-control-financiero-family-groups.mjs",

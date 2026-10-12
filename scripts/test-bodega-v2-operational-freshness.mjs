@@ -12,14 +12,15 @@ const migration = await readFile(new URL('supabase/migrations/20261007182000_bod
 test('el refresco operacional incluye todas las cards abiertas, no sólo NV recientes', () => {
   assert.match(sync, /from\('vw_sales_order_preparation_board'\)/)
   assert.match(sync, /\.in\('status', \['PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT'\]\)/)
-  assert.match(sync, /const activeNvIds = \[\.\.\.new Set\(/)
+  assert.match(sync, /const activeNvIds = options\.refreshActiveBoard/)
   assert.doesNotMatch(sync, /activeNvIds[\s\S]*?\.filter\(id => !bsaleDocsMap\.has\(id\)\)/)
   assert.match(sync, /mapWithConcurrency\(\s*activeNvIds/)
 })
 
 test('discovery y refresh quedan separados y el refresh tiene concurrencia limitada', () => {
   assert.match(sync, /generationdaterange=\$\{rangeEncoded\}/)
-  assert.match(sync, /export const PREPARATION_REFRESH_CONCURRENCY = 6/)
+  assert.match(sync, /const PREPARATION_REFRESH_CONCURRENCY = 6/)
+  assert.doesNotMatch(sync, /export const PREPARATION_REFRESH_CONCURRENCY/)
   assert.match(sync, /fetch\(url, \{ headers: prepHeaders, signal: AbortSignal\.timeout\(15000\) \}\)/)
   assert.match(sync, /fetchPreparationDocumentDetails\(prepBase, prepHeaders, doc\.id/)
 })
@@ -31,7 +32,7 @@ test('la reconciliación se ejecuta después de documentos y detalles', () => {
 })
 
 test('el botón usa el flujo operacional y conserva el refetch único explícito', () => {
-  assert.match(action, /syncBsaleSalesOrdersForPreparation\(companyId\)/)
+  assert.match(action, /runManualWarehouseBsaleRefresh/)
   assert.match(panel, /const res = await syncOperationalBsaleSalesOrders\(\)/)
   assert.match(panel, /await loadBoard\(\)/)
 })

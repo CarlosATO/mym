@@ -617,10 +617,11 @@ type OperationalBsaleSyncCounts = {
   reference_errors: number
   missing_details: number
   new_cards: number
+  closed_invoiced: number
   skipped_invoiced: number
 }
 
-export async function syncOperationalBsaleSalesOrders(): Promise<{ ok: boolean, data?: OperationalBsaleSyncCounts, error?: string }> {
+export async function syncOperationalBsaleSalesOrders(): Promise<{ ok: boolean, data?: OperationalBsaleSyncCounts, error?: string, status?: string }> {
   try {
     const supabase = await createClient()
     const { data: { user }, error: authError } = await supabase.auth.getUser()
@@ -639,11 +640,17 @@ export async function syncOperationalBsaleSalesOrders(): Promise<{ ok: boolean, 
 
     const companyId = await getActiveCompanyId()
     if (!companyId) return { ok: false, error: 'No se pudo determinar la empresa activa' }
-    const { syncBsaleSalesOrdersForPreparation } = await import('@/app/actions/integraciones/bsale-sync')
+    const { runManualWarehouseBsaleRefresh } = await import('@/app/actions/integraciones/bsale-sync')
 
-    const result = await syncBsaleSalesOrdersForPreparation(companyId)
+    const result = await runManualWarehouseBsaleRefresh(companyId)
     if (!result.success) {
-      return { ok: false, error: result.error }
+      return {
+        ok: false,
+        status: result.status,
+        error: result.status === 'SKIPPED_LOCKED'
+          ? 'Ya existe una sincronización en curso.'
+          : result.error,
+      }
     }
     return { ok: true, data: result.counts }
   } catch (err: unknown) {
