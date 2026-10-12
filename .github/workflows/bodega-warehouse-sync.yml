@@ -5,6 +5,16 @@ on:
     - cron: '*/5 * * * *'
     - cron: '0,30 * * * *'
   workflow_dispatch:
+    inputs:
+      sync_type:
+        description: 'Bodega sync to run manually'
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - incremental
+          - operational
 
 permissions:
   contents: read
@@ -15,7 +25,7 @@ concurrency:
 
 jobs:
   incremental:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/5 * * * *'
+    if: (github.event_name == 'workflow_dispatch' && (inputs.sync_type == 'all' || inputs.sync_type == 'incremental')) || (github.event_name == 'schedule' && github.event.schedule == '*/5 * * * *')
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
@@ -35,7 +45,7 @@ jobs:
             -H 'Content-Type: application/json'
 
   operational:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0,30 * * * *'
+    if: (github.event_name == 'workflow_dispatch' && (inputs.sync_type == 'all' || inputs.sync_type == 'operational')) || (github.event_name == 'schedule' && github.event.schedule == '0,30 * * * *')
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
