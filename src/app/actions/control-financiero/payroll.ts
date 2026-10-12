@@ -12,6 +12,7 @@ import { validatePayrollImportMetadata, type PayrollImportMetadata } from '@/lib
 type Db = any
 const db = () => createAdminClient().schema('comercial') as Db
 const PAYROLL_PATH = '/dashboard/analisis-comercial/control-financiero/libro-remuneraciones'
+const CASH_FLOW_PATH = '/dashboard/analisis-comercial/control-financiero/flujo-caja'
 
 export type PayrollImportHistoryItem = {
   id: string
@@ -201,6 +202,11 @@ export async function confirmPayrollImportAction(formData: FormData) {
     if (missingField) return { ok: false as const, message: `El resumen de remuneraciones está incompleto: falta ${missingField}.` }
     const { data, error } = await db().rpc('import_financial_payroll_atomic', { p_company_id: companyId, p_imported_by: user.id, p_metadata: metadata, p_entries: preview.parsedFile.rows.map(snapshotRow) })
     if (error) return { ok: false as const, message: importErrorMessage(error.message) }
+    await db().rpc('reconcile_financial_payroll_payment_batches', {
+      p_company_id: companyId,
+      p_period_year: metadata.period_year,
+      p_period_month: metadata.period_month,
+    })
     revalidatePath(PAYROLL_PATH)
     return { ok: true as const, importId: (data as { import_id: string }).import_id }
   } catch (error) {
@@ -215,4 +221,174 @@ export async function getPayrollImportHistory(year?: number): Promise<PayrollImp
   const { data, error } = await query
   if (error) throw new Error(error.message)
   return (data ?? []) as PayrollImportHistoryItem[]
+}
+
+export type PayrollPaymentAllocationInput = {
+  allocationType: 'FORMAL' | 'OFF_BOOK'
+  payrollEntryId?: string
+  workerRut: string
+  workerNameSnapshot?: string
+  amount: number
+  note?: string
+}
+
+export type PayrollPaymentDraft = {
+  batch: {
+    id: string
+    bank_movement_id: string
+    period_year: number
+    period_month: number
+    bank_amount: number
+    status: 'DRAFT' | 'COMPLETE'
+    formal_expected_amount: number | null
+    formal_payroll_amount: number | null
+    formal_reconciliation_status: 'PENDING_PAYROLL' | 'MATCHED' | 'AMOUNT_DIFFERENCE' | null
+    formal_difference: number | null
+  }
+  allocations: Array<PayrollPaymentAllocationInput & {
+    id: string
+    reconciliation_status: string
+  }>
+}
+
+async function assertPayrollPermission() {
+  const { data, error } = await (await createClient()).rpc('has_permission', {
+    p_permission_code: 'analisis_comercial.control_financiero.classify',
+  })
+  if (error || data !== true) throw new Error('No tienes permiso para conciliar nómina.')
+}
+
+export async function getFinancialPayrollPaymentDraftAction(bankMovementId: string) {
+  try {
+    const { companyId } = await authenticatedContext()
+    const { data, error } = await db().rpc('get_financial_payroll_payment_draft', {
+      p_company_id: companyId,
+      p_bank_movement_id: bankMovementId,
+    })
+    if (error) return { ok: false as const, message: error.message }
+    const result = data as {
+      batch?: PayrollPaymentDraft['batch']
+      allocations?: Array<PayrollPaymentDraft['allocations'][number] & {
+        allocation_type?: PayrollPaymentAllocationInput['allocationType']
+        worker_rut?: string | null
+        worker_name_snapshot?: string | null
+      }>
+    }
+    const allocations = (result.allocations ?? []).map((allocation) => ({
+      id: allocation.id,
+      allocationType: allocation.allocationType ?? allocation.allocation_type ?? 'OFF_BOOK',
+      workerRut: allocation.workerRut ?? allocation.worker_rut ?? null,
+      workerNameSnapshot: allocation.workerNameSnapshot ?? allocation.worker_name_snapshot ?? null,
+      amount: allocation.amount,
+      reconciliation_status: allocation.reconciliation_status,
+      note: allocation.note,
+    }))
+    return { ok: true as const, draft: result.batch ? { batch: result.batch, allocations } : null }
+  } catch (error) {
+    return { ok: false as const, message: error instanceof Error ? error.message : 'No se pudo cargar el borrador.' }
+  }
+}
+
+export async function saveFinancialPayrollPaymentDraftAction(input: {
+  bankMovementId: string
+  periodYear: number
+  periodMonth: number
+  allocations: PayrollPaymentAllocationInput[]
+  note?: string
+}) {
+  try {
+    const { user, companyId } = await authenticatedContext()
+    await assertPayrollPermission()
+    const allocations = input.allocations.map(item => ({
+      allocation_type: item.allocationType,
+      worker_rut: item.workerRut?.trim().toUpperCase() || null,
+      worker_name_snapshot: item.workerNameSnapshot?.trim() || null,
+      amount: Math.round(Number(item.amount)),
+      note: item.note?.trim() || null,
+    }))
+    const { data, error } = await db().rpc('save_financial_payroll_payment_draft', {
+      p_company_id: companyId,
+      p_bank_movement_id: input.bankMovementId,
+      p_period_year: input.periodYear,
+      p_period_month: input.periodMonth,
+      p_created_by: user.id,
+      p_allocations: allocations,
+      p_note: input.note?.trim() || null,
+    })
+    if (error) return { ok: false as const, message: error.message }
+    revalidatePath(PAYROLL_PATH)
+    revalidatePath(CASH_FLOW_PATH)
+    return { ok: true as const, result: data as { batch_id: string; status: 'DRAFT'; bank_amount: number; assigned_amount: number } }
+  } catch (error) {
+    return { ok: false as const, message: error instanceof Error ? error.message : 'No se pudo guardar el borrador.' }
+  }
+}
+
+export async function completeFinancialPayrollPaymentDraftAction(input: { bankMovementId: string }) {
+  try {
+    const { user, companyId } = await authenticatedContext()
+    await assertPayrollPermission()
+    const { data, error } = await db().rpc('complete_financial_payroll_payment_batch', {
+      p_company_id: companyId,
+      p_bank_movement_id: input.bankMovementId,
+      p_completed_by: user.id,
+    })
+    if (error) return { ok: false as const, message: error.message }
+    revalidatePath(PAYROLL_PATH)
+    revalidatePath(CASH_FLOW_PATH)
+    return { ok: true as const, result: data as { batch_id: string; status: 'COMPLETE'; bank_amount: number } }
+  } catch (error) {
+    return { ok: false as const, message: error instanceof Error ? error.message : 'No se pudo completar el desglose.' }
+  }
+}
+
+export async function reconcileFinancialPayrollPaymentAction(input: {
+  bankMovementId: string
+  periodYear: number
+  periodMonth: number
+  allocations: PayrollPaymentAllocationInput[]
+  note?: string
+}) {
+  try {
+    const { user, companyId } = await authenticatedContext()
+    if (!Number.isInteger(input.periodYear) || input.periodYear < 2000 || input.periodYear > 2100) {
+      return { ok: false as const, message: 'El año del período no es válido.' }
+    }
+    if (!Number.isInteger(input.periodMonth) || input.periodMonth < 1 || input.periodMonth > 12) {
+      return { ok: false as const, message: 'El mes del período no es válido.' }
+    }
+    if (!input.bankMovementId || input.allocations.length === 0) {
+      return { ok: false as const, message: 'Indica el movimiento y al menos una asignación.' }
+    }
+    const allocations = input.allocations.map(item => ({
+      allocation_type: item.allocationType,
+      payroll_entry_id: item.payrollEntryId ?? null,
+      worker_rut: item.workerRut.trim().toUpperCase(),
+      worker_name_snapshot: item.workerNameSnapshot?.trim() || null,
+      amount: Math.round(Number(item.amount)),
+      note: item.note?.trim() || null,
+    }))
+    if (allocations.some(item => !item.worker_rut || !Number.isSafeInteger(item.amount) || item.amount <= 0)) {
+      return { ok: false as const, message: 'Cada asignación debe tener RUT y un monto positivo.' }
+    }
+    const { data: permission, error: permissionError } = await (await createClient()).rpc('has_permission', {
+      p_permission_code: 'analisis_comercial.control_financiero.classify',
+    })
+    if (permissionError || permission !== true) return { ok: false as const, message: 'No tienes permiso para conciliar nómina.' }
+    const { data, error } = await db().rpc('create_financial_payroll_payment_batch', {
+      p_company_id: companyId,
+      p_bank_movement_id: input.bankMovementId,
+      p_period_year: input.periodYear,
+      p_period_month: input.periodMonth,
+      p_created_by: user.id,
+      p_allocations: allocations,
+      p_note: input.note?.trim() || null,
+    })
+    if (error) return { ok: false as const, message: error.message }
+    revalidatePath(PAYROLL_PATH)
+    revalidatePath(CASH_FLOW_PATH)
+    return { ok: true as const, result: data as { batch_id: string; status: string; bank_amount: number } }
+  } catch (error) {
+    return { ok: false as const, message: error instanceof Error ? error.message : 'No se pudo conciliar el pago de nómina.' }
+  }
 }

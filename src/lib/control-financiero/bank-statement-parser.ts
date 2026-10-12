@@ -42,7 +42,7 @@ export type ParsedBankStatement = {
     rowDifferenceTotal: number
     rowBalanceValidated: boolean
   }
-  sourceFormat: 'HISTORICAL_SEMICOLON' | 'CURRENT_XLS' | 'ITAU_PDF'
+  sourceFormat: 'HISTORICAL_SEMICOLON' | 'CURRENT_XLS' | 'ITAU_PDF' | 'ITAU_CURRENT_PDF'
   creditLineTotal?: number | null
   creditLineUsed?: number | null
   creditLineAvailable?: number | null
@@ -185,7 +185,7 @@ function normalizedItauText(value: string) {
 
 function itauMetadataAmount(text: string, label: RegExp) {
   const amountPattern = '([($+-]?\\$?[0-9][0-9.]*[,]?[0-9]*[)]?)'
-  const match = text.match(new RegExp(`${label.source}\\s*[:\\-]?\\s*${amountPattern}`, 'i'))
+  const match = text.match(new RegExp(`(?:${label.source})\\s*[:\\-]?\\s*${amountPattern}`, 'i'))
   return match ? parseSignedAmount(match[1]) : null
 }
 
@@ -207,7 +207,7 @@ function itauAccountNumber(text: string) {
 }
 
 function itauAccountHolder(text: string) {
-  const match = text.match(/(?:nombre|titular)\s*[:#-]?\s*([^\n]+)/i)
+  const match = text.match(/(?:nombre|titular|cliente)\s*[:#-]?\s*([^\n]+)/i)
   return match?.[1]?.trim() || null
 }
 
@@ -268,6 +268,191 @@ function parseItauMovementLine(
   } satisfies ParsedBankMovement
 }
 
+function isItauCurrentPdfText(text: string) {
+  const normalized = normalizedItauText(text)
+  const signals = [
+    /itau empresas/i,
+    /cuenta corriente/i,
+    /consulta saldos/i,
+    /ultimos movimientos/i,
+    /fecha.*documentos.*sucursal.*movimientos/i,
+    /depositos? o abonos/i,
+    /giros? o cargos/i,
+    /saldos?/i,
+  ]
+  return signals.slice(0, 4).every(signal => signal.test(normalized)) && signals.slice(4).filter(signal => signal.test(normalized)).length >= 3
+}
+
+function currentPdfDateLine(line: string) {
+  return line.match(/^\s*(\d{2}[/-]\d{2}[/-]\d{4})(?:\s|$)/)?.[1] ?? null
+}
+
+function currentPdfAmount(value: string) {
+  return parseAmount(value || '-')
+}
+
+function currentPdfOperationIsDebit(description: string) {
+  return /cargo|giro|pago|cuota|sueldo|comisi[oó]n|inter[eé]s|imp\/sobreg|liquid/i.test(description)
+}
+
+function parseCurrentPdfBlock(
+  block: string[],
+  sourceRowNumber: number,
+): ParsedBankMovement | null {
+  const dateValue = currentPdfDateLine(block[0] ?? '')
+  if (!dateValue) return null
+  const date = parseDate(dateValue)
+  const tabbed = block[0].split('\t').map(value => value.trim())
+  let documentNumber: string | null = null
+  let branch: string | null = null
+  let description = ''
+  let credit = 0
+  let debit = 0
+  let balance = 0
+
+  if (tabbed.length >= 7) {
+    documentNumber = tabbed[1] || null
+    branch = tabbed[2] || null
+    description = tabbed.slice(3, -3).join(' ').trim()
+    credit = currentPdfAmount(tabbed.at(-3) ?? '')
+    debit = currentPdfAmount(tabbed.at(-2) ?? '')
+    balance = parseSignedAmount(tabbed.at(-1) ?? '')
+  } else {
+    const documentLine = block.find(line => /^documento\s+/i.test(line.trim()))
+    const branchLine = block.find(line => /^sucursal\s+/i.test(line.trim()))
+    documentNumber = documentLine?.match(/^documento\s+([\d-]+)/i)?.[1] ?? null
+    branch = branchLine?.match(/^sucursal\s+([\d-]+)/i)?.[1] ?? null
+    let dataLines = block.slice(1).filter(line =>
+      !/^documento\s+|^sucursal\s+/i.test(line.trim()) &&
+      !/^--\s+\d+\s+of\s+\d+\s+--$/i.test(line.trim()),
+    )
+    const numericPrefix: string[] = []
+    while (dataLines.length && /^\d{3,}$/.test(dataLines[0].trim())) numericPrefix.push(dataLines.shift()!.trim())
+    if (!documentNumber && numericPrefix.length > 1) documentNumber = numericPrefix[0]
+    if (!branch && numericPrefix.length) branch = numericPrefix.at(-1) ?? null
+    const creditLine = dataLines.find(line => /^(?:dep[oó]sitos?\s+o\s+abonos?|abono|cr[eé]dito)\b/i.test(line.trim()))
+    const debitLine = dataLines.find(line => /^(?:giros?\s+o\s+cargos?|cargo|d[eé]bito)\b/i.test(line.trim()))
+    const balanceLine = dataLines.find(line => /^saldo(?:s)?\b/i.test(line.trim()))
+    if (creditLine) credit = currentPdfAmount(creditLine.replace(/^[^:]+:?\s*/i, ''))
+    if (debitLine) debit = currentPdfAmount(debitLine.replace(/^[^:]+:?\s*/i, ''))
+    if (balanceLine) balance = parseSignedAmount(balanceLine.replace(/^saldo(?:s)?\s*:?\s*/i, ''))
+    const amountLines = dataLines.filter(line => /^[-+(]?\$?\s*[\d.]+\)?$/.test(line.trim()) || line.trim() === '-')
+    if (!balanceLine && amountLines.length) balance = parseSignedAmount(amountLines.at(-1) ?? '')
+    const unassignedAmounts = balanceLine ? amountLines : amountLines.slice(0, -1)
+    if (!creditLine && !debitLine) {
+      if (unassignedAmounts.length >= 2) {
+        credit = currentPdfAmount(unassignedAmounts.at(-2) ?? '')
+        debit = currentPdfAmount(unassignedAmounts.at(-1) ?? '')
+      } else {
+        const value = unassignedAmounts.at(-1) ?? ''
+        if (value) {
+          if (value.startsWith('-') || currentPdfOperationIsDebit(dataLines.filter(line => !amountLines.includes(line)).join(' '))) debit = currentPdfAmount(value)
+          else credit = currentPdfAmount(value)
+        }
+      }
+    }
+    description = dataLines
+      .filter(line => line !== creditLine && line !== debitLine && line !== balanceLine && !amountLines.includes(line))
+      .join(' ')
+      .trim()
+  }
+
+  if (!description) {
+    const inline = block[0].replace(/^\s*\d{2}[/-]\d{2}[/-]\d{4}\s*/, '')
+    const monetaryValues = [...inline.matchAll(/\$\s*[+-]?\s*[\d.]+/g)]
+    if (monetaryValues.length >= 2) {
+      const firstAmountIndex = monetaryValues[0].index ?? 0
+      const prefix = inline.slice(0, firstAmountIndex).trim().split(/\s+/)
+      const prefixNumbers: string[] = []
+      while (prefixNumbers.length < prefix.length && /^\d{3,}$/.test(prefix[0] ?? '')) prefixNumbers.push(prefix.shift()!)
+      if (!documentNumber && prefixNumbers.length > 1) documentNumber = prefixNumbers[0]
+      if (!branch && prefixNumbers.length) branch = prefixNumbers.at(-1) ?? null
+      description = prefix.join(' ').trim()
+      const movementAmount = monetaryValues[0][0]
+      const balanceAmount = monetaryValues.at(-1)![0]
+      if (currentPdfOperationIsDebit(description)) debit = currentPdfAmount(movementAmount)
+      else credit = currentPdfAmount(movementAmount)
+      balance = parseSignedAmount(balanceAmount)
+    }
+    if (description) {
+      // The real pdf-parse output omits empty cells, leaving only movement and balance amounts.
+    } else {
+    const tokens = inline.split(/\s+/)
+    const suffix: string[] = []
+    while (tokens.length && itauMoneyToken(tokens.at(-1) ?? '')) suffix.unshift(tokens.pop()!)
+    const prefixNumbers: string[] = []
+    while (tokens.length && /^\d{3,}$/.test(tokens[0])) prefixNumbers.push(tokens.shift()!)
+    if (!documentNumber && prefixNumbers.length > 1) documentNumber = prefixNumbers[0]
+    if (!branch && prefixNumbers.length) branch = prefixNumbers.at(-1) ?? null
+    description = tokens.join(' ').trim()
+    if (suffix.length >= 3) {
+      credit = currentPdfAmount(suffix.at(-3) ?? '')
+      debit = currentPdfAmount(suffix.at(-2) ?? '')
+      balance = parseSignedAmount(suffix.at(-1) ?? '')
+    } else if (suffix.length === 2) {
+      const value = suffix[0]
+      if (value.startsWith('-') || currentPdfOperationIsDebit(description)) debit = currentPdfAmount(value)
+      else credit = currentPdfAmount(value)
+      balance = parseSignedAmount(suffix[1])
+    }
+    }
+  }
+  if (!description) return null
+  return {
+    date, description, credit, debit, balance, documentNumber, transactionNumber: null,
+    cashier: null, branch, sourceRowNumber, sequenceNumber: sourceRowNumber,
+    raw: { date: dateValue, documentNumber: documentNumber ?? '', branch: branch ?? '', description, credit: String(credit), debit: String(debit), balance: String(balance) },
+  }
+}
+
+function parseItauCurrentRows(text: string) {
+  const lines = text.split('\n').map(line => line.replace(/\r/g, '').trimEnd()).filter(Boolean)
+  const blocks: string[][] = []
+  for (const line of lines) {
+    const date = currentPdfDateLine(line)
+    if (date && !/\s+\d{2}:\d{2}:\d{2}/.test(line)) blocks.push([line])
+    else if (blocks.length) blocks.at(-1)!.push(line.trim())
+  }
+  return blocks
+}
+
+/** Parses Itaú Empresas' open-month "Consulta Saldos y Últimos movimientos" PDF. */
+export function parseItauCurrentStatementText(input: string): ParsedBankStatement {
+  const text = input.replace(/^\uFEFF/, '').replace(/\r/g, '')
+  if (!isItauCurrentPdfText(text)) throw new Error('El PDF no corresponde a una consulta Itaú Empresas de mes abierto.')
+  const movements = parseItauCurrentRows(text)
+    .map((block, index) => parseCurrentPdfBlock(block, index + 1))
+    .filter((movement): movement is ParsedBankMovement => Boolean(movement))
+  if (!movements.length) throw new Error('No se encontraron movimientos Itaú de mes abierto en el PDF.')
+  const movementPeriods = new Set(movements.map(movement => movement.date.slice(0, 7)))
+  if (movementPeriods.size !== 1) throw new Error('La consulta Itaú debe contener un solo período mensual.')
+  const order = movements[0].date === movements.at(-1)!.date
+    ? detectDirection(movements)
+    : movements[0].date > movements.at(-1)!.date ? 'DESC' : 'ASC'
+  const ordered = order === 'ASC' ? movements : [...movements].reverse()
+  const first = ordered[0]
+  const last = ordered.at(-1)!
+  const openingBalance = first.balance - first.credit + first.debit
+  const totalCredits = ordered.reduce((sum, row) => sum + row.credit, 0)
+  const totalDebits = ordered.reduce((sum, row) => sum + row.debit, 0)
+  const rowValidation = validateRows(ordered)
+  const currentCreditLineValues = itauHeaderRowAmounts(
+    text,
+    /saldo\s+disponible\s+en\s+l[ií]nea\s+de\s+cr[eé]dito/i,
+  )
+  return {
+    accountNumber: itauAccountNumber(text), accountHolder: itauAccountHolder(text), bankName: 'Itaú', currency: 'CLP',
+    year: Number(first.date.slice(0, 4)), month: Number(first.date.slice(5, 7)), order, openingBalance,
+    totalCredits, totalDebits, closingBalance: last.balance, firstTransactionDate: first.date,
+    lastTransactionDate: last.date, rowCount: ordered.length, movements: ordered,
+    validations: { globalDifference: openingBalance + totalCredits - totalDebits - last.balance, ...rowValidation, rowBalanceValidated: rowValidation.rowDifference === 0 },
+    sourceFormat: 'ITAU_CURRENT_PDF',
+    creditLineTotal: itauMetadataAmount(text, /monto\s+total\s+(?:l[ií]nea\s+de\s+cr[eé]dito|l[ií]nea)/),
+    creditLineUsed: itauMetadataAmount(text, /monto\s+utilizado/),
+    creditLineAvailable: currentCreditLineValues.at(-1) ?? itauMetadataAmount(text, /saldo\s+disponible\s+en\s+l[ií]nea\s+de\s+cr[eé]dito|monto\s+disponible/),
+  }
+}
+
 /** Extracts text from an Itaú Empresas PDF without OCR or external binaries. */
 export async function extractItauPdfText(bytes: Uint8Array) {
   const parser = new PDFParse({ data: bytes })
@@ -282,6 +467,7 @@ export async function extractItauPdfText(bytes: Uint8Array) {
 /** Parses one monthly Itaú Empresas statement from already extracted text. */
 export function parseItauStatementText(input: string): ParsedBankStatement {
   const text = input.replace(/^\uFEFF/, '').replace(/\r/g, '')
+  if (isItauCurrentPdfText(text)) return parseItauCurrentStatementText(text)
   if (!/ita[uú]/i.test(text) || !/cartola\s+historica/i.test(normalizedItauText(text)))
     throw new Error('El PDF no corresponde a una cartola histórica Itaú Empresas.')
   const periodDates = itauPeriodDates(text)

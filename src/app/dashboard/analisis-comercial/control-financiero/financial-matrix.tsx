@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useEffect, useRef, useState, useTransition } from 'react'
+import { Fragment, useEffect, useRef, useState, useTransition, type ReactNode } from 'react'
 import { AlertCircle, ChevronRight } from 'lucide-react'
 import { loadSalesNetDetail } from '@/app/actions/control-financiero/sales-net-detail'
 import { loadSalesDocumentLines } from '@/app/actions/control-financiero/sales-document-lines'
@@ -90,6 +90,8 @@ export function FinancialMatrix({
   companyId,
   year,
   horizonMonth,
+  dataThrough,
+  managerialAsOfDate,
   familyUnavailable = false,
 }: {
   rows: StatementRow[]
@@ -97,10 +99,15 @@ export function FinancialMatrix({
   companyId: string
   year: number
   horizonMonth: number
+  dataThrough?: string | null
+  managerialAsOfDate?: string | null
   familyUnavailable?: boolean
 }) {
-  const visibleMonths = MONTHS.slice(0, horizonMonth)
+  const visibleMonths = MONTHS
   const salesRow = rows.find(row => row.label === 'Ventas Netas')
+  const marginRow = rows.find(row => row.label === 'Margen Bruto')
+  const openingRows = rows.filter(row => ['Ventas Netas', 'Costo de Ventas', 'Margen Bruto'].includes(row.label))
+  const resultRows = rows.filter(row => !['Ventas Netas', 'Costo de Ventas', 'Margen Bruto'].includes(row.label))
   const groupRows = groups.map(group => ({
     ...group,
     percentageYtd: salesRow?.ytd && Number(salesRow.ytd) !== 0
@@ -384,12 +391,42 @@ export function FinancialMatrix({
     if (open && selection?.row === 'sales') return 'bg-[#EAF2F7]'
     if (row.label === 'RESULTADO GERENCIAL') return 'border-y-2 border-[#72383D] bg-[#F1E4DE] font-bold'
     if (row.label === 'RESULTADO OPERACIONAL') return 'border-y border-[#72383D]/60 bg-[#F6EEE9] font-bold'
+    if (row.label === 'TOTAL GASTOS OPERATIVOS') return 'border-y border-[#AC9C8D] bg-[#EFE9E1] font-bold'
     if (row.result) return 'border-y border-[#AC9C8D] bg-[#F6EEE9] font-semibold'
     if (row.label === 'Ventas Netas' || row.label === 'Margen Bruto') return 'bg-[#F1E8E1] font-bold'
     if (row.label === 'Costo de Ventas') return 'bg-[#F8F5F1] font-semibold'
     return row.emphasis ? 'bg-[#E5D8D1] font-semibold' : 'bg-white'
   }
   const cellClass = (row: StatementRow) => rowClass(row)
+
+  function profitForStatementRow(row: StatementRow) {
+    if (row.label === 'Ventas Netas' || row.label === 'Margen Bruto') {
+      return { value: marginRow?.ytd ?? null, percentage: marginRow?.percentageYtd ?? null }
+    }
+    return { value: null, percentage: null }
+  }
+
+  function renderMetricCells(options: {
+    className: string
+    ytd: ReactNode
+    utilidad?: ReactNode
+    porcentajeVentas?: ReactNode
+    porcentajeUtilidad?: ReactNode
+    ytdTitle?: string
+    ytdClassName?: string
+    utilidadClassName?: string
+    padding?: string
+  }) {
+    const padding = options.padding ?? 'py-2'
+    return (
+      <>
+        <td title={options.ytdTitle} className={`sticky right-[325px] z-10 w-[135px] border-l border-[#D1C7BD] px-2.5 ${padding} text-right font-semibold tabular-nums ${options.className} ${options.ytdClassName ?? ''}`}>{options.ytd}</td>
+        <td className={`sticky right-[190px] z-10 w-[135px] border-l border-[#D1C7BD] px-2.5 ${padding} text-right font-semibold tabular-nums ${options.className} ${options.utilidadClassName ?? ''}`}>{options.utilidad ?? '—'}</td>
+        <td className={`sticky right-[95px] z-10 w-[95px] border-l border-[#D1C7BD] px-2.5 ${padding} text-right tabular-nums text-[#72383D] ${options.className}`}>{options.porcentajeVentas ?? '—'}</td>
+        <td className={`sticky right-0 z-10 w-[95px] border-l border-[#D1C7BD] px-2.5 ${padding} text-right tabular-nums text-[#72383D] ${options.className}`}>{options.porcentajeUtilidad ?? '—'}</td>
+      </>
+    )
+  }
 
   function renderSalesValue(value: string | null, columnIndex: number) {
     const active = selection?.row === 'sales'
@@ -426,18 +463,23 @@ export function FinancialMatrix({
   }
 
   function renderExpenseValue(row: StatementRow, value: string | null, month: number | null) {
+    const estimated = month === null ? row.ytdEstimated : row.estimated?.[month - 1]
+    const accrued = estimated && month === Number(managerialAsOfDate?.slice(5, 7))
     const active = expenseSelection?.key === row.drilldownKey
       && (month === null ? expenseSelection?.scope === 'YTD' : expenseSelection?.month === month)
+    const provisional = row.provisional && month === null
+    const title = row.provisionalNote ?? (accrued ? `Estimación devengada al ${managerialAsOfDate?.slice(8, 10)}-${managerialAsOfDate?.slice(5, 7)}-${managerialAsOfDate?.slice(0, 4)} a partir del promedio móvil de hasta 6 períodos reales anteriores. Doble clic para ver cálculo.` : 'Doble clic para abrir el detalle')
     return (
       <button
         type="button"
-        title="Doble clic para abrir el detalle"
+        title={title}
         aria-label={`${row.label} ${month === null ? 'YTD' : MONTHS_FULL[month - 1]}. Doble clic para abrir el detalle`}
         onDoubleClick={() => selectExpenseCell(row, month, value)}
         disabled={value === null}
-        className={`w-full rounded px-1 text-right tabular-nums outline-none transition-colors hover:text-[#72383D] hover:underline focus-visible:ring-2 focus-visible:ring-[#72383D]/45 disabled:cursor-default ${active ? 'bg-[#CFE4F1] font-semibold text-[#355C7D]' : ''} ${valueTone(value)}`}
+        className={`w-full rounded px-1 text-right tabular-nums outline-none transition-colors hover:underline focus-visible:ring-2 focus-visible:ring-[#72383D]/45 disabled:cursor-default ${active ? 'bg-[#CFE4F1] font-semibold' : ''} ${provisional && value !== null ? 'text-[#A23E48] font-semibold' : estimated && value !== null ? 'text-[#1453A0] font-semibold' : valueTone(value)}`}
+        aria-description={accrued ? `Monto estimado devengado proporcionalmente al ${managerialAsOfDate}` : estimated ? 'Monto estimado mediante promedio móvil de hasta 6 períodos reales anteriores' : undefined}
       >
-        {formatClp(value)}
+        {formatClp(value)}{estimated && value !== null && <span className="ml-1 text-[9px] font-bold">EST.</span>}
       </button>
     )
   }
@@ -447,19 +489,28 @@ export function FinancialMatrix({
     return (
       <tr key={row.label} className={className}>
         <th className={`sticky left-0 z-10 px-4 py-2 text-left text-[#322D29] ${cellClass(row)}`}>{displayLabel(row.label)}</th>
-        {row.values.slice(0, horizonMonth).map((value, index) => (
+        {visibleMonths.map((_, index) => {
+          const value = index < horizonMonth ? row.values[index] ?? null : null
+          return (
           <td key={`${row.label}-${index}`} className={`px-2.5 py-2 text-right align-middle tabular-nums ${className} ${open && selection?.row === 'sales' && activeMonth === index + 1 ? 'bg-[#CFE4F1]' : ''}`}>
-            {row.label === 'Ventas Netas' ? renderSalesValue(value, index) : row.drilldownKey ? renderExpenseValue(row, value, index + 1) : formatClp(value)}
+            {row.label === 'Ventas Netas' ? renderSalesValue(value, index) : row.drilldownKey ? renderExpenseValue(row, value, index + 1) : <span className={row.estimated?.[index] && value !== null ? 'font-semibold text-[#1453A0]' : ''}>{formatClp(value)}{row.estimated?.[index] && value !== null && <span title="Promedio móvil 6 meses" className="ml-1 text-[9px]">EST.</span>}</span>}
             <CoverageIndicator count={row.missing[index]} />
           </td>
-        ))}
-        <td title={row.ytdTooltip} className={`sticky right-[95px] z-10 w-[135px] border-l border-[#D1C7BD] px-2.5 py-2 text-right font-semibold tabular-nums ${className} ${activeYtd && selection?.row === 'sales' ? 'bg-[#CFE4F1]' : ''}`}>
-           {row.label === 'Ventas Netas' ? renderSalesValue(row.ytd, 12) : row.drilldownKey ? renderExpenseValue(row, row.ytd, null) : formatClp(row.ytd)}
-          <CoverageIndicator count={row.ytdMissing} />
-        </td>
-        <td className={`sticky right-0 z-10 w-[95px] border-l border-[#D1C7BD] px-2.5 py-2 text-right tabular-nums text-[#72383D] ${className}`}>
-          {formatPercentage(row.percentageYtd)}
-        </td>
+          )
+        })}
+        {(() => {
+          const profit = profitForStatementRow(row)
+          return renderMetricCells({
+            className,
+            ytdTitle: row.ytdTooltip,
+            ytdClassName: activeYtd && selection?.row === 'sales' ? 'bg-[#CFE4F1]' : '',
+            ytd: <>{row.label === 'Ventas Netas' ? renderSalesValue(row.ytd, 12) : row.drilldownKey ? renderExpenseValue(row, row.ytd, null) : <span className={row.ytdEstimated && row.ytd !== null ? 'text-[#1453A0]' : ''}>{formatClp(row.ytd)}{row.ytdEstimated && row.ytd !== null && <span className="ml-1 text-[9px]">EST.</span>}</span>}<CoverageIndicator count={row.ytdMissing} /></>,
+            utilidad: profit.value === null ? undefined : formatClp(profit.value),
+            utilidadClassName: valueTone(profit.value),
+            porcentajeVentas: <span className={row.ytdEstimated ? 'text-[#1453A0]' : ''}>{formatPercentage(row.percentageYtd)}{row.ytdEstimated && <span className="ml-1 text-[9px]">EST.</span>}</span>,
+            porcentajeUtilidad: profit.percentage === null ? undefined : formatPercentage(profit.percentage),
+          })
+        })()}
       </tr>
     )
   }
@@ -475,7 +526,7 @@ export function FinancialMatrix({
       <Fragment key={row.label}>
         {sectionStart && (
           <tr aria-hidden="true">
-            <td colSpan={horizonMonth + 3} className="h-2 bg-white p-0" />
+            <td colSpan={visibleMonths.length + 5} className="h-2 bg-white p-0" />
           </tr>
         )}
         <tr className={`border-y border-[#D1C7BD] ${groupTone}`}>
@@ -485,16 +536,28 @@ export function FinancialMatrix({
               {row.label}
             </button>
           </th>
-            {row.values.slice(0, horizonMonth).map((value, index) => <td key={`${row.label}-${index}`} className={`px-2.5 py-2 text-right align-middle tabular-nums ${groupTone} ${valueTone(value)}`}>{renderExpenseValue(row, value, index + 1)}<CoverageIndicator count={row.missing[index]} /></td>)}
-            <td title={row.ytdTooltip} className={`sticky right-[95px] z-10 w-[135px] border-l border-[#D1C7BD] px-2.5 py-2 text-right font-semibold tabular-nums ${groupTone} ${valueTone(row.ytd)}`}>{renderExpenseValue(row, row.ytd, null)}<CoverageIndicator count={row.ytdMissing} /></td>
-          <td className={`sticky right-0 z-10 w-[95px] border-l border-[#D1C7BD] px-2.5 py-2 text-right tabular-nums text-[#72383D] ${groupTone}`}>{formatPercentage(row.percentageYtd)}</td>
+            {visibleMonths.map((_, index) => <td key={`${row.label}-${index}`} className={`px-2.5 py-2 text-right align-middle tabular-nums ${groupTone}`}>{renderExpenseValue(row, index < horizonMonth ? row.values[index] ?? null : null, index + 1)}<CoverageIndicator count={row.missing[index]} /></td>)}
+            {renderMetricCells({
+              className: groupTone,
+              ytdTitle: row.ytdTooltip,
+              ytdClassName: valueTone(row.ytd),
+              ytd: <>{renderExpenseValue(row, row.ytd, null)}<CoverageIndicator count={row.ytdMissing} /></>,
+              porcentajeVentas: <span className={row.ytdEstimated ? 'text-[#1453A0]' : ''}>{formatPercentage(row.percentageYtd)}{row.ytdEstimated && <span className="ml-1 text-[9px]">EST.</span>}</span>,
+            })}
         </tr>
-        {isExpanded && row.children?.map(child => (
-          <tr key={child.label} className="bg-white">
-            <th className="sticky left-0 z-10 bg-white px-4 py-2 pl-10 text-left font-normal text-[#322D29]">{child.label}</th>
-              {child.values.slice(0, horizonMonth).map((value, index) => <td key={`${child.label}-${index}`} className="px-2.5 py-2 text-right align-middle tabular-nums">{renderExpenseValue(child, value, index + 1)}<CoverageIndicator count={child.missing[index]} /></td>)}
-              <td title={child.ytdTooltip} className="sticky right-[95px] z-10 w-[135px] border-l border-[#D1C7BD] bg-white px-2.5 py-2 text-right font-semibold tabular-nums">{renderExpenseValue(child, child.ytd, null)}<CoverageIndicator count={child.ytdMissing} /></td>
-             <td className="sticky right-0 z-10 w-[95px] border-l border-[#D1C7BD] bg-white px-2.5 py-2 text-right tabular-nums text-[#72383D]">{formatPercentage(child.percentageYtd)}</td>
+         {isExpanded && row.children?.map(child => (
+           <tr key={child.label} className="bg-white">
+             <th className={`sticky left-0 z-10 bg-white px-4 py-2 pl-10 text-left font-normal ${child.provisional ? 'text-[#A23E48]' : 'text-[#322D29]'}`} title={child.provisionalNote}>
+               <span>{child.label}</span>
+               {child.provisional && <span className="ml-2 inline-flex rounded border border-[#A23E48]/35 px-1.5 py-0.5 align-middle text-[9px] font-bold uppercase tracking-[0.08em] text-[#A23E48]">POR VALIDAR</span>}
+             </th>
+              {visibleMonths.map((_, index) => <td key={`${child.label}-${index}`} className="px-2.5 py-2 text-right align-middle tabular-nums">{renderExpenseValue(child, index < horizonMonth ? child.values[index] ?? null : null, index + 1)}<CoverageIndicator count={child.missing[index]} /></td>)}
+              {renderMetricCells({
+                className: 'bg-white',
+                ytdTitle: child.ytdTooltip,
+                ytd: <>{renderExpenseValue(child, child.ytd, null)}<CoverageIndicator count={child.ytdMissing} /></>,
+                porcentajeVentas: <span className={child.ytdEstimated ? 'text-[#1453A0]' : ''}>{formatPercentage(child.percentageYtd)}{child.ytdEstimated && <span className="ml-1 text-[9px]">EST.</span>}</span>,
+              })}
           </tr>
         ))}
       </Fragment>
@@ -508,15 +571,19 @@ export function FinancialMatrix({
           {label}
         </th>
          {visibleMonths.map((_, index) => {
-          const value = family.months[String(index + 1)] ?? null
+          const value = index < horizonMonth ? family.months[String(index + 1)] ?? null : null
            return <td key={`${family.family_key}-${index}`} className="bg-white px-2.5 py-1.5 text-right align-middle tabular-nums">{renderFamilyValue(family, value, index + 1)}</td>
         })}
-         <td className={`sticky right-[95px] z-10 w-[135px] border-l border-[#D1C7BD] bg-white px-2.5 py-1.5 text-right font-semibold tabular-nums ${activeFamilyKey === family.family_key && activeYtd ? 'bg-[#CFE4F1]' : ''}`}>
-          {renderFamilyValue(family, family.ytd, null)}
-        </td>
-         <td className="sticky right-0 z-10 w-[95px] border-l border-[#D1C7BD] bg-white px-2.5 py-1.5 text-right tabular-nums text-[#72383D]">
-          {formatPercentage(family.percentageYtd)}
-        </td>
+        {renderMetricCells({
+          className: 'bg-white',
+          padding: 'py-1.5',
+          ytdClassName: activeFamilyKey === family.family_key && activeYtd ? 'bg-[#CFE4F1]' : '',
+           ytd: renderFamilyValue(family, family.ytd, null),
+           utilidad: family.profitYtd === null || family.profitYtd === undefined ? undefined : formatClp(family.profitYtd),
+           utilidadClassName: valueTone(family.profitYtd),
+           porcentajeVentas: formatPercentage(family.percentageYtd),
+           porcentajeUtilidad: family.profitPercentageYtd === null || family.profitPercentageYtd === undefined ? undefined : formatPercentage(family.profitPercentageYtd),
+         })}
       </tr>
     )
   }
@@ -542,44 +609,68 @@ export function FinancialMatrix({
             {group.group_name}
           </button>
         </th>
-          {visibleMonths.map((_, index) => <td key={`${group.group_key}-${index}`} className={`bg-[#FAF7F3] px-2.5 py-1.5 text-right tabular-nums ${valueTone(group.months[String(index + 1)])}`}>{formatClp(group.months[String(index + 1)])}</td>)}
-        <td className={`sticky right-[95px] z-10 w-[135px] border-l border-[#D1C7BD] bg-[#FAF7F3] px-2.5 py-1.5 text-right tabular-nums ${valueTone(group.ytd)}`}>{formatClp(group.ytd)}</td>
-        <td className="sticky right-0 z-10 w-[95px] border-l border-[#D1C7BD] bg-[#FAF7F3] px-2.5 py-1.5 text-right tabular-nums text-[#72383D]">{formatPercentage(group.percentageYtd)}</td>
+          {visibleMonths.map((_, index) => <td key={`${group.group_key}-${index}`} className={`bg-[#FAF7F3] px-2.5 py-1.5 text-right tabular-nums ${valueTone(group.months[String(index + 1)])}`}>{formatClp(index < horizonMonth ? group.months[String(index + 1)] : null)}</td>)}
+        {renderMetricCells({
+          className: 'bg-[#FAF7F3]',
+          padding: 'py-1.5',
+          ytdClassName: valueTone(group.ytd),
+          ytd: formatClp(group.ytd),
+          utilidad: group.profitYtd === null || group.profitYtd === undefined ? undefined : formatClp(group.profitYtd),
+          utilidadClassName: valueTone(group.profitYtd),
+          porcentajeVentas: formatPercentage(group.percentageYtd),
+          porcentajeUtilidad: group.profitPercentageYtd === null || group.profitPercentageYtd === undefined ? undefined : formatPercentage(group.profitPercentageYtd),
+        })}
       </tr>
     )
   }
 
+  const tableClass = 'isolate w-full table-fixed border-collapse text-[12px] @max-[800px]:[&_td]:static @max-[800px]:[&_th]:static'
+  const tableMinWidth = 260 + horizonMonth * 110 + (12 - horizonMonth) * 48 + 135 + 135 + 95 + 95
+  const tableColumns = (
+    <colgroup>
+      <col className="w-[260px]" />
+      {visibleMonths.map((month, index) => <col style={index >= horizonMonth ? { width: 48 } : undefined} key={month} />)}
+      <col className="w-[135px]" />
+      <col className="w-[135px]" />
+      <col className="w-[95px]" />
+      <col className="w-[95px]" />
+    </colgroup>
+  )
+  const tableHeader = (
+    <thead className="sticky top-0 z-20 bg-[#322D29] text-left text-[10px] uppercase tracking-[0.1em] text-[#EFE9E1]">
+      <tr>
+        <th className="sticky left-0 z-30 w-[260px] bg-[#322D29] px-4 py-2 font-semibold">Concepto</th>
+        {visibleMonths.map((month, index) => <th key={month} title={index + 1 === horizonMonth && rows.some(row => row.estimated?.[index]) && (managerialAsOfDate || dataThrough) ? `Resultado estimado al ${(managerialAsOfDate ?? dataThrough)!.slice(8, 10)}-${(managerialAsOfDate ?? dataThrough)!.slice(5, 7)}-${(managerialAsOfDate ?? dataThrough)!.slice(0, 4)}; ventas y gastos reales hasta su cobertura disponible` : undefined} className={`px-2.5 py-2 text-right font-semibold ${activeMonth === index + 1 ? 'bg-[#355C7D]' : ''}`}>{month}</th>)}
+        <th className="sticky right-[325px] z-30 w-[135px] border-l border-white/20 bg-[#322D29] px-2.5 py-2 text-right font-semibold">YTD</th>
+        <th title="Ventas netas menos el costo de ventas asociado al proveedor." className="sticky right-[190px] z-30 w-[135px] border-l border-white/20 bg-[#322D29] px-2.5 py-2 text-right font-semibold">Utilidad YTD</th>
+        <th className="sticky right-[95px] z-30 w-[95px] border-l border-white/20 bg-[#322D29] px-2.5 py-2 text-right font-semibold">% Ventas</th>
+        <th className="sticky right-0 z-30 w-[95px] border-l border-white/20 bg-[#322D29] px-2.5 py-2 text-right font-semibold">% Utilidad</th>
+      </tr>
+    </thead>
+  )
+  const sectionHeader = (content: ReactNode) => (
+    <tr className="border-y border-[#D1C7BD] bg-[#E5D8D1]">
+      <th className="sticky left-0 z-10 bg-[#E5D8D1] px-4 py-2 text-left font-semibold uppercase tracking-[0.08em] text-[#72383D]">{content}</th>
+      <td colSpan={visibleMonths.length + 4} className="bg-[#E5D8D1]" />
+    </tr>
+  )
+
   return (
-    <div className="relative" style={{ paddingRight: open || expenseOpen ? inspectorWidth : undefined }}>
-      <div className="overflow-x-auto border border-[#D1C7BD] bg-white shadow-[0_2px_8px_rgba(50,45,41,0.03)]">
-        <table className="isolate table-fixed border-collapse text-[12px]" style={{ width: `${260 + horizonMonth * 110 + 135 + 95}px`, minWidth: `${260 + horizonMonth * 110 + 135 + 95}px` }}>
-          <colgroup>
-            <col className="w-[260px]" />
-            {visibleMonths.map(month => <col className="w-[110px]" key={month} />)}
-            <col className="w-[135px]" />
-            <col className="w-[95px]" />
-          </colgroup>
-          <thead className="sticky top-0 z-20 bg-[#322D29] text-left text-[10px] uppercase tracking-[0.1em] text-[#EFE9E1]">
-            <tr>
-              <th className="sticky left-0 z-30 w-[260px] bg-[#322D29] px-4 py-2 font-semibold">Concepto</th>
-              {visibleMonths.map((month, index) => <th key={month} className={`w-[110px] px-2.5 py-2 text-right font-semibold ${activeMonth === index + 1 ? 'bg-[#355C7D]' : ''}`}>{month}</th>)}
-              <th className="sticky right-[95px] z-30 w-[135px] border-l border-white/20 bg-[#322D29] px-2.5 py-2 text-right font-semibold">YTD</th>
-              <th className="sticky right-0 z-30 w-[95px] border-l border-white/20 bg-[#322D29] px-2.5 py-2 text-right font-semibold">% Ventas</th>
-            </tr>
-          </thead>
+    <div className="relative w-full min-w-0 @container space-y-3">
+      <section className="w-full overflow-x-auto border border-[#D1C7BD] bg-white shadow-[0_2px_8px_rgba(50,45,41,0.03)]" aria-label="Ingresos y ventas">
+        <table className={tableClass} style={{ minWidth: `${tableMinWidth}px` }}>
+          {tableColumns}
+          {tableHeader}
           <tbody className="divide-y divide-[#D1C7BD]/70">
-            <tr className="border-y border-[#D1C7BD] bg-[#E5D8D1]">
-              <th className="sticky left-0 z-10 bg-[#E5D8D1] px-4 py-2 text-left font-semibold uppercase tracking-[0.08em] text-[#72383D]">
-                <button type="button" className="flex w-full items-center gap-2 text-left" onClick={() => setExpanded(current => !current)} aria-expanded={expanded}>
-                  <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-[#AC9C8D]/75 transition-transform ${expanded ? 'rotate-90' : ''}`} aria-hidden="true" />
-                  INGRESOS Y VENTAS
-                </button>
-              </th>
-            <td colSpan={horizonMonth + 2} className="bg-[#E5D8D1]" />
-            </tr>
+            {sectionHeader((
+              <button type="button" className="flex w-full items-center gap-2 text-left" onClick={() => setExpanded(current => !current)} aria-expanded={expanded}>
+                <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-[#AC9C8D]/75 transition-transform ${expanded ? 'rotate-90' : ''}`} aria-hidden="true" />
+                INGRESOS Y VENTAS
+              </button>
+            ))}
             {expanded && familyUnavailable && (
               <tr>
-                <td colSpan={horizonMonth + 3} className="px-4 py-2 text-[10px] text-[#322D29]/60">Detalle de ventas temporalmente no disponible.</td>
+                <td colSpan={visibleMonths.length + 5} className="px-4 py-2 text-[10px] text-[#322D29]/60">Detalle de ventas temporalmente no disponible.</td>
               </tr>
             )}
             {expanded && groupRows.flatMap(group => [
@@ -593,10 +684,23 @@ export function FinancialMatrix({
                 ))
                 : []),
             ])}
-            {rows.map(row => row.group ? renderPersonnelRow(row) : renderStatementRow(row))}
+            {openingRows.map(row => renderStatementRow(row))}
           </tbody>
         </table>
-      </div>
+      </section>
+      <section className="w-full overflow-x-auto border border-[#D1C7BD] bg-white shadow-[0_2px_8px_rgba(50,45,41,0.03)]" aria-label="Gastos y resultados">
+        <table className={tableClass} style={{ minWidth: `${tableMinWidth}px` }}>
+          {tableColumns}
+          {tableHeader}
+          <tbody className="divide-y divide-[#D1C7BD]/70">
+            {sectionHeader((
+              <span className="flex w-full items-center gap-2 text-left opacity-90">GASTOS Y RESULTADOS</span>
+            ))}
+            {resultRows.map(row => row.group ? renderPersonnelRow(row) : renderStatementRow(row))}
+          </tbody>
+        </table>
+      </section>
+      <p className="mt-1 text-[10px] text-[#322D29]/65"><strong className="text-[#1453A0]">Azul · EST.</strong> = promedio móvil de hasta 6 períodos reales anteriores.{managerialAsOfDate && ` En mes abierto, remuneraciones y cargas devengadas proporcionalmente al ${managerialAsOfDate.slice(8, 10)}-${managerialAsOfDate.slice(5, 7)}-${managerialAsOfDate.slice(0, 4)}.`}</p>
 
       {open && (
         <aside
@@ -749,7 +853,8 @@ export function FinancialMatrix({
                   <div className="bg-[#EFE9E1] px-4 py-3"><p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#AC9C8D]">Registros</p><p className="mt-1 text-base font-semibold tabular-nums">{expenseDetail.items.length.toLocaleString('es-CL')}</p></div>
                   <div className="bg-[#EFE9E1] px-4 py-3"><p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#AC9C8D]">Control</p><p className="mt-1 text-base font-semibold text-[#355C7D]">Reconciliado</p></div>
                 </div>
-                <p className="border-b border-[#D1C7BD] px-5 py-3 text-xs text-[#322D29]/75">Cobertura: {expenseDetail.coveredMonths.map(month => MONTHS[month - 1]).join(', ') || 'sin meses'} · Total igual a la celda origen.</p>
+                 <p className="border-b border-[#D1C7BD] px-5 py-3 text-xs text-[#322D29]/75">Cobertura: {expenseDetail.coveredMonths.map(month => MONTHS[month - 1]).join(', ') || 'sin meses'} · Total igual a la celda origen.</p>
+                 {expenseDetail.estimates?.map(estimate => <div key={estimate.month} className="border-b border-[#D1C7BD] bg-[#EAF2FC] px-5 py-3 text-xs text-[#1453A0]"><strong>EST. · {MONTHS_FULL[estimate.month - 1]} {year}{estimate.asOfDate ? ` · al ${estimate.asOfDate.slice(8, 10)}-${estimate.asOfDate.slice(5, 7)}-${estimate.asOfDate.slice(0, 4)}` : ''}</strong><p>Promedio móvil de {estimate.sources.length} períodos reales anteriores; sin trabajadores estimados.</p>{estimate.asOfDate && <p>Devengo: {estimate.elapsedDays}/{estimate.daysInMonth} días calendario · promedio mensual formal {formatClp(estimate.monthlyFormalEstimate)} → devengado {formatClp(estimate.formalEarnings)} · promedio mensual cargas {formatClp(estimate.monthlyEmployerEstimate)} → devengado {formatClp(estimate.employerContributions)}.</p>}{!estimate.asOfDate && <p>Remuneraciones: {formatClp(estimate.formalEarnings)} · Cargas: {formatClp(estimate.employerContributions)}</p>}<p>Meses fuente: {estimate.sources.map(source => `${MONTHS[source.month - 1]} ${source.year}`).join(', ')}</p>{estimate.sources.map(source => <p key={`${source.year}-${source.month}`}>{MONTHS[source.month - 1]} {source.year}: remuneraciones {formatClp(source.formalEarnings)} · cargas {formatClp(source.employerContributions)}</p>)}</div>)}
                 {expenseDetail.items.length === 0 ? (
                   <div className="m-5 border border-dashed border-[#AC9C8D]/70 bg-white/35 px-5 py-12 text-center text-sm text-[#322D29]/60">No hay movimientos o registros para este período.</div>
                 ) : (

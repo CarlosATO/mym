@@ -67,6 +67,48 @@ def test_expenses_response_includes_other_income_separately_from_sales_and_expen
     assert response["ytd"]["otherIncome"] == "250.00"
 
 
+def test_reimbursements_are_explicit_real_operating_expenses() -> None:
+    response = build_expenses_response(
+        COMPANY_ID,
+        2026,
+        [{"month": 1, "last_transaction_date": date(2026, 1, 30)}],
+        [{"month": 1, "category_code": "EXPENSE_REIMBURSEMENTS", "amount": Decimal("75")}],
+    )
+
+    january = response["months"][0]
+    assert january["reimbursements"] == "75.00"
+    assert january["operatingIdentifiedTotal"] == "75.00"
+    assert response["ytd"]["reimbursements"] == "75.00"
+    assert "estimated" not in january
+    assert "ytdEstimated" not in response["ytd"]
+
+
+def test_servipag_is_an_explicit_operating_expense() -> None:
+    response = build_expenses_response(
+        COMPANY_ID,
+        2026,
+        [{"month": 1, "last_transaction_date": date(2026, 1, 30)}],
+        [{"month": 1, "category_code": "EXPENSE_SERVIPAG_SERVICES", "amount": Decimal("125") }],
+    )
+
+    assert response["months"][0]["servipagServices"] == "125.00"
+    assert response["months"][0]["operatingIdentifiedTotal"] == "125.00"
+    assert response["ytd"]["servipagServices"] == "125.00"
+
+
+def test_service_collection_payments_are_explicit_real_operating_expenses() -> None:
+    response = build_expenses_response(
+        COMPANY_ID,
+        2026,
+        [{"month": 1, "last_transaction_date": date(2026, 1, 30)}],
+        [{"month": 1, "category_code": "EXPENSE_SERVICE_COLLECTION_PAYMENTS", "amount": Decimal("125")}],
+    )
+
+    assert response["months"][0]["serviceCollectionPayments"] == "125.00"
+    assert response["months"][0]["operatingIdentifiedTotal"] == "125.00"
+    assert response["ytd"]["serviceCollectionPayments"] == "125.00"
+
+
 def test_expenses_distinguish_covered_zero_from_missing_and_ytd_is_incomplete() -> None:
     response = build_expenses_response(
         COMPANY_ID,
@@ -103,6 +145,7 @@ def test_expenses_query_has_company_scope_and_explicit_allowlist() -> None:
     assert "available_periods" in sql
     assert "GREATEST" in sql
     assert "movement.direction = 'DEBE'" in sql
+    assert "DATE '2026-10-01'" in sql
     other_sql = str(OTHER_INCOME_SQL)
     assert OTHER_INCOME_CATEGORY in other_sql
     assert "inflow.company_id = :company_id" in other_sql

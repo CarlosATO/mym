@@ -26,7 +26,7 @@ test('audit rule creation is exact, bank-scoped, AUTO, and idempotent', () => {
 })
 
 test('import auto-classifies only unambiguous active AUTO rules', () => {
-  assert.match(bankStatements, /function applyAutoDebitRules/)
+  assert.match(bankStatements, /function applyAutoRules/)
   assert.match(bankStatements, /\.eq\("mode", "AUTO"\)/)
   assert.match(bankStatements, /\.eq\("active", true\)/)
   assert.match(bankStatements, /const categoryIds = \[\.\.\.new Set/)

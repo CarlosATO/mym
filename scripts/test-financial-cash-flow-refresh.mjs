@@ -55,3 +55,24 @@ test('read-only category loading cannot refresh the route from the client', () =
   assert.match(page, /getFinancialClassificationCategories/)
   assert.match(page, /categories=\{categories\}/)
 })
+
+test('quick pending-review filter reuses the review filter and its live count', () => {
+  assert.match(client, /data\.pendingMovements - locallyReviewedPendingCount/)
+  assert.match(client, /Pendientes de revisión · \{pendingReviewCount\}/)
+  assert.match(client, /aria-pressed=\{classificationFilter === "PENDING"\}/)
+  assert.match(client, /setClassificationFilter\("PENDING"\)/)
+  assert.match(client, /navigateQuery\(year, month, accountId, 1, "PENDING", search, categoryFilter, scope, direction\)/)
+  assert.match(client, /value=\{classificationFilter\}/)
+})
+
+test('confirmed pending movements leave the quick-filter view locally', () => {
+  assert.match(client, /setLocallyReviewedMovementIds\(\(current\) =>/)
+  assert.match(client, /movement\.review_status === "PENDING"/)
+  assert.match(client, /!locallyReviewedMovementIds\.has\(movement\.id\)/)
+  assert.match(client, /review_status: "REVIEWED" as const/)
+})
+
+test('quick filter wraps with the existing responsive filter bar', () => {
+  assert.match(client, /<div className="mt-2 flex flex-wrap items-center gap-1 border-b/)
+  assert.match(client, /<form className="flex flex-wrap gap-1"/)
+})

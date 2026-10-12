@@ -40,8 +40,16 @@ import {
 } from "@/app/actions/control-financiero/classification";
 import {
   bankMovementDirection,
+  categoryTreatment,
   eligibleFinancialCategories,
+  filterCategoriesByTreatment,
+  type CategoryTreatment,
 } from "@/lib/control-financiero/classification";
+import {
+  completeFinancialPayrollPaymentDraftAction,
+  getFinancialPayrollPaymentDraftAction,
+  saveFinancialPayrollPaymentDraftAction,
+} from "@/app/actions/control-financiero/payroll";
 
 const MONTHS = [
   "ENE",
@@ -68,6 +76,32 @@ const bankDisplayName = (value: string) =>
   value.replace(/^Caylo\s+/i, "").replace(/^Itau$/i, "Itaú");
 const accountLabel = (account: FinancialBankAccount) =>
   `${bankDisplayName(account.bank_name)} · •••• ${account.account_number.slice(-4)}`;
+const PAYROLL_MONTHS: Record<string, number> = {
+  ENE: 1, FEB: 2, MAR: 3, ABR: 4, MAY: 5, JUN: 6,
+  JUL: 7, AGO: 8, SEP: 9, OCT: 10, NOV: 11, DIC: 12,
+};
+type PayrollAllocationDraft = {
+  id: string;
+  workerNameSnapshot: string;
+  workerRut: string;
+  amount: string;
+};
+function payrollPeriodFromDescription(description: string | null, transactionDate: string) {
+  const match = description?.toUpperCase().match(/\b(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)\w*\s+(20\d{2})\b/);
+  if (match && PAYROLL_MONTHS[match[1]]) return { year: match[2], month: String(PAYROLL_MONTHS[match[1]]) };
+  return { year: transactionDate.slice(0, 4), month: String(Number(transactionDate.slice(5, 7))) };
+}
+function payrollStatusLabel(status: string | null | undefined) {
+  return {
+    PENDING_PAYROLL: "Pendiente de Libro",
+    MATCHED: "Conciliado",
+    AMOUNT_DIFFERENCE: "Diferencia de monto",
+    NOT_FOUND_IN_PAYROLL: "No encontrado en Libro",
+    NOT_APPLICABLE: "Fuera de libro",
+    DRAFT: "Borrador",
+    COMPLETE: "Desglose completo",
+  }[status ?? ""] ?? status ?? "Pendiente";
+}
 const categoryRootOrder = [
   "INCOME",
   "EXPENSE",
@@ -217,8 +251,23 @@ export function CashFlowClient({
     useState<ClassificationContext | null>(null);
   const [classificationLoading, startClassification] = useTransition();
   const [classificationMessage, setClassificationMessage] = useState("");
+  const [payrollAllocations, setPayrollAllocations] = useState<PayrollAllocationDraft[]>([]);
+  const [payrollPeriodYear, setPayrollPeriodYear] = useState("");
+  const [payrollPeriodMonth, setPayrollPeriodMonth] = useState("");
+  const [payrollComplete, setPayrollComplete] = useState(false);
+  const [payrollBatchStatus, setPayrollBatchStatus] = useState<"DRAFT" | "COMPLETE" | null>(null);
+  const [payrollFormalStatus, setPayrollFormalStatus] = useState<string | null>(null);
+  const [payrollFormalAmount, setPayrollFormalAmount] = useState<number | null>(null);
+  const [payrollFormalDifference, setPayrollFormalDifference] = useState<number | null>(null);
+  const [payrollMessage, setPayrollMessage] = useState("");
+  const [payrollSaving, startPayrollSave] = useTransition();
+  const payrollContextCache = useRef(new Map<string, ClassificationContext>());
+  const payrollDraftCache = useRef(new Map<string, Awaited<ReturnType<typeof getFinancialPayrollPaymentDraftAction>>>());
+  const payrollDraftPromiseCache = useRef(new Map<string, Promise<Awaited<ReturnType<typeof getFinancialPayrollPaymentDraftAction>>>>());
+  const selectedPayrollMovementId = useRef<string | null>(null);
   const [categoryEditOpen, setCategoryEditOpen] = useState(false);
   const [categorySearch, setCategorySearch] = useState("");
+  const [categoryTreatmentTab, setCategoryTreatmentTab] = useState<CategoryTreatment>("CASH");
   const [categoryChangeReason, setCategoryChangeReason] = useState("");
   const [differenceOpen, setDifferenceOpen] = useState(false);
   const [differenceReason, setDifferenceReason] = useState("");
@@ -265,6 +314,9 @@ export function CashFlowClient({
   const [classificationFilter, setClassificationFilter] = useState(
     data.pageFilters.classificationFilter,
   );
+  const [locallyReviewedMovementIds, setLocallyReviewedMovementIds] = useState<Set<string>>(
+    new Set(),
+  );
   const [search, setSearch] = useState(data.pageFilters.search);
   const [categoryFilter, setCategoryFilter] = useState(
     data.pageFilters.categoryId ?? "",
@@ -283,6 +335,7 @@ export function CashFlowClient({
       setSelectedAccountId(nextAccountId);
     }
     setClassificationFilter(data.pageFilters.classificationFilter);
+    setLocallyReviewedMovementIds(new Set());
     setSearch(data.pageFilters.search);
     setCategoryFilter(data.pageFilters.categoryId ?? "");
   }, [accountId, data.pageFilters]);
@@ -488,39 +541,94 @@ export function CashFlowClient({
     nextScope,
     nextDirection,
   ));
+  const loadPayrollDraft = (movementId: string) => {
+    const cachedDraft = payrollDraftCache.current.get(movementId);
+    if (cachedDraft) return Promise.resolve(cachedDraft);
+    const pendingDraft = payrollDraftPromiseCache.current.get(movementId);
+    if (pendingDraft) return pendingDraft;
+    const request = getFinancialPayrollPaymentDraftAction(movementId).then((draft) => {
+      payrollDraftCache.current.set(movementId, draft);
+      payrollDraftPromiseCache.current.delete(movementId);
+      return draft;
+    }).catch((error) => {
+      payrollDraftPromiseCache.current.delete(movementId);
+      throw error;
+    });
+    payrollDraftPromiseCache.current.set(movementId, request);
+    return request;
+  };
+  const hydratePayrollDraft = async (movementId: string) => {
+    const result = await loadPayrollDraft(movementId);
+    if (selectedPayrollMovementId.current !== movementId || !result.ok || !result.draft) return;
+    const { batch, allocations } = result.draft;
+    setPayrollPeriodYear(String(batch.period_year));
+    setPayrollPeriodMonth(String(batch.period_month));
+    setPayrollAllocations(allocations.filter((allocation) => allocation.allocationType === "OFF_BOOK").map((allocation) => ({
+      id: allocation.id,
+      workerNameSnapshot: allocation.workerNameSnapshot ?? "",
+      workerRut: allocation.workerRut ?? "",
+      amount: String(allocation.amount),
+    })));
+    setPayrollBatchStatus(batch.status);
+    setPayrollComplete(batch.status === "COMPLETE");
+    setPayrollFormalStatus(batch.formal_reconciliation_status ?? null);
+    setPayrollFormalAmount(batch.formal_payroll_amount ?? null);
+    setPayrollFormalDifference(batch.formal_difference ?? null);
+  };
+  useEffect(() => {
+    for (const movement of data.movements) {
+      if (movement.direction !== "DEBE" || movement.category_code !== "EXPENSE_SALARIES_WAGES") continue;
+      if (payrollContextCache.current.has(movement.id)) continue;
+      void loadMovementContext(movement.id).then((context) => {
+        payrollContextCache.current.set(movement.id, context);
+      }).catch(() => undefined);
+      void loadPayrollDraft(movement.id).catch(() => undefined);
+    }
+  }, [data.movements]);
   const applyFilters = (event: React.FormEvent) => {
     event.preventDefault();
     navigateQuery(year, month, accountId, 1, classificationFilter, search, categoryFilter);
   };
-  const openMovement = (movement: CashFlowDashboard["movements"][number]) =>
+  const openMovement = (movement: CashFlowDashboard["movements"][number]) => {
+    const payrollPeriod = payrollPeriodFromDescription(movement.operation_description, movement.transaction_date);
+    selectedPayrollMovementId.current = movement.id;
+    setSelectedMovement(movement);
+    setClassificationContext(payrollContextCache.current.get(movement.id) ?? null);
+    setClassificationMessage("");
+    setClassificationCategoryId(movement.category_id ?? "");
+    const existingCategory = movement.category_id
+      ? categories.find((category) => category.id === movement.category_id)
+      : null;
+    setCategoryTreatmentTab(existingCategory ? categoryTreatment(existingCategory) : "CASH");
+    setCategoryEditOpen(false);
+    setCategorySearch("");
+    setCategoryChangeReason("");
+    setCounterparty(movement.counterparty ?? "");
+    setNote(movement.classification_note ?? "");
+    setRuleName(`Clasificar ${movement.normalized_description ?? movement.operation_description}`);
+    setRuleValue(movement.normalized_description ?? movement.operation_description);
+    setRulePreview(null);
+    setPayrollMessage("");
+    setPayrollAllocations([]);
+    setPayrollPeriodYear(payrollPeriod.year);
+    setPayrollPeriodMonth(payrollPeriod.month);
+    setPayrollComplete(false);
+    setPayrollBatchStatus(null);
+    setPayrollFormalStatus(null);
+    setPayrollFormalAmount(null);
+    setPayrollFormalDifference(null);
+    void hydratePayrollDraft(movement.id).catch(() => undefined);
+    if (payrollContextCache.current.has(movement.id)) return;
     startClassification(async () => {
-      setSelectedMovement(movement);
-      setClassificationContext(null);
-      setClassificationMessage("");
-      setClassificationCategoryId(movement.category_id ?? "");
-      setCategoryEditOpen(false);
-      setCategorySearch("");
-      setCategoryChangeReason("");
-      setCounterparty(movement.counterparty ?? "");
-      setNote(movement.classification_note ?? "");
-      setRuleName(
-        `Clasificar ${movement.normalized_description ?? movement.operation_description}`,
-      );
-      setRuleValue(
-        movement.normalized_description ?? movement.operation_description,
-      );
-      setRulePreview(null);
       try {
         setClassificationContext(await loadMovementContext(movement.id));
       } catch (error) {
-        setClassificationMessage(
-          error instanceof Error
-            ? error.message
-            : "No se pudo cargar equivalencias.",
-        );
+        setClassificationMessage(error instanceof Error ? error.message : "No se pudo cargar equivalencias.");
       }
     });
+  };
   const closeMovement = () => {
+    selectedPayrollMovementId.current = null;
     setSelectedMovement(null);
     setClassificationContext(null);
     setRulePreview(null);
@@ -528,6 +636,12 @@ export function CashFlowClient({
     setCategorySearch("");
     setCategoryChangeReason("");
     setClassificationMessage("");
+    setPayrollMessage("");
+    setPayrollAllocations([]);
+    setPayrollBatchStatus(null);
+    setPayrollFormalStatus(null);
+    setPayrollFormalAmount(null);
+    setPayrollFormalDifference(null);
   };
   const openDifference = () => {
     const difference = reconciliation;
@@ -656,6 +770,11 @@ export function CashFlowClient({
       if (!selectedMovement || selectedMovement.direction !== "DEBE") return;
       const result = await confirmFinancialMovementClassification(selectedMovement.id);
       if (!result.ok) return setClassificationMessage(result.message);
+      setLocallyReviewedMovementIds((current) => {
+        const next = new Set(current);
+        next.add(selectedMovement.id);
+        return next;
+      });
       closeMovement();
     });
   const saveObservation = () =>
@@ -665,6 +784,68 @@ export function CashFlowClient({
       if (!result.ok) return setClassificationMessage(result.message);
       setClassificationMessage("Observación guardada.");
     });
+  const payrollInputAllocations = () => payrollAllocations.map((allocation) => ({
+    allocationType: "OFF_BOOK" as const,
+    workerRut: allocation.workerRut,
+    workerNameSnapshot: allocation.workerNameSnapshot,
+    amount: Number(allocation.amount),
+  }));
+  const savePayrollDraft = () => startPayrollSave(async () => {
+    if (!selectedMovement) return;
+    try {
+      const result = await saveFinancialPayrollPaymentDraftAction({
+        bankMovementId: selectedMovement.id,
+        periodYear: Number(payrollPeriodYear),
+        periodMonth: Number(payrollPeriodMonth),
+        allocations: payrollInputAllocations(),
+      });
+      if (!result.ok) return setPayrollMessage(result.message);
+      setPayrollBatchStatus("DRAFT");
+      setPayrollFormalStatus("PENDING_PAYROLL");
+      setPayrollFormalAmount(null);
+      setPayrollFormalDifference(null);
+      setPayrollMessage("Borrador guardado");
+      payrollDraftCache.current.set(selectedMovement.id, await getFinancialPayrollPaymentDraftAction(selectedMovement.id));
+    } catch (error) {
+      setPayrollMessage(error instanceof Error ? error.message : "No se pudo guardar el borrador.");
+    }
+  });
+  const completePayroll = () => startPayrollSave(async () => {
+    if (!selectedMovement || !payrollOffBookValid) return;
+    try {
+      const draft = await saveFinancialPayrollPaymentDraftAction({
+        bankMovementId: selectedMovement.id,
+        periodYear: Number(payrollPeriodYear),
+        periodMonth: Number(payrollPeriodMonth),
+        allocations: payrollInputAllocations(),
+      });
+      if (!draft.ok) return setPayrollMessage(draft.message);
+      const result = await completeFinancialPayrollPaymentDraftAction({ bankMovementId: selectedMovement.id });
+      if (!result.ok) return setPayrollMessage(result.message);
+      setPayrollComplete(true);
+      setPayrollBatchStatus("COMPLETE");
+      setPayrollFormalStatus("PENDING_PAYROLL");
+      setPayrollFormalAmount(null);
+      setPayrollFormalDifference(null);
+      setPayrollMessage("Desglose completo");
+      payrollDraftCache.current.set(selectedMovement.id, await getFinancialPayrollPaymentDraftAction(selectedMovement.id));
+    } catch (error) {
+      setPayrollMessage(error instanceof Error ? error.message : "No se pudo completar el desglose.");
+    }
+  });
+  const addPayrollAllocation = () => setPayrollAllocations((current) => [
+    ...current,
+    { id: crypto.randomUUID(), workerNameSnapshot: "", workerRut: "", amount: "" },
+  ]);
+  const updatePayrollAllocation = (id: string, patch: Partial<PayrollAllocationDraft>) =>
+    setPayrollAllocations((current) => current.map((allocation) => allocation.id === id ? { ...allocation, ...patch } : allocation));
+  const removePayrollAllocation = (id: string) =>
+    setPayrollAllocations((current) => current.filter((allocation) => allocation.id !== id));
+  const payrollAssignedTotal = payrollAllocations.reduce((total, allocation) => total + (Number(allocation.amount) || 0), 0);
+  const payrollReadOnly = payrollBatchStatus === "COMPLETE";
+  const payrollBankAmount = Number(selectedMovement?.debit_amount ?? 0);
+  const payrollFormalExpectedAmount = payrollBankAmount - payrollAssignedTotal;
+  const payrollOffBookValid = payrollAssignedTotal <= payrollBankAmount && payrollBankAmount > 0;
   const annualNet = data.annual.credits - data.annual.debits;
   const monthlyNet = data.monthly
     ? data.monthly.credits - data.monthly.debits
@@ -672,6 +853,31 @@ export function CashFlowClient({
   const coverage = data.annual.openMonths
     ? `Cobertura: ${data.annual.closedMonths} meses cerrados · ${data.annual.openMonths} en curso`
     : `Cobertura: ${data.annual.closedMonths} / 12 meses cerrados`;
+  const locallyReviewedPendingCount = data.movements.filter(
+    (movement) =>
+      movement.review_status === "PENDING" &&
+      locallyReviewedMovementIds.has(movement.id),
+  ).length;
+  const pendingReviewCount = Math.max(
+    0,
+    data.pendingMovements - locallyReviewedPendingCount,
+  );
+  const tableData = {
+    ...data,
+    movements: data.movements
+      .filter(
+        (movement) =>
+          classificationFilter !== "PENDING" ||
+          (movement.review_status === "PENDING" &&
+            !locallyReviewedMovementIds.has(movement.id)),
+      )
+      .map((movement) =>
+        locallyReviewedMovementIds.has(movement.id)
+          ? { ...movement, review_status: "REVIEWED" as const }
+          : movement,
+      ),
+    pendingMovements: pendingReviewCount,
+  };
   const eligibleCategories = selectedMovement
     ? eligibleFinancialCategories(
         categories,
@@ -679,7 +885,8 @@ export function CashFlowClient({
           bankMovementDirection(selectedMovement.credit_amount, selectedMovement.debit_amount),
       )
     : [];
-  const filteredEligibleCategories = eligibleCategories.filter((category) => {
+  const treatmentEligibleCategories = filterCategoriesByTreatment(eligibleCategories, categoryTreatmentTab);
+  const filteredEligibleCategories = treatmentEligibleCategories.filter((category) => {
     const query = categorySearch.trim().toLocaleLowerCase();
     return !query || category.name.toLocaleLowerCase().includes(query) || category.code.toLocaleLowerCase().includes(query);
   });
@@ -690,6 +897,17 @@ export function CashFlowClient({
   const pnlTreatmentChanges = Boolean(
     currentCategory && destinationCategory && currentCategory.affects_pnl_directly !== destinationCategory.affects_pnl_directly,
   );
+  const selectClassificationCategory = (categoryId: string) => {
+    setClassificationCategoryId(categoryId);
+    const category = categories.find((item) => item.id === categoryId);
+    if (category) setCategoryTreatmentTab(categoryTreatment(category));
+  };
+  const changeCategoryTreatmentTab = (treatment: CategoryTreatment) => {
+    setCategoryTreatmentTab(treatment);
+    if (destinationCategory && categoryTreatment(destinationCategory) !== treatment) {
+      setClassificationCategoryId("");
+    }
+  };
 
   return (
     <main className="min-h-[430px] bg-[#EFE9E1] px-4 py-2 sm:px-6 sm:py-3">
@@ -844,9 +1062,29 @@ export function CashFlowClient({
               <option value="PENDING">Pendientes</option>
               <option value="REVIEWED">Revisados</option>
               <option value="HISTORICAL">Histórico</option>
-            </select>
-          </label>
-          <select
+             </select>
+           </label>
+           <button
+             type="button"
+             aria-pressed={classificationFilter === "PENDING"}
+             disabled={isFiltering}
+             onClick={() => {
+               setClassificationFilter("PENDING");
+               navigateQuery(year, month, accountId, 1, "PENDING", search, categoryFilter, scope, direction);
+             }}
+             className={`inline-flex h-8 items-center gap-1.5 border px-2 text-xs font-semibold transition-colors ${
+               pendingReviewCount > 0
+                 ? "border-[#A23E48]/50 bg-[#FFF8F6] text-[#A23E48] hover:bg-[#FDECEA]"
+                 : "border-[#AC9C8D] bg-white text-[#322D29]/65 hover:bg-[#FAF8F5]"
+             } ${classificationFilter === "PENDING" ? "ring-1 ring-[#A23E48]/40" : ""}`}
+           >
+             <span
+               className={`h-1.5 w-1.5 rounded-full ${pendingReviewCount > 0 ? "bg-[#A23E48]" : "bg-[#AC9C8D]"}`}
+               aria-hidden="true"
+             />
+             Pendientes de revisión · {pendingReviewCount}
+           </button>
+           <select
             aria-label="Tipo de movimiento"
             value={direction}
             disabled={isFiltering}
@@ -999,8 +1237,8 @@ export function CashFlowClient({
             No hay cartola para este mes.
           </div>
         ) : (
-          <MovementTable
-            data={data}
+           <MovementTable
+             data={tableData}
             year={year}
             month={month}
            accountId={accountId}
@@ -1164,7 +1402,7 @@ export function CashFlowClient({
       >
         <SheetContent
           side="right"
-          className="w-full overflow-y-auto border-[#D1C7BD] bg-[#EFE9E1] sm:max-w-xl"
+          className="w-full overflow-y-auto border-[#D1C7BD] bg-[#EFE9E1] sm:max-w-[820px]"
         >
           <SheetHeader className="border-b border-[#D1C7BD] bg-white">
             <SheetTitle>Revisión del movimiento</SheetTitle>
@@ -1177,26 +1415,75 @@ export function CashFlowClient({
           {selectedMovement && (
             <div className="space-y-4 p-5 text-xs">
               <div className="border border-[#D1C7BD] bg-white p-4">
-                <p className="font-semibold">
-                  {date(selectedMovement.transaction_date)} ·{" "}
-                  {selectedMovement.operation_description}
+                <p className="font-semibold">{selectedMovement.operation_description}</p>
+                <p className="mt-1 text-[#322D29]/65">
+                  {bankDisplayName(data.accounts.find((account) => account.id === selectedMovement.bank_account_id)?.bank_name ?? "Cuenta bancaria")} · {date(selectedMovement.transaction_date)}
                 </p>
-                <p className="mt-2">
-                  Haber {money(Number(selectedMovement.credit_amount))} · Debe{" "}
-                  {money(Number(selectedMovement.debit_amount))} · Saldo{" "}
-                  {money(Number(selectedMovement.balance_after))}
-                </p>
+                <p className="mt-2">Pago: {money(Number(selectedMovement.debit_amount))}</p>
                 <p className="mt-1 text-[#322D29]/60">
-                  Cuenta {selectedMovement.bank_account_id} · Estado{" "}
+                  Estado{" "}
                   {selectedMovement.review_status === "HISTORICAL"
                     ? "Histórico"
                     : selectedMovement.review_status === "REVIEWED"
                       ? "Revisado"
                       : selectedMovement.review_status === "PENDING"
                         ? "Pendiente de revisión"
-                        : selectedMovement.category_id ? "Clasificado" : "Pendiente de clasificación"}
+                      : selectedMovement.category_id ? "Clasificado" : "Pendiente de clasificación"}
                 </p>
               </div>
+              {selectedMovement.direction === "DEBE" && selectedMovement.category_code === "EXPENSE_SALARIES_WAGES" && (
+                <div className="border border-[#AC9C8D] bg-white p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-semibold">Desglose de nómina</p>
+                    <span className="border border-[#AC9C8D] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em]">{payrollPeriodMonth ? MONTHS[Number(payrollPeriodMonth) - 1] : "—"} {payrollPeriodYear}</span>
+                  </div>
+                  <p className="mt-1 text-[#322D29]/65">
+                    Todo el pago se considera asociado al Libro de Remuneraciones. Agrega sólo las personas que no aparecerán en el Libro.
+                  </p>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                     <label className="text-[10px] font-semibold uppercase tracking-[0.08em]">Año económico<input className="mt-1 w-full border border-[#D1C7BD] bg-[#FCFBF9] p-2 text-xs" type="number" value={payrollPeriodYear} disabled={payrollReadOnly} onChange={(event) => setPayrollPeriodYear(event.target.value)} /></label>
+                     <label className="text-[10px] font-semibold uppercase tracking-[0.08em]">Mes económico<input className="mt-1 w-full border border-[#D1C7BD] bg-[#FCFBF9] p-2 text-xs" type="number" min="1" max="12" value={payrollPeriodMonth} disabled={payrollReadOnly} onChange={(event) => setPayrollPeriodMonth(event.target.value)} /></label>
+                  </div>
+                  <div className="mt-4 border border-[#D1C7BD]">
+                    {payrollAllocations.length > 0 && <div className="divide-y divide-[#EEE8E0]">
+                      {payrollAllocations.map((allocation) => <div key={allocation.id} className="grid gap-2 p-3 sm:grid-cols-[1.3fr_1fr_0.8fr_1fr_auto] sm:items-end">
+                         <label className="text-[10px] font-semibold uppercase tracking-[0.08em]">Nombre<input className="mt-1 h-9 w-full border border-[#D1C7BD] bg-[#FCFBF9] px-2 text-xs" value={allocation.workerNameSnapshot} disabled={payrollReadOnly} onChange={(event) => updatePayrollAllocation(allocation.id, { workerNameSnapshot: event.target.value })} /></label>
+                         <label className="text-[10px] font-semibold uppercase tracking-[0.08em]">RUT<input className="mt-1 h-9 w-full border border-[#D1C7BD] bg-[#FCFBF9] px-2 text-xs" value={allocation.workerRut} disabled={payrollReadOnly} onChange={(event) => updatePayrollAllocation(allocation.id, { workerRut: event.target.value })} /></label>
+                         <label className="text-[10px] font-semibold uppercase tracking-[0.08em]">Monto<input className="mt-1 h-9 w-full border border-[#D1C7BD] bg-[#FCFBF9] px-2 text-xs tabular-nums" type="number" min="0" value={allocation.amount} disabled={payrollReadOnly} onChange={(event) => updatePayrollAllocation(allocation.id, { amount: event.target.value })} /></label>
+                         <button type="button" className="h-9 px-2 text-xs text-[#72383D] underline" disabled={payrollReadOnly} onClick={() => removePayrollAllocation(allocation.id)}>Eliminar</button>
+                      </div>)}
+                    </div>}
+                     <button type="button" className="m-3 border border-[#AC9C8D] px-3 py-2 text-xs font-semibold" disabled={payrollReadOnly} onClick={addPayrollAllocation}>+ Agregar persona fuera de libro</button>
+                  </div>
+                  <div className="mt-4 grid gap-2 border-t border-[#D1C7BD] pt-3 text-xs sm:grid-cols-3">
+                    <p>Nómina bancaria <strong className="block tabular-nums">{money(payrollBankAmount)}</strong></p>
+                    <p>Fuera de libro <strong className="block tabular-nums">{money(payrollAssignedTotal)}</strong></p>
+                    <p className={payrollFormalExpectedAmount < 0 ? "text-[#72383D]" : ""}>Estimado en libro <strong className="block tabular-nums">{money(payrollFormalExpectedAmount)}</strong></p>
+                  </div>
+                  <div className="mt-3 border-t border-[#D1C7BD] pt-3 text-xs">
+                    {payrollFormalAmount === null ? (
+                      <p>Conciliación <strong>Pendiente de Libro</strong></p>
+                    ) : (
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        <p>Libro líquido <strong className="block tabular-nums">{money(payrollFormalAmount)}</strong></p>
+                        <p>Diferencia <strong className="block tabular-nums">{money(payrollFormalDifference ?? 0)}</strong></p>
+                        <p>Estado <strong className="block">{payrollStatusLabel(payrollFormalStatus)}</strong></p>
+                      </div>
+                    )}
+                  </div>
+                  {payrollBatchStatus && <p className={`mt-3 text-xs font-semibold ${payrollBatchStatus === "COMPLETE" ? "text-[#53705C]" : ""}`}>{payrollStatusLabel(payrollBatchStatus)}</p>}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button type="button" size="sm" variant="outline" onClick={savePayrollDraft} disabled={payrollSaving || payrollComplete}>Guardar desglose</Button>
+                    <Button type="button" size="sm" onClick={completePayroll} disabled={payrollSaving || payrollComplete || !payrollOffBookValid}>
+                      {payrollSaving ? "Guardando…" : "Completar desglose"}
+                    </Button>
+                  </div>
+                  {payrollMessage && <p className="mt-2 border border-[#D1C7BD] bg-[#F3E8E4] p-2">{payrollMessage}</p>}
+                </div>
+              )}
+              <details open={selectedMovement.category_code !== "EXPENSE_SALARIES_WAGES"} className="border border-[#D1C7BD] bg-[#FAF8F5]">
+                <summary className="cursor-pointer px-4 py-3 font-semibold">Clasificación bancaria</summary>
+                <div className="space-y-4 border-t border-[#D1C7BD] p-4">
               {classificationContext && (
                 <div className="border border-[#AC9C8D] bg-white p-4">
                   <p className="font-semibold">
@@ -1221,9 +1508,9 @@ export function CashFlowClient({
                         type="button"
                         className="mt-2 underline"
                         onClick={() =>
-                          setClassificationCategoryId(
-                            classificationContext.ruleSuggestion!.category_id,
-                          )
+                           selectClassificationCategory(
+                             classificationContext.ruleSuggestion!.category_id,
+                           )
                         }
                       >
                         Usar sugerencia
@@ -1243,9 +1530,9 @@ export function CashFlowClient({
                           type="button"
                           className="mt-2 underline"
                           onClick={() =>
-                            setClassificationCategoryId(
-                              classificationContext.suggestion!.categoryId,
-                            )
+                             selectClassificationCategory(
+                               classificationContext.suggestion!.categoryId,
+                             )
                           }
                         >
                           Aplicar clasificación sugerida
@@ -1299,32 +1586,50 @@ export function CashFlowClient({
                       </Button>
                     )}
                  </div>
-                 {categoryEditOpen && (
-                   <div className="mt-4 border-t border-[#D1C7BD] pt-4">
-                     <p className="font-semibold">Nueva categoría</p>
-                     <input
+                  {categoryEditOpen && (
+                    <div className="mt-4 border-t border-[#D1C7BD] pt-4">
+                      <p className="font-semibold">Nueva categoría</p>
+                      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2" role="tablist" aria-label="Naturaleza de la categoría">
+                        {([
+                          ["PNL", "AFECTA RESULTADO", "Se incorpora directamente como ingreso o gasto en el Estado de Resultados."],
+                          ["CASH", "SÓLO CAJA", "Mueve dinero, pero no afecta directamente el Estado de Resultados."],
+                        ] as const).map(([treatment, label, help]) => (
+                          <button
+                            key={treatment}
+                            type="button"
+                            role="tab"
+                            aria-selected={categoryTreatmentTab === treatment}
+                            onClick={() => changeCategoryTreatmentTab(treatment)}
+                            className={`min-h-10 border px-3 py-2 text-left text-xs font-bold tracking-[0.08em] transition-colors ${categoryTreatmentTab === treatment ? "border-[#72383D] bg-[#72383D] text-white" : "border-[#AC9C8D] bg-white text-[#72383D] hover:bg-[#F5F0EA]"}`}
+                          >
+                            <span className="block">{label}</span>
+                            <span className={`mt-1 block text-[11px] font-normal normal-case tracking-normal ${categoryTreatmentTab === treatment ? "text-white/85" : "text-[#322D29]/60"}`}>{help}</span>
+                          </button>
+                        ))}
+                      </div>
+                      <input
                        value={categorySearch}
                        onChange={(event) => setCategorySearch(event.target.value)}
                        placeholder="Buscar por nombre o código"
                        className="mt-2 h-9 w-full border border-[#AC9C8D] bg-white px-2"
                      />
                      <select
-                       value={classificationCategoryId}
-                       onChange={(event) => setClassificationCategoryId(event.target.value)}
-                       className="mt-2 h-9 w-full border border-[#AC9C8D] bg-white px-2"
-                     >
-                       <option value="">Selecciona una categoría</option>
-                       {filteredEligibleCategories.map((category) => (
-                         <option key={category.id} value={category.id}>
-                           {categoryPath(category, categories)} · {category.code} · {category.affects_pnl_directly ? "Afecta P&L" : "Sólo caja"}
-                         </option>
-                       ))}
-                     </select>
+                        value={classificationCategoryId}
+                        onChange={(event) => selectClassificationCategory(event.target.value)}
+                        className="mt-2 h-9 w-full border border-[#AC9C8D] bg-white px-2"
+                      >
+                        <option value="">Selecciona una categoría</option>
+                        {filteredEligibleCategories.map((category) => (
+                          <option key={category.id} value={category.id}>
+                            {categoryPath(category, categories)} · {category.code}
+                          </option>
+                        ))}
+                      </select>
                      <p className="mt-2 text-[11px] text-[#322D29]/60">Sólo se muestran hojas activas compatibles con {selectedMovement.direction ?? "la dirección bancaria"}.</p>
                      {classificationCategoryId !== selectedMovement.category_id && destinationCategory && (
                        <div className="mt-3 border border-[#AC9C8D] bg-[#FAF8F5] p-3">
                          <p>{currentCategory?.name ?? "Pendiente"} → {destinationCategory.name}</p>
-                         {pnlTreatmentChanges && <p className="mt-2 text-[#8A4B08]">Este cambio modifica el tratamiento del movimiento en resultados.</p>}
+                          {pnlTreatmentChanges && <p className="mt-2 text-[#8A4B08]">Este cambio modificará si el movimiento afecta directamente el Estado de Resultados.</p>}
                        </div>
                      )}
                      <label className="mt-3 block">
@@ -1458,6 +1763,8 @@ export function CashFlowClient({
                   {classificationMessage}
                 </p>
               )}
+                </div>
+              </details>
             </div>
           )}
         </SheetContent>
@@ -1636,15 +1943,16 @@ function MovementTable({
               <th className="px-4 py-3 text-right">Haber</th>
               <th className="px-4 py-3 text-right">Debe</th>
               <th className="px-4 py-3 text-right">Saldo</th>
-              <th className="px-4 py-3">Categoría</th>
-               <th className="px-4 py-3">Origen</th>
-               <th className="px-4 py-3">Revisión</th>
+               <th className="px-4 py-3">Categoría</th>
+                <th className="px-4 py-3">Origen</th>
+                <th className="px-4 py-3">Revisión</th>
+                <th className="px-4 py-3">Acciones</th>
             </tr>
           </thead>
           <tbody>
             {data.movements.map((row) => (
               <tr key={row.id} className="border-t border-[#EEE8E1]">
-                <td className="px-4 py-3 tabular-nums">
+                <td className={`px-4 py-3 tabular-nums ${row.review_status === "PENDING" ? "border-l-4 border-l-[#A23E48] bg-[#FFF8F6]" : ""}`}>
                   {date(row.transaction_date)}
                 </td>
                 <td className="px-4 py-3">
@@ -1671,18 +1979,28 @@ function MovementTable({
                      ? (row.classification_source ?? "Clasificado")
                      : "Pendiente de clasificación"}
                  </td>
-                 <td className="px-4 py-3">
-                   {row.direction === "HABER"
-                     ? "—"
-                     : row.review_status === "HISTORICAL"
-                       ? "Histórico"
-                       : row.review_status === "REVIEWED"
-                         ? "Revisado"
-                         : row.review_status === "PENDING"
-                           ? "Pendiente"
-                           : "—"}
-                 </td>
-              </tr>
+                   <td className="px-4 py-3">
+                     {row.direction === "HABER" ? "—" : row.review_status === "HISTORICAL" ? "Histórico" : row.review_status === "REVIEWED" ? "Revisado" : row.review_status === "PENDING" ? (
+                       <span className="inline-flex items-center gap-1.5 font-semibold text-[#A23E48]" title="Clasificación pendiente de confirmación">
+                         <span className="h-1.5 w-1.5 rounded-full bg-[#A23E48]" aria-hidden="true" />
+                         Pendiente
+                       </span>
+                     ) : "—"}
+                   </td>
+                  <td className="px-4 py-3">
+                    {row.direction === "DEBE" && row.category_code === "EXPENSE_SALARIES_WAGES" ? (
+                      <button
+                        type="button"
+                        className="font-semibold text-[#72383D] underline underline-offset-2 hover:text-[#4F2529]"
+                        onClick={() => onSelect(row)}
+                      >
+                        Desglosar nómina
+                      </button>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+               </tr>
             ))}
           </tbody>
         </table>

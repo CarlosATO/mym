@@ -44,9 +44,10 @@ test('loan and credit-line subtypes do not net or overlap', () => {
 })
 
 test('bank balance excludes credit-line availability and preserves negative balances', () => {
-  assert.match(cashFlow, /currentBalance: Array\.from\(latest\.values\(\)\)\.reduce/)
+  assert.match(cashFlow, /currentBalance: Array\.from\(latestAll\.values\(\)\)\.reduce/)
   assert.match(cashFlow, /n \+ row\.balance/)
   assert.match(cashFlow, /creditLineAvailable: creditLine\?\.available/)
+  assert.match(cashFlow, /availabilityIsNewer/)
 })
 
 test('non-P&L section exposes monthly/YTD rows and movement drill-down fields', () => {

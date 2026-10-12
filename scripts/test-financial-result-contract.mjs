@@ -30,8 +30,19 @@ test('uses the latest contiguous common coverage and leaves later months unavail
   const coverage = getCommonCoverage(sales, cogs, personnel, expenses)
   assert.deepEqual(coverage.months, months.slice(0, 8))
   const rows = buildStatementRows(sales, cogs, personnel, 10, expenses)
+  const total = rows.find(row => row.label === 'TOTAL GASTOS OPERATIVOS')
   const operating = rows.find(row => row.label === 'RESULTADO OPERACIONAL')
   const managerial = rows.find(row => row.label === 'RESULTADO GERENCIAL')
+  assert.deepEqual(rows.map(row => row.label).slice(3), [
+    'GASTOS DE PERSONAL', 'Otros ingresos', 'GASTOS OPERACIONALES IDENTIFICADOS',
+    'TOTAL GASTOS OPERATIVOS', 'RESULTADO OPERACIONAL',
+    'GASTOS FINANCIEROS / NO OPERACIONALES', 'RESULTADO GERENCIAL',
+  ])
+  assert.equal(total?.values[0], '150')
+  assert.equal(total?.values[7], '150')
+  assert.equal(total?.ytd, '1200')
+  assert.equal(total?.percentageYtd, 1200 / 8000 * 100)
+  assert.equal(total?.percentageYtd, (rows.find(row => row.label === 'GASTOS DE PERSONAL')?.percentageYtd ?? 0) + (rows.find(row => row.label === 'GASTOS OPERACIONALES IDENTIFICADOS')?.percentageYtd ?? 0))
   assert.equal(operating?.values[7], '350')
   assert.equal(operating?.values[8], null)
   assert.equal(managerial?.values[8], null)
@@ -39,6 +50,29 @@ test('uses the latest contiguous common coverage and leaves later months unavail
   assert.equal(managerial?.ytd, '2784')
   assert.equal(managerial?.percentageYtd, 2784 / 8000 * 100)
   assert.equal(operating?.percentageYtd, 2800 / 8000 * 100)
+})
+
+test('total operating expenses requires both components and propagates estimation', () => {
+  const estimatedPersonnel = {
+    ...personnel,
+    months: personnel.months.map((month, index) => index === 8
+      ? { ...month, status: 'ESTIMATED', totalPersonnel: '120' }
+      : month),
+  }
+  const estimatedExpenses = {
+    ...expenses,
+    months: expenses.months.map((month, index) => index === 8
+      ? { ...month, status: 'AVAILABLE', operatingIdentifiedTotal: '30' }
+      : month),
+    ytd: { ...expenses.ytd, operatingIdentifiedTotal: '430' },
+  }
+  const rows = buildStatementRows(sales, cogs, estimatedPersonnel, 10, estimatedExpenses)
+  const total = rows.find(row => row.label === 'TOTAL GASTOS OPERATIVOS')
+  assert.equal(total?.values[8], '150')
+  assert.equal(total?.estimated?.[8], true)
+  assert.equal(total?.ytd, '1350')
+  assert.equal(total?.ytdEstimated, true)
+  assert.equal(total?.values[9], null)
 })
 
 test('does not create derived results without all required sources', () => {

@@ -2,7 +2,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.financial.cogs import get_monthly_cogs
+from app.financial.cogs import get_monthly_cogs, get_provider_cogs
 from app.financial.expenses import get_monthly_expenses
 from app.financial.personnel import get_monthly_personnel
 from app.financial.receivables import get_receivables, get_receivables_analysis
@@ -37,6 +37,16 @@ def monthly_cogs(
     ),
 ) -> dict[str, Any]:
     return get_monthly_cogs(context.company_id, year)
+
+
+@router.get("/income-statement/provider-cogs")
+def provider_cogs(
+    year: int = Query(default=2026, ge=2000, le=2100),
+    context: AuthorizedCompanyContext = Depends(
+        require_company_permission(CONTROL_FINANCE_VIEW)
+    ),
+) -> dict[str, Any]:
+    return get_provider_cogs(context.company_id, year)
 
 
 @router.get("/income-statement/personnel")

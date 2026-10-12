@@ -117,6 +117,40 @@ MONTHLY_COGS_SQL = text(
 )
 
 
+PROVIDER_COGS_SOURCE = "integraciones.vw_bsale_provider_cogs_monthly"
+FAMILY_COGS_SOURCE = "integraciones.vw_bsale_provider_family_cogs_monthly"
+PROVIDER_COGS_SQL = text(
+    """
+    SELECT
+        'PROVIDER' AS row_type,
+        month,
+        provider_key,
+        provider_name,
+        NULL::text AS family_key,
+        NULL::text AS family_name,
+        gross_cogs,
+        credit_note_reversal
+    FROM integraciones.vw_bsale_provider_cogs_monthly
+    WHERE company_id = :company_id
+      AND year = :year
+    UNION ALL
+    SELECT
+        'FAMILY' AS row_type,
+        month,
+        provider_key,
+        provider_name,
+        family_key,
+        family_name,
+        gross_cogs,
+        credit_note_reversal
+    FROM integraciones.vw_bsale_provider_family_cogs_monthly
+    WHERE company_id = :company_id
+      AND year = :year
+    ORDER BY row_type, month, provider_key, family_key
+    """
+)
+
+
 def _money(value: Any) -> Decimal:
     if value is None:
         return Decimal("0.00")
@@ -217,6 +251,97 @@ def build_cogs_response(
         "months": months,
         "ytd": ytd,
     }
+
+
+def build_provider_cogs_response(
+    company_id: UUID,
+    year: int,
+    monthly_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate the provider COGS view to YTD using the same month cutoff as the engine."""
+    through_month = max((int(row["month"]) for row in monthly_rows), default=0)
+    providers: dict[str, dict[str, Any]] = {}
+    families: dict[str, dict[str, Any]] = {}
+    for row in monthly_rows:
+        if int(row["month"]) > through_month:
+            continue
+        row_type = str(row.get("row_type") or "PROVIDER")
+        key = str(row["provider_key"])
+        target = families if row_type == "FAMILY" else providers
+        aggregate_key = str(row.get("family_key")) if row_type == "FAMILY" else key
+        item = target.setdefault(aggregate_key, {
+            "provider_key": key,
+            "provider_name": row.get("provider_name") or "SIN PROVEEDOR",
+            "family_key": row.get("family_key"),
+            "family_name": row.get("family_name") or "Sin clasificar",
+            "gross": Decimal("0.00"),
+            "reversal": Decimal("0.00"),
+        })
+        item["gross"] += _money(row.get("gross_cogs"))
+        item["reversal"] += _money(row.get("credit_note_reversal"))
+
+    payload = []
+    for provider in sorted(
+        providers.values(),
+        key=lambda item: (item["provider_name"].casefold(), item["provider_key"]),
+    ):
+        payload.append({
+            "provider_key": provider["provider_key"],
+            "provider_name": provider["provider_name"],
+            "gross_cogs_ytd": _money_string(provider["gross"]),
+            "credit_note_reversal_ytd": _money_string(provider["reversal"]),
+            "net_cogs_ytd": _money_string(provider["gross"] - provider["reversal"]),
+        })
+
+    family_payload = []
+    for family in sorted(
+        families.values(),
+        key=lambda item: (item["provider_name"].casefold(), item["family_name"].casefold(), item["family_key"]),
+    ):
+        family_payload.append({
+            "provider_key": family["provider_key"],
+            "provider_name": family["provider_name"],
+            "family_key": family["family_key"],
+            "family_name": family["family_name"],
+            "gross_cogs_ytd": _money_string(family["gross"]),
+            "credit_note_reversal_ytd": _money_string(family["reversal"]),
+            "net_cogs_ytd": _money_string(family["gross"] - family["reversal"]),
+        })
+
+    return {
+        "company_id": str(company_id),
+        "year": year,
+        "currency": "CLP",
+        "source": PROVIDER_COGS_SOURCE,
+        "has_information": bool(monthly_rows),
+        "through_month": through_month or None,
+        "providers": payload,
+        "families": family_payload,
+    }
+
+
+def get_provider_cogs(company_id: UUID, year: int) -> dict[str, Any]:
+    settings = get_settings()
+    if settings.database_runtime_dsn is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Financial database is not configured",
+        )
+
+    params = {"company_id": company_id, "year": year}
+    try:
+        with get_session_factory(settings.database_runtime_dsn.get_secret_value())() as session:
+            rows = [
+                dict(row)
+                for row in session.execute(PROVIDER_COGS_SQL, params).mappings().all()
+            ]
+    except (SQLAlchemyError, OSError):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Financial provider COGS data is unavailable",
+        ) from None
+
+    return build_provider_cogs_response(company_id, year, rows)
 
 
 def get_monthly_cogs(company_id: UUID, year: int) -> dict[str, Any]:

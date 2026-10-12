@@ -29,6 +29,9 @@ export type SalesFamily = {
   months: Record<string, string>
   ytd: string
   line_count: number
+  cogsYtd?: string | null
+  profitYtd?: string | null
+  profitPercentageYtd?: number | null
 }
 
 export type SalesFamilyGroup = {
@@ -38,6 +41,10 @@ export type SalesFamilyGroup = {
   ytd: string
   line_count: number
   children: Array<SalesFamily & { detail_name: string }>
+  /** Provider gross margin (sales net of the provider's own COGS). Optional: only provider rows expose it. */
+  cogsYtd?: string | null
+  profitYtd?: string | null
+  profitPercentageYtd?: number | null
 }
 
 export type SalesFamilyMatrixResponse = {
@@ -91,9 +98,45 @@ export type FinanceCogsResponse = {
   ytd: FinanceCogsYtd
 }
 
+export type FinanceProviderCogs = {
+  provider_key: string
+  provider_name: string
+  gross_cogs_ytd: string
+  credit_note_reversal_ytd: string
+  net_cogs_ytd: string
+}
+
+export type FinanceProviderFamilyCogs = FinanceProviderCogs & {
+  family_key: string
+  family_name: string
+}
+
+export type FinanceProviderCogsResponse = {
+  company_id: string
+  year: number
+  currency: 'CLP'
+  source: string
+  has_information: boolean
+  through_month: number | null
+  providers: FinanceProviderCogs[]
+  families: FinanceProviderFamilyCogs[]
+}
+
 export type FinancePersonnelMonthly = {
   month: number
-  status: 'AVAILABLE' | 'MISSING'
+  status: 'AVAILABLE' | 'ESTIMATED' | 'MISSING'
+  formalEarningsEstimated: boolean
+  employerContributionsEstimated: boolean
+  personnelEstimated: boolean
+  estimateMethod: 'TRAILING_REAL_PAYROLL_AVERAGE' | null
+  estimateWindowMonths: number[]
+  estimateWindowCount: number
+  estimateSources: Array<{ year: number; month: number; formalEarnings: string; employerContributions: string }>
+  monthlyFormalEstimate?: string
+  monthlyEmployerEstimate?: string
+  estimateAsOfDate?: string
+  estimateElapsedDays?: number
+  estimateDaysInMonth?: number
   formalEarnings: string | null
   employerContributions: string | null
   formalLaborCost: string | null
@@ -118,6 +161,7 @@ export type FinancePersonnelTotal = {
 
 export type FinancePersonnelCoverage = {
   availableMonths: number[]
+  estimatedMonths?: number[]
   missingMonths: number[]
   latestAvailableMonth: number | null
   coverageStatus: 'COMPLETE' | 'INCOMPLETE' | 'MISSING'
@@ -148,6 +192,9 @@ export type FinanceExpensesMonthly = {
   telecom: string | null
   externalServices: string | null
   otherExpenses: string | null
+  reimbursements: string | null
+  servipagServices: string | null
+  serviceCollectionPayments: string | null
   operatingIdentifiedTotal: string | null
   financialInterest: string | null
   nonOperatingIdentifiedTotal: string | null
@@ -164,6 +211,9 @@ export type FinanceExpensesTotals = {
   telecom: string | null
   externalServices: string | null
   otherExpenses: string | null
+  reimbursements: string | null
+  servipagServices: string | null
+  serviceCollectionPayments: string | null
   operatingIdentifiedTotal: string | null
   financialInterest: string | null
   nonOperatingIdentifiedTotal: string | null
@@ -231,6 +281,10 @@ export type FinanceCogsApiResult =
 
 export type FinancePersonnelApiResult =
   | { ok: true; data: FinancePersonnelResponse }
+  | { ok: false; status: number; message: string }
+
+export type FinanceProviderCogsApiResult =
+  | { ok: true; data: FinanceProviderCogsResponse }
   | { ok: false; status: number; message: string }
 
 export type FinanceExpensesApiResult =
@@ -399,7 +453,7 @@ export type FinanceSalesFamilyApiResult =
   | { ok: true; data: SalesFamilyMatrixResponse }
   | { ok: false; status: number; message: string }
 
-async function getFinanceApiResponse(path: string): Promise<Response> {
+async function getFinanceApiResponse(path: string, signal?: AbortSignal): Promise<Response> {
   const baseUrl = process.env.FINANCE_API_BASE_URL?.trim()
   if (!baseUrl) throw new Error('FINANCE_API_BASE_URL no está configurada.')
 
@@ -417,6 +471,7 @@ async function getFinanceApiResponse(path: string): Promise<Response> {
       Accept: 'application/json',
     },
     cache: 'no-store',
+    ...(signal ? { signal } : {}),
   })
 }
 
@@ -455,16 +510,30 @@ export async function getFinanceSalesNet(year: number): Promise<FinanceApiResult
 }
 
 export async function getFinanceSalesNetByFamily(year: number): Promise<FinanceSalesFamilyApiResult> {
-  try {
-    const response = await getFinanceApiResponse(`/financial/income-statement/sales-net/by-family?year=${year}`)
-    if (!response.ok) {
-      return { ok: false, status: response.status, message: await readFinanceApiError(response, 'No se pudieron cargar las familias de ventas.') }
+  let lastError: unknown = null
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      // no-store disables persistent caching, not React's per-render GET memoization.
+      // The single retry must reach the API rather than reuse the failed response.
+      const response = await getFinanceApiResponse(
+        `/financial/income-statement/sales-net/by-family?year=${year}`,
+        new AbortController().signal,
+      )
+      if (response.ok) return { ok: true, data: await response.json() as SalesFamilyMatrixResponse }
+      const message = await readFinanceApiError(response, 'No se pudieron cargar las familias de ventas.')
+      if (![500, 502, 503, 504].includes(response.status) || attempt === 1) {
+        return { ok: false, status: response.status, message }
+      }
+      console.error('[finance] sales family request transient failure; retrying once', { status: response.status, message, year })
+    } catch (error) {
+      lastError = error
+      if (error instanceof Error && error.message.includes('Dynamic server usage')) break
+      if (!(error instanceof TypeError) || error.message !== 'fetch failed') break
+      if (attempt === 1) break
+      console.error('[finance] sales family request network failure; retrying once', { error, year })
     }
-    const data = await response.json() as SalesFamilyMatrixResponse
-    return { ok: true, data }
-  } catch (error) {
-    return financeApiFailure(error, 'Finance API no está disponible.')
   }
+  return financeApiFailure(lastError, 'Finance API no está disponible.')
 }
 
 export async function getFinanceCogs(year: number): Promise<FinanceCogsApiResult> {
@@ -477,6 +546,52 @@ export async function getFinanceCogs(year: number): Promise<FinanceCogsApiResult
   } catch (error) {
     return financeApiFailure(error, 'Finance API no está disponible.')
   }
+}
+
+export async function getFinanceProviderCogs(year: number): Promise<FinanceProviderCogsApiResult> {
+  let lastError: unknown = null
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      // no-store does not prevent React's per-render GET memoization. The retry
+      // uses a unique signal so a transient failed response reaches the API again.
+      const startedAt = Date.now()
+      const response = await getFinanceApiResponse(
+        `/financial/income-statement/provider-cogs?year=${year}`,
+        new AbortController().signal,
+      )
+      if (response.ok) {
+        const data = await response.json() as FinanceProviderCogsResponse
+        console.info('[finance] provider profitability loaded', {
+          attempt: attempt + 1,
+          durationMs: Date.now() - startedAt,
+          status: response.status,
+          year,
+          providers: data.providers.length,
+          families: data.families.length,
+          hasInformation: data.has_information,
+        })
+        return { ok: true, data }
+      }
+      const message = await readFinanceApiError(response, 'No se pudo cargar la rentabilidad por proveedor.')
+      if (![500, 502, 503, 504].includes(response.status) || attempt === 1) {
+        return { ok: false, status: response.status, message }
+      }
+      console.error('[finance] provider profitability transient failure; retrying once', {
+        attempt: attempt + 1,
+        durationMs: Date.now() - startedAt,
+        status: response.status,
+        message,
+        year,
+      })
+    } catch (error) {
+      lastError = error
+      if (error instanceof Error && error.message.includes('Dynamic server usage')) break
+      if (!(error instanceof TypeError) || error.message !== 'fetch failed') break
+      if (attempt === 1) break
+      console.error('[finance] provider profitability network failure; retrying once', { error, year })
+    }
+  }
+  return financeApiFailure(lastError, 'Finance API no está disponible.')
 }
 
 export async function getFinancePersonnel(year: number): Promise<FinancePersonnelApiResult> {

@@ -31,6 +31,7 @@
     "test:financial-reconciliation-previous-balance": "node --test scripts/test-financial-reconciliation-previous-balance.mjs",
     "test:financial-cash-flow-refresh": "node --test scripts/test-financial-cash-flow-refresh.mjs",
     "test:financial-personnel": "node --experimental-strip-types --test scripts/test-financial-personnel.mjs",
+    "test:financial-payroll-reconciliation": "node --test scripts/test-financial-payroll-reconciliation-contract.mjs",
     "test:financial-recognized-expenses": "node --test scripts/test-financial-recognized-expenses-contract.mjs",
     "test:financial-daily-review": "node --test scripts/test-financial-daily-review-contract.mjs",
     "test:payroll-parser": "node --experimental-strip-types --test scripts/test-payroll-parser.mjs",

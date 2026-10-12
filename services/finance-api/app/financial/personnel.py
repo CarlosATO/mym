@@ -19,14 +19,17 @@ logger = logging.getLogger(__name__)
 
 PERSONNEL_SOURCE = (
     "comercial.financial_payroll_imports + "
-    "comercial.financial_bank_movements"
+    "comercial.financial_bank_movements + "
+    "comercial.financial_payroll_payment_allocations"
 )
 MONEY_QUANTUM = Decimal("0.01")
+CLP_QUANTUM = Decimal("1")
 PERSONNEL_CATEGORIES = ("EXPENSE_PERSONNEL_OFF_BOOK", "EXPENSE_SALARIES_OTHER")
 
 PERSONNEL_PAYROLL_SQL = text(
     """
     SELECT
+        period_year AS year,
         period_month AS month,
         COUNT(*)::integer AS import_count,
         SUM(total_earnings)::numeric AS formal_earnings,
@@ -37,10 +40,10 @@ PERSONNEL_PAYROLL_SQL = text(
         SUM(worker_count)::integer AS worker_count
     FROM comercial.financial_payroll_imports
     WHERE company_id = :company_id
-      AND period_year = :year
+      AND period_year IN (:year, :previous_year)
       AND status = 'IMPORTED'
-    GROUP BY period_month
-    ORDER BY period_month
+    GROUP BY period_year, period_month
+    ORDER BY period_year, period_month
     """
 )
 
@@ -60,6 +63,25 @@ PERSONNEL_BANK_SQL = text(
       AND categories.code IN ('EXPENSE_PERSONNEL_OFF_BOOK', 'EXPENSE_SALARIES_OTHER')
     GROUP BY EXTRACT(MONTH FROM movements.transaction_date)::integer, categories.code
     ORDER BY month, category_code
+    """
+)
+
+PERSONNEL_ALLOCATION_SQL = text(
+    """
+    SELECT
+        batches.period_month AS month,
+        COALESCE(SUM(allocations.amount), 0)::numeric AS amount
+    FROM comercial.financial_payroll_payment_batches AS batches
+    JOIN comercial.financial_payroll_payment_allocations AS allocations
+      ON allocations.company_id = batches.company_id
+     AND allocations.batch_id = batches.id
+    WHERE batches.company_id = :company_id
+      AND batches.period_year = :year
+      AND batches.status = 'COMPLETE'
+      AND allocations.allocation_type = 'OFF_BOOK'
+      AND allocations.reconciliation_status = 'NOT_APPLICABLE'
+    GROUP BY batches.period_month
+    ORDER BY batches.period_month
     """
 )
 
@@ -91,31 +113,58 @@ def build_personnel_response(
     year: int,
     payroll_rows: list[dict[str, Any]],
     bank_rows: list[dict[str, Any]],
+    allocation_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    payroll_by_month = {int(row["month"]): row for row in payroll_rows}
+    payroll_by_period = {(int(row.get("year", year)), int(row["month"])): row for row in payroll_rows}
+    payroll_by_month = {month: row for (period_year, month), row in payroll_by_period.items() if period_year == year}
     bank_by_month: dict[int, dict[str, Decimal]] = {}
     for row in bank_rows:
         month = int(row["month"])
         category = str(row["category_code"])
         bank_by_month.setdefault(month, {})[category] = _money(row.get("amount"))
+    for row in allocation_rows or []:
+        month = int(row["month"])
+        bank_by_month.setdefault(month, {})["EXPENSE_PERSONNEL_OFF_BOOK"] = (
+            bank_by_month.setdefault(month, {}).get("EXPENSE_PERSONNEL_OFF_BOOK", Decimal("0.00"))
+            + _money(row.get("amount"))
+        )
 
     months: list[dict[str, Any]] = []
     available_months: list[int] = []
+    today = date.today()
     for month in range(1, 13):
         payroll = payroll_by_month.get(month)
         is_available = payroll is not None and int(payroll.get("import_count") or 0) == 1
+        history = [period for period, previous in sorted(payroll_by_period.items())
+                   if period < (year, month) and int(previous.get("import_count") or 0) == 1][-6:]
+        is_estimated = not is_available and bool(history) and (year < today.year or year == today.year and month <= today.month)
+        sources = [
+            {
+                "year": previous_year,
+                "month": previous_month,
+                "formalEarnings": _money_string(_money(payroll_by_period[(previous_year, previous_month)].get("formal_earnings"))),
+                "employerContributions": _money_string(_money(payroll_by_period[(previous_year, previous_month)].get("employer_contributions"))),
+            }
+            for previous_year, previous_month in history
+        ] if is_estimated else []
         bank = bank_by_month.get(month, {})
         off_book = bank.get("EXPENSE_PERSONNEL_OFF_BOOK", Decimal("0.00"))
         salaries_other = bank.get("EXPENSE_SALARIES_OTHER", Decimal("0.00"))
 
-        if is_available:
-            available_months.append(month)
-            formal_earnings = _money(payroll.get("formal_earnings"))
-            employer_contributions = _money(payroll.get("employer_contributions"))
+        if is_available or is_estimated:
+            if is_available:
+                available_months.append(month)
+            def component(field: str) -> Decimal:
+                if is_available:
+                    return _money(payroll.get(field))
+                return (_sum([_money(payroll_by_period[previous].get(field)) for previous in history]) / Decimal(len(history))).quantize(CLP_QUANTUM, rounding=ROUND_HALF_UP)
+
+            formal_earnings = component("formal_earnings")
+            employer_contributions = component("employer_contributions")
             formal_labor_cost = formal_earnings + employer_contributions
-            recurring_labor_cost = _money(payroll.get("recurring_labor_cost"))
-            indemnities = _money(payroll.get("indemnities"))
-            worker_count = int(payroll.get("worker_count") or 0)
+            recurring_labor_cost = _money(payroll.get("recurring_labor_cost")) if is_available else None
+            indemnities = _money(payroll.get("indemnities")) if is_available else None
+            worker_count = int(payroll.get("worker_count") or 0) if is_available else None
             total_personnel = formal_labor_cost + off_book + salaries_other
         else:
             formal_earnings = None
@@ -129,7 +178,14 @@ def build_personnel_response(
         months.append(
             {
                 "month": month,
-                "status": "AVAILABLE" if is_available else "MISSING",
+                "status": "AVAILABLE" if is_available else "ESTIMATED" if is_estimated else "MISSING",
+                "formalEarningsEstimated": is_estimated,
+                "employerContributionsEstimated": is_estimated,
+                "personnelEstimated": is_estimated,
+                "estimateMethod": "TRAILING_REAL_PAYROLL_AVERAGE" if is_estimated else None,
+                "estimateWindowMonths": [previous_month for _, previous_month in history] if is_estimated else [],
+                "estimateWindowCount": len(history) if is_estimated else 0,
+                "estimateSources": sources,
                 "formalEarnings": _money_string(formal_earnings),
                 "employerContributions": _money_string(employer_contributions),
                 "formalLaborCost": _money_string(formal_labor_cost),
@@ -169,6 +225,7 @@ def build_personnel_response(
     coverage_status = _coverage_status(available_months)
     coverage = {
         "availableMonths": available_months,
+        "estimatedMonths": [row["month"] for row in months if row["status"] == "ESTIMATED"],
         "missingMonths": missing_months,
         "latestAvailableMonth": max(available_months) if available_months else None,
         "coverageStatus": coverage_status,
@@ -226,9 +283,9 @@ def _get_personnel_from_supabase(settings: Any, company_id: UUID, year: int) -> 
         settings,
         "financial_payroll_imports",
         {
-            "select": "period_month,total_earnings,total_employer_contributions,recurring_labor_cost,total_indemnities,worker_count,status",
+            "select": "period_year,period_month,total_earnings,total_employer_contributions,recurring_labor_cost,total_indemnities,worker_count,status",
             "company_id": f"eq.{company}",
-            "period_year": f"eq.{year}",
+            "period_year": f"in.({year - 1},{year})",
             "status": "eq.IMPORTED",
             "order": "period_month.asc",
         },
@@ -257,15 +314,44 @@ def _get_personnel_from_supabase(settings: Any, company_id: UUID, year: int) -> 
             ("category_id", f"in.({','.join(category_codes)})"),
         ],
     )
+    batches = _supabase_get(
+        settings,
+        "financial_payroll_payment_batches",
+        {
+            "select": "id,period_month",
+            "company_id": f"eq.{company}",
+            "period_year": f"eq.{year}",
+            "status": "eq.COMPLETE",
+        },
+    )
+    batch_ids = [row["id"] for row in batches]
+    allocations = _supabase_get(
+        settings,
+        "financial_payroll_payment_allocations",
+        {
+            "select": "batch_id,amount",
+            "company_id": f"eq.{company}",
+            "allocation_type": "eq.OFF_BOOK",
+            "reconciliation_status": "eq.NOT_APPLICABLE",
+            "batch_id": f"in.({','.join(batch_ids)})" if batch_ids else "in.(00000000-0000-0000-0000-000000000000)",
+        },
+    )
+    batch_months = {row["id"]: row["period_month"] for row in batches}
+    allocation_rows = [
+        {"month": batch_months[row["batch_id"]], "amount": row["amount"]}
+        for row in allocations
+        if row["batch_id"] in batch_months
+    ]
 
     payroll_by_month: dict[int, list[dict[str, Any]]] = {}
     for row in payroll_rows:
-        payroll_by_month.setdefault(int(row["period_month"]), []).append(row)
+        payroll_by_month.setdefault((int(row["period_year"]), int(row["period_month"])), []).append(row)
     payroll_aggregates = []
-    for month, rows in payroll_by_month.items():
+    for (period_year, month), rows in payroll_by_month.items():
         payroll_aggregates.append(
             {
                 "month": month,
+                "year": period_year,
                 "import_count": len(rows),
                 "formal_earnings": sum(Decimal(str(row["total_earnings"])) for row in rows),
                 "employer_contributions": sum(Decimal(str(row["total_employer_contributions"])) for row in rows),
@@ -285,20 +371,22 @@ def _get_personnel_from_supabase(settings: Any, company_id: UUID, year: int) -> 
         {"month": month, "category_code": code, "amount": amount}
         for (month, code), amount in sorted(bank_aggregates.items())
     ]
-    return build_personnel_response(company_id, year, payroll_aggregates, bank_aggregate_rows)
+    return build_personnel_response(company_id, year, payroll_aggregates, bank_aggregate_rows, allocation_rows)
 
 
 def _get_personnel_from_database(settings: Any, company_id: UUID, year: int) -> dict[str, Any]:
     params = {
         "company_id": company_id,
         "year": year,
+        "previous_year": year - 1,
         "date_from": date(year, 1, 1),
         "date_to": date(year + 1, 1, 1),
     }
     with get_session_factory(settings.database_runtime_dsn.get_secret_value())() as session:
         payroll_rows = [dict(row) for row in session.execute(PERSONNEL_PAYROLL_SQL, params).mappings().all()]
         bank_rows = [dict(row) for row in session.execute(PERSONNEL_BANK_SQL, params).mappings().all()]
-    return build_personnel_response(company_id, year, payroll_rows, bank_rows)
+        allocation_rows = [dict(row) for row in session.execute(PERSONNEL_ALLOCATION_SQL, params).mappings().all()]
+    return build_personnel_response(company_id, year, payroll_rows, bank_rows, allocation_rows)
 
 
 def get_monthly_personnel(company_id: UUID, year: int) -> dict[str, Any]:

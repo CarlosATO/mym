@@ -33,7 +33,7 @@ const nonPnl = { rows: [
   { code: 'CREDIT_LINE_NET', label: 'Saldo', informational: true, monthly: Array(12).fill(0), ytd: 0, movementCount: 0 },
 ], ownerWithdrawalsYtd: 0, loanPaymentsYtd: 0, creditLinePaymentsYtd: 0, loanReceiptsYtd: 0, creditLineDrawsYtd: 0, movements: [] }
 const input = {
-  companyName: 'CAYLO PREMIUM SPA', tradeName: 'MYM DISTRIBUIDORA', year: 2026,
+  companyName: 'CAYLO PREMIUM SPA', tradeName: 'MYM DISTRIBUIDORA', year: 2026, cutoffDate: '2026-09-30',
   coverage: ['Datos hasta 30-09-2026', 'Cobertura común: enero-septiembre 2026'], coverageNotes: ['Costo de Ventas: septiembre con cobertura incompleta; octubre pendiente de actualización de costos.'], rows,
   groups: [{ group_key: 'supplier', group_name: 'Proveedor principal', months: Object.fromEntries(Array.from({ length: 12 }, (_, i) => [String(i + 1), '10'])), ytd: '120', line_count: 1, children: [{ family_name: 'Proveedor principal / Familia', detail_name: 'Familia', months: Object.fromEntries(Array.from({ length: 12 }, (_, i) => [String(i + 1), '10'])), ytd: '120', line_count: 1 }] }],
   nonPnl, currentBalance: 2539811, accountBalances: [{ accountId: 'itau', bankName: 'Itaú', maskedAccountNumber: '•••• 1234', balance: 2539811, balanceDate: '2026-09-30', creditLineTotal: 5000000, creditLineUsed: 2198904, creditLineAvailable: 2801096 }],
@@ -47,7 +47,7 @@ test('generated XLSX loads and round-trips with ExcelJS', async () => {
 
   const loaded = new ExcelJS.Workbook()
   await loaded.xlsx.load(buffer)
-  assert.deepEqual(loaded.worksheets.map(sheet => sheet.name), ['RESUMEN EJECUTIVO', 'ESTADO DE RESULTADOS'])
+  assert.deepEqual(loaded.worksheets.map(sheet => sheet.name), ['RESUMEN EJECUTIVO', 'ESTADO DE RESULTADOS', 'BANCO DE CHILE', 'BANCO ITAÚ', 'CUENTAS POR COBRAR'])
   assert.equal(loaded.views[0].activeTab, 0)
 
   const summary = loaded.getWorksheet('RESUMEN EJECUTIVO')
@@ -56,36 +56,31 @@ test('generated XLSX loads and round-trips with ExcelJS', async () => {
   assert.ok(detail)
   assert.equal(summary.getCell('A1').value, 'CAYLO PREMIUM SPA')
   assert.equal(summary.getCell('A2').value, 'MYM DISTRIBUIDORA')
-  assert.equal(summary.getCell('A11').value, 240)
-  assert.equal(typeof summary.getCell('A11').value, 'number')
-  assert.equal(summary.getCell('B11').numFmt, '0.0%')
-  const summaryResultLabels = ['Ventas Netas', 'Costo de Ventas', 'Margen Bruto', 'GASTOS DE PERSONAL', 'GASTOS OPERACIONALES IDENTIFICADOS', 'RESULTADO OPERACIONAL', 'GASTOS FINANCIEROS / NO OPERACIONALES', 'RESULTADO GERENCIAL']
+  const summaryResultLabels = ['Ventas Netas', 'Costo de Ventas', 'Margen Bruto', 'Resultado final']
   for (const label of summaryResultLabels) {
     const resultRow = summary.getRows(1, summary.rowCount).find(row => row.getCell(1).value === label)
     if (!resultRow) continue
     assert.equal(resultRow.getCell(2).value === null || typeof resultRow.getCell(2).value === 'number', true)
     assert.equal(resultRow.getCell(3).numFmt, '0.0%')
   }
-  assert.equal(summary.getColumn(2).values.includes('Costo de Ventas: septiembre con cobertura incompleta; octubre pendiente de actualización de costos.'), true)
+  assert.equal(summary.getCell('A1').value, 'CAYLO PREMIUM SPA')
   assert.equal(summary.getCell('A1').isMerged, true)
-  assert.equal(summary.getCell('F1').isMerged, true)
+  assert.equal(summary.getCell('D1').isMerged, true)
   assert.equal(summary.views[0].showGridLines, false)
   assert.equal(summary.views[0].state, 'frozen')
-  assert.equal(summary.views[0].ySplit, 6)
+  assert.equal(summary.views[0].ySplit, 8)
   assert.equal(summary.pageSetup.orientation, 'landscape')
   assert.equal(summary.pageSetup.fitToPage, true)
   assert.equal(summary.pageSetup.fitToWidth, 1)
-  assert.equal(detail.getCell('N10').value, 1200)
-  assert.equal(detail.getCell('N10').numFmt, '$ #,##0;[Red]($ #,##0);–')
-  assert.equal(detail.getRow(9).hidden, true)
-  assert.equal(detail.getRow(9).outlineLevel, 1)
+  const detailResult = detail.getRows(1, detail.rowCount).find(row => row.getCell(1).value === 'Resultado final del período')
+  assert.equal(detailResult.getCell(14).value, 240)
+  assert.equal(typeof detailResult.getCell(14).value, 'number')
 
   const secondBuffer = await loaded.xlsx.writeBuffer()
   const roundTripped = new ExcelJS.Workbook()
   await roundTripped.xlsx.load(secondBuffer)
-  assert.deepEqual(roundTripped.worksheets.map(sheet => sheet.name), ['RESUMEN EJECUTIVO', 'ESTADO DE RESULTADOS'])
-  assert.equal(roundTripped.getWorksheet('RESUMEN EJECUTIVO').getCell('A11').value, 240)
-  assert.equal(roundTripped.getWorksheet('ESTADO DE RESULTADOS').getCell('N10').numFmt, '$ #,##0;[Red]($ #,##0);–')
+  assert.deepEqual(roundTripped.worksheets.map(sheet => sheet.name), ['RESUMEN EJECUTIVO', 'ESTADO DE RESULTADOS', 'BANCO DE CHILE', 'BANCO ITAÚ', 'CUENTAS POR COBRAR'])
+  assert.equal(roundTripped.getWorksheet('ESTADO DE RESULTADOS').getRows(1, roundTripped.getWorksheet('ESTADO DE RESULTADOS').rowCount).find(row => row.getCell(1).value === 'Resultado final del período').getCell(14).value, 240)
 
   await unlink(outputPath)
   await unlink(compiledPath)

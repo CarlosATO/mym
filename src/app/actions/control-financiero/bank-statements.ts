@@ -30,7 +30,7 @@ type Db = any;
 const db = () => createAdminClient().schema("comercial") as Db;
 const CASH_FLOW_PATH = "/dashboard/analisis-comercial/control-financiero/flujo-caja";
 
-async function applyAutoDebitRules(
+async function applyAutoRules(
   companyId: string,
   accountId: string,
   movementIdentities: string[],
@@ -40,11 +40,10 @@ async function applyAutoDebitRules(
   if (!identities.length) return { classifiedCount: 0, conflictCount: 0 };
   const { data: movements, error: movementError } = await db()
     .from("financial_bank_movements")
-    .select("id,normalized_description,operation_description")
+    .select("id,direction,normalized_description,operation_description")
     .eq("company_id", companyId)
     .eq("bank_account_id", accountId)
-    .eq("direction", "DEBE")
-    .gt("debit_amount", 0)
+    .in("direction", ["DEBE", "HABER"])
     .is("category_id", null)
     .in("movement_identity", identities);
   if (movementError) throw new Error(movementError.message);
@@ -52,31 +51,34 @@ async function applyAutoDebitRules(
   if (!values.length) return { classifiedCount: 0, conflictCount: 0 };
   const { data: rules, error: rulesError } = await db()
     .from("financial_bank_classification_rules")
-    .select("id,match_value,category_id")
+    .select("id,match_value,category_id,direction")
     .eq("company_id", companyId)
     .eq("bank_account_id", accountId)
-    .eq("direction", "DEBE")
     .eq("match_type", "EXACT")
     .eq("mode", "AUTO")
     .eq("active", true)
     .in("match_value", values);
   if (rulesError) throw new Error(rulesError.message);
   const rulesByValue = new Map<string, any[]>();
-  for (const rule of rules ?? []) rulesByValue.set(rule.match_value, [...(rulesByValue.get(rule.match_value) ?? []), rule]);
+  for (const rule of rules ?? []) {
+    const key = `${rule.direction}|${rule.match_value}`;
+    rulesByValue.set(key, [...(rulesByValue.get(key) ?? []), rule]);
+  }
   const groups = new Map<string, { ids: string[]; ruleId: string }>();
   let conflictCount = 0;
   for (const movement of movements ?? []) {
     const value = movement.normalized_description || normalizeBankOperation(movement.operation_description);
-    const matchingRules = rulesByValue.get(value) ?? [];
+    const matchingRules = rulesByValue.get(`${movement.direction}|${value}`) ?? [];
     const categoryIds = [...new Set(matchingRules.map((rule) => rule.category_id))];
     if (categoryIds.length !== 1 || matchingRules.length === 0) {
       if (categoryIds.length > 1) conflictCount += 1;
       continue;
     }
     const ruleId = matchingRules[0].id;
-    const group: { ids: string[]; ruleId: string } = groups.get(ruleId) ?? { ids: [], ruleId };
+    const groupKey = `${ruleId}|${movement.direction}`;
+    const group: { ids: string[]; ruleId: string } = groups.get(groupKey) ?? { ids: [], ruleId };
     group.ids.push(movement.id);
-    groups.set(ruleId, group);
+    groups.set(groupKey, group);
   }
   let classifiedCount = 0;
   for (const group of groups.values()) {
@@ -130,6 +132,9 @@ export type CashFlowMovement = {
   classification_signature: string | null;
   category_id: string | null;
   category_name: string | null;
+  category_code: string | null;
+  affects_pnl_directly: boolean | null;
+  classification_group: string | null;
   counterparty: string | null;
   classification_note: string | null;
   classification_source: string | null;
@@ -139,6 +144,32 @@ export type CashFlowMovement = {
   reviewed_by: string | null;
   reviewed_at: string | null;
 };
+
+const FINANCIAL_MOVEMENT_PAGE_SIZE = 1000;
+
+export async function paginateFinancialRows<T>(
+  loadPage: (from: number, to: number) => Promise<T[]>,
+  pageSize = FINANCIAL_MOVEMENT_PAGE_SIZE,
+  total?: number | null,
+) {
+  const rows: T[] = [];
+  const seen = new Set<string>();
+  let offset = 0;
+  const safePageSize = Math.max(1, Math.floor(pageSize));
+  while (total === null || total === undefined || offset < total) {
+    const page = await loadPage(offset, offset + safePageSize - 1);
+    for (const row of page) {
+      const id = typeof row === "object" && row !== null && "id" in row ? String((row as { id?: unknown }).id ?? "") : "";
+      if (!id || !seen.has(id)) {
+        rows.push(row);
+        if (id) seen.add(id);
+      }
+    }
+    offset += page.length;
+    if (page.length < safePageSize || page.length === 0) break;
+  }
+  return rows;
+}
 export type ImportMode = "CLOSED" | "OPEN" | "FINAL_CLOSE";
 export type FinancialBankReconciliationDifference = {
   id: string;
@@ -419,6 +450,11 @@ export async function previewFinancialBankStatement(formData: FormData) {
         message: "La cuenta de la cartola no coincide con la cuenta seleccionada.",
       };
     if (mode === "CLOSED") {
+      if (parsed.sourceFormat === "ITAU_CURRENT_PDF")
+        return {
+          ok: false as const,
+          message: "El PDF Itaú de mes abierto sólo puede actualizar un período OPEN.",
+        };
       if (
         parsed.validations.globalDifference !== 0 ||
         parsed.validations.rowDifference !== 0
@@ -518,7 +554,8 @@ export async function previewFinancialBankStatement(formData: FormData) {
     );
     if (
       parsed.sourceFormat !== "CURRENT_XLS" &&
-      parsed.sourceFormat !== "ITAU_PDF"
+      parsed.sourceFormat !== "ITAU_PDF" &&
+      parsed.sourceFormat !== "ITAU_CURRENT_PDF"
     )
       return {
         ok: false as const,
@@ -688,7 +725,7 @@ export async function confirmFinancialBankStatement(input: {
     p_imported_by: user.id,
   });
   if (error) return { ok: false as const, message: error.message };
-  const autoClassification = await applyAutoDebitRules(
+  const autoClassification = await applyAutoRules(
     companyId,
     input.accountId,
     movements.map((movement) => movement.movement_identity),
@@ -707,7 +744,8 @@ export async function confirmOpenFinancialBankStatement(input: {
   const { companyId, user } = await authenticatedContext();
   if (
     input.parsed.sourceFormat !== "CURRENT_XLS" &&
-    input.parsed.sourceFormat !== "ITAU_PDF"
+    input.parsed.sourceFormat !== "ITAU_PDF" &&
+    input.parsed.sourceFormat !== "ITAU_CURRENT_PDF"
   )
     return {
       ok: false as const,
@@ -830,9 +868,10 @@ export async function confirmOpenFinancialBankStatement(input: {
         rows_in_file: input.parsed.rowCount,
         metadata: {
           ...importMetadata(input.parsed, input.accountId),
-          parser:
-            input.parsed.sourceFormat === "ITAU_PDF"
-              ? "ITAU_PDF"
+           parser:
+            input.parsed.sourceFormat === "ITAU_PDF" ||
+            input.parsed.sourceFormat === "ITAU_CURRENT_PDF"
+              ? input.parsed.sourceFormat
               : "bank-statement-current-xls-v1",
           existing_count: diff.existing,
           new_count: diff.new,
@@ -872,7 +911,7 @@ export async function confirmOpenFinancialBankStatement(input: {
     },
   );
   if (error) return { ok: false as const, message: error.message };
-  const autoClassification = await applyAutoDebitRules(
+  const autoClassification = await applyAutoRules(
     companyId,
     input.accountId,
     newRows.map(({ key }) => key.movement_identity),
@@ -989,7 +1028,7 @@ export async function confirmFinalFinancialBankStatement(input: {
     p_imported_by: user.id,
   });
   if (error) return { ok: false as const, message: error.message };
-  const autoClassification = await applyAutoDebitRules(
+  const autoClassification = await applyAutoRules(
     companyId,
     input.accountId,
     diff.newIndexes.map((index) => generatedKeys[index].movement_identity),
@@ -1050,6 +1089,8 @@ export async function getCashFlowDashboard(
   categoryId?: string,
   scope: "month" | "year" = "month",
   direction: "all" | "credit" | "debit" = "all",
+  movementPageSize = 50,
+  loadAllMovements = false,
 ): Promise<{
   companyId: string;
   accounts: FinancialBankAccount[];
@@ -1140,27 +1181,56 @@ export async function getCashFlowDashboard(
     .order("imported_at", { ascending: false })
     .limit(500);
   if (importsError) throw new Error(importsError.message);
-  const latestCreditLineByAccount = new Map<
-    string,
-    { total: number | null; used: number | null; available: number | null }
-  >();
+  const creditLineSnapshots = new Map<string, {
+    total: number | null;
+    totalAt: string | null;
+    used: number | null;
+    usedAt: string | null;
+    available: number | null;
+    availableAt: string | null;
+  }>();
   for (const imported of imports ?? []) {
     const metadata = imported.metadata as Record<string, unknown> | null;
     const importedAccountId =
       typeof metadata?.bank_account_id === "string"
         ? metadata.bank_account_id
         : null;
-    if (!importedAccountId || latestCreditLineByAccount.has(importedAccountId))
+    if (!importedAccountId)
       continue;
-    const used = Number(metadata?.credit_line_used);
-    const available = Number(metadata?.credit_line_available);
-    const total = Number(metadata?.credit_line_total);
-    if (Number.isFinite(total) || Number.isFinite(used) || Number.isFinite(available))
-      latestCreditLineByAccount.set(importedAccountId, {
-        total: Number.isFinite(total) ? total : null,
-        used: Number.isFinite(used) ? used : null,
-        available: Number.isFinite(available) ? available : null,
-      });
+    const importedAt = imported.imported_at ?? null;
+    const snapshot = creditLineSnapshots.get(importedAccountId) ?? {
+      total: null, totalAt: null, used: null, usedAt: null, available: null, availableAt: null,
+    };
+    const value = (key: string) => {
+      const number = Number(metadata?.[key]);
+      return Number.isFinite(number) ? number : null;
+    };
+    if (snapshot.total === null && value("credit_line_total") !== null) {
+      snapshot.total = value("credit_line_total");
+      snapshot.totalAt = importedAt;
+    }
+    if (snapshot.used === null && value("credit_line_used") !== null) {
+      snapshot.used = value("credit_line_used");
+      snapshot.usedAt = importedAt;
+    }
+    if (snapshot.available === null && value("credit_line_available") !== null) {
+      snapshot.available = value("credit_line_available");
+      snapshot.availableAt = importedAt;
+    }
+    creditLineSnapshots.set(importedAccountId, snapshot);
+  }
+  const latestCreditLineByAccount = new Map<string, { total: number | null; used: number | null; available: number | null }>();
+  for (const [accountIdKey, snapshot] of creditLineSnapshots) {
+    let { total, used, available } = snapshot;
+    const availabilityIsNewer = Boolean(snapshot.availableAt && (!snapshot.usedAt || snapshot.availableAt > snapshot.usedAt));
+    const usageIsNewer = Boolean(snapshot.usedAt && (!snapshot.availableAt || snapshot.usedAt > snapshot.availableAt));
+    if (total !== null && available !== null && (used === null || availabilityIsNewer)) used = Math.max(0, total - available);
+    else if (total !== null && used !== null && (available === null || usageIsNewer)) available = Math.max(0, total - used);
+    if (total !== null && used !== null && available !== null && total !== used + available) {
+      if (availabilityIsNewer) used = Math.max(0, total - available);
+      else available = Math.max(0, total - used);
+    }
+    latestCreditLineByAccount.set(accountIdKey, { total, used, available });
   }
   const accountBalances = (accounts ?? []).map((account: FinancialBankAccount) => {
     const latestAccount = latestAll.get(account.id);
@@ -1219,31 +1289,37 @@ export async function getCashFlowDashboard(
   if (normalizedSearch)
     countQuery.ilike("operation_description", `%${normalizedSearch}%`);
   const { count: movementTotal } = await countQuery;
-  const pageSize = 50;
+  const pageSize = Math.max(50, Math.floor(movementPageSize));
   const totalPages = Math.max(1, Math.ceil((movementTotal ?? 0) / pageSize));
   const safePage = Math.min(totalPages, Math.max(1, Math.floor(page)));
-  const movementQuery = db()
-    .from("financial_bank_movements")
-    .select(
-      "id,bank_account_id,transaction_date,operation_description,credit_amount,debit_amount,balance_after,source_row_number,direction,normalized_description,classification_signature,category_id,counterparty,classification_note,classification_source,classification_rule_id,classified_at,review_status,reviewed_by,reviewed_at",
-    )
-    .eq("company_id", companyId)
-    .gte("transaction_date", start)
-    .lt("transaction_date", endDate)
-    .order("transaction_date")
-    .order("source_row_number")
-    .range((safePage - 1) * pageSize, safePage * pageSize - 1);
-  if (accountId) movementQuery.eq("bank_account_id", accountId);
-  if (classificationFilter === "PENDING") movementQuery.eq("review_status", "PENDING").eq("direction", "DEBE");
-  if (classificationFilter === "REVIEWED") movementQuery.eq("review_status", "REVIEWED").eq("direction", "DEBE");
-  if (classificationFilter === "HISTORICAL") movementQuery.eq("review_status", "HISTORICAL").eq("direction", "DEBE");
-  if (categoryId) movementQuery.eq("category_id", categoryId);
-  if (direction === "credit") movementQuery.gt("credit_amount", 0);
-  if (direction === "debit") movementQuery.gt("debit_amount", 0);
-  if (normalizedSearch)
-    movementQuery.ilike("operation_description", `%${normalizedSearch}%`);
-  const { data: movements, error: movementError } = await movementQuery;
-  if (movementError) throw new Error(movementError.message);
+  const loadMovementPage = async (from: number, to: number) => {
+    const movementQuery = db()
+      .from("financial_bank_movements")
+      .select(
+        "id,bank_account_id,transaction_date,operation_description,credit_amount,debit_amount,balance_after,source_row_number,direction,normalized_description,classification_signature,category_id,counterparty,classification_note,classification_source,classification_rule_id,classified_at,review_status,reviewed_by,reviewed_at",
+      )
+      .eq("company_id", companyId)
+      .gte("transaction_date", start)
+      .lt("transaction_date", endDate)
+      .order("transaction_date", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, to);
+    if (accountId) movementQuery.eq("bank_account_id", accountId);
+    if (classificationFilter === "PENDING") movementQuery.eq("review_status", "PENDING").eq("direction", "DEBE");
+    if (classificationFilter === "REVIEWED") movementQuery.eq("review_status", "REVIEWED").eq("direction", "DEBE");
+    if (classificationFilter === "HISTORICAL") movementQuery.eq("review_status", "HISTORICAL").eq("direction", "DEBE");
+    if (categoryId) movementQuery.eq("category_id", categoryId);
+    if (direction === "credit") movementQuery.gt("credit_amount", 0);
+    if (direction === "debit") movementQuery.gt("debit_amount", 0);
+    if (normalizedSearch)
+      movementQuery.ilike("operation_description", `%${normalizedSearch}%`);
+    const { data, error } = await movementQuery;
+    if (error) throw new Error(error.message);
+    return (data ?? []) as CashFlowMovement[];
+  };
+  const movements = loadAllMovements
+    ? await paginateFinancialRows(loadMovementPage, FINANCIAL_MOVEMENT_PAGE_SIZE, movementTotal)
+    : await loadMovementPage((safePage - 1) * pageSize, safePage * pageSize - 1);
   const annualPeriods = periods ?? [];
   const firstPeriodByAccount = new Map<string, any>();
   for (const period of annualPeriods)
@@ -1333,23 +1409,41 @@ export async function getCashFlowDashboard(
     : null;
   const { data: categories } = await db()
     .from("financial_categories")
-    .select("id,name")
+    .select("id,name,code,affects_pnl_directly,classification_group")
     .eq("company_id", companyId)
     .eq("is_active", true);
   const categoryNames = new Map(
     (categories ?? []).map((category: any) => [category.id, category.name]),
+  );
+  const categoryCodes = new Map(
+    (categories ?? []).map((category: any) => [category.id, category.code]),
+  );
+  const categoryAffectsPnl = new Map(
+    (categories ?? []).map((category: any) => [category.id, category.affects_pnl_directly ?? null]),
+  );
+  const categoryGroups = new Map(
+    (categories ?? []).map((category: any) => [category.id, category.classification_group ?? null]),
   );
   const classifiedMovements = (movements ?? []).map((movement: any) => ({
     ...movement,
     category_name: movement.category_id
       ? (categoryNames.get(movement.category_id) ?? null)
       : null,
+    category_code: movement.category_id
+      ? (categoryCodes.get(movement.category_id) ?? null)
+      : null,
+    affects_pnl_directly: movement.category_id
+      ? (categoryAffectsPnl.get(movement.category_id) ?? null)
+      : null,
+    classification_group: movement.category_id
+      ? (categoryGroups.get(movement.category_id) ?? null)
+      : null,
   }));
   return {
     companyId,
     accounts: (accounts ?? []) as FinancialBankAccount[],
     accountBalances,
-    currentBalance: Array.from(latest.values()).reduce(
+    currentBalance: Array.from(latestAll.values()).reduce(
       (n, row) => n + row.balance,
       0,
     ),

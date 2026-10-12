@@ -12,6 +12,16 @@ export type FinancialCategoryOption = {
   cash_direction: 'CREDIT' | 'DEBIT' | 'BOTH' | null
 }
 
+export type CategoryTreatment = 'PNL' | 'CASH'
+
+export function categoryTreatment(category: { affects_pnl_directly: boolean }): CategoryTreatment {
+  return category.affects_pnl_directly ? 'PNL' : 'CASH'
+}
+
+export function filterCategoriesByTreatment<T extends FinancialCategoryOption & { affects_pnl_directly: boolean }>(categories: T[], treatment: CategoryTreatment): T[] {
+  return categories.filter((category) => categoryTreatment(category) === treatment)
+}
+
 export function normalizeBankOperation(value: string | null | undefined) {
   return (value ?? '')
     .normalize('NFD')

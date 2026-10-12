@@ -102,7 +102,7 @@ export async function getFinancialMovementClassificationContext(movementId: stri
   if (rulesError) throw new Error(rulesError.message)
   const categoryNames = new Map(categories.map(category => [category.id, category.name]))
   const rules = (matchingRules ?? []).map((rule: any) => ({ ...rule, category_name: categoryNames.get(rule.category_id) ?? null }))
-  const pending = matches.filter(movement => movement.direction === 'DEBE' && movement.review_status === 'PENDING')
+  const pending = matches.filter(movement => movement.review_status === 'PENDING')
   const classified = matches.filter(movement => movement.category_id)
   const categoryCounts = new Map<string, number>()
   classified.forEach(movement => categoryCounts.set(movement.category_id!, (categoryCounts.get(movement.category_id!) ?? 0) + 1))

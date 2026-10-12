@@ -6,7 +6,9 @@ import { getActiveCompanyId } from '@/app/actions/companies'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { FINANCIAL_DAILY_REVIEW_CUTOFF } from '@/lib/control-financiero/config'
-import type { StatementDrilldownKey } from '@/lib/control-financiero/statement'
+import { accrueOpenMonthPersonnel, buildPersonnelEstimateDetails, type StatementDrilldownKey } from '@/lib/control-financiero/statement'
+import { getFinanceCogs, getFinancePersonnel, getFinanceSalesNet } from '@/lib/control-financiero/finance-api'
+import { todayInSantiago } from '@/lib/datetime'
 
 type Db = any
 const db = () => createAdminClient().schema('comercial') as Db
@@ -22,6 +24,9 @@ const EXPENSE_CODES = [
   'EXPENSE_TELECOM',
   'EXPENSE_EXTERNAL_SERVICES',
   'EXPENSE_OTHER',
+  'EXPENSE_REIMBURSEMENTS',
+  'EXPENSE_SERVIPAG_SERVICES',
+  'EXPENSE_SERVICE_COLLECTION_PAYMENTS',
 ] as const
 
 const OPERATING_CODES = new Set(EXPENSE_CODES.filter(code => code !== 'EXPENSE_FINANCIAL_INTEREST'))
@@ -37,6 +42,9 @@ const EXPENSE_KEY_CODES: Partial<Record<StatementDrilldownKey, string>> = {
   EXPENSE_TELECOM: 'EXPENSE_TELECOM',
   EXPENSE_EXTERNAL_SERVICES: 'EXPENSE_EXTERNAL_SERVICES',
   EXPENSE_OTHER: 'EXPENSE_OTHER',
+  EXPENSE_REIMBURSEMENTS: 'EXPENSE_REIMBURSEMENTS',
+  EXPENSE_SERVIPAG_SERVICES: 'EXPENSE_SERVIPAG_SERVICES',
+  EXPENSE_SERVICE_COLLECTION_PAYMENTS: 'EXPENSE_SERVICE_COLLECTION_PAYMENTS',
   EXPENSE_FINANCIAL_INTEREST: 'EXPENSE_FINANCIAL_INTEREST',
 }
 
@@ -74,6 +82,7 @@ export type StatementDrilldownResponse = {
   expectedTotal: string
   reconciled: true
   items: StatementDrilldownItem[]
+  estimates?: Array<{ month: number; formalEarnings: string; employerContributions: string; monthlyFormalEstimate: string; monthlyEmployerEstimate: string; asOfDate: string | null; elapsedDays: number | null; daysInMonth: number | null; sources: Array<{ year: number; month: number; formalEarnings: string; employerContributions: string }> }>
 } | {
   ok: false
   message: string
@@ -162,6 +171,33 @@ function payrollItem(row: any, importRow: any, amount: number): StatementDrilldo
   }
 }
 
+function payrollAllocationItem(row: any, batch: any, movement: any): StatementDrilldownItem {
+  return {
+    id: row.id,
+    date: movement?.transaction_date ?? dateFor(batch.period_year, batch.period_month),
+    amount: money(row.amount),
+    description: `Allocation OFF_BOOK · ${movement?.operation_description ?? 'Pago de nómina'}`,
+    category: 'Personal fuera de libro',
+    counterparty: null,
+    classificationSource: 'PAYROLL_ALLOCATION',
+    reviewStatus: null,
+    note: row.note ?? null,
+    accountingPeriod: `${batch.period_year}-${String(batch.period_month).padStart(2, '0')}`,
+    documentNumber: movement?.id ?? null,
+    sourceType: 'OFF_BOOK_ALLOCATION',
+    status: batch.status,
+    source: 'PAYROLL',
+    workerRut: row.worker_rut ?? null,
+    workerName: row.worker_name_snapshot ?? null,
+    earnings: null,
+    employerContributions: null,
+    beneficiary: null,
+    paymentConcept: null,
+    payrollStatus: 'NOT_APPLICABLE',
+    importFilename: null,
+  }
+}
+
 function recognizedExpenseItem(row: any, categoryName: string | null): StatementDrilldownItem {
   return {
     id: row.id,
@@ -233,6 +269,19 @@ export async function loadStatementDrilldown(input: {
     const isPersonnel = input.key.startsWith('PERSONNEL_')
     const isRecognizedIncome = input.key === 'OTHER_INCOME'
     if (!isExpense && !isPersonnel && !isRecognizedIncome) return { ok: false, message: 'La fila seleccionada no tiene detalle financiero.' }
+    const personnelResponse = isPersonnel ? await getFinancePersonnel(input.year) : null
+    if (personnelResponse && !personnelResponse.ok) return { ok: false, message: personnelResponse.message }
+    const today = todayInSantiago()
+    const hasOpenEstimate = personnelResponse?.ok && personnelResponse.data.months.some(month => month.status === 'ESTIMATED' && month.month <= input.throughMonth && (input.scope === 'YTD' || month.month === input.month) && `${input.year}-${String(month.month).padStart(2, '0')}` === today.slice(0, 7))
+    const [salesResponse, cogsResponse] = hasOpenEstimate
+      ? await Promise.all([getFinanceSalesNet(input.year), getFinanceCogs(input.year)])
+      : [null, null]
+    if (salesResponse && !salesResponse.ok) return { ok: false, message: salesResponse.message }
+    if (cogsResponse && !cogsResponse.ok) return { ok: false, message: cogsResponse.message }
+    const accruedPersonnel = personnelResponse?.ok
+      ? accrueOpenMonthPersonnel(personnelResponse.data, salesResponse?.ok ? salesResponse.data : null, cogsResponse?.ok ? cogsResponse.data : null, today) : null
+    const estimates = input.key === 'PERSONNEL_FORMAL' || input.key === 'PERSONNEL_EMPLOYER' || input.key === 'PERSONNEL_GROUP'
+      ? accruedPersonnel ? buildPersonnelEstimateDetails(accruedPersonnel, input.throughMonth, input.scope === 'MONTH' ? input.month : null) : [] : []
 
     const categoriesResult = await db()
       .from('financial_categories')
@@ -284,7 +333,7 @@ export async function loadStatementDrilldown(input: {
         isExpense
           ? statementMonths
           : input.key === 'PERSONNEL_GROUP'
-            ? (payrollImports ?? []).map((row: any) => Number(row.period_month))
+             ? Array.from({ length: Math.min(input.throughMonth, 12) }, (_, index) => index + 1)
             : Array.from({ length: Math.min(input.throughMonth, 12) }, (_, index) => index + 1),
       )
     if (isExpense && monthSet.size === 0) return { ok: false, message: 'No hay cobertura financiera para el período solicitado.' }
@@ -319,6 +368,40 @@ export async function loadStatementDrilldown(input: {
         if (isExpense && row.transaction_date >= FINANCIAL_DAILY_REVIEW_CUTOFF && row.review_status !== 'REVIEWED') continue
         if (isPersonnel && !monthSet.has(movementMonth)) continue
         items.push(bankItem(row, category?.name ?? null, personnelByMovement.get(row.id) ?? null))
+      }
+      if (isPersonnel) {
+        const batchResult: any = await db()
+          .from('financial_payroll_payment_batches')
+          .select('id,period_year,period_month,status,bank_movement_id')
+          .eq('company_id', companyId)
+          .eq('period_year', input.year)
+          .eq('status', 'COMPLETE')
+        if (batchResult.error) throw new Error(batchResult.error.message)
+        const batches = (batchResult.data ?? []).filter((batch: any) => input.scope === 'MONTH' ? batch.period_month === input.month : batch.period_month <= input.throughMonth)
+        const batchIds = batches.map((batch: any) => batch.id)
+        const allocationResult = batchIds.length === 0
+          ? { data: [], error: null }
+          : await db().from('financial_payroll_payment_allocations')
+            .select('id,batch_id,worker_rut,worker_name_snapshot,amount,note')
+            .eq('company_id', companyId)
+            .eq('allocation_type', 'OFF_BOOK')
+            .eq('reconciliation_status', 'NOT_APPLICABLE')
+            .in('batch_id', batchIds)
+        if (allocationResult.error) throw new Error(allocationResult.error.message)
+        const bankMovementIds = batches.map((batch: any) => batch.bank_movement_id)
+        const sourceMovementResult = bankMovementIds.length === 0
+          ? { data: [], error: null }
+          : await db().from('financial_bank_movements')
+            .select('id,transaction_date,operation_description')
+            .eq('company_id', companyId)
+            .in('id', bankMovementIds)
+        if (sourceMovementResult.error) throw new Error(sourceMovementResult.error.message)
+        const movementById = new Map((sourceMovementResult.data ?? []).map((movement: any) => [movement.id, movement]))
+        const batchById = new Map<string, any>(batches.map((batch: any) => [batch.id, batch] as [string, any]))
+        for (const row of allocationResult.data ?? []) {
+          const batch = batchById.get(row.batch_id)
+          if (batch) items.push(payrollAllocationItem(row, batch, movementById.get(batch.bank_movement_id)))
+        }
       }
       if (isExpense && requestedCategoryIds.length > 0) {
         const recognizedResult = await db()
@@ -381,9 +464,10 @@ export async function loadStatementDrilldown(input: {
     }
 
     items.sort((left, right) => left.date.localeCompare(right.date) || left.id.localeCompare(right.id))
-    const total = sum(items)
+    const estimateTotal = estimates.reduce((total, estimate) => total + (input.key === 'PERSONNEL_EMPLOYER' ? Number(estimate.employerContributions) : input.key === 'PERSONNEL_FORMAL' ? Number(estimate.formalEarnings) : Number(estimate.formalEarnings) + Number(estimate.employerContributions)), 0)
+    const total = String(Number(sum(items)) + estimateTotal)
     if (Number(total) !== Number(input.expectedTotal)) return { ok: false, message: `El detalle no reconcilia con la celda origen. Celda: ${input.expectedTotal}; detalle: ${total}.` }
-    return { ok: true, key: input.key, scope: input.scope, coveredMonths: [...monthSet].sort((a, b) => a - b), total, expectedTotal: input.expectedTotal, reconciled: true, items }
+    return { ok: true, key: input.key, scope: input.scope, coveredMonths: [...monthSet].sort((a, b) => a - b), total, expectedTotal: input.expectedTotal, reconciled: true, items, estimates }
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : 'No se pudo cargar el detalle del Estado de Resultados.' }
   }

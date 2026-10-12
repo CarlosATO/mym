@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Download, FileText, Info } from "lucide-react";
+import { ArrowLeft, Download, FileText } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -14,12 +14,9 @@ import type {
   FinanceReceivablesEvent,
   FinanceReceivablesResponse,
 } from "@/lib/control-financiero/finance-api";
-import { FINANCE_RECEIVABLES_SNAPSHOT_SOURCE } from "@/lib/control-financiero/types";
+import type { CurrentCobranzaPosition } from '@/lib/control-financiero/current-cobranza-position'
 import { ReceivablesAnalysisCache } from "@/lib/control-financiero/receivables-analysis-cache";
-import {
-  findPreviousClosedOverdue,
-  receivablesEvolutionRate,
-} from "@/lib/control-financiero/receivables-metrics";
+import { receivablesEvolutionRate } from "@/lib/control-financiero/receivables-metrics";
 
 // ─── Constantes ──────────────────────────────────────────────────────────────
 
@@ -598,12 +595,10 @@ function Metric({ label, value }: { label: string; value: string }) {
 function Row({
   label,
   values,
-  actual,
   onOpen,
 }: {
   label: string;
   values: Array<string | null>;
-  actual: string;
   onOpen: (period: number) => void;
 }) {
   return (
@@ -621,13 +616,6 @@ function Row({
           {money(value)}
         </td>
       ))}
-      <td
-        onDoubleClick={() => onOpen(0)}
-        title="Doble clic para analizar composición"
-        className="cursor-pointer border-l-2 border-[#AC9C8D] bg-[#FAF7F3] px-2.5 py-2 text-right font-semibold tabular-nums hover:bg-[#F1E4DE]"
-      >
-        {money(actual)}
-      </td>
     </tr>
   );
 }
@@ -644,16 +632,14 @@ function formatEvolution(value: number | null): string {
 
 function EvolutionRow({
   values,
-  actual,
 }: {
   values: Array<number | null>;
-  actual: number | null;
 }) {
   const colorFor = (value: number | null) =>
     value === null ? "text-[#322D29]/45" : value >= 0 ? "text-[#55705B]" : "text-[#8A4B4B]";
 
   return (
-    <tr className="text-[11px]">
+    <tr className="text-xs">
       <th className="bg-white px-4 py-2 text-left font-medium text-[#322D29]/65">
         Evolución cartera vencida vs mes anterior
       </th>
@@ -662,9 +648,6 @@ function EvolutionRow({
           {formatEvolution(value)}
         </td>
       ))}
-      <td className={`border-l-2 border-[#AC9C8D] bg-[#FAF7F3] px-2.5 py-2 text-right font-medium tabular-nums ${colorFor(actual)}`}>
-        {formatEvolution(actual)}
-      </td>
     </tr>
   );
 }
@@ -677,10 +660,16 @@ const sessionCache = new ReceivablesAnalysisCache();
 
 export function ReceivablesSection({
   data,
+  current,
+  currentAnalysis,
   year,
+  today,
 }: {
   data: FinanceReceivablesResponse;
+  current: CurrentCobranzaPosition | null;
+  currentAnalysis: FinanceReceivablesAnalysis | null;
   year: number;
+  today: string;
 }) {
   const [open, setOpen] = useState(false);
   const [analysis, setAnalysis] = useState<FinanceReceivablesAnalysis | null>(null);
@@ -701,25 +690,26 @@ export function ReceivablesSection({
   // company_id viene del payload que ya tenemos
   const companyId = data.company_id;
   const currentContextKey = `${companyId}|${year}`;
-  const isSnapshot = data.actual.receivables_source === FINANCE_RECEIVABLES_SNAPSHOT_SOURCE;
-  const snapshotDateTime = isSnapshot ? snapshotDateTimeLabel(data.actual.snapshot_at) : null;
-  const overdueEvolution = data.months.map((month, index) =>
-    index === 0
+  const snapshotDateTime = current?.snapshotAt ? snapshotDateTimeLabel(current.snapshotAt) : null;
+  // Presentation only: the server supplies today's Santiago civil date so SSR
+  // and hydration share the same calendar cutoff. Source snapshots stay intact.
+  const currentYear = Number(today.slice(0, 4));
+  const lastClosedMonth = year < currentYear ? 12 : year > currentYear ? 0 : Number(today.slice(5, 7)) - 1;
+  const closedMonths = MONTHS.map((_, index) => {
+    const month = index + 1;
+    const source = month <= lastClosedMonth ? data.months.find(item => item.month === month) : undefined;
+    return { receivable_amount: source?.receivable_amount ?? null, overdue_amount: source?.overdue_amount ?? null };
+  });
+  const overdueEvolution = closedMonths.map((month, index) =>
+    index === 0 || index >= lastClosedMonth
       ? null
-      : receivablesEvolutionRate(data.months[index - 1].overdue_amount, month.overdue_amount),
-  );
-  // ACTUAL is provisional: compare it with the latest available closed month,
-  // never with the open month reconstructed from the current effective date.
-  const actualCutoff = data.actual.snapshot_date ?? data.effective_date;
-  const previousClosedOverdue = findPreviousClosedOverdue(data.months, actualCutoff);
-  const actualEvolution = receivablesEvolutionRate(
-    previousClosedOverdue,
-    data.actual.overdue_amount,
+      : receivablesEvolutionRate(closedMonths[index - 1].overdue_amount, month.overdue_amount),
   );
 
   // ── Carga de análisis con cache ─────────────────────────────────────────────
   const loadAnalysis = useCallback(
     async (period: number): Promise<FinanceReceivablesAnalysis> => {
+      if (period === 0 && currentAnalysis) return currentAnalysis;
       const cacheKey = { companyId, year, period };
       return sessionCache.load(cacheKey, async () => {
         const response = await fetch(
@@ -738,7 +728,7 @@ export function ReceivablesSection({
         return payload as FinanceReceivablesAnalysis;
       });
     },
-    [companyId, year],
+    [companyId, year, currentAnalysis],
   );
 
   // ── Abrir análisis desde doble clic ────────────────────────────────────────
@@ -755,6 +745,12 @@ export function ReceivablesSection({
 
     // Si ya está en cache → instantáneo
     const cacheKey = { companyId, year, period };
+    if (period === 0 && currentAnalysis) {
+      setAnalysis(currentAnalysis);
+      setAnalysisKey(selectedKey);
+      setLoading(false);
+      return;
+    }
     if (sessionCache.has(cacheKey)) {
       setAnalysis(sessionCache.get(cacheKey)!);
       setAnalysisKey(selectedKey);
@@ -797,7 +793,7 @@ export function ReceivablesSection({
       .map((p) => p.period);
 
     // Siempre incluir ACTUAL (period = 0)
-    const periodsToPreload = [...periodsWithData, 0];
+    const periodsToPreload = periodsWithData;
 
     if (periodsToPreload.length === 0) return;
 
@@ -877,58 +873,39 @@ export function ReceivablesSection({
 
   return (
     <section
-      className="mt-6 border-t-2 border-[#AC9C8D] pt-4"
+      className="mt-5 min-w-0 border border-[#D1C7BD] bg-[#F8F4EF] p-3 sm:p-4"
       aria-label="Posición de cobranza"
     >
-      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <h3 className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#72383D]">
+      <div className="mb-3 border-b border-[#D1C7BD] pb-2">
+        <h3 className="text-xs font-bold uppercase tracking-[0.1em] text-[#72383D]">
           Posición de cobranza
         </h3>
-        {snapshotDateTime && (
-          <span className="text-[10px] text-[#322D29]/50">
-            Actualizado {snapshotDateTime}
-          </span>
-        )}
       </div>
-      <div className="overflow-x-auto border border-[#D1C7BD] bg-white">
-        <table className="min-w-[920px] w-full border-collapse text-[12px]">
-          <thead className="bg-[#F5F0EA] text-[10px] uppercase tracking-[0.1em] text-[#322D29]/70">
-            <tr>
-              <th className="px-4 py-2 text-left">Concepto</th>
-              {MONTHS.map((month) => (
-                <th key={month} className="px-2.5 py-2 text-right">
-                  {month}
-                </th>
-              ))}
-              <th className="border-l-2 border-[#AC9C8D] bg-[#EEE8E1] px-2.5 py-2 text-right">
-                ACTUAL
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[#D1C7BD]/70">
-            <Row
-              label="CxC pendientes al cierre"
-              values={data.months.map((item) => item.receivable_amount)}
-              actual={data.actual.receivable_amount}
-              onOpen={openAnalysis}
-            />
-            <Row
-              label="CxC vencidas al cierre"
-              values={data.months.map((item) => item.overdue_amount)}
-              actual={data.actual.overdue_amount}
-              onOpen={openAnalysis}
-            />
-            <EvolutionRow values={overdueEvolution} actual={actualEvolution} />
-          </tbody>
-        </table>
+      <h4 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-[#322D29]/65">Situación actual</h4>
+      <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3" aria-label="Indicadores actuales de cobranza">
+        <div className="min-w-0 border border-[#D1C7BD] bg-white px-3 py-3"><p className="text-[11px] text-[#322D29]/70">Cartera vigente total</p><strong className="mt-1 block text-base font-semibold tabular-nums">{money(current ? String(current.allPortfolio.receivableAmount) : null)}</strong></div>
+        <button type="button" disabled={!current} onClick={() => void openAnalysis(0)} className="min-w-0 border border-[#D1C7BD] bg-white px-3 py-3 text-left hover:border-[#72383D] focus-visible:outline-2 focus-visible:outline-[#72383D] disabled:cursor-default disabled:hover:border-[#D1C7BD]"><span className="block text-[11px] text-[#322D29]/70">Monto vencido</span><strong className="mt-1 block text-base font-semibold tabular-nums">{money(current ? String(current.defaultScope.overdueAmount) : null)}</strong></button>
+        <div className="min-w-0 border border-[#D1C7BD] bg-white px-3 py-3"><p className="text-[11px] text-[#322D29]/70">Documentos vigentes</p><strong className="mt-1 block text-base font-semibold tabular-nums" title="Documentos vigentes totales">{current?.activeDocumentCount ?? '—'}</strong></div>
       </div>
-      {isSnapshot && (data.actual.clients_unqueryable ?? 0) > 0 && (
-        <p className="mt-2 flex items-center gap-1 text-[10px] text-[#322D29]/55" title="Clientes incluidos en el universo, pero sin consulta disponible en este snapshot.">
-          <Info className="h-3 w-3 shrink-0" aria-hidden="true" />
-          {data.actual.clients_unqueryable} clientes no consultables en este snapshot.
-        </p>
-      )}
-
+      <div className="mt-2 space-y-1 text-[11px] leading-5 text-[#322D29]/65">
+        {current && <p>Corte {dateLabel(current.asOfDate)}{snapshotDateTime ? ` · snapshot ${snapshotDateTime}` : ''} · pagos confirmados posteriores incluidos</p>}
+        <p>Vista priorizada: {current?.visibleDocumentCount ?? '—'} documentos{current?.clientsUnqueryable ? ` · ${current.clientsUnqueryable} clientes no consultables en el snapshot` : ''}.</p>
+      </div>
+      <section className="mt-5 min-w-0 border border-[#D1C7BD] bg-white" aria-label="Evolución de cierres mensuales">
+        <h4 className="px-3 py-3 text-xs font-bold uppercase tracking-wider text-[#72383D]">Evolución de cierres mensuales</h4>
+        <div className="overflow-x-auto border-t border-[#D1C7BD]">
+          <table className="w-full min-w-[1480px] table-fixed border-collapse text-xs">
+            <colgroup><col className="w-[280px]" />{MONTHS.map(month => <col key={month} />)}</colgroup>
+            <thead className="bg-[#F5F0EA] text-[10px] uppercase tracking-[0.1em] text-[#322D29]/70"><tr><th className="px-4 py-2 text-left">Concepto</th>{MONTHS.map(month => <th key={month} className="px-2.5 py-2 text-right">{month}</th>)}</tr></thead>
+            <tbody className="divide-y divide-[#D1C7BD]/70">
+              <Row label="CxC pendientes al cierre" values={closedMonths.map(item => item.receivable_amount)} onOpen={openAnalysis} />
+              <Row label="CxC vencidas al cierre" values={closedMonths.map(item => item.overdue_amount)} onOpen={openAnalysis} />
+              <EvolutionRow values={overdueEvolution} />
+            </tbody>
+          </table>
+        </div>
+        <p className="border-t border-[#D1C7BD] px-3 py-2 text-xs leading-5 text-[#322D29]/65">Los valores corresponden a la posición de cartera al cierre de cada mes. La situación actual se muestra en los indicadores superiores.</p>
+      </section>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent
           side="right"
@@ -1028,7 +1005,8 @@ export function ReceivablesSection({
             {/* Vista Lista de documentos */}
             {visibleAnalysis && view === "list" && (
               <>
-                  <LineChart data={visibleAnalysis.daily} />
+                   {selectedPeriod !== 0 && <LineChart data={visibleAnalysis.daily} />}
+                   {selectedPeriod === 0 && <p className="px-4 py-3 text-xs text-[#322D29]/65">Cartera visible de Cobranza con pagos confirmados posteriores al snapshot. No se representa una evolución diaria recalculada.</p>}
                 <div className="grid grid-cols-3 gap-px border-b border-[#D1C7BD] bg-[#D1C7BD]">
                   <Metric
                     label="CxC al cierre"

@@ -2,8 +2,10 @@
 
 import { useState } from 'react'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import type { NonPnlCashData, NonPnlCashMovement } from '@/app/actions/control-financiero/non-pnl-cash'
 import type { FinancialAccountBalance } from '@/app/actions/control-financiero/bank-statements'
+import type { ResultVsCashReport } from '@/lib/control-financiero/result-vs-cash'
 
 const MONTHS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
 const MONTHS_FULL = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
@@ -20,6 +22,60 @@ function signedMoney(value: number) {
 function date(value: string) {
   const [year, month, day] = value.split('-')
   return `${day}-${month}-${year}`
+}
+
+export function ResultVsCashSection({ report }: { report: ResultVsCashReport }) {
+  const [detailOpen, setDetailOpen] = useState(false)
+  const show = (value: string | number | null) => value === null ? '—' : signedMoney(Number(value))
+  const pendingCollections = report.receivables ? report.receivables.amount : null
+  const retiros = Math.abs(report.factors.find(factor => factor.label === 'Retiros de socios')?.amount ?? 0)
+
+  return <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
+    <DialogTrigger className="border border-[#72383D]/40 bg-white px-3 py-1.5 text-xs font-semibold text-[#72383D] hover:bg-[#F1E4DE] focus-visible:outline-2 focus-visible:outline-[#72383D]">Análisis resultado vs caja</DialogTrigger>
+    <DialogContent className="flex max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-[1200px] flex-col gap-0 overflow-hidden border border-[#D1C7BD] bg-[#FCFBF9] p-0 text-[#322D29] shadow-2xl sm:max-h-[96dvh] sm:w-[94vw] lg:w-[92vw] sm:max-w-[1200px]">
+      <DialogHeader className="shrink-0 border-b border-[#D1C7BD] bg-[#F8F4EF] px-5 py-3 pr-12 text-left sm:px-6 sm:pr-12">
+        <DialogTitle className="text-sm font-bold uppercase leading-6 tracking-[0.08em] text-[#72383D]">Resultado vs caja</DialogTitle>
+        <DialogDescription className="text-xs text-[#322D29]/65">Referencia gerencial simple · resultado del período vs caja</DialogDescription>
+      </DialogHeader>
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-5 py-4 text-sm sm:px-6">
+        <section className="rounded-lg border border-[#72383D]/30 bg-[#F1E4DE] px-4 py-3">
+          <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#72383D]">Resultado gerencial del período</p>
+          <strong className="mt-0.5 block break-words text-2xl font-semibold tabular-nums text-[#322D29]">{show(report.resultYtd)}{report.resultEstimated && report.resultYtd !== null && <span className="ml-1 text-xs text-[#1453A0]">EST.</span>}</strong>
+          <p className="mt-0.5 text-[11px] text-[#322D29]/60">Utilidad económica estimada del período; no representa efectivo disponible.{report.resultCoverage ? ` ${report.resultCoverage}${report.resultAsOfDate ? ` · al ${date(report.resultAsOfDate)}` : ''}.` : ''}</p>
+        </section>
+
+        <div className="grid min-w-0 items-start gap-3 sm:grid-cols-2">
+          <section className="rounded-lg border border-[#D1C7BD] bg-white px-4 py-3">
+            <h4 className="text-[10px] font-bold uppercase tracking-wider text-[#72383D]">Pendientes de ingreso a caja (cobranzas)</h4>
+            <strong className="mt-1 block text-xl font-semibold tabular-nums text-[#322D29]">{show(pendingCollections)}</strong>
+            <p className="mt-0.5 text-[11px] leading-4 text-[#322D29]/60">Cartera vigente total pendiente de recaudar.</p>
+          </section>
+          <section className="rounded-lg border border-[#D1C7BD] bg-white px-4 py-3">
+            <h4 className="text-[10px] font-bold uppercase tracking-wider text-[#72383D]">Retiros de socios</h4>
+            <strong className="mt-1 block text-xl font-semibold tabular-nums text-[#322D29]">{show(retiros)}</strong>
+            <p className="mt-0.5 text-[11px] leading-4 text-[#322D29]/60">Retiros acumulados del período.</p>
+          </section>
+        </div>
+
+        <section className="rounded-lg border border-[#72383D]/30 bg-[#F1E4DE] px-4 py-3">
+          <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#72383D]">Saldo efectivo en cuentas corrientes</p>
+          <strong className="mt-0.5 block break-words text-2xl font-semibold tabular-nums text-[#322D29]">{show(report.bankBalance)}</strong>
+          <p className="mt-0.5 text-[11px] text-[#322D29]/60">Saldo disponible en bancos.</p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">{report.accounts.map((account, index) => <div key={`${account.name}-${account.maskedAccount}-${index}`} className="rounded-md border border-[#72383D]/20 bg-white/80 px-3 py-2"><p className="text-[11px] font-semibold text-[#322D29]">{account.name} {account.maskedAccount}</p><strong className="mt-0.5 block text-lg font-semibold tabular-nums">{show(account.balance)}</strong><p className="text-[10px] text-[#322D29]/55">{account.date ? date(account.date) : 'sin fecha'}</p></div>)}</div>
+          {!report.accounts.length && <p className="mt-2 text-xs text-[#322D29]/60">Sin saldos bancarios observados.</p>}
+          <p className="mt-2 text-[11px] leading-4 text-[#322D29]/70">El saldo bancario no se reconcilia directamente con el resultado del período. La conciliación completa requerirá incorporar cuentas por pagar, obligaciones y otros componentes del capital de trabajo.</p>
+        </section>
+
+        <section className="rounded-lg border border-dashed border-[#AC9C8D] bg-[#FAF7F3] px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-[#72383D]">Cuentas por pagar y obligaciones</h4>
+            <span className="rounded-full border border-[#AC9C8D] bg-white px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#AC9C8D]">Próximamente</span>
+          </div>
+          <p className="mt-1.5 text-[11px] leading-4 text-[#322D29]/70">Esta sección se ampliará cuando estén disponibles las cuentas por pagar, obligaciones y otros componentes del capital de trabajo.</p>
+        </section>
+      </div>
+    </DialogContent>
+  </Dialog>
 }
 
 function MovementDetail({ movement }: { movement: NonPnlCashMovement }) {
@@ -85,7 +141,7 @@ function MovementDrawer({ title, year, month, movements, total, netSummary, bala
   )
 }
 
-export function ManagerialLiquidityCards({ resultYtd, marginYtd, data, currentBalance, accountBalances, year }: { resultYtd: string | null; marginYtd: number | null; data: NonPnlCashData | null; currentBalance: number | null; accountBalances: FinancialAccountBalance[]; year: number }) {
+export function ManagerialLiquidityCards({ resultYtd, marginYtd, estimated = false, confirmedYtd = null, confirmedMarginYtd = null, confirmedCoverage = '', managerialCoverage = '', estimatedMonths = [], data, currentBalance, accountBalances, year }: { resultYtd: string | null; marginYtd: number | null; estimated?: boolean; confirmedYtd?: string | null; confirmedMarginYtd?: number | null; confirmedCoverage?: string; managerialCoverage?: string; estimatedMonths?: string[]; data: NonPnlCashData | null; currentBalance: number | null; accountBalances: FinancialAccountBalance[]; year: number }) {
   const [movementDetail, setMovementDetail] = useState<{ title: string; code: string } | null>(null)
   const [bankDetail, setBankDetail] = useState(false)
   const movementCards = [
@@ -94,16 +150,16 @@ export function ManagerialLiquidityCards({ resultYtd, marginYtd, data, currentBa
     { label: 'Pago línea de crédito', value: data?.creditLinePaymentsYtd ?? 0, code: 'CREDIT_LINE_PAYMENT', title: 'Pago línea de crédito' },
   ].filter(card => card.value > 0)
   const cards = [
-    { label: 'Resultado final YTD', value: resultYtd ? money(Number(resultYtd)) : '—', detail: 'Resultado final del EERR', onClick: undefined },
-    { label: 'Margen final', value: marginYtd === null ? '—' : `${new Intl.NumberFormat('es-CL', { maximumFractionDigits: 1 }).format(marginYtd)}%`, detail: 'Resultado final sobre ventas', onClick: undefined },
-    ...movementCards.map(card => ({ label: card.label, value: money(card.value), detail: 'Abrir movimientos', onClick: () => setMovementDetail({ title: card.title, code: card.code }) })),
-    { label: 'Saldo bancos', value: currentBalance === null ? '—' : money(currentBalance), detail: 'Abrir saldos por cuenta', onClick: currentBalance === null ? undefined : () => setBankDetail(true) },
+    { label: 'Resultado final YTD', value: resultYtd !== null ? money(Number(resultYtd)) : '—', detail: estimated ? `${managerialCoverage} · incluye remuneraciones estimadas ${estimatedMonths.join('–')} · Confirmado: ${confirmedCoverage} ${confirmedYtd !== null ? money(Number(confirmedYtd)) : '—'}${confirmedMarginYtd !== null ? ` · ${new Intl.NumberFormat('es-CL', { maximumFractionDigits: 1 }).format(confirmedMarginYtd)}%` : ''}` : 'Resultado final del EERR', estimated, onClick: undefined },
+    { label: 'Margen final', value: marginYtd === null ? '—' : `${new Intl.NumberFormat('es-CL', { maximumFractionDigits: 1 }).format(marginYtd)}%`, detail: estimated ? `Sobre ventas ${managerialCoverage}` : 'Resultado final sobre ventas', estimated, onClick: undefined },
+    ...movementCards.map(card => ({ label: card.label, value: money(card.value), detail: 'Abrir movimientos', estimated: false, onClick: () => setMovementDetail({ title: card.title, code: card.code }) })),
+    { label: 'Saldo bancos', value: currentBalance === null ? '—' : money(currentBalance), detail: 'Abrir saldos por cuenta', estimated: false, onClick: currentBalance === null ? undefined : () => setBankDetail(true) },
   ]
   return <>
     <section className="mb-4 border border-[#D1C7BD] bg-[#F8F4EF] p-2.5 sm:p-3">
       <div className="border-b border-[#D1C7BD] pb-1.5"><p className="text-[9px] font-bold uppercase tracking-[0.16em] text-[#72383D]">Gestión de liquidez</p><h3 className="mt-0.5 text-xs font-semibold">INDICADORES GERENCIALES</h3></div>
-      <div className="mt-2 grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-        {cards.map(card => <button key={card.label} type="button" disabled={!card.onClick} onClick={card.onClick} className={`min-h-[68px] border px-2.5 py-1.5 text-left ${card.onClick ? 'cursor-pointer border-[#AC9C8D] bg-white hover:border-[#72383D]' : 'cursor-default border-[#D1C7BD] bg-white'}`}><p className="text-[8px] font-bold uppercase leading-3 tracking-[0.06em] text-[#72383D]">{card.label}</p><p className="mt-1 text-base font-semibold leading-5 tabular-nums text-[#322D29]">{card.value}</p><p className="mt-0.5 text-[8px] leading-3 text-[#322D29]/55">{card.detail}</p></button>)}
+      <div className="mt-2 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+        {cards.map(card => <button key={card.label} type="button" disabled={!card.onClick} onClick={card.onClick} className={`min-h-[68px] min-w-0 border px-3 py-2 text-left [overflow-wrap:anywhere] ${card.onClick ? 'cursor-pointer border-[#AC9C8D] bg-white hover:border-[#72383D]' : 'cursor-default border-[#D1C7BD] bg-white'}`}><p className="text-[10px] font-bold uppercase leading-4 tracking-[0.06em] text-[#72383D]">{card.label}</p><p className={`mt-1 text-base font-semibold leading-5 tabular-nums ${card.estimated ? 'text-[#1453A0]' : 'text-[#322D29]'}`}>{card.value}{card.estimated && <span className="ml-1 text-[10px]">EST.</span>}</p><p className="mt-1 text-[11px] leading-4 text-[#322D29]/65">{card.detail}</p></button>)}
       </div>
       <p className="mt-2 text-[9px] leading-3.5 text-[#322D29]/60">El resultado del negocio no equivale al efectivo disponible. Retiros, financiamiento, inversiones y movimientos de capital pueden afectar la caja sin modificar el resultado.</p>
     </section>

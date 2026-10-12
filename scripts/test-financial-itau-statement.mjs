@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import { parseItauStatementText } from '../src/lib/control-financiero/bank-statement-parser.ts'
 
 const fixture = `Banco Itaú
@@ -15,6 +16,7 @@ Fecha Nº Operación Sucursal Descripción Depósitos o abonos Giros o cargos Sa
 01/02/2026 1001 001 Abono Desde Linea De Credito 148.798.500 - 158.798.500
 02/02/2026 1002 001 Cuota Prestamo - 4.757.601 154.040.899
 03/02/2026 1003 001 Cargo Ctacte Por Traspaso Lc - 200.000.000 -45.959.101`
+const currentFixture = fs.readFileSync(new URL('./fixtures/itau-current-open.txt', import.meta.url), 'utf8')
 
 test('parsea columnas Itaú, cuenta, período y línea de crédito', () => {
   const parsed = parseItauStatementText(fixture)
@@ -55,5 +57,54 @@ test('mantiene el parser Banco de Chile independiente del formato Itaú', () => 
   assert.throws(
     () => parseItauStatementText(fixture.replace('Banco Itaú', 'Banco de Chile')),
     /Itaú Empresas/,
+  )
+})
+
+test('parsea Itaú de mes abierto, conserva columnas vacías y calcula continuidad', () => {
+  const parsed = parseItauStatementText(currentFixture)
+  assert.equal(parsed.sourceFormat, 'ITAU_CURRENT_PDF')
+  assert.equal(parsed.accountNumber, '0231417323')
+  assert.equal(parsed.year, 2026)
+  assert.equal(parsed.month, 10)
+  assert.equal(parsed.order, 'DESC')
+  assert.equal(parsed.openingBalance, -2603267)
+  assert.equal(parsed.totalCredits, 14987671)
+  assert.equal(parsed.totalDebits, 12384404)
+  assert.equal(parsed.closingBalance, 0)
+  assert.equal(parsed.lastTransactionDate, '2026-10-07')
+  assert.equal(parsed.creditLineAvailable, 213425)
+  assert.equal(parsed.rowCount, 14)
+  assert.equal(parsed.validations.rowDifference, 0)
+  assert.equal(parsed.validations.globalDifference, 0)
+  assert.equal(parsed.movements[0].credit, 5000000)
+  assert.equal(parsed.movements[1].credit, 5000000)
+  const salary = parsed.movements.find(row => row.description === 'Sueldo Sep 2026')
+  assert.deepEqual(
+    { debit: salary?.debit, credit: salary?.credit, balance: salary?.balance, document: salary?.documentNumber, branch: salary?.branch },
+    { debit: 7396733, credit: 0, balance: 0, document: '526252201', branch: '1980' },
+  )
+  const emptyDocument = parsed.movements.find(row => row.description === 'Abono Desde Linea De Credito')
+  assert.equal(emptyDocument?.documentNumber, null)
+  assert.equal(emptyDocument?.branch, '0029')
+  assert.equal(parsed.movements.find(row => row.description === 'Cuota Prestamo')?.debit, 4757601)
+})
+
+test('parsea el reflujo PDF con documento y sucursal en líneas separadas', () => {
+  const multiline = currentFixture.replace(
+    '01/10/2026 526252201 1980 Sueldo Sep 2026 $ 7.396.733 $ 0',
+    '01/10/2026\ndocumento 526252201\nsucursal 1980\nSueldo Sep 2026\n$ 7.396.733\n$ 0',
+  )
+  const parsed = parseItauStatementText(multiline)
+  const salary = parsed.movements.find(row => row.description === 'Sueldo Sep 2026')
+  assert.equal(salary?.documentNumber, '526252201')
+  assert.equal(salary?.branch, '1980')
+  assert.equal(salary?.debit, 7396733)
+  assert.equal(salary?.balance, 0)
+})
+
+test('rechaza una consulta Itaú de múltiples meses', () => {
+  assert.throws(
+    () => parseItauStatementText(currentFixture.replace('07/10/2026 0011', '30/09/2026 0011')),
+    /un solo período mensual/,
   )
 })

@@ -29,6 +29,9 @@ EXPENSE_CATEGORIES = (
     "EXPENSE_TELECOM",
     "EXPENSE_EXTERNAL_SERVICES",
     "EXPENSE_OTHER",
+    "EXPENSE_REIMBURSEMENTS",
+    "EXPENSE_SERVIPAG_SERVICES",
+    "EXPENSE_SERVICE_COLLECTION_PAYMENTS",
 )
 OTHER_INCOME_CATEGORY = "INCOME_OTHER_CASH"
 OPERATING_CATEGORIES = EXPENSE_CATEGORIES[:5] + EXPENSE_CATEGORIES[6:]
@@ -52,7 +55,10 @@ MONTHLY_EXPENSES_SQL = text(
             'EXPENSE_INSURANCE',
              'EXPENSE_TELECOM',
              'EXPENSE_EXTERNAL_SERVICES',
-             'EXPENSE_OTHER'
+             'EXPENSE_OTHER',
+             'EXPENSE_REIMBURSEMENTS',
+              'EXPENSE_SERVIPAG_SERVICES',
+              'EXPENSE_SERVICE_COLLECTION_PAYMENTS'
           )
           AND NOT EXISTS (
             SELECT 1
@@ -444,6 +450,9 @@ def build_expenses_response(
                 "telecom": _money_string(values[EXPENSE_CATEGORIES[7]]),
                 "externalServices": _money_string(values[EXPENSE_CATEGORIES[8]]),
                 "otherExpenses": _money_string(values[EXPENSE_CATEGORIES[9]]),
+                "reimbursements": _money_string(values[EXPENSE_CATEGORIES[10]]),
+                "servipagServices": _money_string(values[EXPENSE_CATEGORIES[11]]),
+                "serviceCollectionPayments": _money_string(values[EXPENSE_CATEGORIES[12]]),
                 "operatingIdentifiedTotal": _money_string(operating),
                 "financialInterest": _money_string(financial),
                 "nonOperatingIdentifiedTotal": _money_string(financial),
@@ -475,6 +484,9 @@ def build_expenses_response(
         "telecom": _money_string(available_sum("telecom")) if available_rows else None,
         "externalServices": _money_string(available_sum("externalServices")) if available_rows else None,
         "otherExpenses": _money_string(available_sum("otherExpenses")) if available_rows else None,
+        "reimbursements": _money_string(available_sum("reimbursements")) if available_rows else None,
+        "servipagServices": _money_string(available_sum("servipagServices")) if available_rows else None,
+        "serviceCollectionPayments": _money_string(available_sum("serviceCollectionPayments")) if available_rows else None,
         "operatingIdentifiedTotal": _money_string(available_sum("operatingIdentifiedTotal")) if available_rows else None,
         "financialInterest": _money_string(available_sum("financialInterest")) if available_rows else None,
         "nonOperatingIdentifiedTotal": _money_string(available_sum("nonOperatingIdentifiedTotal")) if available_rows else None,

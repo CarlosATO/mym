@@ -1,4 +1,4 @@
-import { BarChart3, BookOpenText, HandCoins, Package, Truck, WalletCards } from 'lucide-react'
+import { ArrowLeftRight, BarChart3, BookOpenText, HandCoins, Package, Truck, WalletCards } from 'lucide-react'
 import type { BreadcrumbValue, ModuleNavigation } from '@/components/layout/module-shell-types'
 
 const analysisBase = '/dashboard/analisis-comercial'
@@ -83,6 +83,7 @@ export const analisisComercialNavigation: ModuleNavigation = {
         {
           id: 'control-financiero-movements',
           label: '10  Movimientos financieros',
+          icon: ArrowLeftRight,
           target: { href: `${analysisBase}/control-financiero/movimientos` },
           active: { pathname: { prefix: `${analysisBase}/control-financiero/movimientos` } },
           visibility: { anyOf: ['analisis_comercial.control_financiero.view', 'system.admin'] },
