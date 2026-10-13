@@ -7,7 +7,7 @@ const sync = await readFile(new URL('src/app/actions/integraciones/bsale-sync.ts
 const health = await readFile(new URL('src/app/actions/integraciones/sync.ts', root), 'utf8')
 const action = await readFile(new URL('src/app/actions/logistica/sales-order-preparation.ts', root), 'utf8')
 const panel = await readFile(new URL('src/modules/logistica/preparacion-pedidos/sales-order-preparation-panel.tsx', root), 'utf8')
-const migration = await readFile(new URL('supabase/migrations/20261007182000_bodega_operational_freshness.sql', root), 'utf8')
+const migration = await readFile(new URL('supabase/migrations/20261013100000_logistica_bodega_sync_state_8888.sql', root), 'utf8')
 
 test('el refresco operacional incluye todas las cards abiertas, no sólo NV recientes', () => {
   assert.match(sync, /from\('vw_sales_order_preparation_board'\)/)
@@ -65,8 +65,25 @@ test('el FULL es explícito, idempotente y usa paginación exhaustiva sin trunca
   assert.doesNotMatch(sync, /delete\(\)\.eq\('company_id', companyId\)\.eq\('document_type_id'/)
 })
 
-test('state 8888 permanece visible y no recibe cierre automático', () => {
-  assert.match(migration, /nv\.state IN \(0, 8888\)/)
-  assert.doesNotMatch(migration, /nv\.state IN \(0, 1, 8888\)/)
+test('state 8888 se cierra y queda fuera de las vistas operativas', () => {
+  assert.match(migration, /WHERE nv\.document_type_id = 23 AND nv\.state = 0;/)
+  assert.match(migration, /WHEN nv\.state = 8888 THEN 'NON_OPERATIONAL_BSALE'/)
+  assert.match(migration, /'bsale_state', bsale_state/)
+  assert.match(migration, /'bsale_document_id', bsale_document_id/)
   assert.match(sync, /Number\(doc\.state\) === 0\)/)
+})
+
+test('los triggers de Bodega caben y mantienen el catálogo histórico', () => {
+  assert.match(migration, /ALTER COLUMN trigger TYPE varchar\(40\)/)
+  assert.match(migration, /'WAREHOUSE_INCREMENTAL'/)
+  assert.match(migration, /'WAREHOUSE_OPERATIONAL'/)
+  assert.match(migration, /'WAREHOUSE_FULL'/)
+  assert.match(migration, /'ROUTE_GUIDE_DIRECTED'/)
+  assert.match(migration, /'WAREHOUSE_PREP'/)
+})
+
+test('el cierre respeta factura, cancelación y luego no operativo', () => {
+  assert.match(migration, /THEN 'INVOICED'[\s\S]*WHEN nv\.state = 1 THEN 'CANCELLED_BSALE'[\s\S]*WHEN nv\.state = 8888 THEN 'NON_OPERATIONAL_BSALE'/)
+  assert.match(migration, /closed_non_operational/)
+  assert.match(migration, /ON CONFLICT DO NOTHING;/)
 })

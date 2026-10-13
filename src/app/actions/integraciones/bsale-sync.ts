@@ -2338,6 +2338,7 @@ async function materializePreparationAfterSalesSync(companyId: string) {
     relations_created?: number
     closed_invoiced?: number
     closed_cancelled?: number
+    closed_non_operational?: number
     movements_created?: number
   }
 }
@@ -2771,6 +2772,7 @@ export async function syncBsaleSalesOrdersForPreparation(
     relations_created: number
     closed_invoiced: number
     closed_cancelled: number
+    closed_non_operational: number
     duration_ms: number
     errors: number
   }
@@ -3053,7 +3055,7 @@ export async function syncBsaleSalesOrdersForPreparation(
       details_updated: detailsCount,
       relations_created: preparationResult?.relations_created || 0,
       cards_created: preparationResult?.created || 0,
-      cards_closed: (preparationResult?.closed_invoiced || 0) + (preparationResult?.closed_cancelled || 0),
+      cards_closed: (preparationResult?.closed_invoiced || 0) + (preparationResult?.closed_cancelled || 0) + (preparationResult?.closed_non_operational || 0),
       errors: totalErrors,
       duration_ms: durationMs,
     })
@@ -3075,6 +3077,7 @@ export async function syncBsaleSalesOrdersForPreparation(
         relations_created: preparationResult?.relations_created || 0,
         closed_invoiced: preparationResult?.closed_invoiced || 0,
         closed_cancelled: preparationResult?.closed_cancelled || 0,
+        closed_non_operational: preparationResult?.closed_non_operational || 0,
         duration_ms: durationMs,
         errors: totalErrors,
       },
@@ -3131,6 +3134,7 @@ export async function runManualWarehouseBsaleRefresh(companyId: string) {
       relations_created: incrementalCounts.relations_created + operationalCounts.relations_created,
       closed_invoiced: incrementalCounts.closed_invoiced + operationalCounts.closed_invoiced,
       closed_cancelled: incrementalCounts.closed_cancelled + operationalCounts.closed_cancelled,
+      closed_non_operational: incrementalCounts.closed_non_operational + operationalCounts.closed_non_operational,
       errors: incrementalCounts.errors + operationalCounts.errors,
       duration_ms: incrementalCounts.duration_ms + operationalCounts.duration_ms,
     },
@@ -3391,7 +3395,7 @@ export async function runFullWarehouseBsaleRefresh(companyId: string): Promise<W
       : null
     metrics.links_created = preparation?.relations_created || 0
     metrics.cards_created = preparation?.created || 0
-    metrics.cards_closed = (preparation?.closed_invoiced || 0) + (preparation?.closed_cancelled || 0)
+    metrics.cards_closed = (preparation?.closed_invoiced || 0) + (preparation?.closed_cancelled || 0) + (preparation?.closed_non_operational || 0)
     metrics.duration_ms = Date.now() - startedAt
     const finalStatus = metrics.errors > 0 ? 'PARTIAL' : 'COMPLETED'
     await finishSyncRun(runId, finalStatus, {
