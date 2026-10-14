@@ -21,6 +21,7 @@
     "test:cobranza-enqueue": "node --test scripts/test-cobranza-enqueue-contract.mjs",
     "test:cobranza-worker": "node --test scripts/test-cobranza-worker-contract.mjs",
     "test:cobranza-progress": "node --test scripts/test-cobranza-progress-contract.mjs",
+    "test:cobranza-progress-ui": "node --test scripts/test-cobranza-progress-ui.mjs",
     "test:logistica-preparacion-kanban": "node --test scripts/test-logistica-preparacion-kanban-contract.mjs",
     "test:bodega-v2-operational-freshness": "node --test scripts/test-bodega-v2-operational-freshness.mjs",
     "test:bodega-warehouse-sync": "node --test scripts/test-bodega-warehouse-sync.mjs",

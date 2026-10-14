@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { DndContext, DragOverlay, PointerSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
-import { Check, Clipboard, LoaderCircle, Search, X } from 'lucide-react'
+import { Check, ChevronLeft, Clipboard, LoaderCircle, RefreshCw, Search, X } from 'lucide-react'
 import {
   Sheet,
   SheetContent,
@@ -24,7 +24,7 @@ import type { FinanceReceivablesAnalysis } from '@/lib/control-financiero/financ
 import { formatReceivablesSnapshotAt, getReceivablesFreshness } from '@/lib/control-financiero/receivables-freshness'
 import { applyCobranzaPaymentOverlay, buildCobranzaClients, buildCobranzaInvoices, calculateCobranzaClientKpis, calculateCobranzaInvoiceKpis, type CobranzaClient } from '../lib/cobranza-metrics'
 import { CobranzaFreshnessNotice } from '../components/cobranza-freshness-notice'
-import { getCollectionCustomerHistory, getCollectionPaymentOverlay, getCollectionWorkflow, getRecentClosedCollectionCustomers, getUnknownCollectionPaymentAttempts, prepareCollectionCustomerBatch, prepareCollectionPayment, registerCollectionCustomerBatch, registerCollectionInteraction, registerCollectionPayment, reopenCollectionCustomersWithDebt, resolveUnknownCollectionPayment, updateCollectionStage, type CollectionHistoryEvent, type CollectionInteractionType, type CollectionPaymentOverlay, type CollectionStage, type RecentClosedCollectionCustomer } from '@/app/actions/comercial/cobranza-workflow'
+import { getCollectionCustomerHistory, getCollectionPaymentBatchProgress, getCollectionPaymentOverlay, getCollectionWorkflow, getRecentClosedCollectionCustomers, getUnknownCollectionPaymentAttempts, listCollectionPaymentBatchProgress, prepareCollectionCustomerBatch, prepareCollectionPayment, registerCollectionCustomerBatch, registerCollectionInteraction, registerCollectionPayment, reopenCollectionCustomersWithDebt, resolveUnknownCollectionPayment, updateCollectionStage, type CollectionHistoryEvent, type CollectionInteractionType, type CollectionPaymentBatchProgress, type CollectionPaymentOverlay, type CollectionStage, type RecentClosedCollectionCustomer } from '@/app/actions/comercial/cobranza-workflow'
 
 const stages: Array<{ key: CollectionStage; label: string }> = [
   { key: 'TO_MANAGE', label: 'Por gestionar' },
@@ -102,6 +102,195 @@ function Kpi({ label, value, detail }: { label: string; value: string; detail?: 
       {detail && <p className="mt-0.5 text-[10px] text-[#322D29]/50">{detail}</p>}
     </div>
   )
+}
+
+type CollectionPaymentProgressListing = Awaited<ReturnType<typeof listCollectionPaymentBatchProgress>>
+
+const paymentBatchStatusLabel: Record<string, string> = {
+  CREATED: 'En espera',
+  PROCESSING: 'Procesando',
+  UNKNOWN: 'Requiere revisión',
+  COMPLETED: 'Completado',
+  PARTIAL: 'Completado parcialmente',
+  FAILED: 'No procesado',
+}
+
+const paymentBatchStatusTone: Record<string, string> = {
+  CREATED: 'border-[#D1C7BD] bg-[#F5F0EA] text-[#6B625C]',
+  PROCESSING: 'border-[#B38A55]/40 bg-[#F6EFE2] text-[#806238]',
+  UNKNOWN: 'border-[#A45B58]/40 bg-[#F5E8E4] text-[#8A4B4B]',
+  COMPLETED: 'border-[#66856B]/40 bg-[#EDF4EC] text-[#426247]',
+  PARTIAL: 'border-[#B38A55]/40 bg-[#F6EFE2] text-[#806238]',
+  FAILED: 'border-[#A45B58]/40 bg-[#F5E8E4] text-[#8A4B4B]',
+}
+
+const paymentDocumentTone: Record<string, string> = {
+  PENDING: 'text-[#6B625C]',
+  PROCESSING: 'text-[#806238]',
+  CONFIRMED: 'text-[#426247]',
+  REQUIRES_REVIEW: 'text-[#8A4B4B]',
+  FAILED: 'text-[#8A4B4B]',
+  CANCELLED: 'text-[#6B625C]',
+}
+
+function PaymentBatchCard({ batch, onSelect }: { batch: CollectionPaymentBatchProgress; onSelect: () => void }) {
+  const progress = batch.expectedDocuments > 0 ? Math.round((batch.confirmedDocuments / batch.expectedDocuments) * 100) : 0
+  return (
+    <button type="button" onClick={onSelect} className="w-full border border-[#D1C7BD] bg-white p-3 text-left transition-colors hover:border-[#72383D] hover:bg-[#FCFBF9]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-xs font-semibold text-[#322D29]">{batch.clientName}</p>
+          <p className="mt-1 text-[10px] text-[#322D29]/55">{dateTimeLabel(batch.completedAt ?? batch.createdAt)}</p>
+        </div>
+        <span className={`shrink-0 border px-1.5 py-0.5 text-[9px] font-semibold ${paymentBatchStatusTone[batch.status] ?? paymentBatchStatusTone.UNKNOWN}`}>{paymentBatchStatusLabel[batch.status] ?? 'Requiere revisión'}</span>
+      </div>
+      <div className="mt-3 flex items-end justify-between gap-3">
+        <div>
+          <p className="text-[10px] uppercase tracking-[0.08em] text-[#AC9C8D]">Total esperado</p>
+          <p className="mt-0.5 text-sm font-semibold tabular-nums text-[#322D29]">{money(batch.expectedTotal)}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-[10px] uppercase tracking-[0.08em] text-[#AC9C8D]">Confirmado</p>
+          <p className="mt-0.5 text-sm font-semibold tabular-nums text-[#322D29]">{money(batch.confirmedTotal)}</p>
+        </div>
+      </div>
+      <div className="mt-3">
+        <div className="flex items-center justify-between text-[10px] text-[#322D29]/60"><span>{batch.confirmedDocuments} de {batch.expectedDocuments} facturas pagadas</span><strong>{progress}%</strong></div>
+        <div className="mt-1 h-1.5 overflow-hidden bg-[#F0EAE3]"><div className="h-full bg-[#72383D] transition-[width]" style={{ width: `${progress}%` }} /></div>
+      </div>
+    </button>
+  )
+}
+
+function PaymentProgressDetail({ batch, onBack }: { batch: CollectionPaymentBatchProgress; onBack: () => void }) {
+  const documents = [...batch.documents].sort((left, right) => left.sequenceNumber - right.sequenceNumber)
+  return (
+    <div className="space-y-4">
+      <button type="button" onClick={onBack} className="inline-flex items-center gap-1 text-xs font-semibold text-[#72383D] hover:underline"><ChevronLeft className="h-3.5 w-3.5" />Todos los pagos</button>
+      <div className="border border-[#D1C7BD] bg-white p-3">
+        <div className="flex items-start justify-between gap-3"><div><p className="text-sm font-semibold">{batch.clientName}</p><p className="mt-1 text-[10px] text-[#322D29]/55">{dateTimeLabel(batch.completedAt ?? batch.createdAt)}</p></div><span className={`border px-1.5 py-0.5 text-[9px] font-semibold ${paymentBatchStatusTone[batch.status] ?? paymentBatchStatusTone.UNKNOWN}`}>{paymentBatchStatusLabel[batch.status] ?? 'Requiere revisión'}</span></div>
+        <div className="mt-3 grid grid-cols-2 gap-px border border-[#D1C7BD] bg-[#D1C7BD] sm:grid-cols-4">
+          <div className="bg-white px-2 py-2"><p className="text-[9px] uppercase text-[#AC9C8D]">Esperado</p><p className="mt-1 text-xs font-semibold tabular-nums">{money(batch.expectedTotal)}</p></div>
+          <div className="bg-white px-2 py-2"><p className="text-[9px] uppercase text-[#AC9C8D]">Confirmado</p><p className="mt-1 text-xs font-semibold tabular-nums">{money(batch.confirmedTotal)}</p></div>
+          <div className="bg-white px-2 py-2"><p className="text-[9px] uppercase text-[#AC9C8D]">Facturas</p><p className="mt-1 text-xs font-semibold tabular-nums">{batch.confirmedDocuments} / {batch.expectedDocuments}</p></div>
+          <div className="bg-white px-2 py-2"><p className="text-[9px] uppercase text-[#AC9C8D]">Fecha</p><p className="mt-1 text-xs font-semibold">{dateTimeLabel(batch.completedAt ?? batch.createdAt)}</p></div>
+        </div>
+        {batch.requiresReview && <div className="mt-3 border border-[#A45B58]/35 bg-[#F5E8E4] px-3 py-2 text-[11px] text-[#8A4B4B]"><p className="font-semibold">Este procesamiento requiere revisión antes de continuar.</p><p className="mt-1">Revisa el estado de la factura antes de continuar.</p></div>}
+      </div>
+      <section className="border border-[#D1C7BD] bg-white">
+        <div className="border-b border-[#D1C7BD] bg-[#F5F0EA] px-3 py-2"><p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#72383D]">Documentos</p></div>
+        <div className="divide-y divide-[#D1C7BD]/70">
+          {documents.map(document => <div key={document.attemptId} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-3 text-xs"><div><p className="font-semibold">Factura {document.folio ?? document.documentId}</p><p className="mt-1 text-[10px] text-[#322D29]/50">Documento {document.documentId}</p></div><span className="tabular-nums">{money(document.amount)}</span><span className={`text-right text-[10px] font-semibold ${paymentDocumentTone[document.visualStatus] ?? paymentDocumentTone.REQUIRES_REVIEW}`}>{document.message}</span></div>)}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function PaymentProgressSheet({ open, onOpenChange, listing, loading, error, selectedBatch, detailLoading, onRefresh, onSelectBatch, onBack }: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  listing: CollectionPaymentProgressListing | null
+  loading: boolean
+  error: string | null
+  selectedBatch: CollectionPaymentBatchProgress | null
+  detailLoading: boolean
+  onRefresh: () => void
+  onSelectBatch: (batchId: string) => void
+  onBack: () => void
+}) {
+  const renderSection = (title: string, rows: CollectionPaymentBatchProgress[]) => rows.length > 0 && <section><div className="mb-2 flex items-center justify-between"><h3 className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#72383D]">{title}</h3><span className="text-[10px] text-[#322D29]/50">{rows.length}</span></div><div className="space-y-2">{rows.map(batch => <PaymentBatchCard key={batch.batchId} batch={batch} onSelect={() => onSelectBatch(batch.batchId)} />)}</div></section>
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="flex h-screen w-full flex-col overflow-hidden border-[#D1C7BD] bg-[#EFE9E1] p-0 text-[#322D29] sm:!w-[560px] sm:!max-w-[560px]">
+        <SheetHeader className="shrink-0 border-b border-[#D1C7BD] bg-white px-5 py-4 pr-12 text-left"><div className="flex items-start justify-between gap-3"><div><SheetTitle>Procesamiento de pagos</SheetTitle><SheetDescription>Seguimiento sólo lectura de pagos en segundo plano.</SheetDescription></div><button type="button" onClick={onRefresh} disabled={loading} className="inline-flex items-center gap-1 border border-[#D1C7BD] px-2 py-1 text-[10px] font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:opacity-50"><RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />Actualizar</button></div></SheetHeader>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          {error && <p className="mb-3 border border-[#A45B58]/30 bg-[#F5E8E4] px-3 py-2 text-[11px] text-[#8A4B4B]">No se pudo actualizar el estado de pagos.</p>}
+          {detailLoading && <p className="mb-3 text-[10px] text-[#322D29]/50">Cargando detalle…</p>}
+          {selectedBatch ? <PaymentProgressDetail batch={selectedBatch} onBack={onBack} /> : listing && <div className="space-y-5">{renderSection('En proceso', listing.batches.active)}{renderSection('Requieren revisión', listing.batches.requiresReview)}{renderSection('Recientes', listing.batches.recent)}{listing.batches.active.length + listing.batches.requiresReview.length + listing.batches.recent.length === 0 && <p className="border border-[#D1C7BD] bg-white px-3 py-6 text-center text-xs text-[#322D29]/55">No hay pagos en procesamiento.</p>}</div>}
+          {!listing && !loading && !error && <p className="border border-[#D1C7BD] bg-white px-3 py-6 text-center text-xs text-[#322D29]/55">No hay pagos en procesamiento.</p>}
+        </div>
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+function PaymentProgressObserver() {
+  const [listing, setListing] = useState<CollectionPaymentProgressListing | null>(null)
+  const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null)
+  const [selectedBatch, setSelectedBatch] = useState<CollectionPaymentBatchProgress | null>(null)
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const loadingRef = useRef(false)
+
+  const refreshProgress = async () => {
+    if (loadingRef.current) return
+    loadingRef.current = true
+    setLoading(true)
+    try {
+      const nextListing = await listCollectionPaymentBatchProgress()
+      setListing(nextListing)
+      setError(null)
+      if (selectedBatchId) {
+        setDetailLoading(true)
+        try {
+          setSelectedBatch(await getCollectionPaymentBatchProgress(selectedBatchId))
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : 'No se pudo cargar el estado de pagos.')
+        } finally {
+          setDetailLoading(false)
+        }
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo actualizar el estado de pagos.')
+    } finally {
+      loadingRef.current = false
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { void refreshProgress() }, [])
+
+  useEffect(() => {
+    const detailIsActive = selectedBatch && ['CREATED', 'PROCESSING', 'UNKNOWN'].includes(selectedBatch.status)
+    if (!listing || (!(listing.activeCount > 0 || listing.requiresReviewCount > 0) && !detailIsActive)) return
+    const timer = window.setInterval(() => { void refreshProgress() }, 5000)
+    return () => window.clearInterval(timer)
+  }, [listing?.activeCount, listing?.requiresReviewCount, selectedBatchId, selectedBatch?.status])
+
+  const openProgress = () => {
+    setOpen(true)
+    if (!listing || error) void refreshProgress()
+  }
+  const selectBatch = async (batchId: string) => {
+    setSelectedBatchId(batchId)
+    setSelectedBatch(null)
+    setDetailLoading(true)
+    setError(null)
+    try {
+      setSelectedBatch(await getCollectionPaymentBatchProgress(batchId))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo cargar el estado de pagos.')
+    } finally {
+      setDetailLoading(false)
+    }
+  }
+  const backToList = () => {
+    setSelectedBatchId(null)
+    setSelectedBatch(null)
+    setError(null)
+  }
+  const activeCount = listing?.activeCount ?? 0
+  const requiresReviewCount = listing?.requiresReviewCount ?? 0
+  return <>
+    <div className="flex flex-wrap items-center justify-end gap-1.5" data-payment-progress-observer>
+      <button type="button" onClick={openProgress} className={`border px-2.5 py-1.5 text-left ${activeCount > 0 ? 'border-[#B38A55]/50 bg-[#F6EFE2] text-[#806238] hover:border-[#72383D]' : 'border-[#D1C7BD] bg-white text-[#322D29]/65'}`}><span className="text-[10px] font-semibold">Pagos en proceso: <strong>{activeCount}</strong></span>{activeCount > 0 && <span className="ml-1.5 text-[9px]">Procesamiento en segundo plano</span>}</button>
+      <button type="button" onClick={openProgress} className={`border px-2.5 py-1.5 text-left ${requiresReviewCount > 0 ? 'border-[#A45B58]/60 bg-[#F5E8E4] text-[#8A4B4B] hover:border-[#72383D]' : 'border-[#D1C7BD] bg-white text-[#322D29]/65'}`}><span className="text-[10px] font-semibold">Requieren revisión: <strong>{requiresReviewCount}</strong></span></button>
+    </div>
+    <PaymentProgressSheet open={open} onOpenChange={setOpen} listing={listing} loading={loading} error={error} selectedBatch={selectedBatch} detailLoading={detailLoading} onRefresh={() => void refreshProgress()} onSelectBatch={batchId => void selectBatch(batchId)} onBack={backToList} />
+  </>
 }
 
 function Priority({ value }: { value: CobranzaClient['priority'] }) {
@@ -897,10 +1086,11 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
             <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#72383D]">Cobranza</p>
              <h1 className="mt-1 text-xl font-semibold tracking-[-0.03em] text-[#322D29]">Gestión de cartera y clientes</h1>
            </div>
-          <div className="flex min-w-[220px] flex-col items-stretch gap-2 text-[10px] text-[#322D29]/55">
-            <CobranzaFreshnessNotice status={freshness.status} snapshotLabel={snapshotLabel} />
-            <p>{data.summary.pending_documents} documentos pendientes</p>
-          </div>
+           <div className="flex min-w-[220px] flex-col items-stretch gap-2 text-[10px] text-[#322D29]/55">
+             <CobranzaFreshnessNotice status={freshness.status} snapshotLabel={snapshotLabel} />
+             <p>{data.summary.pending_documents} documentos pendientes</p>
+             <PaymentProgressObserver />
+           </div>
         </div>
 
          <div className="mt-4 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-4">

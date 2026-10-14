@@ -57,7 +57,7 @@ test('P/Q: no hay BSale ni escrituras en las actions de progreso', () => {
   assert.doesNotMatch(progressSource, /\.update\(|\.insert\(|\.delete\(|claim_collection_payment_batch|mark_collection_payment_attempt_submitting/)
 })
 
-test('no modifica UI, polling, enqueue ni worker', () => {
-  assert.doesNotMatch(view, /getCollectionPaymentBatchProgress|listCollectionPaymentBatchProgress/)
+test('la UI sólo consume progreso read-only y la capa no activa polling, enqueue ni worker', () => {
+  assert.match(view, /<PaymentProgressObserver \/>/)
   assert.doesNotMatch(progressSource, /setInterval|setTimeout|enqueueCollectionCustomerBatch|runCollectionPaymentWorker/)
 })
