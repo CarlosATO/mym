@@ -16,6 +16,8 @@
     "test:cobranza-2b": "node --test scripts/test-cobranza-2b-contract.mjs",
     "test:cobranza-unknown": "node --test scripts/test-cobranza-unknown-recovery.mjs",
     "test:cobranza-closed-recent": "node --test scripts/test-cobranza-closed-recent.mjs",
+    "test:cobranza-batch-durable-model": "node --test scripts/test-cobranza-batch-durable-model.mjs",
+    "test:cobranza-batch-durable-compatibility": "node --test scripts/test-cobranza-batch-durable-compatibility.mjs",
     "test:logistica-preparacion-kanban": "node --test scripts/test-logistica-preparacion-kanban-contract.mjs",
     "test:bodega-v2-operational-freshness": "node --test scripts/test-bodega-v2-operational-freshness.mjs",
     "test:bodega-warehouse-sync": "node --test scripts/test-bodega-warehouse-sync.mjs",
