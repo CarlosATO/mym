@@ -15,7 +15,7 @@ import {
 import {
   Search, CheckCircle2, Clock, AlertCircle, Package,
   MapPin, Calendar, FileText, Paperclip, Layers, X,
-  Eye, PackageOpen, Loader2
+  Eye, PackageOpen, Loader2, ArrowLeft
 } from 'lucide-react'
 import { erpInputClass } from '@/lib/form-styles'
 import { cn } from '@/lib/utils'
@@ -216,11 +216,11 @@ function DetailPanel({
               <FileText className="h-3 w-3" /> Ver PDF OC
             </button>
             <button
+              type="button"
               onClick={onClose}
-              title="Cerrar detalle"
-              className="p-1.5 rounded-lg hover:bg-theme-text/10 text-theme-text-muted transition-colors"
+              className="inline-flex min-h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-theme-border px-3 py-2 text-xs font-semibold text-theme-text-muted transition-colors hover:bg-theme-text/10 hover:text-theme-text"
             >
-              <X className="w-3.5 h-3.5" />
+              <ArrowLeft className="h-3.5 w-3.5" /> Volver al menú
             </button>
           </div>
         </div>
@@ -739,7 +739,10 @@ export function RecepcionesPanel({ canViewEconomics }: { canViewEconomics: boole
   const detailSummary = detailPoId ? (filteredPOs.find(p => p.id === detailPoId) ?? null) : null
 
   const openDetail = (po: PurchaseOrderPending) => setDetailPoId(po.id)
-  const closeDetail = () => setDetailPoId(null)
+  const closeDetail = () => {
+    setDetailPoId(null)
+    router.replace('/dashboard/logistica?tab=movimientos&action=recepciones')
+  }
   const openOperationalPdf = (poId: string) => setOperationalPdfPoId(poId)
 
   const prefetchDetail = (poId: string) => {
