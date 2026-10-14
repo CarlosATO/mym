@@ -24,7 +24,7 @@ import type { FinanceReceivablesAnalysis } from '@/lib/control-financiero/financ
 import { formatReceivablesSnapshotAt, getReceivablesFreshness } from '@/lib/control-financiero/receivables-freshness'
 import { applyCobranzaPaymentOverlay, buildCobranzaClients, buildCobranzaInvoices, calculateCobranzaClientKpis, calculateCobranzaInvoiceKpis, type CobranzaClient } from '../lib/cobranza-metrics'
 import { CobranzaFreshnessNotice } from '../components/cobranza-freshness-notice'
-import { getCollectionCustomerHistory, getCollectionPaymentOverlay, getCollectionWorkflow, prepareCollectionCustomerBatch, prepareCollectionPayment, registerCollectionCustomerBatch, registerCollectionInteraction, registerCollectionPayment, reopenCollectionCustomersWithDebt, updateCollectionStage, type CollectionHistoryEvent, type CollectionInteractionType, type CollectionPaymentOverlay, type CollectionStage } from '@/app/actions/comercial/cobranza-workflow'
+import { getCollectionCustomerHistory, getCollectionPaymentOverlay, getCollectionWorkflow, getUnknownCollectionPaymentAttempts, prepareCollectionCustomerBatch, prepareCollectionPayment, registerCollectionCustomerBatch, registerCollectionInteraction, registerCollectionPayment, reopenCollectionCustomersWithDebt, resolveUnknownCollectionPayment, updateCollectionStage, type CollectionHistoryEvent, type CollectionInteractionType, type CollectionPaymentOverlay, type CollectionStage } from '@/app/actions/comercial/cobranza-workflow'
 
 const stages: Array<{ key: CollectionStage; label: string }> = [
   { key: 'TO_MANAGE', label: 'Por gestionar' },
@@ -379,6 +379,9 @@ function ClientPanel({
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [historyHasMore, setHistoryHasMore] = useState(false)
   const [historyExpanded, setHistoryExpanded] = useState(false)
+  const [unknownAttempts, setUnknownAttempts] = useState<Array<{ id: string; documentId: number; status: string }>>([])
+  const [unknownBusyId, setUnknownBusyId] = useState<string | null>(null)
+  const [unknownResolution, setUnknownResolution] = useState<Record<number, { outcome: string; message: string }>>({})
   const message = buildCollectionMessage(client)
 
   const copyMessage = async () => {
@@ -387,7 +390,7 @@ function ClientPanel({
     window.setTimeout(() => setCopied(false), 1800)
   }
 
-  const paymentBusy = preflightDocumentId !== null || Boolean(paymentPreview) || paymentProcessing || batchPreparing || batchProcessing
+  const paymentBusy = preflightDocumentId !== null || Boolean(paymentPreview) || paymentProcessing || batchPreparing || batchProcessing || unknownBusyId !== null
 
   useEffect(() => {
     let cancelled = false
@@ -403,6 +406,16 @@ function ClientPanel({
     return () => { cancelled = true }
   }, [client.clientId])
 
+  useEffect(() => {
+    let cancelled = false
+    getUnknownCollectionPaymentAttempts(client.clientId).then(result => {
+      if (!cancelled) setUnknownAttempts(result)
+    }).catch(() => {
+      if (!cancelled) setUnknownAttempts([])
+    })
+    return () => { cancelled = true }
+  }, [client.clientId])
+
   const refreshHistory = async (limit = historyExpanded ? 100 : 20) => {
     try {
       const result = await getCollectionCustomerHistory(client.clientId, limit)
@@ -411,6 +424,25 @@ function ClientPanel({
       setHistoryError(null)
     } catch (cause) {
       setHistoryError(cause instanceof Error ? cause.message : 'No se pudo actualizar la bitácora.')
+    }
+  }
+
+  const verifyUnknown = async (attempt: { id: string; documentId: number }) => {
+    if (unknownBusyId) return
+    setUnknownBusyId(attempt.id)
+    try {
+      const result = await resolveUnknownCollectionPayment({ attemptId: attempt.id })
+      setUnknownResolution(current => ({ ...current, [attempt.documentId]: { outcome: result.outcome, message: result.message ?? (result.outcome === 'CONFIRMED' ? 'Pago confirmado y reconciliado en Bsale.' : '') } }))
+      if (result.outcome === 'CONFIRMED') {
+        setUnknownAttempts(current => current.filter(item => item.id !== attempt.id))
+        onPaymentReconciled?.(attempt.documentId, result.documentBalance, result.clientBalance)
+      } else if (result.outcome === 'FAILED') {
+        setUnknownAttempts(current => current.filter(item => item.id !== attempt.id))
+      }
+    } catch (cause) {
+      setUnknownResolution(current => ({ ...current, [attempt.documentId]: { outcome: 'UNKNOWN', message: cause instanceof Error ? cause.message : 'No se pudo verificar el pago en Bsale.' } }))
+    } finally {
+      setUnknownBusyId(null)
     }
   }
 
@@ -638,10 +670,12 @@ function ClientPanel({
             <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#72383D]">Documentos pendientes</p>
           </div>
           <div className="divide-y divide-[#D1C7BD]/70">
-           {client.documents.map((document) => {
-              const dueToday = document.expiration_date === cutoffDate
-              const visibleStatus = document.overdue ? 'Vencida' : dueToday ? 'Adeudada · vence hoy' : 'Adeudada'
-              return (
+            {client.documents.map((document) => {
+               const dueToday = document.expiration_date === cutoffDate
+               const visibleStatus = document.overdue ? 'Vencida' : dueToday ? 'Adeudada · vence hoy' : 'Adeudada'
+               const unknownAttempt = unknownAttempts.find(attempt => attempt.documentId === document.document_id)
+               const resolution = unknownResolution[document.document_id]
+               return (
                  <div key={document.document_id} className={`px-3 py-3 text-xs ${focusedDocumentId === document.document_id ? 'bg-[#F6EFE2] ring-1 ring-inset ring-[#B38A55]' : ''}`}>
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -652,7 +686,9 @@ function ClientPanel({
                   </div>
                    <p className={`mt-1 text-[10px] ${document.overdue ? 'text-[#8A4B4B]' : 'text-[#322D29]/55'}`}>{visibleStatus}</p>
                     <div className="mt-2 flex items-center justify-between gap-2"><span className="text-[10px] text-[#322D29]/55">Saldo pendiente</span><strong className="text-[11px]">{money(document.pending_amount)}</strong></div>
-                    <button type="button" disabled={paymentBusy} onClick={() => void previewPayment(document.document_id, String(document.pending_amount))} className="mt-2 inline-flex items-center gap-2 border border-[#72383D]/30 px-2 py-1 text-[10px] font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">{preflightDocumentId === document.document_id && <LoaderCircle className="h-3 w-3 animate-spin" />}{preflightDocumentId === document.document_id ? 'Consultando saldo en Bsale…' : 'Registrar pago'}</button>
+                     {unknownAttempt ? <button type="button" disabled={paymentBusy} onClick={() => void verifyUnknown(unknownAttempt)} className="mt-2 inline-flex items-center gap-2 border border-[#B38A55]/50 bg-[#F6EFE2] px-2 py-1 text-[10px] font-semibold text-[#806238] hover:bg-[#EDE1C9] disabled:cursor-not-allowed disabled:opacity-50">{unknownBusyId === unknownAttempt.id && <LoaderCircle className="h-3 w-3 animate-spin" />}{unknownBusyId === unknownAttempt.id ? 'Verificando en Bsale…' : 'Verificar en Bsale'}</button> : <button type="button" disabled={paymentBusy} onClick={() => void previewPayment(document.document_id, String(document.pending_amount))} className="mt-2 inline-flex items-center gap-2 border border-[#72383D]/30 px-2 py-1 text-[10px] font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">{preflightDocumentId === document.document_id && <LoaderCircle className="h-3 w-3 animate-spin" />}{preflightDocumentId === document.document_id ? 'Consultando saldo en Bsale…' : 'Registrar pago'}</button>}
+                     {unknownAttempt && <p className="mt-2 border-l-2 border-[#B38A55] pl-2 text-[10px] text-[#806238]">Estado UNKNOWN: no vuelvas a intentar hasta verificarlo.</p>}
+                     {resolution && <p className={`mt-2 border-l-2 pl-2 text-[10px] ${resolution.outcome === 'CONFIRMED' ? 'border-[#66856B] text-[#426247]' : resolution.outcome === 'FAILED' ? 'border-[#66856B] text-[#426247]' : 'border-[#B38A55] text-[#806238]'}`}>{resolution.message}</p>}
                     {paymentPreview?.documentId === document.document_id && paymentStatus === 'IDLE' && <p className="mt-2 border-l-2 border-[#B38A55] pl-2 text-[10px] text-[#806238]">Preflight OK. Saldo vivo Bsale: {money(paymentPreview.liveBalance)}. No se ha escrito ningún pago.</p>}
                  </div>
               )

@@ -102,13 +102,13 @@ test('eventos de auditoría detallados conservan submitted, confirmed, failed, u
   assert.match(action, /eventType: 'COLLECTION_PAYMENT_CONFIRMED'/)
   assert.match(action, /eventType: 'COLLECTION_CUSTOMER_CLOSED'/)
 })
-test('auditoría previa bloquea POST y auditoría posterior no clasifica FAILED', () => {
+test('auditoría previa bloquea POST y timeout conserva UNKNOWN con verificación live', () => {
   assert.match(action, /await auditCollectionEvent\(\{ userId: user\.id, action: 'INSERT'/)
   assert.match(action, /let postAttempted = false/)
   assert.match(action, /postAttempted = true[\s\S]*gateway\.createPayment/)
   assert.match(action, /if \(!postAttempted\)[\s\S]*status: 'FAILED'/)
-  assert.match(action, /if \(!postAttempted\)[\s\S]*throw cause[\s\S]*status: 'REQUIRES_REVIEW'/)
   assert.match(action, /status: 'UNKNOWN'/)
+  assert.match(action, /A failed POST is indeterminate[\s\S]*resolveUnknownCollectionPaymentInternal/)
   assert.match(action, /auditCollectionEventBestEffort/)
 })
 test('botón real requiere confirmación y se deshabilita procesando', () => assert.match(view, /disabled=\{paymentProcessing\}[\s\S]*CONFIRMAR PAGO EN BSALE/))

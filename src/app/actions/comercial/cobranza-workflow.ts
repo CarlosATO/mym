@@ -329,14 +329,26 @@ function paymentId(payment: CollectionPayment | null | undefined) {
   return Number.isInteger(id) && id > 0 ? id : null
 }
 
-function matchingPayments(payments: CollectionPayment[], input: { amount: number; paymentTypeId: number; recordDate: string }) {
+function recordDateMatches(payment: CollectionPayment, expectedDate: string) {
+  const rawDate = Number(payment.recordDate)
+  const paymentDate = Number.isFinite(rawDate) && rawDate > 0
+    ? new Date(rawDate * 1000)
+    : new Date(String(payment.recordDate ?? ''))
+  const expected = new Date(`${expectedDate}T00:00:00.000Z`)
+  if (Number.isNaN(paymentDate.getTime()) || Number.isNaN(expected.getTime())) return false
+  // BSale has returned the adjacent UTC calendar day for a local record date.
+  return Math.abs(paymentDate.getTime() - expected.getTime()) <= 24 * 60 * 60 * 1000
+}
+
+function matchingPayments(payments: CollectionPayment[], input: { amount: number; paymentTypeId: number; recordDate: string; documentId?: number }) {
   return payments.filter(payment => {
     const amountMatches = Math.abs(Number(payment.amount ?? 0) - input.amount) < 0.01
     const type = Number(payment.payment_type?.id ?? payment.paymentTypeId)
     const typeMatches = type === input.paymentTypeId
-    const rawDate = Number(payment.recordDate)
-    const date = Number.isFinite(rawDate) && rawDate > 0 ? new Date(rawDate * 1000).toISOString().slice(0, 10) : String(payment.recordDate ?? '').slice(0, 10)
-    return amountMatches && typeMatches && date === input.recordDate
+    const application = input.documentId === undefined
+      ? true
+      : dedupeCollectionPaymentApplications(payment, input.documentId).some(item => item.documentId === input.documentId && Math.abs(item.amount - input.amount) < 0.01 && item.source !== 'fallback')
+    return amountMatches && typeMatches && application && recordDateMatches(payment, input.recordDate)
   }).filter(payment => paymentId(payment) !== null)
 }
 
@@ -401,6 +413,125 @@ export async function reconcileExistingCollectionPayment(input: { attemptId: str
   await auditCollectionEventBestEffort({ userId: user.id, action: 'UPDATE', eventType: 'COLLECTION_PAYMENT_CONFIRMED', attemptId: input.attemptId, metadata: { company_id: companyId, client_id: Number(attempt.client_id), bsale_document_id: Number(attempt.bsale_document_id), amount: Number(attempt.amount), payment_type_id: paymentTypeId, bsale_payment_id: input.paymentId, post_balance: reconciled.postBalance, reconciliation: 'DIRECTED_EXISTING_PAYMENT' } })
   if (reconciled.clientBalance === 0) await closeCollectionCustomer(companyId, user.id, Number(attempt.client_id), Number(attempt.bsale_document_id), Number(attempt.amount), input.paymentId)
   return { ok: true as const, attemptId: input.attemptId, paymentId: input.paymentId, documentBalance: reconciled.postBalance, clientBalance: reconciled.clientBalance }
+}
+
+const UNKNOWN_SAFETY_WINDOW_MS = 60_000
+
+async function refreshCollectionBatchStatus(companyId: string, batchId: string) {
+  const { data: attempts, error } = await db().from('collection_payment_attempts')
+    .select('status,amount').eq('company_id', companyId).eq('batch_id', batchId)
+  if (error) throw new Error(error.message)
+  const rows = attempts ?? []
+  const confirmedTotal = rows.filter(row => row.status === 'CONFIRMED').reduce((sum, row) => sum + Number(row.amount ?? 0), 0)
+  const unknown = rows.some(row => row.status === 'UNKNOWN' || row.status === 'REQUIRES_REVIEW')
+  const failed = rows.some(row => row.status === 'FAILED')
+  const status = unknown ? 'UNKNOWN' : failed ? (confirmedTotal > 0 ? 'PARTIAL' : 'FAILED') : 'COMPLETED'
+  await db().from('collection_payment_batches').update({ confirmed_total: confirmedTotal, status, completed_at: new Date().toISOString() }).eq('company_id', companyId).eq('id', batchId)
+  return { status, confirmedTotal }
+}
+
+async function resolveUnknownCollectionPaymentInternal(input: {
+  companyId: string
+  userId: string
+  attempt: {
+    id: string
+    client_id: number
+    bsale_document_id: number
+    amount: number
+    preflight_balance?: number | null
+    payment_type_id: number
+    record_date: string
+    created_at: string
+    status: string
+    batch_id?: string | null
+  }
+}) {
+  const attempt = input.attempt
+  const gateway = createCollectionPaymentGateway(input.companyId)
+  const [documentPayments, unpaid] = await Promise.all([
+    gateway.getDocumentPayments(Number(attempt.bsale_document_id)),
+    gateway.getUnpaidDocuments(Number(attempt.client_id)),
+  ])
+  const candidates = matchingPayments(documentPayments, {
+    amount: Number(attempt.amount),
+    paymentTypeId: Number(attempt.payment_type_id),
+    recordDate: String(attempt.record_date),
+    documentId: Number(attempt.bsale_document_id),
+  })
+  const uniqueCandidates = [...new Map(candidates.map(payment => [paymentId(payment), payment])).values()]
+
+  if (uniqueCandidates.length === 1) {
+    const foundPaymentId = paymentId(uniqueCandidates[0])
+    if (!foundPaymentId) throw new Error('El payment candidato no tiene un identificador válido.')
+    const reconciled = await reconcileCollectionPayment({
+      companyId: input.companyId,
+      clientId: Number(attempt.client_id),
+      documentId: Number(attempt.bsale_document_id),
+      paymentId: foundPaymentId,
+      gateway,
+      recordDate: String(attempt.record_date),
+    })
+    await db().from('collection_payment_attempts').update({
+      status: 'CONFIRMED',
+      bsale_payment_id: foundPaymentId,
+      post_balance: reconciled.postBalance,
+      confirmed_at: new Date().toISOString(),
+      payment_response: reconciled.payment,
+      error_message: null,
+      updated_at: new Date().toISOString(),
+    }).eq('company_id', input.companyId).eq('id', attempt.id).in('status', ['UNKNOWN', 'REQUIRES_REVIEW'])
+    await auditCollectionEventBestEffort({ userId: input.userId, action: 'UPDATE', eventType: 'COLLECTION_PAYMENT_CONFIRMED', attemptId: attempt.id, metadata: { company_id: input.companyId, bsale_document_id: Number(attempt.bsale_document_id), bsale_payment_id: foundPaymentId, reconciliation: 'UNKNOWN_LIVE_RECOVERY', post_balance: reconciled.postBalance } })
+    if (reconciled.clientBalance === 0) await closeCollectionCustomer(input.companyId, input.userId, Number(attempt.client_id), Number(attempt.bsale_document_id), Number(attempt.amount), foundPaymentId)
+    if (attempt.batch_id) await refreshCollectionBatchStatus(input.companyId, attempt.batch_id)
+    return { outcome: 'CONFIRMED' as const, attemptId: attempt.id, paymentId: foundPaymentId, documentBalance: reconciled.postBalance, clientBalance: reconciled.clientBalance, payment: reconciled.payment, message: 'Pago confirmado y reconciliado en Bsale.' }
+  }
+
+  const liveDocument = flattenUnpaidDocuments(unpaid).find(document => Number(document.id) === Number(attempt.bsale_document_id))
+  const liveBalance = Number(liveDocument?.totalAmountOwed ?? 0)
+  const ageMs = Date.now() - new Date(attempt.created_at).getTime()
+  const expectedBalance = Number(attempt.preflight_balance ?? attempt.amount)
+  const absenceProven = uniqueCandidates.length === 0
+    && liveDocument !== undefined
+    && Math.abs(expectedBalance - Number(attempt.amount)) < 0.01
+    && Math.abs(liveBalance - expectedBalance) < 0.01
+    && ageMs >= UNKNOWN_SAFETY_WINDOW_MS
+
+  if (absenceProven) {
+    const reason = 'Pago no creado en Bsale después de verificación live'
+    await db().from('collection_payment_attempts').update({ status: 'FAILED', error_message: reason, updated_at: new Date().toISOString() }).eq('company_id', input.companyId).eq('id', attempt.id).in('status', ['UNKNOWN', 'REQUIRES_REVIEW'])
+    await auditCollectionEventBestEffort({ userId: input.userId, action: 'STATUS_CHANGE', eventType: 'COLLECTION_PAYMENT_FAILED', attemptId: attempt.id, metadata: { company_id: input.companyId, bsale_document_id: Number(attempt.bsale_document_id), amount: Number(attempt.amount), reason, live_balance: liveBalance, safety_window_ms: UNKNOWN_SAFETY_WINDOW_MS } })
+    if (attempt.batch_id) await refreshCollectionBatchStatus(input.companyId, attempt.batch_id)
+    return { outcome: 'FAILED' as const, attemptId: attempt.id, message: 'Pago no fue creado en Bsale. Ya puedes volver a intentarlo.' }
+  }
+
+  return { outcome: 'UNKNOWN' as const, attemptId: attempt.id, message: 'No se pudo determinar con seguridad si Bsale procesó el pago. No vuelvas a intentar hasta verificarlo.' }
+}
+
+export async function resolveUnknownCollectionPayment(input: { attemptId: string }) {
+  const { companyId, user } = await context()
+  if (!(await canRegisterPayment())) throw new Error('No tienes permiso para registrar pagos de cobranza.')
+  if (!input.attemptId) throw new Error('El intento de cobranza es obligatorio.')
+  const { data: attempt, error } = await db().from('collection_payment_attempts')
+    .select('id,client_id,bsale_document_id,amount,preflight_balance,payment_type_id,record_date,created_at,status,batch_id')
+    .eq('company_id', companyId).eq('id', input.attemptId).maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!attempt) throw new Error('El intento de cobranza no pertenece a la empresa activa.')
+  if (!['UNKNOWN', 'REQUIRES_REVIEW'].includes(String(attempt.status))) throw new Error('El intento no está en estado UNKNOWN recuperable.')
+  try {
+    return await resolveUnknownCollectionPaymentInternal({ companyId, userId: user.id, attempt: attempt as typeof attempt & { batch_id?: string | null } })
+  } catch (cause) {
+    await auditCollectionEventBestEffort({ userId: user.id, action: 'STATUS_CHANGE', eventType: 'COLLECTION_PAYMENT_UNKNOWN', attemptId: input.attemptId, metadata: { company_id: companyId, recovery: 'LIVE_READ_FAILED', error: cause instanceof Error ? cause.message.slice(0, 300) : 'Error de verificación live' } })
+    return { outcome: 'UNKNOWN' as const, attemptId: input.attemptId, message: 'No se pudo determinar con seguridad si Bsale procesó el pago. No vuelvas a intentar hasta verificarlo.' }
+  }
+}
+
+export async function getUnknownCollectionPaymentAttempts(clientId: number) {
+  const { companyId } = await context()
+  const { data, error } = await db().from('collection_payment_attempts')
+    .select('id,bsale_document_id,status,amount,created_at')
+    .eq('company_id', companyId).eq('client_id', clientId).in('status', ['UNKNOWN', 'REQUIRES_REVIEW'])
+  if (error) throw new Error(error.message)
+  return (data ?? []).map(row => ({ id: String(row.id), documentId: Number(row.bsale_document_id), status: String(row.status), amount: Number(row.amount), createdAt: String(row.created_at) }))
 }
 
 async function upsertDirectedPayment(companyId: string, clientId: number, documentId: number, payment: CollectionPayment, documentPayments: CollectionPayment[], fallbackRecordDate?: string) {
@@ -545,9 +676,22 @@ export async function registerCollectionPayment(input: {
       await auditCollectionEventBestEffort({ userId: user.id, action: 'STATUS_CHANGE', eventType: 'COLLECTION_PAYMENT_FAILED', attemptId, metadata: { company_id: companyId, bsale_document_id: input.documentId, amount: input.amount, error: cause instanceof Error ? cause.message.slice(0, 300) : 'Error de registro' } })
       throw cause
     }
-    await db().from('collection_payment_attempts').update({ status: 'REQUIRES_REVIEW', error_message: cause instanceof Error ? cause.message.slice(0, 500) : 'Error posterior al POST', updated_at: new Date().toISOString() }).eq('id', attemptId).eq('status', 'SUBMITTING')
-    await auditCollectionEventBestEffort({ userId: user.id, action: 'STATUS_CHANGE', eventType: 'COLLECTION_PAYMENT_REQUIRES_REVIEW', attemptId, metadata: { company_id: companyId, bsale_document_id: input.documentId, amount: input.amount, error: cause instanceof Error ? cause.message.slice(0, 300) : 'Error posterior al POST' } })
-    throw new Error('El pago pudo haberse creado en Bsale y requiere revisión. No reintentes automáticamente.')
+    // A failed POST is indeterminate. Read BSale once, but never issue a second POST.
+    const { data: unknownAttempt } = await db().from('collection_payment_attempts')
+      .select('id,client_id,bsale_document_id,amount,preflight_balance,payment_type_id,record_date,created_at,status,batch_id')
+      .eq('company_id', companyId).eq('id', attemptId).eq('status', 'UNKNOWN').maybeSingle()
+    if (unknownAttempt) {
+      let recoveryFailedMessage: string | null = null
+      try {
+        const recovery = await resolveUnknownCollectionPaymentInternal({ companyId, userId: user.id, attempt: unknownAttempt as typeof unknownAttempt & { batch_id?: string | null } })
+        if (recovery.outcome === 'CONFIRMED') return { ok: true as const, attemptId, paymentId: recovery.paymentId, documentBalance: recovery.documentBalance, clientBalance: recovery.clientBalance, payment: recovery.payment }
+        if (recovery.outcome === 'FAILED') recoveryFailedMessage = recovery.message
+      } catch (recoveryCause) {
+        await auditCollectionEventBestEffort({ userId: user.id, action: 'STATUS_CHANGE', eventType: 'COLLECTION_PAYMENT_UNKNOWN', attemptId, metadata: { company_id: companyId, client_id: input.clientId ?? null, bsale_document_id: input.documentId, amount: input.amount, recovery: 'LIVE_READ_FAILED', error: recoveryCause instanceof Error ? recoveryCause.message.slice(0, 300) : 'Error de verificación live' } })
+      }
+      if (recoveryFailedMessage) throw new Error(recoveryFailedMessage)
+    }
+    throw new Error('El pago pudo haberse creado en Bsale y requiere verificación. No reintentes automáticamente.')
   }
 }
 

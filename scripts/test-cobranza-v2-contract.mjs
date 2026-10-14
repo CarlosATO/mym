@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 const migration = await readFile(new URL('../supabase/migrations/20261006140000_collection_workflow_etapa_2a.sql', import.meta.url), 'utf8')
-const paymentTypesMigration = await readFile(new URL('../supabase/migrations/20261008110000_collection_payment_types_caylo.sql', import.meta.url), 'utf8')
+const paymentTypesMigration = await readFile(new URL('../supabase/migrations/20261008164530_collection_payment_types_caylo.sql', import.meta.url), 'utf8')
 const action = await readFile(new URL('../src/app/actions/comercial/cobranza-workflow.ts', import.meta.url), 'utf8')
 const view = await readFile(new URL('../src/modules/analisis-comercial/views/cobranza.tsx', import.meta.url), 'utf8')
 const metrics = await readFile(new URL('../src/modules/analisis-comercial/lib/cobranza-metrics.ts', import.meta.url), 'utf8')

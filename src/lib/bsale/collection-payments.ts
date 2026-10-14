@@ -76,7 +76,8 @@ function items<T>(response: { items?: T[] } | T[]): T[] {
 
 export function createCollectionPaymentGateway(companyId: string): CollectionPaymentGateway {
   return {
-    createPayment: payload => bsaleWriteForCompany<CollectionPayment>({ companyId, path: '/payments.json', body: payload as unknown as Record<string, unknown> }),
+    // Cobranza receives a longer response window, but never retries a POST.
+    createPayment: payload => bsaleWriteForCompany<CollectionPayment>({ companyId, path: '/payments.json', body: payload as unknown as Record<string, unknown>, timeoutMs: 30_000 }),
     getPayment: paymentId => bsaleFetchResourceForCompany<CollectionPayment>({ companyId, path: `/payments/${paymentId}.json` }),
     getDocumentPayments: async documentId => items(await bsaleFetchForCompany<CollectionPayment>({ companyId, path: '/payments.json', params: { documentid: documentId } })),
     getUnpaidDocuments: clientId => bsaleFetchResourceForCompany({ companyId, path: '/clients/unpaid_documents.json', params: { clientid: clientId } }),
