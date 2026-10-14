@@ -407,7 +407,7 @@ async function loadCollectionPaymentReconciliation(input: {
   return { payment, documentPayments, postBalance, clientBalance }
 }
 
-async function reconcileCollectionPayment(input: {
+export async function reconcileCollectionPayment(input: {
   companyId: string
   clientId: number
   documentId: number
@@ -454,7 +454,7 @@ export async function reconcileExistingCollectionPayment(input: { attemptId: str
 
 const UNKNOWN_SAFETY_WINDOW_MS = 60_000
 
-async function refreshCollectionBatchStatus(companyId: string, batchId: string) {
+export async function refreshCollectionBatchStatus(companyId: string, batchId: string) {
   const { data: attempts, error } = await db().from('collection_payment_attempts')
     .select('status,amount').eq('company_id', companyId).eq('batch_id', batchId)
   if (error) throw new Error(error.message)
@@ -462,12 +462,13 @@ async function refreshCollectionBatchStatus(companyId: string, batchId: string) 
   const confirmedTotal = rows.filter(row => row.status === 'CONFIRMED').reduce((sum, row) => sum + Number(row.amount ?? 0), 0)
   const unknown = rows.some(row => row.status === 'UNKNOWN' || row.status === 'REQUIRES_REVIEW')
   const failed = rows.some(row => row.status === 'FAILED')
-  const status = unknown ? 'UNKNOWN' : failed ? (confirmedTotal > 0 ? 'PARTIAL' : 'FAILED') : 'COMPLETED'
-  await db().from('collection_payment_batches').update({ confirmed_total: confirmedTotal, status, completed_at: new Date().toISOString() }).eq('company_id', companyId).eq('id', batchId)
+  const pending = rows.some(row => ['CREATED', 'SUBMITTING'].includes(String(row.status)))
+  const status = unknown ? 'UNKNOWN' : pending ? 'PROCESSING' : failed ? (confirmedTotal > 0 ? 'PARTIAL' : 'FAILED') : 'COMPLETED'
+  await db().from('collection_payment_batches').update({ confirmed_total: confirmedTotal, status, completed_at: status === 'PROCESSING' || status === 'UNKNOWN' ? null : new Date().toISOString() }).eq('company_id', companyId).eq('id', batchId)
   return { status, confirmedTotal }
 }
 
-async function resolveUnknownCollectionPaymentInternal(input: {
+export async function resolveUnknownCollectionPaymentInternal(input: {
   companyId: string
   userId: string
   attempt: {
@@ -479,11 +480,21 @@ async function resolveUnknownCollectionPaymentInternal(input: {
     payment_type_id: number
     record_date: string
     created_at: string
+    post_started_at?: string | null
     status: string
     batch_id?: string | null
+    execution_mode?: string | null
+    refreshBatch?: boolean
   }
 }) {
   const attempt = input.attempt
+  let executionMode = attempt.execution_mode ?? null
+  if (executionMode === null && attempt.batch_id) {
+    const { data: batch, error: batchError } = await db().from('collection_payment_batches').select('metadata').eq('id', attempt.batch_id).maybeSingle()
+    if (batchError) throw new Error(batchError.message)
+    const metadata = batch?.metadata && typeof batch.metadata === 'object' ? batch.metadata as Record<string, unknown> : null
+    executionMode = typeof metadata?.execution_mode === 'string' ? metadata.execution_mode : null
+  }
   const gateway = createCollectionPaymentGateway(input.companyId)
   const [documentPayments, unpaid] = await Promise.all([
     gateway.getDocumentPayments(Number(attempt.bsale_document_id)),
@@ -519,25 +530,29 @@ async function resolveUnknownCollectionPaymentInternal(input: {
     }).eq('company_id', input.companyId).eq('id', attempt.id).in('status', ['UNKNOWN', 'REQUIRES_REVIEW'])
     await auditCollectionEventBestEffort({ userId: input.userId, action: 'UPDATE', eventType: 'COLLECTION_PAYMENT_CONFIRMED', attemptId: attempt.id, metadata: { company_id: input.companyId, bsale_document_id: Number(attempt.bsale_document_id), bsale_payment_id: foundPaymentId, reconciliation: 'UNKNOWN_LIVE_RECOVERY', post_balance: reconciled.postBalance } })
     if (reconciled.clientBalance === 0) await closeCollectionCustomer(input.companyId, input.userId, Number(attempt.client_id), Number(attempt.bsale_document_id), Number(attempt.amount), foundPaymentId)
-    if (attempt.batch_id) await refreshCollectionBatchStatus(input.companyId, attempt.batch_id)
+    if (attempt.batch_id && input.attempt.refreshBatch !== false) await refreshCollectionBatchStatus(input.companyId, attempt.batch_id)
     return { outcome: 'CONFIRMED' as const, attemptId: attempt.id, paymentId: foundPaymentId, documentBalance: reconciled.postBalance, clientBalance: reconciled.clientBalance, payment: reconciled.payment, message: 'Pago confirmado y reconciliado en Bsale.' }
   }
 
   const liveDocument = flattenUnpaidDocuments(unpaid).find(document => Number(document.id) === Number(attempt.bsale_document_id))
   const liveBalance = Number(liveDocument?.totalAmountOwed ?? 0)
-  const ageMs = Date.now() - new Date(attempt.created_at).getTime()
+  const isAsync = executionMode === 'ASYNC_V1'
+  const postStartedAtMs = attempt.post_started_at ? new Date(attempt.post_started_at).getTime() : Number.NaN
+  const safetyWindowStartMs = isAsync ? postStartedAtMs : Number.isFinite(postStartedAtMs) ? postStartedAtMs : new Date(attempt.created_at).getTime()
+  const ageMs = Number.isFinite(safetyWindowStartMs) ? Date.now() - safetyWindowStartMs : Number.NaN
   const expectedBalance = Number(attempt.preflight_balance ?? attempt.amount)
   const absenceProven = uniqueCandidates.length === 0
     && liveDocument !== undefined
     && Math.abs(expectedBalance - Number(attempt.amount)) < 0.01
     && Math.abs(liveBalance - expectedBalance) < 0.01
-    && ageMs >= UNKNOWN_SAFETY_WINDOW_MS
+    && (!isAsync && Number.isFinite(safetyWindowStartMs) || isAsync && Number.isFinite(postStartedAtMs) && ageMs >= UNKNOWN_SAFETY_WINDOW_MS)
+    && (!isAsync || Number.isFinite(postStartedAtMs))
 
   if (absenceProven) {
     const reason = 'Pago no creado en Bsale después de verificación live'
     await db().from('collection_payment_attempts').update({ status: 'FAILED', error_message: reason, updated_at: new Date().toISOString() }).eq('company_id', input.companyId).eq('id', attempt.id).in('status', ['UNKNOWN', 'REQUIRES_REVIEW'])
     await auditCollectionEventBestEffort({ userId: input.userId, action: 'STATUS_CHANGE', eventType: 'COLLECTION_PAYMENT_FAILED', attemptId: attempt.id, metadata: { company_id: input.companyId, bsale_document_id: Number(attempt.bsale_document_id), amount: Number(attempt.amount), reason, live_balance: liveBalance, safety_window_ms: UNKNOWN_SAFETY_WINDOW_MS } })
-    if (attempt.batch_id) await refreshCollectionBatchStatus(input.companyId, attempt.batch_id)
+    if (attempt.batch_id && input.attempt.refreshBatch !== false) await refreshCollectionBatchStatus(input.companyId, attempt.batch_id)
     return { outcome: 'FAILED' as const, attemptId: attempt.id, message: 'Pago no fue creado en Bsale. Ya puedes volver a intentarlo.' }
   }
 
@@ -715,7 +730,7 @@ export async function registerCollectionPayment(input: {
     }
     // A failed POST is indeterminate. Read BSale once, but never issue a second POST.
     const { data: unknownAttempt } = await db().from('collection_payment_attempts')
-      .select('id,client_id,bsale_document_id,amount,preflight_balance,payment_type_id,record_date,created_at,status,batch_id')
+      .select('id,client_id,bsale_document_id,amount,preflight_balance,payment_type_id,record_date,created_at,post_started_at,status,batch_id')
       .eq('company_id', companyId).eq('id', attemptId).eq('status', 'UNKNOWN').maybeSingle()
     if (unknownAttempt) {
       let recoveryFailedMessage: string | null = null
@@ -732,7 +747,7 @@ export async function registerCollectionPayment(input: {
   }
 }
 
-async function closeCollectionCustomer(companyId: string, userId: string, clientId: number, documentId: number, previousBalance: number, paymentIdValue: number) {
+export async function closeCollectionCustomer(companyId: string, userId: string, clientId: number, documentId: number, previousBalance: number, paymentIdValue: number) {
   await db().from('collection_customer_workflow').upsert({ company_id: companyId, client_id: clientId, stage: 'CLOSED', updated_at: new Date().toISOString() }, { onConflict: 'company_id,client_id' })
   await db().from('collection_customer_events').insert({ company_id: companyId, client_id: clientId, event_type: 'PAYMENT_CLOSED', body: 'Cliente cerrado automáticamente por saldo Bsale cero.', metadata: { previous_balance: previousBalance, final_balance: 0, payment_ids: [paymentIdValue], document_id: documentId }, created_by: userId })
   await auditCollectionEventBestEffort({ userId, action: 'STATUS_CHANGE', eventType: 'COLLECTION_CUSTOMER_CLOSED', metadata: { company_id: companyId, client_id: clientId, bsale_document_id: documentId, payment_ids: [paymentIdValue], preflight_balance: previousBalance, post_balance: 0 } })

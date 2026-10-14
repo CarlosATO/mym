@@ -17,6 +17,20 @@ test('B: ausencia probada después de ventana resuelve FAILED', () => {
   assert.match(action, /Pago no creado en Bsale después de verificación live/)
 })
 test('C: ausencia dentro de ventana mantiene UNKNOWN', () => assert.match(action, /ageMs >= UNKNOWN_SAFETY_WINDOW_MS[\s\S]*return \{ outcome: 'UNKNOWN'/))
+test('ASYNC A: ventana reciente usa post_started_at y no created_at', () => {
+  assert.match(action, /const isAsync = executionMode === 'ASYNC_V1'/)
+  assert.match(action, /safetyWindowStartMs = isAsync \? postStartedAtMs/)
+  assert.match(action, /isAsync && Number\.isFinite\(postStartedAtMs\) && ageMs >= UNKNOWN_SAFETY_WINDOW_MS/)
+})
+test('ASYNC B/C: post_started_at viejo permite FAILED y NULL no prueba ausencia', () => {
+  assert.match(action, /!isAsync \|\| Number\.isFinite\(postStartedAtMs\)/)
+  assert.match(action, /post_started_at\?: string \| null/)
+  assert.match(action, /execution_mode.*ASYNC_V1|executionMode === 'ASYNC_V1'/)
+})
+test('ASYNC D: legacy conserva fallback created_at', () => {
+  assert.match(action, /!isAsync && Number\.isFinite\(safetyWindowStartMs\)/)
+  assert.match(action, /Number\.isFinite\(postStartedAtMs\) \? postStartedAtMs : new Date\(attempt\.created_at\)/)
+})
 test('D: saldo parcial no prueba ausencia', () => assert.match(action, /expectedBalance[\s\S]*Math\.abs\(liveBalance - expectedBalance\) < 0\.01/))
 test('E: múltiples candidatos permanecen UNKNOWN', () => assert.match(action, /uniqueCandidates\.length === 1[\s\S]*return \{ outcome: 'UNKNOWN'/))
 test('F/G: timeout hace GET dirigido y nunca repite POST', () => {

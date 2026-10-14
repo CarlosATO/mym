@@ -19,6 +19,7 @@
     "test:cobranza-batch-durable-model": "node --test scripts/test-cobranza-batch-durable-model.mjs",
     "test:cobranza-batch-durable-compatibility": "node --test scripts/test-cobranza-batch-durable-compatibility.mjs",
     "test:cobranza-enqueue": "node --test scripts/test-cobranza-enqueue-contract.mjs",
+    "test:cobranza-worker": "node --test scripts/test-cobranza-worker-contract.mjs",
     "test:logistica-preparacion-kanban": "node --test scripts/test-logistica-preparacion-kanban-contract.mjs",
     "test:bodega-v2-operational-freshness": "node --test scripts/test-bodega-v2-operational-freshness.mjs",
     "test:bodega-warehouse-sync": "node --test scripts/test-bodega-warehouse-sync.mjs",
