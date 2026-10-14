@@ -774,6 +774,51 @@ export async function prepareCollectionCustomerBatch(clientId: number) {
   return { clientId, documents, total: documents.reduce((sum, document) => sum + document.balance, 0), paymentTypes: paymentTypes.availableTypes }
 }
 
+export async function enqueueCollectionCustomerBatch(input: { clientId: number; paymentTypeId: number; recordDate?: string }) {
+  const { companyId, user } = await context()
+  if (!Number.isInteger(input.clientId) || input.clientId <= 0) throw new Error('Cliente inválido.')
+  if (!Number.isInteger(input.paymentTypeId) || input.paymentTypeId <= 0) throw new Error('Forma de pago inválida.')
+  const recordDate = input.recordDate ?? new Date().toISOString().slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(recordDate)) throw new Error('Fecha de registro inválida.')
+
+  const prepared = await prepareCollectionCustomerBatch(input.clientId)
+  if (!prepared.paymentTypes.some(type => type.id === input.paymentTypeId)) {
+    throw new Error('La forma de pago no está habilitada y activa para la empresa activa.')
+  }
+
+  const documents = prepared.documents.map((document, index) => ({
+    documentId: document.documentId,
+    amount: document.balance,
+    sequenceNumber: index + 1,
+  }))
+  const { data, error } = await db().rpc('enqueue_collection_payment_batch', {
+    p_company_id: companyId,
+    p_client_id: input.clientId,
+    p_payment_type_id: input.paymentTypeId,
+    p_record_date: recordDate,
+    p_created_by: user.id,
+    p_documents: documents,
+  })
+  if (error || !data) {
+    const message = error?.message ?? ''
+    if (message.includes('COLLECTION_PAYMENT_DOCUMENT_ACTIVE')) {
+      throw new Error('Uno de los documentos ya tiene un intento de pago activo. No se creó el batch.')
+    }
+    if (message.includes('COLLECTION_PAYMENT_CLIENT_BATCH_ACTIVE')) {
+      throw new Error('Este cliente ya tiene un batch de pagos activo. No se creó el batch.')
+    }
+    throw new Error(`No se pudo encolar el batch de pagos: ${message || 'error transaccional'}`)
+  }
+  return data as {
+    batchId: string
+    clientId: number
+    status: 'CREATED'
+    expectedTotal: number
+    expectedDocuments: number
+    documents: Array<{ attemptId: string; sequenceNumber: number; documentId: number; amount: number; status: 'CREATED' }>
+  }
+}
+
 export async function registerCollectionCustomerBatch(input: { clientId: number; paymentTypeId: number; recordDate?: string }) {
   const { companyId, user } = await context()
   if (!(await canRegisterPayment())) throw new Error('No tienes permiso para registrar pagos de cobranza.')
