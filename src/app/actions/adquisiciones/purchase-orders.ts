@@ -56,6 +56,7 @@ export interface PurchaseOrderItem {
   quantity: number
   unit_price: number
   discount_percent: number
+  discount_unit_amount?: number
   discount_amount: number
   tax_rate: number
   tax_amount: number
@@ -310,6 +311,7 @@ export async function getPurchaseOrderDocumentDetail(poId: string) {
       quantity,
       unit_price: snapshotNumber(item.unit_price) as number,
       discount_percent: snapshotNumber(item.discount_percent) as number,
+      discount_unit_amount: snapshotNumber(item.discount_unit_amount) ?? 0,
       discount_amount: snapshotNumber(item.discount_amount) as number,
       tax_rate: snapshotNumber(item.tax_rate) as number,
       tax_amount: snapshotNumber(item.tax_amount) as number,
@@ -345,6 +347,7 @@ export interface CreatePOItem {
   quantity: number
   unit_price: number
   discount_percent?: number
+  discount_unit_amount?: number
   tax_rate?: number
   warehouse_id?: string | null
   cost_center?: string | null
@@ -395,6 +398,7 @@ export async function createPurchaseOrder(data: CreatePOData) {
         quantity: i.quantity,
         unit_price: i.unit_price,
         discount_percent: i.discount_percent ?? 0,
+        discount_unit_amount: i.discount_unit_amount ?? 0,
         tax_rate: i.tax_rate ?? 19,
         warehouse_id: i.warehouse_id || null,
         cost_center: i.cost_center || null,
@@ -419,6 +423,7 @@ export interface SupplierReviewItemInput {
   quantity: number
   unit_price: number
   discount_percent?: number | null
+  discount_unit_amount?: number | null
   tax_rate?: number | null
   notes?: string | null
 }
@@ -444,6 +449,7 @@ export interface PurchaseOrderReviewItem {
   quantity: number
   unit_price: number
   discount_percent: number
+  discount_unit_amount?: number
   discount_amount: number
   tax_rate: number
   tax_amount: number
@@ -527,6 +533,7 @@ export async function updateSentPurchaseOrderReview(poId: string, data: Supplier
         quantity: item.quantity,
         unit_price: item.unit_price,
         discount_percent: item.discount_percent ?? null,
+        discount_unit_amount: item.discount_unit_amount ?? 0,
         tax_rate: item.tax_rate ?? null,
         notes: item.notes ?? null,
       })),
