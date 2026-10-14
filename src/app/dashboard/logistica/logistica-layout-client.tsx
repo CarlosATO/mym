@@ -112,7 +112,7 @@ export function LogisticaLayoutClient({ children, profile, permissions }: Logist
     productos: 'adquisiciones.products.view',
     calendario_despacho: 'system.admin',
     preparacion_pedidos: 'logistica.preparation.manage',
-    recepciones: 'adquisiciones.po.view',
+    recepciones: 'logistica.receptions.create',
     traspasos: 'system.admin',
     ajustes: 'system.admin',
     guias_ruta: 'logistica.route_guides.view',
@@ -166,7 +166,7 @@ export function LogisticaLayoutClient({ children, profile, permissions }: Logist
     }
   } else if (activeTab === 'movimientos') {
     if (activeActionId === 'recepciones') {
-      content = <RecepcionesPanel />
+      content = <RecepcionesPanel canViewEconomics={permissions.includes('adquisiciones.po.view') || permissions.includes('system.admin')} />
     } else if (activeActionId === 'traspasos') {
       content = <TransfersPanel />
     } else if (activeActionId === 'ajustes') {

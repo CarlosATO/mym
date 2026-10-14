@@ -55,7 +55,7 @@ export const wmsNavigation: ModuleNavigation = {
       id: 'movimientos',
       label: 'Movimientos',
       items: [
-        { id: 'recepciones', label: 'Recepciones', icon: PackageOpen, target: actionTarget('movimientos', 'recepciones'), active: ({ pathname, searchParams }: NavigationLocation) => pathname.startsWith('/dashboard/logistica/recepciones/') && !searchParams.has('action') || searchParams.get('action') === 'recepciones', visibility: { allOf: ['adquisiciones.po.view'] } },
+        { id: 'recepciones', label: 'Recepciones', icon: PackageOpen, target: actionTarget('movimientos', 'recepciones'), active: ({ pathname, searchParams }: NavigationLocation) => pathname.startsWith('/dashboard/logistica/recepciones/') && !searchParams.has('action') || searchParams.get('action') === 'recepciones', visibility: { anyOf: ['logistica.receptions.create', 'system.admin'] } },
         { id: 'traspasos', label: 'Traspasos', icon: ArrowLeftRight, target: actionTarget('movimientos', 'traspasos'), active: actionMatcher('traspasos'), visibility: { allOf: ['system.admin'] } },
         { id: 'ajustes', label: 'Ajustes', icon: SlidersHorizontal, target: actionTarget('movimientos', 'ajustes'), active: actionMatcher('ajustes'), visibility: { allOf: ['system.admin'] } },
         { id: 'preparacion_pedidos', label: 'Preparación de Pedidos', icon: ClipboardList, target: actionTarget('preparacion_pedidos', 'preparacion_pedidos'), active: actionMatcher('preparacion_pedidos'), visibility: { allOf: ['logistica.preparation.manage'] } },

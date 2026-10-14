@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { AccessDenied } from '@/components/access-denied'
 import { ReceiptWorksheet } from '@/modules/logistica/recepciones/receipt-worksheet'
+import { hasWmsPermission, requireWmsPermission } from '@/app/actions/logistica/authorization'
 
 interface PageProps {
   params: Promise<{ poId: string }>
@@ -13,10 +14,12 @@ export default async function Page({ params }: PageProps) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const { data: allowed } = await supabase.rpc('has_permission', {
-    p_permission_code: 'adquisiciones.po.view',
-  })
-  if (allowed !== true) return <AccessDenied />
+  try {
+    await requireWmsPermission('logistica.receptions.create')
+  } catch {
+    return <AccessDenied />
+  }
+  const canViewEconomics = await hasWmsPermission(user.id, 'adquisiciones.po.view')
 
   const { data: profile } = await supabase
     .from('users')
@@ -38,5 +41,5 @@ export default async function Page({ params }: PageProps) {
     ? { ...profile, roles: { name: roleName } }
     : { nombre: '', apellido: '', email: '', roles: { name: '' } }
 
-  return <ReceiptWorksheet poId={poId} profile={profileWithRole} />
+  return <ReceiptWorksheet poId={poId} profile={profileWithRole} canViewEconomics={canViewEconomics} />
 }

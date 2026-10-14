@@ -1,5 +1,8 @@
 'use client'
 
+/* Existing operational component uses legacy mutable state and Supabase row shapes. */
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars, react-hooks/set-state-in-effect, react-hooks/refs */
+
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import {
@@ -45,7 +48,7 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
-function BsaleStatus({ receipt, onRefresh }: { receipt: any; onRefresh: () => void }) {
+function BsaleStatus({ receipt, onRefresh, canViewEconomics }: { receipt: any; onRefresh: () => void; canViewEconomics: boolean }) {
   const [busy, setBusy] = useState(false)
   const status = receipt.bsale?.status ?? 'PENDING'
   const labels: Record<string, string> = { PENDING: 'Pendiente BSale', PREPARED: 'Pendiente BSale', SENDING: 'Enviando', CONFIRMED: 'Sincronizada', FAILED: 'Error', RECONCILIATION_REQUIRED: 'Requiere conciliación' }
@@ -60,7 +63,7 @@ function BsaleStatus({ receipt, onRefresh }: { receipt: any; onRefresh: () => vo
   return <div className="flex items-center gap-2 mt-1">
     <span className="text-[10px] font-semibold text-theme-text-muted">{labels[status] ?? status}{status === 'CONFIRMED' && receipt.bsale?.receptionId ? ` · ID ${receipt.bsale.receptionId}` : ''}</span>
     {status !== 'CONFIRMED' && status !== 'SENDING' && <button onClick={run} disabled={busy} className="text-[10px] text-theme-accent font-bold hover:underline">{busy ? 'Procesando...' : status === 'RECONCILIATION_REQUIRED' ? 'Reconciliar' : status === 'FAILED' ? 'Reintentar' : 'Sincronizar'}</button>}
-    {receipt.bsale?.payload && <details className="text-[10px]"><summary className="cursor-pointer text-theme-accent">Preview</summary><pre className="absolute z-10 mt-1 max-w-[420px] max-h-56 overflow-auto rounded border border-theme-border bg-theme-surface p-2 text-[9px]">{JSON.stringify(receipt.bsale.payload, null, 2)}</pre></details>}
+    {canViewEconomics && receipt.bsale?.payload && <details className="text-[10px]"><summary className="cursor-pointer text-theme-accent">Preview</summary><pre className="absolute z-10 mt-1 max-w-[420px] max-h-56 overflow-auto rounded border border-theme-border bg-theme-surface p-2 text-[9px]">{JSON.stringify(receipt.bsale.payload, null, 2)}</pre></details>}
   </div>
 }
 
@@ -89,7 +92,8 @@ function DetailPanel({
   onClose,
   onDetailLoaded,
   receivingId,
-  onReceive
+  onReceive,
+  canViewEconomics,
 }: {
   summary: PurchaseOrderPending
   cachedDetail: any | null
@@ -97,6 +101,7 @@ function DetailPanel({
   onDetailLoaded: (poId: string, data: any) => void
   receivingId: string | null
   onReceive: (id: string) => void
+  canViewEconomics: boolean
 }) {
   const [detail, setDetail] = useState<any>(cachedDetail)
   const [loadingDetail, setLoadingDetail] = useState(!cachedDetail)
@@ -209,14 +214,15 @@ function DetailPanel({
         </div>
 
         {/* KPI row — from summary data, no loading wait */}
-        <div className="grid grid-cols-5 divide-x divide-theme-border/50 border-t border-theme-border/50">
-          {[
+        <div className={cn('grid divide-x divide-theme-border/50 border-t border-theme-border/50', canViewEconomics ? 'grid-cols-5' : 'grid-cols-3')}>
+          {(canViewEconomics ? [
             { label: 'Total OC', value: fmt(summary.grand_total), color: '' },
             { label: 'Recibido', value: fmt(summary.amount_received), color: 'text-emerald-600 dark:text-emerald-400' },
+          ] : []).concat([
             { label: 'Solicitada', value: String(summary.qty_ordered), color: '' },
             { label: 'Recibida', value: String(summary.qty_received), color: 'text-emerald-600 dark:text-emerald-400' },
             { label: 'Pendiente', value: String(summary.qty_pending), color: summary.qty_pending > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-theme-text-muted' },
-          ].map(({ label, value, color }) => (
+          ]).map(({ label, value, color }) => (
             <div key={label} className="px-4 py-2">
               <p className="text-[9px] font-bold uppercase tracking-wider text-theme-text-muted mb-0.5">{label}</p>
               <p className={cn('text-xs font-bold', color || 'text-theme-text')}>{value}</p>
@@ -272,7 +278,7 @@ function DetailPanel({
                               {rec.received_at ? new Date(rec.received_at).toLocaleDateString('es-CL') : '—'}
                             </span>
                           </div>
-                          <BsaleStatus receipt={rec} onRefresh={() => getPurchaseOrderReceiptDetails(summary.id).then(res => res && setDetail(res))} />
+                          <BsaleStatus receipt={rec} canViewEconomics={canViewEconomics} onRefresh={() => getPurchaseOrderReceiptDetails(summary.id).then(res => res && setDetail(res))} />
                           {doc && (
                             <p className="text-[10px] text-theme-text-muted mt-0.5 flex items-center gap-1 truncate">
                               <Paperclip className="w-2.5 h-2.5 shrink-0" />
@@ -280,9 +286,9 @@ function DetailPanel({
                             </p>
                           )}
                         </div>
-                        <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 shrink-0">
+                        {canViewEconomics && <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 shrink-0">
                           {fmt(Number(rec.receipt_total_gross || 0))}
-                        </span>
+                        </span>}
                       </div>
                     )
                   })}
@@ -300,7 +306,7 @@ function DetailPanel({
                   <thead>
                     <tr className="bg-theme-text/[0.04] border-b border-theme-border text-[10px] font-semibold uppercase tracking-wider text-theme-text-muted">
                       <th className="text-left px-3 py-2">Producto</th>
-                      <th className="text-right px-3 py-2">P.Un.</th>
+                      {canViewEconomics && <th className="text-right px-3 py-2">P.Un.</th>}
                       <th className="text-right px-3 py-2">Pedida</th>
                       <th className="text-right px-3 py-2">Recibida</th>
                       <th className="text-right px-3 py-2">Pendiente</th>
@@ -317,7 +323,7 @@ function DetailPanel({
                             <p className="font-medium text-theme-text truncate max-w-[200px]" title={item.product_description}>{item.product_description}</p>
                             {item.item_type === 'PRODUCT' && <p className="font-mono text-[10px] text-theme-text-muted">SKU {receiptItemSku(item)}</p>}
                           </td>
-                          <td className="px-3 py-2 text-right text-theme-text-muted">{fmt(Number(item.unit_price || 0))}</td>
+                          {canViewEconomics && <td className="px-3 py-2 text-right text-theme-text-muted">{fmt(Number(item.unit_price || 0))}</td>}
                           <td className="px-3 py-2 text-right">{qOrd}</td>
                           <td className="px-3 py-2 text-right text-emerald-600 dark:text-emerald-400 font-semibold">{qRec}</td>
                           <td className={cn('px-3 py-2 text-right font-bold', qPen > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-theme-text-muted/40')}>{qPen}</td>
@@ -396,7 +402,8 @@ function TrayTable({
   onOpenDetail,
   onPrefetch,
   receivingId,
-  onReceive
+  onReceive,
+  canViewEconomics,
 }: {
   pos: PurchaseOrderPending[]
   loading: boolean
@@ -410,6 +417,7 @@ function TrayTable({
   onPrefetch: (poId: string) => void
   receivingId: string | null
   onReceive: (id: string) => void
+  canViewEconomics: boolean
 }) {
 
   const tabBtn = (id: FilterTab, label: string, activeColor: string) => (
@@ -471,8 +479,8 @@ function TrayTable({
                 <th className="text-right px-4 py-3">Solicitada</th>
                 <th className="text-right px-4 py-3">Recibida</th>
                 <th className="text-right px-4 py-3">Pendiente</th>
-                <th className="text-right px-4 py-3">Total OC</th>
-                <th className="text-right px-4 py-3">Monto Rec.</th>
+                {canViewEconomics && <th className="text-right px-4 py-3">Total OC</th>}
+                {canViewEconomics && <th className="text-right px-4 py-3">Monto Rec.</th>}
                 <th className="text-left px-4 py-3">Últ. Recepción</th>
                 <th className="text-right px-4 py-3">Acción</th>
               </tr>
@@ -511,10 +519,10 @@ function TrayTable({
                     <td className={cn('px-4 py-2.5 text-right font-bold', po.qty_pending > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-theme-text-muted/40')}>
                       {po.qty_pending}
                     </td>
-                    <td className="px-4 py-2.5 text-right text-theme-text-muted">{fmt(po.grand_total)}</td>
-                    <td className="px-4 py-2.5 text-right text-emerald-600 dark:text-emerald-400 font-medium">
+                    {canViewEconomics && <td className="px-4 py-2.5 text-right text-theme-text-muted">{fmt(po.grand_total)}</td>}
+                    {canViewEconomics && <td className="px-4 py-2.5 text-right text-emerald-600 dark:text-emerald-400 font-medium">
                       {po.amount_received > 0 ? fmt(po.amount_received) : '—'}
-                    </td>
+                    </td>}
                     <td className="px-4 py-2.5 text-theme-text-muted">
                       {po.latest_receipt_number ? (
                         <span className="font-mono text-[10px] text-theme-accent">{po.latest_receipt_number}</span>
@@ -611,7 +619,7 @@ function CompactList({
 
 // ─── Main Panel ───────────────────────────────────────────────────────────────
 
-export function RecepcionesPanel() {
+export function RecepcionesPanel({ canViewEconomics }: { canViewEconomics: boolean }) {
   const router = useRouter()
   const [pos, setPos] = useState<PurchaseOrderPending[]>([])
   const [loading, setLoading] = useState(true)
@@ -735,6 +743,7 @@ export function RecepcionesPanel() {
           onPrefetch={prefetchDetail}
           receivingId={receivingId}
           onReceive={handleReceive}
+          canViewEconomics={canViewEconomics}
         />
       </div>
     )
@@ -777,6 +786,7 @@ export function RecepcionesPanel() {
           onDetailLoaded={(poId, data) => { detailCache.current[poId] = data }}
           receivingId={receivingId}
           onReceive={handleReceive}
+          canViewEconomics={canViewEconomics}
         />
       </div>
 

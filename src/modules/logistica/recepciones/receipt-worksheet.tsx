@@ -1,5 +1,8 @@
 'use client'
 
+/* Existing operational component uses legacy mutable state and Supabase row shapes. */
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars, react-hooks/purity */
+
 import React, { useState, useEffect, Fragment } from 'react'
 import { useRouter } from 'next/navigation'
 import { getPurchaseOrderForReceipt, createPurchaseReceipt } from '@/app/actions/logistica/recepciones'
@@ -14,6 +17,7 @@ import { receiptItemSku } from '@/lib/logistica/receipt-display'
 interface ReceiptWorksheetProps {
   poId: string
   profile: { nombre: string; apellido: string; email: string; roles: { name: string } }
+  canViewEconomics: boolean
 }
 
 interface ItemSplit {
@@ -32,7 +36,7 @@ function countsAsReceived(condition: ItemSplit['condition']) {
   return acceptedConditions.has(condition)
 }
 
-export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
+export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWorksheetProps) {
   const router = useRouter()
   const [poDetail, setPoDetail] = useState<any | null>(null)
   const [loading, setLoading] = useState(true)
@@ -237,9 +241,9 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
     }
   }
 
-  // Financial calculations
+  // Financial calculations are only available to users authorized for purchase-order economics.
   let netTotal = 0
-  if (poDetail) {
+  if (canViewEconomics && poDetail) {
     Object.entries(itemInputs).forEach(([itemId, splits]) => {
       const poItem = poDetail.items.find((it: any) => it.id === itemId)
       if (!poItem) return
@@ -409,11 +413,13 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
     : isMixed
       ? 'Productos: recepción física. Servicios: conformidad administrativa.'
       : 'Conforme: se recibe e ingresa a stock. Dañado: se recibe e ingresa a stock y posteriormente puede procesarse mediante Mermas. Rechazado o faltante: no se considera recibido.'
-  const totalsHelp = isServiceOnly
-    ? 'Totales calculados según los servicios conformados en esta recepción.'
-    : isMixed
-      ? 'Totales calculados según productos recibidos y servicios conformados.'
-      : 'Totales calculados según las cantidades recibidas.'
+  const totalsHelp = !canViewEconomics
+    ? 'Resumen operativo de cantidades recibidas, faltantes y rechazadas.'
+    : isServiceOnly
+      ? 'Totales calculados según los servicios conformados en esta recepción.'
+      : isMixed
+        ? 'Totales calculados según productos recibidos y servicios conformados.'
+        : 'Totales calculados según las cantidades recibidas.'
 
   return (
     <div className="w-full max-w-7xl mx-auto space-y-3 px-3 py-2 animate-in fade-in duration-200">
@@ -673,8 +679,8 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
                   <th className="py-3 px-4 text-right w-24">Ya Recibido</th>
                   <th className="py-3 px-4 text-right w-20">Pendiente</th>
                   <th className="py-3 px-4 text-right w-28 text-theme-accent">Rec. Actual</th>
-                  <th className="py-3 px-4 text-right w-28">P. Unitario</th>
-                  <th className="py-3 px-4 text-right w-32 font-bold text-theme-text">Monto Rec.</th>
+                  {canViewEconomics && <th className="py-3 px-4 text-right w-28">P. Unitario</th>}
+                  {canViewEconomics && <th className="py-3 px-4 text-right w-32 font-bold text-theme-text">Monto Rec.</th>}
                 </tr>
               </thead>
               <tbody>
@@ -691,8 +697,8 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
                     }
                   })
 
-                  const price = Number(item.unit_price || 0)
-                  const actualMonto = sumActualRec * price
+                  const price = canViewEconomics ? Number(item.unit_price || 0) : 0
+                  const actualMonto = canViewEconomics ? sumActualRec * price : 0
                   const exceedsPending = sumQty > Number(item.quantity_pending)
 
                   const itemWh = item.warehouse_id || mainWarehouseId
@@ -743,8 +749,8 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
                             className={cn(erpInputClass, 'w-16 h-6 rounded px-1.5 text-right font-bold text-[10px]')}
                           />
                         </td>
-                        <td className="py-1.5 px-2 text-right font-semibold text-theme-text">${price.toLocaleString('es-CL')}</td>
-                        <td className="py-1.5 px-2 text-right font-bold text-theme-text">${actualMonto.toLocaleString('es-CL')}</td>
+                        {canViewEconomics && <td className="py-1.5 px-2 text-right font-semibold text-theme-text">${price.toLocaleString('es-CL')}</td>}
+                        {canViewEconomics && <td className="py-1.5 px-2 text-right font-bold text-theme-text">${actualMonto.toLocaleString('es-CL')}</td>}
                       </tr>
                     )
                   }
@@ -771,8 +777,8 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
                         <td className="py-2.5 px-4 text-right text-emerald-600 dark:text-emerald-400 font-semibold">{item.quantity_received}</td>
                         <td className="py-2.5 px-4 text-right text-theme-text-accent font-semibold">{item.quantity_pending}</td>
                         <td className="py-2.5 px-4 text-right font-bold text-theme-accent bg-theme-accent/[0.02]">{sumActualRec}</td>
-                        <td className="py-2.5 px-4 text-right font-semibold text-theme-text">${price.toLocaleString('es-CL')}</td>
-                        <td className="py-2.5 px-4 text-right font-bold text-theme-text bg-theme-text/[0.02]">${actualMonto.toLocaleString('es-CL')}</td>
+                        {canViewEconomics && <td className="py-2.5 px-4 text-right font-semibold text-theme-text">${price.toLocaleString('es-CL')}</td>}
+                        {canViewEconomics && <td className="py-2.5 px-4 text-right font-bold text-theme-text bg-theme-text/[0.02]">${actualMonto.toLocaleString('es-CL')}</td>}
                       </tr>
 
                       {/* Sub-rows for Splits (Lotes / Partidas) */}
@@ -809,7 +815,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
                             </td>
 
                              {/* Splits details inputs aligned on rest of columns */}
-                             <td colSpan={5} className="py-1.5 px-4">
+                             <td colSpan={canViewEconomics ? 5 : 3} className="py-1.5 px-4">
                                <div className="flex items-center gap-3">
                                  <select
                                    value={split.condition}
@@ -892,7 +898,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
                       {/* Plus Split Action Row */}
                       <tr className="border-b border-theme-border last:border-none bg-theme-text/[0.005]">
                         <td className="py-1 px-4 text-center"></td>
-                        <td colSpan={8} className="py-1 px-4">
+                        <td colSpan={canViewEconomics ? 8 : 6} className="py-1 px-4">
                           <button
                             onClick={() => addSplit(item.id)}
                             className="inline-flex items-center gap-1 text-[10px] font-bold text-theme-accent hover:text-theme-accent-hover transition-colors pl-8 py-0.5"
@@ -912,7 +918,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
       </div>
 
       {/* Dynamic financial totals block */}
-      <div className="flex flex-col md:flex-row items-stretch justify-between gap-3 p-3 rounded-xl border border-theme-border bg-theme-surface/50 shadow-sm text-xs">
+      {canViewEconomics && <div className="flex flex-col md:flex-row items-stretch justify-between gap-3 p-3 rounded-xl border border-theme-border bg-theme-surface/50 shadow-sm text-xs">
         <div className="max-w-md space-y-1.5 flex flex-col justify-center">
           <h4 className="font-bold text-theme-text text-sm">Resumen de Recepción</h4>
           <p className="text-theme-text-muted leading-relaxed">{totalsHelp}</p>
@@ -932,7 +938,7 @@ export function ReceiptWorksheet({ poId, profile }: ReceiptWorksheetProps) {
             <span className="text-theme-accent">${grossTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
           </div>
         </div>
-      </div>
+      </div>}
 
       <div className="h-1" aria-hidden="true" />
 
