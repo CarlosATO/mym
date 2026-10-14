@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils'
 import { formatCivilDate } from '@/lib/datetime'
 import { receiptItemSku } from '@/lib/logistica/receipt-display'
 import { OperationalPoPdfModal } from './operational-po-pdf-modal'
+import { ReceiptDocumentViewerModal } from './receipt-document-viewer-modal'
 
 type FilterTab = 'ALL' | 'PENDING' | 'PARTIAL' | 'RECEIVED'
 
@@ -109,6 +110,7 @@ function DetailPanel({
   const [detail, setDetail] = useState<any>(cachedDetail)
   const [loadingDetail, setLoadingDetail] = useState(!cachedDetail)
   const [successReceipt, setSuccessReceipt] = useState<string | null>(null)
+  const [documentToView, setDocumentToView] = useState<{ id: string; document_type: string | null; document_number: string | null; file_name: string | null } | null>(null)
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -276,9 +278,9 @@ function DetailPanel({
                 <h3 className="text-[10px] font-bold uppercase tracking-wider text-theme-text-muted mb-2 flex items-center gap-1.5">
                   <FileText className="w-3 h-3 text-theme-accent" /> Recepciones Registradas
                 </h3>
-                <div className="space-y-1.5">
-                  {detail.receipts.map((rec: any) => {
-                    const doc = rec.receipt_documents?.[0]
+                  <div className="space-y-1.5">
+                   {detail.receipts.map((rec: any) => {
+                    const documents = Array.isArray(rec.receipt_documents) ? rec.receipt_documents : []
                     return (
                       <div key={rec.id} className="flex items-center gap-3 px-3 py-2 rounded-lg bg-theme-text/[0.03] border border-theme-border/50">
                         <div className="flex-1 min-w-0">
@@ -289,12 +291,15 @@ function DetailPanel({
                             </span>
                           </div>
                           <BsaleStatus receipt={rec} canViewEconomics={canViewEconomics} onRefresh={() => getPurchaseOrderReceiptDetails(summary.id).then(res => res && setDetail(res))} />
-                          {doc && (
-                            <p className="text-[10px] text-theme-text-muted mt-0.5 flex items-center gap-1 truncate">
-                              <Paperclip className="w-2.5 h-2.5 shrink-0" />
-                              {doc.document_type} {doc.document_number || ''} {doc.file_name ? `· ${doc.file_name}` : ''}
-                            </p>
-                          )}
+                          {documents.length > 0 && <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            {documents.map((doc: any) => (
+                              <div key={doc.id} className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-theme-border/60 px-2 py-1 text-[10px] text-theme-text-muted">
+                                <Paperclip className="h-2.5 w-2.5 shrink-0" />
+                                <span className="max-w-[180px] truncate" title={doc.file_name || undefined}>{[doc.document_type, doc.document_number].filter(Boolean).join(' ') || 'Documento'}{doc.file_name ? ` · ${doc.file_name}` : ''}</span>
+                                {doc.has_file && <button type="button" onClick={() => setDocumentToView({ id: doc.id, document_type: doc.document_type, document_number: doc.document_number, file_name: doc.file_name })} className="shrink-0 font-semibold text-theme-accent hover:underline">Ver documento</button>}
+                              </div>
+                            ))}
+                          </div>}
                         </div>
                         {canViewEconomics && <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 shrink-0">
                           {fmt(Number(rec.receipt_total_gross || 0))}
@@ -394,6 +399,7 @@ function DetailPanel({
           </div>
         )}
       </div>
+      {documentToView && <ReceiptDocumentViewerModal documentId={documentToView.id} documentType={documentToView.document_type} documentNumber={documentToView.document_number} fileName={documentToView.file_name} onClose={() => setDocumentToView(null)} />}
     </div>
   )
 }

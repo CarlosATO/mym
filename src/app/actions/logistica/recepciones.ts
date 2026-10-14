@@ -54,6 +54,17 @@ const PO_ITEM_OPERATIONAL_FIELDS = 'id, po_id, line_number, item_type, product_i
 const PO_ITEM_ECONOMIC_FIELDS = 'unit_price, discount_percent, discount_amount, tax_rate, tax_amount, line_total'
 const RECEIPT_OPERATIONAL_FIELDS = 'id, company_id, purchase_order_id, receipt_number, receiving_type, warehouse_id, status, received_at, received_by, notes, created_by, created_at'
 const RECEIPT_ECONOMIC_FIELDS = 'receipt_total_gross'
+const RECEIPT_DOCUMENT_BUCKET = 'recepciones'
+const RECEIPT_DOCUMENT_MIME_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp'])
+
+function inferReceiptDocumentMimeType(fileName: string | null, storagePath: string): string | null {
+  const extension = (fileName || storagePath).split('.').pop()?.toLowerCase()
+  return extension === 'pdf' ? 'application/pdf'
+    : extension === 'jpg' || extension === 'jpeg' ? 'image/jpeg'
+      : extension === 'png' ? 'image/png'
+        : extension === 'webp' ? 'image/webp'
+          : null
+}
 
 async function authorizeReception(): Promise<{ authorization: WmsAuthorization; canViewEconomics: boolean }> {
   const authorization = await requireWmsPermission('logistica.receptions.create')
@@ -385,7 +396,7 @@ export async function getPurchaseOrderReceiptDetails(poId: string) {
 
   const receiptsQuery: any = logDbClient
     .from('purchase_receipts')
-    .select(`${RECEIPT_OPERATIONAL_FIELDS}${canViewEconomics ? `, ${RECEIPT_ECONOMIC_FIELDS}` : ''}, receipt_documents(id, document_type, document_number, file_name), purchase_receipt_items(id, receipt_id, purchase_order_item_id, product_id, service_description, quantity_ordered, quantity_previously_received, quantity_received, quantity_pending_after, warehouse_id, location_id, lot_number, expiration_date, notes, locations(name, code))`)
+    .select(`${RECEIPT_OPERATIONAL_FIELDS}${canViewEconomics ? `, ${RECEIPT_ECONOMIC_FIELDS}` : ''}, receipt_documents(id, document_type, document_number, file_name, mime_type, storage_path), purchase_receipt_items(id, receipt_id, purchase_order_item_id, product_id, service_description, quantity_ordered, quantity_previously_received, quantity_received, quantity_pending_after, warehouse_id, location_id, lot_number, expiration_date, notes, locations(name, code))`)
     .eq('purchase_order_id', poId)
     .eq('company_id', authorization.companyId)
     .order('received_at', { ascending: false })
@@ -404,11 +415,23 @@ export async function getPurchaseOrderReceiptDetails(poId: string) {
   // Extract receipt items and format receipts
   let receiptItems: any[] = [];
   const receipts = receiptsData.map((r: any) => {
-    const { purchase_receipt_items, ...rest } = r;
+    const { purchase_receipt_items, receipt_documents, ...rest } = r;
     if (purchase_receipt_items && Array.isArray(purchase_receipt_items)) {
       receiptItems = receiptItems.concat(purchase_receipt_items);
     }
-    return rest;
+    return {
+      ...rest,
+      receipt_documents: Array.isArray(receipt_documents)
+        ? receipt_documents.map((document: any) => ({
+            id: document.id,
+            document_type: document.document_type,
+            document_number: document.document_number,
+            file_name: document.file_name,
+            mime_type: document.mime_type,
+            has_file: Boolean(document.storage_path),
+          }))
+        : [],
+    };
   });
   const receiptStatuses = await Promise.all(receipts.map((receipt: any) => getPurchaseReceiptOperation(authorization.companyId, receipt.id, authorization.user.id)))
   receipts.forEach((receipt: any, index: number) => { receipt.bsale = redactBsaleStatus(receiptStatuses[index], canViewEconomics) })
@@ -746,13 +769,36 @@ export async function getStockSummary(): Promise<StockItem[]> {
   })
 }
 
-export async function getReceiptDocumentSignedUrl(document: any) {
+export async function getReceiptDocumentSignedUrl(documentId: string) {
   const authorization = await requireWmsPermission('logistica.receptions.create')
   const companyId = authorization.companyId
 
   const logistica = logDb()
-  
-  if (!document.storage_path) return { error: 'Documento sin ruta de almacenamiento' }
+
+  if (!documentId || typeof documentId !== 'string') return { error: 'Identificador de documento inválido' }
+
+  const { data: document, error: documentError } = await logistica
+    .from('receipt_documents')
+    .select('id, company_id, receipt_id, document_type, document_number, storage_bucket, storage_path, file_name, mime_type')
+    .eq('id', documentId)
+    .maybeSingle()
+
+  if (documentError) {
+    console.error('getReceiptDocumentSignedUrl document error:', documentError)
+    return { error: 'Error al validar el documento' }
+  }
+
+  if (!document) return { error: 'Documento no encontrado' }
+  if (document.company_id !== companyId) return { error: 'Acceso denegado al documento' }
+  if (!document.storage_path) return { error: 'Este documento no tiene un archivo adjunto disponible' }
+  if (document.storage_bucket !== RECEIPT_DOCUMENT_BUCKET) return { error: 'El documento no pertenece al bucket autorizado' }
+  const mimeType = document.mime_type || inferReceiptDocumentMimeType(document.file_name, document.storage_path)
+  if (!mimeType || !RECEIPT_DOCUMENT_MIME_TYPES.has(mimeType)) return { error: 'Tipo de archivo no permitido para previsualización' }
+
+  const expectedPrefix = `${companyId}/`
+  if (!document.storage_path.startsWith(expectedPrefix) || document.storage_path.includes('..') || document.storage_path.includes('//')) {
+    return { error: 'Ruta de almacenamiento inválida' }
+  }
 
   const { data: receipt, error: receiptError } = await logistica
     .from('purchase_receipts')
@@ -785,19 +831,22 @@ export async function getReceiptDocumentSignedUrl(document: any) {
   }
 
   const expiresIn = 300
-  const { data: signedData, error: signedError } = await logistica.storage
-    .from(document.storage_bucket || 'recepciones')
-    .createSignedUrl(document.storage_path, expiresIn)
+  const storage = logistica.storage.from(RECEIPT_DOCUMENT_BUCKET)
+  const [{ data: signedData, error: signedError }, { data: downloadData, error: downloadError }] = await Promise.all([
+    storage.createSignedUrl(document.storage_path, expiresIn),
+    storage.createSignedUrl(document.storage_path, expiresIn, { download: document.file_name || true }),
+  ])
 
-  if (signedError || !signedData?.signedUrl) {
-    console.error('getReceiptDocumentSignedUrl storage error:', signedError)
-    return { error: 'No se pudo generar la previsualización del documento' }
+  if (signedError || downloadError || !signedData?.signedUrl || !downloadData?.signedUrl) {
+    console.error('getReceiptDocumentSignedUrl storage error:', signedError || downloadError)
+    return { error: 'No se pudo generar el enlace temporal del documento' }
   }
 
   return {
     signedUrl: signedData.signedUrl,
-    fileName: document.file_name || 'Documento de recepción',
-    mimeType: document.mime_type || null,
+    downloadUrl: downloadData.signedUrl,
+    fileName: document.file_name || `documento-${document.id}`,
+    mimeType,
     expiresIn
   }
 }
