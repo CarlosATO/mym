@@ -586,6 +586,200 @@ export async function getUnknownCollectionPaymentAttempts(clientId: number) {
   return (data ?? []).map(row => ({ id: String(row.id), documentId: Number(row.bsale_document_id), status: String(row.status), amount: Number(row.amount), createdAt: String(row.created_at) }))
 }
 
+export type CollectionPaymentDocumentProgress = {
+  attemptId: string
+  sequenceNumber: number
+  documentId: number
+  folio: number | string
+  amount: number
+  status: string
+  visualStatus: 'PENDING' | 'PROCESSING' | 'CONFIRMED' | 'REQUIRES_REVIEW' | 'FAILED' | 'CANCELLED'
+  preflightBalance: number | null
+  postBalance: number | null
+  paymentId: number | null
+  createdAt: string
+  postStartedAt: string | null
+  confirmedAt: string | null
+  updatedAt: string
+  message: string
+}
+
+export type CollectionPaymentBatchProgress = {
+  batchId: string
+  clientId: number
+  clientName: string
+  status: string
+  expectedTotal: number
+  confirmedTotal: number
+  confirmedTotalConsistent: boolean
+  expectedDocuments: number
+  confirmedDocuments: number
+  pendingDocuments: number
+  failedDocuments: number
+  cancelledDocuments: number
+  unknownDocuments: number
+  processingDocuments: number
+  requiresReview: boolean
+  createdAt: string
+  processingStartedAt: string | null
+  completedAt: string | null
+  leaseExpiresAt: string | null
+  currentDocument: CollectionPaymentDocumentProgress | null
+  documents: CollectionPaymentDocumentProgress[]
+}
+
+const collectionProgressMessage: Record<string, string> = {
+  CREATED: 'Pendiente',
+  SUBMITTING: 'Procesando',
+  CONFIRMED: 'Pagada',
+  UNKNOWN: 'Requiere revisión',
+  REQUIRES_REVIEW: 'Requiere revisión',
+  FAILED: 'No procesada',
+  CANCELLED: 'Cancelada',
+}
+
+function collectionProgressVisualStatus(status: string): CollectionPaymentDocumentProgress['visualStatus'] {
+  if (status === 'CREATED') return 'PENDING'
+  if (status === 'SUBMITTING') return 'PROCESSING'
+  if (status === 'CONFIRMED') return 'CONFIRMED'
+  if (status === 'FAILED') return 'FAILED'
+  if (status === 'CANCELLED') return 'CANCELLED'
+  return 'REQUIRES_REVIEW'
+}
+
+async function requireCollectionProgressContext() {
+  const current = await context()
+  if (!(await canRegisterPayment())) throw new Error('No tienes acceso a Cobranza.')
+  return current
+}
+
+async function loadCollectionProgressLabels(companyId: string, clientIds: number[], documentIds: number[]) {
+  const integrations = createAdminClient().schema('integraciones')
+  const [clients, snapshots] = await Promise.all([
+    clientIds.length > 0
+      ? integrations.from('bsale_clients').select('bsale_client_id,business_name,first_name,last_name').eq('company_id', companyId).in('bsale_client_id', clientIds)
+      : Promise.resolve({ data: [], error: null }),
+    documentIds.length > 0
+      ? integrations.from('bsale_receivable_snapshot_documents').select('bsale_document_id,folio,snapshot_at').eq('company_id', companyId).in('bsale_document_id', documentIds).order('snapshot_at', { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
+  ])
+  if (clients.error) throw new Error(clients.error.message)
+  if (snapshots.error) throw new Error(snapshots.error.message)
+  const clientNames = new Map((clients.data ?? []).map(client => [Number(client.bsale_client_id), client.business_name || [client.first_name, client.last_name].filter(Boolean).join(' ').trim() || `Cliente #${client.bsale_client_id}`]))
+  const folios = new Map<number, number | string>()
+  for (const snapshot of snapshots.data ?? []) {
+    if (!folios.has(Number(snapshot.bsale_document_id)) && snapshot.folio !== null) folios.set(Number(snapshot.bsale_document_id), snapshot.folio)
+  }
+  return { clientNames, folios }
+}
+
+async function buildCollectionPaymentBatchProgress(companyId: string, batch: {
+  id: string
+  client_id: number
+  expected_total: number
+  confirmed_total: number
+  status: string
+  created_at: string
+  processing_started_at: string | null
+  completed_at: string | null
+  lease_expires_at: string | null
+  updated_at?: string
+}) {
+  const { data: attempts, error } = await db().from('collection_payment_attempts')
+    .select('id,client_id,bsale_document_id,amount,status,sequence_number,preflight_balance,post_balance,bsale_payment_id,created_at,post_started_at,confirmed_at,updated_at')
+    .eq('company_id', companyId).eq('batch_id', batch.id).order('sequence_number', { ascending: true })
+  if (error) throw new Error(error.message)
+  const rows = attempts ?? []
+  const labels = await loadCollectionProgressLabels(companyId, [batch.client_id], rows.map(row => Number(row.bsale_document_id)))
+  const documents = rows.map(row => {
+    const status = String(row.status)
+    const documentId = Number(row.bsale_document_id)
+    return {
+      attemptId: String(row.id),
+      sequenceNumber: Number(row.sequence_number),
+      documentId,
+      folio: labels.folios.get(documentId) ?? documentId,
+      amount: Number(row.amount),
+      status,
+      visualStatus: collectionProgressVisualStatus(status),
+      preflightBalance: row.preflight_balance === null ? null : Number(row.preflight_balance),
+      postBalance: row.post_balance === null ? null : Number(row.post_balance),
+      paymentId: row.bsale_payment_id === null ? null : Number(row.bsale_payment_id),
+      createdAt: String(row.created_at),
+      postStartedAt: row.post_started_at ? String(row.post_started_at) : null,
+      confirmedAt: row.confirmed_at ? String(row.confirmed_at) : null,
+      updatedAt: String(row.updated_at),
+      message: collectionProgressMessage[status] ?? 'Requiere revisión',
+    } satisfies CollectionPaymentDocumentProgress
+  })
+  const confirmedTotal = documents.filter(document => document.status === 'CONFIRMED').reduce((sum, document) => sum + document.amount, 0)
+  const count = (status: string) => documents.filter(document => document.status === status).length
+  const currentDocument = documents.find(document => document.status === 'SUBMITTING')
+    ?? documents.find(document => document.status === 'UNKNOWN' || document.status === 'REQUIRES_REVIEW')
+    ?? documents.find(document => document.status === 'CREATED')
+    ?? null
+  return {
+    batchId: String(batch.id),
+    clientId: Number(batch.client_id),
+    clientName: labels.clientNames.get(Number(batch.client_id)) ?? `Cliente #${batch.client_id}`,
+    status: String(batch.status),
+    expectedTotal: Number(batch.expected_total),
+    confirmedTotal,
+    confirmedTotalConsistent: Math.abs(confirmedTotal - Number(batch.confirmed_total)) < 0.01,
+    expectedDocuments: documents.length,
+    confirmedDocuments: count('CONFIRMED'),
+    pendingDocuments: count('CREATED'),
+    failedDocuments: count('FAILED'),
+    cancelledDocuments: count('CANCELLED'),
+    unknownDocuments: count('UNKNOWN') + count('REQUIRES_REVIEW'),
+    processingDocuments: count('SUBMITTING'),
+    requiresReview: count('UNKNOWN') + count('REQUIRES_REVIEW') > 0,
+    createdAt: String(batch.created_at),
+    processingStartedAt: batch.processing_started_at ? String(batch.processing_started_at) : null,
+    completedAt: batch.completed_at ? String(batch.completed_at) : null,
+    leaseExpiresAt: batch.lease_expires_at ? String(batch.lease_expires_at) : null,
+    currentDocument,
+    documents,
+  } satisfies CollectionPaymentBatchProgress
+}
+
+export async function getCollectionPaymentBatchProgress(batchId: string): Promise<CollectionPaymentBatchProgress> {
+  const { companyId } = await requireCollectionProgressContext()
+  if (!batchId) throw new Error('El batch de cobranza es obligatorio.')
+  const { data: batch, error } = await db().from('collection_payment_batches')
+    .select('id,client_id,expected_total,confirmed_total,status,created_at,processing_started_at,completed_at,lease_expires_at,updated_at,metadata')
+    .eq('company_id', companyId).eq('id', batchId).maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!batch || (batch.metadata as Record<string, unknown> | null)?.execution_mode !== 'ASYNC_V1') throw new Error('El batch de cobranza no está disponible.')
+  return buildCollectionPaymentBatchProgress(companyId, batch)
+}
+
+export async function listCollectionPaymentBatchProgress() {
+  const { companyId } = await requireCollectionProgressContext()
+  const { data: batches, error } = await db().from('collection_payment_batches')
+    .select('id,client_id,expected_total,confirmed_total,status,created_at,processing_started_at,completed_at,lease_expires_at,updated_at,metadata')
+    .eq('company_id', companyId).order('created_at', { ascending: true })
+  if (error) throw new Error(error.message)
+  const asyncBatches = (batches ?? []).filter(batch => (batch.metadata as Record<string, unknown> | null)?.execution_mode === 'ASYNC_V1')
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000
+  const activeRows = asyncBatches.filter(batch => batch.status === 'CREATED' || batch.status === 'PROCESSING').sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+  const reviewRows = asyncBatches.filter(batch => batch.status === 'UNKNOWN').sort((a, b) => String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? '')))
+  const recentRows = asyncBatches.filter(batch => ['COMPLETED', 'PARTIAL', 'FAILED'].includes(String(batch.status)) && batch.completed_at && new Date(batch.completed_at).getTime() >= cutoff)
+    .sort((a, b) => String(b.completed_at).localeCompare(String(a.completed_at))).slice(0, 20)
+  const [active, requiresReview, recent] = await Promise.all([
+    Promise.all(activeRows.map(batch => buildCollectionPaymentBatchProgress(companyId, batch))),
+    Promise.all(reviewRows.map(batch => buildCollectionPaymentBatchProgress(companyId, batch))),
+    Promise.all(recentRows.map(batch => buildCollectionPaymentBatchProgress(companyId, batch))),
+  ])
+  return {
+    queuedCount: active.filter(batch => batch.status === 'CREATED').length,
+    processingCount: active.filter(batch => batch.status === 'PROCESSING').length,
+    requiresReviewCount: requiresReview.length,
+    activeCount: active.length,
+    batches: { active, requiresReview, recent },
+  }
+}
+
 async function upsertDirectedPayment(companyId: string, clientId: number, documentId: number, payment: CollectionPayment, documentPayments: CollectionPayment[], fallbackRecordDate?: string) {
   const admin = createAdminClient().schema('integraciones')
   const id = paymentId(payment)
