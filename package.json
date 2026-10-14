@@ -36,6 +36,8 @@
     "test:financial-consolidated-cash": "node --experimental-strip-types --test scripts/test-financial-consolidated-cash.mjs",
     "test:current-balance": "node --experimental-strip-types --test scripts/test-current-balance.mjs",
     "test:financial-open-bank-statement": "node --experimental-strip-types --test scripts/test-financial-open-bank-statement.mjs",
+    "test:financial-open-append-only": "node --experimental-strip-types --test scripts/test-financial-open-append-only.mjs",
+    "test:financial-import-ux": "node --test scripts/test-financial-import-ux.mjs",
     "test:financial-final-close": "node --experimental-strip-types --test scripts/test-financial-final-close-contract.mjs",
     "test:financial-reconciliation-previous-balance": "node --test scripts/test-financial-reconciliation-previous-balance.mjs",
     "test:financial-cash-flow-refresh": "node --test scripts/test-financial-cash-flow-refresh.mjs",

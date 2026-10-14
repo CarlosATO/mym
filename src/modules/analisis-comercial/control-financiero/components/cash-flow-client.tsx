@@ -76,6 +76,8 @@ const bankDisplayName = (value: string) =>
   value.replace(/^Caylo\s+/i, "").replace(/^Itau$/i, "Itaú");
 const accountLabel = (account: FinancialBankAccount) =>
   `${bankDisplayName(account.bank_name)} · •••• ${account.account_number.slice(-4)}`;
+const isItauBank = (bankName: string | undefined) => /ita[uú]/i.test(bankName ?? "");
+const isBancoChileBank = (bankName: string | undefined) => /banco\s+de\s+chile/i.test(bankName ?? "");
 const PAYROLL_MONTHS: Record<string, number> = {
   ENE: 1, FEB: 2, MAR: 3, ABR: 4, MAY: 5, JUN: 6,
   JUL: 7, AGO: 8, SEP: 9, OCT: 10, NOV: 11, DIC: 12,
@@ -2379,7 +2381,7 @@ function ImportCartola({
   onConfirmed: () => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [mode, setMode] = useState<"OPEN" | "CLOSED" | "FINAL_CLOSE">("CLOSED");
+  const [mode, setMode] = useState<"OPEN" | "CLOSED" | "FINAL_CLOSE">("OPEN");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [message, setMessage] = useState("");
@@ -2388,6 +2390,27 @@ function ImportCartola({
     bankName: "",
     accountNumber: "",
   });
+  const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
+  const selectedBankName = selectedAccount?.bank_name;
+  const isItau = isItauBank(selectedBankName);
+  const isBancoChile = isBancoChileBank(selectedBankName);
+  const acceptedExtensions = isItau
+    ? ".pdf"
+    : isBancoChile
+      ? mode === "OPEN"
+        ? ".xls,.xlsx"
+        : ".csv,.txt,.text"
+      : "";
+  const resetFileState = () => {
+    setSelectedFile(null);
+    setPreview(null);
+    setMessage("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+  const changeMode = (nextMode: "OPEN" | "CLOSED" | "FINAL_CLOSE") => {
+    setMode(nextMode);
+    resetFileState();
+  };
   const analyze = () =>
     startTransition(async () => {
       if (!selectedFile)
@@ -2477,41 +2500,44 @@ function ImportCartola({
         <div className="mt-4 grid gap-2 sm:grid-cols-3">
           <button
             type="button"
-            onClick={() => {
-              setMode("OPEN");
-              setPreview(null);
-            }}
+            onClick={() => changeMode("OPEN")}
             className={`border p-3 text-left text-xs ${mode === "OPEN" ? "border-[#72383D] bg-[#F3E8E4]" : "border-[#D1C7BD] bg-white"}`}
           >
             <strong>Actualizar mes actual</strong>
             <span className="mt-1 block text-[#322D29]/60">
-              Período abierto, acumulativo e incremental.
+              {isBancoChile
+                ? "Banco de Chile: XLS/XLSX acumulado de movimientos del mes actual."
+                : isItau
+                  ? "Itaú: PDF de consulta de movimientos del mes actual."
+                  : "Selecciona una cuenta para ver el formato compatible."}
             </span>
           </button>
           <button
             type="button"
-            onClick={() => {
-              setMode("FINAL_CLOSE");
-              setPreview(null);
-            }}
+            onClick={() => changeMode("FINAL_CLOSE")}
             className={`border p-3 text-left text-xs ${mode === "FINAL_CLOSE" ? "border-[#72383D] bg-[#F3E8E4]" : "border-[#D1C7BD] bg-white"}`}
           >
             <strong>Cerrar mes con cartola definitiva</strong>
             <span className="mt-1 block text-[#322D29]/60">
-              Reemplaza el estado OPEN y bloquea nuevas cargas.
+              {isBancoChile
+                ? "Banco de Chile: cartola definitiva en CSV o texto separado por punto y coma."
+                : isItau
+                  ? "Itaú: PDF definitivo."
+                  : "Selecciona una cuenta para ver el formato compatible."}
             </span>
           </button>
           <button
             type="button"
-            onClick={() => {
-              setMode("CLOSED");
-              setPreview(null);
-            }}
+            onClick={() => changeMode("CLOSED")}
             className={`border p-3 text-left text-xs ${mode === "CLOSED" ? "border-[#72383D] bg-[#F3E8E4]" : "border-[#D1C7BD] bg-white"}`}
           >
             <strong>Importar mes histórico cerrado</strong>
             <span className="mt-1 block text-[#322D29]/60">
-              Cartola definitiva validada.
+              {isBancoChile
+                ? "Banco de Chile: cartola definitiva histórica en CSV o texto separado por punto y coma."
+                : isItau
+                  ? "Itaú: PDF definitivo histórico."
+                  : "Selecciona una cuenta para ver el formato compatible."}
             </span>
           </button>
         </div>
@@ -2522,7 +2548,7 @@ function ImportCartola({
               value={selectedAccountId}
               onChange={(event) => {
                 onAccountSelected(event.target.value);
-                setPreview(null);
+                resetFileState();
               }}
               className="mt-1 block h-9 w-full border border-[#AC9C8D] bg-white px-2"
             >
@@ -2542,7 +2568,7 @@ function ImportCartola({
             <input
               ref={fileInputRef}
               type="file"
-              accept={mode === "OPEN" ? ".xls,.xlsx,.pdf" : ".xls,.csv,.pdf,text/plain"}
+              accept={acceptedExtensions}
               hidden
               onChange={(event) => {
                 setSelectedFile(event.target.files?.[0] ?? null);
@@ -2550,7 +2576,7 @@ function ImportCartola({
                 setMessage("");
               }}
             />
-            <p>Archivo de cartola</p>
+            <p>Archivo de cartola{acceptedExtensions ? ` (${acceptedExtensions.replaceAll(",", ", ")})` : ""}</p>
             <Button
               type="button"
               variant="outline"
@@ -2582,27 +2608,29 @@ function ImportCartola({
               {MONTHS[openPreview.month - 1]} {openPreview.year} · ABIERTO
             </p>
             <p>
-              Movimientos existentes:{" "}
-              <strong>{openPreview.existingCount}</strong>
+              Movimientos guardados previamente: <strong>{openPreview.existingCount}</strong>
             </p>
             <p>
-              Filas detectadas archivo:{" "}
-              <strong>{openPreview.rowsInFile}</strong>
+              Filas archivo: <strong>{openPreview.rowsInFile}</strong>
             </p>
-            <p>
-              Ya existentes: <strong>{openPreview.existingCount}</strong>
-            </p>
+             <p>Coincidencias exactas: <strong>{openPreview.exactMatchCount}</strong></p>
+             <p>Saldos reexpresados por el banco: <strong>{openPreview.balanceRestatementCount}</strong></p>
             <p>
               Nuevos: <strong>{openPreview.newCount}</strong>
             </p>
-            <p>
-              Conflictos:{" "}
+             <p>
+               Conflictos reales:{" "}
               <strong
                 className={openPreview.conflictCount ? "text-red-700" : ""}
               >
                 {openPreview.conflictCount}
               </strong>
-            </p>
+             </p>
+             {openPreview.balanceRestatementCount > 0 && (
+               <p className="sm:col-span-2 border border-[#D1C7BD] bg-[#F8F4EE] p-2">
+                 El banco actualizó el saldo acumulado mostrado para {openPreview.balanceRestatementCount} movimientos ya registrados. Los movimientos originales y sus clasificaciones no serán modificados.
+               </p>
+             )}
             <p>
               Saldo cierre período anterior:{" "}
               <strong>{money(openPreview.previousClosingBalance)}</strong>
@@ -2631,7 +2659,9 @@ function ImportCartola({
               <strong>{money(openPreview.resultingBalance)}</strong>
             </p>
             <p>
-              Saldo explicado:{" "}
+              {openPreview.balanceRestatementCount > 0
+                ? "Saldo según base anterior + movimientos nuevos: "
+                : "Saldo explicado: "}
               <strong>{money(openPreview.explainedBalance)}</strong>
             </p>
             <p>
@@ -2650,6 +2680,36 @@ function ImportCartola({
             <p>
               Neto nuevos: <strong>{money(openPreview.newNet)}</strong>
             </p>
+            {openPreview.conflictCount > 0 && (
+              <div className="sm:col-span-2 mt-2 border-t border-red-200 pt-3">
+                <p className="font-semibold text-red-700">Movimientos en conflicto</p>
+                <div className="mt-2 space-y-2">
+                  {openPreview.conflicts.map((conflict) => (
+                    <div key={conflict.index} className="border border-red-200 bg-red-50 p-2 text-[11px]">
+                      <p className="font-semibold">Fila {conflict.file.sourceRowNumber} · índice {conflict.index}</p>
+                      <div className="mt-1 grid gap-1 sm:grid-cols-2">
+                        <div>
+                          <p className="font-semibold">Archivo</p>
+                          <p>{date(conflict.file.date)} · {conflict.file.description}</p>
+                          <p>Cargo: {money(conflict.file.debit)} · Abono: {money(conflict.file.credit)} · Saldo: {money(conflict.file.balance)}</p>
+                          <p>Documento: {conflict.file.documentNumber ?? "—"} · Sucursal: {conflict.file.branch ?? "—"}</p>
+                        </div>
+                        <div>
+                          <p className="font-semibold">Registro actual</p>
+                          {conflict.existing ? (
+                            <>
+                              <p>{date(conflict.existing.date)} · {conflict.existing.description}</p>
+                              <p>Cargo: {money(conflict.existing.debit)} · Abono: {money(conflict.existing.credit)} · Saldo: {money(conflict.existing.balance)}</p>
+                              <p>Documento: {conflict.existing.documentNumber ?? "—"} · Sucursal: {conflict.existing.branch ?? "—"}</p>
+                            </>
+                          ) : <p>No se encontró el registro actual asociado.</p>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="sm:col-span-2 mt-2 border-t border-[#D1C7BD] pt-3">
               <p className="font-semibold">Conciliación bancaria del archivo</p>
               <p className="mt-1">
@@ -2664,29 +2724,26 @@ function ImportCartola({
                   {money(openPreview.fileGlobalDifference)}
                 </strong>
               </p>
-              <p className="mt-2 font-semibold">Conciliación incremental</p>
-              <p className="mt-1">
-                Saldo conocido anterior + neto movimientos nuevos = nuevo saldo
-                conocido · Diferencia:{" "}
-                <strong
-                  className={
-                    openPreview.incrementalDifference
-                      ? "text-red-700"
-                      : "text-green-700"
-                  }
-                >
-                  {money(openPreview.incrementalDifference)}
-                </strong>
-              </p>
-              {openPreview.reconciliationDifference !== 0 && (
-                <p className="mt-2 font-semibold text-[#8A4B08]">
-                  Se detectará una diferencia de conciliación de{" "}
-                  {money(openPreview.reconciliationDifference)}
-                </p>
-              )}
+               {openPreview.balanceRestatementCount > 0 && (
+                 <p className="mt-2 font-semibold">
+                   Reexpresión de saldo detectada · Ajuste respecto del saldo previamente informado:{" "}
+                   <strong>{money(openPreview.restatementAdjustment)}</strong>
+                 </p>
+               )}
+               {openPreview.balanceRestatementCount > 0 && !openPreview.restatementDeltasUniform && (
+                 <p className="mt-2 text-red-700">
+                   La reexpresión de saldos es compleja porque los ajustes no son uniformes.
+                 </p>
+               )}
+               <p className="mt-2 font-semibold">
+                 Diferencia inexplicada:{" "}
+                 <strong className={openPreview.unexplainedDifference ? "text-red-700" : "text-green-700"}>
+                   {money(openPreview.unexplainedDifference)}
+                 </strong>
+               </p>
               {openPreview.existingNotInFileCount > 0 && (
                 <p className="mt-2 text-red-700">
-                  Movimientos existentes ausentes del archivo:{" "}
+                   Movimientos existentes ausentes del archivo:{" "}
                   {openPreview.existingNotInFileCount}
                 </p>
               )}
@@ -2778,14 +2835,6 @@ function ImportCartola({
             inconsistencia de movimientos.
           </p>
         )}
-        {openPreview &&
-          openPreview.canConfirm &&
-          openPreview.reconciliationDifference !== 0 && (
-            <p className="mt-4 border border-[#E4B66A] bg-[#FFF7ED] p-3 text-xs text-[#8A4B08]">
-              Se registrará una diferencia de conciliación pendiente. No se
-              creará un movimiento bancario ficticio.
-            </p>
-          )}
         <div className="mt-5 flex justify-end gap-2">
           <Button type="button" variant="outline" onClick={onClose}>
             Cancelar
@@ -2800,9 +2849,7 @@ function ImportCartola({
             }
             onClick={confirm}
           >
-            {openPreview?.reconciliationDifference
-              ? "Confirmar y registrar diferencia"
-              : "Confirmar importación"}
+            Confirmar importación
           </Button>
         </div>
       </div>

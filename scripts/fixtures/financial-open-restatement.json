@@ -1,0 +1,15 @@
+{
+  "account": "Banco de Chile 2707",
+  "period": "2026-10",
+  "openingBalance": 12000840,
+  "closingBalance": 9169021,
+  "rowsInFile": 162,
+  "exactMatched": 85,
+  "balanceRestatements": 18,
+  "new": 59,
+  "trueConflicts": 0,
+  "existingMissing": 0,
+  "legacyIncrementalDifference": -362715,
+  "restatementAdjustment": -362715,
+  "unexplainedDifference": 0
+}

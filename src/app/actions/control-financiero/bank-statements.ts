@@ -17,8 +17,11 @@ import {
 } from "@/lib/control-financiero/bank-statement-parser";
 import {
   buildOpenMovementKeys,
+  ensureOpenInsertKeys,
   compareFinalCloseMovements,
   compareOpenMovements,
+  compareOpenMovementsLegacy,
+  evaluateOpenReconciliation,
   type ExistingFinalCloseMovement,
 } from "@/lib/control-financiero/open-bank-statement";
 import { resolveLatestKnownBalances } from "@/lib/control-financiero/current-balance";
@@ -215,6 +218,14 @@ function normalizeAccount(value: string | null | undefined) {
   return (value ?? "").replace(/\D/g, "");
 }
 
+function isItauBank(value: string | null | undefined) {
+  return /ita[uú]/i.test(value ?? "");
+}
+
+function isBancoChileBank(value: string | null | undefined) {
+  return /banco\s+de\s+chile/i.test(value ?? "");
+}
+
 function buildBankMovementFingerprint(
   accountId: string,
   row: ParsedBankMovement,
@@ -322,6 +333,24 @@ function importMetadata(parsed: ParsedBankStatement, accountId: string) {
   };
 }
 
+function compatibleOpenDifferenceId(
+  context: Awaited<ReturnType<typeof loadOpenContext>>,
+  restatements: Array<{ oldBalance: number; newBalance: number; date: string }>,
+  unexplainedDifference: number,
+) {
+  if (!restatements.length || unexplainedDifference !== 0) return null;
+  const deltas = [...new Set(restatements.map((item) => item.oldBalance - item.newBalance))];
+  const dates = [...new Set(restatements.map((item) => item.date))];
+  if (deltas.length !== 1 || dates.length !== 1 || deltas[0] === 0) return null;
+  const compatible = context.pendingDifferences.filter(
+    (difference) =>
+      difference.financial_date === dates[0] &&
+      Number(difference.amount_signed) === deltas[0] &&
+      Number(difference.reported_balance) - Number(difference.expected_balance) === deltas[0],
+  );
+  return compatible.length === 1 ? compatible[0].id : null;
+}
+
 type ExistingOpenRow = {
   movement_identity: string;
   movement_content_hash: string;
@@ -332,6 +361,9 @@ type ExistingOpenRow = {
   balance_after: number | string;
   source_row_number: number;
   document_number: string | null;
+  transaction_number: string | null;
+  branch: string | null;
+  cashier: string | null;
 };
 
 async function loadOpenContext(
@@ -376,19 +408,29 @@ async function loadOpenContext(
       (row: any) => periodKey(row.year, row.month) < periodKey(year, month),
     ) ?? null;
   let existingRows: ExistingOpenRow[] = [];
+  let pendingDifferences: any[] = [];
   if (period) {
     const result = await db()
       .from("financial_bank_movements")
       .select(
-        "movement_identity,movement_content_hash,credit_amount,debit_amount,transaction_date,operation_description,balance_after,source_row_number,document_number",
+        "movement_identity,movement_content_hash,credit_amount,debit_amount,transaction_date,operation_description,balance_after,source_row_number,document_number,transaction_number,branch,cashier",
       )
       .eq("company_id", companyId)
       .eq("bank_account_id", accountId)
       .eq("statement_period_id", period.id);
     if (result.error) throw new Error(result.error.message);
     existingRows = (result.data ?? []) as ExistingOpenRow[];
+    const differences = await db()
+      .from("financial_bank_reconciliation_differences")
+      .select("id,financial_date,amount_signed,expected_balance,reported_balance,status")
+      .eq("company_id", companyId)
+      .eq("bank_account_id", accountId)
+      .eq("statement_period_id", period.id)
+      .eq("status", "PENDING");
+    if (differences.error) throw new Error(differences.error.message);
+    pendingDifferences = differences.data ?? [];
   }
-  return { account: accountResult.data, period, previous, existingRows };
+  return { account: accountResult.data, period, previous, existingRows, pendingDifferences };
 }
 
 export async function previewFinancialBankStatement(formData: FormData) {
@@ -411,26 +453,9 @@ export async function previewFinancialBankStatement(formData: FormData) {
         ok: false as const,
         message: "Selecciona una cuenta para analizar la cartola.",
       };
-    const fileHash = createHash("sha256").update(bytes).digest("hex");
-    const { data: alreadyProcessed } = await db()
-      .from("financial_imports")
-      .select("id")
-      .eq("company_id", companyId)
-      .eq("file_hash", fileHash)
-      .maybeSingle();
-    if (alreadyProcessed)
-      return { ok: false as const, message: "Este archivo ya fue procesado." };
-    const isItauPdf = file.name.toLowerCase().endsWith(".pdf");
-    const parsed = isItauPdf
-      ? await parseItauFile(bytes)
-      : mode === "FINAL_CLOSE"
-        ? parseDefinitiveFile(bytes)
-        : mode === "OPEN"
-          ? parseCurrentBankStatementXls(bytes)
-          : parseHistoricalFile(bytes);
     const accountResult = await db()
       .from("financial_bank_accounts")
-      .select("account_number")
+      .select("account_number,bank_name")
       .eq("id", accountId)
       .eq("company_id", companyId)
       .eq("is_active", true)
@@ -440,6 +465,48 @@ export async function previewFinancialBankStatement(formData: FormData) {
         ok: false as const,
         message: "La cuenta seleccionada no pertenece a la empresa activa.",
       };
+    const extension = file.name.toLowerCase().match(/\.[^.]+$/)?.[0] ?? "";
+    const isItau = isItauBank(accountResult.data.bank_name);
+    const isBancoChile = isBancoChileBank(accountResult.data.bank_name);
+    if (isBancoChile && mode !== "OPEN" && [".xls", ".xlsx"].includes(extension))
+      return {
+        ok: false as const,
+        message: "Este archivo corresponde a una cartola de mes actual de Banco de Chile. Selecciona ‘Actualizar mes actual’.",
+      };
+    const allowedExtensions = isItau
+      ? [".pdf"]
+      : isBancoChile
+        ? mode === "OPEN"
+          ? [".xls", ".xlsx"]
+          : [".csv", ".txt", ".text"]
+        : [];
+    if (!allowedExtensions.includes(extension))
+      return {
+        ok: false as const,
+        message: isItau
+          ? "Para Itaú selecciona un PDF de cartola."
+          : isBancoChile
+            ? mode === "OPEN"
+              ? "Para Banco de Chile selecciona un XLS o XLSX acumulado del mes actual."
+              : "Para Banco de Chile selecciona una cartola definitiva en CSV o texto separado por punto y coma."
+            : "El banco de la cuenta seleccionada no tiene un formato de cartola configurado.",
+      };
+    const fileHash = createHash("sha256").update(bytes).digest("hex");
+    const { data: alreadyProcessed } = await db()
+      .from("financial_imports")
+      .select("id")
+      .eq("company_id", companyId)
+      .eq("file_hash", fileHash)
+      .maybeSingle();
+    if (alreadyProcessed)
+      return { ok: false as const, message: "Este archivo ya fue procesado." };
+    const parsed = isItau
+      ? await parseItauFile(bytes)
+      : mode === "FINAL_CLOSE"
+        ? parseDefinitiveFile(bytes)
+        : mode === "OPEN"
+          ? parseCurrentBankStatementXls(bytes)
+          : parseHistoricalFile(bytes);
     if (
       parsed.accountNumber &&
       normalizeAccount(parsed.accountNumber) !==
@@ -453,7 +520,7 @@ export async function previewFinancialBankStatement(formData: FormData) {
       if (parsed.sourceFormat === "ITAU_CURRENT_PDF")
         return {
           ok: false as const,
-          message: "El PDF Itaú de mes abierto sólo puede actualizar un período OPEN.",
+          message: "Este PDF corresponde a una consulta de movimientos del mes actual de Itaú. Selecciona ‘Actualizar mes actual’.",
         };
       if (
         parsed.validations.globalDifference !== 0 ||
@@ -467,6 +534,11 @@ export async function previewFinancialBankStatement(formData: FormData) {
     }
 
     if (mode === "FINAL_CLOSE") {
+      if (parsed.sourceFormat === "ITAU_CURRENT_PDF")
+        return {
+          ok: false as const,
+          message: "Este PDF corresponde a una consulta de movimientos del mes actual de Itaú. Selecciona ‘Actualizar mes actual’.",
+        };
       const context = await loadOpenContext(
         companyId,
         accountId,
@@ -559,10 +631,17 @@ export async function previewFinancialBankStatement(formData: FormData) {
     )
       return {
         ok: false as const,
-        message: "El archivo no corresponde a una actualización mensual.",
+        message: "El archivo no corresponde a una actualización del mes actual.",
+      };
+    if (parsed.sourceFormat === "ITAU_PDF")
+      return {
+        ok: false as const,
+        message: "Este PDF corresponde a una cartola definitiva histórica de Itaú. Selecciona ‘Cerrar mes con cartola definitiva’ o ‘Importar mes histórico cerrado’.",
       };
     const keys = buildOpenMovementKeys(accountId, parsed.movements);
-    const diff = compareOpenMovements(keys, context.existingRows);
+    const diff = parsed.sourceFormat === "CURRENT_XLS"
+      ? compareOpenMovements(parsed.movements, context.existingRows)
+      : compareOpenMovementsLegacy(keys, context.existingRows);
     const previousClosingBalance = Number(
       context.previous?.closing_balance ?? parsed.openingBalance,
     );
@@ -583,18 +662,16 @@ export async function previewFinancialBankStatement(formData: FormData) {
       parsed.closingBalance -
       (parsed.openingBalance + parsed.totalCredits - parsed.totalDebits);
     const incrementalDifference = resultingBalance - explainedBalance;
-    const fileIdentitySet = new Set(keys.map((key) => key.movement_identity));
-    const existingNotInFileCount = context.existingRows.filter(
-      (row) => !fileIdentitySet.has(row.movement_identity),
-    ).length;
-    const reconciliationConsistent =
-      fileGlobalDifference === incrementalDifference;
-    const canConfirm =
-      diff.conflicts === 0 &&
-      existingNotInFileCount === 0 &&
-      hasConsistentOpenRowBalances(parsed) &&
-      openingDifference === 0 &&
-      reconciliationConsistent;
+    const existingNotInFileCount = diff.existingMissing.length;
+    const reconciliation = evaluateOpenReconciliation({
+      openingDifference,
+      fileGlobalDifference,
+      rowBalancesValid: hasConsistentOpenRowBalances(parsed),
+      existingMissing: existingNotInFileCount,
+      trueConflicts: diff.conflicts,
+      legacyIncrementalDifference: incrementalDifference,
+      restatements: diff.balanceRestatements,
+    });
     return {
       ok: true as const,
       mode,
@@ -607,6 +684,10 @@ export async function previewFinancialBankStatement(formData: FormData) {
         account: context.account,
         periodStatus: "OPEN" as const,
         existingCount: context.existingRows.length,
+        matchedCount: diff.exactMatched + diff.balanceRestatements.length,
+        exactMatchCount: diff.exactMatched,
+        balanceRestatementCount: diff.balanceRestatements.length,
+        restatements: diff.balanceRestatements,
         rowsInFile: parsed.rowCount,
         newCount: diff.new,
         conflictCount: diff.conflicts,
@@ -618,7 +699,7 @@ export async function previewFinancialBankStatement(formData: FormData) {
         currentBalanceBefore: knownBalanceBefore,
         resultingBalance,
         explainedBalance,
-        reconciliationDifference: incrementalDifference,
+        reconciliationDifference: reconciliation.unexplainedDifference,
         totalCredits: parsed.totalCredits,
         totalDebits: parsed.totalDebits,
         newCredits,
@@ -627,18 +708,48 @@ export async function previewFinancialBankStatement(formData: FormData) {
         knownBalanceBefore,
         fileGlobalDifference,
         fileRowDifference: parsed.validations.rowDifference,
-        incrementalDifference,
-        reconciliationConsistent,
+        incrementalDifference: reconciliation.legacyIncrementalDifference,
+        legacyIncrementalDifference: reconciliation.legacyIncrementalDifference,
+        restatementAdjustment: reconciliation.restatementAdjustment,
+        restatementExplained: reconciliation.restatementExplained,
+        restatementDeltasUniform: reconciliation.restatementDeltasUniform,
+        unexplainedDifference: reconciliation.unexplainedDifference,
+        reconciliationConsistent: reconciliation.unexplainedDifference === 0,
         existingNotInFileCount,
         movementCount: context.existingRows.length + diff.new,
-        canConfirm,
+        canConfirm: reconciliation.canConfirm,
         conflictIndexes: diff.conflictIndexes,
-        conflicts: diff.conflictIndexes.map((index) => ({
-          index,
-          date: parsed.movements[index].date,
-          description: parsed.movements[index].description,
-          balance: parsed.movements[index].balance,
-        })),
+        conflicts: diff.conflictIndexes.map((index) => {
+          const movement = parsed.movements[index];
+          const existing = context.existingRows.find(
+            (row) => row.movement_identity === keys[index].movement_identity,
+          );
+          return {
+            index,
+            file: {
+              date: movement.date,
+              description: movement.description,
+              debit: movement.debit,
+              credit: movement.credit,
+              balance: movement.balance,
+              documentNumber: movement.documentNumber,
+              branch: movement.branch,
+              sourceRowNumber: movement.sourceRowNumber,
+            },
+            existing: existing
+              ? {
+                  date: existing.transaction_date,
+                  description: existing.operation_description,
+                  debit: Number(existing.debit_amount),
+                  credit: Number(existing.credit_amount),
+                  balance: Number(existing.balance_after),
+                  documentNumber: existing.document_number,
+                  branch: existing.branch,
+                  sourceRowNumber: existing.source_row_number,
+                }
+              : null,
+          };
+        }),
       },
     };
   } catch (error) {
@@ -783,15 +894,18 @@ export async function confirmOpenFinancialBankStatement(input: {
       message: "La cartola no concilia y no puede confirmarse.",
     };
   const keys = buildOpenMovementKeys(input.accountId, input.parsed.movements);
-  const diff = compareOpenMovements(keys, context.existingRows);
+  const diff = input.parsed.sourceFormat === "CURRENT_XLS"
+    ? compareOpenMovements(input.parsed.movements, context.existingRows)
+    : compareOpenMovementsLegacy(keys, context.existingRows);
   if (diff.conflicts)
     return {
       ok: false as const,
       message: `Hay ${diff.conflicts} conflicto(s) de contenido. Resuélvelos antes de confirmar.`,
     };
+  const insertKeys = ensureOpenInsertKeys(keys, diff.newIndexes, context.existingRows);
   const newRows = diff.newIndexes.map((index) => ({
     row: input.parsed.movements[index],
-    key: keys[index],
+    key: insertKeys[index],
   }));
   const newCredits = newRows.reduce((sum, item) => sum + item.row.credit, 0);
   const newDebits = newRows.reduce((sum, item) => sum + item.row.debit, 0);
@@ -811,24 +925,25 @@ export async function confirmOpenFinancialBankStatement(input: {
       input.parsed.totalCredits -
       input.parsed.totalDebits);
   const incrementalDifference = currentBalance - explainedBalance;
-  const fileIdentitySet = new Set(keys.map((key) => key.movement_identity));
-  const existingNotInFileCount = context.existingRows.filter(
-    (row) => !fileIdentitySet.has(row.movement_identity),
-  ).length;
+  const existingNotInFileCount = diff.existingMissing.length;
   const previousClosingBalance = Number(
     context.previous?.closing_balance ?? input.parsed.openingBalance,
   );
   const openingDifference =
     input.parsed.openingBalance - previousClosingBalance;
-  if (
-    existingNotInFileCount ||
-    !hasConsistentOpenRowBalances(input.parsed) ||
-    openingDifference !== 0 ||
-    fileGlobalDifference !== incrementalDifference
-  ) {
+  const reconciliation = evaluateOpenReconciliation({
+    openingDifference,
+    fileGlobalDifference,
+    rowBalancesValid: hasConsistentOpenRowBalances(input.parsed),
+    existingMissing: existingNotInFileCount,
+    trueConflicts: diff.conflicts,
+    legacyIncrementalDifference: incrementalDifference,
+    restatements: diff.balanceRestatements,
+  });
+  if (!reconciliation.canConfirm) {
     return {
       ok: false as const,
-      message: `La conciliación OPEN no es válida. Archivo: ${fileGlobalDifference}; incremental: ${incrementalDifference}; filas fuera del archivo: ${existingNotInFileCount}.`,
+      message: `La conciliación OPEN no es válida. Archivo: ${fileGlobalDifference}; diferencia inexplicada: ${reconciliation.unexplainedDifference}; filas fuera del archivo: ${existingNotInFileCount}.`,
     };
   }
   const firstDate = context.period
@@ -857,6 +972,11 @@ export async function confirmOpenFinancialBankStatement(input: {
     movement_content_hash: key.movement_content_hash,
     raw_payload: row.raw,
   }));
+  const compatibleDifferenceId = compatibleOpenDifferenceId(
+    context,
+    diff.balanceRestatements,
+    reconciliation.unexplainedDifference,
+  );
   const { data, error } = await db().rpc(
     "confirm_financial_bank_statement_open",
     {
@@ -873,9 +993,24 @@ export async function confirmOpenFinancialBankStatement(input: {
             input.parsed.sourceFormat === "ITAU_CURRENT_PDF"
               ? input.parsed.sourceFormat
               : "bank-statement-current-xls-v1",
-          existing_count: diff.existing,
-          new_count: diff.new,
-          conflict_count: diff.conflicts,
+           existing_count: context.existingRows.length,
+           exact_match_count: diff.exactMatched,
+           balance_restatement_count: diff.balanceRestatements.length,
+           balance_restatements: diff.balanceRestatements,
+           new_count: diff.new,
+           conflict_count: diff.conflicts,
+           existing_missing_count: existingNotInFileCount,
+           rows_in_file: input.parsed.rowCount,
+           reported_closing_balance: input.parsed.closingBalance,
+           true_conflict_count: diff.conflicts,
+            unexplained_difference: reconciliation.unexplainedDifference,
+            restatement_adjustment: reconciliation.restatementAdjustment,
+            restatement_explained: reconciliation.restatementExplained,
+           resolve_previous_compatible: Boolean(compatibleDifferenceId),
+           resolve_difference_id: compatibleDifferenceId,
+           expected_existing_count: context.existingRows.length,
+           expected_current_balance: context.period?.current_balance ?? null,
+           expected_coverage_through: coveragePrevious,
           coverage_from: input.parsed.firstTransactionDate,
           coverage_to: input.parsed.lastTransactionDate,
           resulting_balance: currentBalance,
@@ -902,12 +1037,18 @@ export async function confirmOpenFinancialBankStatement(input: {
       },
       p_movements: movements,
       p_imported_by: user.id,
-      p_reconciliation: {
-        coverage_date: input.parsed.lastTransactionDate,
-        expected_balance: explainedBalance,
-        reported_balance: currentBalance,
-        amount_signed: incrementalDifference,
-      },
+       p_reconciliation: {
+         coverage_date: compatibleDifferenceId
+           ? diff.balanceRestatements[0].date
+           : input.parsed.lastTransactionDate,
+         expected_balance: explainedBalance,
+         reported_balance: currentBalance,
+          amount_signed: reconciliation.unexplainedDifference,
+         compatible_difference_id: compatibleDifferenceId,
+         compatible_amount: compatibleDifferenceId
+           ? diff.balanceRestatements[0].oldBalance - diff.balanceRestatements[0].newBalance
+           : null,
+       },
     },
   );
   if (error) return { ok: false as const, message: error.message };
@@ -1009,10 +1150,13 @@ export async function confirmFinalFinancialBankStatement(input: {
             input.parsed.sourceFormat === "ITAU_PDF"
               ? "ITAU_PDF"
               : "bank-statement-definitive-semicolon-v1",
-        existing_count: diff.matchedExisting,
-        new_count: diff.newIndexes.length,
-        conflict_count: diff.conflictIndexes.length + diff.ambiguousIndexes.length,
-      },
+         existing_count: diff.matchedExisting,
+         new_count: diff.newIndexes.length,
+         conflict_count: diff.conflictIndexes.length + diff.ambiguousIndexes.length,
+         expected_existing_count: context.existingRows.length,
+         expected_current_balance: context.period.current_balance,
+         expected_coverage_through: context.period.coverage_through,
+       },
     },
     p_period: {
       year: input.parsed.year,

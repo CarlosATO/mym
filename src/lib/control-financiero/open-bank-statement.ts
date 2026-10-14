@@ -38,9 +38,94 @@ export function buildOpenMovementKeys(accountId: string, movements: ParsedBankMo
   })
 }
 
+export function ensureOpenInsertKeys(
+  keys: OpenMovementKey[],
+  newIndexes: number[],
+  existing: ExistingOpenMovement[],
+) {
+  const occupied = new Set(existing.map(row => row.movement_identity))
+  const result = keys.map(key => ({ ...key }))
+  newIndexes.forEach(index => {
+    let candidate = result[index].movement_identity
+    let salt = 0
+    while (occupied.has(candidate)) {
+      salt += 1
+      candidate = createHash('sha256')
+        .update(`${result[index].movement_identity}|open-insert|${index}|${salt}`)
+        .digest('hex')
+    }
+    result[index].movement_identity = candidate
+    occupied.add(candidate)
+  })
+  return result
+}
+
 export type ExistingOpenMovement = {
   movement_identity: string
   movement_content_hash: string
+  transaction_date?: string
+  operation_description?: string
+  credit_amount?: number | string
+  debit_amount?: number | string
+  balance_after?: number | string
+  source_row_number?: number
+  document_number?: string | null
+  transaction_number?: string | null
+  branch?: string | null
+  cashier?: string | null
+}
+
+export type OpenBalanceRestatement = {
+  fileIndex: number
+  existingIndex: number
+  movement_identity: string
+  oldBalance: number
+  newBalance: number
+  sourceRowNumber: number
+  date: string
+}
+
+export type OpenReconciliationResult = {
+  legacyIncrementalDifference: number
+  restatementAdjustment: number
+  restatementExplained: boolean
+  restatementDeltasUniform: boolean
+  unexplainedDifference: number
+  canConfirm: boolean
+}
+
+export function evaluateOpenReconciliation(input: {
+  openingDifference: number
+  fileGlobalDifference: number
+  rowBalancesValid: boolean
+  existingMissing: number
+  trueConflicts: number
+  legacyIncrementalDifference: number
+  restatements: OpenBalanceRestatement[]
+}): OpenReconciliationResult {
+  const deltas = input.restatements.map((item) => item.newBalance - item.oldBalance)
+  const restatementDeltasUniform = deltas.length > 0 && deltas.every((delta) => delta === deltas[0])
+  const restatementAdjustment = restatementDeltasUniform ? deltas[0] : 0
+  const unexplainedDifference = input.legacyIncrementalDifference - restatementAdjustment
+  const baseValid = input.openingDifference === 0 &&
+    input.fileGlobalDifference === 0 &&
+    input.rowBalancesValid &&
+    input.existingMissing === 0 &&
+    input.trueConflicts === 0
+  const restatementExplained = baseValid &&
+    input.restatements.length > 0 &&
+    restatementDeltasUniform &&
+    unexplainedDifference === 0
+  const canConfirm = baseValid && unexplainedDifference === 0 &&
+    (input.restatements.length === 0 || restatementExplained)
+  return {
+    legacyIncrementalDifference: input.legacyIncrementalDifference,
+    restatementAdjustment,
+    restatementExplained,
+    restatementDeltasUniform,
+    unexplainedDifference,
+    canConfirm,
+  }
 }
 
 export type ExistingFinalCloseMovement = ExistingOpenMovement & {
@@ -213,29 +298,147 @@ export function compareFinalCloseMovements(
 }
 
 export type OpenDiff = {
-  existing: number
+  exactMatched: number
+  balanceRestatements: OpenBalanceRestatement[]
   new: number
   conflicts: number
+  existingMissing: number[]
   newIndexes: number[]
   conflictIndexes: number[]
+  matchedByFile: Map<number, ExistingOpenMovement>
 }
 
-export function compareOpenMovements(keys: OpenMovementKey[], existing: ExistingOpenMovement[]): OpenDiff {
-  const existingByIdentity = new Map(existing.map(row => [row.movement_identity, row.movement_content_hash]))
-  const seen = new Set<string>()
-  const result: OpenDiff = { existing: 0, new: 0, conflicts: 0, newIndexes: [], conflictIndexes: [] }
+function normalizedMovementDescription(value: unknown) {
+  return String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, ' ')
+}
+
+function meaningful(value: unknown) {
+  const normalized = normalizedMovementDescription(value)
+  return normalized && !/^0+$/.test(normalized) ? normalized : ''
+}
+
+function sameOptionalIdentifier(existing: unknown, file: unknown) {
+  const left = meaningful(existing)
+  const right = meaningful(file)
+  return !left || !right || left === right
+}
+
+function sameEconomicMovement(existing: ExistingOpenMovement, file: ParsedBankMovement) {
+  return existing.transaction_date === file.date &&
+    normalizedMovementDescription(existing.operation_description) === normalizedMovementDescription(file.description) &&
+    Number(existing.debit_amount) === file.debit &&
+    Number(existing.credit_amount) === file.credit &&
+    sameOptionalIdentifier(existing.document_number, file.documentNumber) &&
+    sameOptionalIdentifier(existing.transaction_number, file.transactionNumber) &&
+    sameOptionalIdentifier(existing.branch, file.branch) &&
+    sameOptionalIdentifier(existing.cashier, file.cashier)
+}
+
+function likelyEconomicConflict(existing: ExistingOpenMovement, file: ParsedBankMovement) {
+  const sameDescription = normalizedMovementDescription(existing.operation_description) === normalizedMovementDescription(file.description)
+  const sameAmounts = Number(existing.debit_amount) === file.debit && Number(existing.credit_amount) === file.credit
+  const identifiers = [
+    [existing.document_number, file.documentNumber],
+    [existing.transaction_number, file.transactionNumber],
+    [existing.branch, file.branch],
+    [existing.cashier, file.cashier],
+  ]
+  const hasIdentifier = identifiers.some(([left, right]) => meaningful(left) || meaningful(right))
+  const sameIdentifiers = hasIdentifier && identifiers.every(([left, right]) => sameOptionalIdentifier(left, right))
+  return sameDescription || sameAmounts || sameIdentifiers
+}
+
+/** Compares an accumulated OPEN statement as a multiset without using balance as identity. */
+export function compareOpenMovements(
+  movements: ParsedBankMovement[],
+  existing: ExistingOpenMovement[],
+): OpenDiff {
+  const matchedExisting = new Set<number>()
+  const matchedFiles = new Set<number>()
+  const matchedByFile = new Map<number, ExistingOpenMovement>()
+  const balanceRestatements: OpenBalanceRestatement[] = []
+  let exactMatched = 0
+
+  movements.forEach((movement, fileIndex) => {
+    const existingIndex = existing.findIndex((row, index) =>
+      !matchedExisting.has(index) && sameEconomicMovement(row, movement),
+    )
+    if (existingIndex < 0) return
+    const row = existing[existingIndex]
+    matchedExisting.add(existingIndex)
+    matchedFiles.add(fileIndex)
+    matchedByFile.set(fileIndex, row)
+    if (Number(row.balance_after) === movement.balance) exactMatched += 1
+    else balanceRestatements.push({
+      fileIndex,
+      existingIndex,
+      movement_identity: row.movement_identity,
+      oldBalance: Number(row.balance_after),
+      newBalance: movement.balance,
+      sourceRowNumber: movement.sourceRowNumber,
+      date: movement.date,
+    })
+  })
+
+  const conflictIndexes: number[] = []
+  const newIndexes: number[] = []
+  movements.forEach((movement, fileIndex) => {
+    if (matchedFiles.has(fileIndex)) return
+    if (existing.some((row, index) => !matchedExisting.has(index) && likelyEconomicConflict(row, movement)))
+      conflictIndexes.push(fileIndex)
+    else newIndexes.push(fileIndex)
+  })
+  const existingMissing = existing
+    .map((_row, index) => index)
+    .filter(index => !matchedExisting.has(index))
+
+  return {
+    exactMatched,
+    balanceRestatements,
+    new: newIndexes.length,
+    conflicts: conflictIndexes.length,
+    existingMissing,
+    newIndexes,
+    conflictIndexes,
+    matchedByFile,
+  }
+}
+
+/** Preserves the identity/hash semantics used by the existing Itaú OPEN flow. */
+export function compareOpenMovementsLegacy(
+  keys: OpenMovementKey[],
+  existing: ExistingOpenMovement[],
+): OpenDiff {
+  const existingByIdentity = new Map(existing.map((row, index) => [row.movement_identity, { row, index }]))
+  const matchedExisting = new Set<number>()
+  const matchedByFile = new Map<number, ExistingOpenMovement>()
+  const newIndexes: number[] = []
+  const conflictIndexes: number[] = []
   keys.forEach((key, index) => {
     const previous = existingByIdentity.get(key.movement_identity)
-    if (previous === undefined && !seen.has(key.movement_identity)) {
-      result.new += 1
-      result.newIndexes.push(index)
-    } else if (previous === key.movement_content_hash) {
-      result.existing += 1
+    if (!previous) newIndexes.push(index)
+    else if (previous.row.movement_content_hash === key.movement_content_hash) {
+      matchedExisting.add(previous.index)
+      matchedByFile.set(index, previous.row)
     } else {
-      result.conflicts += 1
-      result.conflictIndexes.push(index)
+      matchedExisting.add(previous.index)
+      matchedByFile.set(index, previous.row)
+      conflictIndexes.push(index)
     }
-    seen.add(key.movement_identity)
   })
-  return result
+  return {
+    exactMatched: matchedExisting.size,
+    balanceRestatements: [],
+    new: newIndexes.length,
+    conflicts: conflictIndexes.length,
+    existingMissing: existing.map((_row, index) => index).filter(index => !matchedExisting.has(index)),
+    newIndexes,
+    conflictIndexes,
+    matchedByFile,
+  }
 }
