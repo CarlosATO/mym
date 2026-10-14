@@ -13,6 +13,7 @@ import * as LucideIcons from 'lucide-react'
 import { erpInputClass, erpSelectClass } from '@/lib/form-styles'
 import { cn } from '@/lib/utils'
 import { receiptItemSku } from '@/lib/logistica/receipt-display'
+import { OperationalPoPdfModal } from './operational-po-pdf-modal'
 
 interface ReceiptWorksheetProps {
   poId: string
@@ -65,6 +66,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
   } | null>(null)
 
   const [saving, setSaving] = useState(false)
+  const [showOperationalPdf, setShowOperationalPdf] = useState(false)
 
   // itemInputs state maps itemId -> Array of ItemSplit
   const [itemInputs, setItemInputs] = useState<Record<string, ItemSplit[]>>({})
@@ -426,6 +428,13 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
       {/* Top action header bar */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 pb-2 border-b border-theme-border/60">
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setShowOperationalPdf(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-[11px] font-semibold text-theme-text transition-all hover:bg-theme-text/5"
+          >
+            <LucideIcons.FileText className="h-3.5 w-3.5 text-theme-accent" /> Ver PDF OC
+          </button>
           <button 
             onClick={() => router.push('/dashboard/logistica')}
             className="p-2 rounded-lg border border-theme-border bg-theme-surface hover:bg-theme-text/5 text-theme-text transition-colors"
@@ -941,6 +950,8 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
       </div>}
 
       <div className="h-1" aria-hidden="true" />
+
+      {showOperationalPdf && <OperationalPoPdfModal poId={poId} onClose={() => setShowOperationalPdf(false)} />}
 
     </div>
   )

@@ -23,6 +23,12 @@ function adqDb() {
   })
 }
 
+function coreDb() {
+  return createSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey, {
+    db: { schema: 'core' }, auth: { autoRefreshToken: false, persistSession: false },
+  })
+}
+
 export interface PurchaseOrderPending {
   id: string
   correlative: string
@@ -195,6 +201,80 @@ export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]>
 export async function getPurchaseOrderForReceipt(poId: string) {
   const { authorization, canViewEconomics } = await authorizeReception()
   return getPurchaseOrderForReceiptAuthorized(poId, authorization, canViewEconomics)
+}
+
+export interface OperationalPurchaseOrderPdfData {
+  company: {
+    name: string
+    rut: string | null
+    phone: string | null
+    email: string | null
+    address: string | null
+    logo_url: string | null
+  }
+  po: {
+    correlative: string
+    issue_date: string
+    required_date: string | null
+    supplier_name: string
+    warehouse_name: string | null
+    po_type: string
+    requester_name: string
+    notes: string | null
+    status: string
+  }
+  items: Array<{
+    line_number: number
+    item_type: string
+    sku: string | null
+    product_description: string
+    unit: string | null
+    quantity: number
+    notes: string | null
+  }>
+}
+
+/** Returns the intentionally economic-free document used by warehouse staff. */
+export async function getOperationalPurchaseOrderPdfData(poId: string): Promise<OperationalPurchaseOrderPdfData | null> {
+  const authorization = await requireWmsPermission('logistica.receptions.create')
+  const [baseData, companyResult] = await Promise.all([
+    getPurchaseOrderForReceiptAuthorized(poId, authorization, false),
+    coreDb().from('companies').select('business_name, trade_name, rut, phone, email, address, logo_url').eq('id', authorization.companyId).eq('is_active', true).maybeSingle(),
+  ])
+
+  if (!baseData || companyResult.error || !companyResult.data) return null
+
+  const company = companyResult.data
+  return {
+    company: {
+      name: company.trade_name || company.business_name || authorization.companyName,
+      rut: company.rut || null,
+      phone: company.phone || null,
+      email: company.email || null,
+      address: company.address || null,
+      logo_url: company.logo_url || null,
+    },
+    po: {
+      correlative: baseData.po.correlative,
+      issue_date: baseData.po.issue_date,
+      required_date: baseData.po.required_date || null,
+      supplier_name: baseData.po.supplier_name,
+      warehouse_name: baseData.po.warehouse_name || null,
+      po_type: baseData.po.po_type,
+      requester_name: baseData.po.requester_name,
+      notes: baseData.po.notes || null,
+      status: baseData.po.status,
+    },
+    items: baseData.items.map((item: any) => ({
+      line_number: Number(item.line_number),
+      item_type: item.item_type,
+      sku: item.sku || null,
+      product_description: item.product_description,
+      unit: item.unit || null,
+      quantity: Number(item.quantity || 0),
+      notes: item.notes || null,
+    })),
+  }
 }
 
 async function getPurchaseOrderForReceiptAuthorized(poId: string, authorization: WmsAuthorization, canViewEconomics: boolean) {

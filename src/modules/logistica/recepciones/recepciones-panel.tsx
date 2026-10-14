@@ -21,6 +21,7 @@ import { erpInputClass } from '@/lib/form-styles'
 import { cn } from '@/lib/utils'
 import { formatCivilDate } from '@/lib/datetime'
 import { receiptItemSku } from '@/lib/logistica/receipt-display'
+import { OperationalPoPdfModal } from './operational-po-pdf-modal'
 
 type FilterTab = 'ALL' | 'PENDING' | 'PARTIAL' | 'RECEIVED'
 
@@ -93,6 +94,7 @@ function DetailPanel({
   onDetailLoaded,
   receivingId,
   onReceive,
+  onOpenOperationalPdf,
   canViewEconomics,
 }: {
   summary: PurchaseOrderPending
@@ -101,6 +103,7 @@ function DetailPanel({
   onDetailLoaded: (poId: string, data: any) => void
   receivingId: string | null
   onReceive: (id: string) => void
+  onOpenOperationalPdf: (id: string) => void
   canViewEconomics: boolean
 }) {
   const [detail, setDetail] = useState<any>(cachedDetail)
@@ -203,6 +206,13 @@ function DetailPanel({
                 {receivingId === summary.id ? 'Cargando...' : 'Recibir OC'}
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => onOpenOperationalPdf(summary.id)}
+              className="inline-flex items-center gap-1 rounded-lg border border-theme-border px-2.5 py-1.5 text-[10px] font-semibold text-theme-text-muted hover:bg-theme-text/10"
+            >
+              <FileText className="h-3 w-3" /> Ver PDF OC
+            </button>
             <button
               onClick={onClose}
               title="Cerrar detalle"
@@ -403,6 +413,7 @@ function TrayTable({
   onPrefetch,
   receivingId,
   onReceive,
+  onOpenOperationalPdf,
   canViewEconomics,
 }: {
   pos: PurchaseOrderPending[]
@@ -417,6 +428,7 @@ function TrayTable({
   onPrefetch: (poId: string) => void
   receivingId: string | null
   onReceive: (id: string) => void
+  onOpenOperationalPdf: (id: string) => void
   canViewEconomics: boolean
 }) {
 
@@ -529,6 +541,7 @@ function TrayTable({
                       ) : '—'}
                     </td>
                     <td className="px-4 py-2.5 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
                       {isTotal ? (
                         <button
                           onClick={() => onOpenDetail(po)}
@@ -555,6 +568,14 @@ function TrayTable({
                           {receivingId === po.id ? 'Cargando...' : 'Recibir'}
                         </button>
                       )}
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); onOpenOperationalPdf(po.id) }}
+                        className="px-2.5 py-1 rounded-lg border border-theme-border hover:bg-theme-text/10 text-theme-text-muted text-[10px] font-semibold transition-all flex items-center gap-1"
+                      >
+                        <FileText className="w-3 h-3" /> PDF OC
+                      </button>
+                      </div>
                     </td>
                   </tr>
                 )
@@ -635,6 +656,7 @@ export function RecepcionesPanel({ canViewEconomics }: { canViewEconomics: boole
 
   // null = tray view (no detail). string = detail open for this poId.
   const [detailPoId, setDetailPoId] = useState<string | null>(null)
+  const [operationalPdfPoId, setOperationalPdfPoId] = useState<string | null>(null)
 
   // Cache: poId → full detail data. Persists between opens.
   const detailCache = useRef<Record<string, any>>({})
@@ -712,6 +734,7 @@ export function RecepcionesPanel({ canViewEconomics }: { canViewEconomics: boole
 
   const openDetail = (po: PurchaseOrderPending) => setDetailPoId(po.id)
   const closeDetail = () => setDetailPoId(null)
+  const openOperationalPdf = (poId: string) => setOperationalPdfPoId(poId)
 
   const prefetchDetail = (poId: string) => {
     if (detailCache.current[poId] || pendingRequestsRef.current[poId]) return
@@ -741,11 +764,13 @@ export function RecepcionesPanel({ canViewEconomics }: { canViewEconomics: boole
           filteredPOs={filteredPOs}
           onOpenDetail={openDetail}
           onPrefetch={prefetchDetail}
-          receivingId={receivingId}
-          onReceive={handleReceive}
-          canViewEconomics={canViewEconomics}
-        />
-      </div>
+           receivingId={receivingId}
+           onReceive={handleReceive}
+           onOpenOperationalPdf={openOperationalPdf}
+           canViewEconomics={canViewEconomics}
+         />
+         {operationalPdfPoId && <OperationalPoPdfModal poId={operationalPdfPoId} onClose={() => setOperationalPdfPoId(null)} />}
+       </div>
     )
   }
 
@@ -784,12 +809,14 @@ export function RecepcionesPanel({ canViewEconomics }: { canViewEconomics: boole
           cachedDetail={detailCache.current[detailSummary.id] ?? null}
           onClose={closeDetail}
           onDetailLoaded={(poId, data) => { detailCache.current[poId] = data }}
-          receivingId={receivingId}
-          onReceive={handleReceive}
-          canViewEconomics={canViewEconomics}
-        />
-      </div>
+           receivingId={receivingId}
+           onReceive={handleReceive}
+           onOpenOperationalPdf={openOperationalPdf}
+           canViewEconomics={canViewEconomics}
+         />
+       </div>
+       {operationalPdfPoId && <OperationalPoPdfModal poId={operationalPdfPoId} onClose={() => setOperationalPdfPoId(null)} />}
 
-    </div>
+     </div>
   )
 }
