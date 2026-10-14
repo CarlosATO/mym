@@ -112,13 +112,50 @@ test('auditoría previa bloquea POST y timeout conserva UNKNOWN con verificació
   assert.match(action, /auditCollectionEventBestEffort/)
 })
 test('botón real requiere confirmación y se deshabilita procesando', () => assert.match(view, /disabled=\{paymentProcessing\}[\s\S]*CONFIRMAR PAGO EN BSALE/))
-test('FAILED visible no permite retry automático en el modal', () => {
+test('estados terminales muestran sólo Cerrar y no permiten segundo POST', () => {
   assert.match(view, /No se pudo registrar el pago/)
   assert.match(view, /El pago NO fue confirmado en Bsale/)
-  assert.match(view, /paymentStatus === 'FAILED'/)
-  assert.match(view, /paymentStatus === 'UNKNOWN' \|\| paymentStatus === 'FAILED'/)
+  assert.match(view, /paymentStatus !== 'IDLE'[\s\S]*>Cerrar<\/Button>/)
+  assert.doesNotMatch(view, /paymentStatus === 'SUCCESS' \|\| paymentStatus === 'UNKNOWN' \|\| paymentStatus === 'FAILED'/)
 })
-test('pago total muestra batch secuencial', () => assert.match(view, /procesarán los documentos secuencialmente/))
+test('modal IDLE conserva Cancelar y Confirmar', () => {
+  assert.match(view, /paymentStatus === 'IDLE'[\s\S]*>Cancelar<\/Button>/)
+  assert.match(view, /paymentStatus === 'IDLE'[\s\S]*CONFIRMAR PAGO EN BSALE/)
+  assert.match(view, /onOpenChange=\{open => \{ if \(!open && !paymentProcessing\)/)
+})
+test('SUCCESS muestra saldos y cierre automático cuando corresponde', () => {
+  assert.match(view, /paymentStatus === 'SUCCESS'/)
+  assert.match(view, /Pago confirmado y reconciliado\./)
+  assert.match(view, /Saldo factura:/)
+  assert.match(view, /Saldo cliente:/)
+  assert.match(view, /Cliente cerrado automáticamente\./)
+})
+test('cantidad efectiva de documentos controla acciones de pago', () => {
+  assert.match(view, /const pendingDocuments = client\.documents\.filter\(document => Number\(document\.pending_amount\) > 0\)/)
+  assert.match(view, /pendingDocuments\.length >= 2[\s\S]*Pagar todas/)
+  assert.match(view, /pendingDocuments\.map\(\(document\)/)
+  assert.match(view, /Pagar todas las facturas/)
+  assert.match(view, /Se procesarán los documentos del cliente uno por uno\./)
+  assert.match(view, /Registrar pago/)
+})
+test('pagar todas mantiene batch secuencial', () => assert.match(view, /Se procesarán los documentos del cliente uno por uno\./))
+test('filtros de cobranza comienzan en Todos', () => {
+  assert.match(view, /useState<'all' \| 'overdue'>\('all'\)/)
+  assert.match(view, /<option value="all">Todos<\/option>/)
+})
+test('selector de vista no muestra etiqueta redundante', () => {
+  assert.doesNotMatch(view, />Vista</)
+  assert.match(view, /Clientes[\s\S]*Facturas/)
+})
+test('Limpiar filtros restaura defaults sin cambiar la vista', () => {
+  const clearBlock = view.match(/const clearFilters = \(\) => \{[\s\S]*?\n  \}/)?.[0] ?? ''
+  assert.match(clearBlock, /setQuery\(''\)/)
+  assert.match(clearBlock, /setScope\('all'\)/)
+  assert.match(clearBlock, /setAge\('0'\)/)
+  assert.match(clearBlock, /setSortMode\(viewMode === 'CLIENTS' \? 'overdue-desc' : 'due-asc'\)/)
+  assert.doesNotMatch(clearBlock, /setViewMode/)
+  assert.match(view, /disabled=\{filtersClean\}[\s\S]*>Limpiar filtros<\/button>/)
+})
 test('documentos muestran saldo pendiente sin input de monto', () => {
   assert.match(view, /Saldo pendiente/)
   assert.doesNotMatch(view, /Monto pago/)

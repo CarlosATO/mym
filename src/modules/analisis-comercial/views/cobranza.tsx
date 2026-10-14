@@ -382,6 +382,7 @@ function ClientPanel({
   const [unknownAttempts, setUnknownAttempts] = useState<Array<{ id: string; documentId: number; status: string }>>([])
   const [unknownBusyId, setUnknownBusyId] = useState<string | null>(null)
   const [unknownResolution, setUnknownResolution] = useState<Record<number, { outcome: string; message: string }>>({})
+  const pendingDocuments = client.documents.filter(document => Number(document.pending_amount) > 0)
   const message = buildCollectionMessage(client)
 
   const copyMessage = async () => {
@@ -583,7 +584,7 @@ function ClientPanel({
           {copied ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}
           {copied ? 'Mensaje copiado' : 'Copiar mensaje de cobranza'}
         </button>
-        <button type="button" disabled={paymentBusy} onClick={() => void prepareBatch()} className="mt-2 inline-flex items-center gap-2 border border-[#72383D]/30 bg-white px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">{batchPreparing && <LoaderCircle className="h-3 w-3 animate-spin" />}{batchPreparing ? 'Consultando saldos en Bsale…' : 'Registrar pago total'}</button>
+         {pendingDocuments.length >= 2 && <button type="button" disabled={paymentBusy} onClick={() => void prepareBatch()} className="mt-2 inline-flex items-center gap-2 border border-[#72383D]/30 bg-white px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">{batchPreparing && <LoaderCircle className="h-3 w-3 animate-spin" />}{batchPreparing ? 'Consultando saldos en Bsale…' : 'Pagar todas'}</button>}
         {batchError && <p className="mt-2 text-[10px] text-[#8A4B4B]">{batchError}</p>}
         <button type="button" disabled={paymentBusy} onClick={() => { setInteractionError(null); setInteractionOpen(true) }} className="mt-2 inline-flex items-center gap-2 border border-[#72383D]/30 bg-white px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">Agregar nota</button>
 
@@ -612,7 +613,7 @@ function ClientPanel({
           </DialogContent>
         </Dialog>
 
-         <Dialog open={Boolean(paymentPreview)} onOpenChange={open => { if (!open && !paymentBusy) setPaymentPreview(null) }}>
+         <Dialog open={Boolean(paymentPreview)} onOpenChange={open => { if (!open && !paymentProcessing) setPaymentPreview(null) }}>
           <DialogContent className="border-[#D1C7BD] bg-[#FCFBF9] text-[#322D29]">
             <DialogHeader>
               <DialogTitle>Confirmar pago en Bsale</DialogTitle>
@@ -633,12 +634,13 @@ function ClientPanel({
               <p><strong>Fecha:</strong> {dateLabel(paymentPreview.recordDate)}</p>
               <p className="mt-3 border border-[#B38A55]/40 bg-[#F6EFE2] px-3 py-2 text-[11px] text-[#806238]">Esta acción registrará un pago real en Bsale.</p>
             </div>}
-              {paymentStatus === 'SUCCESS' && paymentResult && <p className="border border-[#66856B]/40 bg-[#EDF4EC] px-3 py-2 text-[11px] text-[#426247]">Pago confirmado y reconciliado. Saldo factura: <strong>{money(paymentResult.documentBalance)}</strong>. Saldo cliente: <strong>{money(paymentResult.clientBalance)}</strong>{paymentResult.clientBalance === 0 ? ' · Cliente cerrado automáticamente.' : ''}</p>}
+               {paymentStatus === 'SUCCESS' && paymentResult && <div className="border border-[#66856B]/40 bg-[#EDF4EC] px-3 py-2 text-[11px] text-[#426247]"><p className="font-semibold">Pago confirmado y reconciliado.</p><p className="mt-1">Saldo factura: <strong>{money(paymentResult.documentBalance)}</strong>. Saldo cliente: <strong>{money(paymentResult.clientBalance)}</strong>{paymentResult.clientBalance === 0 && ' · Cliente cerrado automáticamente.'}</p></div>}
               {paymentStatus === 'FAILED' && <div className="border border-[#A45B58]/40 bg-[#F5E8E4] px-3 py-2 text-[11px] text-[#8A4B4B]"><p className="font-semibold">No se pudo registrar el pago</p><p className="mt-1">El pago NO fue confirmado en Bsale.</p><p className="mt-1">Detalle: {paymentError ?? 'No fue posible completar el registro interno del pago.'}</p></div>}
               {paymentStatus === 'UNKNOWN' && <p className="border border-[#B38A55]/40 bg-[#F6EFE2] px-3 py-2 text-[11px] text-[#806238]">Estado incierto: no reintentes automáticamente. Verifica el pago en Bsale y revisa la conciliación.</p>}
-              <DialogFooter>
-                <Button type="button" variant="outline" disabled={paymentProcessing} onClick={() => setPaymentPreview(null)}>{paymentStatus === 'FAILED' ? 'Cerrar' : 'Cancelar'}</Button>
-                <Button type="button" disabled={paymentProcessing || paymentStatus === 'SUCCESS' || paymentStatus === 'UNKNOWN' || paymentStatus === 'FAILED'} onClick={() => void confirmPayment()}>{paymentProcessing ? 'Registrando y verificando…' : 'CONFIRMAR PAGO EN BSALE'}</Button>
+               <DialogFooter>
+                 {paymentStatus === 'IDLE' && <Button type="button" variant="outline" disabled={paymentProcessing} onClick={() => setPaymentPreview(null)}>Cancelar</Button>}
+                 {paymentStatus === 'IDLE' && <Button type="button" disabled={paymentProcessing} onClick={() => void confirmPayment()}>{paymentProcessing ? 'Registrando y verificando…' : 'CONFIRMAR PAGO EN BSALE'}</Button>}
+                 {paymentStatus !== 'IDLE' && <Button type="button" onClick={() => setPaymentPreview(null)}>Cerrar</Button>}
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -646,8 +648,8 @@ function ClientPanel({
          <Dialog open={Boolean(batchPreview)} onOpenChange={open => { if (!open && !batchProcessing) setBatchPreview(null) }}>
           <DialogContent className="border-[#D1C7BD] bg-[#FCFBF9] text-[#322D29]">
             <DialogHeader>
-              <DialogTitle>Registrar pago total</DialogTitle>
-              <DialogDescription>Se procesarán los documentos secuencialmente, uno por uno.</DialogDescription>
+              <DialogTitle>Pagar todas las facturas</DialogTitle>
+              <DialogDescription>Se procesarán los documentos del cliente uno por uno.</DialogDescription>
             </DialogHeader>
                {batchPreview && <div className="space-y-2 text-xs">
               <p className="font-semibold">{client.name}</p>
@@ -670,7 +672,7 @@ function ClientPanel({
             <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#72383D]">Documentos pendientes</p>
           </div>
           <div className="divide-y divide-[#D1C7BD]/70">
-            {client.documents.map((document) => {
+            {pendingDocuments.map((document) => {
                const dueToday = document.expiration_date === cutoffDate
                const visibleStatus = document.overdue ? 'Vencida' : dueToday ? 'Adeudada · vence hoy' : 'Adeudada'
                const unknownAttempt = unknownAttempts.find(attempt => attempt.documentId === document.document_id)
@@ -729,7 +731,7 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
   type ClientSort = 'overdue-desc' | 'age-desc' | 'total-desc' | 'total-asc' | 'name-asc'
   type InvoiceSort = 'due-asc' | 'due-desc' | 'amount-desc' | 'amount-asc' | 'name-asc'
   const [query, setQuery] = useState('')
-  const [scope, setScope] = useState<'all' | 'overdue'>('overdue')
+  const [scope, setScope] = useState<'all' | 'overdue'>('all')
   const [age, setAge] = useState('0')
   const [viewMode, setViewMode] = useState<ViewMode>('CLIENTS')
   const [sortMode, setSortMode] = useState<ClientSort | InvoiceSort>('overdue-desc')
@@ -853,6 +855,13 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
     setViewMode(nextView)
     setSortMode(nextView === 'CLIENTS' ? 'overdue-desc' : 'due-asc')
   }
+  const clearFilters = () => {
+    setQuery('')
+    setScope('all')
+    setAge('0')
+    setSortMode(viewMode === 'CLIENTS' ? 'overdue-desc' : 'due-asc')
+  }
+  const filtersClean = query === '' && scope === 'all' && age === '0' && sortMode === (viewMode === 'CLIENTS' ? 'overdue-desc' : 'due-asc')
   const kpis = viewMode === 'CLIENTS'
     ? calculateCobranzaClientKpis(visibleClients)
     : calculateCobranzaInvoiceKpis(visibleInvoices)
@@ -884,7 +893,7 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
             <p className="mt-0.5 text-[10px] text-[#322D29]/50">Ordenada por deuda vencida, antigüedad y saldo total.</p>
           </div>
           <div className="flex w-full flex-wrap items-center gap-1.5 lg:w-auto">
-             <div className="flex items-center gap-1 border border-[#D1C7BD] bg-white p-0.5 text-[10px] font-semibold"><span className="px-1 text-[#322D29]/45">Vista</span><button type="button" onClick={() => changeView('CLIENTS')} className={`px-1.5 py-1 ${viewMode === 'CLIENTS' ? 'bg-[#72383D] text-white' : 'text-[#72383D]'}`}>Clientes</button><button type="button" onClick={() => changeView('INVOICES')} className={`px-1.5 py-1 ${viewMode === 'INVOICES' ? 'bg-[#72383D] text-white' : 'text-[#72383D]'}`}>Facturas</button></div>
+              <div className="flex items-center gap-1 border border-[#D1C7BD] bg-white p-0.5 text-[10px] font-semibold"><button type="button" onClick={() => changeView('CLIENTS')} className={`px-1.5 py-1 ${viewMode === 'CLIENTS' ? 'bg-[#72383D] text-white' : 'text-[#72383D]'}`}>Clientes</button><button type="button" onClick={() => changeView('INVOICES')} className={`px-1.5 py-1 ${viewMode === 'INVOICES' ? 'bg-[#72383D] text-white' : 'text-[#72383D]'}`}>Facturas</button></div>
              <label className="relative">
                <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#322D29]/40" />
                 <input value={query} onChange={event => setQuery(event.target.value)} placeholder={viewMode === 'CLIENTS' ? 'Buscar cliente' : 'Buscar cliente o folio'} className="h-8 w-full min-w-[220px] border border-[#D1C7BD] bg-white pl-7 pr-2 text-xs outline-none focus:border-[#72383D] sm:w-52" />
@@ -901,8 +910,9 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
              </select>
              <label className="flex h-8 items-center gap-1 border border-[#D1C7BD] bg-white px-2 text-xs"><span className="text-[#322D29]/50">Ordenar</span><select value={sortMode} onChange={event => setSortMode(event.target.value as ClientSort | InvoiceSort)} className="bg-transparent text-xs text-[#322D29] outline-none">
                {viewMode === 'CLIENTS' ? <><option value="overdue-desc">Deuda vencida: mayor a menor</option><option value="age-desc">Antigüedad: mayor primero</option><option value="total-desc">Deuda total: mayor a menor</option><option value="total-asc">Deuda total: menor a mayor</option><option value="name-asc">Cliente: A–Z</option></> : <><option value="due-asc">Vencimiento: más antiguo primero</option><option value="due-desc">Vencimiento: más reciente primero</option><option value="amount-desc">Monto: mayor a menor</option><option value="amount-asc">Monto: menor a mayor</option><option value="name-asc">Cliente: A–Z</option></>}
-             </select></label>
-           </div>
+              </select></label>
+              <button type="button" onClick={clearFilters} disabled={filtersClean} className="h-8 border border-[#D1C7BD] px-2 text-xs text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-40">Limpiar filtros</button>
+            </div>
          </div>
 
            {viewMode === 'CLIENTS' ? <DndContext sensors={sensors} onDragStart={handleDragStart} onDragCancel={() => setActiveDragClientId(null)} onDragEnd={handleDragEnd}>
