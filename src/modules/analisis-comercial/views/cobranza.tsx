@@ -21,8 +21,9 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Button } from '@/components/ui/button'
 import type { FinanceReceivablesAnalysis } from '@/lib/control-financiero/finance-api'
-import { FINANCE_RECEIVABLES_SNAPSHOT_SOURCE } from '@/lib/control-financiero/types'
+import { formatReceivablesSnapshotAt, getReceivablesFreshness } from '@/lib/control-financiero/receivables-freshness'
 import { applyCobranzaPaymentOverlay, buildCobranzaClients, buildCobranzaInvoices, calculateCobranzaClientKpis, calculateCobranzaInvoiceKpis, type CobranzaClient } from '../lib/cobranza-metrics'
+import { CobranzaFreshnessNotice } from '../components/cobranza-freshness-notice'
 import { getCollectionCustomerHistory, getCollectionPaymentOverlay, getCollectionWorkflow, prepareCollectionCustomerBatch, prepareCollectionPayment, registerCollectionCustomerBatch, registerCollectionInteraction, registerCollectionPayment, reopenCollectionCustomersWithDebt, updateCollectionStage, type CollectionHistoryEvent, type CollectionInteractionType, type CollectionPaymentOverlay, type CollectionStage } from '@/app/actions/comercial/cobranza-workflow'
 
 const stages: Array<{ key: CollectionStage; label: string }> = [
@@ -738,7 +739,10 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
   if (error || !data) {
     return <main className="min-h-[430px] bg-[#EFE9E1] px-4 py-5 sm:px-5 sm:py-6 lg:px-6"><div className="border border-[#72383D]/25 bg-white/60 px-5 py-8 text-sm text-[#72383D]">{error ?? 'No hay datos de cobranza disponibles.'}</div></main>
   }
-  const isSnapshot = data.receivables_source === FINANCE_RECEIVABLES_SNAPSHOT_SOURCE
+  const freshness = data.freshness_status
+    ? { status: data.freshness_status, ageMinutes: data.snapshot_age_minutes ?? null }
+    : getReceivablesFreshness(data.snapshot_at)
+  const snapshotLabel = formatReceivablesSnapshotAt(data.snapshot_at)
   const normalizedQuery = normalize(query.trim())
   const minimumAge = Number(age)
   const visibleClients = clients.filter((client) => {
@@ -825,20 +829,20 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
             <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#72383D]">Cobranza</p>
             <h1 className="mt-1 text-xl font-semibold tracking-[-0.03em] text-[#322D29]">Gestión de cartera y clientes</h1>
           </div>
-          <div className="text-right text-[10px] text-[#322D29]/55">
-            <p>{isSnapshot ? `Snapshot ${dateLabel(data.snapshot_date ?? null)}` : 'Fuente histórica'}</p>
+          <div className="flex min-w-[220px] flex-col items-stretch gap-2 text-[10px] text-[#322D29]/55">
+            <CobranzaFreshnessNotice status={freshness.status} snapshotLabel={snapshotLabel} />
             <p>{data.summary.pending_documents} documentos pendientes</p>
           </div>
         </div>
 
-        <div className="mt-4 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-4">
-           <Kpi label="CxC total" value={money(kpis.totalAmount)} />
-           <Kpi label="CxC vencida" value={money(kpis.overdueAmount)} />
-           <Kpi label="Clientes con saldo" value={kpis.clientsWithBalance.toLocaleString('es-CL')} />
-           <Kpi label="Clientes con deuda vencida" value={kpis.clientsWithOverdueDebt.toLocaleString('es-CL')} />
-        </div>
+         <div className="mt-4 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-4">
+            <Kpi label="CxC total" value={money(kpis.totalAmount)} />
+            <Kpi label="CxC vencida" value={money(kpis.overdueAmount)} />
+            <Kpi label="Clientes con saldo" value={kpis.clientsWithBalance.toLocaleString('es-CL')} />
+            <Kpi label="Clientes con deuda vencida" value={kpis.clientsWithOverdueDebt.toLocaleString('es-CL')} />
+         </div>
 
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-b border-[#D1C7BD] pb-3">
+         <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-b border-[#D1C7BD] pb-3">
           <div className="min-w-0">
             <h2 className="text-sm font-semibold text-[#322D29]">Cobranza priorizada</h2>
             <p className="mt-0.5 text-[10px] text-[#322D29]/50">Ordenada por deuda vencida, antigüedad y saldo total.</p>

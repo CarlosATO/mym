@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { getActiveCompanyId } from '@/app/actions/companies'
+import { getReceivablesFreshness, type ReceivablesFreshnessStatus } from './receivables-freshness'
 import type { FinanceReceivablesSource } from './types'
 
 export type FinanceMonthlyAmount = {
@@ -268,6 +269,8 @@ export type FinanceReceivablesResponse = {
     clients_error?: number
     coverage_percent?: number
     is_provisional?: boolean
+    freshness_status?: ReceivablesFreshnessStatus
+    snapshot_age_minutes?: number | null
   }
 }
 
@@ -323,6 +326,8 @@ export type FinanceReceivablesAnalysis = {
   clients_error?: number
   coverage_percent?: number
   is_provisional?: boolean
+  freshness_status?: ReceivablesFreshnessStatus
+  snapshot_age_minutes?: number | null
   summary: {
     receivable_amount: string
     overdue_amount: string
@@ -637,7 +642,16 @@ export async function getFinanceReceivablesAnalysis(year: number, period: number
     if (!response.ok) {
       return { ok: false, status: response.status, message: await readFinanceApiError(response, 'No se pudo cargar el análisis de cobranza.') }
     }
-    return { ok: true, data: await response.json() as FinanceReceivablesAnalysis }
+    const data = await response.json() as FinanceReceivablesAnalysis
+    const freshness = getReceivablesFreshness(data.snapshot_at)
+    return {
+      ok: true,
+      data: {
+        ...data,
+        freshness_status: freshness.status,
+        snapshot_age_minutes: freshness.ageMinutes,
+      },
+    }
   } catch (error) {
     return financeApiFailure(error, 'Finance API no está disponible.')
   }
