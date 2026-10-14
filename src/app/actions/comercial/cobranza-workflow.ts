@@ -56,6 +56,43 @@ export async function getCollectionWorkflow(clientIds: number[]) {
   return data ?? []
 }
 
+export type RecentClosedCollectionCustomer = {
+  clientId: number
+  name: string
+  code: string | null
+  closedAt: string
+}
+
+export async function getRecentClosedCollectionCustomers(): Promise<RecentClosedCollectionCustomer[]> {
+  const { companyId } = await context()
+  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+  const { data: workflows, error: workflowError } = await db().from('collection_customer_workflow')
+    .select('client_id').eq('company_id', companyId).eq('stage', 'CLOSED')
+  if (workflowError) throw new Error(workflowError.message)
+  const clientIds = (workflows ?? []).map(row => Number(row.client_id)).filter(Number.isInteger)
+  if (clientIds.length === 0) return []
+  const { data: events, error: eventError } = await db().from('collection_customer_events')
+    .select('client_id,created_at').eq('company_id', companyId).eq('event_type', 'PAYMENT_CLOSED')
+    .in('client_id', clientIds).gte('created_at', cutoff).order('created_at', { ascending: false })
+  if (eventError) throw new Error(eventError.message)
+  const latestByClient = new Map<number, string>()
+  for (const event of events ?? []) {
+    const clientId = Number(event.client_id)
+    if (!latestByClient.has(clientId)) latestByClient.set(clientId, String(event.created_at))
+  }
+  const recentIds = [...latestByClient.keys()]
+  if (recentIds.length === 0) return []
+  const { data: clients, error: clientsError } = await createAdminClient().schema('integraciones')
+    .from('bsale_clients').select('bsale_client_id,code,business_name,first_name,last_name').eq('company_id', companyId).in('bsale_client_id', recentIds)
+  if (clientsError) throw new Error(clientsError.message)
+  const clientMap = new Map((clients ?? []).map(client => [Number(client.bsale_client_id), client]))
+  return recentIds.map(clientId => {
+    const client = clientMap.get(clientId)
+    const name = client?.business_name || [client?.first_name, client?.last_name].filter(Boolean).join(' ').trim() || `Cliente #${clientId}`
+    return { clientId, name, code: client?.code ?? null, closedAt: latestByClient.get(clientId) as string }
+  })
+}
+
 export type CollectionPaymentOverlay = {
   clientId: number
   documentId: number

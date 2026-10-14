@@ -24,7 +24,7 @@ import type { FinanceReceivablesAnalysis } from '@/lib/control-financiero/financ
 import { formatReceivablesSnapshotAt, getReceivablesFreshness } from '@/lib/control-financiero/receivables-freshness'
 import { applyCobranzaPaymentOverlay, buildCobranzaClients, buildCobranzaInvoices, calculateCobranzaClientKpis, calculateCobranzaInvoiceKpis, type CobranzaClient } from '../lib/cobranza-metrics'
 import { CobranzaFreshnessNotice } from '../components/cobranza-freshness-notice'
-import { getCollectionCustomerHistory, getCollectionPaymentOverlay, getCollectionWorkflow, getUnknownCollectionPaymentAttempts, prepareCollectionCustomerBatch, prepareCollectionPayment, registerCollectionCustomerBatch, registerCollectionInteraction, registerCollectionPayment, reopenCollectionCustomersWithDebt, resolveUnknownCollectionPayment, updateCollectionStage, type CollectionHistoryEvent, type CollectionInteractionType, type CollectionPaymentOverlay, type CollectionStage } from '@/app/actions/comercial/cobranza-workflow'
+import { getCollectionCustomerHistory, getCollectionPaymentOverlay, getCollectionWorkflow, getRecentClosedCollectionCustomers, getUnknownCollectionPaymentAttempts, prepareCollectionCustomerBatch, prepareCollectionPayment, registerCollectionCustomerBatch, registerCollectionInteraction, registerCollectionPayment, reopenCollectionCustomersWithDebt, resolveUnknownCollectionPayment, updateCollectionStage, type CollectionHistoryEvent, type CollectionInteractionType, type CollectionPaymentOverlay, type CollectionStage, type RecentClosedCollectionCustomer } from '@/app/actions/comercial/cobranza-workflow'
 
 const stages: Array<{ key: CollectionStage; label: string }> = [
   { key: 'TO_MANAGE', label: 'Por gestionar' },
@@ -33,7 +33,7 @@ const stages: Array<{ key: CollectionStage; label: string }> = [
   { key: 'FOLLOW_UP', label: 'Seguimiento' },
 ]
 
-const kanbanStages: Array<{ key: CollectionStage; label: string }> = [...stages, { key: 'CLOSED', label: 'Cerrado' }]
+const kanbanStages: Array<{ key: CollectionStage; label: string }> = [...stages, { key: 'CLOSED', label: 'Cerrados recientes' }]
 
 type WorkflowState = {
   stage: CollectionStage
@@ -306,9 +306,9 @@ function ClientKanbanCard({
       {stage === 'FOLLOW_UP' && workflow?.next_action_at && <p className="mt-2 text-[10px] text-[#806238]">Seguimiento {dateLabel(workflow.next_action_at)}</p>}
       {!isOverlay && <div className="mt-2 flex flex-wrap gap-1 border-t border-[#D1C7BD]/70 pt-2">
         <button type="button" onPointerDown={stopCardInteraction} onClick={copyMessage} className="min-w-[100px] flex-1 border border-[#72383D]/25 px-1.5 py-1 text-[9px] font-semibold text-[#72383D] hover:bg-[#F5EDE9]">{copied ? 'Mensaje copiado' : 'Copiar mensaje'}</button>
-        <button type="button" onPointerDown={stopCardInteraction} onClick={event => { event.stopPropagation(); onAddNote() }} className="min-w-[100px] flex-1 border border-[#D1C7BD] px-1.5 py-1 text-[9px] font-semibold text-[#322D29] hover:bg-[#F5F0EA]">Agregar nota</button>
-      </div>}
-    </div>
+         <button type="button" onPointerDown={stopCardInteraction} onClick={event => { event.stopPropagation(); onAddNote() }} className="min-w-[100px] flex-1 border border-[#D1C7BD] px-1.5 py-1 text-[9px] font-semibold text-[#322D29] hover:bg-[#F5F0EA]">Agregar nota</button>
+            </div>}
+     </div>
   )
 }
 
@@ -318,21 +318,27 @@ function ClientKanbanColumn({
   workflow,
   onOpen,
   onAddNote,
+  closedRecent = [],
+  onOpenClosed,
 }: {
   stage: { key: CollectionStage; label: string }
   clients: CobranzaClient[]
   workflow: Record<number, WorkflowState>
   onOpen: (client: CobranzaClient) => void
   onAddNote: (client: CobranzaClient) => void
+  closedRecent?: RecentClosedCollectionCustomer[]
+  onOpenClosed?: (client: RecentClosedCollectionCustomer) => void
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `collection-stage-${stage.key}`, data: { stage: stage.key }, disabled: stage.key === 'CLOSED' })
   return (
     <section ref={setNodeRef} className={`min-w-[240px] border bg-[#F5F0EA] transition-colors ${isOver && stage.key !== 'CLOSED' ? 'border-[#72383D] bg-[#F1E4DD]' : 'border-[#D1C7BD]'}`}>
-      <header className="border-b border-[#D1C7BD] px-3 py-2"><div className="flex items-center justify-between"><h3 className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#72383D]">{stage.label}</h3><span className="text-[10px] text-[#322D29]/50">{clients.length}</span></div></header>
-      <div className="space-y-2 p-2">
-        {clients.map(client => <ClientKanbanCard key={client.key} client={client} stage={stage.key} workflow={workflow[client.clientId]} onOpen={() => onOpen(client)} onAddNote={() => onAddNote(client)} />)}
-        {clients.length === 0 && <p className="px-2 py-5 text-center text-[10px] text-[#322D29]/45">Sin clientes</p>}
-      </div>
+       <header className="border-b border-[#D1C7BD] px-3 py-2"><div className="flex items-center justify-between"><h3 className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#72383D]">{stage.label}</h3><span className="text-[10px] text-[#322D29]/50">{stage.key === 'CLOSED' ? closedRecent.length : clients.length}</span></div></header>
+       <div className="space-y-2 p-2">
+         {stage.key === 'CLOSED'
+           ? closedRecent.map(client => <button key={client.clientId} type="button" onClick={() => onOpenClosed?.(client)} className="w-full border border-[#D1C7BD] bg-white p-2.5 text-left hover:border-[#72383D]"><span className="block break-words text-xs font-semibold">{client.name}</span><span className="mt-2 block text-[10px] text-[#322D29]/65">Saldo $0</span><span className="mt-1 block text-[10px] text-[#322D29]/55">Cerrado {dateTimeLabel(client.closedAt)}</span><span className="mt-2 block border-t border-[#D1C7BD]/70 pt-2 text-[9px] font-semibold text-[#72383D]">Ver bitácora</span></button>)
+           : clients.map(client => <ClientKanbanCard key={client.key} client={client} stage={stage.key} workflow={workflow[client.clientId]} onOpen={() => onOpen(client)} onAddNote={() => onAddNote(client)} />)}
+         {((stage.key === 'CLOSED' ? closedRecent.length : clients.length) === 0) && <p className="px-2 py-5 text-center text-[10px] text-[#322D29]/45">Sin clientes</p>}
+       </div>
     </section>
   )
 }
@@ -342,6 +348,7 @@ function ClientPanel({
   cutoffDate,
   stage,
   focusedDocumentId,
+  historicalClosed,
   onPaymentReconciled,
   onStageChange,
   onClose,
@@ -350,10 +357,12 @@ function ClientPanel({
   cutoffDate: string
   stage: CollectionStage
   focusedDocumentId?: number | null
+  historicalClosed?: RecentClosedCollectionCustomer | null
   onPaymentReconciled?: (documentId: number, documentBalance: number, clientBalance: number) => void
   onStageChange: (input: StageChangeInput) => Promise<void>
   onClose: () => void
 }) {
+  const isHistoricalClosed = Boolean(historicalClosed)
   const [copied, setCopied] = useState(false)
   const [paymentPreview, setPaymentPreview] = useState<{ documentId: number; amount: string; liveBalance: number; snapshotBalance: number; paymentTypes: Array<{ id: number; label: string; name: string }>; paymentTypeId: number | null; recordDate: string } | null>(null)
   const [paymentError, setPaymentError] = useState<string | null>(null)
@@ -573,25 +582,27 @@ function ClientPanel({
       </SheetHeader>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-        <div className="grid grid-cols-2 gap-px border border-[#D1C7BD] bg-[#D1C7BD] sm:grid-cols-4">
+        {!isHistoricalClosed && <div className="grid grid-cols-2 gap-px border border-[#D1C7BD] bg-[#D1C7BD] sm:grid-cols-4">
           <div className="bg-white px-2.5 py-2"><p className="text-[9px] uppercase tracking-[0.08em] text-[#AC9C8D]">Deuda total</p><p className="mt-1 text-sm font-semibold tabular-nums">{money(client.totalAmount)}</p></div>
           <div className="bg-white px-2.5 py-2"><p className="text-[9px] uppercase tracking-[0.08em] text-[#AC9C8D]">Vencida</p><p className="mt-1 text-sm font-semibold tabular-nums text-[#8A4B4B]">{money(client.overdueAmount)}</p></div>
           <div className="bg-white px-2.5 py-2"><p className="text-[9px] uppercase tracking-[0.08em] text-[#AC9C8D]">Documentos</p><p className="mt-1 text-sm font-semibold tabular-nums">{client.pendingDocuments}</p></div>
           <div className="bg-white px-2.5 py-2"><p className="text-[9px] uppercase tracking-[0.08em] text-[#AC9C8D]">Prioridad</p><div className="mt-1"><Priority value={client.priority} /></div></div>
-        </div>
+        </div>}
 
-        <button type="button" onClick={copyMessage} className="mt-4 flex items-center gap-2 border border-[#72383D]/30 bg-[#F5EDE9] px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#EDD9D3]">
+        {!isHistoricalClosed && <button type="button" onClick={copyMessage} className="mt-4 flex items-center gap-2 border border-[#72383D]/30 bg-[#F5EDE9] px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#EDD9D3]">
           {copied ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}
           {copied ? 'Mensaje copiado' : 'Copiar mensaje de cobranza'}
-        </button>
-         {pendingDocuments.length >= 2 && <button type="button" disabled={paymentBusy} onClick={() => void prepareBatch()} className="mt-2 inline-flex items-center gap-2 border border-[#72383D]/30 bg-white px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">{batchPreparing && <LoaderCircle className="h-3 w-3 animate-spin" />}{batchPreparing ? 'Consultando saldos en Bsale…' : 'Pagar todas'}</button>}
+        </button>}
+         {!isHistoricalClosed && pendingDocuments.length >= 2 && <button type="button" disabled={paymentBusy} onClick={() => void prepareBatch()} className="mt-2 inline-flex items-center gap-2 border border-[#72383D]/30 bg-white px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">{batchPreparing && <LoaderCircle className="h-3 w-3 animate-spin" />}{batchPreparing ? 'Consultando saldos en Bsale…' : 'Pagar todas'}</button>}
         {batchError && <p className="mt-2 text-[10px] text-[#8A4B4B]">{batchError}</p>}
-        <button type="button" disabled={paymentBusy} onClick={() => { setInteractionError(null); setInteractionOpen(true) }} className="mt-2 inline-flex items-center gap-2 border border-[#72383D]/30 bg-white px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">Agregar nota</button>
+        {!isHistoricalClosed && <button type="button" disabled={paymentBusy} onClick={() => { setInteractionError(null); setInteractionOpen(true) }} className="mt-2 inline-flex items-center gap-2 border border-[#72383D]/30 bg-white px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">Agregar nota</button>}
 
-        <div className="mt-4 border border-[#D1C7BD] bg-white p-3">
-          <label className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#72383D]">Etapa de cobranza</label>
-          <StagePicker stage={stage} onChange={requestStage} />
-        </div>
+         <div className="mt-4 border border-[#D1C7BD] bg-white p-3">
+           <label className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#72383D]">Etapa de cobranza</label>
+           {isHistoricalClosed ? <p className="mt-2 text-xs font-semibold">Cerrado</p> : <StagePicker stage={stage} onChange={requestStage} />}
+         </div>
+
+         {isHistoricalClosed && <div className="mt-4 border border-[#D1C7BD] bg-white p-3 text-xs"><p><strong>Saldo:</strong> $0</p><p className="mt-1"><strong>Cerrado:</strong> {dateTimeLabel(historicalClosed?.closedAt ?? '')}</p></div>}
 
         <CollectionStageDialog key={`drawer-stage-${pendingStage ?? 'closed'}`} open={Boolean(pendingStage)} clientName={client.name} clientTotal={client.totalAmount} currentStage={stage} nextStage={pendingStage} onOpenChange={open => { if (!open) setPendingStage(null) }} onSave={saveStage} />
 
@@ -613,7 +624,7 @@ function ClientPanel({
           </DialogContent>
         </Dialog>
 
-         <Dialog open={Boolean(paymentPreview)} onOpenChange={open => { if (!open && !paymentProcessing) setPaymentPreview(null) }}>
+          {!isHistoricalClosed && <Dialog open={Boolean(paymentPreview)} onOpenChange={open => { if (!open && !paymentProcessing) setPaymentPreview(null) }}>
           <DialogContent className="border-[#D1C7BD] bg-[#FCFBF9] text-[#322D29]">
             <DialogHeader>
               <DialogTitle>Confirmar pago en Bsale</DialogTitle>
@@ -643,9 +654,9 @@ function ClientPanel({
                  {paymentStatus !== 'IDLE' && <Button type="button" onClick={() => setPaymentPreview(null)}>Cerrar</Button>}
             </DialogFooter>
           </DialogContent>
-        </Dialog>
+         </Dialog>}
 
-         <Dialog open={Boolean(batchPreview)} onOpenChange={open => { if (!open && !batchProcessing) setBatchPreview(null) }}>
+         {!isHistoricalClosed && <Dialog open={Boolean(batchPreview)} onOpenChange={open => { if (!open && !batchProcessing) setBatchPreview(null) }}>
           <DialogContent className="border-[#D1C7BD] bg-[#FCFBF9] text-[#322D29]">
             <DialogHeader>
               <DialogTitle>Pagar todas las facturas</DialogTitle>
@@ -665,12 +676,12 @@ function ClientPanel({
                <Button type="button" disabled={batchProcessing || Boolean(batchResult)} onClick={() => void confirmBatch()}>{batchProcessing ? 'Registrando y verificando…' : 'CONFIRMAR PAGOS EN BSALE'}</Button>
             </DialogFooter>
           </DialogContent>
-        </Dialog>
+         </Dialog>}
 
-        <div className="mt-5 border border-[#D1C7BD] bg-white">
+         {!isHistoricalClosed && <div className="mt-5 border border-[#D1C7BD] bg-white">
           <div className="border-b border-[#D1C7BD] bg-[#F5F0EA] px-3 py-2">
-            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#72383D]">Documentos pendientes</p>
-          </div>
+             <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#72383D]">Documentos pendientes</p>
+           </div>
           <div className="divide-y divide-[#D1C7BD]/70">
             {pendingDocuments.map((document) => {
                const dueToday = document.expiration_date === cutoffDate
@@ -696,8 +707,8 @@ function ClientPanel({
               )
             })}
            </div>
-         </div>
-         <section className="mt-5 border border-[#D1C7BD] bg-white">
+           </div>}
+          <section className="mt-5 border border-[#D1C7BD] bg-white">
            <div className="border-b border-[#D1C7BD] bg-[#F5F0EA] px-3 py-2">
              <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#72383D]">Bitácora de cobranza</p>
            </div>
@@ -715,8 +726,8 @@ function ClientPanel({
                 {event.eventType === 'COMMITMENT' && (event.commitmentDate || event.commitmentAmount !== null) && <p className="mt-2 text-[10px] text-[#806238]">{event.commitmentDate && <>Fecha: {dateLabel(event.commitmentDate)}</>}{event.commitmentDate && event.commitmentAmount !== null && ' · '}{event.commitmentAmount !== null && <>Monto: {money(event.commitmentAmount)}</>}</p>}
                 {event.nextActionAt && <p className="mt-2 text-[10px] text-[#806238]">Próxima gestión: {dateLabel(event.nextActionAt)}</p>}
                 {event.note && <p className="mt-3 whitespace-pre-wrap border-l-2 border-[#72383D] bg-[#F5EDE9] px-3 py-2 text-[13px] leading-5 text-[#322D29]">{event.note}</p>}
-              </article>)}
-           </div>}
+               </article>)}
+            </div>}
            {!historyLoading && !historyError && historyHasMore && <button type="button" onClick={() => { setHistoryExpanded(true); void refreshHistory(100) }} className="border-t border-[#D1C7BD] px-3 py-2 text-[10px] font-semibold text-[#72383D] hover:bg-[#F5F0EA]">Ver historial completo</button>}
          </section>
          {paymentError && <p className="mt-3 border border-[#A45B58]/30 bg-[#F5E8E4] px-3 py-2 text-[10px] text-[#8A4B4B]">{paymentError}</p>}
@@ -736,6 +747,7 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
   const [viewMode, setViewMode] = useState<ViewMode>('CLIENTS')
   const [sortMode, setSortMode] = useState<ClientSort | InvoiceSort>('overdue-desc')
   const [selectedClient, setSelectedClient] = useState<CobranzaClient | null>(null)
+  const [selectedClosed, setSelectedClosed] = useState<RecentClosedCollectionCustomer | null>(null)
   const [selectedDocumentId, setSelectedDocumentId] = useState<number | null>(null)
   const [settledDocumentIds, setSettledDocumentIds] = useState<number[]>([])
   const [workflow, setWorkflow] = useState<Record<number, WorkflowState>>({})
@@ -749,19 +761,23 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
   const cutoffDate = data ? data.snapshot_date ?? data.close_date : ''
   const overlayDocuments = data ? applyCobranzaPaymentOverlay(data.documents, paymentOverlay) : []
   const clients = data ? buildCobranzaClients(overlayDocuments, cutoffDate) : []
+  const activeClientIds = new Set(clients.map(client => client.clientId))
   const invoices = buildCobranzaInvoices(clients, cutoffDate)
+  const [closedRecent, setClosedRecent] = useState<RecentClosedCollectionCustomer[]>([])
   useEffect(() => {
     let cancelled = false
     const workflowClients = data ? buildCobranzaClients(data.documents, data.snapshot_date ?? data.close_date) : []
     const loadDirectedState = async () => {
       try {
-        const [rows, workflowRows] = await Promise.all([
+        const [rows, workflowRows, closedRows] = await Promise.all([
           getCollectionPaymentOverlay(workflowClients.map(client => client.clientId), data?.snapshot_at),
           getCollectionWorkflow(workflowClients.map(client => client.clientId)),
+          getRecentClosedCollectionCustomers(),
         ])
         if (cancelled) return
         setPaymentOverlay(rows)
         setWorkflow(Object.fromEntries(workflowRows.map(row => [row.client_id, { ...row, stage: row.stage as CollectionStage }])))
+        setClosedRecent(closedRows)
       } catch {
         // Initial local state loading should not block the Cobranza UI.
       }
@@ -783,6 +799,7 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
   const snapshotLabel = formatReceivablesSnapshotAt(data.snapshot_at)
   const normalizedQuery = normalize(query.trim())
   const minimumAge = Number(age)
+  const visibleClosedRecent = closedRecent.filter(client => !activeClientIds.has(client.clientId)).filter(client => !normalizedQuery || normalize(`${client.name} ${client.code ?? ''}`).includes(normalizedQuery))
   const visibleClients = clients.filter((client) => {
     const matchesQuery = !normalizedQuery || normalize(`${client.name} ${client.code ?? ''}`).includes(normalizedQuery)
     const matchesScope = scope === 'all' || client.overdueAmount > 0
@@ -813,7 +830,13 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
   })
   const selectClient = (client: CobranzaClient, documentId?: number) => {
     setSelectedClient(client)
+    setSelectedClosed(null)
     setSelectedDocumentId(documentId ?? null)
+  }
+  const selectClosed = (closed: RecentClosedCollectionCustomer) => {
+    setSelectedClosed(closed)
+    setSelectedClient({ key: `closed-${closed.clientId}`, clientId: closed.clientId, name: closed.name, code: closed.code, totalAmount: 0, overdueAmount: 0, pendingDocuments: 0, oldestExpirationDate: null, oldestDaysOverdue: 0, documents: [], priority: 'Normal' })
+    setSelectedDocumentId(null)
   }
   const saveQuickInteraction = async (input: { type: CollectionInteractionType; body: string }) => {
     if (!quickNoteClient) return
@@ -872,8 +895,8 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
         <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#D1C7BD] pb-4">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#72383D]">Cobranza</p>
-            <h1 className="mt-1 text-xl font-semibold tracking-[-0.03em] text-[#322D29]">Gestión de cartera y clientes</h1>
-          </div>
+             <h1 className="mt-1 text-xl font-semibold tracking-[-0.03em] text-[#322D29]">Gestión de cartera y clientes</h1>
+           </div>
           <div className="flex min-w-[220px] flex-col items-stretch gap-2 text-[10px] text-[#322D29]/55">
             <CobranzaFreshnessNotice status={freshness.status} snapshotLabel={snapshotLabel} />
             <p>{data.summary.pending_documents} documentos pendientes</p>
@@ -918,7 +941,7 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
            {viewMode === 'CLIENTS' ? <DndContext sensors={sensors} onDragStart={handleDragStart} onDragCancel={() => setActiveDragClientId(null)} onDragEnd={handleDragEnd}>
               <div className="mt-3 overflow-x-auto pb-2">
                 <div className="grid min-w-[1240px] grid-cols-[repeat(5,minmax(240px,1fr))] gap-2">
-                {kanbanStages.map(stage => <ClientKanbanColumn key={stage.key} stage={stage} clients={sortedClients.filter(client => (workflow[client.clientId]?.stage ?? 'TO_MANAGE') === stage.key)} workflow={workflow} onOpen={selectClient} onAddNote={setQuickNoteClient} />)}
+                {kanbanStages.map(stage => <ClientKanbanColumn key={stage.key} stage={stage} clients={sortedClients.filter(client => stage.key !== 'CLOSED' && (workflow[client.clientId]?.stage ?? 'TO_MANAGE') === stage.key)} closedRecent={stage.key === 'CLOSED' ? visibleClosedRecent : []} workflow={workflow} onOpen={selectClient} onOpenClosed={selectClosed} onAddNote={setQuickNoteClient} />)}
                 </div>
               </div>
              <DragOverlay>
@@ -947,8 +970,8 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
         <p className="mt-2 text-[10px] text-[#322D29]/45">Vencida según Bsale: vencimiento anterior al corte. Una factura que vence el día del corte permanece como adeudada.</p>
       </section>
 
-       <Sheet open={Boolean(selectedClient)} onOpenChange={open => { if (!open) { setSelectedClient(null); setSelectedDocumentId(null) } }}>
-        {selectedClient && <ClientPanel key={selectedClient.clientId} client={clients.find(client => client.clientId === selectedClient.clientId) ?? selectedClient} cutoffDate={cutoffDate} stage={workflow[selectedClient.clientId]?.stage ?? 'TO_MANAGE'} onStageChange={async input => {
+        <Sheet open={Boolean(selectedClient)} onOpenChange={open => { if (!open) { setSelectedClient(null); setSelectedClosed(null); setSelectedDocumentId(null) } }}>
+         {selectedClient && <ClientPanel key={selectedClient.clientId} client={clients.find(client => client.clientId === selectedClient.clientId) ?? selectedClient} cutoffDate={cutoffDate} stage={selectedClosed ? 'CLOSED' : workflow[selectedClient.clientId]?.stage ?? 'TO_MANAGE'} historicalClosed={selectedClosed} onStageChange={async input => {
           await updateCollectionStage({ clientId: selectedClient.clientId, ...input })
           setWorkflow(current => ({
             ...current,
@@ -963,7 +986,7 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
           }} focusedDocumentId={selectedDocumentId} onPaymentReconciled={(documentId, documentBalance) => {
             setPaymentOverlay(current => [...current.filter(item => item.documentId !== documentId), { clientId: selectedClient.clientId, documentId, pendingAmount: documentBalance, confirmedAt: new Date().toISOString(), paymentId: 0, source: 'COLLECTION_PAYMENT' }])
             if (documentBalance === 0) setSettledDocumentIds(current => current.includes(documentId) ? current : [...current, documentId])
-          }} onClose={() => { setSelectedClient(null); setSelectedDocumentId(null) }} />}
+           }} onClose={() => { setSelectedClient(null); setSelectedClosed(null); setSelectedDocumentId(null) }} />}
       </Sheet>
     </main>
   )
