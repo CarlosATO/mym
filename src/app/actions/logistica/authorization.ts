@@ -10,6 +10,15 @@ export type WmsAuthorization = {
   companyName: string
 }
 
+export async function hasWmsPermission(userId: string, permissionCode: string): Promise<boolean> {
+  const supabase = await createClient()
+  const { data, error } = await supabase.rpc('user_has_permission', {
+    p_user_id: userId,
+    p_permission_code: permissionCode,
+  })
+  return !error && data === true
+}
+
 export async function requireWmsPermission(permissionCode: string | string[]): Promise<WmsAuthorization> {
   const supabase = await createClient()
   const { data: authData, error: authError } = await supabase.auth.getUser()

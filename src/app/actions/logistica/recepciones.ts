@@ -1,9 +1,11 @@
 'use server'
 
+/* Supabase's generated query types cannot represent the permission-dependent projections below. */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
-import { getActiveCompanyId } from '@/app/actions/companies'
-import { requireWmsPermission } from './authorization'
+import { hasWmsPermission, requireWmsPermission, type WmsAuthorization } from './authorization'
 import { getPurchaseReceiptOperation, getPurchaseReceiptSyncSettings, reconcilePurchaseReceiptOperation, syncPurchaseReceipt } from '@/lib/integraciones/bsale-purchase-receipt-orchestrator'
 import { enrichReceiptItemsWithProducts } from '@/lib/logistica/receipt-display'
 
@@ -40,30 +42,54 @@ export interface PurchaseOrderPending {
   latest_receipt_doc: string | null
 }
 
+const PO_OPERATIONAL_FIELDS = 'id, company_id, correlative, issue_date, required_date, supplier_id, source_type, warehouse_id, po_type, requested_by, notes, status, receipt_status, invoice_status, cancel_reason, created_at, updated_at'
+const PO_ECONOMIC_FIELDS = 'net_total, discount_total, tax_total, exempt_total, grand_total'
+const PO_ITEM_OPERATIONAL_FIELDS = 'id, po_id, line_number, item_type, product_id, product_description, unit, quantity, warehouse_id, required_date, notes, quantity_received, lot_number, expiration_date'
+const PO_ITEM_ECONOMIC_FIELDS = 'unit_price, discount_percent, discount_amount, tax_rate, tax_amount, line_total'
+const RECEIPT_OPERATIONAL_FIELDS = 'id, company_id, purchase_order_id, receipt_number, receiving_type, warehouse_id, status, received_at, received_by, notes, created_by, created_at'
+const RECEIPT_ECONOMIC_FIELDS = 'receipt_total_gross'
+
+async function authorizeReception(): Promise<{ authorization: WmsAuthorization; canViewEconomics: boolean }> {
+  const authorization = await requireWmsPermission('logistica.receptions.create')
+  const canViewEconomics = await hasWmsPermission(authorization.user.id, 'adquisiciones.po.view')
+  return { authorization, canViewEconomics }
+}
+
+function redactBsaleStatus<T extends { payload?: unknown }>(status: T, canViewEconomics: boolean) {
+  return canViewEconomics ? status : { ...status, payload: null }
+}
+
+async function receiptBelongsToCompany(receiptId: string, companyId: string) {
+  const { data, error } = await logDb()
+    .from('purchase_receipts')
+    .select('id')
+    .eq('id', receiptId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  return !error && Boolean(data)
+}
+
 export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]> {
   if (process.env.NODE_ENV === 'development') console.time('getPendingReceivablePOs')
+  const { authorization, canViewEconomics } = await authorizeReception()
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
+  if (!authorization.user) {
     if (process.env.NODE_ENV === 'development') console.timeEnd('getPendingReceivablePOs')
     return []
   }
 
-  const companyId = await getActiveCompanyId()
-  if (!companyId) {
-    if (process.env.NODE_ENV === 'development') console.timeEnd('getPendingReceivablePOs')
-    return []
-  }
+  const companyId = authorization.companyId
 
   const db = adqDb()
   if (process.env.NODE_ENV === 'development') console.time('getPendingReceivablePOs:base')
-  const { data, error } = await db
+  const pendingOrdersQuery: any = db
     .from('purchase_orders')
-    .select('id, correlative, issue_date, po_type, grand_total, status, receipt_status, supplier_id, warehouse_id')
+    .select(`id, correlative, issue_date, po_type, status, receipt_status, supplier_id, warehouse_id${canViewEconomics ? ', grand_total' : ''}`)
     .eq('company_id', companyId)
     .in('status', ['CONFIRMADA', 'RECEPCION_PARCIAL', 'RECEPCION_TOTAL'])
     .order('created_at', { ascending: false })
     .limit(200)
+  const { data, error } = await pendingOrdersQuery
   if (process.env.NODE_ENV === 'development') console.timeEnd('getPendingReceivablePOs:base')
 
   if (error) {
@@ -78,8 +104,8 @@ export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]>
   }
 
   // Fetch supplier names and warehouse names in parallel
-  const supplierIds = Array.from(new Set(data.map(d => d.supplier_id)))
-  const warehouseIds = Array.from(new Set(data.map(d => d.warehouse_id).filter(Boolean)))
+  const supplierIds = Array.from(new Set(data.map((d: any) => d.supplier_id)))
+  const warehouseIds = Array.from(new Set(data.map((d: any) => d.warehouse_id).filter(Boolean)))
 
   if (process.env.NODE_ENV === 'development') console.time('getPendingReceivablePOs:lookups')
   const [suppliersRes, warehousesRes] = await Promise.all([
@@ -92,7 +118,7 @@ export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]>
   const warehouseMap = new Map(warehousesRes.data?.map(w => [w.id, w.name]) ?? [])
 
   // Additional Fetch: Quantities
-  const poIds = data.map(d => d.id)
+  const poIds = data.map((d: any) => d.id)
   if (process.env.NODE_ENV === 'development') console.time('getPendingReceivablePOs:items')
   const { data: itemsData } = await db
     .from('purchase_order_items')
@@ -108,14 +134,15 @@ export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]>
   })
   
   if (process.env.NODE_ENV === 'development') console.time('getPendingReceivablePOs:receipts')
-  const { data: receiptsData } = await logDbClient
+  const receiptsQuery: any = logDbClient
     .from('purchase_receipts')
-    .select('id, purchase_order_id, receipt_number, received_at, status, receipt_total_gross, receipt_documents(id, document_type, document_number, file_name)')
+    .select(`id, purchase_order_id, receipt_number, received_at, status${canViewEconomics ? ', receipt_total_gross' : ''}, receipt_documents(id, document_type, document_number, file_name)`)
     .in('purchase_order_id', poIds)
     .order('received_at', { ascending: false })
+  const { data: receiptsData } = await receiptsQuery
   if (process.env.NODE_ENV === 'development') console.timeEnd('getPendingReceivablePOs:receipts')
 
-  const result = data.map(po => {
+  const result = data.map((po: any) => {
     // Quantities
     const poItems = itemsData?.filter(i => i.po_id === po.id) || []
     const qtyOrdered = poItems.reduce((acc, i) => acc + Number(i.quantity || 0), 0)
@@ -123,8 +150,10 @@ export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]>
     const qtyPending = Math.max(0, qtyOrdered - qtyReceived)
 
     // Receipts
-    const poReceipts = receiptsData?.filter(r => r.purchase_order_id === po.id) || []
-    const amountReceived = poReceipts.reduce((acc, r) => acc + Number(r.receipt_total_gross || 0), 0)
+     const poReceipts = receiptsData?.filter((r: any) => r.purchase_order_id === po.id) || []
+    const amountReceived = canViewEconomics
+       ? poReceipts.reduce((acc: number, r: any) => acc + Number(r.receipt_total_gross || 0), 0)
+      : undefined
     
     let latestReceiptNumber = null
     let latestReceiptDate = null
@@ -147,39 +176,41 @@ export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]>
       supplier_name: supplierMap.get(po.supplier_id) || 'Proveedor Desconocido',
       warehouse_name: po.warehouse_id ? warehouseMap.get(po.warehouse_id) || null : null,
       po_type: po.po_type,
-      grand_total: po.grand_total,
+       ...(canViewEconomics ? { grand_total: po.grand_total } : {}),
       receipt_status: po.receipt_status || 'PENDIENTE',
       status: po.status,
       qty_ordered: qtyOrdered,
       qty_received: qtyReceived,
       qty_pending: qtyPending,
-      amount_received: amountReceived,
+       ...(canViewEconomics ? { amount_received: amountReceived } : {}),
       latest_receipt_number: latestReceiptNumber,
       latest_receipt_date: latestReceiptDate,
       latest_receipt_doc: latestReceiptDoc
     }
   })
   if (process.env.NODE_ENV === 'development') console.timeEnd('getPendingReceivablePOs')
-  return result
+  return result as PurchaseOrderPending[]
 }
 
 export async function getPurchaseOrderForReceipt(poId: string) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
+  const { authorization, canViewEconomics } = await authorizeReception()
+  return getPurchaseOrderForReceiptAuthorized(poId, authorization, canViewEconomics)
+}
 
-  const companyId = await getActiveCompanyId()
-  if (!companyId) return null
+async function getPurchaseOrderForReceiptAuthorized(poId: string, authorization: WmsAuthorization, canViewEconomics: boolean) {
+  const supabase = await createClient()
+  const companyId = authorization.companyId
 
   const db = adqDb()
 
   // 1. Fetch Purchase Order
-  const { data: po, error: poError } = await db
+  const purchaseOrderQuery: any = db
     .from('purchase_orders')
-    .select('*')
+    .select(`${PO_OPERATIONAL_FIELDS}${canViewEconomics ? `, ${PO_ECONOMIC_FIELDS}` : ''}`)
     .eq('id', poId)
     .eq('company_id', companyId)
     .single()
+  const { data: po, error: poError } = await purchaseOrderQuery
 
   if (poError || !po) {
     console.error('getPurchaseOrderForReceipt PO error:', poError)
@@ -187,17 +218,23 @@ export async function getPurchaseOrderForReceipt(poId: string) {
   }
 
   // 2. Fetch dependencies in parallel
+  const itemsQuery: any = db
+    .from('purchase_order_items')
+    .select(`${PO_ITEM_OPERATIONAL_FIELDS}${canViewEconomics ? `, ${PO_ITEM_ECONOMIC_FIELDS}` : ''}`)
+    .eq('po_id', poId)
+    .eq('company_id', companyId)
+    .order('line_number')
   const [supplierRes, warehouseRes, requesterRes, itemsRes] = await Promise.all([
-    db.from('suppliers').select('*').eq('id', po.supplier_id).single(),
+    db.from('suppliers').select('business_name, rut, contact_name, contact_email, contact_phone, address').eq('id', po.supplier_id).eq('company_id', companyId).single(),
     po.warehouse_id ? db.from('warehouses').select('name').eq('id', po.warehouse_id).single() : Promise.resolve({ data: null }),
     po.requested_by ? supabase.from('users').select('nombre, apellido').eq('id', po.requested_by).single() : Promise.resolve({ data: null }),
-    db.from('purchase_order_items').select('*').eq('po_id', poId).order('line_number')
+    itemsQuery
   ]);
 
   const supplier = supplierRes.data;
   const warehouseName = warehouseRes.data?.name || null;
   const requester = requesterRes.data;
-  const items = itemsRes.data;
+  const items = (itemsRes.data ?? []) as any[];
   const itemsError = itemsRes.error;
 
   if (itemsError) {
@@ -205,7 +242,7 @@ export async function getPurchaseOrderForReceipt(poId: string) {
     return null
   }
 
-  const productIds = Array.from(new Set((items ?? []).map(item => item.product_id).filter(Boolean)))
+  const productIds = Array.from(new Set(items.map((item: any) => item.product_id).filter(Boolean)))
   const { data: products, error: productsError } = productIds.length
     ? await db.from('products').select('id, sku').in('id', productIds)
     : { data: [], error: null }
@@ -246,7 +283,7 @@ export async function getPurchaseOrderForReceipt(poId: string) {
       warehouse_name: warehouseName,
       requester_name: requester ? `${requester.nombre} ${requester.apellido}` : 'Usuario'
     },
-    items: enrichReceiptItemsWithProducts(items ?? [], products ?? []).map(item => ({
+     items: enrichReceiptItemsWithProducts(items, products ?? []).map((item: any) => ({
       ...item,
       quantity_received: Number(item.quantity_received || 0),
       quantity_pending: Math.max(0, Number(item.quantity || 0) - (accountedByItem.get(item.id) ?? Number(item.quantity_received || 0)))
@@ -257,6 +294,7 @@ export async function getPurchaseOrderForReceipt(poId: string) {
 export async function getPurchaseOrderReceiptDetails(poId: string) {
   if (process.env.NODE_ENV === 'development') console.time(`getPurchaseOrderReceiptDetails_${poId}`)
 
+  const { authorization, canViewEconomics } = await authorizeReception()
   const supabase = await createClient()
   const { data: { session } } = await supabase.auth.getSession()
 
@@ -265,13 +303,15 @@ export async function getPurchaseOrderReceiptDetails(poId: string) {
     global: { headers: { Authorization: `Bearer ${session?.access_token}` } }
   })
 
+  const receiptsQuery: any = logDbClient
+    .from('purchase_receipts')
+    .select(`${RECEIPT_OPERATIONAL_FIELDS}${canViewEconomics ? `, ${RECEIPT_ECONOMIC_FIELDS}` : ''}, receipt_documents(id, document_type, document_number, file_name), purchase_receipt_items(id, receipt_id, purchase_order_item_id, product_id, service_description, quantity_ordered, quantity_previously_received, quantity_received, quantity_pending_after, warehouse_id, location_id, lot_number, expiration_date, notes, locations(name, code))`)
+    .eq('purchase_order_id', poId)
+    .eq('company_id', authorization.companyId)
+    .order('received_at', { ascending: false })
   const [baseData, receiptsResult] = await Promise.all([
-    getPurchaseOrderForReceipt(poId),
-    logDbClient
-      .from('purchase_receipts')
-      .select('*, receipt_documents(id, document_type, document_number, file_name), purchase_receipt_items(*, locations(name, code))')
-      .eq('purchase_order_id', poId)
-      .order('received_at', { ascending: false })
+    getPurchaseOrderForReceiptAuthorized(poId, authorization, canViewEconomics),
+    receiptsQuery
   ]);
 
   if (!baseData) {
@@ -290,15 +330,16 @@ export async function getPurchaseOrderReceiptDetails(poId: string) {
     }
     return rest;
   });
-  const authorization = await requireWmsPermission('logistica.receptions.create')
   const receiptStatuses = await Promise.all(receipts.map((receipt: any) => getPurchaseReceiptOperation(authorization.companyId, receipt.id, authorization.user.id)))
-  receipts.forEach((receipt: any, index: number) => { receipt.bsale = receiptStatuses[index] })
+  receipts.forEach((receipt: any, index: number) => { receipt.bsale = redactBsaleStatus(receiptStatuses[index], canViewEconomics) })
 
   // Calculate totals
   const totalOrdered = baseData.items.reduce((acc, i) => acc + Number(i.quantity || 0), 0)
   const totalReceived = baseData.items.reduce((acc, i) => acc + Number(i.quantity_received || 0), 0)
   const totalPending = Math.max(0, totalOrdered - totalReceived)
-  const amountReceived = receipts?.reduce((acc: number, r: any) => acc + Number(r.receipt_total_gross || 0), 0) || 0
+   const amountReceived = canViewEconomics
+     ? receipts?.reduce((acc: number, r: any) => acc + Number(r.receipt_total_gross || 0), 0) || 0
+     : undefined
 
   if (process.env.NODE_ENV === 'development') console.timeEnd(`getPurchaseOrderReceiptDetails_${poId}`)
 
@@ -311,7 +352,7 @@ export async function getPurchaseOrderReceiptDetails(poId: string) {
       qtyOrdered: totalOrdered,
       qtyReceived: totalReceived,
       qtyPending: totalPending,
-      amountReceived: amountReceived
+       ...(canViewEconomics ? { amountReceived } : {})
     }
   }
 }
@@ -354,6 +395,7 @@ export async function createPurchaseReceipt(data: {
   const authorization = await requireWmsPermission('logistica.receptions.create')
   const user = authorization.user
   const companyId = authorization.companyId
+  const canViewEconomics = await hasWmsPermission(user.id, 'adquisiciones.po.view')
   const supabase = await createClient()
 
   const { data: { session } } = await supabase.auth.getSession()
@@ -420,13 +462,13 @@ export async function createPurchaseReceipt(data: {
   if (settings.enabled && settings.autoSyncEnabled) {
     try {
       const bsale = await syncPurchaseReceipt(companyId, user.id, r.receipt_id!)
-      return { success: true, receipt_id: r.receipt_id, receipt_number: r.receipt_number, bsale }
+       return { success: true, receipt_id: r.receipt_id, receipt_number: r.receipt_number, bsale: redactBsaleStatus(bsale, canViewEconomics) }
     } catch (syncError) {
       return {
         success: true,
         receipt_id: r.receipt_id,
         receipt_number: r.receipt_number,
-        bsale: { status: 'RECONCILIATION_REQUIRED' as const, operationId: '', receptionId: null, error: syncError instanceof Error ? syncError.message : 'No se pudo iniciar la sincronización BSale.', payload: null },
+         bsale: { status: 'RECONCILIATION_REQUIRED' as const, operationId: '', receptionId: null, error: syncError instanceof Error ? syncError.message : 'No se pudo iniciar la sincronización BSale.', payload: null },
       }
     }
   }
@@ -440,17 +482,23 @@ export async function createPurchaseReceipt(data: {
 
 export async function getPurchaseReceiptBsaleStatus(receiptId: string) {
   const authorization = await requireWmsPermission('logistica.receptions.create')
-  return getPurchaseReceiptOperation(authorization.companyId, receiptId, authorization.user.id)
+  const status = await getPurchaseReceiptOperation(authorization.companyId, receiptId, authorization.user.id)
+  return redactBsaleStatus(status, await hasWmsPermission(authorization.user.id, 'adquisiciones.po.view'))
 }
 
 export async function reconcilePurchaseReceiptBsale(operationId: string) {
   const authorization = await requireWmsPermission('logistica.receptions.create')
-  return reconcilePurchaseReceiptOperation(authorization.companyId, authorization.user.id, operationId)
+  const status = await reconcilePurchaseReceiptOperation(authorization.companyId, authorization.user.id, operationId)
+  return redactBsaleStatus(status, await hasWmsPermission(authorization.user.id, 'adquisiciones.po.view'))
 }
 
 export async function syncPurchaseReceiptBsale(receiptId: string) {
   const authorization = await requireWmsPermission('logistica.receptions.create')
-  return syncPurchaseReceipt(authorization.companyId, authorization.user.id, receiptId)
+  if (!await receiptBelongsToCompany(receiptId, authorization.companyId)) {
+    return { status: 'FAILED' as const, operationId: '', receptionId: null, error: 'Recepción no encontrada', payload: null }
+  }
+  const status = await syncPurchaseReceipt(authorization.companyId, authorization.user.id, receiptId)
+  return redactBsaleStatus(status, await hasWmsPermission(authorization.user.id, 'adquisiciones.po.view'))
 }
 
 export interface KardexMovement {
@@ -619,12 +667,8 @@ export async function getStockSummary(): Promise<StockItem[]> {
 }
 
 export async function getReceiptDocumentSignedUrl(document: any) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'No autorizado' }
-
-  const companyId = await getActiveCompanyId()
-  if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
+  const authorization = await requireWmsPermission('logistica.receptions.create')
+  const companyId = authorization.companyId
 
   const logistica = logDb()
   
