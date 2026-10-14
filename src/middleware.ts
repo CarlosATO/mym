@@ -9,7 +9,8 @@ const cronRoutes = [
   '/api/integraciones/bsale/products/sync',
   '/api/cron/sync-replenishment',
   '/api/cron/warehouse-incremental',
-  '/api/cron/warehouse-operational'
+  '/api/cron/warehouse-operational',
+  '/api/cron/receivables-snapshot'
 ]
 
 export async function middleware(request: NextRequest) {
