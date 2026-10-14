@@ -16,6 +16,7 @@ import { getPurchaseOrderProductCatalogCached } from './purchase-order-product-c
 import type { PurchaseOrderCatalogProduct } from '@/app/actions/adquisiciones/products'
 import { PurchaseOrderNewProductModal } from './purchase-order-new-product-modal'
 import type { LocalCreatedProduct } from '@/lib/integraciones/bsale-product-creation-core'
+import { calculatePurchaseOrderTotals } from '@/lib/adquisiciones/purchase-order-totals'
 
 type EditableReviewItem = Omit<PurchaseOrderReviewItem, 'item_id'> & {
   item_id: string | null
@@ -156,16 +157,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
     return catalog.filter(product => [product.sku, product.description, product.barcode ?? ''].some(value => value.toLocaleLowerCase('es-CL').includes(query))).slice(0, 8)
   }, [catalog, catalogQuery])
 
-  const preview = useMemo(() => lines.reduce((totals, line) => {
-    const base = line.quantity * line.unit_price
-    const discount = base * (line.discount_percent || 0) / 100
-    const tax = (base - discount) * (line.tax_rate || 0) / 100
-    totals.net += base - discount
-    totals.discount += discount
-    totals.tax += tax
-    totals.total += base - discount + tax
-    return totals
-  }, { net: 0, discount: 0, tax: 0, total: 0 }), [lines])
+  const preview = useMemo(() => calculatePurchaseOrderTotals(lines), [lines])
 
   const hasPendingPrice = lines.some(line => !Number.isFinite(line.unit_price) || line.unit_price <= 0)
   const hasInvalidQuantity = lines.some(line => !Number.isFinite(line.quantity) || line.quantity <= 0)
@@ -379,7 +371,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
 
   if (!comparison) return null
   const { po, summary } = comparison
-  const displayCurrentTotal = dirty ? preview.total : summary.current_grand_total
+  const displayCurrentTotal = dirty ? preview.grand_total : summary.current_grand_total
   const displayDifference = displayCurrentTotal - summary.original_grand_total
   const summaryCards = [
     ['Sin cambios', summary.unchanged_count, false],
@@ -438,7 +430,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
 
          {removedLines.length > 0 && <section className="mb-4 border border-[#D1C7BD] bg-white/70 p-3"><h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-[#6D625B]">Productos no disponibles / eliminados</h2><div className="overflow-x-auto"><table className="min-w-[820px] w-full text-xs"><thead><tr className="border-b border-[#D1C7BD] text-left text-[10px] uppercase text-[#AC9C8D]"><th className="py-2">Estado</th><th>SKU</th><th>Descripción</th><th className="text-right">Cantidad</th><th className="text-right">Precio</th><th className="text-right">Total</th><th className="text-right">Acción</th></tr></thead><tbody>{removedLines.map(line => <tr key={line.item_id} className="border-b border-[#E5DDD4]"><td className="py-2"><span className={`rounded border px-1.5 py-0.5 text-[10px] ${statusStyle('ELIMINADA')}`}>Eliminada</span></td><td className="font-mono">{line.original_item?.sku || '—'}</td><td>{line.original_item?.product_description || '—'}</td><td className="text-right">{line.original_item?.quantity ?? '—'}</td><td className="text-right">{currency(line.original_item?.unit_price, po.currency)}</td><td className="text-right font-semibold">{currency(line.original_item?.line_total, po.currency)}</td><td className="text-right"><button type="button" onClick={() => restoreLine(line.original_item)} className="rounded border border-[#72383D]/40 px-2 py-1 text-[11px] font-semibold text-[#72383D] hover:bg-[#72383D]/10">Restaurar</button></td></tr>)}</tbody></table></div></section>}
 
-         <section className="flex justify-end border-t border-[#D1C7BD] pt-3"><div className="w-72 space-y-1 text-xs"><div className="flex justify-between"><span className="text-[#AC9C8D]">Neto preview</span><span>{currency(preview.net, po.currency)}</span></div><div className="flex justify-between"><span className="text-[#AC9C8D]">Descuento preview</span><span>{currency(preview.discount, po.currency)}</span></div><div className="flex justify-between"><span className="text-[#AC9C8D]">IVA preview</span><span>{currency(preview.tax, po.currency)}</span></div><div className="flex justify-between border-t border-[#D1C7BD] pt-1 font-bold text-[#72383D]"><span>Total preview</span><span>{currency(preview.total, po.currency)}</span></div></div></section>
+          <section className="flex justify-end border-t border-[#D1C7BD] pt-3"><div className="w-72 space-y-1 text-xs"><div className="flex justify-between"><span className="text-[#AC9C8D]">Subtotal bruto</span><span>{currency(preview.gross_total, po.currency)}</span></div><div className="flex justify-between"><span className="text-[#AC9C8D]">Descuentos</span><span>{currency(preview.discount_total, po.currency)}</span></div><div className="flex justify-between"><span className="text-[#AC9C8D]">Neto final</span><span>{currency(preview.net_total, po.currency)}</span></div><div className="flex justify-between"><span className="text-[#AC9C8D]">IVA</span><span>{currency(preview.tax_total, po.currency)}</span></div><div className="flex justify-between border-t border-[#D1C7BD] pt-1 font-bold text-[#72383D]"><span>Total OC</span><span>{currency(preview.grand_total, po.currency)}</span></div></div></section>
          {confirmDialogOpen && <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#322D29]/60 p-4"><section role="dialog" aria-modal="true" aria-labelledby="confirm-purchase-order-title" className="w-full max-w-md border border-[#D1C7BD] bg-[#EFE9E1] p-5 text-[#322D29] shadow-xl"><h2 id="confirm-purchase-order-title" className="text-base font-bold text-[#72383D]">Confirmar orden de compra</h2><div className="mt-3 space-y-1 text-xs"><p><span className="font-semibold">OC:</span> {po.correlative}</p><p><span className="font-semibold">Proveedor:</span> {po.supplier_name || '—'}</p><p><span className="font-semibold">Total definitivo:</span> {currency(displayCurrentTotal, po.currency)}</p></div><div className="mt-3 border-y border-[#D1C7BD] py-3 text-xs"><p className="font-semibold">Resumen</p><p>Modificadas: {summary.modified_count}</p><p>Eliminadas: {summary.removed_count}</p><p>Agregadas: {summary.added_count}</p></div><p className="mt-3 text-xs text-[#6D625B]">Esta acción cerrará la revisión del proveedor y dejará esta versión como definitiva para recepción. Después de confirmar, la OC ya no podrá editarse desde esta pantalla.</p>{error && <p className="mt-3 border border-[#72383D]/30 bg-[#F5EDEE] px-3 py-2 text-xs text-[#72383D]">{error}</p>}<div className="mt-4 flex justify-end gap-2"><button type="button" onClick={() => setConfirmDialogOpen(false)} disabled={confirming} className="rounded-md border border-[#D1C7BD] px-3 py-2 text-xs font-semibold text-[#6D625B] disabled:opacity-50">Cancelar</button><button type="button" onClick={() => void confirmReview()} disabled={confirming} className="rounded-md bg-[#72383D] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{confirming ? 'Confirmando...' : 'Confirmar definitivamente'}</button></div></section></div>}
         </main>
        <PurchaseOrderNewProductModal poId={poId} open={newProductModalOpen} onClose={() => setNewProductModalOpen(false)} onCreated={addCreatedProduct} />

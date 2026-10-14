@@ -50,12 +50,19 @@ test('supplier review handles complete payloads and comparison states', () => {
 })
 
 test('supplier review summary reflects live totals only while dirty', () => {
-  assert.match(review, /const displayCurrentTotal = dirty \? preview\.total : summary\.current_grand_total/)
+  assert.match(review, /calculatePurchaseOrderTotals\(lines\)/)
+  assert.match(review, /const displayCurrentTotal = dirty \? preview\.grand_total : summary\.current_grand_total/)
   assert.match(review, /const displayDifference = displayCurrentTotal - summary\.original_grand_total/)
   assert.match(review, /signedCurrency\(displayDifference, po\.currency\)/)
   assert.match(review, /pending && <span[^>]*>Sin guardar<\/span>/)
   assert.doesNotMatch(review, /summary\.total_difference/)
   assert.match(review, /updateSentPurchaseOrderReview\(poId, payload\)/)
+})
+
+test('supplier review renders the complete monetary summary at the bottom', () => {
+  for (const label of ['Subtotal bruto', 'Descuentos', 'Neto final', 'IVA', 'Total OC']) {
+    assert.match(review, new RegExp(label))
+  }
 })
 
 test('supplier review product picker has explicit compact open and close state', () => {

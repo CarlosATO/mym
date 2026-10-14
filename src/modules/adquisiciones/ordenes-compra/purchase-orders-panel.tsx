@@ -27,6 +27,7 @@ import { ReplenishmentExcelImportDialog } from './replenishment-excel-import-dia
 import { PurchaseOrderSupplierReview } from './purchase-order-supplier-review'
 import { createClient as createBrowserClient } from '@/lib/supabase/client'
 import { formatCivilDate } from '@/lib/datetime'
+import { calculatePurchaseOrderLineTotals, calculatePurchaseOrderTotals } from '@/lib/adquisiciones/purchase-order-totals'
 
 const STATUS_BADGES: Record<string, { bg: string; text: string; border: string }> = {
   BORRADOR: { bg: 'bg-gray-500/10', text: 'text-gray-500', border: 'border-gray-500/20' },
@@ -1130,19 +1131,14 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     if (editingItem === tempId) setEditingItem(null)
   }
 
-  const netTotal = items.reduce((sum, it) => sum + (it.quantity * it.unit_price), 0)
-  const discountTotal = items.reduce((sum, it) => sum + (it.quantity * it.unit_price * it.discount_percent / 100), 0)
-  const taxableAmount = items.reduce((sum, it) => {
-    const lineNet = it.quantity * it.unit_price
-    const lineDiscount = lineNet * it.discount_percent / 100
-    return sum + (lineNet - lineDiscount)
-  }, 0)
-  const taxTotal = items.reduce((sum, it) => {
-    const lineNet = it.quantity * it.unit_price
-    const lineDiscount = lineNet * it.discount_percent / 100
-    return sum + ((lineNet - lineDiscount) * it.tax_rate / 100)
-  }, 0)
-  const grandTotal = netTotal - discountTotal + taxTotal
+  const orderTotals = calculatePurchaseOrderTotals(items)
+  const {
+    gross_total: grossTotal,
+    discount_total: discountTotal,
+    net_total: netTotal,
+    tax_total: taxTotal,
+    grand_total: grandTotal,
+  } = orderTotals
 
 
   async function handleCreateAuthorizer(e: React.MouseEvent) {
@@ -1245,8 +1241,10 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         company_email: activeCompany?.email,
         company_address: activeCompany?.address
       },
-      items: items.map((it, idx) => ({
-        line_number: idx + 1,
+         items: items.map((it, idx) => {
+           const lineTotals = calculatePurchaseOrderLineTotals(it)
+           return {
+         line_number: idx + 1,
         item_type: it.item_type,
         product_id: it.product_id || undefined,
         product_description: it.description,
@@ -1254,13 +1252,14 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         quantity: it.quantity,
         unit_price: it.unit_price,
         discount_percent: it.discount_percent,
-        discount_amount: it.quantity * it.unit_price * it.discount_percent / 100,
-        tax_rate: it.tax_rate,
-        tax_amount: ((it.quantity * it.unit_price) - (it.quantity * it.unit_price * it.discount_percent / 100)) * it.tax_rate / 100,
-        line_total: it.quantity * it.unit_price,
-        warehouse_name: warehouse?.name || undefined,
-        notes: it.notes || undefined,
-      })),
+         discount_amount: lineTotals.discount_amount,
+         tax_rate: it.tax_rate,
+         tax_amount: lineTotals.tax_amount,
+         line_total: lineTotals.line_total,
+         warehouse_name: warehouse?.name || undefined,
+         notes: it.notes || undefined,
+           }
+         }),
     }
     try {
       let previewLogoBase64 = logoBase64
@@ -1708,22 +1707,24 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
 
                 <div className="mt-3 flex justify-end border-t border-[#D1C7BD] pt-3">
                   <div className="w-full space-y-1 text-xs sm:w-96">
-                    <div className="flex justify-between py-0.5">
-                      <span className="text-[#AC9C8D]">Neto</span>
-                      <span className="font-medium text-[#322D29]">{formatCurrency(netTotal, form.currency)}</span>
-                  </div>
-                  {discountTotal > 0 && (
+                     <div className="flex justify-between py-0.5">
+                       <span className="text-[#AC9C8D]">Subtotal bruto</span>
+                       <span className="font-medium text-[#322D29]">{formatCurrency(grossTotal, form.currency)}</span>
+                   </div>
                      <div className="flex justify-between py-0.5">
                        <span className="text-[#AC9C8D]">Descuentos</span>
-                      <span className="text-red-500">-{formatCurrency(discountTotal, form.currency)}</span>
-                    </div>
-                  )}
+                       <span className="text-red-500">-{formatCurrency(discountTotal, form.currency)}</span>
+                     </div>
+                   <div className="flex justify-between py-0.5">
+                     <span className="text-[#AC9C8D]">Neto final</span>
+                     <span className="font-medium text-[#322D29]">{formatCurrency(netTotal, form.currency)}</span>
+                   </div>
                    <div className="flex justify-between py-0.5">
                         <span className="text-[#AC9C8D]">IVA</span>
                         <span className="font-medium text-[#322D29]">{formatCurrency(taxTotal, form.currency)}</span>
                    </div>
                     <div className="mt-1 flex justify-between border-t border-[#D1C7BD] py-1.5">
-                      <span className="font-bold text-[#322D29]">Total</span>
+                       <span className="font-bold text-[#322D29]">Total OC</span>
                       <span className="text-base font-bold text-[#72383D]">{formatCurrency(grandTotal, form.currency)}</span>
                   </div>
                 </div>
