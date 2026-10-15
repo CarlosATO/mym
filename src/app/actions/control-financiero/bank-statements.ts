@@ -968,6 +968,7 @@ export async function confirmOpenFinancialBankStatement(input: {
     branch: row.branch,
     cashier: row.cashier,
     source_row_number: row.sourceRowNumber,
+    fingerprint: buildBankMovementFingerprint(input.accountId, row),
     movement_identity: key.movement_identity,
     movement_content_hash: key.movement_content_hash,
     raw_payload: row.raw,

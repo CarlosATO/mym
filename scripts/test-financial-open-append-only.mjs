@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { compareOpenMovements, ensureOpenInsertKeys, evaluateOpenReconciliation } from '../src/lib/control-financiero/open-bank-statement.ts'
 
+const action = fs.readFileSync('src/app/actions/control-financiero/bank-statements.ts', 'utf8')
+
 function movement(index, overrides = {}) {
   return {
     date: `2026-10-${String(index + 1).padStart(2, '0')}`,
@@ -170,4 +172,13 @@ test('auto classification is restricted to NEW identities', () => {
   const action = fs.readFileSync('src/app/actions/control-financiero/bank-statements.ts', 'utf8')
   assert.match(action, /newRows\.map\(\(\{ key \}\) => key\.movement_identity\)/)
   assert.match(action, /diff\.newIndexes\.map\(\(index\) => generatedKeys\[index\]\.movement_identity\)/)
+})
+
+test('OPEN sends legacy fingerprints only for NEW movements', () => {
+  const openMovements = action.match(/const movements = newRows\.map\(\(\{ row, key \}\) => \(\{[\s\S]*?\n  \}\)\);/)?.[0]
+  assert.ok(openMovements)
+  assert.match(openMovements, /fingerprint: buildBankMovementFingerprint\(input\.accountId, row\)/)
+  assert.match(action, /const newRows = diff\.newIndexes\.map\(\(index\) => \(/)
+  assert.match(action, /p_movements: movements/)
+  assert.doesNotMatch(openMovements, /diff\.exactMatched|balanceRestatements/)
 })
