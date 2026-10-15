@@ -7,14 +7,16 @@ const actionPath = new URL('../src/app/actions/adquisiciones/purchase-orders.ts'
 const pagePath = new URL('../src/app/dashboard/adquisiciones/ordenes-compra/page.tsx', import.meta.url)
 const warehouseCachePath = new URL('../src/modules/adquisiciones/ordenes-compra/warehouse-cache.ts', import.meta.url)
 const analysisPath = new URL('../src/modules/adquisiciones/ordenes-compra/replenishment-analysis-panel.tsx', import.meta.url)
+const importPath = new URL('../src/modules/adquisiciones/ordenes-compra/replenishment-excel-import.ts', import.meta.url)
 const migrationPath = new URL('../supabase/migrations/20260924184940_validate_purchase_order_prices_on_issue.sql', import.meta.url)
-const [panel, action, page, warehouseCache, analysis, migration] = await Promise.all([
+const [panel, action, page, warehouseCache, analysis, migration, replenishmentImport] = await Promise.all([
   readFile(panelPath, 'utf8'),
   readFile(actionPath, 'utf8'),
   readFile(pagePath, 'utf8'),
   readFile(warehouseCachePath, 'utf8'),
   readFile(analysisPath, 'utf8'),
   readFile(migrationPath, 'utf8'),
+  readFile(importPath, 'utf8'),
 ])
 
 test('Órdenes de Compra usa Operational Table con key y columnas independientes', () => {
@@ -94,14 +96,14 @@ test('el formulario de OC permite ajustar líneas antes de emitir y reutiliza el
     /pendingUnitPrice/,
     /Sin precio disponible/,
     /invalidPriceItemIds/,
-    /Hay productos sin precio unitario\. Complete el precio antes de emitir la orden\./,
+    /Hay líneas sin precio unitario\. Complete el precio antes de emitir la orden\./,
     /aria-invalid=/,
     /linePriceInputRefs\.current\[invalidPriceItems\[0\]\.tempId\]\?\.focus\(\)/,
     /items\.some\(it => it\.product_id === p\.id\)/,
     /function removeItem\(tempId: string\)/,
     /setItems\(prev => prev\.filter\(it => it\.tempId !== tempId\)\)/,
     /value=\{it\.quantity\}/,
-    /const grandTotal = netTotal - discountTotal \+ taxTotal/,
+    /calculatePurchaseOrderTotals\(items\)/,
     /items: items\.map\(it =>/,
     /quantity: it\.quantity/,
     /handlePreviewPDF/,
@@ -110,7 +112,7 @@ test('el formulario de OC permite ajustar líneas antes de emitir y reutiliza el
     assert.match(panel, pattern)
   }
   assert.match(panel, /po\.status === 'BORRADOR'/)
-  assert.doesNotMatch(panel, /po\.status === 'EMITIDA'[\s\S]*editPO\(po\)/)
+  assert.match(panel, /detail\.po\.status === 'BORRADOR'[\s\S]*editPO\(detail\.po\)/)
 })
 
 test('las líneas del formulario muestran SKU sin hacerlo editable y lo resuelven al editar una OC', () => {
@@ -158,9 +160,9 @@ test('el handoff de Reposición abre Nueva OC mediante searchParams explícito y
   assert.match(panel, /setItems\(payload\.items\.map/)
   assert.match(panel, /setView\('form'\)/)
   assert.match(analysis, /source: 'EXCEL'/)
-  assert.match(analysis, /filter\(row => row\.status === 'VALIDO'/)
+   assert.match(replenishmentImport, /filter\(row => row\.status === 'VALIDO'/)
   assert.match(analysis, /sessionStorage\.setItem\(REPLENISHMENT_PO_PREPARATION_KEY/)
-  assert.match(analysis, /unit_price: cost !== null && cost !== undefined/)
+   assert.match(replenishmentImport, /reference_unit_cost: cost !== null && cost !== undefined/)
 })
 
 test('las bodegas se precargan por empresa, reutilizan caché y solo consultan activas', () => {

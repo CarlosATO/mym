@@ -2,25 +2,24 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ClipboardCheck, Loader2, Plus, Save, Search, Trash2 } from 'lucide-react'
-import {
-  confirmPurchaseOrderSupplierReview,
-  getPurchaseOrderSupplierReviewComparison,
-  updateSentPurchaseOrderReview,
-  type PurchaseOrderReviewChangedField,
-  type PurchaseOrderReviewComparisonLine,
-  type PurchaseOrderReviewItem,
-  type PurchaseOrderSupplierReviewComparison,
-  type SupplierReviewData,
-} from '@/app/actions/adquisiciones/purchase-orders'
+import { confirmPurchaseOrderSupplierReview, getPurchaseOrderSupplierReviewComparison, updateSentPurchaseOrderReview, type PurchaseOrderReviewChangedField, type PurchaseOrderReviewComparisonLine, type PurchaseOrderReviewItem, type PurchaseOrderSupplierReviewComparison, type SupplierReviewData } from '@/app/actions/adquisiciones/purchase-orders'
 import { getPurchaseOrderProductCatalogCached } from './purchase-order-product-cache'
 import type { PurchaseOrderCatalogProduct } from '@/app/actions/adquisiciones/products'
 import { PurchaseOrderNewProductModal } from './purchase-order-new-product-modal'
 import type { LocalCreatedProduct } from '@/lib/integraciones/bsale-product-creation-core'
-import { calculatePurchaseOrderTotals } from '@/lib/adquisiciones/purchase-order-totals'
+import { calculatePurchaseOrderLineTotals, calculatePurchaseOrderTotals } from '@/lib/adquisiciones/purchase-order-totals'
+
+type DiscountMode = 'percent' | 'unit' | null
 
 type EditableReviewItem = Omit<PurchaseOrderReviewItem, 'item_id'> & {
   item_id: string | null
   client_id: string
+  discount_unit_amount: number
+  discount_mode: DiscountMode
+}
+
+function roundDiscount(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100
 }
 
 interface PurchaseOrderSupplierReviewProps {
@@ -33,7 +32,10 @@ interface PurchaseOrderSupplierReviewProps {
 const inputClass = 'h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15'
 
 function currency(value: number | null | undefined, code: string) {
-  return Number(value ?? 0).toLocaleString('es-CL', { style: 'currency', currency: code })
+  return Number(value ?? 0).toLocaleString('es-CL', {
+    style: 'currency',
+    currency: code,
+  })
 }
 
 function signedCurrency(value: number, code: string) {
@@ -57,19 +59,20 @@ function statusLabel(status: string) {
 }
 
 function changedValue(changes: PurchaseOrderReviewChangedField[], field: string) {
-  return changes.find(change => change.field === field)?.original
+  return changes.find((change) => change.field === field)?.original
 }
 
 function displayValue(value: unknown, field: string, code: string) {
   if (value === null || value === undefined || value === '') return '—'
   if (field === 'unit_price') return currency(Number(value), code)
+  if (field === 'discount_unit_amount') return currency(Number(value), code)
   if (field === 'quantity') return Number(value).toLocaleString('es-CL')
   if (field.endsWith('_percent')) return `${value}%`
   return String(value)
 }
 
 function reviewLineMap(comparison: PurchaseOrderReviewComparisonLine[]) {
-  return new Map(comparison.map(line => [line.item_id, line]))
+  return new Map(comparison.map((line) => [line.item_id, line]))
 }
 
 function toEditable(item: PurchaseOrderReviewItem, index: number): EditableReviewItem {
@@ -77,17 +80,23 @@ function toEditable(item: PurchaseOrderReviewItem, index: number): EditableRevie
     ...item,
     item_id: item.item_id || null,
     client_id: item.item_id ? `persisted-${item.item_id}` : `persisted-new-${index}`,
+    discount_unit_amount: item.discount_unit_amount ?? 0,
+    discount_mode: item.discount_percent > 0 ? 'percent' : (item.discount_unit_amount ?? 0) > 0 ? 'unit' : null,
   }
 }
 
+function discountPercentDisplay(line: EditableReviewItem) {
+  if (line.discount_mode !== 'unit') return line.discount_percent
+  return line.unit_price > 0 ? roundDiscount((line.discount_unit_amount / line.unit_price) * 100) : 0
+}
+
+function discountUnitAmountDisplay(line: EditableReviewItem) {
+  if (line.discount_mode !== 'percent') return line.discount_unit_amount
+  return roundDiscount(line.unit_price * line.discount_percent / 100)
+}
+
 function matchesOriginal(line: EditableReviewItem, original: PurchaseOrderReviewItem) {
-  return line.item_type === original.item_type
-    && line.product_id === original.product_id
-    && line.quantity === original.quantity
-    && line.unit_price === original.unit_price
-    && line.discount_percent === original.discount_percent
-    && line.tax_rate === original.tax_rate
-    && line.notes === original.notes
+  return line.item_type === original.item_type && line.product_id === original.product_id && line.quantity === original.quantity && line.unit_price === original.unit_price && line.discount_percent === original.discount_percent && line.discount_unit_amount === (original.discount_unit_amount ?? 0) && line.tax_rate === original.tax_rate && line.notes === original.notes
 }
 
 export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed }: PurchaseOrderSupplierReviewProps) {
@@ -104,9 +113,17 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
   const [newQuantity, setNewQuantity] = useState('1')
   const [newUnitPrice, setNewUnitPrice] = useState('0')
   const [servicePickerOpen, setServicePickerOpen] = useState(false)
-  const [newService, setNewService] = useState({ description: '', quantity: '1', unitPrice: '0', discountPercent: '0', taxRate: '19', notes: '' })
+  const [newService, setNewService] = useState({
+    description: '',
+    quantity: '1',
+    unitPrice: '0',
+    discountPercent: '0',
+    taxRate: '19',
+    notes: '',
+  })
   const [productPickerOpen, setProductPickerOpen] = useState(false)
   const [newProductModalOpen, setNewProductModalOpen] = useState(false)
+  const [showDiscountColumns, setShowDiscountColumns] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -136,7 +153,9 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
     setLoading(false)
   }
 
-  useEffect(() => { void loadComparison() }, [poId])
+  useEffect(() => {
+    void loadComparison()
+  }, [poId])
   function closeProductPicker() {
     setProductPickerOpen(false)
     setSelectedProduct(null)
@@ -145,44 +164,73 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
     setNewUnitPrice('0')
   }
 
-  useEffect(() => { closeProductPicker() }, [poId])
-  useEffect(() => { setNewProductModalOpen(false) }, [poId])
+  useEffect(() => {
+    closeProductPicker()
+  }, [poId])
+  useEffect(() => {
+    setNewProductModalOpen(false)
+  }, [poId])
 
   const statuses = useMemo(() => reviewLineMap(comparison?.comparison ?? []), [comparison])
-  const removedLines = comparison?.comparison.filter(line => line.comparison_status === 'ELIMINADA' && !lines.some(item => item.item_id === line.item_id)) ?? []
+  const removedLines = comparison?.comparison.filter((line) => line.comparison_status === 'ELIMINADA' && !lines.some((item) => item.item_id === line.item_id)) ?? []
   const catalog = productPickerOpen ? catalogCache : []
   const visibleProducts = useMemo(() => {
     const query = catalogQuery.trim().toLocaleLowerCase('es-CL')
     if (!query) return catalog.slice(0, 8)
-    return catalog.filter(product => [product.sku, product.description, product.barcode ?? ''].some(value => value.toLocaleLowerCase('es-CL').includes(query))).slice(0, 8)
+    return catalog.filter((product) => [product.sku, product.description, product.barcode ?? ''].some((value) => value.toLocaleLowerCase('es-CL').includes(query))).slice(0, 8)
   }, [catalog, catalogQuery])
 
   const preview = useMemo(() => calculatePurchaseOrderTotals(lines), [lines])
 
-  const hasPendingPrice = lines.some(line => !Number.isFinite(line.unit_price) || line.unit_price <= 0)
-  const hasInvalidQuantity = lines.some(line => !Number.isFinite(line.quantity) || line.quantity <= 0)
-  const confirmDisabledReason = dirty
-    ? 'Guarda la revisión antes de confirmar la OC.'
-    : hasPendingPrice
-      ? 'Existen líneas con precio pendiente.'
-      : hasInvalidQuantity
-        ? 'Existen líneas con cantidad inválida.'
-        : ''
+  const hasPendingPrice = lines.some((line) => !Number.isFinite(line.unit_price) || line.unit_price <= 0)
+  const hasInvalidQuantity = lines.some((line) => !Number.isFinite(line.quantity) || line.quantity <= 0)
+  const confirmDisabledReason = dirty ? 'Guarda la revisión antes de confirmar la OC.' : hasPendingPrice ? 'Existen líneas con precio pendiente.' : hasInvalidQuantity ? 'Existen líneas con cantidad inválida.' : ''
 
-  function updateLine(itemId: string | null, field: 'quantity' | 'unit_price' | 'discount_percent' | 'tax_rate', value: string) {
+  function updateLine(itemId: string | null, field: 'quantity' | 'unit_price' | 'discount_percent' | 'discount_unit_amount' | 'tax_rate', value: string) {
     const numeric = Number(value)
-    setLines(current => current.map(line => line.item_id === itemId || line.client_id === itemId ? { ...line, [field]: Number.isFinite(numeric) ? numeric : 0 } : line))
+    setLines((current) =>
+      current.map((line) => {
+        if (line.item_id !== itemId && line.client_id !== itemId) return line
+        const nextValue = Number.isFinite(numeric) ? numeric : 0
+        if (field === 'discount_percent') {
+          const discountPercent = Math.min(Math.max(nextValue, 0), 100)
+          return {
+            ...line,
+            discount_percent: discountPercent,
+            discount_unit_amount: 0,
+            discount_mode: 'percent',
+          }
+        }
+        if (field === 'discount_unit_amount') {
+          const discountUnitAmount = Math.min(Math.max(nextValue, 0), Math.max(line.unit_price, 0))
+          return {
+            ...line,
+            discount_unit_amount: discountUnitAmount,
+            discount_percent: 0,
+            discount_mode: 'unit',
+          }
+        }
+        if (field === 'unit_price') {
+          return {
+            ...line,
+            unit_price: nextValue,
+            discount_unit_amount: Math.min(line.discount_unit_amount, Math.max(nextValue, 0)),
+          }
+        }
+        return { ...line, [field]: nextValue }
+      }),
+    )
     setDirty(true)
   }
 
   function removeLine(clientId: string | null) {
-    setLines(current => current.filter(line => line.item_id !== clientId && line.client_id !== clientId))
+    setLines((current) => current.filter((line) => line.item_id !== clientId && line.client_id !== clientId))
     setDirty(true)
   }
 
   function restoreLine(line: PurchaseOrderReviewItem | null) {
     if (!line) return
-    setLines(current => current.some(item => item.item_id === line.item_id) ? current : [...current, toEditable(line, current.length)])
+    setLines((current) => (current.some((item) => item.item_id === line.item_id) ? current : [...current, toEditable(line, current.length)]))
     setDirty(true)
     setMessage('Línea restaurada; guarda la revisión para confirmar.')
   }
@@ -218,24 +266,29 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
       setError('El precio unitario no puede ser negativo.')
       return
     }
-    setLines(current => [...current, {
-      item_id: `new-${++newItemSequence.current}`,
-      client_id: `new-${newItemSequence.current}`,
-      line_number: current.length + 1,
-      item_type: 'PRODUCT',
-      product_id: selectedProduct.id,
-      sku: selectedProduct.sku,
-      product_description: selectedProduct.description,
-      unit: selectedProduct.unit_of_measure,
-      quantity,
-      unit_price: unitPrice,
-      discount_percent: 0,
-      discount_amount: 0,
-      tax_rate: selectedProduct.tax_rate,
-      tax_amount: 0,
-      line_total: 0,
-      notes: null,
-    }])
+    setLines((current) => [
+      ...current,
+      {
+        item_id: `new-${++newItemSequence.current}`,
+        client_id: `new-${newItemSequence.current}`,
+        line_number: current.length + 1,
+        item_type: 'PRODUCT',
+        product_id: selectedProduct.id,
+        sku: selectedProduct.sku,
+        product_description: selectedProduct.description,
+        unit: selectedProduct.unit_of_measure,
+        quantity,
+        unit_price: unitPrice,
+        discount_percent: 0,
+        discount_unit_amount: 0,
+        discount_mode: null,
+        discount_amount: 0,
+        tax_rate: selectedProduct.tax_rate,
+        tax_amount: 0,
+        line_total: 0,
+        notes: null,
+      },
+    ])
     closeProductPicker()
     setDirty(true)
     setError('')
@@ -247,46 +300,103 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
     const unitPrice = Number(newService.unitPrice)
     const discountPercent = Number(newService.discountPercent)
     const taxRate = Number(newService.taxRate)
-    if (!description) { setError('La descripción del servicio es obligatoria.'); return }
-    if (!Number.isFinite(quantity) || quantity <= 0) { setError('La cantidad debe ser mayor que cero.'); return }
-    if (!Number.isFinite(unitPrice) || unitPrice < 0) { setError('El precio unitario no puede ser negativo.'); return }
-    if (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100) { setError('El descuento debe estar entre 0 y 100.'); return }
-    if (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100) { setError('El IVA debe estar entre 0 y 100.'); return }
-    setLines(current => [...current, {
-      item_id: `new-${++newItemSequence.current}`, client_id: `new-${newItemSequence.current}`, line_number: current.length + 1,
-      item_type: 'SERVICE', product_id: null, sku: null, product_description: description, unit: null,
-      quantity, unit_price: unitPrice, discount_percent: discountPercent, discount_amount: 0, tax_rate: taxRate,
-      tax_amount: 0, line_total: 0, notes: newService.notes.trim() || null,
-    }])
-    setNewService({ description: '', quantity: '1', unitPrice: '0', discountPercent: '0', taxRate: '19', notes: '' })
+    if (!description) {
+      setError('La descripción del servicio es obligatoria.')
+      return
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setError('La cantidad debe ser mayor que cero.')
+      return
+    }
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      setError('El precio unitario no puede ser negativo.')
+      return
+    }
+    if (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100) {
+      setError('El descuento debe estar entre 0 y 100.')
+      return
+    }
+    if (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100) {
+      setError('El IVA debe estar entre 0 y 100.')
+      return
+    }
+    setLines((current) => [
+      ...current,
+      {
+        item_id: `new-${++newItemSequence.current}`,
+        client_id: `new-${newItemSequence.current}`,
+        line_number: current.length + 1,
+        item_type: 'SERVICE',
+        product_id: null,
+        sku: null,
+        product_description: description,
+        unit: null,
+        quantity,
+        unit_price: unitPrice,
+        discount_percent: discountPercent,
+        discount_unit_amount: 0,
+        discount_mode: discountPercent > 0 ? 'percent' : null,
+        discount_amount: 0,
+        tax_rate: taxRate,
+        tax_amount: 0,
+        line_total: 0,
+        notes: newService.notes.trim() || null,
+      },
+    ])
+    setNewService({
+      description: '',
+      quantity: '1',
+      unitPrice: '0',
+      discountPercent: '0',
+      taxRate: '19',
+      notes: '',
+    })
     setServicePickerOpen(false)
     setDirty(true)
     setError('')
   }
 
   function addCreatedProduct(product: LocalCreatedProduct, quantity: number, unitPrice: number) {
-    setLines(current => [...current, {
-      item_id: `new-${++newItemSequence.current}`,
-      client_id: `new-${newItemSequence.current}`,
-      line_number: current.length + 1,
-      item_type: 'PRODUCT',
-      product_id: product.id,
-      sku: product.sku,
-      product_description: product.description,
-      unit: null,
-      quantity,
-      unit_price: unitPrice,
-      discount_percent: 0,
-      discount_amount: 0,
-      tax_rate: product.tax_rate,
-      tax_amount: 0,
-      line_total: 0,
-      notes: null,
-    }])
-    setCatalogCache(current => current.some(item => item.id === product.id) ? current : [...current, {
-      id: product.id, sku: product.sku, barcode: product.barcode, description: product.description,
-      unit_of_measure: null, tax_rate: product.tax_rate, bsale_variant_id: product.bsale_variant_id, last_purchase_unit_cost: null,
-    }])
+    setLines((current) => [
+      ...current,
+      {
+        item_id: `new-${++newItemSequence.current}`,
+        client_id: `new-${newItemSequence.current}`,
+        line_number: current.length + 1,
+        item_type: 'PRODUCT',
+        product_id: product.id,
+        sku: product.sku,
+        product_description: product.description,
+        unit: null,
+        quantity,
+        unit_price: unitPrice,
+        discount_percent: 0,
+        discount_unit_amount: 0,
+        discount_mode: null,
+        discount_amount: 0,
+        tax_rate: product.tax_rate,
+        tax_amount: 0,
+        line_total: 0,
+        notes: null,
+      },
+    ])
+    setCatalogCache((current) =>
+      current.some((item) => item.id === product.id)
+        ? current
+        : [
+            ...current,
+            {
+              id: product.id,
+              sku: product.sku,
+              barcode: product.barcode,
+              description: product.description,
+              unit_of_measure: null,
+              tax_rate: product.tax_rate,
+              bsale_variant_id: product.bsale_variant_id,
+              last_purchase_unit_cost: null,
+            },
+          ],
+    )
     setNewProductModalOpen(false)
     closeProductPicker()
     setDirty(true)
@@ -303,14 +413,15 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
     setSaving(true)
     setError('')
     const payload: SupplierReviewData = {
-      items: lines.map(line => ({
+      items: lines.map((line) => ({
         item_id: line.item_id?.startsWith('new-') ? null : line.item_id,
         item_type: line.item_type,
         product_id: line.product_id,
         product_description: line.item_type === 'SERVICE' ? line.product_description : undefined,
         quantity: line.quantity,
         unit_price: line.unit_price,
-        discount_percent: line.discount_percent,
+        discount_percent: line.discount_mode === 'percent' ? line.discount_percent : 0,
+        discount_unit_amount: line.discount_mode === 'unit' ? line.discount_unit_amount : 0,
         tax_rate: line.tax_rate,
         notes: line.notes,
       })),
@@ -362,11 +473,22 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
   }
 
   if (loading) {
-    return <div className="flex h-full items-center justify-center bg-[#EFE9E1] text-sm text-[#6D625B]"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Cargando comparación...</div>
+    return (
+      <div className="flex h-full items-center justify-center bg-[#EFE9E1] text-sm text-[#6D625B]">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Cargando comparación...
+      </div>
+    )
   }
 
   if (error && !comparison) {
-    return <div className="flex h-full flex-col items-center justify-center gap-3 bg-[#EFE9E1] p-6 text-center"><p className="text-sm text-[#72383D]">{error}</p><button onClick={leave} className="rounded-md border border-[#D1C7BD] px-3 py-2 text-xs font-semibold text-[#322D29]">Volver</button></div>
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 bg-[#EFE9E1] p-6 text-center">
+        <p className="text-sm text-[#72383D]">{error}</p>
+        <button onClick={leave} className="rounded-md border border-[#D1C7BD] px-3 py-2 text-xs font-semibold text-[#322D29]">
+          Volver
+        </button>
+      </div>
+    )
   }
 
   if (!comparison) return null
@@ -386,54 +508,414 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
   return (
     <div className="flex h-full min-w-0 flex-col overflow-hidden bg-[#EFE9E1] text-[#322D29]">
       <header className="sticky top-0 z-20 flex shrink-0 flex-wrap items-center justify-between gap-3 bg-[#322D29] px-4 py-3 text-[#EFE9E1] shadow-sm">
-        <div className="flex items-center gap-3"><button onClick={leave} className="rounded-md p-1.5 hover:bg-white/10" title="Volver"><ArrowLeft className="h-4 w-4" /></button><div><div className="flex items-center gap-2"><ClipboardCheck className="h-4 w-4 text-[#D1C7BD]" /><h1 className="text-sm font-bold">Confirmación del proveedor</h1><span className="font-mono text-xs text-[#D1C7BD]">OC {po.correlative}</span></div><p className="text-[11px] text-[#D1C7BD]">Proveedor: {po.supplier_name || '—'} · Estado: ENVIADA_PROVEEDOR</p></div></div>
-         <div className="flex items-center gap-3"><span className="text-[11px] text-[#D1C7BD]">{dirty ? 'Cambios sin guardar' : message}</span><button onClick={() => void saveReview()} disabled={saving || confirming} className="inline-flex items-center gap-1.5 rounded-md bg-[#EFE9E1] px-3 py-2 text-xs font-bold text-[#72383D] disabled:opacity-50"><Save className="h-3.5 w-3.5" /> {saving ? 'Guardando...' : 'Guardar revisión'}</button><button type="button" onClick={openConfirmDialog} disabled={Boolean(confirmDisabledReason) || saving || confirming} title={confirmDisabledReason || 'Confirmar la orden de compra'} className="inline-flex items-center gap-1.5 rounded-md border border-[#D1C7BD] px-3 py-2 text-xs font-bold text-[#EFE9E1] hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50">Confirmar OC</button></div>
+        <div className="flex items-center gap-3">
+          <button onClick={leave} className="rounded-md p-1.5 hover:bg-white/10" title="Volver">
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <div>
+            <div className="flex items-center gap-2">
+              <ClipboardCheck className="h-4 w-4 text-[#D1C7BD]" />
+              <h1 className="text-sm font-bold">Confirmación del proveedor</h1>
+              <span className="font-mono text-xs text-[#D1C7BD]">OC {po.correlative}</span>
+            </div>
+            <p className="text-[11px] text-[#D1C7BD]">Proveedor: {po.supplier_name || '—'} · Estado: ENVIADA_PROVEEDOR</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] text-[#D1C7BD]">{dirty ? 'Cambios sin guardar' : message}</span>
+          <button onClick={() => void saveReview()} disabled={saving || confirming} className="inline-flex items-center gap-1.5 rounded-md bg-[#EFE9E1] px-3 py-2 text-xs font-bold text-[#72383D] disabled:opacity-50">
+            <Save className="h-3.5 w-3.5" /> {saving ? 'Guardando...' : 'Guardar revisión'}
+          </button>
+          <button type="button" onClick={openConfirmDialog} disabled={Boolean(confirmDisabledReason) || saving || confirming} title={confirmDisabledReason || 'Confirmar la orden de compra'} className="inline-flex items-center gap-1.5 rounded-md border border-[#D1C7BD] px-3 py-2 text-xs font-bold text-[#EFE9E1] hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50">
+            Confirmar OC
+          </button>
+        </div>
       </header>
 
-        <main className="min-w-0 flex-1 overflow-auto p-4 lg:p-6">
+      <main className="min-w-0 flex-1 overflow-auto p-4 lg:p-6">
         {error && <div className="mb-3 border border-[#72383D]/30 bg-[#F5EDEE] px-3 py-2 text-xs text-[#72383D]">{error}</div>}
         <section className="mb-4 grid grid-cols-2 gap-3 border border-[#D1C7BD] bg-white/60 p-3 text-xs md:grid-cols-4 xl:grid-cols-7">
-          {[['Proveedor', po.supplier_name], ['RUT', po.supplier_rut], ['Bodega', po.warehouse_name], ['Fecha emisión', dateValue(po.issue_date)], ['Fecha requerida', dateValue(po.required_date)], ['Condición de pago', po.payment_terms], ['Moneda', po.currency]].map(([label, value]) => <div key={label as string}><p className="text-[10px] uppercase tracking-wider text-[#AC9C8D]">{label}</p><p className="mt-1 font-medium">{value || '—'}</p></div>)}
+          {[
+            ['Proveedor', po.supplier_name],
+            ['RUT', po.supplier_rut],
+            ['Bodega', po.warehouse_name],
+            ['Fecha emisión', dateValue(po.issue_date)],
+            ['Fecha requerida', dateValue(po.required_date)],
+            ['Condición de pago', po.payment_terms],
+            ['Moneda', po.currency],
+          ].map(([label, value]) => (
+            <div key={label as string}>
+              <p className="text-[10px] uppercase tracking-wider text-[#AC9C8D]">{label}</p>
+              <p className="mt-1 font-medium">{value || '—'}</p>
+            </div>
+          ))}
         </section>
 
         <section className="mb-4 grid gap-px border border-[#D1C7BD] bg-[#D1C7BD] md:grid-cols-7">
-           {summaryCards.map(([label, value, pending]) => <div key={label} className="bg-white/80 px-3 py-2"><p className="text-[10px] uppercase tracking-wider text-[#AC9C8D]">{label}{pending && <span className="ml-1 normal-case tracking-normal text-[#AC9C8D]">Sin guardar</span>}</p><p className="mt-1 text-sm font-bold tabular-nums">{value}</p></div>)}
+          {summaryCards.map(([label, value, pending]) => (
+            <div key={label} className="bg-white/80 px-3 py-2">
+              <p className="text-[10px] uppercase tracking-wider text-[#AC9C8D]">
+                {label}
+                {pending && <span className="ml-1 normal-case tracking-normal text-[#AC9C8D]">Sin guardar</span>}
+              </p>
+              <p className="mt-1 text-sm font-bold tabular-nums">{value}</p>
+            </div>
+          ))}
+        </section>
+
+        <section className="mb-2 flex justify-end">
+          <button type="button" onClick={() => setShowDiscountColumns((visible) => !visible)} className="rounded-md border border-[#AC9C8D] bg-white/70 px-3 py-2 text-xs font-semibold text-[#6D625B] hover:bg-[#EFE9E1]">
+            {showDiscountColumns ? 'Ocultar descuentos' : 'Agregar descuentos'}
+          </button>
         </section>
 
         <section className="mb-4 overflow-x-auto border border-[#D1C7BD] bg-white">
-          <table className="min-w-[1080px] w-full border-collapse text-xs">
-            <thead><tr className="bg-[#322D29] text-[10px] uppercase tracking-wider text-[#EFE9E1]"><th className="px-3 py-2 text-left">Estado</th><th className="px-3 py-2 text-left">SKU</th><th className="px-3 py-2 text-left">Producto</th><th className="px-3 py-2 text-left">Unidad</th><th className="px-3 py-2 text-right">Cantidad</th><th className="px-3 py-2 text-right">P. unitario</th><th className="px-3 py-2 text-right">Dto %</th><th className="px-3 py-2 text-right">IVA %</th><th className="px-3 py-2 text-right">Total</th><th className="px-3 py-2 text-right">Acción</th></tr></thead>
-            <tbody>{lines.map(line => {
-              const persisted = line.item_id ? statuses.get(line.item_id) : undefined
-               const status = persisted?.comparison_status === 'ELIMINADA' && persisted.original_item
-                 ? matchesOriginal(line, persisted.original_item) ? 'SIN_CAMBIOS' : 'MODIFICADA'
-                 : persisted?.comparison_status ?? 'AGREGADA'
-              return <tr key={line.item_id ?? `${line.product_id}-${line.line_number}`} className="border-b border-[#E5DDD4] align-top"><td className="px-3 py-2"><span className={`inline-flex whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] font-semibold ${statusStyle(status)}`}>{statusLabel(status)}</span></td><td className="px-3 py-2 font-mono text-[#72383D]">{line.sku || '—'}</td><td className="px-3 py-2 font-medium">{line.product_description}{line.unit_price === 0 && <span className="ml-2 text-[10px] text-[#AC9C8D]">Precio pendiente</span>}{persisted?.comparison_status === 'MODIFICADA' && <div className="mt-1 space-y-0.5 text-[10px] text-[#AC9C8D]">{persisted.changed_fields.map(change => <div key={change.field}>Antes {change.field}: {displayValue(change.original, change.field, po.currency)}</div>)}</div>}</td><td className="px-3 py-2">{line.unit || '—'}</td><td className="px-3 py-2"><input aria-label={`Cantidad ${line.product_description}`} type="number" min="0" step="0.01" value={line.quantity} onChange={event => updateLine(line.item_id, 'quantity', event.target.value)} className={`${inputClass} w-24 text-right`} /></td><td className="px-3 py-2"><input aria-label={`Precio ${line.product_description}`} type="number" min="0" step="0.01" value={line.unit_price} onChange={event => updateLine(line.item_id, 'unit_price', event.target.value)} className={`${inputClass} w-28 text-right`} /></td><td className="px-3 py-2"><input aria-label={`Descuento ${line.product_description}`} type="number" min="0" max="100" step="0.01" value={line.discount_percent} onChange={event => updateLine(line.item_id, 'discount_percent', event.target.value)} className={`${inputClass} w-20 text-right`} /></td><td className="px-3 py-2"><input aria-label={`IVA ${line.product_description}`} type="number" min="0" max="100" step="0.01" value={line.tax_rate} onChange={event => updateLine(line.item_id, 'tax_rate', event.target.value)} className={`${inputClass} w-20 text-right`} /></td><td className="px-3 py-2 text-right font-semibold tabular-nums">{currency((line.quantity * line.unit_price) - (line.quantity * line.unit_price * line.discount_percent / 100) + (((line.quantity * line.unit_price) - (line.quantity * line.unit_price * line.discount_percent / 100)) * line.tax_rate / 100), po.currency)}</td><td className="px-3 py-2 text-right"><button onClick={() => removeLine(line.item_id)} className="rounded p-1.5 text-[#6D625B] hover:bg-[#F5EDEE] hover:text-[#72383D]" title="Eliminar línea"><Trash2 className="h-3.5 w-3.5" /></button></td></tr>
-            })}</tbody>
-         </table>
-       </section>
+          <table className={`${showDiscountColumns ? 'min-w-[1240px]' : 'min-w-[1080px]'} w-full border-collapse text-xs`}>
+            <thead>
+              <tr className="bg-[#322D29] text-[10px] uppercase tracking-wider text-[#EFE9E1]">
+                <th className="px-3 py-2 text-left">Estado</th>
+                <th className="px-3 py-2 text-left">SKU</th>
+                <th className="px-3 py-2 text-left">Producto</th>
+                <th className="px-3 py-2 text-left">Unidad</th>
+                <th className="px-3 py-2 text-right">Cantidad</th>
+                <th className="px-3 py-2 text-right">P. unitario</th>
+                {showDiscountColumns && (
+                  <>
+                    <th className="px-3 py-2 text-right">Dcto %</th>
+                    <th className="px-3 py-2 text-right">Dcto por unidad</th>
+                  </>
+                )}
+                <th className="px-3 py-2 text-right">IVA %</th>
+                <th className="px-3 py-2 text-right">Total</th>
+                <th className="px-3 py-2 text-right">Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((line) => {
+                const persisted = line.item_id ? statuses.get(line.item_id) : undefined
+                const status = persisted?.comparison_status === 'ELIMINADA' && persisted.original_item ? (matchesOriginal(line, persisted.original_item) ? 'SIN_CAMBIOS' : 'MODIFICADA') : (persisted?.comparison_status ?? 'AGREGADA')
+                return (
+                  <tr key={line.item_id ?? `${line.product_id}-${line.line_number}`} className="border-b border-[#E5DDD4] align-top">
+                    <td className="px-3 py-2">
+                      <span className={`inline-flex whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] font-semibold ${statusStyle(status)}`}>{statusLabel(status)}</span>
+                    </td>
+                    <td className="px-3 py-2 font-mono text-[#72383D]">{line.sku || '—'}</td>
+                    <td className="px-3 py-2 font-medium">
+                      {line.product_description}
+                      {line.unit_price === 0 && <span className="ml-2 text-[10px] text-[#AC9C8D]">Precio pendiente</span>}
+                      {persisted?.comparison_status === 'MODIFICADA' && (
+                        <div className="mt-1 space-y-0.5 text-[10px] text-[#AC9C8D]">
+                          {persisted.changed_fields.map((change) => (
+                            <div key={change.field}>
+                              Antes {change.field}: {displayValue(change.original, change.field, po.currency)}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">{line.unit || '—'}</td>
+                    <td className="px-3 py-2">
+                      <input aria-label={`Cantidad ${line.product_description}`} type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => updateLine(line.item_id, 'quantity', event.target.value)} className={`${inputClass} w-24 text-right`} />
+                    </td>
+                    <td className="px-3 py-2">
+                      <input aria-label={`Precio ${line.product_description}`} type="number" min="0" step="0.01" value={line.unit_price} onChange={(event) => updateLine(line.item_id, 'unit_price', event.target.value)} className={`${inputClass} w-28 text-right`} />
+                    </td>
+                    {showDiscountColumns && (
+                      <>
+                        <td className="px-3 py-2">
+                          <input aria-label={`Dcto % ${line.product_description}`} type="number" min="0" max="100" step="0.01" value={discountPercentDisplay(line)} onChange={(event) => updateLine(line.item_id, 'discount_percent', event.target.value)} className={`${inputClass} w-20 text-right`} />
+                        </td>
+                        <td className="px-3 py-2">
+                          <input aria-label={`Dcto por unidad ${line.product_description}`} type="number" min="0" max={line.unit_price} step="0.01" value={discountUnitAmountDisplay(line)} onChange={(event) => updateLine(line.item_id, 'discount_unit_amount', event.target.value)} className={`${inputClass} w-28 text-right`} />
+                        </td>
+                      </>
+                    )}
+                    <td className="px-3 py-2">
+                      <input aria-label={`IVA ${line.product_description}`} type="number" min="0" max="100" step="0.01" value={line.tax_rate} onChange={(event) => updateLine(line.item_id, 'tax_rate', event.target.value)} className={`${inputClass} w-20 text-right`} />
+                    </td>
+                    <td className="px-3 py-2 text-right font-semibold tabular-nums">{currency(calculatePurchaseOrderLineTotals(line).line_total, po.currency)}</td>
+                    <td className="px-3 py-2 text-right">
+                      <button onClick={() => removeLine(line.item_id)} className="rounded p-1.5 text-[#6D625B] hover:bg-[#F5EDEE] hover:text-[#72383D]" title="Eliminar línea">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </section>
 
-         {!productPickerOpen && <section className="mb-4 flex flex-wrap gap-2 border border-[#D1C7BD] bg-white/70 p-3">
-           <button type="button" onClick={() => void openCatalog()} disabled={catalogLoading} className="inline-flex items-center gap-1.5 rounded-md border border-[#72383D]/40 px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#72383D]/10 disabled:opacity-50"><Plus className="h-3.5 w-3.5" /> {catalogLoading ? 'Cargando catálogo...' : 'Agregar producto'}</button>
-           <button type="button" onClick={() => setServicePickerOpen(true)} className="inline-flex items-center gap-1.5 rounded-md border border-[#72383D]/40 px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#72383D]/10"><Plus className="h-3.5 w-3.5" /> Agregar servicio</button>
-         </section>}
-         {servicePickerOpen && <section className="mb-4 border border-[#D1C7BD] bg-white/70 p-3"><div className="mb-2 flex items-center justify-between"><span className="text-xs font-semibold text-[#6D625B]">Nuevo servicio</span><button type="button" onClick={() => setServicePickerOpen(false)} className="rounded-md border border-[#D1C7BD] px-2 py-1 text-[11px] font-semibold text-[#6D625B]">Cerrar</button></div><div className="grid gap-2 md:grid-cols-5"><label className="text-[10px] font-semibold md:col-span-2">Descripción *<input value={newService.description} onChange={event => setNewService(prev => ({ ...prev, description: event.target.value }))} className={`${inputClass} mt-1`} /></label><label className="text-[10px] font-semibold">Cantidad<input type="number" min="0.01" step="0.01" value={newService.quantity} onChange={event => setNewService(prev => ({ ...prev, quantity: event.target.value }))} className={`${inputClass} mt-1`} /></label><label className="text-[10px] font-semibold">Precio<input type="number" min="0" step="0.01" value={newService.unitPrice} onChange={event => setNewService(prev => ({ ...prev, unitPrice: event.target.value }))} className={`${inputClass} mt-1`} /></label><label className="text-[10px] font-semibold">Dto %<input type="number" min="0" max="100" step="0.01" value={newService.discountPercent} onChange={event => setNewService(prev => ({ ...prev, discountPercent: event.target.value }))} className={`${inputClass} mt-1`} /></label><label className="text-[10px] font-semibold">IVA %<input type="number" min="0" max="100" step="0.01" value={newService.taxRate} onChange={event => setNewService(prev => ({ ...prev, taxRate: event.target.value }))} className={`${inputClass} mt-1`} /></label></div><label className="mt-2 block text-[10px] font-semibold">Observaciones<textarea rows={2} value={newService.notes} onChange={event => setNewService(prev => ({ ...prev, notes: event.target.value }))} className={`${inputClass} mt-1 h-auto py-1`} /></label><div className="mt-2 flex justify-end"><button type="button" onClick={addService} className="rounded-md bg-[#72383D] px-3 py-2 text-xs font-semibold text-white">Agregar servicio</button></div></section>}
-         {productPickerOpen && !selectedProduct && <section className="mb-4 max-w-2xl border border-[#D1C7BD] bg-white/70 p-3">
-          <div className="mb-2 flex items-center justify-between gap-2"><span className="text-xs font-semibold text-[#6D625B]">Buscar producto</span><button type="button" onClick={closeProductPicker} className="rounded-md border border-[#D1C7BD] px-2 py-1 text-[11px] font-semibold text-[#6D625B] hover:bg-[#EFE9E1]">Cerrar</button></div>
-          <div className="relative"><Search className="absolute left-2 top-2 h-3.5 w-3.5 text-[#AC9C8D]" /><input autoFocus value={catalogQuery} onChange={event => setCatalogQuery(event.target.value)} placeholder="Buscar por SKU, descripción o código de barra" className={`${inputClass} pl-7`} /></div>
-          <div className="mt-2 max-h-[220px] overflow-y-auto divide-y divide-[#E5DDD4] border border-[#D1C7BD]">{visibleProducts.map(product => <button type="button" key={product.id} onClick={() => setSelectedProduct(product)} className="block w-full px-2 py-1.5 text-left text-xs hover:bg-[#EFE9E1]"><span className="font-mono text-[#72383D]">{product.sku}</span> · {product.description} <span className="text-[#AC9C8D]">({product.barcode || 'sin código'})</span></button>)}{visibleProducts.length === 0 && <div className="flex items-center justify-between gap-3 px-2 py-3 text-xs"><span className="text-[#AC9C8D]">No encontramos el producto en el catálogo.</span><button type="button" onClick={() => setNewProductModalOpen(true)} className="whitespace-nowrap rounded-md bg-[#72383D] px-2.5 py-1.5 font-semibold text-white">+ Crear producto nuevo</button></div>}</div>
-        </section>}
-        {productPickerOpen && selectedProduct && <section className="mb-4 border border-[#D1C7BD] bg-white/70 p-3">
-          <div className="flex flex-wrap items-center gap-2"><div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold">{selectedProduct.description}</p><p className="font-mono text-[11px] text-[#72383D]">{selectedProduct.sku}</p></div><input aria-label="Cantidad nuevo producto" type="number" min="0" step="0.01" value={newQuantity} onChange={event => setNewQuantity(event.target.value)} className={`${inputClass} w-24`} /><input aria-label="Precio nuevo producto" type="number" min="0" step="0.01" value={newUnitPrice} onChange={event => setNewUnitPrice(event.target.value)} className={`${inputClass} w-28`} /><button type="button" onClick={addProduct} className="rounded-md bg-[#72383D] px-3 py-2 text-xs font-semibold text-white">Agregar</button><button type="button" onClick={closeProductPicker} className="rounded-md border border-[#D1C7BD] px-3 py-2 text-xs font-semibold text-[#6D625B] hover:bg-[#EFE9E1]">Cancelar</button></div>
-        </section>}
+        {!productPickerOpen && (
+          <section className="mb-4 flex flex-wrap gap-2 border border-[#D1C7BD] bg-white/70 p-3">
+            <button type="button" onClick={() => void openCatalog()} disabled={catalogLoading} className="inline-flex items-center gap-1.5 rounded-md border border-[#72383D]/40 px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#72383D]/10 disabled:opacity-50">
+              <Plus className="h-3.5 w-3.5" /> {catalogLoading ? 'Cargando catálogo...' : 'Agregar producto'}
+            </button>
+            <button type="button" onClick={() => setServicePickerOpen(true)} className="inline-flex items-center gap-1.5 rounded-md border border-[#72383D]/40 px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#72383D]/10">
+              <Plus className="h-3.5 w-3.5" /> Agregar servicio
+            </button>
+          </section>
+        )}
+        {servicePickerOpen && (
+          <section className="mb-4 border border-[#D1C7BD] bg-white/70 p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-semibold text-[#6D625B]">Nuevo servicio</span>
+              <button type="button" onClick={() => setServicePickerOpen(false)} className="rounded-md border border-[#D1C7BD] px-2 py-1 text-[11px] font-semibold text-[#6D625B]">
+                Cerrar
+              </button>
+            </div>
+            <div className="grid gap-2 md:grid-cols-5">
+              <label className="text-[10px] font-semibold md:col-span-2">
+                Descripción *
+                <input
+                  value={newService.description}
+                  onChange={(event) =>
+                    setNewService((prev) => ({
+                      ...prev,
+                      description: event.target.value,
+                    }))
+                  }
+                  className={`${inputClass} mt-1`}
+                />
+              </label>
+              <label className="text-[10px] font-semibold">
+                Cantidad
+                <input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={newService.quantity}
+                  onChange={(event) =>
+                    setNewService((prev) => ({
+                      ...prev,
+                      quantity: event.target.value,
+                    }))
+                  }
+                  className={`${inputClass} mt-1`}
+                />
+              </label>
+              <label className="text-[10px] font-semibold">
+                Precio
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={newService.unitPrice}
+                  onChange={(event) =>
+                    setNewService((prev) => ({
+                      ...prev,
+                      unitPrice: event.target.value,
+                    }))
+                  }
+                  className={`${inputClass} mt-1`}
+                />
+              </label>
+              <label className="text-[10px] font-semibold">
+                Dto %
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  value={newService.discountPercent}
+                  onChange={(event) =>
+                    setNewService((prev) => ({
+                      ...prev,
+                      discountPercent: event.target.value,
+                    }))
+                  }
+                  className={`${inputClass} mt-1`}
+                />
+              </label>
+              <label className="text-[10px] font-semibold">
+                IVA %
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  value={newService.taxRate}
+                  onChange={(event) =>
+                    setNewService((prev) => ({
+                      ...prev,
+                      taxRate: event.target.value,
+                    }))
+                  }
+                  className={`${inputClass} mt-1`}
+                />
+              </label>
+            </div>
+            <label className="mt-2 block text-[10px] font-semibold">
+              Observaciones
+              <textarea
+                rows={2}
+                value={newService.notes}
+                onChange={(event) =>
+                  setNewService((prev) => ({
+                    ...prev,
+                    notes: event.target.value,
+                  }))
+                }
+                className={`${inputClass} mt-1 h-auto py-1`}
+              />
+            </label>
+            <div className="mt-2 flex justify-end">
+              <button type="button" onClick={addService} className="rounded-md bg-[#72383D] px-3 py-2 text-xs font-semibold text-white">
+                Agregar servicio
+              </button>
+            </div>
+          </section>
+        )}
+        {productPickerOpen && !selectedProduct && (
+          <section className="mb-4 max-w-2xl border border-[#D1C7BD] bg-white/70 p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-[#6D625B]">Buscar producto</span>
+              <button type="button" onClick={closeProductPicker} className="rounded-md border border-[#D1C7BD] px-2 py-1 text-[11px] font-semibold text-[#6D625B] hover:bg-[#EFE9E1]">
+                Cerrar
+              </button>
+            </div>
+            <div className="relative">
+              <Search className="absolute left-2 top-2 h-3.5 w-3.5 text-[#AC9C8D]" />
+              <input autoFocus value={catalogQuery} onChange={(event) => setCatalogQuery(event.target.value)} placeholder="Buscar por SKU, descripción o código de barra" className={`${inputClass} pl-7`} />
+            </div>
+            <div className="mt-2 max-h-[220px] overflow-y-auto divide-y divide-[#E5DDD4] border border-[#D1C7BD]">
+              {visibleProducts.map((product) => (
+                <button type="button" key={product.id} onClick={() => setSelectedProduct(product)} className="block w-full px-2 py-1.5 text-left text-xs hover:bg-[#EFE9E1]">
+                  <span className="font-mono text-[#72383D]">{product.sku}</span> · {product.description} <span className="text-[#AC9C8D]">({product.barcode || 'sin código'})</span>
+                </button>
+              ))}
+              {visibleProducts.length === 0 && (
+                <div className="flex items-center justify-between gap-3 px-2 py-3 text-xs">
+                  <span className="text-[#AC9C8D]">No encontramos el producto en el catálogo.</span>
+                  <button type="button" onClick={() => setNewProductModalOpen(true)} className="whitespace-nowrap rounded-md bg-[#72383D] px-2.5 py-1.5 font-semibold text-white">
+                    + Crear producto nuevo
+                  </button>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+        {productPickerOpen && selectedProduct && (
+          <section className="mb-4 border border-[#D1C7BD] bg-white/70 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-semibold">{selectedProduct.description}</p>
+                <p className="font-mono text-[11px] text-[#72383D]">{selectedProduct.sku}</p>
+              </div>
+              <input aria-label="Cantidad nuevo producto" type="number" min="0" step="0.01" value={newQuantity} onChange={(event) => setNewQuantity(event.target.value)} className={`${inputClass} w-24`} />
+              <input aria-label="Precio nuevo producto" type="number" min="0" step="0.01" value={newUnitPrice} onChange={(event) => setNewUnitPrice(event.target.value)} className={`${inputClass} w-28`} />
+              <button type="button" onClick={addProduct} className="rounded-md bg-[#72383D] px-3 py-2 text-xs font-semibold text-white">
+                Agregar
+              </button>
+              <button type="button" onClick={closeProductPicker} className="rounded-md border border-[#D1C7BD] px-3 py-2 text-xs font-semibold text-[#6D625B] hover:bg-[#EFE9E1]">
+                Cancelar
+              </button>
+            </div>
+          </section>
+        )}
 
+        {removedLines.length > 0 && (
+          <section className="mb-4 border border-[#D1C7BD] bg-white/70 p-3">
+            <h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-[#6D625B]">Productos no disponibles / eliminados</h2>
+            <div className="overflow-x-auto">
+              <table className="min-w-[820px] w-full text-xs">
+                <thead>
+                  <tr className="border-b border-[#D1C7BD] text-left text-[10px] uppercase text-[#AC9C8D]">
+                    <th className="py-2">Estado</th>
+                    <th>SKU</th>
+                    <th>Descripción</th>
+                    <th className="text-right">Cantidad</th>
+                    <th className="text-right">Precio</th>
+                    <th className="text-right">Total</th>
+                    <th className="text-right">Acción</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {removedLines.map((line) => (
+                    <tr key={line.item_id} className="border-b border-[#E5DDD4]">
+                      <td className="py-2">
+                        <span className={`rounded border px-1.5 py-0.5 text-[10px] ${statusStyle('ELIMINADA')}`}>Eliminada</span>
+                      </td>
+                      <td className="font-mono">{line.original_item?.sku || '—'}</td>
+                      <td>{line.original_item?.product_description || '—'}</td>
+                      <td className="text-right">{line.original_item?.quantity ?? '—'}</td>
+                      <td className="text-right">{currency(line.original_item?.unit_price, po.currency)}</td>
+                      <td className="text-right font-semibold">{currency(line.original_item?.line_total, po.currency)}</td>
+                      <td className="text-right">
+                        <button type="button" onClick={() => restoreLine(line.original_item)} className="rounded border border-[#72383D]/40 px-2 py-1 text-[11px] font-semibold text-[#72383D] hover:bg-[#72383D]/10">
+                          Restaurar
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
 
-         {removedLines.length > 0 && <section className="mb-4 border border-[#D1C7BD] bg-white/70 p-3"><h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-[#6D625B]">Productos no disponibles / eliminados</h2><div className="overflow-x-auto"><table className="min-w-[820px] w-full text-xs"><thead><tr className="border-b border-[#D1C7BD] text-left text-[10px] uppercase text-[#AC9C8D]"><th className="py-2">Estado</th><th>SKU</th><th>Descripción</th><th className="text-right">Cantidad</th><th className="text-right">Precio</th><th className="text-right">Total</th><th className="text-right">Acción</th></tr></thead><tbody>{removedLines.map(line => <tr key={line.item_id} className="border-b border-[#E5DDD4]"><td className="py-2"><span className={`rounded border px-1.5 py-0.5 text-[10px] ${statusStyle('ELIMINADA')}`}>Eliminada</span></td><td className="font-mono">{line.original_item?.sku || '—'}</td><td>{line.original_item?.product_description || '—'}</td><td className="text-right">{line.original_item?.quantity ?? '—'}</td><td className="text-right">{currency(line.original_item?.unit_price, po.currency)}</td><td className="text-right font-semibold">{currency(line.original_item?.line_total, po.currency)}</td><td className="text-right"><button type="button" onClick={() => restoreLine(line.original_item)} className="rounded border border-[#72383D]/40 px-2 py-1 text-[11px] font-semibold text-[#72383D] hover:bg-[#72383D]/10">Restaurar</button></td></tr>)}</tbody></table></div></section>}
-
-          <section className="flex justify-end border-t border-[#D1C7BD] pt-3"><div className="w-72 space-y-1 text-xs"><div className="flex justify-between"><span className="text-[#AC9C8D]">Subtotal bruto</span><span>{currency(preview.gross_total, po.currency)}</span></div><div className="flex justify-between"><span className="text-[#AC9C8D]">Descuentos</span><span>{currency(preview.discount_total, po.currency)}</span></div><div className="flex justify-between"><span className="text-[#AC9C8D]">Neto final</span><span>{currency(preview.net_total, po.currency)}</span></div><div className="flex justify-between"><span className="text-[#AC9C8D]">IVA</span><span>{currency(preview.tax_total, po.currency)}</span></div><div className="flex justify-between border-t border-[#D1C7BD] pt-1 font-bold text-[#72383D]"><span>Total OC</span><span>{currency(preview.grand_total, po.currency)}</span></div></div></section>
-         {confirmDialogOpen && <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#322D29]/60 p-4"><section role="dialog" aria-modal="true" aria-labelledby="confirm-purchase-order-title" className="w-full max-w-md border border-[#D1C7BD] bg-[#EFE9E1] p-5 text-[#322D29] shadow-xl"><h2 id="confirm-purchase-order-title" className="text-base font-bold text-[#72383D]">Confirmar orden de compra</h2><div className="mt-3 space-y-1 text-xs"><p><span className="font-semibold">OC:</span> {po.correlative}</p><p><span className="font-semibold">Proveedor:</span> {po.supplier_name || '—'}</p><p><span className="font-semibold">Total definitivo:</span> {currency(displayCurrentTotal, po.currency)}</p></div><div className="mt-3 border-y border-[#D1C7BD] py-3 text-xs"><p className="font-semibold">Resumen</p><p>Modificadas: {summary.modified_count}</p><p>Eliminadas: {summary.removed_count}</p><p>Agregadas: {summary.added_count}</p></div><p className="mt-3 text-xs text-[#6D625B]">Esta acción cerrará la revisión del proveedor y dejará esta versión como definitiva para recepción. Después de confirmar, la OC ya no podrá editarse desde esta pantalla.</p>{error && <p className="mt-3 border border-[#72383D]/30 bg-[#F5EDEE] px-3 py-2 text-xs text-[#72383D]">{error}</p>}<div className="mt-4 flex justify-end gap-2"><button type="button" onClick={() => setConfirmDialogOpen(false)} disabled={confirming} className="rounded-md border border-[#D1C7BD] px-3 py-2 text-xs font-semibold text-[#6D625B] disabled:opacity-50">Cancelar</button><button type="button" onClick={() => void confirmReview()} disabled={confirming} className="rounded-md bg-[#72383D] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{confirming ? 'Confirmando...' : 'Confirmar definitivamente'}</button></div></section></div>}
-        </main>
-       <PurchaseOrderNewProductModal poId={poId} open={newProductModalOpen} onClose={() => setNewProductModalOpen(false)} onCreated={addCreatedProduct} />
+        <section className="flex justify-end border-t border-[#D1C7BD] pt-3">
+          <div className="w-72 space-y-1 text-xs">
+            <div className="flex justify-between">
+              <span className="text-[#AC9C8D]">Subtotal bruto</span>
+              <span>{currency(preview.gross_total, po.currency)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-[#AC9C8D]">Descuentos</span>
+              <span>{currency(preview.discount_total, po.currency)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-[#AC9C8D]">Neto final</span>
+              <span>{currency(preview.net_total, po.currency)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-[#AC9C8D]">IVA</span>
+              <span>{currency(preview.tax_total, po.currency)}</span>
+            </div>
+            <div className="flex justify-between border-t border-[#D1C7BD] pt-1 font-bold text-[#72383D]">
+              <span>Total OC</span>
+              <span>{currency(preview.grand_total, po.currency)}</span>
+            </div>
+          </div>
+        </section>
+        {confirmDialogOpen && (
+          <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#322D29]/60 p-4">
+            <section role="dialog" aria-modal="true" aria-labelledby="confirm-purchase-order-title" className="w-full max-w-md border border-[#D1C7BD] bg-[#EFE9E1] p-5 text-[#322D29] shadow-xl">
+              <h2 id="confirm-purchase-order-title" className="text-base font-bold text-[#72383D]">
+                Confirmar orden de compra
+              </h2>
+              <div className="mt-3 space-y-1 text-xs">
+                <p>
+                  <span className="font-semibold">OC:</span> {po.correlative}
+                </p>
+                <p>
+                  <span className="font-semibold">Proveedor:</span> {po.supplier_name || '—'}
+                </p>
+                <p>
+                  <span className="font-semibold">Total definitivo:</span> {currency(displayCurrentTotal, po.currency)}
+                </p>
+              </div>
+              <div className="mt-3 border-y border-[#D1C7BD] py-3 text-xs">
+                <p className="font-semibold">Resumen</p>
+                <p>Modificadas: {summary.modified_count}</p>
+                <p>Eliminadas: {summary.removed_count}</p>
+                <p>Agregadas: {summary.added_count}</p>
+              </div>
+              <p className="mt-3 text-xs text-[#6D625B]">Esta acción cerrará la revisión del proveedor y dejará esta versión como definitiva para recepción. Después de confirmar, la OC ya no podrá editarse desde esta pantalla.</p>
+              {error && <p className="mt-3 border border-[#72383D]/30 bg-[#F5EDEE] px-3 py-2 text-xs text-[#72383D]">{error}</p>}
+              <div className="mt-4 flex justify-end gap-2">
+                <button type="button" onClick={() => setConfirmDialogOpen(false)} disabled={confirming} className="rounded-md border border-[#D1C7BD] px-3 py-2 text-xs font-semibold text-[#6D625B] disabled:opacity-50">
+                  Cancelar
+                </button>
+                <button type="button" onClick={() => void confirmReview()} disabled={confirming} className="rounded-md bg-[#72383D] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">
+                  {confirming ? 'Confirmando...' : 'Confirmar definitivamente'}
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
+      </main>
+      <PurchaseOrderNewProductModal poId={poId} open={newProductModalOpen} onClose={() => setNewProductModalOpen(false)} onCreated={addCreatedProduct} />
     </div>
   )
 }
