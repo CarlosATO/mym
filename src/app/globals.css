@@ -243,6 +243,21 @@ input[type="number"] {
   -moz-appearance: textfield;
 }
 
+@keyframes cobranzaLocatePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(114, 56, 61, 0); }
+  50% { box-shadow: 0 0 0 3px rgba(114, 56, 61, 0.35); }
+}
+
+.cobranza-locate {
+  animation: cobranzaLocatePulse 1.2s ease-in-out 3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cobranza-locate {
+    animation: none;
+  }
+}
+
 /* Ocultar barra de desplazamiento manteniendo funcionalidad */
 .hide-scrollbar::-webkit-scrollbar {
   display: none;

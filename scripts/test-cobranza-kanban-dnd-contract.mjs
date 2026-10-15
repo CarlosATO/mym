@@ -46,9 +46,10 @@ test('CLOSED no es destino de drag', () => {
   assert.match(view, /disabled: stage\.key === 'CLOSED'/)
 })
 
-test('PAYMENT_COMMITMENT exige fecha y monto', () => {
+test('PAYMENT_COMMITMENT exige fecha y permite monto opcional', () => {
   assert.match(view, /nextStage === 'PAYMENT_COMMITMENT'/)
-  assert.match(view, /!commitmentAt \|\| !Number\.isFinite\(amount\) \|\| amount <= 0/)
+  assert.match(view, /if \(!commitmentAt\)/)
+  assert.match(view, /amount !== null && \(!Number\.isFinite\(amount\) \|\| amount <= 0\)/)
   assert.match(view, /amount > clientTotal/)
 })
 
@@ -103,29 +104,32 @@ test('selector del drawer continúa como fallback', () => {
 
 test('clientes son los únicos datos del contexto DnD', () => {
   assert.match(view, /viewMode === 'CLIENTS' \? <DndContext/)
-  assert.match(view, /clients=\{sortedClients\.filter/)
+  assert.match(view, /const stageClients = sortedClients\.filter/)
+  assert.match(view, /clients=\{includeLocated && locatedClient/)
   assert.match(view, /sortedInvoices\.filter/)
 })
 
-test('Kanban responsive conserva ancho y permite scroll horizontal', () => {
+test('Kanban conserva ancho mínimo legible y scroll horizontal local', () => {
   assert.match(view, /overflow-x-auto pb-2/)
-  assert.match(view, /min-w-\[1240px\]/)
-  assert.match(view, /grid-cols-\[repeat\(5,minmax\(240px,1fr\)\)\]/)
-  assert.match(view, /className=\{`min-w-\[240px\]/)
+  assert.match(view, /min-w-\[1120px\]/)
+  assert.match(view, /grid-cols-\[repeat\(5,minmax\(212px,1fr\)\)\]/)
+  assert.match(view, /className=\{`min-w-0 border/)
 })
 
-test('tarjeta conserva acciones rápidas sin comprimir controles', () => {
+test('tarjeta conserva acciones rápidas utilizables en ancho compacto', () => {
   assert.match(card, /flex flex-wrap gap-1 border/)
-  assert.match(card, /min-w-\[100px\] flex-1 border.*Copiar mensaje/)
-  assert.match(card, /min-w-\[100px\] flex-1 border.*Agregar nota/)
+  assert.match(card, /min-w-\[84px\] flex-1 border.*Copiar mensaje/)
+  assert.match(card, /min-w-\[84px\] flex-1 border.*Agregar nota/)
 })
 
-test('KPI usa cuatro columnas sólo cuando el ancho lo permite', () => {
-  assert.match(view, /mt-4 grid gap-1\.5 sm:grid-cols-2 xl:grid-cols-4/)
+test('KPIs compactos viven en el header en 2x2 y desaparece la fila independiente', () => {
+  assert.match(view, /grid grid-cols-2 grid-rows-2 gap-px bg-\[#EAE2D9\]/)
+  assert.doesNotMatch(view, /mt-4 grid gap-1\.5 sm:grid-cols-2 xl:grid-cols-4/)
+  assert.doesNotMatch(view, /Cobranza priorizada/)
 })
 
 test('toolbar admite wrap y mantiene búsqueda legible', () => {
-  assert.match(view, /flex w-full flex-wrap items-center gap-1\.5 lg:w-auto/)
+  assert.match(view, /mt-2\.5 flex flex-wrap items-center gap-1\.5 border-b border-\[#D1C7BD\]/)
   assert.match(view, /w-full min-w-\[220px\].*sm:w-52/)
 })
 

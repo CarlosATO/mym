@@ -73,7 +73,8 @@ test('selector de etapa usa Popover y conserva las cuatro etiquetas', () => {
   assert.doesNotMatch(view, /id="collection-stage"[\s\S]*<select/)
 })
 test('compromiso y seguimiento exigen sus datos', () => {
-  assert.match(view, /!commitmentAt \|\| !Number\.isFinite\(amount\) \|\| amount <= 0/)
+  assert.match(view, /if \(!commitmentAt\)/)
+  assert.match(view, /amount !== null && \(!Number\.isFinite\(amount\) \|\| amount <= 0\)/)
   assert.match(view, /amount > clientTotal/)
   assert.match(view, /!nextActionAt/)
 })

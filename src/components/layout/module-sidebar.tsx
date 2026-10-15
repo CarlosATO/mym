@@ -84,6 +84,8 @@ export function ModuleSidebar({ identity, navigation, collapsed, responsiveColla
       <div className={cn('border-t p-3', variant === 'financial' ? 'border-[#AC9C8D]/30 bg-[#322D29]' : 'border-theme-sidebar-border bg-theme-sidebar-surface', effectiveCollapsed && 'md:px-2')}>
         <button
           title={collapsed ? 'Expandir navegación' : responsiveCollapsed ? 'Navegación compacta en este ancho' : 'Contraer navegación'}
+          aria-label={collapsed ? 'Expandir navegación' : responsiveCollapsed ? 'Navegación compacta en este ancho' : 'Contraer navegación'}
+          aria-expanded={!effectiveCollapsed}
           onClick={onToggle}
           className={cn('hidden w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold md:flex', variant === 'financial' ? 'text-[#AC9C8D] hover:bg-white/10 hover:text-[#EFE9E1]' : 'text-theme-sidebar-muted hover:bg-theme-sidebar-hover hover:text-theme-sidebar-text')}
         >
@@ -127,12 +129,12 @@ function SidebarItem({ item, location, collapsed, permissions, variant, onNaviga
   )
 
   if (item.disabled) {
-    return <div title={collapsed ? item.label : undefined} className={className}>{itemContent}{children.map(child => <SidebarItem key={child.id} item={child} location={location} collapsed={collapsed} permissions={permissions} variant={variant} onNavigate={onNavigate} depth={depth + 1} />)}</div>
+    return <div title={collapsed ? item.label : undefined} aria-label={collapsed ? item.label : undefined} className={className}>{itemContent}{children.map(child => <SidebarItem key={child.id} item={child} location={location} collapsed={collapsed} permissions={permissions} variant={variant} onNavigate={onNavigate} depth={depth + 1} />)}</div>
   }
 
   return (
     <>
-      <Link href={href} title={collapsed ? item.label : undefined} onClick={onNavigate} className={className}>
+      <Link href={href} title={collapsed ? item.label : undefined} aria-label={collapsed ? item.label : undefined} onClick={onNavigate} className={className}>
         {itemContent}
       </Link>
       {children.map(child => <SidebarItem key={child.id} item={child} location={location} collapsed={collapsed} permissions={permissions} variant={variant} onNavigate={onNavigate} depth={depth + 1} />)}

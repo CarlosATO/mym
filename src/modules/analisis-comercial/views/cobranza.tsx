@@ -23,10 +23,11 @@ import { Button } from '@/components/ui/button'
 import type { FinanceReceivablesAnalysis } from '@/lib/control-financiero/finance-api'
 import { formatReceivablesSnapshotAt, getReceivablesFreshness } from '@/lib/control-financiero/receivables-freshness'
 import { applyCobranzaPaymentOverlay, buildCobranzaClients, buildCobranzaInvoices, calculateCobranzaClientKpis, calculateCobranzaInvoiceKpis, type CobranzaClient } from '../lib/cobranza-metrics'
+import { buildCobranzaTasks, civilDate, effectivePriority, prioritizeCobranzaColumn, taskForClient, todayInChile, type CobranzaTask } from '../lib/cobranza-tasks'
 import { CobranzaFreshnessNotice } from '../components/cobranza-freshness-notice'
 import { CobranzaSnapshotControl } from '../components/cobranza-snapshot-control'
 import type { ReceivablesSnapshotStatus } from '@/app/actions/comercial/cobranza-snapshot'
-import { getCollectionCustomerHistory, getCollectionPaymentBatchProgress, getCollectionPaymentOverlay, getCollectionWorkflow, getRecentClosedCollectionCustomers, getUnknownCollectionPaymentAttempts, listCollectionPaymentBatchProgress, prepareCollectionCustomerBatch, prepareCollectionPayment, registerCollectionCustomerBatch, registerCollectionInteraction, registerCollectionPayment, reopenCollectionCustomersWithDebt, resolveUnknownCollectionPayment, updateCollectionStage, type CollectionHistoryEvent, type CollectionInteractionType, type CollectionPaymentBatchProgress, type CollectionPaymentOverlay, type CollectionStage, type RecentClosedCollectionCustomer } from '@/app/actions/comercial/cobranza-workflow'
+import { clearCollectionCommitment, getCollectionCustomerHistory, getCollectionPaymentBatchProgress, getCollectionPaymentOverlay, getCollectionWorkflow, getRecentClosedCollectionCustomers, getUnknownCollectionPaymentAttempts, listCollectionPaymentBatchProgress, prepareCollectionCustomerBatch, prepareCollectionPayment, registerCollectionCustomerBatch, registerCollectionInteraction, registerCollectionPayment, reopenCollectionCustomersWithDebt, resolveUnknownCollectionPayment, setCollectionCommitment, updateCollectionStage, type CollectionHistoryEvent, type CollectionInteractionType, type CollectionPaymentBatchProgress, type CollectionPaymentOverlay, type CollectionStage, type RecentClosedCollectionCustomer } from '@/app/actions/comercial/cobranza-workflow'
 
 const stages: Array<{ key: CollectionStage; label: string }> = [
   { key: 'TO_MANAGE', label: 'Por gestionar' },
@@ -61,7 +62,9 @@ const clpInput = (value: string) => value ? money(Number(value)) : ''
 
 const dateLabel = (value: string | null) => {
   if (!value) return '—'
-  return new Intl.DateTimeFormat('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(`${value.slice(0, 10)}T12:00:00`))
+  const date = civilDate(value) ?? value.slice(0, 10)
+  const [year, month, day] = date.split('-')
+  return `${day}/${month}/${year}`
 }
 
 const dateTimeLabel = (value: string) => new Intl.DateTimeFormat('es-CL', {
@@ -72,7 +75,11 @@ const stageLabel = (stage: CollectionStage | null) => stages.find(option => opti
 
 const historyTitle = (event: CollectionHistoryEvent) => {
   if (event.eventType === 'STAGE_CHANGED') return 'Cambio de etapa'
-  if (event.eventType === 'COMMITMENT') return 'Compromiso de pago registrado'
+  if (event.eventType === 'COMMITMENT') {
+    if (event.metadata.action === 'UPDATED') return 'Compromiso actualizado'
+    if (event.metadata.action === 'CLEARED') return 'Compromiso eliminado'
+    return 'Compromiso de pago registrado'
+  }
   if (event.eventType === 'PAYMENT_CLOSED') return 'Cobranza cerrada'
   if (event.eventType === 'REOPENED_BY_NEW_DEBT') return 'Cobranza reabierta por nueva deuda'
   if (event.eventType === 'NOTE') return 'Nota de cobranza'
@@ -96,12 +103,11 @@ export const buildCollectionMessage = (client: CobranzaClient) => {
   return `Hola ${client.name}, junto con saludar, según nuestros registros ${balanceMessage}${documentSummary} ¿Nos podría confirmar una fecha estimada de pago? Gracias.`
 }
 
-function Kpi({ label, value, detail }: { label: string; value: string; detail?: string }) {
+function MiniKpi({ label, value, tone = 'default' }: { label: string; value: string; tone?: 'default' | 'overdue' }) {
   return (
-    <div className="border border-[#D1C7BD] bg-white px-3 py-2.5">
-      <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#AC9C8D]">{label}</p>
-      <p className="mt-1 text-base font-semibold tabular-nums text-[#322D29]">{value}</p>
-      {detail && <p className="mt-0.5 text-[10px] text-[#322D29]/50">{detail}</p>}
+    <div className="min-w-0 bg-white px-2.5 py-1.5">
+      <p className="truncate text-[8px] font-bold uppercase tracking-[0.1em] text-[#AC9C8D]">{label}</p>
+      <p className={`mt-0.5 truncate text-sm font-semibold tabular-nums ${tone === 'overdue' ? 'text-[#8A4B4B]' : 'text-[#322D29]'}`}>{value}</p>
     </div>
   )
 }
@@ -287,9 +293,9 @@ function PaymentProgressObserver() {
   const activeCount = listing?.activeCount ?? 0
   const requiresReviewCount = listing?.requiresReviewCount ?? 0
   return <>
-    <div className="flex flex-wrap items-center justify-end gap-1.5" data-payment-progress-observer>
-      <button type="button" onClick={openProgress} className={`border px-2.5 py-1.5 text-left ${activeCount > 0 ? 'border-[#B38A55]/50 bg-[#F6EFE2] text-[#806238] hover:border-[#72383D]' : 'border-[#D1C7BD] bg-white text-[#322D29]/65'}`}><span className="text-[10px] font-semibold">Pagos en proceso: <strong>{activeCount}</strong></span>{activeCount > 0 && <span className="ml-1.5 text-[9px]">Procesamiento en segundo plano</span>}</button>
-      <button type="button" onClick={openProgress} className={`border px-2.5 py-1.5 text-left ${requiresReviewCount > 0 ? 'border-[#A45B58]/60 bg-[#F5E8E4] text-[#8A4B4B] hover:border-[#72383D]' : 'border-[#D1C7BD] bg-white text-[#322D29]/65'}`}><span className="text-[10px] font-semibold">Requieren revisión: <strong>{requiresReviewCount}</strong></span></button>
+    <div className="grid grid-cols-2 gap-1.5" data-payment-progress-observer>
+      <button type="button" onClick={openProgress} className={`min-w-0 border px-2 py-1 text-left ${activeCount > 0 ? 'border-[#B38A55]/50 bg-[#F6EFE2] text-[#806238] hover:border-[#72383D]' : 'border-[#D1C7BD] bg-white text-[#322D29]/65'}`}><span className="block truncate text-[10px] font-semibold">Pagos en proceso: <strong>{activeCount}</strong></span></button>
+      <button type="button" onClick={openProgress} className={`min-w-0 border px-2 py-1 text-left ${requiresReviewCount > 0 ? 'border-[#A45B58]/60 bg-[#F5E8E4] text-[#8A4B4B] hover:border-[#72383D]' : 'border-[#D1C7BD] bg-white text-[#322D29]/65'}`}><span className="block truncate text-[10px] font-semibold">Requieren revisión: <strong>{requiresReviewCount}</strong></span></button>
     </div>
     <PaymentProgressSheet open={open} onOpenChange={setOpen} listing={listing} loading={loading} error={error} selectedBatch={selectedBatch} detailLoading={detailLoading} onRefresh={() => void refreshProgress()} onSelectBatch={batchId => void selectBatch(batchId)} onBack={backToList} />
   </>
@@ -346,12 +352,16 @@ function CollectionStageDialog({
   const confirm = async () => {
     if (!nextStage || processing) return
     if (nextStage === 'PAYMENT_COMMITMENT') {
-      const amount = Number(commitmentAmount)
-      if (!commitmentAt || !Number.isFinite(amount) || amount <= 0) {
-        setError('Ingresa una fecha y un monto comprometido mayor que cero.')
+      const amount = commitmentAmount === '' ? null : Number(commitmentAmount)
+      if (!commitmentAt) {
+        setError('Ingresa una fecha de compromiso.')
         return
       }
-      if (amount > clientTotal) {
+      if (amount !== null && (!Number.isFinite(amount) || amount <= 0)) {
+        setError('El monto comprometido debe ser mayor que cero.')
+        return
+      }
+      if (amount !== null && amount > clientTotal) {
         setError(`El monto no puede superar la deuda pendiente de ${money(clientTotal)}.`)
         return
       }
@@ -367,7 +377,7 @@ function CollectionStageDialog({
         stage: nextStage,
         note,
         commitmentAt: nextStage === 'PAYMENT_COMMITMENT' ? commitmentAt : undefined,
-        commitmentAmount: nextStage === 'PAYMENT_COMMITMENT' ? Number(commitmentAmount) : undefined,
+        commitmentAmount: nextStage === 'PAYMENT_COMMITMENT' && commitmentAmount !== '' ? Number(commitmentAmount) : undefined,
         nextActionAt: nextStage === 'FOLLOW_UP' ? nextActionAt : undefined,
       })
     } catch (cause) {
@@ -389,7 +399,7 @@ function CollectionStageDialog({
           <p className="text-xs"><strong>Nueva etapa:</strong> {stageLabel(nextStage)}</p>
           {nextStage === 'PAYMENT_COMMITMENT' && <>
             <label className="block text-xs font-semibold">Fecha comprometida *<input type="date" value={commitmentAt} onChange={event => setCommitmentAt(event.target.value)} disabled={processing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>
-            <label className="block text-xs font-semibold">Monto comprometido *<input type="number" min="1" value={commitmentAmount} onChange={event => setCommitmentAmount(event.target.value)} disabled={processing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>
+            <label className="block text-xs font-semibold">Monto comprometido <span className="font-normal text-[#322D29]/50">(opcional)</span><input type="number" min="1" value={commitmentAmount} onChange={event => setCommitmentAmount(event.target.value)} disabled={processing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>
             <p className="text-[10px] text-[#322D29]/55">Máximo permitido: {money(clientTotal)}</p>
           </>}
           {nextStage === 'FOLLOW_UP' && <label className="block text-xs font-semibold">Próxima fecha de gestión *<input type="date" value={nextActionAt} onChange={event => setNextActionAt(event.target.value)} disabled={processing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>}
@@ -399,6 +409,93 @@ function CollectionStageDialog({
         <DialogFooter>
           <Button type="button" variant="outline" disabled={processing} onClick={() => onOpenChange(false)}>Cancelar</Button>
           <Button type="button" disabled={processing} onClick={() => void confirm()}>{processing ? 'Guardando cambio…' : 'Guardar cambio'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function CommitmentDialog({
+  open,
+  clientName,
+  clientTotal,
+  workflow,
+  onOpenChange,
+  onSave,
+  onClear,
+}: {
+  open: boolean
+  clientName: string
+  clientTotal: number
+  workflow?: WorkflowState
+  onOpenChange: (open: boolean) => void
+  onSave: (input: { commitmentAt: string; commitmentAmount?: number; note?: string }) => Promise<void>
+  onClear: () => Promise<void>
+}) {
+  const [commitmentAt, setCommitmentAt] = useState(workflow?.commitment_at?.slice(0, 10) ?? '')
+  const [commitmentAmount, setCommitmentAmount] = useState(workflow?.commitment_amount === null || workflow?.commitment_amount === undefined ? '' : String(workflow.commitment_amount))
+  const [note, setNote] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [processing, setProcessing] = useState(false)
+  const hasCommitment = Boolean(workflow?.commitment_at)
+
+  const save = async () => {
+    if (processing) return
+    const amount = commitmentAmount === '' ? undefined : Number(commitmentAmount)
+    if (!commitmentAt) {
+      setError('Ingresa una fecha de compromiso.')
+      return
+    }
+    if (amount !== undefined && (!Number.isFinite(amount) || amount <= 0)) {
+      setError('El monto comprometido debe ser mayor que cero.')
+      return
+    }
+    if (amount !== undefined && amount > clientTotal) {
+      setError(`El monto no puede superar la deuda pendiente de ${money(clientTotal)}.`)
+      return
+    }
+    setProcessing(true)
+    setError(null)
+    try {
+      await onSave({ commitmentAt, commitmentAmount: amount, note })
+      setNote('')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo guardar el compromiso.')
+    } finally {
+      setProcessing(false)
+    }
+  }
+
+  const clear = async () => {
+    if (processing || !window.confirm('¿Quitar el compromiso vigente?')) return
+    setProcessing(true)
+    setError(null)
+    try {
+      await onClear()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo quitar el compromiso.')
+    } finally {
+      setProcessing(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={value => { if (!value && !processing) onOpenChange(false) }}>
+      <DialogContent className="border-[#D1C7BD] bg-[#FCFBF9] text-[#322D29]">
+        <DialogHeader>
+          <DialogTitle>{hasCommitment ? 'Editar compromiso' : 'Fecha compromiso'}</DialogTitle>
+          <DialogDescription>{clientName}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <label className="block text-xs font-semibold">Fecha de compromiso *<input type="date" value={commitmentAt} onChange={event => setCommitmentAt(event.target.value)} disabled={processing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>
+          <label className="block text-xs font-semibold">Monto comprometido <span className="font-normal text-[#322D29]/50">(opcional)</span><input type="number" min="1" value={commitmentAmount} onChange={event => setCommitmentAmount(event.target.value)} disabled={processing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>
+          <p className="text-[10px] text-[#322D29]/55">Máximo permitido: {money(clientTotal)}</p>
+          <label className="block text-xs font-semibold">Comentario / nota <span className="font-normal text-[#322D29]/50">(opcional)</span><textarea value={note} onChange={event => setNote(event.target.value)} disabled={processing} rows={3} maxLength={2000} className="mt-1 w-full resize-none border border-[#D1C7BD] bg-white p-2 text-xs" /></label>
+          {error && <p className="text-xs text-[#8A4B4B]">{error}</p>}
+        </div>
+        <DialogFooter className="flex-wrap sm:justify-between">
+          <div>{hasCommitment && <Button type="button" variant="outline" disabled={processing} onClick={() => void clear()} className="border-[#A45B58]/50 text-[#8A4B4B]">Quitar compromiso</Button>}</div>
+          <div className="flex gap-2"><Button type="button" variant="outline" disabled={processing} onClick={() => onOpenChange(false)}>Cancelar</Button><Button type="button" disabled={processing} onClick={() => void save()}>{processing ? 'Guardando…' : hasCommitment ? 'Guardar cambios' : 'Guardar compromiso'}</Button></div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -457,12 +554,63 @@ function QuickInteractionDialog({
   )
 }
 
+const taskTypeLabel = (type: CobranzaTask['type']) => type === 'COMMITMENT' ? 'Compromiso' : 'Seguimiento'
+const taskShortDate = (value: string) => { const [, month, day] = (civilDate(value) ?? value.slice(0, 10)).split('-'); return `${day}/${month}` }
+const taskStatusLabel = (task: CobranzaTask) => task.urgency === 'OVERDUE' ? 'Vencido' : 'Hoy'
+const taskMetaLabel = (task: CobranzaTask) => {
+  const amount = task.amount !== null ? money(task.amount) : ''
+  return task.urgency === 'OVERDUE' ? [taskShortDate(task.date), amount].filter(Boolean).join(' · ') : amount
+}
+
+function PendingTasksPanel({ tasks, selectedTaskId, onSelectTask, onOpenClient }: {
+  tasks: CobranzaTask[]
+  selectedTaskId: string | null
+  onSelectTask: (task: CobranzaTask) => void
+  onOpenClient: (clientId: number) => void
+}) {
+  const selected = tasks.find(task => task.id === selectedTaskId) ?? null
+  return (
+    <div className="flex min-w-0 flex-col">
+      <div className="flex items-center justify-between border-b border-[#EAE2D9] px-3 py-1">
+        <h2 className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#72383D]">Tareas pendientes</h2>
+        <span className="text-[10px] font-semibold text-[#322D29]/60">{tasks.length}</span>
+      </div>
+      <div className="h-[130px] overflow-y-auto" role="list">
+        {tasks.length === 0
+          ? <p className="px-3 py-3 text-[10px] text-[#322D29]/50">No hay tareas pendientes para hoy.</p>
+          : tasks.map(task => {
+            const isSelected = task.id === selectedTaskId
+            const overdue = task.urgency === 'OVERDUE'
+            return <button key={task.id} type="button" role="listitem" onClick={() => onSelectTask(task)} className={`grid h-[26px] w-full grid-cols-[10px_minmax(0,1fr)_auto_auto] items-center gap-2 border-l-2 px-3 text-left text-[11px] leading-none ${isSelected ? 'border-l-[#72383D] bg-[#F6EFE8]' : 'border-l-transparent hover:bg-[#FCFBF9]'}`}>
+              <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${overdue ? 'bg-[#A45B58]' : 'bg-[#B38A55]'}`} />
+              <span className="truncate text-[#322D29]">{task.clientName}</span>
+              <span className="whitespace-nowrap text-[10px] tabular-nums text-[#322D29]/60">{taskMetaLabel(task)}</span>
+              <span className={`border px-1 py-px text-[9px] font-semibold ${overdue ? 'border-[#A45B58]/30 bg-[#F5E8E4] text-[#8A4B4B]' : 'border-[#B38A55]/30 bg-[#F6EFE2] text-[#806238]'}`}>{taskStatusLabel(task)}</span>
+            </button>
+          })}
+      </div>
+      <div className="flex min-h-[36px] items-center border-t border-[#EAE2D9] px-3 py-1">
+        {selected
+          ? <div className="flex w-full min-w-0 items-center justify-between gap-2">
+            <span className="min-w-0 truncate text-[11px] font-semibold text-[#322D29]">{selected.clientName}</span>
+            <span className="hidden min-w-0 truncate text-[10px] text-[#806238] sm:inline">{taskTypeLabel(selected.type)} {selected.urgency === 'OVERDUE' ? `vencido ${taskShortDate(selected.date)}` : 'hoy'}{selected.amount !== null ? ` · ${money(selected.amount)}` : ''}</span>
+            <button type="button" onClick={() => onOpenClient(selected.clientId)} className="shrink-0 border border-[#72383D]/30 px-2 py-0.5 text-[10px] font-semibold text-[#72383D] hover:bg-[#F5EDE9]">Abrir cliente</button>
+          </div>
+          : <p className="text-[10px] text-[#322D29]/45">Selecciona una tarea para ver el detalle.</p>}
+      </div>
+    </div>
+  )
+}
+
 function ClientKanbanCard({
   client,
   stage,
   workflow,
   onOpen,
   onAddNote,
+  onCommitment,
+  task,
+  locate = false,
   isOverlay = false,
 }: {
   client: CobranzaClient
@@ -470,6 +618,9 @@ function ClientKanbanCard({
   workflow?: WorkflowState
   onOpen: () => void
   onAddNote: () => void
+  onCommitment: () => void
+  task?: CobranzaTask | null
+  locate?: boolean
   isOverlay?: boolean
 }) {
   const [copied, setCopied] = useState(false)
@@ -479,7 +630,9 @@ function ClientKanbanCard({
     disabled: isOverlay,
   })
   const style = transform && !isOverlay ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined
-  const className = `w-full border border-[#D1C7BD] bg-white p-2.5 text-left transition-shadow ${isOverlay ? 'pointer-events-none shadow-xl ring-2 ring-[#72383D]' : isDragging ? 'cursor-grabbing opacity-45 shadow-lg' : 'cursor-grab hover:border-[#72383D] hover:shadow-sm'}`
+  const taskTone = task?.urgency === 'OVERDUE' ? 'border-[#A45B58]/60 bg-[#FCF7F5]' : task?.urgency === 'TODAY' ? 'border-[#B38A55]/60 bg-[#FFFCF6]' : 'border-[#D1C7BD] bg-white'
+  const locateTone = locate && !isOverlay ? 'ring-2 ring-[#72383D] cobranza-locate' : ''
+  const className = `w-full border p-2.5 text-left transition-shadow ${taskTone} ${locateTone} ${isOverlay ? 'pointer-events-none shadow-xl ring-2 ring-[#72383D]' : isDragging ? 'cursor-grabbing opacity-45 shadow-lg' : 'cursor-grab hover:border-[#72383D] hover:shadow-sm'}`
   const copyMessage = async (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation()
     await navigator.clipboard.writeText(buildCollectionMessage(client))
@@ -488,17 +641,19 @@ function ClientKanbanCard({
   }
   const stopCardInteraction = (event: React.SyntheticEvent) => event.stopPropagation()
   return (
-    <div ref={isOverlay ? undefined : setNodeRef} style={style} {...(!isOverlay ? listeners : {})} {...(!isOverlay ? attributes : {})} onDoubleClick={isOverlay ? undefined : onOpen} onKeyDown={isOverlay ? undefined : event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() } }} role="button" tabIndex={0} aria-label={`Abrir detalle de ${client.name}`} className={className}>
-      <div className="flex items-start justify-between gap-2"><span className="min-w-0 break-words text-xs font-semibold">{client.name}</span><Priority value={client.priority} /></div>
+    <div id={isOverlay ? undefined : `collection-card-${client.clientId}`} ref={isOverlay ? undefined : setNodeRef} style={style} {...(!isOverlay ? listeners : {})} {...(!isOverlay ? attributes : {})} onDoubleClick={isOverlay ? undefined : onOpen} onKeyDown={isOverlay ? undefined : event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() } }} role="button" tabIndex={0} aria-label={`Abrir detalle de ${client.name}`} className={className}>
+      <div className="flex items-start justify-between gap-2"><span className="min-w-0 break-words text-xs font-semibold">{client.name}</span><Priority value={effectivePriority(client.priority, task)} /></div>
+      {task && <p className={`mt-1 text-[9px] font-semibold ${task.urgency === 'OVERDUE' ? 'text-[#8A4B4B]' : 'text-[#806238]'}`}>{taskTypeLabel(task.type)} {task.urgency === 'OVERDUE' ? 'vencido' : 'hoy'}</p>}
       <p className="mt-2 text-[10px] text-[#322D29]/55">{client.pendingDocuments} doc{client.pendingDocuments === 1 ? '' : 's'} · {client.oldestDaysOverdue} días</p>
       <p className={`mt-1 text-sm font-semibold tabular-nums ${stage === 'CLOSED' ? 'text-[#322D29]' : 'text-[#8A4B4B]'}`}>{stage === 'CLOSED' ? '$0 · Pagado' : `Vencida ${money(client.overdueAmount)}`}</p>
       {stage !== 'CLOSED' && client.totalAmount !== client.overdueAmount && <p className="mt-0.5 text-[10px] text-[#322D29]/55 tabular-nums">Total {money(client.totalAmount)}</p>}
-      {stage === 'PAYMENT_COMMITMENT' && workflow?.commitment_at && <p className="mt-2 text-[10px] text-[#806238]">Compromiso {dateLabel(workflow.commitment_at)} · {money(workflow.commitment_amount ?? null)}</p>}
+       {workflow?.commitment_at && <p className="mt-2 text-[10px] text-[#806238]">Compromiso {dateLabel(workflow.commitment_at)}{workflow.commitment_amount !== null && workflow.commitment_amount !== undefined ? ` · ${money(workflow.commitment_amount)}` : ''}</p>}
       {stage === 'FOLLOW_UP' && workflow?.next_action_at && <p className="mt-2 text-[10px] text-[#806238]">Seguimiento {dateLabel(workflow.next_action_at)}</p>}
       {!isOverlay && <div className="mt-2 flex flex-wrap gap-1 border-t border-[#D1C7BD]/70 pt-2">
-        <button type="button" onPointerDown={stopCardInteraction} onClick={copyMessage} className="min-w-[100px] flex-1 border border-[#72383D]/25 px-1.5 py-1 text-[9px] font-semibold text-[#72383D] hover:bg-[#F5EDE9]">{copied ? 'Mensaje copiado' : 'Copiar mensaje'}</button>
-         <button type="button" onPointerDown={stopCardInteraction} onClick={event => { event.stopPropagation(); onAddNote() }} className="min-w-[100px] flex-1 border border-[#D1C7BD] px-1.5 py-1 text-[9px] font-semibold text-[#322D29] hover:bg-[#F5F0EA]">Agregar nota</button>
-            </div>}
+         <button type="button" onPointerDown={stopCardInteraction} onClick={copyMessage} className="min-w-[84px] flex-1 border border-[#72383D]/25 px-1.5 py-1 text-[9px] font-semibold text-[#72383D] hover:bg-[#F5EDE9]">{copied ? 'Mensaje copiado' : 'Copiar mensaje'}</button>
+          <button type="button" onPointerDown={stopCardInteraction} onClick={event => { event.stopPropagation(); onAddNote() }} className="min-w-[84px] flex-1 border border-[#D1C7BD] px-1.5 py-1 text-[9px] font-semibold text-[#322D29] hover:bg-[#F5F0EA]">Agregar nota</button>
+          <button type="button" onPointerDown={stopCardInteraction} onClick={event => { event.stopPropagation(); onCommitment() }} className="min-w-[84px] flex-1 border border-[#B38A55]/50 px-1.5 py-1 text-[9px] font-semibold text-[#806238] hover:bg-[#F6EFE2]">{workflow?.commitment_at ? 'Editar compromiso' : 'Fecha compromiso'}</button>
+             </div>}
      </div>
   )
 }
@@ -507,27 +662,36 @@ function ClientKanbanColumn({
   stage,
   clients,
   workflow,
+  tasks,
+  today,
+  selectedClientId,
   onOpen,
   onAddNote,
+  onCommitment,
   closedRecent = [],
   onOpenClosed,
 }: {
   stage: { key: CollectionStage; label: string }
   clients: CobranzaClient[]
   workflow: Record<number, WorkflowState>
+  tasks: CobranzaTask[]
+  today: string
+  selectedClientId?: number | null
   onOpen: (client: CobranzaClient) => void
   onAddNote: (client: CobranzaClient) => void
+  onCommitment: (client: CobranzaClient) => void
   closedRecent?: RecentClosedCollectionCustomer[]
   onOpenClosed?: (client: RecentClosedCollectionCustomer) => void
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `collection-stage-${stage.key}`, data: { stage: stage.key }, disabled: stage.key === 'CLOSED' })
+  const orderedClients = prioritizeCobranzaColumn(clients, workflow, today)
   return (
-    <section ref={setNodeRef} className={`min-w-[240px] border bg-[#F5F0EA] transition-colors ${isOver && stage.key !== 'CLOSED' ? 'border-[#72383D] bg-[#F1E4DD]' : 'border-[#D1C7BD]'}`}>
+    <section ref={setNodeRef} className={`min-w-0 border bg-[#F5F0EA] transition-colors ${isOver && stage.key !== 'CLOSED' ? 'border-[#72383D] bg-[#F1E4DD]' : 'border-[#D1C7BD]'}`}>
        <header className="border-b border-[#D1C7BD] px-3 py-2"><div className="flex items-center justify-between"><h3 className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#72383D]">{stage.label}</h3><span className="text-[10px] text-[#322D29]/50">{stage.key === 'CLOSED' ? closedRecent.length : clients.length}</span></div></header>
        <div className="space-y-2 p-2">
          {stage.key === 'CLOSED'
            ? closedRecent.map(client => <button key={client.clientId} type="button" onClick={() => onOpenClosed?.(client)} className="w-full border border-[#D1C7BD] bg-white p-2.5 text-left hover:border-[#72383D]"><span className="block break-words text-xs font-semibold">{client.name}</span><span className="mt-2 block text-[10px] text-[#322D29]/65">Saldo $0</span><span className="mt-1 block text-[10px] text-[#322D29]/55">Cerrado {dateTimeLabel(client.closedAt)}</span><span className="mt-2 block border-t border-[#D1C7BD]/70 pt-2 text-[9px] font-semibold text-[#72383D]">Ver bitácora</span></button>)
-           : clients.map(client => <ClientKanbanCard key={client.key} client={client} stage={stage.key} workflow={workflow[client.clientId]} onOpen={() => onOpen(client)} onAddNote={() => onAddNote(client)} />)}
+             : orderedClients.map(client => <ClientKanbanCard key={client.key} client={client} stage={stage.key} workflow={workflow[client.clientId]} task={taskForClient(client.clientId, tasks)} locate={client.clientId === selectedClientId} onOpen={() => onOpen(client)} onAddNote={() => onAddNote(client)} onCommitment={() => onCommitment(client)} />)}
          {((stage.key === 'CLOSED' ? closedRecent.length : clients.length) === 0) && <p className="px-2 py-5 text-center text-[10px] text-[#322D29]/45">Sin clientes</p>}
        </div>
     </section>
@@ -946,7 +1110,11 @@ export function Cobranza({ data, error, snapshotStatus }: { data?: FinanceReceiv
   const [activeDragClientId, setActiveDragClientId] = useState<number | null>(null)
   const [pendingDrop, setPendingDrop] = useState<{ client: CobranzaClient; currentStage: CollectionStage; nextStage: CollectionStage } | null>(null)
   const [quickNoteClient, setQuickNoteClient] = useState<CobranzaClient | null>(null)
+  const [commitmentClient, setCommitmentClient] = useState<CobranzaClient | null>(null)
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const [locatedClientId, setLocatedClientId] = useState<number | null>(null)
   const [quickNoteFeedback, setQuickNoteFeedback] = useState(false)
+  const [today, setToday] = useState(() => todayInChile())
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }))
 
   const cutoffDate = data ? data.snapshot_date ?? data.close_date : ''
@@ -955,6 +1123,18 @@ export function Cobranza({ data, error, snapshotStatus }: { data?: FinanceReceiv
   const activeClientIds = new Set(clients.map(client => client.clientId))
   const invoices = buildCobranzaInvoices(clients, cutoffDate)
   const [closedRecent, setClosedRecent] = useState<RecentClosedCollectionCustomer[]>([])
+  useEffect(() => {
+    const timer = window.setInterval(() => setToday(current => {
+      const next = todayInChile()
+      return next === current ? current : next
+    }), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
+  useEffect(() => {
+    if (locatedClientId === null || viewMode !== 'CLIENTS') return
+    const node = document.getElementById(`collection-card-${locatedClientId}`)
+    node?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' })
+  }, [locatedClientId, viewMode])
   useEffect(() => {
     let cancelled = false
     const workflowClients = data ? buildCobranzaClients(data.documents, data.snapshot_date ?? data.close_date) : []
@@ -1019,10 +1199,20 @@ export function Cobranza({ data, error, snapshotStatus }: { data?: FinanceReceiv
     if (sortMode === 'name-asc') return left.clientName.localeCompare(right.clientName, 'es') || leftDate.localeCompare(rightDate) || String(left.folio ?? '').localeCompare(String(right.folio ?? ''))
     return leftDate.localeCompare(rightDate) || Number(right.pending_amount) - Number(left.pending_amount) || String(left.folio ?? '').localeCompare(String(right.folio ?? ''))
   })
+  const pendingTasks = buildCobranzaTasks(clients, workflow, today)
+  const locatedClient = locatedClientId === null ? null : clients.find(client => client.clientId === locatedClientId) ?? null
+  const selectTask = (task: CobranzaTask) => {
+    setSelectedTaskId(task.id)
+    setLocatedClientId(task.clientId)
+  }
   const selectClient = (client: CobranzaClient, documentId?: number) => {
     setSelectedClient(client)
     setSelectedClosed(null)
     setSelectedDocumentId(documentId ?? null)
+  }
+  const openClientFromTask = (clientId: number) => {
+    const client = clients.find(candidate => candidate.clientId === clientId)
+    if (client) selectClient(client)
   }
   const selectClosed = (closed: RecentClosedCollectionCustomer) => {
     setSelectedClosed(closed)
@@ -1035,6 +1225,34 @@ export function Cobranza({ data, error, snapshotStatus }: { data?: FinanceReceiv
     setQuickNoteClient(null)
     setQuickNoteFeedback(true)
     window.setTimeout(() => setQuickNoteFeedback(false), 1800)
+  }
+  const saveCommitment = async (input: { commitmentAt: string; commitmentAmount?: number; note?: string }) => {
+    if (!commitmentClient) return
+    const result = await setCollectionCommitment({ clientId: commitmentClient.clientId, ...input })
+    setWorkflow(current => ({
+      ...current,
+      [commitmentClient.clientId]: {
+        ...current[commitmentClient.clientId],
+        stage: current[commitmentClient.clientId]?.stage ?? 'TO_MANAGE',
+        commitment_at: result.commitmentAt,
+        commitment_amount: result.commitmentAmount,
+      },
+    }))
+    setCommitmentClient(null)
+  }
+  const removeCommitment = async () => {
+    if (!commitmentClient) return
+    await clearCollectionCommitment(commitmentClient.clientId)
+    setWorkflow(current => ({
+      ...current,
+      [commitmentClient.clientId]: {
+        ...current[commitmentClient.clientId],
+        stage: current[commitmentClient.clientId]?.stage ?? 'TO_MANAGE',
+        commitment_at: null,
+        commitment_amount: null,
+      },
+    }))
+    setCommitmentClient(null)
   }
   const handleDragStart = (event: DragStartEvent) => {
     if (viewMode !== 'CLIENTS') return
@@ -1083,32 +1301,32 @@ export function Cobranza({ data, error, snapshotStatus }: { data?: FinanceReceiv
   return (
     <main className="min-h-[430px] bg-[#EFE9E1] px-4 py-5 sm:px-5 sm:py-6 lg:px-6">
       <section className="border border-[#D1C7BD] bg-[#FCFBF9] p-4 shadow-[0_8px_24px_rgba(50,45,41,0.05)] lg:p-5">
-        <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#D1C7BD] pb-4">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#72383D]">Cobranza</p>
-             <h1 className="mt-1 text-xl font-semibold tracking-[-0.03em] text-[#322D29]">Gestión de cartera y clientes</h1>
-           </div>
-           <div className="flex min-w-[220px] flex-col items-stretch gap-2 text-[10px] text-[#322D29]/55">
+        <div className="overflow-hidden border border-[#D1C7BD] bg-white">
+          <div className="grid grid-cols-1 gap-px bg-[#EAE2D9] lg:grid-cols-2 2xl:grid-cols-[minmax(190px,1.05fr)_minmax(280px,1.15fr)_minmax(330px,1.3fr)_minmax(200px,.8fr)]">
+            <div className="flex flex-col justify-center gap-0.5 bg-white p-3">
+              <p className="text-[9px] font-bold uppercase tracking-[0.16em] text-[#72383D]">Cobranza</p>
+              <h1 className="truncate text-base font-semibold tracking-[-0.02em] text-[#322D29]">Gestión de cartera y clientes</h1>
+              <p className="truncate text-[10px] leading-4 text-[#322D29]/50">Ordenada por deuda vencida, antigüedad y saldo total.</p>
+            </div>
+            <div className="grid grid-cols-2 grid-rows-2 gap-px bg-[#EAE2D9]">
+              <MiniKpi label="CxC total" value={money(kpis.totalAmount)} />
+              <MiniKpi label="CxC vencida" value={money(kpis.overdueAmount)} tone="overdue" />
+              <MiniKpi label="Clientes con saldo" value={kpis.clientsWithBalance.toLocaleString('es-CL')} />
+              <MiniKpi label="Clientes con deuda vencida" value={kpis.clientsWithOverdueDebt.toLocaleString('es-CL')} tone="overdue" />
+            </div>
+            <div className="flex flex-col bg-white">
+              <PendingTasksPanel tasks={pendingTasks} selectedTaskId={selectedTaskId} onSelectTask={selectTask} onOpenClient={openClientFromTask} />
+            </div>
+            <div className="flex min-w-0 flex-col gap-1.5 bg-white p-3 text-[10px] text-[#322D29]/55">
               <CobranzaFreshnessNotice status={freshness.status} snapshotLabel={snapshotLabel} />
               {snapshotStatus && <CobranzaSnapshotControl initialStatus={snapshotStatus} />}
-             <p>{data.summary.pending_documents} documentos pendientes</p>
-             <PaymentProgressObserver />
-           </div>
+              <p className="break-words">{data.summary.pending_documents} documentos pendientes</p>
+              <PaymentProgressObserver />
+            </div>
+          </div>
         </div>
 
-         <div className="mt-4 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-4">
-            <Kpi label="CxC total" value={money(kpis.totalAmount)} />
-            <Kpi label="CxC vencida" value={money(kpis.overdueAmount)} />
-            <Kpi label="Clientes con saldo" value={kpis.clientsWithBalance.toLocaleString('es-CL')} />
-            <Kpi label="Clientes con deuda vencida" value={kpis.clientsWithOverdueDebt.toLocaleString('es-CL')} />
-         </div>
-
-         <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-b border-[#D1C7BD] pb-3">
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-[#322D29]">Cobranza priorizada</h2>
-            <p className="mt-0.5 text-[10px] text-[#322D29]/50">Ordenada por deuda vencida, antigüedad y saldo total.</p>
-          </div>
-          <div className="flex w-full flex-wrap items-center gap-1.5 lg:w-auto">
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5 border-b border-[#D1C7BD] pb-3">
               <div className="flex items-center gap-1 border border-[#D1C7BD] bg-white p-0.5 text-[10px] font-semibold"><button type="button" onClick={() => changeView('CLIENTS')} className={`px-1.5 py-1 ${viewMode === 'CLIENTS' ? 'bg-[#72383D] text-white' : 'text-[#72383D]'}`}>Clientes</button><button type="button" onClick={() => changeView('INVOICES')} className={`px-1.5 py-1 ${viewMode === 'INVOICES' ? 'bg-[#72383D] text-white' : 'text-[#72383D]'}`}>Facturas</button></div>
              <label className="relative">
                <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#322D29]/40" />
@@ -1128,22 +1346,25 @@ export function Cobranza({ data, error, snapshotStatus }: { data?: FinanceReceiv
                {viewMode === 'CLIENTS' ? <><option value="overdue-desc">Deuda vencida: mayor a menor</option><option value="age-desc">Antigüedad: mayor primero</option><option value="total-desc">Deuda total: mayor a menor</option><option value="total-asc">Deuda total: menor a mayor</option><option value="name-asc">Cliente: A–Z</option></> : <><option value="due-asc">Vencimiento: más antiguo primero</option><option value="due-desc">Vencimiento: más reciente primero</option><option value="amount-desc">Monto: mayor a menor</option><option value="amount-asc">Monto: menor a mayor</option><option value="name-asc">Cliente: A–Z</option></>}
               </select></label>
               <button type="button" onClick={clearFilters} disabled={filtersClean} className="h-8 border border-[#D1C7BD] px-2 text-xs text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-40">Limpiar filtros</button>
-            </div>
-         </div>
+        </div>
 
-           {viewMode === 'CLIENTS' ? <DndContext sensors={sensors} onDragStart={handleDragStart} onDragCancel={() => setActiveDragClientId(null)} onDragEnd={handleDragEnd}>
+            {viewMode === 'CLIENTS' ? <DndContext sensors={sensors} onDragStart={handleDragStart} onDragCancel={() => setActiveDragClientId(null)} onDragEnd={handleDragEnd}>
               <div className="mt-3 overflow-x-auto pb-2">
-                <div className="grid min-w-[1240px] grid-cols-[repeat(5,minmax(240px,1fr))] gap-2">
-                {kanbanStages.map(stage => <ClientKanbanColumn key={stage.key} stage={stage} clients={sortedClients.filter(client => stage.key !== 'CLOSED' && (workflow[client.clientId]?.stage ?? 'TO_MANAGE') === stage.key)} closedRecent={stage.key === 'CLOSED' ? visibleClosedRecent : []} workflow={workflow} onOpen={selectClient} onOpenClosed={selectClosed} onAddNote={setQuickNoteClient} />)}
+                <div className="grid min-w-[1120px] grid-cols-[repeat(5,minmax(212px,1fr))] gap-2">
+                 {kanbanStages.map(stage => {
+                   const stageClients = sortedClients.filter(client => stage.key !== 'CLOSED' && (workflow[client.clientId]?.stage ?? 'TO_MANAGE') === stage.key)
+                   const includeLocated = locatedClient !== null && stage.key !== 'CLOSED' && (workflow[locatedClient.clientId]?.stage ?? 'TO_MANAGE') === stage.key && !stageClients.some(client => client.clientId === locatedClient.clientId)
+                   return <ClientKanbanColumn key={stage.key} stage={stage} clients={includeLocated && locatedClient ? [...stageClients, locatedClient] : stageClients} tasks={pendingTasks} today={today} selectedClientId={locatedClientId} closedRecent={stage.key === 'CLOSED' ? visibleClosedRecent : []} workflow={workflow} onOpen={selectClient} onOpenClosed={selectClosed} onAddNote={setQuickNoteClient} onCommitment={setCommitmentClient} />
+                 })}
                 </div>
               </div>
              <DragOverlay>
-               {activeDragClientId ? (() => { const client = clients.find(candidate => candidate.clientId === activeDragClientId); if (!client) return null; return <ClientKanbanCard client={client} stage={workflow[client.clientId]?.stage ?? 'TO_MANAGE'} workflow={workflow[client.clientId]} onOpen={() => undefined} onAddNote={() => undefined} isOverlay /> })() : null}
+                 {activeDragClientId ? (() => { const client = clients.find(candidate => candidate.clientId === activeDragClientId); if (!client) return null; return <ClientKanbanCard client={client} stage={workflow[client.clientId]?.stage ?? 'TO_MANAGE'} workflow={workflow[client.clientId]} task={taskForClient(client.clientId, pendingTasks)} onOpen={() => undefined} onAddNote={() => undefined} onCommitment={() => undefined} isOverlay /> })() : null}
              </DragOverlay>
-            </DndContext> : <div className="mt-3 overflow-x-auto pb-2"><div className="grid min-w-[1240px] grid-cols-[repeat(5,minmax(240px,1fr))] gap-2">
+             </DndContext> : <div className="mt-3 overflow-x-auto pb-2"><div className="grid min-w-[1120px] grid-cols-[repeat(5,minmax(212px,1fr))] gap-2">
              {kanbanStages.map(stage => {
                const stageInvoices = sortedInvoices.filter(invoice => (workflow[invoice.client_id]?.stage ?? 'TO_MANAGE') === stage.key)
-                return <section key={stage.key} className="min-w-[240px] border border-[#D1C7BD] bg-[#F5F0EA]">
+                return <section key={stage.key} className="min-w-0 border border-[#D1C7BD] bg-[#F5F0EA]">
                  <header className="border-b border-[#D1C7BD] px-3 py-2"><div className="flex items-center justify-between"><h3 className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#72383D]">{stage.label}</h3><span className="text-[10px] text-[#322D29]/50">{stageInvoices.length}</span></div></header>
                  <div className="space-y-2 p-2">
                    {stageInvoices.map(invoice => { const client = clients.find(candidate => candidate.clientId === invoice.client_id); if (!client) return null; return <div key={invoice.key} role="button" tabIndex={0} onDoubleClick={() => selectClient(client, invoice.document_id)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectClient(client, invoice.document_id) } }} className="w-full cursor-pointer border border-[#D1C7BD] bg-white p-2.5 text-left hover:border-[#72383D]">
@@ -1158,7 +1379,8 @@ export function Cobranza({ data, error, snapshotStatus }: { data?: FinanceReceiv
              })}
             </div></div>}
            <CollectionStageDialog key={`drop-stage-${pendingDrop?.client.clientId ?? 'closed'}-${pendingDrop?.nextStage ?? ''}`} open={Boolean(pendingDrop)} clientName={pendingDrop?.client.name ?? ''} clientTotal={pendingDrop?.client.totalAmount ?? 0} currentStage={pendingDrop?.currentStage ?? 'TO_MANAGE'} nextStage={pendingDrop?.nextStage ?? null} onOpenChange={open => { if (!open) setPendingDrop(null) }} onSave={saveDroppedStage} />
-           <QuickInteractionDialog key={`quick-note-${quickNoteClient?.clientId ?? 'closed'}`} open={Boolean(quickNoteClient)} clientName={quickNoteClient?.name ?? ''} onOpenChange={open => { if (!open) setQuickNoteClient(null) }} onSave={saveQuickInteraction} />
+            <QuickInteractionDialog key={`quick-note-${quickNoteClient?.clientId ?? 'closed'}`} open={Boolean(quickNoteClient)} clientName={quickNoteClient?.name ?? ''} onOpenChange={open => { if (!open) setQuickNoteClient(null) }} onSave={saveQuickInteraction} />
+            <CommitmentDialog key={`commitment-${commitmentClient?.clientId ?? 'closed'}-${workflow[commitmentClient?.clientId ?? 0]?.commitment_at ?? 'new'}`} open={Boolean(commitmentClient)} clientName={commitmentClient?.name ?? ''} clientTotal={commitmentClient?.totalAmount ?? 0} workflow={commitmentClient ? workflow[commitmentClient.clientId] : undefined} onOpenChange={open => { if (!open) setCommitmentClient(null) }} onSave={saveCommitment} onClear={removeCommitment} />
            {quickNoteFeedback && <p className="fixed bottom-4 right-4 z-40 border border-[#66856B]/40 bg-[#EDF4EC] px-3 py-2 text-xs text-[#426247] shadow-sm">Nota guardada</p>}
         <p className="mt-2 text-[10px] text-[#322D29]/45">Vencida según Bsale: vencimiento anterior al corte. Una factura que vence el día del corte permanece como adeudada.</p>
       </section>

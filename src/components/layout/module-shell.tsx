@@ -28,7 +28,7 @@ type ModuleShellProps = {
 
 const STORAGE_KEY = 'mym:erp-sidebar-collapsed'
 const LEGACY_STORAGE_KEY = 'mym:wms-sidebar-collapsed'
-const WIDE_VIEWPORT_QUERY = '(min-width: 1180px)'
+const WIDE_VIEWPORT_QUERY = '(min-width: 1536px)'
 
 export function ModuleShell({
   children,

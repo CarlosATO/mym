@@ -14,7 +14,8 @@ test('TO_MANAGE pasa por el modal y acepta nota o vacío', () => {
 
 test('las etapas conservan sus requisitos', () => {
   assert.match(view, /nextStage === 'PAYMENT_COMMITMENT'/)
-  assert.match(view, /!commitmentAt \|\| !Number\.isFinite\(amount\) \|\| amount <= 0/)
+  assert.match(view, /if \(!commitmentAt\)/)
+  assert.match(view, /amount !== null && \(!Number\.isFinite\(amount\) \|\| amount <= 0\)/)
   assert.match(view, /nextStage === 'FOLLOW_UP'/)
   assert.match(view, /!nextActionAt/)
   assert.match(view, /stage: nextStage,[\s\S]*note,/)

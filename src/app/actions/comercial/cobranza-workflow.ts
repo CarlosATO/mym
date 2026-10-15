@@ -153,7 +153,7 @@ export async function getCollectionCustomerHistory(clientId: number, requestedLi
   const noteOf = (eventType: string, body: string, metadata: Record<string, unknown>) => {
     if (!body || eventType === 'PAYMENT_CLOSED' || eventType === 'REOPENED_BY_NEW_DEBT') return null
     if (eventType === 'STAGE_CHANGED' && body === `Etapa actualizada a ${String(metadata.stage ?? '')}.`) return null
-    if (eventType === 'COMMITMENT' && body === 'Compromiso de pago registrado.') return null
+    if (eventType === 'COMMITMENT' && ['Compromiso de pago registrado.', 'Compromiso de pago actualizado.', 'Compromiso de pago eliminado.'].includes(body)) return null
     if (eventType === 'FOLLOW_UP' && body === 'Seguimiento programado.') return null
     return body
   }
@@ -161,7 +161,14 @@ export async function getCollectionCustomerHistory(clientId: number, requestedLi
     const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata as Record<string, unknown> : {}
     const toStage = stageOf(row)
     const previousStage = visibleRows.slice(index + 1).map(stageOf).find(Boolean) ?? null
-    const commitmentAmount = Number(metadata.commitmentAmount ?? metadata.commitment_amount)
+    const commitmentAction = metadata.action
+    const commitmentDateValue = commitmentAction === 'CLEARED'
+      ? metadata.previousCommitmentAt
+      : metadata.commitmentAt ?? metadata.newCommitmentAt ?? metadata.commitment_at
+    const commitmentAmountValue = commitmentAction === 'CLEARED'
+      ? metadata.previousCommitmentAmount
+      : metadata.commitmentAmount ?? metadata.newCommitmentAmount ?? metadata.commitment_amount
+    const commitmentAmount = Number(commitmentAmountValue)
     return {
       id: String(row.id),
       eventType: String(row.event_type),
@@ -170,7 +177,7 @@ export async function getCollectionCustomerHistory(clientId: number, requestedLi
       fromStage: toStage && String(row.event_type) === 'STAGE_CHANGED' ? previousStage : null,
       toStage,
       note: noteOf(String(row.event_type), String(row.body ?? '').trim(), metadata),
-      commitmentDate: typeof (metadata.commitmentAt ?? metadata.commitment_at) === 'string' ? String(metadata.commitmentAt ?? metadata.commitment_at) : null,
+      commitmentDate: typeof commitmentDateValue === 'string' ? commitmentDateValue : null,
       commitmentAmount: Number.isFinite(commitmentAmount) && commitmentAmount > 0 ? commitmentAmount : null,
       nextActionAt: typeof (metadata.nextActionAt ?? metadata.next_action_at) === 'string' ? String(metadata.nextActionAt ?? metadata.next_action_at) : null,
       metadata,
@@ -179,24 +186,162 @@ export async function getCollectionCustomerHistory(clientId: number, requestedLi
   return { events, hasMore }
 }
 
+function validateClientId(clientId: number) {
+  if (!Number.isInteger(clientId) || clientId <= 0) throw new Error('Cliente de cobranza inválido.')
+}
+
+function civilDate(value: string, label = 'La fecha') {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error(`${label} debe tener formato YYYY-MM-DD.`)
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+    throw new Error(`${label} no es válida.`)
+  }
+  return value
+}
+
+async function validateCommitmentAmount(companyId: string, clientId: number, amount: number | null) {
+  if (amount === null) return
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('El monto comprometido debe ser mayor que cero.')
+  const { data, error } = await db().from('vw_customer_receivables')
+    .select('total_pending')
+    .eq('company_id', companyId)
+    .eq('bsale_client_id', clientId)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  const currentDebt = Number(data?.total_pending ?? 0)
+  if (amount > currentDebt) throw new Error(`El monto no puede superar la deuda pendiente de $${Math.round(currentDebt).toLocaleString('es-CL')}.`)
+}
+
+function optionalCommitmentAmount(value: number | null | undefined) {
+  if (value === undefined || value === null) return null
+  return value
+}
+
+async function currentWorkflow(companyId: string, clientId: number) {
+  const { data, error } = await db().from('collection_customer_workflow')
+    .select('stage,commitment_at,commitment_amount,next_action_at,assigned_to')
+    .eq('company_id', companyId)
+    .eq('client_id', clientId)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  return data
+}
+
+function commitmentMetadata(action: string, previous: { commitmentAt?: string | null; commitmentAmount?: number | null }, next: { commitmentAt?: string | null; commitmentAmount?: number | null }) {
+  return {
+    action,
+    previousCommitmentAt: previous.commitmentAt ?? null,
+    newCommitmentAt: next.commitmentAt ?? null,
+    previousCommitmentAmount: previous.commitmentAmount ?? null,
+    newCommitmentAmount: next.commitmentAmount ?? null,
+  }
+}
+
+export async function setCollectionCommitment(input: {
+  clientId: number
+  commitmentAt: string
+  commitmentAmount?: number | null
+  note?: string
+}) {
+  const { companyId, user } = await context()
+  validateClientId(input.clientId)
+  const commitmentAt = civilDate(input.commitmentAt, 'La fecha de compromiso')
+  const commitmentAmount = optionalCommitmentAmount(input.commitmentAmount)
+  await validateCommitmentAmount(companyId, input.clientId, commitmentAmount)
+  const note = input.note?.trim() ?? ''
+  if (note.length > 2000) throw new Error('El comentario no puede superar los 2000 caracteres.')
+  const previous = await currentWorkflow(companyId, input.clientId)
+  const stage = (previous?.stage as CollectionStage | undefined) ?? 'TO_MANAGE'
+  const now = new Date().toISOString()
+  const { error } = await db().from('collection_customer_workflow').upsert({
+    company_id: companyId,
+    client_id: input.clientId,
+    stage,
+    commitment_at: `${commitmentAt}T00:00:00Z`,
+    commitment_amount: commitmentAmount,
+    next_action_at: previous?.next_action_at ?? null,
+    assigned_to: previous?.assigned_to ?? null,
+    last_contact_at: now,
+    updated_at: now,
+  }, { onConflict: 'company_id,client_id' })
+  if (error) throw new Error(error.message)
+  const action = previous?.commitment_at ? 'UPDATED' : 'CREATED'
+  const event = await db().from('collection_customer_events').insert({
+    company_id: companyId,
+    client_id: input.clientId,
+    event_type: 'COMMITMENT',
+    body: note || (action === 'UPDATED' ? 'Compromiso de pago actualizado.' : 'Compromiso de pago registrado.'),
+    metadata: {
+      stage,
+      ...commitmentMetadata(action, {
+        commitmentAt: previous?.commitment_at ? String(previous.commitment_at).slice(0, 10) : null,
+        commitmentAmount: previous?.commitment_amount === null || previous?.commitment_amount === undefined ? null : Number(previous.commitment_amount),
+      }, { commitmentAt, commitmentAmount }),
+    },
+    created_by: user.id,
+  })
+  if (event.error) throw new Error(event.error.message)
+  return { ok: true as const, commitmentAt, commitmentAmount }
+}
+
+export async function clearCollectionCommitment(clientId: number) {
+  const { companyId, user } = await context()
+  validateClientId(clientId)
+  const previous = await currentWorkflow(companyId, clientId)
+  if (!previous || (!previous.commitment_at && previous.commitment_amount === null)) throw new Error('El cliente no tiene un compromiso vigente.')
+  const stage = (previous.stage as CollectionStage | undefined) ?? 'TO_MANAGE'
+  const now = new Date().toISOString()
+  const { error } = await db().from('collection_customer_workflow').update({
+    commitment_at: null,
+    commitment_amount: null,
+    updated_at: now,
+    last_contact_at: now,
+  }).eq('company_id', companyId).eq('client_id', clientId)
+  if (error) throw new Error(error.message)
+  const event = await db().from('collection_customer_events').insert({
+    company_id: companyId,
+    client_id: clientId,
+    event_type: 'COMMITMENT',
+    body: 'Compromiso de pago eliminado.',
+    metadata: {
+      stage,
+      ...commitmentMetadata('CLEARED', {
+        commitmentAt: previous.commitment_at ? String(previous.commitment_at).slice(0, 10) : null,
+        commitmentAmount: previous.commitment_amount === null || previous.commitment_amount === undefined ? null : Number(previous.commitment_amount),
+      }, { commitmentAt: null, commitmentAmount: null }),
+    },
+    created_by: user.id,
+  })
+  if (event.error) throw new Error(event.error.message)
+  return { ok: true as const }
+}
+
 export async function updateCollectionStage(input: {
   clientId: number
   stage: CollectionStage
   note?: string
-  commitmentAt?: string
-  commitmentAmount?: number
+  commitmentAt?: string | null
+  commitmentAmount?: number | null
   nextActionAt?: string
 }) {
   const { companyId, user } = await context()
+  validateClientId(input.clientId)
   if (input.stage === 'CLOSED') throw new Error('CLOSED sólo puede establecerse después de reconciliar saldo Bsale cero.')
+  const commitmentAt = input.stage === 'PAYMENT_COMMITMENT'
+    ? civilDate(input.commitmentAt ?? '', 'La fecha de compromiso')
+    : null
+  const commitmentAmount = input.stage === 'PAYMENT_COMMITMENT' ? optionalCommitmentAmount(input.commitmentAmount) : null
+  if (input.stage === 'PAYMENT_COMMITMENT') await validateCommitmentAmount(companyId, input.clientId, commitmentAmount)
+  if (input.stage === 'FOLLOW_UP' && input.nextActionAt) civilDate(input.nextActionAt, 'La fecha de seguimiento')
   const now = new Date().toISOString()
   const { error } = await db().from('collection_customer_workflow').upsert({
     company_id: companyId,
     client_id: input.clientId,
     stage: input.stage,
-    commitment_at: input.commitmentAt ?? null,
-    commitment_amount: input.commitmentAmount ?? null,
-    next_action_at: input.nextActionAt ?? null,
+    commitment_at: commitmentAt ? `${commitmentAt}T00:00:00Z` : null,
+    commitment_amount: commitmentAmount,
+    next_action_at: input.stage === 'PAYMENT_COMMITMENT' ? null : input.nextActionAt ?? null,
     last_contact_at: now,
     updated_at: now,
   }, { onConflict: 'company_id,client_id' })
@@ -211,8 +356,8 @@ export async function updateCollectionStage(input: {
       body: eventBody,
       metadata: {
         stage: input.stage,
-        commitmentAt: input.commitmentAt ?? null,
-        commitmentAmount: input.commitmentAmount ?? null,
+        commitmentAt,
+        commitmentAmount,
         nextActionAt: input.nextActionAt ?? null,
       },
       created_by: user.id,
