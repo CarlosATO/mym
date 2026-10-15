@@ -88,6 +88,7 @@
     "test:table-2c-purchase-orders": "node --experimental-strip-types --test scripts/test-table-2c-purchase-orders.mjs",
     "test:po-pdf-header": "node --experimental-strip-types --test scripts/test-po-pdf-header.mjs",
     "test:purchase-order-totals": "node --experimental-strip-types --test scripts/test-purchase-order-totals.mjs",
+    "test:purchase-order-creation-discounts": "node --experimental-strip-types --test scripts/test-purchase-order-creation-discounts.mjs",
     "test:route-guide-pdf": "node --experimental-strip-types --test scripts/test-route-guide-pdf.mjs",
     "test:replenishment-filters": "node --experimental-strip-types --test scripts/test-replenishment-filters.mjs",
     "test:replenishment-excel-import": "node --experimental-strip-types --test scripts/test-replenishment-excel-import.mjs",

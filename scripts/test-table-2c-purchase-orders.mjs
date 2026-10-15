@@ -117,12 +117,36 @@ test('el formulario de OC permite ajustar líneas antes de emitir y reutiliza el
 
 test('las líneas del formulario muestran SKU sin hacerlo editable y lo resuelven al editar una OC', () => {
   assert.match(panel, /interface LineItem[\s\S]*sku: string/)
-  assert.match(panel, /it\.sku && <div className="font-mono text-\[10px\] text-\[#AC9C8D\]">SKU \{it\.sku\}<\/div>/)
+  assert.match(panel, /it\.sku && <span className="font-mono">SKU \{it\.sku\}<\/span>/)
+  assert.match(panel, /it\.item_type === 'PRODUCT' \? 'Producto' : 'Servicio'/)
+  assert.match(panel, /it\.unit \|\| '—'/)
   assert.match(panel, /editingItem === it\.tempId \? \([\s\S]*?it\.description[\s\S]*?it\.sku &&/)
   assert.match(panel, /getPurchaseOrderProductCatalogCached\(\)[\s\S]*?productsById\.set\(product\.id, product\)/)
   assert.match(panel, /sku: i\.item_type === 'SERVICE' \? '' : productsById\.get\(i\.product_id \|\| ''\)\?\.sku \|\| ''/)
   assert.match(panel, /catch \{[\s\S]*?A missing catalog must not prevent editing the purchase order\./)
   assert.doesNotMatch(panel, /PurchaseOrderItem/)
+})
+
+test('Nueva OC mantiene el overflow dentro de la tabla y compacta la metadata operativa', () => {
+  assert.match(panel, /<div className="min-w-0 overflow-x-auto border border-\[#D1C7BD\] bg-white">/)
+  assert.match(panel, /<table className="w-full min-w-\[760px\] table-fixed text-sm">/)
+  assert.match(panel, /Producto \/ Servicio/)
+  assert.match(panel, /title="Descuento por unidad">Dcto\/u/)
+  assert.match(panel, /sm:grid-cols-\[minmax\(0,1\.25fr\)_minmax\(82px,\.55fr\)/)
+  assert.match(panel, /showDiscountColumns && <><th[\s\S]*Dcto %/)
+  assert.match(panel, /className="min-w-0 space-y-4/)
+})
+
+test('la nueva composición separa información, notas y resumen sin duplicar notes', () => {
+  assert.match(panel, /Información de la orden/)
+  assert.match(panel, /order-1 space-y-1 xl:order-1/)
+  assert.match(panel, /order-2 space-y-1 xl:order-2/)
+  assert.match(panel, /order-3 space-y-1 xl:order-3/)
+  assert.match(panel, /order-4 space-y-1/)
+  assert.match(panel, /Notas de la orden/)
+  assert.match(panel, /Resumen de la orden/)
+  assert.match(panel, /placeholder="Agregar notas adicionales\.\.\."/)
+  assert.equal((panel.match(/value=\{form\.notes\}/g) ?? []).length, 1)
 })
 
 test('la emisión de OC envía estado explícito y el backend permite borradores pero bloquea precios inválidos al emitir', () => {

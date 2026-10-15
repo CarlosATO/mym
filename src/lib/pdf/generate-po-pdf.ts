@@ -1,6 +1,8 @@
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { formatCivilDate, todayInSantiago } from '@/lib/datetime'
+import { calculatePurchaseOrderLineTotals } from '@/lib/adquisiciones/purchase-order-totals'
+import { getPurchaseOrderDiscountDisplayValues, resolvePurchaseOrderDiscountMode } from '@/lib/adquisiciones/purchase-order-discounts'
 
 export interface POItem {
   line_number: number
@@ -11,6 +13,7 @@ export interface POItem {
   quantity: number
   unit_price: number
   discount_percent: number
+  discount_unit_amount?: number | null
   discount_amount: number
   tax_rate: number
   tax_amount: number
@@ -187,6 +190,65 @@ function getImageSizeFromBase64(base64: string): { width: number; height: number
     console.error('Error parsing image size from base64:', err)
   }
   return null
+}
+
+export function buildPOItemPdfRow(item: POItem) {
+  const lineTotals = calculatePurchaseOrderLineTotals({
+    quantity: Number(item.quantity) || 0,
+    unit_price: Number(item.unit_price) || 0,
+    discount_percent: Number(item.discount_percent) || 0,
+    discount_unit_amount: Number(item.discount_unit_amount) || 0,
+    tax_rate: Number(item.tax_rate) || 0,
+  })
+
+  const discountMode = resolvePurchaseOrderDiscountMode(item.discount_percent, item.discount_unit_amount)
+  const discountDisplay = getPurchaseOrderDiscountDisplayValues({
+    unit_price: Number(item.unit_price) || 0,
+    discount_percent: Number(item.discount_percent) || 0,
+    discount_unit_amount: Number(item.discount_unit_amount) || 0,
+    discount_mode: discountMode,
+  })
+
+  const hasDiscount = discountDisplay.discount_percent > 0 || discountDisplay.discount_unit_amount > 0
+
+  const discountPercentText = hasDiscount
+    ? `${discountDisplay.discount_percent.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%`
+    : '—'
+
+  const discountUnitText = hasDiscount && discountDisplay.discount_unit_amount > 0
+    ? formatCurrency(discountDisplay.discount_unit_amount)
+    : '—'
+
+  const sku = item.sku || '-'
+
+  return {
+    sku,
+    product_description: item.product_description,
+    unit: item.unit || '-',
+    quantity: item.quantity.toString(),
+    unit_price: formatCurrency(item.unit_price),
+    discount_percent_text: discountPercentText,
+    discount_unit_text: discountUnitText,
+    tax_rate_text: item.tax_rate ? `${item.tax_rate}%` : '0%',
+    net_text: formatCurrency(lineTotals.net_amount),
+    total_text: formatCurrency(lineTotals.line_total),
+    net_amount: lineTotals.net_amount,
+    total_amount: lineTotals.line_total,
+    discount_display: discountDisplay,
+    line_totals: lineTotals,
+    rawRow: [
+      sku,
+      item.product_description,
+      item.unit || '-',
+      item.quantity.toString(),
+      formatCurrency(item.unit_price),
+      discountPercentText,
+      discountUnitText,
+      item.tax_rate ? `${item.tax_rate}%` : '0%',
+      formatCurrency(lineTotals.net_amount),
+      formatCurrency(lineTotals.line_total),
+    ],
+  }
 }
 
 export function generatePdfBlob(detail: PODetail, logoBase64?: string): Blob {
@@ -382,28 +444,19 @@ export function generatePdfBlob(detail: PODetail, logoBase64?: string): Blob {
 
   // ── ITEMS TABLE ──
   const tableHeaders = [
-    'Línea',
     'SKU',
     'Producto / Servicio',
     'Unidad',
     'Cant.',
     'P.Unitario',
-    'Dto%',
-    'IVA%',
+    'Dcto %',
+    'Dcto/U',
+    'IVA %',
+    'Neto',
     'Total Línea',
   ]
 
-  const tableBody = detail.items.map((item) => [
-    item.line_number.toString(),
-    item.sku || '-',
-    item.product_description,
-    item.unit || '-',
-    item.quantity.toString(),
-    formatCurrency(item.unit_price),
-    item.discount_percent ? `${item.discount_percent}%` : '-',
-    item.tax_rate ? `${item.tax_rate}%` : '-',
-    formatCurrency(item.line_total),
-  ])
+  const tableBody = detail.items.map((item) => buildPOItemPdfRow(item).rawRow)
 
   autoTable(doc, {
     head: [tableHeaders],
@@ -412,8 +465,8 @@ export function generatePdfBlob(detail: PODetail, logoBase64?: string): Blob {
     margin: { left: margin, right: margin },
     styles: {
       font: 'helvetica',
-      fontSize: 7,
-      cellPadding: { top: 2, right: 2, bottom: 2, left: 2 },
+      fontSize: 6.5,
+      cellPadding: { top: 2, right: 1.5, bottom: 2, left: 1.5 },
       textColor: [30, 41, 59],
       lineColor: [226, 232, 240],
       lineWidth: 0.3,
@@ -422,19 +475,20 @@ export function generatePdfBlob(detail: PODetail, logoBase64?: string): Blob {
       fillColor: [30, 58, 95],
       textColor: [255, 255, 255],
       fontStyle: 'bold',
-      fontSize: 7,
+      fontSize: 6.5,
       halign: 'center',
     },
     columnStyles: {
-      0: { halign: 'center', cellWidth: 10 },
-      1: { cellWidth: 23 },
-      2: { cellWidth: 58 },
-      3: { halign: 'center', cellWidth: 11 },
-      4: { halign: 'center', cellWidth: 13 },
-      5: { halign: 'right', cellWidth: 22 },
-      6: { halign: 'center', cellWidth: 10 },
+      0: { halign: 'left', cellWidth: 18 },
+      1: { cellWidth: 46 },
+      2: { halign: 'center', cellWidth: 11 },
+      3: { halign: 'center', cellWidth: 10 },
+      4: { halign: 'right', cellWidth: 18 },
+      5: { halign: 'center', cellWidth: 13 },
+      6: { halign: 'right', cellWidth: 16 },
       7: { halign: 'center', cellWidth: 10 },
-      8: { halign: 'right', cellWidth: 23 },
+      8: { halign: 'right', cellWidth: 19 },
+      9: { halign: 'right', cellWidth: 19 },
     },
     alternateRowStyles: {
       fillColor: [248, 250, 252],
@@ -450,7 +504,7 @@ export function generatePdfBlob(detail: PODetail, logoBase64?: string): Blob {
   // ── TOTALS ──
   let totalsY = finalY + 8
 
-  if (totalsY > pageHeight - 50) {
+  if (totalsY > pageHeight - 55) {
     doc.addPage()
     totalsY = 20
   }
@@ -460,11 +514,13 @@ export function generatePdfBlob(detail: PODetail, logoBase64?: string): Blob {
 
   // Background box
   doc.setFillColor(...LIGHT_GRAY)
-  doc.roundedRect(totalsX - 3, totalsY - 3, totalsWidth + 6, 34, 3, 3, 'F')
+  doc.roundedRect(totalsX - 3, totalsY - 3, totalsWidth + 6, 39, 3, 3, 'F')
 
+  const grossTotal = (detail.po.net_total ?? 0) + (detail.po.discount_total ?? 0)
   const totalsData: [string, string, boolean][] = [
-    ['Neto', formatCurrency(detail.po.net_total), false],
+    ['Subtotal bruto', formatCurrency(grossTotal), false],
     ['Descuentos', formatCurrency(detail.po.discount_total), false],
+    ['Neto', formatCurrency(detail.po.net_total), false],
     ['IVA', formatCurrency(detail.po.tax_total), false],
     ['TOTAL', formatCurrency(detail.po.grand_total), true],
   ]
@@ -476,18 +532,18 @@ export function generatePdfBlob(detail: PODetail, logoBase64?: string): Blob {
       doc.setDrawColor(...EMERALD)
       doc.setLineWidth(0.5)
       doc.line(totalsX, ty + 1, totalsX + totalsWidth, ty + 1)
-      ty += 3
+      ty += 2.5
       doc.setFont('helvetica', 'bold')
-      doc.setFontSize(10)
+      doc.setFontSize(9.5)
       doc.setTextColor(...EMERALD)
     } else {
       doc.setFont('helvetica', 'normal')
-      doc.setFontSize(9)
+      doc.setFontSize(8.5)
       doc.setTextColor(...DARK_TEXT)
     }
     doc.text(label, totalsX + 2, ty + 4)
     doc.text(value, totalsX + totalsWidth - 2, ty + 4, { align: 'right' })
-    ty += 7
+    ty += 6.5
   }
 
   // ── NOTES & CONDITIONS ──

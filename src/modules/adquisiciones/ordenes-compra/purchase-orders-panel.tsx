@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, FileSpreadsheet, Ban, PackageOpen, XCircle, CheckCircle2, BarChart3, RefreshCw, Loader2, ClipboardCheck, Send } from 'lucide-react'
 import { AuthorizedPersonnelCombobox } from '@/components/ui/authorized-personnel-combobox'
 import {
-  getPurchaseOrders, getPurchaseOrderDetail, createPurchaseOrder,
+  getPurchaseOrders, getPurchaseOrderDetail, createPurchaseOrder, updateDraftPurchaseOrder,
   updatePurchaseOrderStatus, getAuthorizedPersonnel, createAuthorizedPersonnel,
   getNextCorrelative, getPurchaseOrderDocumentDetail,
   type PurchaseOrder, type PurchaseOrderDetail, type PurchaseOrderFilters,
@@ -28,6 +28,7 @@ import { PurchaseOrderSupplierReview } from './purchase-order-supplier-review'
 import { createClient as createBrowserClient } from '@/lib/supabase/client'
 import { formatCivilDate } from '@/lib/datetime'
 import { calculatePurchaseOrderLineTotals, calculatePurchaseOrderTotals } from '@/lib/adquisiciones/purchase-order-totals'
+import { getPurchaseOrderDiscountDisplayValues, getPurchaseOrderDiscountPayload, resolvePurchaseOrderDiscountMode, type PurchaseOrderDiscountMode } from '@/lib/adquisiciones/purchase-order-discounts'
 
 const STATUS_BADGES: Record<string, { bg: string; text: string; border: string }> = {
   BORRADOR: { bg: 'bg-gray-500/10', text: 'text-gray-500', border: 'border-gray-500/20' },
@@ -203,18 +204,24 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     unit_price: number
     reference_unit_cost?: number
     discount_percent: number
+    discount_unit_amount: number
+    discount_mode: PurchaseOrderDiscountMode
     tax_rate: number
     warehouse_id: string
     notes: string
   }
 
   const [items, setItems] = useState<LineItem[]>([])
+  const [showDiscountColumns, setShowDiscountColumns] = useState(false)
   const [editingItem, setEditingItem] = useState<string | null>(null)
   const [invalidPriceItemIds, setInvalidPriceItemIds] = useState<Set<string>>(new Set())
   const linePriceInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const [pendingProduct, setPendingProduct] = useState<PurchaseOrderCatalogProduct | null>(null)
   const [pendingQuantity, setPendingQuantity] = useState('1')
   const [pendingUnitPrice, setPendingUnitPrice] = useState('')
+  const [pendingDiscountPercent, setPendingDiscountPercent] = useState(0)
+  const [pendingDiscountUnitAmount, setPendingDiscountUnitAmount] = useState(0)
+  const [pendingDiscountMode, setPendingDiscountMode] = useState<PurchaseOrderDiscountMode>(null)
   const [showServiceForm, setShowServiceForm] = useState(false)
   const [serviceDraft, setServiceDraft] = useState({
     description: '', quantity: '1', unitPrice: '', discountPercent: '0', taxRate: '19', notes: '',
@@ -287,6 +294,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       quantity: i.quantity || 0,
       unit_price: i.unit_price || 0,
       discount_percent: i.discount_percent || 0,
+      discount_unit_amount: i.discount_unit_amount ?? 0,
+      discount_mode: resolvePurchaseOrderDiscountMode(i.discount_percent, i.discount_unit_amount),
       tax_rate: i.tax_rate || 19,
       warehouse_id: i.warehouse_id || '',
       notes: i.notes || '',
@@ -305,6 +314,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       unit_price: number
       reference_unit_cost: number
       discount_percent: number
+      discount_unit_amount?: number
       tax_rate: number
     }>
   }
@@ -367,8 +377,9 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
           authorized_by: d.po.authorized_by || '',
           notes: d.po.notes || '',
         });
-        setEditId(d.po.id);
-        setItems(await buildLineItems(d.items));
+         setEditId(d.po.id);
+         setIsReplenishmentPreparation(d.po.source_type === 'REPLENISHMENT');
+         setItems(await buildLineItems(d.items));
         setSelectedPo(null);
         setView('form');
       }
@@ -421,6 +432,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       setItems(prev => prev.map(it => ({
         ...it,
         discount_percent: supplier.discount_percent,
+        discount_unit_amount: 0,
+        discount_mode: 'percent',
       })))
     }
     if (supplier.payment_terms) {
@@ -443,10 +456,12 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       description: item.product_description,
       unit: item.unit || 'UNIDAD',
       quantity: item.quantity,
-      unit_price: item.unit_price,
-      reference_unit_cost: item.reference_unit_cost ?? item.unit_price,
-      discount_percent: item.discount_percent ?? 0,
-      tax_rate: item.tax_rate,
+       unit_price: item.unit_price,
+       reference_unit_cost: item.reference_unit_cost ?? item.unit_price,
+       discount_percent: item.discount_percent ?? 0,
+       discount_unit_amount: item.discount_unit_amount ?? 0,
+       discount_mode: resolvePurchaseOrderDiscountMode(item.discount_percent, item.discount_unit_amount),
+       tax_rate: item.tax_rate,
       warehouse_id: '',
       notes: '',
     })))
@@ -584,7 +599,12 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     if (!draftPrompt) return
     const d = draftPrompt.draftData
     setForm(d.form)
-    setItems(d.items)
+    setItems(d.items.map(item => ({
+      ...item,
+      discount_percent: item.discount_percent ?? 0,
+      discount_unit_amount: item.discount_unit_amount ?? 0,
+      discount_mode: resolvePurchaseOrderDiscountMode(item.discount_percent, item.discount_unit_amount),
+    })))
     setIsReplenishmentPreparation(Boolean(d.isReplenishmentPreparation))
     setReplenishmentSupplierName(d.replenishmentSupplierName || '')
     setLastSavedAt(draftPrompt.savedAtFormatted)
@@ -670,6 +690,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       notes: '',
     })
     setItems([])
+    setShowDiscountColumns(false)
     setEditingItem(null)
     setInvalidPriceItemIds(new Set())
     linePriceInputRefs.current = {}
@@ -684,6 +705,9 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     setPendingProduct(null)
     setPendingQuantity('1')
     setPendingUnitPrice('')
+    setPendingDiscountPercent(0)
+    setPendingDiscountUnitAmount(0)
+    setPendingDiscountMode(null)
     setShowServiceForm(false)
     setServiceDraft({ description: '', quantity: '1', unitPrice: '', discountPercent: '0', taxRate: '19', notes: '' })
     productLoadingMoreRef.current = false
@@ -781,30 +805,31 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     submittingRef.current = true
     setIsSubmitting(true)
     try {
-      const res = await createPurchaseOrder({
-        issue_date: form.issue_date,
+       const payload = {
+         issue_date: form.issue_date,
         required_date: form.required_date,
         supplier_id: form.supplier_id,
-        source_type: isReplenishmentPreparation ? 'REPLENISHMENT' : 'MANUAL',
+         source_type: isReplenishmentPreparation ? ('REPLENISHMENT' as const) : ('MANUAL' as const),
         warehouse_id: form.warehouse_id,
         payment_terms: form.payment_terms || undefined,
         authorized_by: form.authorized_by || undefined,
         notes: form.notes || undefined,
         currency: form.currency,
-        status: 'EMITIDA',
-        items: items.map(it => ({
+         status: 'EMITIDA' as const,
+         items: items.map(it => ({
           item_type: it.item_type,
           product_id: it.product_id || null,
           product_description: it.description,
           unit: it.unit || null,
           quantity: it.quantity,
           unit_price: it.unit_price,
-          discount_percent: it.discount_percent,
+          ...getPurchaseOrderDiscountPayload(it),
           tax_rate: it.tax_rate,
           warehouse_id: it.warehouse_id || null,
-          notes: it.notes || null,
-        })),
-      })
+           notes: it.notes || null,
+         })),
+       }
+       const res = editId ? await updateDraftPurchaseOrder(editId, payload) : await createPurchaseOrder(payload)
       if ('error' in res && res.error) {
         msg(res.error)
         submittingRef.current = false
@@ -815,7 +840,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       if (draftStorageKey) {
         try { localStorage.removeItem(draftStorageKey) } catch {}
       }
-      msg('Orden de compra creada')
+       msg(editId ? 'Orden de compra actualizada' : 'Orden de compra creada')
       setView('list'); resetForm(); load()
     } catch (error) {
       submittingRef.current = false
@@ -1048,7 +1073,33 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     setPendingProduct(p)
     setPendingQuantity('1')
     setPendingUnitPrice(p.last_purchase_unit_cost === null ? '' : String(p.last_purchase_unit_cost))
+    setPendingDiscountPercent(0)
+    setPendingDiscountUnitAmount(0)
+    setPendingDiscountMode(null)
     setProductDropdownOpen(false)
+  }
+
+  function updatePendingDiscount(field: 'discount_percent' | 'discount_unit_amount', value: string) {
+    const numeric = Number(value)
+    const nextValue = Number.isFinite(numeric) ? Math.max(numeric, 0) : 0
+    const unitPrice = Math.max(Number(pendingUnitPrice) || 0, 0)
+    if (field === 'discount_percent') {
+      const percent = Math.min(nextValue, 100)
+      setPendingDiscountPercent(percent)
+      setPendingDiscountUnitAmount(0)
+      setPendingDiscountMode(percent > 0 ? 'percent' : null)
+      return
+    }
+    const unitAmount = Math.min(nextValue, unitPrice)
+    setPendingDiscountUnitAmount(unitAmount)
+    setPendingDiscountPercent(0)
+    setPendingDiscountMode(unitAmount > 0 ? 'unit' : null)
+  }
+
+  function updatePendingUnitPrice(value: string) {
+    const unitPrice = Math.max(Number(value) || 0, 0)
+    setPendingUnitPrice(value)
+    if (pendingDiscountMode === 'unit') setPendingDiscountUnitAmount(current => Math.min(current, unitPrice))
   }
 
   function addProductToItems() {
@@ -1058,6 +1109,12 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     const unitPrice = Number(pendingUnitPrice)
     if (!Number.isFinite(quantity) || quantity <= 0) { msg('Ingresa una cantidad mayor a 0.'); return }
     if (!Number.isFinite(unitPrice) || unitPrice < 0) { msg('Ingresa un precio unitario válido.'); return }
+    const discountPayload = getPurchaseOrderDiscountPayload({
+      unit_price: unitPrice,
+      discount_percent: pendingDiscountPercent,
+      discount_unit_amount: pendingDiscountUnitAmount,
+      discount_mode: pendingDiscountMode,
+    })
     setItems(prev => [...prev, {
       tempId: newTempId(),
       item_type: 'PRODUCT',
@@ -1066,15 +1123,19 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       description: pendingProduct.description,
       unit: pendingProduct.unit_of_measure || 'UNIDAD',
       quantity,
-      unit_price: unitPrice,
-      discount_percent: 0,
-      tax_rate: pendingProduct.tax_rate || 19,
+       unit_price: unitPrice,
+        ...discountPayload,
+        discount_mode: resolvePurchaseOrderDiscountMode(discountPayload.discount_percent, discountPayload.discount_unit_amount),
+       tax_rate: pendingProduct.tax_rate || 19,
       warehouse_id: form.warehouse_id,
       notes: '',
     }])
     setPendingProduct(null)
     setPendingQuantity('1')
     setPendingUnitPrice('')
+    setPendingDiscountPercent(0)
+    setPendingDiscountUnitAmount(0)
+    setPendingDiscountMode(null)
     setProductSearch('')
     setProductResults([])
     setProductDropdownOpen(false)
@@ -1098,7 +1159,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     if (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100) { msg('El IVA debe estar entre 0 y 100.'); return }
     setItems(prev => [...prev, {
       tempId: newTempId(), item_type: 'SERVICE', product_id: '', sku: '', description,
-      unit: '', quantity, unit_price: unitPrice, discount_percent: discountPercent, tax_rate: taxRate,
+       unit: '', quantity, unit_price: unitPrice, discount_percent: discountPercent, discount_unit_amount: 0,
+       discount_mode: discountPercent > 0 ? 'percent' : null, tax_rate: taxRate,
       warehouse_id: '', notes: serviceDraft.notes.trim(),
     }])
     setServiceDraft({ description: '', quantity: '1', unitPrice: '', discountPercent: '0', taxRate: '19', notes: '' })
@@ -1115,7 +1177,23 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   }
 
   function updateItem(tempId: string, field: keyof LineItem, value: unknown) {
-    setItems(prev => prev.map(it => it.tempId === tempId ? { ...it, [field]: value } : it))
+    setItems(prev => prev.map(it => {
+      if (it.tempId !== tempId) return it
+      if (field === 'discount_percent') {
+        const percent = Math.min(Math.max(Number(value) || 0, 0), 100)
+        return { ...it, discount_percent: percent, discount_unit_amount: 0, discount_mode: percent > 0 ? 'percent' : null }
+      }
+      if (field === 'discount_unit_amount') {
+        const unitAmount = Math.min(Math.max(Number(value) || 0, 0), Math.max(it.unit_price, 0))
+        return { ...it, discount_percent: 0, discount_unit_amount: unitAmount, discount_mode: unitAmount > 0 ? 'unit' : null }
+      }
+      if (field === 'unit_price') {
+        const unitPrice = Math.max(Number(value) || 0, 0)
+        const unitAmount = Math.min(it.discount_unit_amount, unitPrice)
+        return { ...it, unit_price: unitPrice, discount_unit_amount: unitAmount, discount_mode: unitAmount > 0 ? 'unit' : null }
+      }
+      return { ...it, [field]: value }
+    }))
     if (field === 'unit_price' || field === 'quantity') {
       setInvalidPriceItemIds(prev => {
         if (!prev.has(tempId)) return prev
@@ -1139,6 +1217,12 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     tax_total: taxTotal,
     grand_total: grandTotal,
   } = orderTotals
+  const pendingDiscountDisplay = getPurchaseOrderDiscountDisplayValues({
+    unit_price: Number(pendingUnitPrice) || 0,
+    discount_percent: pendingDiscountPercent,
+    discount_unit_amount: pendingDiscountUnitAmount,
+    discount_mode: pendingDiscountMode,
+  })
 
 
   async function handleCreateAuthorizer(e: React.MouseEvent) {
@@ -1242,16 +1326,19 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         company_address: activeCompany?.address
       },
          items: items.map((it, idx) => {
-           const lineTotals = calculatePurchaseOrderLineTotals(it)
-           return {
+             const lineTotals = calculatePurchaseOrderLineTotals(it)
+             const discountPayload = getPurchaseOrderDiscountPayload(it)
+            return {
          line_number: idx + 1,
         item_type: it.item_type,
         product_id: it.product_id || undefined,
+        sku: it.sku || undefined,
         product_description: it.description,
         unit: it.unit || undefined,
         quantity: it.quantity,
         unit_price: it.unit_price,
-        discount_percent: it.discount_percent,
+         ...discountPayload,
+         discount_unit_amount: discountPayload.discount_unit_amount,
          discount_amount: lineTotals.discount_amount,
          tax_rate: it.tax_rate,
          tax_amount: lineTotals.tax_amount,
@@ -1300,10 +1387,10 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
               </button>
               <button onClick={() => { URL.revokeObjectURL(previewUrl); setPreviewUrl(null) }} className="px-4 py-1.5 rounded-lg border border-theme-border text-theme-text-muted hover:text-theme-text hover:bg-theme-text/10 text-xs font-semibold transition-colors">
                 Cerrar
-              </button>
-             </div>
+                </button>
+                 </div>
            </div>
-          <div className="flex-1 min-h-0">
+           <div className="flex-1 min-h-0">
                <iframe src={previewUrl} className="w-full h-full" title="Vista previa OC" />
              </div>
             </div>
@@ -1321,10 +1408,10 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                <button type="button" onClick={() => { setView('list'); resetForm() }} className="rounded-md p-1.5 text-[#D1C7BD] transition-colors hover:bg-white/10 hover:text-[#EFE9E1]">
                 <ArrowLeft className="w-5 h-5" />
               </button>
-              <div className="min-w-0">
+             <div className="min-w-0">
                  <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-[#AC9C8D]">Adquisiciones</p>
                  <div className="flex flex-wrap items-center gap-2 min-w-0">
-                   <h2 className="truncate text-sm font-bold uppercase tracking-wide text-[#EFE9E1]">{editId ? 'Editar orden de compra' : 'Nueva orden de compra'}</h2>
+                    <h2 className="truncate text-base font-bold uppercase tracking-wide text-[#EFE9E1]">{editId ? 'Editar orden de compra' : 'Nueva orden de compra'}</h2>
                    {!editId && lastSavedAt && (
                      <span className="text-[11px] font-normal text-[#AC9C8D] flex items-center gap-1 shrink-0">
                        • Guardado automáticamente · {lastSavedAt}
@@ -1345,7 +1432,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                </button>
             </div>
           </div>
-           <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-5">
+            <div className="min-w-0 space-y-4 px-4 py-4 sm:px-6 sm:py-5">
              {!editId && draftPrompt && (
                <div className="rounded-lg border border-[#AC9C8D]/40 bg-[#F7F4F0] p-3.5 shadow-sm text-[#322D29] animate-in fade-in duration-150">
                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1376,25 +1463,25 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                  </div>
                </div>
              )}
-             <section className="border-b border-[#D1C7BD] pb-4">
-               <div className="mb-3 border-b border-[#D1C7BD] pb-2">
-                 <div>
-                   <h3 className="text-sm font-bold uppercase tracking-wide text-[#322D29]">Datos generales</h3>
-                   <p className="mt-0.5 text-[10px] text-[#AC9C8D]">Información principal de la orden</p>
+              <section className="rounded-xl border border-[#D1C7BD] bg-[#F7F4F0] p-4 shadow-sm">
+                <div className="mb-3 border-b border-[#D1C7BD] pb-2">
+                  <div>
+                    <h3 className="text-sm font-bold text-[#322D29]">Información de la orden</h3>
+                    <p className="mt-0.5 text-[10px] text-[#AC9C8D]">Información principal de la orden</p>
+                  </div>
+                </div>
+              <div className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-2.5 md:grid-cols-2 xl:grid-cols-4">
+                <div className="order-2 space-y-1 xl:order-2">
+                  <label className="text-[10px] font-semibold text-[#6D625B]">Fecha emisión</label>
+                  <div className="flex h-8 items-center justify-between rounded-md border border-[#D1C7BD] bg-[#EFE9E1] px-2.5 text-xs text-[#6D625B]">
+                   <span>{new Date().toLocaleDateString('es-CL')}</span><span className="text-[10px] text-[#AC9C8D]">automática</span>
                  </div>
                </div>
-             <div className="grid grid-cols-1 gap-x-4 gap-y-2.5 md:grid-cols-2 xl:grid-cols-4">
-               <div className="space-y-1">
-                 <label className="text-[10px] font-semibold text-[#6D625B]">Fecha emisión</label>
-                 <div className="flex h-8 items-center rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#6D625B]">
-                  {new Date().toLocaleDateString('es-CL')}
-                </div>
-              </div>
-              <div className="space-y-1">
-                  <label className="text-[10px] font-semibold text-[#6D625B]">Fecha requerida</label>
-                <input type="date" value={form.required_date} onChange={e => setForm(p => ({ ...p, required_date: e.target.value }))} className={inputClass} />
-              </div>
-              <div ref={supplierRef} className="relative space-y-1">
+               <div className="order-3 space-y-1 xl:order-3">
+                   <label className="text-[10px] font-semibold text-[#6D625B]">Fecha requerida</label>
+                 <input type="date" value={form.required_date} onChange={e => setForm(p => ({ ...p, required_date: e.target.value }))} className={inputClass} />
+               </div>
+               <div ref={supplierRef} className="relative order-1 space-y-1 xl:order-1">
                   <label className="text-[10px] font-semibold text-[#6D625B]">Proveedor *</label>
                 <input
                   type="text"
@@ -1443,7 +1530,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                   </>
                 )}
               </div>
-              <div className="relative space-y-1" ref={warehouseRef}>
+               <div className="relative order-4 space-y-1" ref={warehouseRef}>
                   <label className="text-[10px] font-semibold text-[#6D625B]">Bodega destino</label>
                 {warehouses.length === 0 ? (
                   <div className="w-full rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-500 font-semibold">
@@ -1496,7 +1583,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                   </>
                 )}
               </div>
-              <div className="space-y-1">
+               <div className="order-5 space-y-1 xl:order-5 xl:max-w-[180px]">
                   <label className="text-[10px] font-semibold text-[#6D625B]">Moneda</label>
                 <select value={form.currency} onChange={e => setForm(p => ({ ...p, currency: e.target.value }))} className={selectClass}>
                   <option value="CLP" className="bg-white dark:bg-emerald-900">CLP</option>
@@ -1504,7 +1591,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                   <option value="EUR" className="bg-white dark:bg-emerald-900">EUR</option>
                 </select>
               </div>
-              <div className="space-y-1">
+               <div className="order-6 space-y-1 xl:col-span-1">
                   <label className="text-[10px] font-semibold text-[#6D625B]">Condiciones de pago</label>
                 <input type="text" value={form.payment_terms} onChange={e => setForm(p => ({ ...p, payment_terms: e.target.value }))} placeholder="Ej: 30 días" className={inputClass} />
               </div>
@@ -1515,7 +1602,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                     <button type="button" onClick={() => setShowAuthorizerForm(false)} className="text-xs text-theme-text-muted hover:text-theme-text">Cancelar</button>
                   </div>
                      <div className="grid grid-cols-1 gap-x-4 gap-y-2.5 md:grid-cols-2 xl:grid-cols-4">
-                    <div className="space-y-1">
+                 <div className="order-7 space-y-1 xl:col-span-2 xl:max-w-[390px]">
                       <label className="text-xs text-theme-text-muted/70">Nombre completo *</label>
                       <input type="text" value={authorizerForm.full_name} onChange={e => setAuthorizerForm(p => ({ ...p, full_name: e.target.value }))} className={inputClass} />
                     </div>
@@ -1549,22 +1636,21 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                   />
                 </div>
               )}
-               <div className="col-span-1 space-y-1 md:col-span-2 xl:col-span-4">
-                  <label className="text-[10px] font-semibold text-[#6D625B]">Notas</label>
-                   <textarea value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} rows={2} className={`${textareaClass} h-12`} />
-               </div>
-             </div>
-           </section>
+              </div>
+            </section>
 
-             <section className="border-b border-[#D1C7BD] pb-4">
-               <div className="mb-3 flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
+              <section className="min-w-0 border-b border-[#D1C7BD] pb-4">
+                <div className="mb-2 flex min-w-0 flex-col justify-between gap-2 sm:flex-row sm:items-center">
                  <div>
                    <h3 className="text-sm font-bold uppercase tracking-wide text-[#322D29]">Líneas de la orden</h3>
                    <p className="mt-0.5 text-[10px] text-[#AC9C8D]">Productos y servicios incluidos</p>
                 </div>
-                 <div className="flex flex-wrap gap-2 self-start sm:self-auto">
-                   <button type="button" onClick={focusProductSearch} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-[#72383D]/40 bg-[#EFE9E1] px-3 text-xs font-semibold text-[#72383D] transition-colors hover:bg-[#F5EDEE]"><Plus className="h-3.5 w-3.5" />Agregar producto</button>
-                   <button type="button" onClick={() => setShowServiceForm(value => !value)} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-[#72383D]/40 bg-[#EFE9E1] px-3 text-xs font-semibold text-[#72383D] transition-colors hover:bg-[#F5EDEE]"><Plus className="h-3.5 w-3.5" />Agregar servicio</button>
+                   <div className="flex min-w-0 flex-wrap gap-1.5 self-start sm:justify-end sm:self-auto">
+                     <button type="button" onClick={() => setShowDiscountColumns(value => !value)} className="inline-flex h-8 shrink-0 items-center justify-center rounded-md border border-[#72383D]/40 bg-[#EFE9E1] px-2.5 text-[11px] font-semibold text-[#72383D] transition-colors hover:bg-[#F5EDEE]">
+                      {showDiscountColumns ? 'Ocultar descuentos' : 'Agregar descuentos'}
+                    </button>
+                     <button type="button" onClick={focusProductSearch} className="inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-md border border-[#72383D]/40 bg-[#EFE9E1] px-2.5 text-[11px] font-semibold text-[#72383D] transition-colors hover:bg-[#F5EDEE]"><Plus className="h-3.5 w-3.5" />Agregar producto</button>
+                    <button type="button" onClick={() => setShowServiceForm(value => !value)} className="inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-md border border-[#72383D]/40 bg-[#EFE9E1] px-2.5 text-[11px] font-semibold text-[#72383D] transition-colors hover:bg-[#F5EDEE]"><Plus className="h-3.5 w-3.5" />Agregar servicio</button>
                  </div>
                </div>
 
@@ -1579,7 +1665,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                  <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end"><label className="flex-1 text-[10px] font-semibold text-[#6D625B]">Observaciones<textarea value={serviceDraft.notes} onChange={event => setServiceDraft(prev => ({ ...prev, notes: event.target.value }))} rows={2} className="mt-1 w-full rounded-md border border-[#D1C7BD] bg-white px-2 py-1 text-xs" /></label><button type="button" onClick={addServiceToItems} className="h-8 rounded-md bg-[#72383D] px-3 text-xs font-bold text-white">Agregar servicio</button></div>
                </div>}
 
-               <div ref={productRef} className="relative mb-3">
+                <div ref={productRef} className="relative mb-2 min-w-0">
                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#AC9C8D]" />
                     <input ref={productInputRef} type="text" value={productSearch} onChange={e => handleProductSearch(e.target.value)}
                      onFocus={openProductDropdown}
@@ -1605,96 +1691,121 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                    )}
                </div>
 
-               {pendingProduct && (
-                  <div className="mb-3 border border-[#D1C7BD] bg-[#F7F4F0] p-3">
-                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1.5fr)_minmax(110px,.7fr)_minmax(140px,.8fr)_auto] sm:items-end">
-                     <div className="min-w-0">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-[#72383D]">Producto</p>
-                        <p className="truncate text-xs font-semibold text-[#322D29]" title={pendingProduct.description}>{pendingProduct.description}</p>
-                        <p className="mt-0.5 font-mono text-[10px] text-[#AC9C8D]">SKU {pendingProduct.sku}</p>
-                        <p className="mt-1 text-[10px] text-[#AC9C8D]">Último costo de compra Bsale (CLP): {pendingProduct.last_purchase_unit_cost === null ? 'Sin precio disponible' : formatCurrency(pendingProduct.last_purchase_unit_cost, 'CLP')}</p>
-                     </div>
-                      <label className="text-[10px] font-semibold text-[#6D625B]">Cantidad<input type="number" min="0.001" step="0.001" value={pendingQuantity} onChange={event => setPendingQuantity(event.target.value)} className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" /></label>
-                      <label className="text-[10px] font-semibold text-[#6D625B]">Precio unitario<input type="number" min="0" step="1" value={pendingUnitPrice} onChange={event => setPendingUnitPrice(event.target.value)} placeholder="Ingresar manualmente" className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" /></label>
-                      <button type="button" onClick={addProductToItems} className="h-8 rounded-md border border-[#72383D]/40 bg-[#EFE9E1] px-3 text-xs font-bold text-[#72383D] hover:bg-[#F5EDEE]">Agregar producto</button>
-                   </div>
-                 </div>
-               )}
+               {pendingProduct && (() => {
+                  const pendingLineTotals = calculatePurchaseOrderLineTotals({
+                    quantity: Number(pendingQuantity) || 0,
+                    unit_price: Number(pendingUnitPrice) || 0,
+                    discount_percent: Number(pendingDiscountDisplay.discount_percent) || 0,
+                    discount_unit_amount: Number(pendingDiscountDisplay.discount_unit_amount) || 0,
+                    tax_rate: Number(pendingProduct.tax_rate) || 19,
+                  })
+                  return (
+                    <div className="mb-2 min-w-0 rounded-md border border-[#D1C7BD] bg-[#F7F4F0] p-2.5">
+                      <div className={`grid min-w-0 grid-cols-1 gap-2 sm:items-end ${showDiscountColumns ? 'sm:grid-cols-[minmax(0,1.25fr)_minmax(82px,.55fr)_minmax(108px,.7fr)_minmax(82px,.55fr)_minmax(108px,.7fr)_minmax(60px,.45fr)_minmax(96px,.65fr)_auto]' : 'sm:grid-cols-[minmax(0,1.5fr)_minmax(95px,.65fr)_minmax(120px,.8fr)_minmax(64px,.45fr)_minmax(104px,.7fr)_auto]'}`}>
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-[#72383D]">Producto</p>
+                          <p className="truncate text-xs font-semibold text-[#322D29]" title={pendingProduct.description}>{pendingProduct.description}</p>
+                          <p className="mt-0.5 font-mono text-[10px] text-[#AC9C8D]">SKU {pendingProduct.sku}</p>
+                          <p className="mt-1 text-[10px] text-[#AC9C8D]">Último costo de compra Bsale (CLP): {pendingProduct.last_purchase_unit_cost === null ? 'Sin precio disponible' : formatCurrency(pendingProduct.last_purchase_unit_cost, 'CLP')}</p>
+                        </div>
+                        <label className="text-[10px] font-semibold text-[#6D625B]">Cantidad<input type="number" min="0.001" step="0.001" value={pendingQuantity} onChange={event => setPendingQuantity(event.target.value)} className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" /></label>
+                        <label className="text-[10px] font-semibold text-[#6D625B]">Precio unitario<input type="number" min="0" step="1" value={pendingUnitPrice} onChange={event => updatePendingUnitPrice(event.target.value)} placeholder="Ingresar manualmente" className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" /></label>
+                        {showDiscountColumns && <>
+                          <label className="text-[10px] font-semibold text-[#6D625B]">Dcto %<input type="number" min="0" max="100" step="0.01" value={pendingDiscountDisplay.discount_percent} onChange={event => updatePendingDiscount('discount_percent', event.target.value)} className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" /></label>
+                          <label className="text-[10px] font-semibold text-[#6D625B]">Dcto por unidad<input type="number" min="0" max={Math.max(Number(pendingUnitPrice) || 0, 0)} step="0.01" value={pendingDiscountDisplay.discount_unit_amount} onChange={event => updatePendingDiscount('discount_unit_amount', event.target.value)} className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" /></label>
+                        </>}
+                        <div className="text-[10px] font-semibold text-[#6D625B]">IVA
+                          <div className="mt-1 flex h-8 items-center justify-end rounded-md border border-[#D1C7BD] bg-[#EFE9E1] px-2 text-xs text-[#6D625B]">{pendingProduct.tax_rate || 19}%</div>
+                        </div>
+                        <div className="text-[10px] font-semibold text-[#6D625B]">Neto
+                          <div className="mt-1 flex h-8 items-center justify-end rounded-md border border-[#D1C7BD] bg-[#EFE9E1] px-2 font-mono text-xs font-semibold text-[#322D29]">
+                            {pendingLineTotals.net_amount.toLocaleString('es-CL', { style: 'currency', currency: form.currency, minimumFractionDigits: 0 })}
+                          </div>
+                        </div>
+                        <button type="button" onClick={addProductToItems} className="h-8 whitespace-nowrap rounded-md border border-[#72383D]/40 bg-[#EFE9E1] px-2.5 text-[11px] font-bold text-[#72383D] hover:bg-[#F5EDEE]">Agregar producto</button>
+                      </div>
+                    </div>
+                  )
+                })()}
 
-                 <div className="overflow-x-auto border border-[#D1C7BD] bg-white">
-                  <table className="w-full min-w-[1120px] table-fixed text-sm">
-                   <colgroup>
-                     <col className="w-10" />
-                     <col className="w-24" />
-                     <col />
-                     <col className="w-20" />
-                     <col className="w-24" />
-                     <col className="w-32" />
-                     <col className="w-20" />
-                     <col className="w-32" />
-                     <col className="w-20" />
-                     <col className="w-32" />
-                     <col className="w-12" />
+                  <div className="min-w-0 overflow-x-auto border border-[#D1C7BD] bg-white">
+                   <table className="w-full min-w-[760px] table-fixed text-sm">
+                    <colgroup>
+                      <col />
+                      <col className="w-20" />
+                      <col className="w-28" />
+                      {showDiscountColumns && <><col className="w-20" /><col className="w-24" /></>}
+                      <col className="w-16" />
+                      <col className="w-28" />
+                      <col className="w-28" />
+                      <col className="w-12" />
                    </colgroup>
                     <thead className="bg-[#322D29]">
                       <tr className="border-b border-[#AC9C8D]/35 text-[9px] uppercase tracking-[0.08em] text-[#EFE9E1]">
-                        <th className="px-3 py-1.5 text-center font-semibold">#</th>
-                        <th className="px-3 py-1.5 text-center font-semibold">Tipo</th>
-                        <th className="px-3 py-1.5 text-left font-semibold">Producto/Servicio</th>
-                        <th className="px-3 py-1.5 text-center font-semibold">Unidad</th>
-                        <th className="px-3 py-1.5 text-center font-semibold">Cantidad</th>
-                        <th className="px-3 py-1.5 text-center font-semibold">P.Unitario</th>
-                        <th className="px-3 py-1.5 text-center font-semibold">Dto%</th>
-                        <th className="px-3 py-1.5 text-right font-semibold">Descuento</th>
-                        <th className="px-3 py-1.5 text-center font-semibold">IVA%</th>
-                        <th className="px-3 py-1.5 text-right font-semibold">Total</th>
-                        <th className="px-3 py-1.5 text-center font-medium">Acción</th>
+                         <th className="px-2.5 py-1.5 text-left font-semibold">Producto / Servicio</th>
+                         <th className="px-2 py-1.5 text-center font-semibold">Cantidad</th>
+                         <th className="px-2 py-1.5 text-center font-semibold">P. unitario</th>
+                          {showDiscountColumns && <><th className="px-2 py-1.5 text-center font-semibold">Dcto %</th><th className="px-2 py-1.5 text-center font-semibold" title="Descuento por unidad">Dcto/u</th></>}
+                         <th className="px-2 py-1.5 text-center font-semibold">IVA %</th>
+                         <th className="px-2 py-1.5 text-right font-semibold">Neto</th>
+                         <th className="px-2 py-1.5 text-right font-semibold">Total</th>
+                         <th className="px-2 py-1.5 text-center font-medium">Acción</th>
                     </tr>
                   </thead>
                   <tbody>
                     {items.length === 0 ? (
                       <tr>
-                         <td colSpan={11} className="py-6 text-center text-xs text-[#AC9C8D]">No hay líneas agregadas</td>
+                          <td colSpan={showDiscountColumns ? 9 : 7} className="py-6 text-center text-xs text-[#AC9C8D]">No hay líneas agregadas</td>
                       </tr>
-                    ) : items.map((it, idx) => (
+                    ) : items.map(it => (
                          <tr key={it.tempId} className={`border-b border-[#E5DDD4] odd:bg-white even:bg-[#FBFAF8] hover:bg-[#F3EFE9] transition-colors ${invalidPriceItemIds.has(it.tempId) ? 'bg-red-50 ring-1 ring-inset ring-red-300' : ''}`}>
-                          <td className="px-3 py-1.5 text-center text-xs text-[#AC9C8D]">{idx + 1}</td>
-                         <td className="py-2 px-3 text-center">
-                            <span className="rounded border border-[#D1C7BD] bg-[#EFE9E1] px-2 py-0.5 text-[10px] font-semibold text-[#6D625B]">{it.item_type === 'PRODUCT' ? 'Producto' : 'Servicio'}</span>
-                        </td>
-                          <td className="px-3 py-1.5 text-xs text-[#322D29]">
-                          {editingItem === it.tempId ? (
-                              <input type="text" value={it.description} onChange={e => updateItem(it.tempId, 'description', e.target.value)} className="h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
-                          ) : (
-                            <span>{it.description || <span className="text-theme-text-muted/40">—</span>}</span>
-                          )}
-                          {it.sku && <div className="font-mono text-[10px] text-[#AC9C8D]">SKU {it.sku}</div>}
-                        </td>
-                          <td className="px-3 py-1.5 text-center text-xs text-[#AC9C8D]">{it.unit}</td>
-                          <td className="px-3 py-1.5 text-center">
-                            <input type="number" min="0" step="0.001" value={it.quantity} onChange={e => updateItem(it.tempId, 'quantity', parseFloat(e.target.value) || 0)} className="mx-auto block h-8 w-20 rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
-                        </td>
-                          <td className="px-3 py-1.5 text-center">
-                              <input ref={input => { linePriceInputRefs.current[it.tempId] = input }} aria-invalid={invalidPriceItemIds.has(it.tempId)} type="number" min="0" step="1" value={it.unit_price} onChange={e => updateItem(it.tempId, 'unit_price', parseFloat(e.target.value) || 0)} className={`mx-auto block h-8 w-24 rounded-md border bg-white px-2 text-right text-xs text-[#322D29] focus:outline-none focus:ring-2 ${invalidPriceItemIds.has(it.tempId) ? 'border-red-500 focus:ring-red-300' : 'border-[#D1C7BD] focus:border-[#72383D] focus:ring-[#72383D]/15'}`} />
+                           <td className="min-w-0 px-2.5 py-1.5 text-xs text-[#322D29]">
+                           {editingItem === it.tempId ? (
+                               <input type="text" value={it.description} onChange={e => updateItem(it.tempId, 'description', e.target.value)} className="h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
+                           ) : (
+                             <span className="block truncate" title={it.description}>{it.description || <span className="text-theme-text-muted/40">—</span>}</span>
+                           )}
+                           <div className="mt-0.5 truncate text-[10px] text-[#AC9C8D]">
+                             {it.sku && <span className="font-mono">SKU {it.sku}</span>}
+                             {it.sku && <span> · </span>}
+                             <span>{it.item_type === 'PRODUCT' ? 'Producto' : 'Servicio'}</span>
+                             <span> · {it.unit || '—'}</span>
+                           </div>
+                         </td>
+                           <td className="px-2 py-1.5 text-center">
+                             <input type="number" min="0" step="0.001" value={it.quantity} onChange={e => updateItem(it.tempId, 'quantity', parseFloat(e.target.value) || 0)} className="mx-auto block h-8 w-[4.5rem] rounded-md border border-[#D1C7BD] bg-white px-1.5 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
+                         </td>
+                           <td className="px-2 py-1.5 text-center">
+                               <input ref={input => { linePriceInputRefs.current[it.tempId] = input }} aria-invalid={invalidPriceItemIds.has(it.tempId)} type="number" min="0" step="1" value={it.unit_price} onChange={e => updateItem(it.tempId, 'unit_price', parseFloat(e.target.value) || 0)} className={`mx-auto block h-8 w-[6.5rem] rounded-md border bg-white px-1.5 text-right text-xs text-[#322D29] focus:outline-none focus:ring-2 ${invalidPriceItemIds.has(it.tempId) ? 'border-red-500 focus:ring-red-300' : 'border-[#D1C7BD] focus:border-[#72383D] focus:ring-[#72383D]/15'}`} />
                              {invalidPriceItemIds.has(it.tempId) && <span className="block mt-0.5 text-[10px] font-semibold text-red-600">Complete el precio</span>}
                              {it.reference_unit_cost !== undefined && <span className="mt-0.5 block text-[10px] text-[#AC9C8D]">Ref. Bsale {formatCurrency(it.reference_unit_cost, 'CLP')}</span>}
                         </td>
-                          <td className="px-3 py-1.5 text-center">
-                            <input type="number" min="0" max="100" step="0.01" value={it.discount_percent} onChange={e => updateItem(it.tempId, 'discount_percent', parseFloat(e.target.value) || 0)} className="mx-auto block h-8 w-16 rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
+                           {showDiscountColumns && (() => {
+                             const discountDisplay = getPurchaseOrderDiscountDisplayValues(it)
+                             return <>
+                              <td className="px-2 py-1.5 text-center">
+                                <input type="number" min="0" max="100" step="0.01" value={discountDisplay.discount_percent} onChange={e => updateItem(it.tempId, 'discount_percent', e.target.value)} className="mx-auto block h-8 w-[4.5rem] rounded-md border border-[#D1C7BD] bg-white px-1.5 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
+                              </td>
+                              <td className="px-2 py-1.5 text-center">
+                                <input type="number" min="0" max={it.unit_price} step="0.01" value={discountDisplay.discount_unit_amount} onChange={e => updateItem(it.tempId, 'discount_unit_amount', e.target.value)} className="mx-auto block h-8 w-[5.5rem] rounded-md border border-[#D1C7BD] bg-white px-1.5 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
+                              </td>
+                             </>
+                           })()}
+                           <td className="px-2 py-1.5 text-center">
+                             <input type="number" min="0" max="100" step="0.01" value={it.tax_rate} onChange={e => updateItem(it.tempId, 'tax_rate', parseFloat(e.target.value) || 0)} className="mx-auto block h-8 w-[4rem] rounded-md border border-[#D1C7BD] bg-white px-1.5 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                         </td>
-                         <td className="px-3 py-1.5 text-right text-xs text-[#6D625B]">{(it.quantity * it.unit_price * it.discount_percent / 100).toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 })}</td>
-                          <td className="px-3 py-1.5 text-center">
-                            <input type="number" min="0" max="100" step="0.01" value={it.tax_rate} onChange={e => updateItem(it.tempId, 'tax_rate', parseFloat(e.target.value) || 0)} className="mx-auto block h-8 w-16 rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
-                        </td>
-                         <td className="px-3 py-1.5 text-right text-xs font-semibold text-[#322D29]">
                           {(() => {
-                            const lineNet = it.quantity * it.unit_price
-                            const lineDisc = lineNet * it.discount_percent / 100
-                            const lineTax = (lineNet - lineDisc) * it.tax_rate / 100
-                            return (lineNet - lineDisc + lineTax).toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 })
+                            const lineTotals = calculatePurchaseOrderLineTotals(it)
+                            return <>
+                              <td className="px-2 py-1.5 text-right text-xs text-[#6D625B]">
+                                {lineTotals.net_amount.toLocaleString('es-CL', { style: 'currency', currency: form.currency, minimumFractionDigits: 0 })}
+                              </td>
+                              <td className="px-2 py-1.5 text-right text-xs font-semibold text-[#322D29]">
+                                {lineTotals.line_total.toLocaleString('es-CL', { style: 'currency', currency: form.currency, minimumFractionDigits: 0 })}
+                              </td>
+                            </>
                           })()}
-                        </td>
-                         <td className="px-3 py-1.5 text-center">
+                          <td className="px-2 py-1.5 text-center">
                            <button type="button" onClick={() => removeItem(it.tempId)} className="rounded-md p-1 text-[#AC9C8D] transition-colors hover:bg-red-500/10 hover:text-red-500">
                             <X className="w-3.5 h-3.5" />
                           </button>
@@ -1705,8 +1816,14 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                 </table>
               </div>
 
-                <div className="mt-3 flex justify-end border-t border-[#D1C7BD] pt-3">
-                  <div className="w-full space-y-1 text-xs sm:w-96">
+                <div className="mt-3 grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1.8fr)_minmax(280px,.9fr)]">
+                  <div className="min-w-0 rounded-xl border border-[#D1C7BD] bg-[#F7F4F0] p-3.5">
+                    <h3 className="mb-2 text-sm font-bold text-[#322D29]">Notas de la orden</h3>
+                    <textarea value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} rows={4} placeholder="Agregar notas adicionales..." className={`${textareaClass} min-h-[112px] bg-white`} />
+                  </div>
+                  <div className="min-w-0 rounded-xl border border-[#D1C7BD] bg-[#F7F4F0] p-3.5">
+                   <h3 className="mb-2 text-sm font-bold text-[#322D29]">Resumen de la orden</h3>
+                   <div className="space-y-1 text-xs">
                      <div className="flex justify-between py-0.5">
                        <span className="text-[#AC9C8D]">Subtotal bruto</span>
                        <span className="font-medium text-[#322D29]">{formatCurrency(grossTotal, form.currency)}</span>
@@ -1727,9 +1844,10 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                        <span className="font-bold text-[#322D29]">Total OC</span>
                       <span className="text-base font-bold text-[#72383D]">{formatCurrency(grandTotal, form.currency)}</span>
                   </div>
-                </div>
-              </div>
-              </section>
+                 </div>
+               </div>
+               </div>
+               </section>
              </div>
          </form>
        </div>
@@ -2103,8 +2221,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                  <div className="w-7 h-7 rounded-lg bg-theme-accent/10 flex items-center justify-center shrink-0"><PackageOpen className="w-4 h-4 text-theme-accent" /></div>
                  <div>
                    <div className="flex items-center gap-2"><span className="font-mono text-sm font-bold text-theme-accent">{selectedPo.correlative}</span><Badge value={selectedPo.status} map={STATUS_BADGES} /></div>
-                   <p className="text-xs text-theme-text-muted truncate">{selectedPo.supplier_name}</p>
-                 </div>
+                    <p className="text-xs text-theme-text-muted truncate">{selectedPo.supplier_name}</p>
+                  </div>
                </div>
                <div className="flex items-center gap-2 shrink-0">
                  <button onClick={() => setSelectedPo(null)} className="p-1.5 rounded-lg hover:bg-theme-text/10 text-theme-text-muted transition-colors"><X className="w-3.5 h-3.5" /></button>

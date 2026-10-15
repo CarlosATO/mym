@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { getActiveCompanyId } from '@/app/actions/companies'
 import { syncProductSupplierMappings } from '@/lib/integraciones/bsale-auto-mapping'
+import { calculatePurchaseOrderTotals } from '@/lib/adquisiciones/purchase-order-totals'
 
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
@@ -413,6 +414,96 @@ export async function createPurchaseOrder(data: CreatePOData) {
   const r = result as { success: boolean; error?: string; po_id?: string; correlative?: string }
   if (!r.success) return { error: r.error || 'Error al crear OC' }
   return { success: true, po_id: r.po_id, correlative: r.correlative }
+}
+
+export async function updateDraftPurchaseOrder(poId: string, data: CreatePOData) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado' }
+
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
+
+  const totals = calculatePurchaseOrderTotals(data.items.map(item => ({
+    ...item,
+    discount_percent: item.discount_percent ?? 0,
+    tax_rate: item.tax_rate ?? 19,
+  })))
+  const hasProduct = data.items.some(item => item.item_type === 'PRODUCT')
+  const hasService = data.items.some(item => item.item_type === 'SERVICE')
+  const db = adqAdmin()
+  const { data: existing, error: existingError } = await db
+    .from('purchase_orders')
+    .select('id, status')
+    .eq('id', poId)
+    .eq('company_id', companyId)
+    .single()
+  if (existingError || !existing) return { error: 'La OC borrador no existe o no pertenece a la empresa' }
+  if (existing.status !== 'BORRADOR') return { error: 'Solo se pueden editar OCs en estado borrador' }
+
+  const { error: headerError } = await db.from('purchase_orders').update({
+    issue_date: data.issue_date,
+    required_date: data.required_date || null,
+    supplier_id: data.supplier_id,
+    source_type: data.source_type ?? 'MANUAL',
+    warehouse_id: data.warehouse_id || null,
+    payment_terms: data.payment_terms || null,
+    authorized_by: data.authorized_by || null,
+    notes: data.notes || null,
+    currency: data.currency || 'CLP',
+    po_type: hasProduct && hasService ? 'MIXTA' : hasService ? 'SERVICIOS' : 'PRODUCTOS',
+    status: data.status || 'EMITIDA',
+    net_total: totals.net_total,
+    discount_total: totals.discount_total,
+    tax_total: totals.tax_total,
+    exempt_total: 0,
+    grand_total: totals.grand_total,
+    updated_by: user.id,
+    updated_at: new Date().toISOString(),
+  }).eq('id', poId).eq('company_id', companyId)
+  if (headerError) return { error: headerError.message }
+
+  const { error: deleteError } = await db.from('purchase_order_items').delete().eq('po_id', poId).eq('company_id', companyId)
+  if (deleteError) return { error: deleteError.message }
+
+  const { error: itemError } = await db.from('purchase_order_items').insert(data.items.map((item, index) => {
+    const lineTotals = calculatePurchaseOrderTotals([{
+      ...item,
+      discount_percent: item.discount_percent ?? 0,
+      tax_rate: item.tax_rate ?? 19,
+    }])
+    const discountPercent = item.discount_percent ?? 0
+    const discountUnitAmount = item.discount_unit_amount ?? 0
+    const grossAmount = item.quantity * item.unit_price
+    const discountAmount = lineTotals.discount_total
+    const taxAmount = lineTotals.tax_total
+    return {
+      company_id: companyId,
+      po_id: poId,
+      line_number: index + 1,
+      item_type: item.item_type,
+      product_id: item.product_id || null,
+      product_description: item.product_description,
+      unit: item.unit || null,
+      quantity: item.quantity,
+      unit_price: item.unit_price,
+      discount_percent: discountPercent,
+      discount_unit_amount: discountUnitAmount,
+      discount_amount: discountAmount,
+      tax_rate: item.tax_rate ?? 19,
+      tax_amount: taxAmount,
+      line_total: grossAmount - discountAmount + taxAmount,
+      warehouse_id: item.warehouse_id || null,
+      cost_center: item.cost_center || null,
+      required_date: item.required_date || null,
+      notes: item.notes || null,
+      quantity_received: 0,
+      created_by: user.id,
+      updated_by: user.id,
+    }
+  }))
+  if (itemError) return { error: itemError.message }
+  return { success: true, po_id: poId }
 }
 
 export interface SupplierReviewItemInput {

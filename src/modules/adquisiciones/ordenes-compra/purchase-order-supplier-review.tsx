@@ -8,18 +8,13 @@ import type { PurchaseOrderCatalogProduct } from '@/app/actions/adquisiciones/pr
 import { PurchaseOrderNewProductModal } from './purchase-order-new-product-modal'
 import type { LocalCreatedProduct } from '@/lib/integraciones/bsale-product-creation-core'
 import { calculatePurchaseOrderLineTotals, calculatePurchaseOrderTotals } from '@/lib/adquisiciones/purchase-order-totals'
-
-type DiscountMode = 'percent' | 'unit' | null
+import { getPurchaseOrderDiscountDisplayValues, getPurchaseOrderDiscountPayload, resolvePurchaseOrderDiscountMode, type PurchaseOrderDiscountMode } from '@/lib/adquisiciones/purchase-order-discounts'
 
 type EditableReviewItem = Omit<PurchaseOrderReviewItem, 'item_id'> & {
   item_id: string | null
   client_id: string
   discount_unit_amount: number
-  discount_mode: DiscountMode
-}
-
-function roundDiscount(value: number) {
-  return Math.round((value + Number.EPSILON) * 100) / 100
+  discount_mode: PurchaseOrderDiscountMode
 }
 
 interface PurchaseOrderSupplierReviewProps {
@@ -81,18 +76,16 @@ function toEditable(item: PurchaseOrderReviewItem, index: number): EditableRevie
     item_id: item.item_id || null,
     client_id: item.item_id ? `persisted-${item.item_id}` : `persisted-new-${index}`,
     discount_unit_amount: item.discount_unit_amount ?? 0,
-    discount_mode: item.discount_percent > 0 ? 'percent' : (item.discount_unit_amount ?? 0) > 0 ? 'unit' : null,
+    discount_mode: resolvePurchaseOrderDiscountMode(item.discount_percent, item.discount_unit_amount),
   }
 }
 
 function discountPercentDisplay(line: EditableReviewItem) {
-  if (line.discount_mode !== 'unit') return line.discount_percent
-  return line.unit_price > 0 ? roundDiscount((line.discount_unit_amount / line.unit_price) * 100) : 0
+  return getPurchaseOrderDiscountDisplayValues(line).discount_percent
 }
 
 function discountUnitAmountDisplay(line: EditableReviewItem) {
-  if (line.discount_mode !== 'percent') return line.discount_unit_amount
-  return roundDiscount(line.unit_price * line.discount_percent / 100)
+  return getPurchaseOrderDiscountDisplayValues(line).discount_unit_amount
 }
 
 function matchesOriginal(line: EditableReviewItem, original: PurchaseOrderReviewItem) {
@@ -198,7 +191,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
             ...line,
             discount_percent: discountPercent,
             discount_unit_amount: 0,
-            discount_mode: 'percent',
+            discount_mode: discountPercent > 0 ? 'percent' : null,
           }
         }
         if (field === 'discount_unit_amount') {
@@ -207,14 +200,17 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
             ...line,
             discount_unit_amount: discountUnitAmount,
             discount_percent: 0,
-            discount_mode: 'unit',
+            discount_mode: discountUnitAmount > 0 ? 'unit' : null,
           }
         }
         if (field === 'unit_price') {
+          const unitPrice = Math.max(nextValue, 0)
+          const unitAmount = Math.min(line.discount_unit_amount, unitPrice)
           return {
             ...line,
-            unit_price: nextValue,
-            discount_unit_amount: Math.min(line.discount_unit_amount, Math.max(nextValue, 0)),
+            unit_price: unitPrice,
+            discount_unit_amount: unitAmount,
+            discount_mode: unitAmount > 0 ? 'unit' : null,
           }
         }
         return { ...line, [field]: nextValue }
@@ -420,8 +416,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
         product_description: line.item_type === 'SERVICE' ? line.product_description : undefined,
         quantity: line.quantity,
         unit_price: line.unit_price,
-        discount_percent: line.discount_mode === 'percent' ? line.discount_percent : 0,
-        discount_unit_amount: line.discount_mode === 'unit' ? line.discount_unit_amount : 0,
+        ...getPurchaseOrderDiscountPayload(line),
         tax_rate: line.tax_rate,
         notes: line.notes,
       })),
