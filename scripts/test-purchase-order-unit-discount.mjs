@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 const root = new URL('..', import.meta.url)
-const migration = await readFile(new URL('supabase/migrations/20261014100000_adquisiciones_purchase_order_unit_discount.sql', root), 'utf8')
+const migration = await readFile(new URL('supabase/migrations/20261014210000_adquisiciones_purchase_order_unit_discount.sql', root), 'utf8')
 const actions = await readFile(new URL('src/app/actions/adquisiciones/purchase-orders.ts', root), 'utf8')
 
 function calculate({ quantity, unitPrice, discountPercent, discountUnitAmount, taxRate }) {
