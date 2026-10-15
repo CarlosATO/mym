@@ -10,6 +10,7 @@ import {
   SyncStatus
 } from './sync-core'
 import { getBsaleConfigForCompany } from '@/lib/bsale/company-config'
+import { canDeactivateAbsentClients, getAbsentBsaleClientIds } from './bsale-clients-sync-logic'
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -88,18 +89,19 @@ export async function syncBsaleClients(options: SyncBsaleClientsOptions) {
     insertedCount: 0,
     updatedCount: 0,
     skippedCount: 0,
-    errorCount: 0
+    errorCount: 0,
+    deactivatedCount: 0
   }
 
   try {
     // 2. Fetch clients
     let offset = 0
     const limit = 50
-    let hasMore = true
     let totalCount = -1
     const allClients = []
 
-    while (hasMore) {
+    let fetchCompleted = false
+    while (!fetchCompleted) {
       const url = `${bsaleUrl}/clients.json?limit=${limit}&offset=${offset}`
       const response = await fetch(url, {
         method: 'GET',
@@ -119,27 +121,34 @@ export async function syncBsaleClients(options: SyncBsaleClientsOptions) {
 
       const data = await response.json()
       if (totalCount === -1) {
-        totalCount = data.count
+        totalCount = Number(data.count)
+        if (!Number.isFinite(totalCount) || totalCount < 0) {
+          throw new Error('Bsale API response missing a valid clients count')
+        }
         stats.bsaleTotal = totalCount
       }
 
       if (!data.items || data.items.length === 0) {
-        hasMore = false
-        break
+        if (totalCount === allClients.length) {
+          fetchCompleted = true
+          continue
+        }
+        throw new Error('Bsale clients pagination ended before the complete list was fetched')
       }
 
       allClients.push(...data.items)
       stats.bsaleFetched += data.items.length
 
-      if (limitOverride && allClients.length >= limitOverride) {
-        hasMore = false
+      if (limitOverride !== null) {
         break
       }
 
-      offset += limit
-      if (offset > totalCount + limit) {
-        hasMore = false
+      if (allClients.length >= totalCount) {
+        fetchCompleted = true
+        continue
       }
+
+      offset += limit
     }
 
     // 3. Process clients
@@ -280,6 +289,45 @@ export async function syncBsaleClients(options: SyncBsaleClientsOptions) {
         stats.updatedCount += toUpdate.length
       }
       upsertedCount += chunk.length
+    }
+
+    // Absence is meaningful only after a complete, non-limited Bsale fetch.
+    if (canDeactivateAbsentClients({
+      isDryRun,
+      hasLimitOverride: limitOverride !== null,
+      fetchCompleted
+    })) {
+      const currentBsaleIds = new Set(allClients.map(client => client.id))
+      const { data: localClients, error: localClientsError } = await admin.schema('integraciones')
+        .from('bsale_clients')
+        .select('bsale_client_id')
+        .eq('company_id', companyId)
+
+      if (localClientsError) throw localClientsError
+
+      const absentIds = getAbsentBsaleClientIds(
+        localClients.map(client => client.bsale_client_id),
+        [...currentBsaleIds]
+      )
+
+      if (absentIds.length > 0) {
+        const { error: deactivateBsaleError } = await admin.schema('integraciones')
+          .from('bsale_clients')
+          .update({ is_active_bsale: false })
+          .eq('company_id', companyId)
+          .in('bsale_client_id', absentIds)
+
+        if (deactivateBsaleError) throw deactivateBsaleError
+
+        const { error: deactivateCustomersError } = await admin.schema('comercial')
+          .from('customers')
+          .update({ is_active: false })
+          .eq('company_id', companyId)
+          .in('bsale_client_id', absentIds)
+
+        if (deactivateCustomersError) throw deactivateCustomersError
+        stats.deactivatedCount = absentIds.length
+      }
     }
 
     if (runId) {

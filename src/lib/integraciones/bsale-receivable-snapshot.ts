@@ -114,6 +114,11 @@ export function snapshotCoveragePercent(processedClients: number, clientsTotal: 
   return Math.round((processedClients / clientsTotal) * 10000) / 100
 }
 
+export function snapshotEffectiveCoveragePercent(clientsSuccess: number, clientsTotal: number): number {
+  if (clientsTotal <= 0) return 100
+  return Math.round((clientsSuccess / clientsTotal) * 10000) / 100
+}
+
 export function snapshotRunStatus(clientsTotal: number, processedClients: number, clientsError: number) {
   if (processedClients < clientsTotal) return 'RUNNING' as const
   return clientsError > 0 ? 'PARTIAL' as const : 'COMPLETED' as const
@@ -384,7 +389,10 @@ export async function snapshotReceivablesForClient({
     clientsError: result.client?.result === 'HTTP_ERROR' ? 1 : 0,
     documentsTotal: result.documents.length,
     totalAmountOwed: result.totalAmountOwed,
-    coveragePercent: result.client?.result === 'SUCCESS' ? 100 : 0,
+    coveragePercent: snapshotEffectiveCoveragePercent(
+      result.client?.result === 'SUCCESS' ? 1 : 0,
+      1,
+    ),
   })
   return result
 }
@@ -429,7 +437,7 @@ export async function snapshotReceivablesForClients({
     clientsError,
     documentsTotal: documents.length,
     totalAmountOwed: documents.reduce((sum, document) => sum + document.total_amount_owed, 0),
-    coveragePercent: snapshotCoveragePercent(clients.length, uniqueClientIds.length),
+    coveragePercent: snapshotEffectiveCoveragePercent(clientsSuccess, uniqueClientIds.length),
     completedAt: status === 'RUNNING' ? null : undefined,
   })
   return {
@@ -552,7 +560,10 @@ export async function snapshotReceivablesBatch({
     clientsError: run.clientsError + clientsError,
     documentsTotal: run.documentsTotal + documents.length,
     totalAmountOwed: run.totalAmountOwed + documents.reduce((sum, document) => sum + document.total_amount_owed, 0),
-    coveragePercent: snapshotCoveragePercent(processedClients, run.clientsTotal),
+    coveragePercent: snapshotEffectiveCoveragePercent(
+      run.clientsSuccess + clientsSuccess,
+      run.clientsTotal,
+    ),
     completedAt: status === 'RUNNING' ? null : new Date().toISOString(),
     errorSummary: rateLimitSummary,
   })

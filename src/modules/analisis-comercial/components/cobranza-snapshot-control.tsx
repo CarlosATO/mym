@@ -54,12 +54,24 @@ export function CobranzaSnapshotControl({ initialStatus }: { initialStatus: Rece
 
   const running = pending || Boolean(status.activeRunId)
   const progress = status.clientsTotal > 0 ? `${status.clientsProcessed}/${status.clientsTotal}` : null
+  const effectiveCoverage = status.clientsTotal > 0
+    ? Math.round((status.clientsSuccess / status.clientsTotal) * 1000) / 10
+    : 100
+  const effectiveCoverageLabel = effectiveCoverage === 100 ? '100%' : `${effectiveCoverage.toLocaleString('es-CL', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+  const terminalSnapshot = status.status === 'COMPLETED' || status.status === 'PARTIAL'
   return (
     <div className="flex flex-wrap items-center gap-2">
       <button type="button" onClick={() => void start()} disabled={running} className="border border-[#72383D]/35 bg-white px-2.5 py-1.5 text-[10px] font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">
         {running ? 'Sincronizando cobranzas…' : 'Sincronizar cobranzas'}
       </button>
       {running && <span className="text-[10px] text-[#806238]">{status.rateLimited ? 'BSale solicitó una pausa. La actualización continuará automáticamente.' : 'Actualizando cobranzas…'}{progress ? ` ${progress}` : ''}</span>}
+      {!running && terminalSnapshot && status.clientsTotal > 0 && (
+        <span className={`text-[10px] ${status.clientsError > 0 ? 'text-[#8A4B4B]' : 'text-[#806238]'}`}>
+          {status.clientsSuccess} consultados · {status.clientsUnqueryable} no consultables
+          {status.clientsError > 0 ? ` · ${status.clientsError} con error` : ''}
+          {' · '}Cobertura efectiva {effectiveCoverageLabel}
+        </span>
+      )}
       {!running && feedback && <span role="status" className={`text-[10px] ${status.status === 'COMPLETED' ? 'text-[#426247]' : 'text-[#8A4B4B]'}`}>{feedback}</span>}
     </div>
   )

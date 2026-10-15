@@ -85,6 +85,30 @@ def test_actual_drilldown_reads_the_same_snapshot_run() -> None:
     assert "d.status AS source_status" in sql
 
 
+def test_snapshot_metadata_keeps_effective_coverage_and_provisional_flag() -> None:
+    response = build_receivables_response(
+        COMPANY_ID,
+        2026,
+        [{"month": 0, "receivable_amount": Decimal("42876344"), "overdue_amount": Decimal("20449639"), "pending_documents": 153}],
+        date(2026, 10, 15),
+        date(2026, 10, 15),
+        {
+            "clients_total": 353,
+            "clients_success": 341,
+            "clients_unqueryable": 12,
+            "clients_error": 0,
+            "coverage_percent": 96.6,
+            "is_provisional": True,
+        },
+    )
+
+    assert response["actual"]["coverage_percent"] == 96.6
+    assert response["actual"]["is_provisional"] is True
+    assert response["actual"]["receivable_amount"] == "42876344.00"
+    assert response["actual"]["overdue_amount"] == "20449639.00"
+    assert response["actual"]["pending_documents"] == 153
+
+
 def test_bsale_overdue_boundary_is_strictly_before_cutoff() -> None:
     cutoff = date(2026, 10, 6)
     assert date(2026, 10, 5) < cutoff

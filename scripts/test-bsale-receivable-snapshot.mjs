@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { classifySnapshotError, localSnapshotDate, mapUnpaidDocuments, resolveClientState } from '../src/lib/integraciones/bsale-receivable-snapshot.ts'
+import {
+  classifySnapshotError,
+  localSnapshotDate,
+  mapUnpaidDocuments,
+  resolveClientState,
+  snapshotEffectiveCoveragePercent,
+  snapshotRunStatus,
+} from '../src/lib/integraciones/bsale-receivable-snapshot.ts'
 
 const companyId = 'd1000000-0000-0000-0000-000000000001'
 
@@ -39,4 +46,18 @@ test('classifies only the known Bsale invalid-client response as unqueryable', (
   assert.equal(classifySnapshotError(new Error('Bsale HTTP 400: invalid client code or id')).result, 'UNPAID_DOCUMENTS_CLIENT_INVALID')
   assert.equal(classifySnapshotError(new Error('Bsale HTTP 400: validation error')).result, 'HTTP_ERROR')
   assert.equal(classifySnapshotError(new Error('request timeout')).result, 'HTTP_ERROR')
+})
+
+test('separates technical progress from effective coverage', () => {
+  assert.equal(341 + 12 + 0, 353)
+  assert.equal(snapshotRunStatus(353, 353, 0), 'COMPLETED')
+  assert.equal(snapshotEffectiveCoveragePercent(341, 353), 96.6)
+  assert.equal(snapshotEffectiveCoveragePercent(353, 353), 100)
+  assert.equal(snapshotEffectiveCoveragePercent(0, 0), 100)
+})
+
+test('unqueryable clients do not make a complete run partial', () => {
+  assert.equal(snapshotRunStatus(353, 353, 0), 'COMPLETED')
+  assert.equal(snapshotRunStatus(353, 353, 1), 'PARTIAL')
+  assert.equal(snapshotEffectiveCoveragePercent(340, 353), 96.32)
 })

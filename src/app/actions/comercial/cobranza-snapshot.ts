@@ -15,6 +15,8 @@ export type ReceivablesSnapshotStatus = {
   status: 'RUNNING' | 'COMPLETED' | 'PARTIAL' | 'FAILED' | null
   clientsTotal: number
   clientsProcessed: number
+  clientsSuccess: number
+  clientsUnqueryable: number
   clientsError: number
   rateLimited: boolean
   retryAfterSeconds: number | null
@@ -36,6 +38,8 @@ function emptyStatus(): ReceivablesSnapshotStatus {
     status: null,
     clientsTotal: 0,
     clientsProcessed: 0,
+    clientsSuccess: 0,
+    clientsUnqueryable: 0,
     clientsError: 0,
     rateLimited: false,
     retryAfterSeconds: null,
@@ -75,6 +79,8 @@ export async function getReceivablesSnapshotStatus(): Promise<ReceivablesSnapsho
     status: source.status as ReceivablesSnapshotStatus['status'],
     clientsTotal: Number(source.clients_total || 0),
     clientsProcessed,
+    clientsSuccess: Number(source.clients_success || 0),
+    clientsUnqueryable: Number(source.clients_unqueryable || 0),
     clientsError: Number(source.clients_error || 0),
     rateLimited: Boolean(active && errorSummary?.code === 'TRANSIENT_GLOBAL_RATE_LIMIT'),
     retryAfterSeconds: Number.isFinite(retryAfter) ? retryAfter : null,

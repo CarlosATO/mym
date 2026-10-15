@@ -43,10 +43,18 @@ test('el snapshot independiente reutiliza runner, lock y run existente', () => {
 
 test('el estado de UI se lee desde runs de Supabase y expone progreso/rate limit', () => {
   assert.match(action, /bsale_receivable_snapshot_runs/)
-  for (const field of ['lastCompletedAt', 'activeRunId', 'clientsTotal', 'clientsProcessed', 'clientsError', 'rateLimited', 'retryAfterSeconds', 'updatedAt']) {
+  for (const field of ['lastCompletedAt', 'activeRunId', 'clientsTotal', 'clientsProcessed', 'clientsSuccess', 'clientsUnqueryable', 'clientsError', 'rateLimited', 'retryAfterSeconds', 'updatedAt']) {
     assert.match(action, new RegExp(field))
   }
   assert.doesNotMatch(control, /bsaleFetch|unpaid_documents|baseUrl|accessToken/)
+})
+
+test('la UI separa progreso técnico y cobertura efectiva', () => {
+  assert.match(control, /Actualizando cobranzas….*\$\{progress\}/s)
+  assert.match(control, /consultados · .*no consultables/)
+  assert.match(control, /Cobertura efectiva/)
+  assert.match(control, /clientsSuccess \/ status\.clientsTotal/)
+  assert.match(control, /clientsError > 0/)
 })
 
 test('la UI hace polling controlado, bloquea doble ejecución y refresca al finalizar', () => {
