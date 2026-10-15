@@ -2,6 +2,9 @@ import crypto from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { getBsaleConfigForCompany, KNOWN_COMPANY_IDS } from '@/lib/bsale/company-config'
 import {
+  DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
+  parseRetryAfter,
+  SnapshotRateLimitError,
   collectPagedRows,
   snapshotReceivablesBatch,
   type SnapshotBatchResult,
@@ -10,6 +13,8 @@ import {
 const COMPANY_ID = KNOWN_COMPANY_IDS.CAYLO
 const MAX_BATCH_SIZE = 20
 const SNAPSHOT_LOCK_NAME = 'bsale_receivable_snapshot'
+export const MANUAL_DISPATCH_LOCK_NAME = 'bsale_receivable_snapshot_manual_dispatch'
+export const MANUAL_DISPATCH_LOCK_TTL_MINUTES = 40
 const SYNC_LOCK_NAME = 'bsale_replenishment_sync'
 const LOCK_TTL_MINUTES = 15
 const YEAR = 2026
@@ -24,6 +29,7 @@ type SnapshotRunRow = {
   documents_total: number
   total_amount_owed: number
   coverage_percent: number | null
+  error_summary: Record<string, unknown> | null
   completed_at: string | null
 }
 
@@ -31,6 +37,7 @@ export type ReceivableSnapshotRunResult = {
   skipped?: 'SNAPSHOT_LOCKED' | 'SYNC_ACTIVE'
   run?: SnapshotRunRow
   result?: SnapshotBatchResult
+  rateLimited?: SnapshotBatchResult['rateLimited']
   universe: {
     year: number
     eligible_documents: number
@@ -121,6 +128,13 @@ async function releaseLock(db: ReturnType<typeof integrationDb>, lockName: strin
     .eq('company_id', COMPANY_ID).eq('lock_name', lockName).eq('run_id', runId)
 }
 
+async function consumeManualDispatchClaim(db: ReturnType<typeof integrationDb>, claimId: string | null) {
+  if (!claimId) throw new Error('Falta el claim de la ejecución manual de Cobranzas.')
+  const { error } = await db.schema('integraciones').from('bsale_sync_locks').delete()
+    .eq('company_id', COMPANY_ID).eq('lock_name', MANUAL_DISPATCH_LOCK_NAME).eq('run_id', claimId)
+  if (error) throw error
+}
+
 async function activeSyncLock(db: ReturnType<typeof integrationDb>) {
   const { data, error } = await db.schema('integraciones').from('bsale_sync_locks')
     .select('run_id, expires_at')
@@ -146,7 +160,7 @@ async function latestRunningSnapshot(db: ReturnType<typeof integrationDb>) {
 
 async function fetchRun(db: ReturnType<typeof integrationDb>, runId: string) {
   const { data, error } = await db.schema('integraciones').from('bsale_receivable_snapshot_runs')
-    .select('id, status, clients_total, clients_success, clients_unqueryable, clients_error, documents_total, total_amount_owed, coverage_percent, completed_at')
+    .select('id, status, clients_total, clients_success, clients_unqueryable, clients_error, documents_total, total_amount_owed, coverage_percent, error_summary, completed_at')
     .eq('id', runId)
     .single()
   if (error) throw error
@@ -157,10 +171,14 @@ export async function runReceivablesSnapshot({
   runId,
   batchSize = MAX_BATCH_SIZE,
   forceNew = false,
+  consumeManualDispatchClaim: shouldConsumeManualDispatchClaim = false,
+  manualDispatchClaimId = null,
 }: {
   runId?: string
   batchSize?: number
   forceNew?: boolean
+  consumeManualDispatchClaim?: boolean
+  manualDispatchClaimId?: string | null
 } = {}): Promise<ReceivableSnapshotRunResult> {
   if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > MAX_BATCH_SIZE) {
     throw new Error(`batchSize debe estar entre 1 y ${MAX_BATCH_SIZE}.`)
@@ -190,6 +208,7 @@ export async function runReceivablesSnapshot({
   }
 
   try {
+    if (shouldConsumeManualDispatchClaim) await consumeManualDispatchClaim(db, manualDispatchClaimId)
     let batchResult: SnapshotBatchResult | undefined
     do {
       batchResult = await snapshotReceivablesBatch({
@@ -205,17 +224,27 @@ export async function runReceivablesSnapshot({
             signal: AbortSignal.timeout(30_000),
           })
           const body = await response.text()
-          if (!response.ok) throw new Error(`Bsale HTTP ${response.status}: ${body.slice(0, 300)}`)
+          if (!response.ok) {
+            if (response.status === 429) {
+              const bodyRetryAfter = body.match(/retry[_-]?after\s*["']?\s*[:=]\s*["']?\s*(\d+(?:\.\d+)?)/i)?.[1]
+              const retryAfterSeconds = parseRetryAfter(response.headers.get('retry-after'))
+                ?? parseRetryAfter(bodyRetryAfter)
+                ?? DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS
+              throw new SnapshotRateLimitError(`Bsale HTTP 429: ${body.slice(0, 300)}`, retryAfterSeconds)
+            }
+            throw new Error(`Bsale HTTP ${response.status}: ${body.slice(0, 300)}`)
+          }
           return JSON.parse(body)
         },
       })
       currentRunId = batchResult.runId
       await refreshLock(db, SNAPSHOT_LOCK_NAME, lockRunId)
-    } while (batchResult.status === 'RUNNING' && batchResult.remainingClientIds.length > 0)
+    } while (batchResult.status === 'RUNNING' && batchResult.remainingClientIds.length > 0 && !batchResult.rateLimited)
 
     return {
       run: await fetchRun(db, batchResult.runId),
       result: batchResult,
+      rateLimited: batchResult.rateLimited,
       universe: universe.summary,
       duration_ms: Date.now() - startedAt,
     }

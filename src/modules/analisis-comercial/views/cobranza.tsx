@@ -24,6 +24,8 @@ import type { FinanceReceivablesAnalysis } from '@/lib/control-financiero/financ
 import { formatReceivablesSnapshotAt, getReceivablesFreshness } from '@/lib/control-financiero/receivables-freshness'
 import { applyCobranzaPaymentOverlay, buildCobranzaClients, buildCobranzaInvoices, calculateCobranzaClientKpis, calculateCobranzaInvoiceKpis, type CobranzaClient } from '../lib/cobranza-metrics'
 import { CobranzaFreshnessNotice } from '../components/cobranza-freshness-notice'
+import { CobranzaSnapshotControl } from '../components/cobranza-snapshot-control'
+import type { ReceivablesSnapshotStatus } from '@/app/actions/comercial/cobranza-snapshot'
 import { getCollectionCustomerHistory, getCollectionPaymentBatchProgress, getCollectionPaymentOverlay, getCollectionWorkflow, getRecentClosedCollectionCustomers, getUnknownCollectionPaymentAttempts, listCollectionPaymentBatchProgress, prepareCollectionCustomerBatch, prepareCollectionPayment, registerCollectionCustomerBatch, registerCollectionInteraction, registerCollectionPayment, reopenCollectionCustomersWithDebt, resolveUnknownCollectionPayment, updateCollectionStage, type CollectionHistoryEvent, type CollectionInteractionType, type CollectionPaymentBatchProgress, type CollectionPaymentOverlay, type CollectionStage, type RecentClosedCollectionCustomer } from '@/app/actions/comercial/cobranza-workflow'
 
 const stages: Array<{ key: CollectionStage; label: string }> = [
@@ -926,7 +928,7 @@ function ClientPanel({
   )
 }
 
-export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; error?: string }) {
+export function Cobranza({ data, error, snapshotStatus }: { data?: FinanceReceivablesAnalysis; error?: string; snapshotStatus?: ReceivablesSnapshotStatus }) {
   type ViewMode = 'CLIENTS' | 'INVOICES'
   type ClientSort = 'overdue-desc' | 'age-desc' | 'total-desc' | 'total-asc' | 'name-asc'
   type InvoiceSort = 'due-asc' | 'due-desc' | 'amount-desc' | 'amount-asc' | 'name-asc'
@@ -980,7 +982,7 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
     }
   }, [data])
   if (error || !data) {
-    return <main className="min-h-[430px] bg-[#EFE9E1] px-4 py-5 sm:px-5 sm:py-6 lg:px-6"><div className="border border-[#72383D]/25 bg-white/60 px-5 py-8 text-sm text-[#72383D]">{error ?? 'No hay datos de cobranza disponibles.'}</div></main>
+    return <main className="min-h-[430px] bg-[#EFE9E1] px-4 py-5 sm:px-5 sm:py-6 lg:px-6"><div className="flex flex-wrap items-start justify-between gap-3 border border-[#72383D]/25 bg-white/60 px-5 py-8"><div className="text-sm text-[#72383D]">{error ?? 'No hay datos de cobranza disponibles.'}</div>{snapshotStatus && <CobranzaSnapshotControl initialStatus={snapshotStatus} />}</div></main>
   }
   const freshness = data.freshness_status
     ? { status: data.freshness_status, ageMinutes: data.snapshot_age_minutes ?? null }
@@ -1087,7 +1089,8 @@ export function Cobranza({ data, error }: { data?: FinanceReceivablesAnalysis; e
              <h1 className="mt-1 text-xl font-semibold tracking-[-0.03em] text-[#322D29]">Gestión de cartera y clientes</h1>
            </div>
            <div className="flex min-w-[220px] flex-col items-stretch gap-2 text-[10px] text-[#322D29]/55">
-             <CobranzaFreshnessNotice status={freshness.status} snapshotLabel={snapshotLabel} />
+              <CobranzaFreshnessNotice status={freshness.status} snapshotLabel={snapshotLabel} />
+              {snapshotStatus && <CobranzaSnapshotControl initialStatus={snapshotStatus} />}
              <p>{data.summary.pending_documents} documentos pendientes</p>
              <PaymentProgressObserver />
            </div>

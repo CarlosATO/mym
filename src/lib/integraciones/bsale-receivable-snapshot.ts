@@ -66,10 +66,13 @@ export interface SnapshotClientRow {
 
 export interface SnapshotRunResult {
   runId: string
-  client: SnapshotClientRow
+  client?: SnapshotClientRow
   documents: SnapshotDocumentRow[]
   totalAmountOwed: number
-  status: 'COMPLETED' | 'PARTIAL'
+  status: 'RUNNING' | 'COMPLETED' | 'PARTIAL'
+  rateLimited?: {
+    retryAfterSeconds: number | null
+  }
 }
 
 export interface SnapshotBatchResult {
@@ -80,6 +83,22 @@ export interface SnapshotBatchResult {
   status: 'RUNNING' | 'COMPLETED' | 'PARTIAL'
   remainingClientIds: number[]
   skippedClientIds: number[]
+  rateLimited?: {
+    retryAfterSeconds: number | null
+  }
+}
+
+export const DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 60
+
+export class SnapshotRateLimitError extends Error {
+  readonly httpStatus = 429
+  readonly retryAfterSeconds: number | null
+
+  constructor(message: string, retryAfterSeconds: number | null) {
+    super(message)
+    this.name = 'SnapshotRateLimitError'
+    this.retryAfterSeconds = retryAfterSeconds
+  }
 }
 
 export function selectPendingClientIds(clientIds: number[], processedClientIds: number[], limit: number): number[] {
@@ -137,6 +156,15 @@ export function localSnapshotDate(now = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Santiago' }).format(now)
 }
 
+export function parseRetryAfter(value: string | null | undefined, now = new Date()): number | null {
+  if (!value) return null
+  const trimmed = value.trim()
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) return Math.max(0, Math.ceil(Number(trimmed)))
+  const date = Date.parse(trimmed)
+  if (!Number.isFinite(date)) return null
+  return Math.max(0, Math.ceil((date - now.getTime()) / 1000))
+}
+
 export function resolveClientState(client: LocalClient) {
   return {
     clientState: numberOrNull(client.raw_payload?.state),
@@ -191,10 +219,18 @@ export function mapUnpaidDocuments(
 export function classifySnapshotError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
   const statusMatch = message.match(/Bsale HTTP (\d+)/)
-  const httpStatus = statusMatch ? Number(statusMatch[1]) : null
+  const httpStatus = error instanceof SnapshotRateLimitError
+    ? error.httpStatus
+    : statusMatch ? Number(statusMatch[1]) : null
   const invalidClient = httpStatus === 400 && /invalid client code or id/i.test(message)
+  const retryAfterMatch = message.match(/retry[_-]?after\s*["']?\s*[:=]\s*["']?\s*(\d+(?:\.\d+)?)/i)
+  const retryAfterSeconds = error instanceof SnapshotRateLimitError
+    ? error.retryAfterSeconds
+    : parseRetryAfter(retryAfterMatch?.[1])
   return {
     httpStatus,
+    isRateLimited: httpStatus === 429,
+    retryAfterSeconds,
     result: invalidClient ? 'UNPAID_DOCUMENTS_CLIENT_INVALID' as const : 'HTTP_ERROR' as const,
     errorCode: invalidClient ? 'UNPAID_DOCUMENTS_CLIENT_INVALID' : statusMatch ? `BSALE_HTTP_${statusMatch[1]}` : 'SNAPSHOT_CLIENT_ERROR',
     errorMessage: message.slice(0, 500),
@@ -287,6 +323,17 @@ async function processClient(context: SnapshotContext, clientId: number): Promis
     return { runId, client: clientRow, documents, totalAmountOwed, status: 'COMPLETED' }
   } catch (error) {
     const details = classifySnapshotError(error)
+    if (details.isRateLimited) {
+      return {
+        runId,
+        documents: [],
+        totalAmountOwed: 0,
+        status: 'RUNNING',
+        rateLimited: {
+          retryAfterSeconds: details.retryAfterSeconds,
+        },
+      }
+    }
     const clientRow: SnapshotClientRow = {
       run_id: runId,
       company_id: companyId,
@@ -326,14 +373,18 @@ export async function snapshotReceivablesForClient({
 }): Promise<SnapshotRunResult> {
   const run = await createRun(db, companyId, 1, now)
   const result = await processClient({ db, companyId, fetchJson, ...run }, clientId)
+  if (result.rateLimited) {
+    await finishRun(db, run.runId, { status: 'RUNNING', completedAt: null })
+    return result
+  }
   await finishRun(db, run.runId, {
     status: result.status,
-    clientsSuccess: result.client.result === 'SUCCESS' ? 1 : 0,
-    clientsUnqueryable: result.client.result === 'UNPAID_DOCUMENTS_CLIENT_INVALID' ? 1 : 0,
-    clientsError: result.client.result === 'HTTP_ERROR' ? 1 : 0,
+    clientsSuccess: result.client?.result === 'SUCCESS' ? 1 : 0,
+    clientsUnqueryable: result.client?.result === 'UNPAID_DOCUMENTS_CLIENT_INVALID' ? 1 : 0,
+    clientsError: result.client?.result === 'HTTP_ERROR' ? 1 : 0,
     documentsTotal: result.documents.length,
     totalAmountOwed: result.totalAmountOwed,
-    coveragePercent: result.client.result === 'SUCCESS' ? 100 : 0,
+    coveragePercent: result.client?.result === 'SUCCESS' ? 100 : 0,
   })
   return result
 }
@@ -355,31 +406,41 @@ export async function snapshotReceivablesForClients({
   const run = await createRun(db, companyId, uniqueClientIds.length, now)
   const context = { db, companyId, fetchJson, ...run }
   const results: SnapshotRunResult[] = []
+  let rateLimited: SnapshotBatchResult['rateLimited']
   for (const clientId of uniqueClientIds) {
-    results.push(await processClient(context, clientId))
+    const result = await processClient(context, clientId)
+    if (result.rateLimited) {
+      rateLimited = result.rateLimited
+      break
+    }
+    results.push(result)
   }
-  const clients = results.map(result => result.client)
+  const clients = results.flatMap(result => result.client ? [result.client] : [])
   const documents = results.flatMap(result => result.documents)
   const clientsSuccess = clients.filter(client => client.result === 'SUCCESS').length
   const clientsUnqueryable = clients.filter(client => client.result === 'UNPAID_DOCUMENTS_CLIENT_INVALID').length
   const clientsError = clients.filter(client => client.result === 'HTTP_ERROR').length
+  const status = rateLimited ? 'RUNNING' : clientsError > 0 ? 'PARTIAL' : 'COMPLETED'
+  const processedClientIds = clients.map(client => client.client_id)
   await finishRun(db, run.runId, {
-    status: clientsError > 0 ? 'PARTIAL' : 'COMPLETED',
+    status,
     clientsSuccess,
     clientsUnqueryable,
     clientsError,
     documentsTotal: documents.length,
     totalAmountOwed: documents.reduce((sum, document) => sum + document.total_amount_owed, 0),
-    coveragePercent: clientsSuccess / (uniqueClientIds.length - clientsUnqueryable) * 100,
+    coveragePercent: snapshotCoveragePercent(clients.length, uniqueClientIds.length),
+    completedAt: status === 'RUNNING' ? null : undefined,
   })
   return {
     runId: run.runId,
     clients,
     documents,
     totalAmountOwed: documents.reduce((sum, document) => sum + document.total_amount_owed, 0),
-    status: clientsError > 0 ? 'PARTIAL' : 'COMPLETED',
-    remainingClientIds: [],
+    status,
+    remainingClientIds: uniqueClientIds.filter(clientId => !processedClientIds.includes(clientId)),
     skippedClientIds: [],
+    rateLimited,
   }
 }
 
@@ -460,15 +521,30 @@ export async function snapshotReceivablesBatch({
   const skippedClientIds = uniqueClientIds.filter(clientId => processedClientIds.includes(clientId))
   const context = { db, companyId, fetchJson, runId: run.runId, snapshotAt: run.snapshotAt, snapshotDate: run.snapshotDate }
   const results: SnapshotRunResult[] = []
-  for (const clientId of batchClientIds) results.push(await processClient(context, clientId))
+  const processedBatchClientIds: number[] = []
+  let rateLimited: SnapshotBatchResult['rateLimited']
+  for (const clientId of batchClientIds) {
+    const result = await processClient(context, clientId)
+    if (result.rateLimited) {
+      rateLimited = result.rateLimited
+      break
+    }
+    results.push(result)
+    processedBatchClientIds.push(clientId)
+  }
 
-  const clients = results.map(result => result.client)
+  const clients = results.flatMap(result => result.client ? [result.client] : [])
   const documents = results.flatMap(result => result.documents)
   const clientsSuccess = clients.filter(client => client.result === 'SUCCESS').length
   const clientsUnqueryable = clients.filter(client => client.result === 'UNPAID_DOCUMENTS_CLIENT_INVALID').length
   const clientsError = clients.filter(client => client.result === 'HTTP_ERROR').length
-  const processedClients = processedClientIds.length + clients.length
+  const processedClients = processedClientIds.length + processedBatchClientIds.length
   const status = snapshotRunStatus(run.clientsTotal, processedClients, run.clientsError + clientsError)
+  const rateLimitSummary = rateLimited ? {
+    code: 'TRANSIENT_GLOBAL_RATE_LIMIT',
+    retry_after_seconds: rateLimited.retryAfterSeconds,
+    recorded_at: new Date().toISOString(),
+  } : null
   await finishRun(db, run.runId, {
     status,
     clientsSuccess: run.clientsSuccess + clientsSuccess,
@@ -478,9 +554,10 @@ export async function snapshotReceivablesBatch({
     totalAmountOwed: run.totalAmountOwed + documents.reduce((sum, document) => sum + document.total_amount_owed, 0),
     coveragePercent: snapshotCoveragePercent(processedClients, run.clientsTotal),
     completedAt: status === 'RUNNING' ? null : new Date().toISOString(),
+    errorSummary: rateLimitSummary,
   })
 
-  const processedAfterBatch = new Set([...processedClientIds, ...batchClientIds])
+  const processedAfterBatch = new Set([...processedClientIds, ...processedBatchClientIds])
   return {
     runId: run.runId,
     clients,
@@ -489,6 +566,7 @@ export async function snapshotReceivablesBatch({
     status,
     remainingClientIds: uniqueClientIds.filter(clientId => !processedAfterBatch.has(clientId)),
     skippedClientIds,
+    rateLimited,
   }
 }
 
@@ -509,19 +587,22 @@ async function finishRun(
     totalAmountOwed?: number
     coveragePercent?: number
     completedAt?: string | null
+    errorSummary?: Record<string, unknown> | null
   },
 ) {
+  const update: Record<string, unknown> = {
+    status: values.status,
+    clients_success: values.clientsSuccess ?? 0,
+    clients_unqueryable: values.clientsUnqueryable ?? 0,
+    clients_error: values.clientsError ?? 0,
+    documents_total: values.documentsTotal ?? 0,
+    total_amount_owed: values.totalAmountOwed ?? 0,
+    coverage_percent: values.coveragePercent ?? null,
+    completed_at: values.completedAt === undefined ? new Date().toISOString() : values.completedAt,
+  }
+  if (values.errorSummary !== undefined) update.error_summary = values.errorSummary
   const result = await db.schema('integraciones').from('bsale_receivable_snapshot_runs')
-    .update({
-      status: values.status,
-      clients_success: values.clientsSuccess ?? 0,
-      clients_unqueryable: values.clientsUnqueryable ?? 0,
-      clients_error: values.clientsError ?? 0,
-      documents_total: values.documentsTotal ?? 0,
-      total_amount_owed: values.totalAmountOwed ?? 0,
-      coverage_percent: values.coveragePercent ?? null,
-      completed_at: values.completedAt === undefined ? new Date().toISOString() : values.completedAt,
-    })
+    .update(update)
     .eq('id', runId)
   if (result.error) throw result.error
 }

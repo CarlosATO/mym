@@ -9,9 +9,15 @@ export async function POST(request: Request) {
   if (request.headers.get('authorization') !== `Bearer ${secret}`) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
   try {
-    const result = await runReceivablesSnapshot()
+    const result = await runReceivablesSnapshot({
+      consumeManualDispatchClaim: request.headers.get('x-cxc-snapshot-only') === 'true',
+      manualDispatchClaimId: request.headers.get('x-cxc-manual-claim-id'),
+    })
     if (result.skipped === 'SYNC_ACTIVE') return NextResponse.json({ success: false, ...result }, { status: 409 })
     if (result.skipped === 'SNAPSHOT_LOCKED') return NextResponse.json({ success: false, ...result }, { status: 409 })
+    if (result.rateLimited || result.run?.status === 'RUNNING') {
+      return NextResponse.json({ success: false, ...result }, { status: 202 })
+    }
     return NextResponse.json({ success: result.run?.status === 'COMPLETED', ...result }, { status: result.run?.status === 'COMPLETED' ? 200 : 500 })
   } catch (error) {
     return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Receivables snapshot failed' }, { status: 500 })

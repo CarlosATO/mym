@@ -4,6 +4,16 @@ on:
   schedule:
     - cron: '0 * * * *'
   workflow_dispatch:
+    inputs:
+      snapshot_only:
+        description: 'Run only the CxC receivables snapshot'
+        required: false
+        type: boolean
+        default: false
+      manual_claim_id:
+        description: 'Atomic CxC manual-dispatch claim identifier'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -14,6 +24,7 @@ concurrency:
 
 jobs:
   sync:
+    if: github.event_name == 'schedule' || (inputs.snapshot_only != true && inputs.snapshot_only != 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -90,13 +101,16 @@ jobs:
 
   receivables-snapshot:
     needs: sync
+    if: always() && (needs.sync.result == 'success' || inputs.snapshot_only == true || inputs.snapshot_only == 'true')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
       - name: Generate CxC snapshot after Bsale sync
         env:
           SYNC_URL: ${{ secrets.PRODUCTION_SYNC_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SNAPSHOT_ONLY: ${{ inputs.snapshot_only }}
+          MANUAL_CLAIM_ID: ${{ inputs.manual_claim_id }}
         run: |
           set -euo pipefail
 
@@ -115,8 +129,63 @@ jobs:
             exit 1
           fi
 
+          # The general sync consumes the same Bsale quota as CxC. Let the
+          # provider's one-minute cooldown elapse before unpaid_documents.
+          if [ "$SNAPSHOT_ONLY" = "true" ]; then
+            echo "Snapshot-only execution: no general sync cooldown required."
+          else
+            echo "Waiting 60 seconds before CxC snapshot to avoid quota carry-over..."
+            sleep 60
+          fi
+
           snapshot_url="${SYNC_URL%/api/cron/sync-replenishment}/api/cron/receivables-snapshot"
-          curl --fail-with-body --silent --show-error --max-time 540 \
-            -X POST "$snapshot_url" \
-            -H "Authorization: Bearer ${CRON_SECRET}" \
-            -H 'Content-Type: application/json'
+          # Backend normalizes Retry-After to rateLimited.retryAfterSeconds.
+          # Clamp it defensively so two retries cannot create an unbounded job.
+          max_snapshot_attempts=3
+          min_retry_after=5
+          max_retry_after=180
+
+          for snapshot_attempt in $(seq 1 "$max_snapshot_attempts"); do
+            response_file="$(mktemp)"
+            curl_exit=0
+            http_code="$(curl -sS -X POST "$snapshot_url" \
+              -H "Authorization: Bearer ${CRON_SECRET}" \
+              -H 'Content-Type: application/json' \
+              -H "X-CxC-Snapshot-Only: ${SNAPSHOT_ONLY}" \
+              -H "X-CxC-Manual-Claim-ID: ${MANUAL_CLAIM_ID}" \
+              --max-time 525 \
+              -o "$response_file" \
+              -w "%{http_code}" || curl_exit=$?)"
+            body="$(cat "$response_file")"
+            rm -f "$response_file"
+            echo "Snapshot CxC attempt ${snapshot_attempt}/${max_snapshot_attempts}: HTTP ${http_code:-000} · curl exit: ${curl_exit}"
+            echo "Response: ${body:0:2000}"
+
+            if [ "$http_code" = "200" ]; then
+              echo "Snapshot CxC completed."
+              exit 0
+            fi
+
+            if [ "$http_code" = "202" ]; then
+              if [ "$snapshot_attempt" -ge "$max_snapshot_attempts" ]; then
+                echo "Snapshot remains RUNNING and will resume on next scheduled execution."
+                exit 0
+              fi
+
+              retry_after="$(printf '%s' "$body" | jq -r '.rateLimited.retryAfterSeconds // empty' 2>/dev/null || true)"
+              if ! [[ "$retry_after" =~ ^[0-9]+$ ]]; then
+                retry_after=60
+              fi
+              if [ "$retry_after" -lt "$min_retry_after" ]; then
+                retry_after="$min_retry_after"
+              elif [ "$retry_after" -gt "$max_retry_after" ]; then
+                retry_after="$max_retry_after"
+              fi
+              echo "Snapshot CxC rate-limited. Retry in ${retry_after} seconds."
+              sleep "$retry_after"
+              continue
+            fi
+
+            echo "Snapshot CxC endpoint failed without a controlled retry."
+            exit 1
+          done
