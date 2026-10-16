@@ -44,3 +44,11 @@ test('confirmation remains disabled when OPEN has conflicts', () => {
   assert.match(client, /preview\.mode === "OPEN" && !preview\.openPreview\.canConfirm/)
   assert.match(action, /if \(diff\.conflicts\)/)
 })
+
+test('OPEN surfaces a historical restatement already explained as resolved evidence', () => {
+  assert.match(action, /historicalRestatementRecognized: reconciliation\.historicalRestatementRecognized/)
+  assert.match(action, /historicalRestatementDifferenceId: reconciliation\.historicalRestatementDifferenceId/)
+  assert.match(action, /resolvedRestatementEvidence: context\.resolvedDifferences/)
+  assert.match(client, /openPreview\.historicalRestatementRecognized/)
+  assert.match(client, /ya fue explicada y auditada previamente/)
+})

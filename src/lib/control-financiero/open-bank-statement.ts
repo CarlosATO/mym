@@ -85,6 +85,19 @@ export type OpenBalanceRestatement = {
   date: string
 }
 
+/**
+ * A previously audited reconciliation difference that is already RESOLVED. It is
+ * used strictly as read-only evidence to recognise a bank re-expression that was
+ * already explained; it must never be treated as a PENDING difference to resolve.
+ */
+export type OpenResolvedDifferenceEvidence = {
+  id: string
+  financial_date: string
+  amount_signed: number | string
+  expected_balance?: number | string | null
+  reported_balance?: number | string | null
+}
+
 export type OpenReconciliationResult = {
   legacyIncrementalDifference: number
   restatementAdjustment: number
@@ -92,6 +105,44 @@ export type OpenReconciliationResult = {
   restatementDeltasUniform: boolean
   unexplainedDifference: number
   canConfirm: boolean
+  historicalRestatementRecognized: boolean
+  historicalRestatementDifferenceId: string | null
+}
+
+/**
+ * Selects exactly one RESOLVED historical difference that fully accounts for the
+ * observed uniform restatement. Ambiguity (zero or more than one compatible
+ * evidence) always blocks automation. The difference is matched on the same
+ * period/account/company (guaranteed by the caller query), the same financial
+ * date, the same absolute amount and the same re-expression pattern.
+ */
+function selectResolvedRestatementEvidence(
+  restatements: OpenBalanceRestatement[],
+  restatementAdjustment: number,
+  restatementDeltasUniform: boolean,
+  legacyIncrementalDifference: number,
+  evidence: OpenResolvedDifferenceEvidence[] | undefined,
+): OpenResolvedDifferenceEvidence | null {
+  if (!restatementDeltasUniform || !restatements.length) return null
+  if (restatementAdjustment === 0) return null
+  // The incremental bridge (known balance + new movements) must already reconcile.
+  if (legacyIncrementalDifference !== 0) return null
+  const dates = [...new Set(restatements.map((item) => item.date))]
+  if (dates.length !== 1) return null
+  const date = dates[0]
+  const expectedAmount = -restatementAdjustment
+  const compatible = (evidence ?? []).filter((item) => {
+    if (item.financial_date !== date) return false
+    if (Number(item.amount_signed) !== expectedAmount) return false
+    const expected = Number(item.expected_balance)
+    const reported = Number(item.reported_balance)
+    if (item.expected_balance !== null && item.expected_balance !== undefined &&
+        item.reported_balance !== null && item.reported_balance !== undefined &&
+        Number.isFinite(expected) && Number.isFinite(reported) && reported - expected !== expectedAmount)
+      return false
+    return true
+  })
+  return compatible.length === 1 ? compatible[0] : null
 }
 
 export function evaluateOpenReconciliation(input: {
@@ -102,16 +153,28 @@ export function evaluateOpenReconciliation(input: {
   trueConflicts: number
   legacyIncrementalDifference: number
   restatements: OpenBalanceRestatement[]
+  resolvedRestatementEvidence?: OpenResolvedDifferenceEvidence[]
 }): OpenReconciliationResult {
   const deltas = input.restatements.map((item) => item.newBalance - item.oldBalance)
   const restatementDeltasUniform = deltas.length > 0 && deltas.every((delta) => delta === deltas[0])
   const restatementAdjustment = restatementDeltasUniform ? deltas[0] : 0
-  const unexplainedDifference = input.legacyIncrementalDifference - restatementAdjustment
   const baseValid = input.openingDifference === 0 &&
     input.fileGlobalDifference === 0 &&
     input.rowBalancesValid &&
     input.existingMissing === 0 &&
     input.trueConflicts === 0
+  const historicalEvidence = baseValid
+    ? selectResolvedRestatementEvidence(
+        input.restatements,
+        restatementAdjustment,
+        restatementDeltasUniform,
+        input.legacyIncrementalDifference,
+        input.resolvedRestatementEvidence,
+      )
+    : null
+  const historicalRestatementRecognized = historicalEvidence !== null
+  const rawDifference = input.legacyIncrementalDifference - restatementAdjustment
+  const unexplainedDifference = historicalRestatementRecognized ? 0 : rawDifference
   const restatementExplained = baseValid &&
     input.restatements.length > 0 &&
     restatementDeltasUniform &&
@@ -125,6 +188,8 @@ export function evaluateOpenReconciliation(input: {
     restatementDeltasUniform,
     unexplainedDifference,
     canConfirm,
+    historicalRestatementRecognized,
+    historicalRestatementDifferenceId: historicalEvidence?.id ?? null,
   }
 }
 

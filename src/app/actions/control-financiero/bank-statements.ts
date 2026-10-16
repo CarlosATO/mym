@@ -409,6 +409,7 @@ async function loadOpenContext(
     ) ?? null;
   let existingRows: ExistingOpenRow[] = [];
   let pendingDifferences: any[] = [];
+  let resolvedDifferences: any[] = [];
   if (period) {
     const result = await db()
       .from("financial_bank_movements")
@@ -426,11 +427,13 @@ async function loadOpenContext(
       .eq("company_id", companyId)
       .eq("bank_account_id", accountId)
       .eq("statement_period_id", period.id)
-      .eq("status", "PENDING");
+      .in("status", ["PENDING", "RESOLVED"]);
     if (differences.error) throw new Error(differences.error.message);
-    pendingDifferences = differences.data ?? [];
+    const differenceRows = (differences.data ?? []) as any[];
+    pendingDifferences = differenceRows.filter((row) => row.status === "PENDING");
+    resolvedDifferences = differenceRows.filter((row) => row.status === "RESOLVED");
   }
-  return { account: accountResult.data, period, previous, existingRows, pendingDifferences };
+  return { account: accountResult.data, period, previous, existingRows, pendingDifferences, resolvedDifferences };
 }
 
 export async function previewFinancialBankStatement(formData: FormData) {
@@ -671,6 +674,7 @@ export async function previewFinancialBankStatement(formData: FormData) {
       trueConflicts: diff.conflicts,
       legacyIncrementalDifference: incrementalDifference,
       restatements: diff.balanceRestatements,
+      resolvedRestatementEvidence: context.resolvedDifferences,
     });
     return {
       ok: true as const,
@@ -713,6 +717,8 @@ export async function previewFinancialBankStatement(formData: FormData) {
         restatementAdjustment: reconciliation.restatementAdjustment,
         restatementExplained: reconciliation.restatementExplained,
         restatementDeltasUniform: reconciliation.restatementDeltasUniform,
+        historicalRestatementRecognized: reconciliation.historicalRestatementRecognized,
+        historicalRestatementDifferenceId: reconciliation.historicalRestatementDifferenceId,
         unexplainedDifference: reconciliation.unexplainedDifference,
         reconciliationConsistent: reconciliation.unexplainedDifference === 0,
         existingNotInFileCount,
@@ -939,6 +945,7 @@ export async function confirmOpenFinancialBankStatement(input: {
     trueConflicts: diff.conflicts,
     legacyIncrementalDifference: incrementalDifference,
     restatements: diff.balanceRestatements,
+    resolvedRestatementEvidence: context.resolvedDifferences,
   });
   if (!reconciliation.canConfirm) {
     return {
@@ -1007,6 +1014,8 @@ export async function confirmOpenFinancialBankStatement(input: {
             unexplained_difference: reconciliation.unexplainedDifference,
             restatement_adjustment: reconciliation.restatementAdjustment,
             restatement_explained: reconciliation.restatementExplained,
+           historical_restatement_recognized: reconciliation.historicalRestatementRecognized,
+           historical_restatement_difference_id: reconciliation.historicalRestatementDifferenceId,
            resolve_previous_compatible: Boolean(compatibleDifferenceId),
            resolve_difference_id: compatibleDifferenceId,
            expected_existing_count: context.existingRows.length,

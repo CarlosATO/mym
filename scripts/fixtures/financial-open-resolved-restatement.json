@@ -1,0 +1,26 @@
+{
+  "account": "Banco de Chile 2707",
+  "period": "2026-10",
+  "openingBalance": 12000840,
+  "closingBalance": 393382,
+  "rowsInFile": 193,
+  "existing": 162,
+  "exactMatched": 144,
+  "balanceRestatements": 18,
+  "new": 31,
+  "trueConflicts": 0,
+  "existingMissing": 0,
+  "legacyIncrementalDifference": 0,
+  "restatementAdjustment": -362715,
+  "unexplainedDifference": 0,
+  "coveragePrevious": "2026-10-14",
+  "coverageNew": "2026-10-16",
+  "historicalResolvedEvidence": {
+    "id": "20c6b851-36da-4434-a387-f4d62ab2f630",
+    "financial_date": "2026-10-08",
+    "amount_signed": 362715,
+    "expected_balance": 4780363,
+    "reported_balance": 5143078,
+    "status": "RESOLVED"
+  }
+}

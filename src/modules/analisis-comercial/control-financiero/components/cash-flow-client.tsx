@@ -2746,6 +2746,13 @@ function ImportCartola({
                    La reexpresión de saldos es compleja porque los ajustes no son uniformes.
                  </p>
                )}
+               {openPreview.historicalRestatementRecognized && (
+                 <p className="mt-2 border border-[#D1C7BD] bg-[#F8F4EE] p-2">
+                   La reexpresión de saldo ya fue explicada y auditada previamente (incidencia resuelta del{" "}
+                   {date(openPreview.restatements[0]?.date)} por {money(Math.abs(openPreview.restatementAdjustment))}).
+                   No se modifica la incidencia histórica; sólo se registra la trazabilidad.
+                 </p>
+               )}
                <p className="mt-2 font-semibold">
                  Diferencia inexplicada:{" "}
                  <strong className={openPreview.unexplainedDifference ? "text-red-700" : "text-green-700"}>
