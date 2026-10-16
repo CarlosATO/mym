@@ -43,6 +43,10 @@ export interface PurchaseOrder {
   invoice_status: string | null
   email_sent_at: string | null
   cancel_reason: string | null
+  closed_with_pending: boolean
+  closure_reason: string | null
+  closed_at: string | null
+  closed_by: string | null
   created_at: string
   updated_at: string
 }
@@ -110,6 +114,10 @@ export interface PurchaseOrderDetail {
     invoice_status: string | null
     cancel_reason: string | null
     cancelled_at: string | null
+    closed_with_pending: boolean
+    closure_reason: string | null
+    closed_at: string | null
+    closed_by: string | null
     email_sent_at: string | null
     supplier_email_snapshot: string | null
     created_at: string
@@ -707,6 +715,30 @@ export async function updatePurchaseOrderStatus(poId: string, newStatus: string,
   const r = data as { success: boolean; error?: string }
   if (!r.success) return { error: r.error || 'Error al actualizar estado' }
   return { success: true }
+}
+
+export async function closePurchaseOrderWithPending(poId: string, reason: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado' }
+
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
+
+  const trimmedReason = reason.trim()
+  if (!trimmedReason) return { error: 'El motivo de cierre es obligatorio' }
+
+  const db = adqAdmin()
+  const { data, error } = await db.rpc('close_purchase_order_with_pending', {
+    p_po_id: poId,
+    p_reason: trimmedReason,
+    p_user_id: user.id,
+    p_company_id: companyId,
+  })
+  if (error) return { error: error.message }
+  const r = data as { success?: boolean; error?: string; already_closed?: boolean }
+  if (r?.success !== true) return { error: r?.error || 'No se pudo cerrar la orden de compra' }
+  return { success: true, already_closed: r.already_closed ?? false }
 }
 
 export async function getAuthorizedPersonnel() {

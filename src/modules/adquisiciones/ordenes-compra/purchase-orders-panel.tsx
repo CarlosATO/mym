@@ -1,11 +1,11 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, FileSpreadsheet, Ban, PackageOpen, XCircle, CheckCircle2, BarChart3, RefreshCw, Loader2, ClipboardCheck, Send } from 'lucide-react'
+import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, FileSpreadsheet, Ban, PackageOpen, XCircle, CheckCircle2, BarChart3, RefreshCw, Loader2, ClipboardCheck, Send, Lock } from 'lucide-react'
 import { AuthorizedPersonnelCombobox } from '@/components/ui/authorized-personnel-combobox'
 import {
   getPurchaseOrders, getPurchaseOrderDetail, createPurchaseOrder, updateDraftPurchaseOrder,
-  updatePurchaseOrderStatus, getAuthorizedPersonnel, createAuthorizedPersonnel,
+  updatePurchaseOrderStatus, closePurchaseOrderWithPending, getAuthorizedPersonnel, createAuthorizedPersonnel,
   getNextCorrelative, getPurchaseOrderDocumentDetail,
   type PurchaseOrder, type PurchaseOrderDetail, type PurchaseOrderFilters,
   type AuthorizedPersonnel
@@ -97,11 +97,17 @@ function statusLabel(s: string) {
   return map[s] || s
 }
 
-function Badge({ value, map }: { value: string | null; map: Record<string, { bg: string; text: string; border: string }> }) {
+const CLOSED_WITH_PENDING_LABEL = 'Cerrada con saldo pendiente'
+
+function purchaseOrderStatusLabel(po: Pick<PurchaseOrder, 'status' | 'closed_with_pending'>) {
+  return po.status === 'CERRADA' && po.closed_with_pending ? CLOSED_WITH_PENDING_LABEL : undefined
+}
+
+function Badge({ value, map, label }: { value: string | null; map: Record<string, { bg: string; text: string; border: string }>; label?: string }) {
   if (!value) return <span className="text-[11px] text-theme-text-muted/40">—</span>
   const s = map[value]
   if (!s) return <span className="text-[11px] text-theme-text-muted/40">{value}</span>
-  return <span className={`inline-flex whitespace-nowrap text-[11px] font-semibold px-2 py-0.5 rounded border ${s.bg} ${s.text} ${s.border}`}>{statusLabel(value)}</span>
+  return <span className={`inline-flex whitespace-nowrap text-[11px] font-semibold px-2 py-0.5 rounded border ${s.bg} ${s.text} ${s.border}`}>{label ?? statusLabel(value)}</span>
 }
 
 const inputClass = "w-full h-8 rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15 focus:border-[#72383D]"
@@ -150,6 +156,10 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const [isReplenishmentPreparation, setIsReplenishmentPreparation] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isMarkingSent, setIsMarkingSent] = useState(false)
+  const [closePendingPo, setClosePendingPo] = useState<PurchaseOrder | null>(null)
+  const [closeReason, setCloseReason] = useState('')
+  const [closeError, setCloseError] = useState('')
+  const [closingPending, setClosingPending] = useState(false)
   const [downloadingPdf, setDownloadingPdf] = useState(false)
   const [downloadingExcel, setDownloadingExcel] = useState(false)
   const [excelImportPreview, setExcelImportPreview] = useState<ReplenishmentExcelImportPreview | null>(null)
@@ -858,6 +868,56 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     if (d) setDetail(d)
     load()
   }
+
+  function requestCloseWithPending(po: PurchaseOrder) {
+    setCloseError('')
+    setCloseReason('')
+    setClosePendingPo(po)
+    if (!detail || detail.po.id !== po.id) {
+      void openDetail(po)
+    }
+  }
+
+  async function handleCloseWithPending() {
+    if (!closePendingPo || closingPending) return
+    const reason = closeReason.trim()
+    if (!reason) {
+      setCloseError('El motivo de cierre es obligatorio')
+      return
+    }
+    const poId = closePendingPo.id
+    setClosingPending(true)
+    setCloseError('')
+    const res = await closePurchaseOrderWithPending(poId, reason)
+    setClosingPending(false)
+    if ('error' in res && res.error) {
+      setCloseError(res.error)
+      return
+    }
+    delete detailCacheRef.current[poId]
+    delete pendingRequestsRef.current[poId]
+    setClosePendingPo(null)
+    setCloseReason('')
+    msg(res.already_closed ? 'La orden de compra ya estaba cerrada' : 'Orden de compra cerrada con saldo pendiente')
+    await load()
+    const d = await getPurchaseOrderDetail(poId)
+    if (d) {
+      detailCacheRef.current[poId] = d
+      setDetail(d)
+      if (selectedPo?.id === poId) setSelectedPo(d.po as PurchaseOrder)
+    }
+  }
+
+  const closePendingSummary = detail && closePendingPo && detail.po.id === closePendingPo.id
+    ? detail.items.reduce((acc, item) => {
+        const ordered = Number(item.quantity || 0)
+        const received = Number(item.quantity_received || 0)
+        acc.ordered += ordered
+        acc.received += received
+        acc.pending += Math.max(0, ordered - received)
+        return acc
+      }, { ordered: 0, received: 0, pending: 0 })
+    : null
 
   async function handleMarkSentToSupplier(poId: string) {
     if (isMarkingSent) return
@@ -1877,7 +1937,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
               </button>
               <div className="flex items-center gap-3">
                 <h2 className="text-lg font-bold text-theme-text">OC {detail.po.correlative}</h2>
-                <Badge value={detail.po.status} map={STATUS_BADGES} />
+                <Badge value={detail.po.status} map={STATUS_BADGES} label={purchaseOrderStatusLabel(detail.po)} />
               </div>
             </div>
             <div className="flex gap-2">
@@ -1895,6 +1955,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
               {detail.po.status === 'ENVIADA_PROVEEDOR' && (
                 <button onClick={() => openSupplierReview(detail.po.id)} className="px-4 py-2 rounded-xl bg-[#72383D] text-[#EFE9E1] hover:bg-[#5D2E32] text-xs font-semibold transition-colors flex items-center gap-1.5">
                   <ClipboardCheck className="w-3.5 h-3.5" /> Revisar confirmación
+                </button>
+              )}
+              {detail.po.status === 'RECEPCION_PARCIAL' && (
+                <button onClick={() => requestCloseWithPending(detail.po as PurchaseOrder)} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5">
+                  <Lock className="w-3.5 h-3.5" /> Cerrar OC
                 </button>
               )}
               <button onClick={() => void handleDownloadPDF()} disabled={downloadingPdf} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50">
@@ -2168,7 +2233,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                    <td className="truncate px-3 py-1.5 text-xs text-[#6D625B]" title={po.warehouse_name || '—'}>{po.warehouse_name || '—'}</td>
                    <td className="truncate px-3 py-1.5 text-xs text-[#6D625B]" title={po.requester_name}>{po.requester_name}</td>
                    <td className="truncate px-3 py-1.5 text-xs text-[#6D625B]" title={po.authorized_name || '—'}>{po.authorized_name || '—'}</td>
-                  <td className="px-4 py-2.5 truncate"><Badge value={po.status} map={STATUS_BADGES} /></td>
+                   <td className="px-4 py-2.5 truncate"><Badge value={po.status} map={STATUS_BADGES} label={purchaseOrderStatusLabel(po)} /></td>
                    <td className="truncate px-3 py-1.5 text-right text-xs font-medium tabular-nums text-[#322D29]" title={formatCurrency(po.grand_total, po.currency)}>{formatCurrency(po.grand_total, po.currency)}</td>
                   <td className="px-4 py-2.5 truncate"><Badge value={po.receipt_status} map={RECEIPT_BADGES} /></td>
                   <td className="px-4 py-2.5 truncate"><Badge value={po.invoice_status} map={INVOICE_BADGES} /></td>
@@ -2184,6 +2249,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                     {['EMITIDA', 'BORRADOR', 'PENDIENTE_APROBACION'].includes(po.status) && (
                       <button onClick={() => handleStatusUpdate(po.id, 'CANCELADA')} className="p-1.5 rounded-lg hover:bg-red-500/10 text-theme-text-muted hover:text-red-500 transition-colors" title="Cancelar">
                         <Ban className="w-4 h-4" />
+                      </button>
+                    )}
+                    {po.status === 'RECEPCION_PARCIAL' && (
+                      <button onClick={() => requestCloseWithPending(po)} className="p-1.5 rounded-lg hover:bg-theme-text/10 text-theme-text-muted hover:text-theme-text transition-colors" title="Cerrar OC con saldo pendiente">
+                        <Lock className="w-4 h-4" />
                       </button>
                     )}
                   </td>
@@ -2220,7 +2290,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                <div className="flex items-center gap-3">
                  <div className="w-7 h-7 rounded-lg bg-theme-accent/10 flex items-center justify-center shrink-0"><PackageOpen className="w-4 h-4 text-theme-accent" /></div>
                  <div>
-                   <div className="flex items-center gap-2"><span className="font-mono text-sm font-bold text-theme-accent">{selectedPo.correlative}</span><Badge value={selectedPo.status} map={STATUS_BADGES} /></div>
+                   <div className="flex items-center gap-2"><span className="font-mono text-sm font-bold text-theme-accent">{selectedPo.correlative}</span><Badge value={selectedPo.status} map={STATUS_BADGES} label={purchaseOrderStatusLabel(selectedPo)} /></div>
                     <p className="text-xs text-theme-text-muted truncate">{selectedPo.supplier_name}</p>
                   </div>
                </div>
@@ -2236,7 +2306,15 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                        <button onClick={() => void handleDownloadExcel()} disabled={downloadingExcel} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"><FileSpreadsheet className="w-3.5 h-3.5" /> {downloadingExcel ? 'Excel...' : 'Excel'}</button>
                       {detail.po.status === 'EMITIDA' && <button onClick={() => void handleMarkSentToSupplier(detail.po.id)} disabled={isMarkingSent} className="px-4 py-2 rounded-xl border border-[#72383D]/35 text-[#72383D] hover:bg-[#72383D]/10 text-xs font-semibold transition-colors flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50">{isMarkingSent ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}{isMarkingSent ? 'Marcando...' : 'Marcar enviada al proveedor'}</button>}
                       {detail.po.status === 'ENVIADA_PROVEEDOR' && <button onClick={() => openSupplierReview(detail.po.id)} className="px-4 py-2 rounded-xl bg-[#72383D] text-[#EFE9E1] hover:bg-[#5D2E32] text-xs font-semibold transition-colors flex items-center gap-1.5"><ClipboardCheck className="w-3.5 h-3.5" /> Revisar confirmación</button>}
+                      {detail.po.status === 'RECEPCION_PARCIAL' && <button onClick={() => requestCloseWithPending(detail.po as PurchaseOrder)} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5"><Lock className="w-3.5 h-3.5" /> Cerrar OC</button>}
                     </div>
+                   {detail.po.status === 'CERRADA' && detail.po.closed_with_pending && (
+                     <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-700 dark:text-amber-200">
+                       <p className="font-semibold">Cerrada con saldo pendiente</p>
+                       {detail.po.closure_reason && <p className="mt-1">Motivo: {detail.po.closure_reason}</p>}
+                       {detail.po.closed_at && <p className="mt-1 opacity-80">Cerrada el {formatDate(detail.po.closed_at)}</p>}
+                     </div>
+                   )}
                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-5">
                      <div><p className="text-xs text-theme-text-muted/70 mb-0.5">Fecha emisión</p><p className="text-sm text-theme-text">{formatDate(selectedPo.issue_date)}</p></div>
                      <div><p className="text-xs text-theme-text-muted/70 mb-0.5">Total Neto</p><p className="text-sm text-theme-text">{formatCurrency(selectedPo.net_total, selectedPo.currency)}</p></div>
@@ -2265,11 +2343,55 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                    <div className="w-8 h-8 border-4 border-theme-text/10 border-t-theme-accent rounded-full animate-spin mb-4" />
                    <p className="text-sm font-medium text-theme-text-muted">Cargando detalle de orden de compra...</p>
                  </div>
-               )}
-             </div>
+                )}
+              </div>
+           </div>
+         )}
+       </div>
+
+      {closePendingPo && (
+        <div className="fixed inset-0 z-[1300] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Cerrar orden de compra con saldo pendiente">
+          <div className="w-full max-w-lg rounded-2xl border border-theme-border bg-theme-surface p-5 shadow-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-sm font-bold text-theme-text">Cerrar OC {closePendingPo.correlative}</h3>
+                <p className="mt-1 text-xs text-theme-text-muted">El cierre es definitivo y distinto de una cancelación. No modifica cantidades, documentos, Kardex ni stock.</p>
+              </div>
+              <button type="button" onClick={() => setClosePendingPo(null)} disabled={closingPending} className="rounded p-1 text-theme-text-muted hover:bg-theme-text/5 hover:text-theme-text disabled:opacity-50" aria-label="Cerrar">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            {closePendingSummary && (
+              <div className="mt-4 grid grid-cols-3 gap-3 rounded-xl border border-theme-border bg-theme-text/[0.02] p-3 text-center">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-theme-text-muted">Solicitado</p>
+                  <p className="text-sm font-semibold text-theme-text">{closePendingSummary.ordered}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-theme-text-muted">Recibido</p>
+                  <p className="text-sm font-semibold text-theme-text">{closePendingSummary.received}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-theme-text-muted">Pendiente</p>
+                  <p className="text-sm font-semibold text-amber-600">{closePendingSummary.pending}</p>
+                </div>
+              </div>
+            )}
+            <div className="mt-4">
+              <label className="mb-1 block text-xs font-semibold text-theme-text">Motivo de cierre</label>
+              <textarea value={closeReason} onChange={e => setCloseReason(e.target.value)} rows={3} placeholder="Indica por qué se cierra la OC con saldo pendiente..." className={textareaClass} />
+            </div>
+            {closeError && <p className="mt-2 text-xs font-semibold text-red-500">{closeError}</p>}
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" onClick={() => setClosePendingPo(null)} disabled={closingPending} className="rounded-lg border border-theme-border px-3 py-2 text-xs font-semibold text-theme-text-muted hover:bg-theme-text/5 disabled:opacity-50">Cancelar</button>
+              <button type="button" onClick={() => void handleCloseWithPending()} disabled={closingPending} className="flex items-center gap-1.5 rounded-lg bg-[#72383D] px-3 py-2 text-xs font-semibold text-white hover:bg-[#5D2E32] disabled:opacity-50">
+                {closingPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lock className="h-3.5 w-3.5" />}
+                {closingPending ? 'Cerrando...' : 'Cerrar OC'}
+              </button>
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   )
 }
