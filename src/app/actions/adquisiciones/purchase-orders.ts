@@ -191,6 +191,7 @@ export async function getPurchaseOrders(filters: PurchaseOrderFilters = {}) {
       page: filters.page ?? 1,
       page_size: filters.pageSize ?? 50,
     },
+    p_user_id: user.id,
     p_company_id: companyId
   })
   if (error) {
@@ -207,9 +208,16 @@ export async function getPurchaseOrderDetail(poId: string) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
 
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return null
+
   const db = adqAdmin()
   if (process.env.NODE_ENV === 'development') console.time(`getPurchaseOrderDetail_${poId}`)
-  const { data, error } = await db.rpc('get_purchase_order_detail', { p_po_id: poId })
+  const { data, error } = await db.rpc('get_purchase_order_detail', {
+    p_po_id: poId,
+    p_user_id: user.id,
+    p_company_id: companyId,
+  })
   if (process.env.NODE_ENV === 'development') console.timeEnd(`getPurchaseOrderDetail_${poId}`)
   if (error) {
     console.error('get_purchase_order_detail error:', error)

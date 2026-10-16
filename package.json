@@ -91,6 +91,7 @@
     "test:operational-table": "node --experimental-strip-types --test scripts/test-operational-table.mjs",
     "test:table-2c-purchase-orders": "node --experimental-strip-types --test scripts/test-table-2c-purchase-orders.mjs",
     "test:purchase-order-close-pending": "node --test scripts/test-close-purchase-order-with-pending.mjs",
+    "test:purchase-order-access-control": "node --test scripts/test-purchase-order-access-control.mjs",
     "test:po-pdf-header": "node --experimental-strip-types --test scripts/test-po-pdf-header.mjs",
     "test:purchase-order-totals": "node --experimental-strip-types --test scripts/test-purchase-order-totals.mjs",
     "test:purchase-order-creation-discounts": "node --experimental-strip-types --test scripts/test-purchase-order-creation-discounts.mjs",
