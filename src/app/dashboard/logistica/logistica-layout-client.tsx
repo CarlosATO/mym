@@ -187,7 +187,7 @@ export function LogisticaLayoutClient({ children, profile, permissions }: Logist
       )
     }
   } else if (activeTab === 'preparacion_pedidos') {
-    content = <SalesOrderPreparationPanel />
+    content = <SalesOrderPreparationPanel roleName={profile.roles?.name} />
   } else if (activeTab === 'consultas') {
     if (activeActionId === 'stock') {
       content = <StockPanel />

@@ -1,17 +1,20 @@
 'use client'
 
 import { useEffect, useState, useMemo } from 'react'
-import { Search, SlidersHorizontal, KanbanSquare, Loader2, RotateCcw, RefreshCw } from 'lucide-react'
+import { Search, SlidersHorizontal, KanbanSquare, Loader2, RotateCcw, RefreshCw, ShieldCheck } from 'lucide-react'
 import { 
   getSalesOrderPreparationBoard, 
   getSalesOrderPreparationItems,
   syncOperationalBsaleSalesOrders,
+  excludeSalesOrderPreparationNv,
   SalesOrderPreparationCardInfo,
   SalesOrderPreparationItem,
 } from '@/app/actions/logistica/sales-order-preparation'
 import { getWarehousePreparationSyncHealth, type WarehousePreparationSyncHealth } from '@/app/actions/integraciones/sync'
 import { SalesOrderCard } from './sales-order-card'
 import { SalesOrderDrawer } from './sales-order-drawer'
+import { PreparationExclusionDialog, type ExclusionConfirmInput, type ExclusionConfirmResult } from './preparation-exclusion-dialog'
+import { PreparationExclusionsDrawer } from './preparation-exclusions-drawer'
 import { DndContext, DragEndEvent, DragStartEvent, DragOverlay, useDroppable, useSensor, useSensors, PointerSensor } from '@dnd-kit/core'
 import { getMovementRule } from './movement-rules'
 import { MovementObservationDialog } from './movement-observation-dialog'
@@ -55,7 +58,7 @@ const COLUMNS: KanbanColumn[] = [
   },
 ]
 
-function DroppableColumn({ col, colCards, pendingCardIds, onOpenCardDetails }: { col: KanbanColumn, colCards: SalesOrderPreparationCardInfo[], pendingCardIds: Set<string>, onOpenCardDetails: (c: SalesOrderPreparationCardInfo) => void }) {
+function DroppableColumn({ col, colCards, pendingCardIds, onOpenCardDetails, canExclude, onExclude }: { col: KanbanColumn, colCards: SalesOrderPreparationCardInfo[], pendingCardIds: Set<string>, onOpenCardDetails: (c: SalesOrderPreparationCardInfo) => void, canExclude: boolean, onExclude: (c: SalesOrderPreparationCardInfo) => void }) {
   const { setNodeRef, isOver } = useDroppable({
     id: col.id,
   })
@@ -81,6 +84,8 @@ function DroppableColumn({ col, colCards, pendingCardIds, onOpenCardDetails }: {
             card={card}
             isPending={pendingCardIds.has(card.card_id)}
             onDoubleClick={() => onOpenCardDetails(card)}
+            canExclude={canExclude}
+            onExclude={onExclude}
           />
         ))}
       </div>
@@ -88,7 +93,9 @@ function DroppableColumn({ col, colCards, pendingCardIds, onOpenCardDetails }: {
   )
 }
 
-export function SalesOrderPreparationPanel() {
+export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: string }) {
+  const canManageExclusions = roleName === 'SUPER_USUARIO' || roleName === 'GERENCIA'
+
   const [companyId, setCompanyId] = useState<string | null>(null)
   const [cards, setCards] = useState<SalesOrderPreparationCardInfo[]>([])
   const [loading, setLoading] = useState(true)
@@ -114,6 +121,31 @@ export function SalesOrderPreparationPanel() {
   const [pendingCardIds, setPendingCardIds] = useState<Set<string>>(new Set())
   const [transitionError, setTransitionError] = useState<string | null>(null)
   const [isSyncing, setIsSyncing] = useState(false)
+
+  // Exclusiones administrativas
+  const [excludeCard, setExcludeCard] = useState<SalesOrderPreparationCardInfo | null>(null)
+  const [exclusionsOpen, setExclusionsOpen] = useState(false)
+
+  const handleExclusionConfirm = async ({ reason, observation }: ExclusionConfirmInput): Promise<ExclusionConfirmResult> => {
+    const card = excludeCard
+    if (!card) return { ok: false, error: 'No hay Nota de Venta seleccionada.' }
+    const res = await excludeSalesOrderPreparationNv({
+      bsaleNvId: card.nv_bsale_id,
+      reason,
+      observation,
+    })
+    if (!res.ok && res.status !== 'already_exists') {
+      return { ok: false, error: res.error || 'No se pudo excluir la Nota de Venta.' }
+    }
+    if (res.status === 'already_exists') {
+      toast.info(`La NV #${card.nv_folio} ya estaba excluida de preparación.`)
+    } else {
+      toast.success(`NV #${card.nv_folio} excluida de preparación`)
+    }
+    await loadBoard()
+    setSelectedCard(current => current?.card_id === card.card_id ? null : current)
+    return { ok: true }
+  }
 
   const handleSyncBsale = async () => {
     setIsSyncing(true)
@@ -338,6 +370,14 @@ export function SalesOrderPreparationPanel() {
               {isSyncing ? 'ACTUALIZANDO...' : 'ACTUALIZAR NOTAS DE VENTA'}
             </button>
 
+            <button
+              onClick={() => setExclusionsOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-bold border bg-white border-[#D1C7BD] text-[#322D29]/70 hover:bg-[#F5F0EA] transition-colors"
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              EXCLUSIONES
+            </button>
+
             <div className="relative w-40 ml-2">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#322D29]/40" />
               <input
@@ -409,7 +449,7 @@ export function SalesOrderPreparationPanel() {
                 <div className="grid h-full min-w-[1000px] grid-cols-[repeat(3,minmax(320px,1fr))] gap-4">
                   {COLUMNS.map(col => {
                     const colCards = filteredCards.filter(c => c.status === col.id)
-                     return <DroppableColumn key={col.id} col={col} colCards={colCards} pendingCardIds={pendingCardIds} onOpenCardDetails={openCardDetails} />
+                     return <DroppableColumn key={col.id} col={col} colCards={colCards} pendingCardIds={pendingCardIds} onOpenCardDetails={openCardDetails} canExclude={canManageExclusions} onExclude={setExcludeCard} />
                   })}
                 </div>
               </div>
@@ -441,6 +481,20 @@ export function SalesOrderPreparationPanel() {
         label={pendingMovement?.label ?? ''}
         isMoving={isMoving}
         error={transitionError}
+      />
+
+      <PreparationExclusionDialog
+        card={excludeCard}
+        open={!!excludeCard}
+        onOpenChange={(next) => { if (!next) setExcludeCard(null) }}
+        onConfirm={handleExclusionConfirm}
+      />
+
+      <PreparationExclusionsDrawer
+        open={exclusionsOpen}
+        onOpenChange={setExclusionsOpen}
+        canRevoke={canManageExclusions}
+        onChanged={loadBoard}
       />
 
     </div>

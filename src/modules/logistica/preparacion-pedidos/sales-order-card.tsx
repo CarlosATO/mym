@@ -1,6 +1,6 @@
 'use client'
 
-import { MapPin, Package, User, Calendar } from 'lucide-react'
+import { MapPin, Package, User, Calendar, Ban } from 'lucide-react'
 import { SalesOrderPreparationCardInfo } from '@/app/actions/logistica/sales-order-preparation'
 import { useDraggable } from '@dnd-kit/core'
 
@@ -9,9 +9,11 @@ interface SalesOrderCardProps {
   onDoubleClick?: () => void
   isOverlay?: boolean
   isPending?: boolean
+  canExclude?: boolean
+  onExclude?: (card: SalesOrderPreparationCardInfo) => void
 }
 
-export function SalesOrderCard({ card, onDoubleClick, isOverlay, isPending = false }: SalesOrderCardProps) {
+export function SalesOrderCard({ card, onDoubleClick, isOverlay, isPending = false, canExclude = false, onExclude }: SalesOrderCardProps) {
   const emitDate = new Date(card.nv_emission_date).toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })
   const routeDate = card.route_date
     ? new Date(card.route_date).toLocaleDateString('es-CL', { day: 'numeric', month: 'short' })
@@ -98,6 +100,21 @@ export function SalesOrderCard({ card, onDoubleClick, isOverlay, isPending = fal
         )}
       </div>
       <span className="mt-2 inline-flex w-fit border border-[#AC9C8D]/30 bg-[#F5F0EA] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-[#6B625C]">{isPending ? 'Guardando…' : statusLabel}</span>
+      {canExclude && !isOverlay && card.status === 'PENDING_ROUTE_PREP' && (
+        <button
+          type="button"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation()
+            onExclude?.(card)
+          }}
+          onDoubleClick={(event) => event.stopPropagation()}
+          className="mt-1.5 inline-flex w-fit items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.08em] text-[#8A4B4B] underline-offset-2 hover:text-[#72383D] hover:underline"
+        >
+          <Ban className="w-3 h-3" />
+          Excluir de preparación
+        </button>
+      )}
     </div>
   )
 }

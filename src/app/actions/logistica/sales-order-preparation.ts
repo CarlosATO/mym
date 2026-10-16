@@ -395,6 +395,154 @@ export async function getSalesOrderClientData(companyId: string, bsaleNvId: numb
   }
 }
 
+// ---------------------------------------------------------------------------
+// Exclusiones administrativas de NV (Preparación/Bodega).
+// La autorización real (auth.uid, empresa, rol SUPER_USUARIO/GERENCIA, tipo/estado
+// de NV, tarjeta elegible, duplicados) vive dentro de los RPC producto.
+// Estas acciones sólo conservan la sesión autenticada del usuario y delegan.
+// ---------------------------------------------------------------------------
+
+export type SalesOrderPreparationExclusion = {
+  id: string
+  company_id: string
+  bsale_nv_id: number
+  nv_folio: string
+  reason: string
+  observation: string | null
+  excluded_by: string
+  excluded_by_name: string | null
+  excluded_at: string
+  active: boolean
+  revoked_by: string | null
+  revoked_by_name: string | null
+  revoked_at: string | null
+  revoked_reason: string | null
+}
+
+export type ExclusionActionResult = {
+  ok: boolean
+  status: string | null
+  error: string | null
+}
+
+export async function getSalesOrderPreparationExclusions(): Promise<{ data: SalesOrderPreparationExclusion[]; error: string | null }> {
+  try {
+    const { supabase, error: permissionError } = await requireLogisticaView()
+    if (permissionError) return { data: [], error: permissionError }
+
+    const companyId = await getActiveCompanyId()
+    if (!companyId) return { data: [], error: 'No se pudo determinar la empresa activa' }
+
+    // RLS authenticated: core.has_company_access(auth.uid(), company_id).
+    const { data, error } = await supabase
+      .schema('logistica')
+      .from('sales_order_preparation_exclusions')
+      .select('*')
+      .eq('company_id', companyId)
+      .order('excluded_at', { ascending: false })
+
+    if (error) {
+      console.error('[getSalesOrderPreparationExclusions] Error:', error)
+      return { data: [], error: error.message }
+    }
+
+    return { data: (data ?? []) as SalesOrderPreparationExclusion[], error: null }
+  } catch (err: unknown) {
+    console.error('[getSalesOrderPreparationExclusions] Exception:', err)
+    return { data: [], error: err instanceof Error ? err.message : 'Error desconocido' }
+  }
+}
+
+export async function excludeSalesOrderPreparationNv(params: {
+  bsaleNvId: number | string
+  reason: string
+  observation?: string | null
+}): Promise<ExclusionActionResult> {
+  try {
+    // Sesión real del usuario: auth.uid() lo deriva el RPC desde este JWT.
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { ok: false, status: null, error: 'No autorizado' }
+
+    const nvId = Number(params.bsaleNvId)
+    if (!Number.isFinite(nvId)) return { ok: false, status: null, error: 'Nota de Venta inválida' }
+
+    const reason = params.reason?.trim()
+    if (!reason) return { ok: false, status: null, error: 'El motivo es obligatorio' }
+
+    // company activa resuelta en el servidor; nunca desde el frontend.
+    const companyId = await getActiveCompanyId(user)
+    if (!companyId) return { ok: false, status: null, error: 'No se pudo determinar la empresa activa' }
+
+    const { data, error } = await supabase
+      .schema('logistica')
+      .rpc('exclude_sales_order_preparation_nv', {
+        p_company_id: companyId,
+        p_bsale_nv_id: nvId,
+        p_reason: reason,
+        p_observation: params.observation?.trim() || null,
+      })
+
+    if (error) {
+      console.error('[excludeSalesOrderPreparationNv] RPC error', {
+        nvId,
+        message: error.message,
+        code: error.code,
+      })
+      return { ok: false, status: null, error: error.message }
+    }
+
+    const status = (data as { status?: string } | null)?.status ?? null
+    return { ok: status === 'excluded', status, error: null }
+  } catch (err: unknown) {
+    console.error('[excludeSalesOrderPreparationNv] Exception:', err)
+    return { ok: false, status: null, error: err instanceof Error ? err.message : 'Error desconocido' }
+  }
+}
+
+export async function revokeSalesOrderPreparationExclusion(params: {
+  bsaleNvId: number | string
+  revokedReason: string
+}): Promise<ExclusionActionResult> {
+  try {
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { ok: false, status: null, error: 'No autorizado' }
+
+    const nvId = Number(params.bsaleNvId)
+    if (!Number.isFinite(nvId)) return { ok: false, status: null, error: 'Nota de Venta inválida' }
+
+    const revokedReason = params.revokedReason?.trim()
+    if (!revokedReason) return { ok: false, status: null, error: 'El motivo de revocación es obligatorio' }
+
+    const companyId = await getActiveCompanyId(user)
+    if (!companyId) return { ok: false, status: null, error: 'No se pudo determinar la empresa activa' }
+
+    const { data, error } = await supabase
+      .schema('logistica')
+      .rpc('revoke_sales_order_preparation_exclusion', {
+        p_company_id: companyId,
+        p_bsale_nv_id: nvId,
+        p_revoked_reason: revokedReason,
+      })
+
+    if (error) {
+      console.error('[revokeSalesOrderPreparationExclusion] RPC error', {
+        nvId,
+        message: error.message,
+        code: error.code,
+      })
+      return { ok: false, status: null, error: error.message }
+    }
+
+    const status = (data as { status?: string } | null)?.status ?? null
+    return { ok: status === 'revoked', status, error: null }
+  } catch (err: unknown) {
+    console.error('[revokeSalesOrderPreparationExclusion] Exception:', err)
+    return { ok: false, status: null, error: err instanceof Error ? err.message : 'Error desconocido' }
+  }
+}
+
 export type SalesOrderPreparationMovement = {
   id: string
   company_id: string
