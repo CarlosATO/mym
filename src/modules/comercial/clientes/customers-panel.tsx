@@ -10,6 +10,7 @@ import {
 } from '@/app/actions/comercial/customers'
 import { forceSyncBsaleClients, getBsaleSalesSyncHealth, getSyncStatus, type BsaleSalesSyncHealth } from '@/app/actions/integraciones/sync'
 import { Client360Drawer } from './client-360-drawer'
+import { ClientsExcelExportButton } from './clients-excel-export'
 import {
   AlertCircle, Building2, CloudSync, Mail, MapPin, Phone,
   Plus, RefreshCw, Search, ShieldAlert, TrendingUp, UserRoundCheck,
@@ -370,6 +371,7 @@ export function CustomersPanel() {
           <button onClick={load} title="Recargar esta vista, sin sincronizar Bsale" className="h-9 w-9 flex items-center justify-center rounded-lg border border-theme-border bg-theme-surface hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text transition-colors">
             <RefreshCw className={cn("w-3.5 h-3.5", loading && "animate-spin")} />
           </button>
+          <ClientsExcelExportButton />
           <button onClick={() => setIsNewFormOpen(true)} className="h-9 px-3 flex items-center gap-1.5 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-xs font-bold shadow-sm shadow-theme-accent/15 transition-all shrink-0">
             <Plus className="w-3.5 h-3.5" />Nuevo cliente manual
           </button>
