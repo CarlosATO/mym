@@ -172,7 +172,7 @@ test('new Bsale product flow is lazy, supplier-bound, and local-only after creat
 test('supplier review discounts are optional, exclusive and preserved in the payload', () => {
   assert.match(review, /showDiscountColumns, setShowDiscountColumns\] = useState\(false\)/)
   assert.match(review, /showDiscountColumns && \(\s*<>[\s\S]*Dcto %/)
-  assert.match(review, /Dcto por unidad/)
+  assert.match(review, /Dcto\/U Neto/)
   assert.match(review, /Agregar descuentos/)
   assert.match(review, /Ocultar descuentos/)
   assert.match(review, /discount_unit_amount: item\.discount_unit_amount \?\? 0/)

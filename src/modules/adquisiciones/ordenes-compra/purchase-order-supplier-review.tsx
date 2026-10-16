@@ -583,7 +583,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
         </section>
 
         <section className="mb-4 overflow-x-auto border border-[#D1C7BD] bg-white">
-          <table className={`${showDiscountColumns ? 'min-w-[1240px]' : 'min-w-[1080px]'} w-full border-collapse text-xs`}>
+          <table className={`${showDiscountColumns ? 'min-w-[1340px]' : 'min-w-[1180px]'} w-full border-collapse text-xs`}>
             <thead>
               <tr className="bg-[#322D29] text-[10px] uppercase tracking-wider text-[#EFE9E1]">
                 <th className="px-3 py-2 text-left">Estado</th>
@@ -595,10 +595,11 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
                 {showDiscountColumns && (
                   <>
                     <th className="px-3 py-2 text-right">Dcto %</th>
-                    <th className="px-3 py-2 text-right">Dcto por unidad</th>
+                    <th className="px-3 py-2 text-right">Dcto/U Neto</th>
                   </>
                 )}
                 <th className="px-3 py-2 text-right">IVA %</th>
+                <th className="px-3 py-2 text-right">Neto</th>
                 <th className="px-3 py-2 text-right">Total</th>
                 <th className="px-3 py-2 text-right">Acción</th>
               </tr>
@@ -607,6 +608,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
               {visibleLines.map((line) => {
                 const persisted = line.item_id ? statuses.get(line.item_id) : undefined
                 const status = persisted?.comparison_status === 'ELIMINADA' && persisted.original_item ? (matchesOriginal(line, persisted.original_item) ? 'SIN_CAMBIOS' : 'MODIFICADA') : (persisted?.comparison_status ?? 'AGREGADA')
+                const lineTotals = calculatePurchaseOrderLineTotals(line)
                 return (
                   <tr key={line.item_id ?? `${line.product_id}-${line.line_number}`} className="border-b border-[#E5DDD4] align-top">
                     <td className="px-3 py-2">
@@ -639,14 +641,15 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
                           <input aria-label={`Dcto % ${line.product_description}`} type="number" min="0" max="100" step="0.01" value={discountPercentDisplay(line)} onChange={(event) => updateLine(line.item_id, 'discount_percent', event.target.value)} className={`${inputClass} w-20 text-right`} />
                         </td>
                         <td className="px-3 py-2">
-                          <input aria-label={`Dcto por unidad ${line.product_description}`} type="number" min="0" max={line.unit_price} step="0.01" value={discountUnitAmountDisplay(line)} onChange={(event) => updateLine(line.item_id, 'discount_unit_amount', event.target.value)} className={`${inputClass} w-28 text-right`} />
+                          <input aria-label={`Dcto/U Neto ${line.product_description}`} type="number" min="0" max={line.unit_price} step="0.01" value={discountUnitAmountDisplay(line)} onChange={(event) => updateLine(line.item_id, 'discount_unit_amount', event.target.value)} className={`${inputClass} w-28 text-right`} />
                         </td>
                       </>
                     )}
                     <td className="px-3 py-2">
                       <input aria-label={`IVA ${line.product_description}`} type="number" min="0" max="100" step="0.01" value={line.tax_rate} onChange={(event) => updateLine(line.item_id, 'tax_rate', event.target.value)} className={`${inputClass} w-20 text-right`} />
                     </td>
-                    <td className="px-3 py-2 text-right font-semibold tabular-nums">{currency(calculatePurchaseOrderLineTotals(line).line_total, po.currency)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{currency(lineTotals.net_amount, po.currency)}</td>
+                    <td className="px-3 py-2 text-right font-semibold tabular-nums">{currency(lineTotals.line_total, po.currency)}</td>
                     <td className="px-3 py-2 text-right">
                       <button onClick={() => removeLine(line.item_id)} className="rounded p-1.5 text-[#6D625B] hover:bg-[#F5EDEE] hover:text-[#72383D]" title="Eliminar línea">
                         <Trash2 className="h-3.5 w-3.5" />
