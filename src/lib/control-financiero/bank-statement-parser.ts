@@ -408,12 +408,49 @@ function parseCurrentPdfBlock(
 function parseItauCurrentRows(text: string) {
   const lines = text.split('\n').map(line => line.replace(/\r/g, '').trimEnd()).filter(Boolean)
   const blocks: string[][] = []
+  // A page break injects the next page's header/footer furniture. Those lines
+  // must never be appended to the last movement of the previous page, otherwise
+  // the border movement is dropped and a phantom row is created. Ignore every
+  // line after a page marker until the next dated movement starts a new block.
+  let afterPageBreak = false
   for (const line of lines) {
+    if (/^--\s*\d+\s+of\s+\d+\s*--$/i.test(line.trim())) {
+      afterPageBreak = true
+      continue
+    }
     const date = currentPdfDateLine(line)
-    if (date && !/\s+\d{2}:\d{2}:\d{2}/.test(line)) blocks.push([line])
-    else if (blocks.length) blocks.at(-1)!.push(line.trim())
+    if (date && !/\s+\d{2}:\d{2}:\d{2}/.test(line)) {
+      afterPageBreak = false
+      blocks.push([line])
+    } else if (!afterPageBreak && blocks.length) {
+      blocks.at(-1)!.push(line.trim())
+    }
   }
   return blocks
+}
+
+/**
+ * The real pdf-parse text drops empty table cells, so a row that carries a
+ * single amount loses the column that would tell credit from debit. The
+ * statement's balance column is the running balance, so the sign of the
+ * movement is reconstructed arithmetically from the ordered balances instead
+ * of relying on a fragile keyword list.
+ */
+function resolveCurrentPdfDirections(movements: ParsedBankMovement[]) {
+  for (let index = 1; index < movements.length; index += 1) {
+    const row = movements[index]
+    const expected = row.balance - movements[index - 1].balance
+    if (row.credit > 0 && row.debit > 0) continue
+    const amount = row.credit || row.debit
+    if (!amount) continue
+    if (expected === amount && row.credit === 0) {
+      row.credit = amount
+      row.debit = 0
+    } else if (expected === -amount && row.debit === 0) {
+      row.debit = amount
+      row.credit = 0
+    }
+  }
 }
 
 /** Parses Itaú Empresas' open-month "Consulta Saldos y Últimos movimientos" PDF. */
@@ -430,6 +467,7 @@ export function parseItauCurrentStatementText(input: string): ParsedBankStatemen
     ? detectDirection(movements)
     : movements[0].date > movements.at(-1)!.date ? 'DESC' : 'ASC'
   const ordered = order === 'ASC' ? movements : [...movements].reverse()
+  resolveCurrentPdfDirections(ordered)
   const first = ordered[0]
   const last = ordered.at(-1)!
   const openingBalance = first.balance - first.credit + first.debit
