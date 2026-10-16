@@ -49,7 +49,13 @@ test('product, service and mixed receipt contracts are wired', () => {
   assert.match(migration, /CASE WHEN v_item_type = 'SERVICE' THEN v_po_item\.product_description ELSE NULL END/)
   assert.match(migration, /IF v_condition IN \('CONFORME', 'DANADO'\) THEN[\s\S]*quantity_received = quantity_received \+ v_qty_received/)
   assert.match(migration, /IF v_condition IN \('CONFORME', 'DANADO'\) AND v_item_type = 'PRODUCT' THEN/)
-  assert.match(worksheet, /quantity: Number\(item\.quantity_pending \|\| 0\)/)
+  assert.doesNotMatch(worksheet, /quantity: Number\(item\.quantity_pending \|\| 0\)/)
+  assert.match(worksheet, /quantity: 0,/)
+})
+
+test('receipt worksheet initializes capture quantities at zero to allow partial receipts', () => {
+  assert.doesNotMatch(worksheet, /quantity: Number\(item\.quantity_pending \|\| 0\)/)
+  assert.match(worksheet, /quantity: 0,\s*\n\s*condition: 'CONFORME',/)
 })
 
 test('receipt security, idempotency, documents and correlatives are present', () => {

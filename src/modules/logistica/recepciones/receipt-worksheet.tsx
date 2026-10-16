@@ -118,7 +118,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
           initialInputs[item.id] = [
             {
               id: `split-${Date.now()}-${Math.random()}`,
-              quantity: Number(item.quantity_pending || 0),
+              quantity: 0,
               condition: 'CONFORME',
               location_id: defaultLocId,
               lot_number: '',
