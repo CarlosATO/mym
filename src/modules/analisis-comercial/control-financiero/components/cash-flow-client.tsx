@@ -1015,16 +1015,17 @@ export function CashFlowClient({
           ))}
         </div>
       </section>
+      {isFiltering && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="pointer-events-none fixed left-1/2 top-[45%] z-[60] inline-flex -translate-x-1/2 items-center gap-2.5 rounded-xl border border-[#D1C7BD] bg-white/95 px-5 py-3 text-sm font-semibold text-[#72383D] shadow-xl backdrop-blur-sm"
+        >
+          <LoaderCircle aria-hidden="true" className="h-5 w-5 animate-spin text-[#72383D]" />
+          Actualizando…
+        </div>
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-1 border-b border-[#D1C7BD] pb-1">
-        {isFiltering && (
-          <span
-            role="status"
-            className="inline-flex items-center gap-1.5 border border-[#D1C7BD] bg-white px-2 py-0.5 text-[11px] font-semibold text-[#72383D]"
-          >
-            <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-            Actualizando…
-          </span>
-        )}
         <form className="flex flex-wrap gap-1" onSubmit={applyFilters}>
           <input
             aria-label="Buscar operación"
@@ -1071,17 +1072,27 @@ export function CashFlowClient({
              aria-pressed={classificationFilter === "PENDING"}
              disabled={isFiltering}
              onClick={() => {
-               setClassificationFilter("PENDING");
-               navigateQuery(year, month, accountId, 1, "PENDING", search, categoryFilter, scope, direction);
+               const nextFilter =
+                 classificationFilter === "PENDING" ? "ALL" : "PENDING";
+               setClassificationFilter(nextFilter);
+               navigateQuery(year, month, accountId, 1, nextFilter, search, categoryFilter, scope, direction);
              }}
              className={`inline-flex h-8 items-center gap-1.5 border px-2 text-xs font-semibold transition-colors ${
-               pendingReviewCount > 0
-                 ? "border-[#A23E48]/50 bg-[#FFF8F6] text-[#A23E48] hover:bg-[#FDECEA]"
-                 : "border-[#AC9C8D] bg-white text-[#322D29]/65 hover:bg-[#FAF8F5]"
-             } ${classificationFilter === "PENDING" ? "ring-1 ring-[#A23E48]/40" : ""}`}
+               classificationFilter === "PENDING"
+                 ? "border-[#66856B]/50 bg-[#EDF4EC] text-[#426247] hover:bg-[#E2EEE0] ring-1 ring-[#66856B]/30"
+                 : pendingReviewCount > 0
+                   ? "border-[#A23E48]/50 bg-[#FFF8F6] text-[#A23E48] hover:bg-[#FDECEA]"
+                   : "border-[#AC9C8D] bg-white text-[#322D29]/65 hover:bg-[#FAF8F5]"
+             }`}
            >
              <span
-               className={`h-1.5 w-1.5 rounded-full ${pendingReviewCount > 0 ? "bg-[#A23E48]" : "bg-[#AC9C8D]"}`}
+               className={`h-1.5 w-1.5 rounded-full ${
+                 classificationFilter === "PENDING"
+                   ? "bg-[#426247]"
+                   : pendingReviewCount > 0
+                     ? "bg-[#A23E48]"
+                     : "bg-[#AC9C8D]"
+               }`}
                aria-hidden="true"
              />
              Pendientes de revisión · {pendingReviewCount}

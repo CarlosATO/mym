@@ -60,9 +60,34 @@ test('quick pending-review filter reuses the review filter and its live count', 
   assert.match(client, /data\.pendingMovements - locallyReviewedPendingCount/)
   assert.match(client, /Pendientes de revisión · \{pendingReviewCount\}/)
   assert.match(client, /aria-pressed=\{classificationFilter === "PENDING"\}/)
-  assert.match(client, /setClassificationFilter\("PENDING"\)/)
-  assert.match(client, /navigateQuery\(year, month, accountId, 1, "PENDING", search, categoryFilter, scope, direction\)/)
   assert.match(client, /value=\{classificationFilter\}/)
+})
+
+test('quick pending-review filter toggles between PENDING and ALL', () => {
+  assert.match(client, /classificationFilter === "PENDING" \? "ALL" : "PENDING"/)
+  assert.match(client, /const nextFilter =/)
+  assert.match(client, /setClassificationFilter\(nextFilter\)/)
+  assert.match(client, /navigateQuery\(year, month, accountId, 1, nextFilter, search, categoryFilter, scope, direction\)/)
+  assert.doesNotMatch(client, /setClassificationFilter\("PENDING"\)/)
+})
+
+test('ALL filter is never serialized as a classification param', () => {
+  assert.match(client, /if \(nextFilter !== "ALL"\) params\.set\("classification", nextFilter\)/)
+})
+
+test('quick pending-review filter shows an active green state when selected', () => {
+  assert.match(client, /classificationFilter === "PENDING"\s*\n\s*\? "border-\[#66856B\]\/50 bg-\[#EDF4EC\] text-\[#426247\]/)
+  assert.match(client, /bg-\[#426247\]/)
+})
+
+test('review select shares the same classificationFilter state', () => {
+  assert.match(client, /aria-label="Revisión"/)
+  assert.match(client, /value=\{classificationFilter\}/)
+  assert.match(client, /setClassificationFilter\(nextFilter\)/)
+})
+
+test('Filtrar button submits the current classificationFilter', () => {
+  assert.match(client, /navigateQuery\(year, month, accountId, 1, classificationFilter, search, categoryFilter\)/)
 })
 
 test('confirmed pending movements leave the quick-filter view locally', () => {
@@ -75,4 +100,21 @@ test('confirmed pending movements leave the quick-filter view locally', () => {
 test('quick filter wraps with the existing responsive filter bar', () => {
   assert.match(client, /<div className="mt-2 flex flex-wrap items-center gap-1 border-b/)
   assert.match(client, /<form className="flex flex-wrap gap-1"/)
+})
+
+test('updating indicator floats out of the filter flow without layout shift', () => {
+  assert.match(client, /\{isFiltering && \(\s*\n\s*<div/)
+  assert.match(client, /pointer-events-none fixed left-1\/2 top-\[45%\] z-\[60\]/)
+  assert.match(client, /role="status"/)
+  assert.match(client, /aria-live="polite"/)
+  assert.match(client, /<LoaderCircle aria-hidden="true" className="h-5 w-5 animate-spin text-\[#72383D\]"/)
+  assert.match(client, /Actualizando…/)
+
+  const filterBar = client.slice(client.indexOf('<div className="mt-2 flex flex-wrap items-center gap-1 border-b'))
+  const formIndex = filterBar.indexOf('<form className="flex flex-wrap gap-1"')
+  const between = filterBar.slice(0, formIndex)
+  assert.doesNotMatch(between, /Actualizando…/)
+
+  const indicatorIndex = client.indexOf('Actualizando…')
+  assert.ok(indicatorIndex > -1 && indicatorIndex < client.indexOf('<div className="mt-2 flex flex-wrap items-center gap-1 border-b'))
 })
