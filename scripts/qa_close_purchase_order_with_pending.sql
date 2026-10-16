@@ -248,14 +248,14 @@ BEGIN
 
     IF v_receipt_user IS NOT NULL THEN
         PERFORM set_config('request.jwt.claim.sub', v_receipt_user::text, true);
-        v_attempt := adquisiciones.create_purchase_receipt_db(
-            v_company, v_po, 'OFFICE', NULL, 'QA intento post cierre', 'FA', 'QA-DOC-2', CURRENT_DATE,
+        v_attempt := logistica.create_purchase_receipt_db(
+            v_company, v_po, 'OFFICE'::text, NULL::uuid, 'QA intento post cierre'::text, 'FA'::text, 'QA-DOC-2'::text, CURRENT_DATE,
             jsonb_build_array(jsonb_build_object(
                 'purchase_order_item_id', v_item,
                 'quantity_received', 1,
                 'condition', 'CONFORME'
             )),
-            v_receipt_user, gen_random_uuid(), NULL
+            v_receipt_user, gen_random_uuid(), NULL::jsonb
         );
         IF (v_attempt->>'success')::boolean IS DISTINCT FROM false THEN
             RAISE EXCEPTION 'QA-FAIL: se permitio una recepcion en una OC cerrada: %', v_attempt;
@@ -268,5 +268,7 @@ BEGIN
     RAISE NOTICE 'QA OK: cierre manual de OC con saldo pendiente validado (PO %)', v_po;
 END;
 $$;
+
+SELECT 'QA_OK' AS result, 'cierre manual de OC con saldo pendiente validado en transaccion reversible' AS detail;
 
 ROLLBACK;
