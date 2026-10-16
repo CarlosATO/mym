@@ -2744,13 +2744,22 @@ type WarehousePreparationSyncOptions = {
   trigger: 'WAREHOUSE_INCREMENTAL' | 'WAREHOUSE_OPERATIONAL'
   discoverRecent: boolean
   refreshActiveBoard: boolean
+  // Reparación móvil de documentos de cierre (Boleta=1, Guía=7) por generation_date.
+  // Sólo se usa cuando discoverRecent=false (flujo operacional). Con discoverRecent=true
+  // (incremental) los tipos 1/7 usan la misma ventana incremental + solape existente.
+  closureDocsRepairDays?: number
 }
 
 const DEFAULT_WAREHOUSE_PREPARATION_SYNC_OPTIONS: WarehousePreparationSyncOptions = {
   trigger: 'WAREHOUSE_OPERATIONAL',
   discoverRecent: true,
   refreshActiveBoard: true,
+  closureDocsRepairDays: 90,
 }
+
+// Tipos de documento que pueden CERRAR una NV (Boleta, Factura, Guía). Se sincronizan
+// completos (sin filtrar state) para que la futura regla de cobertura decida con state=0.
+const WAREHOUSE_CLOSURE_DOCUMENT_TYPE_IDS = [1, 7] as const
 
 export async function syncBsaleSalesOrdersForPreparation(
   companyId: string,
@@ -2833,6 +2842,19 @@ export async function syncBsaleSalesOrdersForPreparation(
     const dateFrom = new Date(checkpointDate.getTime() - 10 * 60000)
     const rangeEncoded = encodeURIComponent(`[${Math.floor(dateFrom.getTime() / 1000)},${Math.floor(dateTo.getTime() / 1000)}]`)
 
+    // Ventana para documentos de cierre (Boleta=1, Guía=7):
+    // - incremental (discoverRecent=true): misma ventana incremental + solape de 10 min.
+    // - operacional (discoverRecent=false): reparación móvil de los últimos N días de generation_date.
+    const closureRepairDays = options.closureDocsRepairDays ?? 0
+    const closureRangeFrom = options.discoverRecent
+      ? dateFrom
+      : closureRepairDays > 0
+        ? new Date(dateTo.getTime() - closureRepairDays * 86400000)
+        : null
+    const closureRangeEncoded = closureRangeFrom
+      ? encodeURIComponent(`[${Math.floor(closureRangeFrom.getTime() / 1000)},${Math.floor(dateTo.getTime() / 1000)}]`)
+      : null
+
     const { error: windowError } = await db.from('bsale_sync_runs').update({
       date_from: dateFrom.toISOString().slice(0, 10),
       date_to: dateTo.toISOString().slice(0, 10),
@@ -2842,9 +2864,31 @@ export async function syncBsaleSalesOrdersForPreparation(
     let offset = 0
     const bsaleDocsMap = new Map<number, BsalePreparationDocument>()
     const invoiceDocsMap = new Map<number, BsalePreparationDocument>()
+    const closureDocsMap = new Map<number, BsalePreparationDocument>()
 
     const { baseUrl: prepBase, headers: prepHeaders } = bsaleConfig(companyId)
     let bsaleGetRequests = 0
+
+    // Documentos de cierre (1/7): se persisten completos, SIN filtrar por state.
+    // La regla de cobertura decidirá con state=0; el sync sólo refleja el estado real.
+    async function discoverClosureDocuments(documentTypeId: number, range: string) {
+      let closureOffset = 0
+      while (true) {
+        const url = `${prepBase}/documents.json?documenttypeid=${documentTypeId}&limit=50&offset=${closureOffset}&generationdaterange=${range}&expand=details`
+        bsaleGetRequests++
+        const response = await fetch(url, { headers: prepHeaders, signal: AbortSignal.timeout(30000) })
+        if (!response.ok) throw new Error(`Bsale closure discovery error ${response.status} (documenttypeid=${documentTypeId})`)
+        const data = await response.json() as { items?: unknown[] }
+        if (!Array.isArray(data.items)) throw new Error(`Bsale closure discovery response missing items (documenttypeid=${documentTypeId})`)
+        const items = data.items.filter(isBsalePreparationDocument)
+        for (const doc of items) {
+          const documentTypeIdValue = Number(doc.documentTypeId ?? doc.document_type?.id)
+          if (documentTypeIdValue === documentTypeId) closureDocsMap.set(doc.id, doc)
+        }
+        if (data.items.length < 50) break
+        closureOffset += 50
+      }
+    }
 
     if (options.discoverRecent) {
       while (true) {
@@ -2928,16 +2972,34 @@ export async function syncBsaleSalesOrdersForPreparation(
       }
     }
 
+    // Documentos de cierre Boleta(1)/Guía(7). Se solicitan SIEMPRE (incremental y operacional),
+    // sin filtrar state, para que la cobertura NV pueda reevaluarse con el estado real.
+    if (closureRangeEncoded) {
+      for (const closureTypeId of WAREHOUSE_CLOSURE_DOCUMENT_TYPE_IDS) {
+        await discoverClosureDocuments(closureTypeId, closureRangeEncoded)
+      }
+    }
+    const closureDiscoveryCount = closureDocsMap.size
+
     // Invoice details are part of the canonical NV -> Factura resolver because
     // BSale exposes the source line through relatedDetailId.
     const allDocs = Array.from(new Map([
       ...Array.from(bsaleDocsMap.values()),
       ...Array.from(invoiceDocsMap.values()),
+      ...Array.from(closureDocsMap.values()),
     ].map((doc) => [doc.id, doc] as const)).values())
 
     let detailErrors = 0
     let detailsCount = 0
     let documentErrors = 0
+    // Errores específicos de documentos de cierre (1/7): si ocurren, NO se ejecuta reconcile
+    // (no se decide cobertura sobre una fotografía de cierre conocida como incompleta).
+    let closureDocumentErrors = 0
+    let closureDetailErrors = 0
+    const isClosureDocument = (doc: BsalePreparationDocument) =>
+      (WAREHOUSE_CLOSURE_DOCUMENT_TYPE_IDS as readonly number[]).includes(
+        Number(doc.documentTypeId ?? doc.document_type?.id)
+      )
 
     if (allDocs.length > 0) {
       // Upsert documentos
@@ -2966,7 +3028,14 @@ export async function syncBsaleSalesOrdersForPreparation(
          const { error } = await db.from('bsale_documents').upsert(records, { onConflict: 'company_id, bsale_id', ignoreDuplicates: false })
          if (error) {
            documentErrors += records.length
+           const closureInBatch = batch.filter(isClosureDocument).length
            console.error(`[syncBsaleSalesOrdersForPreparation] Document upsert error:`, error.message)
+           if (closureInBatch > 0) {
+             closureDocumentErrors += closureInBatch
+             // Un documento de cierre (Boleta/Guía) no persistido deja la cobertura NV incompleta:
+             // abortar para no ejecutar reconcile sobre una fotografía conocida como incompleta.
+             throw new Error(`Closure document upsert error (${closureInBatch}): ${error.message}`)
+           }
          }
       }
 
@@ -3030,6 +3099,12 @@ export async function syncBsaleSalesOrdersForPreparation(
             detailErrors++
             console.error(`[syncBsaleSalesOrdersForPreparation] Details error for ${doc.id}:`, error instanceof Error ? error.message : error)
             // No delete occurs on any fetch, parse, pagination, upsert, or delete failure.
+            if (isClosureDocument(doc)) {
+              closureDetailErrors++
+              // Detalles de cierre (Boleta/Guía) incompletos: abortar para que no se ejecute
+              // reconcile con cobertura parcial conocida.
+              throw new Error(`Closure document details incomplete for ${doc.id}: ${error instanceof Error ? error.message : String(error)}`)
+            }
          }
       }
     }
@@ -3049,6 +3124,9 @@ export async function syncBsaleSalesOrdersForPreparation(
       : undefined,
     {
       discovery: discoveryCount,
+      closure_discovery: closureDiscoveryCount,
+      closure_document_errors: closureDocumentErrors,
+      closure_detail_errors: closureDetailErrors,
       cards_refreshed: refreshCount,
       get_requests: bsaleGetRequests,
       documents_updated: allDocs.length - documentErrors,
@@ -3059,6 +3137,7 @@ export async function syncBsaleSalesOrdersForPreparation(
       errors: totalErrors,
       duration_ms: durationMs,
     })
+    console.log(`[syncBsaleSalesOrdersForPreparation] closure_docs discovered=${closureDiscoveryCount} doc_errors=${closureDocumentErrors} detail_errors=${closureDetailErrors} reconcile_ran=true`)
     await releaseSyncLock(companyId, lockName, runId)
 
     return {
@@ -3105,6 +3184,7 @@ export async function runOperationalWarehouseBsaleRefresh(companyId: string) {
     trigger: 'WAREHOUSE_OPERATIONAL',
     discoverRecent: false,
     refreshActiveBoard: true,
+    closureDocsRepairDays: 90,
   })
 }
 
