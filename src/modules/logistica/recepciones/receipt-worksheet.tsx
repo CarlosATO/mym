@@ -3,7 +3,7 @@
 /* Existing operational component uses legacy mutable state and Supabase row shapes. */
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars, react-hooks/purity */
 
-import React, { useState, useEffect, Fragment } from 'react'
+import React, { useState, useEffect, useMemo, Fragment } from 'react'
 import { useRouter } from 'next/navigation'
 import { getPurchaseOrderForReceipt, createPurchaseReceipt } from '@/app/actions/logistica/recepciones'
 import { getLocations, type Location } from '@/app/actions/logistica/locations'
@@ -70,6 +70,20 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
 
   // itemInputs state maps itemId -> Array of ItemSplit
   const [itemInputs, setItemInputs] = useState<Record<string, ItemSplit[]>>({})
+  const [receiptSearchQuery, setReceiptSearchQuery] = useState('')
+
+  // Client-side search over the canonical poDetail.items array. It never mutates
+  // the canonical state; it only selects which rows are visible, keeping each
+  // item's original index so the '#' column keeps the OC line numbering.
+  const visibleReceiptItems = useMemo(() => {
+    const items: any[] = poDetail?.items ?? []
+    const query = receiptSearchQuery.trim().toLocaleLowerCase('es-CL')
+    const indexed = items.map((item, originalIndex) => ({ item, originalIndex }))
+    if (!query) return indexed
+    return indexed.filter(({ item }) =>
+      [receiptItemSku(item), item.product_description].some(value => (value ?? '').toLocaleLowerCase('es-CL').includes(query))
+    )
+  }, [poDetail, receiptSearchQuery])
 
   useEffect(() => {
     async function loadData() {
@@ -675,6 +689,36 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
           </span>
         </div>
 
+        {/* Client-side search over the receipt lines */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative w-full max-w-xs">
+            <LucideIcons.Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-theme-text-muted pointer-events-none" />
+            <input
+              type="search"
+              value={receiptSearchQuery}
+              onChange={e => setReceiptSearchQuery(e.target.value)}
+              placeholder="Buscar por SKU o producto..."
+              aria-label="Buscar por SKU o producto"
+              className={cn(erpInputClass, 'w-full h-8 rounded-lg pl-8 pr-8 text-xs')}
+            />
+            {receiptSearchQuery && (
+              <button
+                type="button"
+                onClick={() => setReceiptSearchQuery('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-theme-text-muted hover:text-theme-text hover:bg-theme-text/10 transition-colors"
+                title="Limpiar búsqueda"
+              >
+                <LucideIcons.X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+          {receiptSearchQuery.trim() && (
+            <span className="text-[10px] text-theme-text-muted font-semibold">
+              Mostrando {visibleReceiptItems.length} de {poDetail.items.length}
+            </span>
+          )}
+        </div>
+
         {/* Unified Table Container */}
         <div className="rounded-2xl border border-theme-border bg-theme-surface shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
@@ -693,7 +737,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
                 </tr>
               </thead>
               <tbody>
-                {poDetail.items.map((item: any, idx: number) => {
+                {visibleReceiptItems.map(({ item, originalIndex }) => {
                   const splits = itemInputs[item.id] || []
                   
                   // Calculate quantity accumulations
@@ -720,7 +764,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
                         'border-b border-theme-border bg-theme-text/[0.02] hover:bg-theme-text/[0.04] transition-colors',
                         exceedsPending && 'bg-red-500/[0.02]'
                       )}>
-                        <td className="py-1.5 px-2 text-center font-bold text-theme-text">{idx + 1}</td>
+                        <td className="py-1.5 px-2 text-center font-bold text-theme-text">{originalIndex + 1}</td>
                         <td className="py-1.5 px-2 text-theme-text-muted">—</td>
                         <td className="py-1.5 px-2 min-w-[240px]">
                           <p className="font-semibold text-theme-text text-xs leading-tight">{item.product_description}</p>
@@ -771,7 +815,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
                         "border-b border-theme-border bg-theme-text/[0.02] hover:bg-theme-text/[0.04] transition-colors font-medium",
                         exceedsPending && "bg-red-500/[0.02]"
                       )}>
-                        <td className="py-2.5 px-4 text-center font-bold text-theme-text">{idx + 1}</td>
+                        <td className="py-2.5 px-4 text-center font-bold text-theme-text">{originalIndex + 1}</td>
                         <td className="py-2.5 px-4 text-theme-text font-mono">{receiptItemSku(item)}</td>
                         <td className="py-2.5 px-4">
                           <p className="font-semibold text-theme-text text-xs leading-normal">{item.product_description}</p>

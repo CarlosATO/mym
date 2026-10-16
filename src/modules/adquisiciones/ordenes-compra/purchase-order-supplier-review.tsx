@@ -117,6 +117,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
   const [productPickerOpen, setProductPickerOpen] = useState(false)
   const [newProductModalOpen, setNewProductModalOpen] = useState(false)
   const [showDiscountColumns, setShowDiscountColumns] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
   const [dirty, setDirty] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -174,6 +175,12 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
   }, [catalog, catalogQuery])
 
   const preview = useMemo(() => calculatePurchaseOrderTotals(lines), [lines])
+
+  const visibleLines = useMemo(() => {
+    const query = searchQuery.trim().toLocaleLowerCase('es-CL')
+    if (!query) return lines
+    return lines.filter((line) => [line.sku, line.product_description].some((value) => (value ?? '').toLocaleLowerCase('es-CL').includes(query)))
+  }, [lines, searchQuery])
 
   const hasPendingPrice = lines.some((line) => !Number.isFinite(line.unit_price) || line.unit_price <= 0)
   const hasInvalidQuantity = lines.some((line) => !Number.isFinite(line.quantity) || line.quantity <= 0)
@@ -558,10 +565,21 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
           ))}
         </section>
 
-        <section className="mb-2 flex justify-end">
-          <button type="button" onClick={() => setShowDiscountColumns((visible) => !visible)} className="rounded-md border border-[#AC9C8D] bg-white/70 px-3 py-2 text-xs font-semibold text-[#6D625B] hover:bg-[#EFE9E1]">
-            {showDiscountColumns ? 'Ocultar descuentos' : 'Agregar descuentos'}
-          </button>
+        <section className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div className="relative w-full max-w-xs">
+            <Search className="absolute left-2 top-2 h-3.5 w-3.5 text-[#AC9C8D]" />
+            <input type="search" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Buscar por SKU o producto..." aria-label="Buscar por SKU o producto" className={`${inputClass} pl-7`} />
+          </div>
+          <div className="flex items-center gap-3">
+            {searchQuery.trim() && (
+              <span className="text-[11px] text-[#AC9C8D]">
+                Mostrando {visibleLines.length} de {lines.length} productos
+              </span>
+            )}
+            <button type="button" onClick={() => setShowDiscountColumns((visible) => !visible)} className="rounded-md border border-[#AC9C8D] bg-white/70 px-3 py-2 text-xs font-semibold text-[#6D625B] hover:bg-[#EFE9E1]">
+              {showDiscountColumns ? 'Ocultar descuentos' : 'Agregar descuentos'}
+            </button>
+          </div>
         </section>
 
         <section className="mb-4 overflow-x-auto border border-[#D1C7BD] bg-white">
@@ -586,7 +604,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
               </tr>
             </thead>
             <tbody>
-              {lines.map((line) => {
+              {visibleLines.map((line) => {
                 const persisted = line.item_id ? statuses.get(line.item_id) : undefined
                 const status = persisted?.comparison_status === 'ELIMINADA' && persisted.original_item ? (matchesOriginal(line, persisted.original_item) ? 'SIN_CAMBIOS' : 'MODIFICADA') : (persisted?.comparison_status ?? 'AGREGADA')
                 return (
