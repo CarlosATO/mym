@@ -29,6 +29,8 @@
     "test:logistica-preparacion-kanban": "node --test scripts/test-logistica-preparacion-kanban-contract.mjs",
     "test:bodega-v2-operational-freshness": "node --test scripts/test-bodega-v2-operational-freshness.mjs",
     "test:bodega-warehouse-sync": "node --test scripts/test-bodega-warehouse-sync.mjs",
+    "test:logistica-legacy-archive": "node --test scripts/test-logistica-legacy-archive-contract.mjs",
+    "test:logistica-legacy-reopen": "node --test scripts/test-logistica-legacy-reopen-contract.mjs",
     "audit:bsale-warehouse-full": "node scripts/audit-bsale-warehouse-full.mjs",
     "audit:bsale-expand": "node scripts/audit-bsale-expand.mjs",
     "test:control-financiero-family-groups": "node --experimental-strip-types --test scripts/test-control-financiero-family-groups.mjs",
