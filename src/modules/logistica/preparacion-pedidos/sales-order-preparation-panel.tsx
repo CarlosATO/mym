@@ -11,7 +11,14 @@ import {
   excludeSalesOrderPreparationNv,
   SalesOrderPreparationCardInfo,
   SalesOrderPreparationItem,
+  type SalesOrderClientData,
 } from '@/app/actions/logistica/sales-order-preparation'
+import {
+  type PreparationDetailEntry,
+  getUncachedNvIds,
+  putPreparationDetailsBatch,
+  prunePreparationDetailCache,
+} from './preparation-detail-cache'
 import { getWarehousePreparationSyncHealth, type WarehousePreparationSyncHealth } from '@/app/actions/integraciones/sync'
 import {
   PREPARATION_SYNC_CHECK_INTERVAL_MS,
@@ -210,6 +217,7 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
   // Drawer state
   const [selectedCard, setSelectedCard] = useState<SalesOrderPreparationCardInfo | null>(null)
   const [selectedItems, setSelectedItems] = useState<SalesOrderPreparationItem[]>([])
+  const [selectedClientData, setSelectedClientData] = useState<SalesOrderClientData | null>(null)
   const [loadingItems, setLoadingItems] = useState(false)
 
   // Filters
@@ -242,6 +250,10 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
   const cardsRef = useRef<SalesOrderPreparationCardInfo[]>([])
   const boardRequestSeqRef = useRef(0)
   const itemsRequestSeqRef = useRef(0)
+  const prefetchSeqRef = useRef(0)
+  const detailCacheRef = useRef<Map<number, PreparationDetailEntry>>(new Map())
+  const prefetchInFlightRef = useRef<Set<number>>(new Set())
+  const selectedCardRef = useRef<SalesOrderPreparationCardInfo | null>(null)
   const pendingStatusByCardRef = useRef<Map<string, string>>(new Map())
   const pendingExclusionNvIdsRef = useRef<Set<number>>(new Set())
   const exclusionSnapshotsRef = useRef<Map<number, PreparationCardSnapshot<SalesOrderPreparationCardInfo>>>(new Map())
@@ -253,6 +265,10 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
   useEffect(() => {
     cardsRef.current = cards
   }, [cards])
+
+  useEffect(() => {
+    selectedCardRef.current = selectedCard
+  }, [selectedCard])
 
   const persistExclusion = async (
     card: SalesOrderPreparationCardInfo,
@@ -319,6 +335,50 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
     return { ok: true }
   }
 
+  const prefetchPreparationDetails = useCallback(async (activeCompanyId: string, candidateNvIds: number[]) => {
+    const uncachedIds = getUncachedNvIds(
+      detailCacheRef.current,
+      candidateNvIds,
+      prefetchInFlightRef.current,
+    )
+    if (uncachedIds.length === 0) return
+
+    for (const id of uncachedIds) {
+      prefetchInFlightRef.current.add(id)
+    }
+
+    const prefetchSeq = ++prefetchSeqRef.current
+    const startedAt = performance.now()
+
+    try {
+      const res = await getSalesOrderPreparationPrintData(activeCompanyId, uncachedIds)
+      if (prefetchSeq !== prefetchSeqRef.current || !mountedRef.current) return
+
+      if (res.data) {
+        putPreparationDetailsBatch(detailCacheRef.current, res.data, uncachedIds)
+
+        const currentCard = selectedCardRef.current
+        if (currentCard && uncachedIds.includes(currentCard.nv_bsale_id)) {
+          const cached = detailCacheRef.current.get(currentCard.nv_bsale_id)
+          if (cached) {
+            setSelectedItems(cached.items)
+            setSelectedClientData(cached.clientData)
+            setLoadingItems(false)
+          }
+        }
+      }
+    } catch (err: unknown) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('[preparacion-prefetch] Error precargando detalles en batch:', err)
+      }
+    } finally {
+      for (const id of uncachedIds) {
+        prefetchInFlightRef.current.delete(id)
+      }
+      recordPreparationDuration('prefetchBatch', performance.now() - startedAt)
+    }
+  }, [])
+
   const loadBoard = useCallback(async ({ showSpinner = false }: { showSpinner?: boolean } = {}) => {
     const seq = ++boardRequestSeqRef.current
     const startedAt = performance.now()
@@ -360,6 +420,12 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
         const next = rows.find(candidate => candidate.card_id === current.card_id)
         return next ?? (pendingExclusionNvIdsRef.current.has(current.nv_bsale_id) ? null : current)
       })
+
+      // Poda de cache: remover NVs que ya no pertenecen al board
+      prunePreparationDetailCache(detailCacheRef.current, rows.map(r => r.nv_bsale_id))
+
+      // Precarga batch de detalles en segundo plano sin bloquear el renderizado del board
+      void prefetchPreparationDetails(activeCompanyId, rows.map(r => r.nv_bsale_id))
     } catch (err: unknown) {
       if (seq === boardRequestSeqRef.current) {
         setError(err instanceof Error ? err.message : 'Error al cargar el tablero.')
@@ -368,7 +434,7 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
       if (seq === boardRequestSeqRef.current) setLoading(false)
       recordPreparationDuration('boardLoad', performance.now() - startedAt)
     }
-  }, [])
+  }, [prefetchPreparationDetails])
 
   const loadSyncHealth = useCallback(async () => {
     try {
@@ -417,7 +483,10 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
 
       if (res.ok) {
         setSyncError(null)
-        if (refresh && mountedRef.current) await loadBoard()
+        if (refresh && mountedRef.current) {
+          detailCacheRef.current.clear()
+          await loadBoard()
+        }
 
         if (source === 'manual') {
           const {
@@ -509,17 +578,53 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
   const openCardDetails = async (card: SalesOrderPreparationCardInfo) => {
     if (!companyId) return
     const requestId = ++itemsRequestSeqRef.current
+    const clickStart = performance.now()
     setSelectedCard(card)
-    setSelectedItems([])
-    setLoadingItems(true)
-    const res = await getSalesOrderPreparationItems(companyId, card.nv_bsale_id)
-    if (requestId !== itemsRequestSeqRef.current) return
-    if (!res.error && res.data) {
-      setSelectedItems(res.data)
-    } else {
-      setSelectedItems([])
+
+    // A. Cache HIT: Apertura instantánea sin round-trips
+    const cached = detailCacheRef.current.get(card.nv_bsale_id)
+    if (cached) {
+      setSelectedItems(cached.items)
+      setSelectedClientData(cached.clientData)
+      setLoadingItems(false)
+      recordPreparationDuration('cardOpen', performance.now() - clickStart)
+      return
     }
-    setLoadingItems(false)
+
+    // B. Cache MISS: Fallback individual seguro
+    setSelectedItems([])
+    setSelectedClientData(null)
+    setLoadingItems(true)
+
+    try {
+      const res = await getSalesOrderPreparationPrintData(companyId, [card.nv_bsale_id])
+      if (requestId !== itemsRequestSeqRef.current || !mountedRef.current) return
+
+      if (res.data) {
+        const items = res.data.itemsByNv[String(card.nv_bsale_id)] || []
+        const clientData = res.data.clientByNv[String(card.nv_bsale_id)] || null
+        detailCacheRef.current.set(card.nv_bsale_id, {
+          items,
+          clientData,
+          loadedAt: Date.now(),
+        })
+        setSelectedItems(items)
+        setSelectedClientData(clientData)
+      } else {
+        setSelectedItems([])
+        setSelectedClientData(null)
+      }
+    } catch (err: unknown) {
+      if (requestId === itemsRequestSeqRef.current && mountedRef.current) {
+        setSelectedItems([])
+        setSelectedClientData(null)
+      }
+    } finally {
+      if (requestId === itemsRequestSeqRef.current && mountedRef.current) {
+        setLoadingItems(false)
+        recordPreparationDuration('cardOpen', performance.now() - clickStart)
+      }
+    }
   }
 
   const transitionCard = async (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string) => {
@@ -1181,6 +1286,7 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
       <SalesOrderDrawer
         card={selectedCard}
         items={selectedItems}
+        clientData={selectedClientData}
         isLoadingItems={loadingItems}
         onClose={() => setSelectedCard(null)}
         onTransition={transitionCard}

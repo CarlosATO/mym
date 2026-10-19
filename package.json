@@ -29,6 +29,7 @@
     "test:logistica-preparacion-kanban": "node --test scripts/test-logistica-preparacion-kanban-contract.mjs",
     "test:preparacion-pedidos-fast": "node --experimental-strip-types --test scripts/test-preparacion-pedidos-fast.mjs scripts/test-preparacion-pedidos-fast-contract.mjs",
     "test:preparacion-pedidos-ux": "node --experimental-strip-types --test scripts/test-preparacion-pedidos-ux.mjs scripts/test-preparacion-pedidos-ux-contract.mjs",
+    "test:preparacion-pedidos-detail-cache": "node --experimental-strip-types --test scripts/test-preparacion-pedidos-detail-cache.mjs",
     "test:bodega-v2-operational-freshness": "node --test scripts/test-bodega-v2-operational-freshness.mjs",
     "test:bodega-warehouse-sync": "node --test scripts/test-bodega-warehouse-sync.mjs",
     "test:logistica-legacy-archive": "node --test scripts/test-logistica-legacy-archive-contract.mjs",

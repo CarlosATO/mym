@@ -9,6 +9,7 @@ import { MOVEMENT_RULES } from './movement-rules'
 interface SalesOrderDrawerProps {
   card: SalesOrderPreparationCardInfo | null
   items: SalesOrderPreparationItem[]
+  clientData?: SalesOrderClientData | null
   isLoadingItems: boolean
   onClose: () => void
   onTransition: (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string) => Promise<boolean>
@@ -32,11 +33,20 @@ function closePdfWindow(target: Window | null) {
   }
 }
 
-export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTransition }: SalesOrderDrawerProps) {
-  const [clientData, setClientData] = useState<SalesOrderClientData | null>(null)
+export function SalesOrderDrawer({
+  card,
+  items,
+  clientData: clientDataProp,
+  isLoadingItems,
+  onClose,
+  onTransition,
+}: SalesOrderDrawerProps) {
+  const [fallbackClientData, setFallbackClientData] = useState<SalesOrderClientData | null>(null)
+  const clientData = clientDataProp !== undefined ? clientDataProp : fallbackClientData
   
   const [movements, setMovements] = useState<SalesOrderPreparationMovement[]>([])
   const [loadingMovements, setLoadingMovements] = useState(false)
+  const [movementsLoaded, setMovementsLoaded] = useState(false)
   
   const [pendingMoveAction, setPendingMoveAction] = useState<{ toStatus: string; requireObs: boolean; label: string } | null>(null)
   const [observation, setObservation] = useState('')
@@ -45,43 +55,50 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
   const [isPrinting, setIsPrinting] = useState(false)
   const [printError, setPrintError] = useState<string | null>(null)
 
-  // This loader synchronizes the drawer history when the selected card changes.
+  // Solo consulta cliente si el padre no lo entregó ya precargado.
   /* eslint-disable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
   useEffect(() => {
     let cancelled = false
-    setClientData(null)
+    if (clientDataProp !== undefined) return
 
+    setFallbackClientData(null)
     if (card?.company_id && card?.nv_bsale_id) {
       getSalesOrderClientData(card.company_id, card.nv_bsale_id).then((res) => {
-        if (!cancelled && res.data) setClientData(res.data)
+        if (!cancelled && res.data) setFallbackClientData(res.data)
       })
     }
 
     return () => {
       cancelled = true
     }
-  }, [card?.company_id, card?.nv_bsale_id])
+  }, [card?.company_id, card?.nv_bsale_id, clientDataProp])
 
   const loadMovements = async () => {
     if (!card?.card_id) return
     setLoadingMovements(true)
     const res = await getSalesOrderPreparationMovements(card.card_id)
     setMovements(res.data || [])
+    setMovementsLoaded(true)
     setLoadingMovements(false)
   }
 
+  // Resetea el historial sin consultar al servidor al abrir una tarjeta.
   useEffect(() => {
-    if (card?.card_id) {
-      loadMovements()
-    } else {
-      setMovements([])
-    }
+    setMovements([])
+    setMovementsLoaded(false)
     setPendingMoveAction(null)
     setObservation('')
     setMoveError(null)
     setPrintError(null)
   }, [card?.card_id])
   /* eslint-enable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
+
+  const handleMovementsToggle = (e: React.SyntheticEvent<HTMLDetailsElement>) => {
+    const isOpen = e.currentTarget.open
+    if (isOpen && !movementsLoaded && !loadingMovements && card?.card_id) {
+      void loadMovements()
+    }
+  }
 
   if (!card) return null
 
@@ -105,7 +122,9 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
       return
     }
     setPendingMoveAction(null)
-    await loadMovements()
+    if (movementsLoaded) {
+      await loadMovements()
+    }
   }
 
   const dateStr = new Date(card.nv_emission_date).toLocaleDateString('es-CL', { day: 'numeric', month: 'long', year: 'numeric' })
@@ -150,7 +169,9 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
       }
 
       openPreparationOrdersPdf(blob, printWindow, `preparacion-nv-${card.nv_folio}.pdf`)
-      await loadMovements()
+      if (movementsLoaded) {
+        await loadMovements()
+      }
     } catch (err) {
       closePdfWindow(printWindow)
       setPrintError(err instanceof Error ? err.message : 'No se pudo generar el PDF de preparación.')
@@ -360,7 +381,7 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
                 <p className="text-[11px] text-theme-text-muted">Ruta: {new Date(card.route_date).toLocaleDateString('es-CL')}</p>
               )}
               <p className="text-[11px] font-medium text-theme-accent">
-                Prep: {firstPrepMovement ? new Date(firstPrepMovement.created_at).toLocaleString('es-CL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Sin iniciar'}
+                Prep: {firstPrepMovement ? new Date(firstPrepMovement.created_at).toLocaleString('es-CL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : (movementsLoaded ? 'Sin iniciar' : '—')}
               </p>
             </div>
 
@@ -382,9 +403,12 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
           </div>
 
           {/* Historial de Movimientos */}
-          <details className="rounded-lg border border-[#DDD4CA] bg-white shadow-xs group">
+          <details
+            className="rounded-lg border border-[#DDD4CA] bg-white shadow-xs group"
+            onToggle={handleMovementsToggle}
+          >
             <summary className="cursor-pointer px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-[#6B625C] hover:bg-[#F8F5F1] transition-colors flex items-center justify-between list-none">
-              <span>Historial de Movimientos ({movements.length})</span>
+              <span>Historial de Movimientos ({movementsLoaded ? movements.length : '—'})</span>
               <span className="text-[10px] text-theme-text-muted font-normal group-open:rotate-180 transition-transform">▼</span>
             </summary>
             <div className="p-3 border-t border-[#DDD4CA]/60 max-h-[180px] overflow-y-auto text-xs space-y-2 bg-[#FCFBF9]">
