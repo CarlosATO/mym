@@ -59,6 +59,7 @@ export interface ClientsExportRow {
   business_name: string
   fantasy_name: string | null
   business_activity: string | null
+  address: string | null
   city: string | null
   commune: string | null
   region: string | null
@@ -94,6 +95,14 @@ export interface ClientsExportRow {
   receivable_pending: number | null
   receivable_overdue: number | null
   receivable_document_count: number | null
+  navigation_address: string | null
+  maps_url: string | null
+}
+
+export interface ClientsExportAddressCoverage {
+  complete: number
+  partial: number
+  missing: number
 }
 
 export interface ClientsExportSnapshotMeta {
@@ -117,6 +126,7 @@ export interface ClientsExportData {
   snapshot: ClientsExportSnapshotMeta | null
   lastDataUpdateAt: string | null
   clients: ClientsExportRow[]
+  addressCoverage: ClientsExportAddressCoverage
 }
 
 type Client360Row = {
@@ -125,6 +135,7 @@ type Client360Row = {
   business_name: string | null
   fantasy_name: string | null
   business_activity: string | null
+  address: string | null
   city: string | null
   commune: string | null
   region: string | null
@@ -155,17 +166,54 @@ type Client360Row = {
   snapshot_calculated_at: string | null
 }
 
+type BsaleClientAddressRow = {
+  bsale_client_id: number | string
+  address: string | null
+  city: string | null
+  commune: string | null
+  region: string | null
+}
+
+function cleanAddressPart(value: string | null | undefined): string | null {
+  const cleaned = value?.trim()
+  return cleaned || null
+}
+
+function buildNavigationAddress(address: string | null, commune: string | null, city: string | null, region: string | null): string | null {
+  if (!address || (!commune && !city)) return null
+  const parts = [address, commune, city, region, 'Chile'].filter((part): part is string => Boolean(cleanAddressPart(part)))
+  return parts.join(', ')
+}
+
+function hasSpecificDomicile(address: string | null, commune: string | null, city: string | null): boolean {
+  const normalizedAddress = cleanAddressPart(address)?.toLocaleUpperCase('es-CL')
+  const normalizedCommune = cleanAddressPart(commune)?.toLocaleUpperCase('es-CL')
+  const normalizedCity = cleanAddressPart(city)?.toLocaleUpperCase('es-CL')
+  if (!normalizedAddress || !normalizedCommune) return false
+  if (normalizedAddress === normalizedCommune || normalizedAddress === normalizedCity) return false
+  if (/\bS\s*\/?\s*N\b|SIN\s+N(?:Ú|U)MERO/u.test(normalizedAddress)) return false
+  // A domicile requires an address with a house number and a separate commune.
+  return /\d/u.test(normalizedAddress) && /[A-ZÁÉÍÓÚÜÑ]/u.test(normalizedAddress)
+}
+
+function buildMapsUrl(navigationAddress: string | null, address: string | null, commune: string | null, city: string | null): string | null {
+  return navigationAddress && hasSpecificDomicile(address, commune, city)
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(navigationAddress)}`
+    : null
+}
+
 export async function getClientsExportData(): Promise<ClientsExportData> {
   const companyId = await getActiveCompanyId()
   if (!companyId) throw new Error('No autorizado')
 
   const comercial = comercialAdmin()
+  const integraciones = integracionesAdmin()
 
-  const [clientRows, profileRows, companyRow] = await Promise.all([
+  const [clientRows, profileRows, addressRows, companyRow] = await Promise.all([
     fetchAll<Client360Row>(async (from, to) => {
       const { data, error } = await comercial
         .from('vw_client_360')
-        .select('bsale_client_id,rut,business_name,fantasy_name,business_activity,city,commune,region,email,phone,mobile,is_active,status,first_invoice_date,last_invoice_date,days_since_last_invoice,official_sales_30d,official_sales_90d,official_sales_180d,official_sales_365d,official_sales_total,invoice_docs_total,avg_ticket_gross_total,credit_note_count_total,credit_note_amount_total,credit_note_count_90d,credit_note_amount_90d,last_seller_name,main_seller_name,snapshot_quality_score,has_possible_sibling,has_anomalous_receipt,snapshot_calculated_at')
+        .select('bsale_client_id,rut,business_name,fantasy_name,business_activity,address,city,commune,region,email,phone,mobile,is_active,status,first_invoice_date,last_invoice_date,days_since_last_invoice,official_sales_30d,official_sales_90d,official_sales_180d,official_sales_365d,official_sales_total,invoice_docs_total,avg_ticket_gross_total,credit_note_count_total,credit_note_amount_total,credit_note_count_90d,credit_note_amount_90d,last_seller_name,main_seller_name,snapshot_quality_score,has_possible_sibling,has_anomalous_receipt,snapshot_calculated_at')
         .eq('company_id', companyId)
         .order('official_sales_total', { ascending: false, nullsFirst: false })
         .range(from, to)
@@ -181,6 +229,15 @@ export async function getClientsExportData(): Promise<ClientsExportData> {
       if (error) throw error
       return (data || []) as { bsale_client_id: number | string; account_type: string | null; is_internal_account: boolean | null }[]
     }),
+    fetchAll<BsaleClientAddressRow>(async (from, to) => {
+      const { data, error } = await integraciones
+        .from('bsale_clients')
+        .select('bsale_client_id,address,city,commune,region')
+        .eq('company_id', companyId)
+        .range(from, to)
+      if (error) throw error
+      return (data || []) as BsaleClientAddressRow[]
+    }),
     coreAdmin().from('companies').select('business_name,trade_name').eq('id', companyId).maybeSingle(),
   ])
 
@@ -193,12 +250,13 @@ export async function getClientsExportData(): Promise<ClientsExportData> {
   }
 
   const companyName = (companyRow.data?.trade_name || companyRow.data?.business_name || 'Empresa') as string
+  const addressByClient = new Map<number, BsaleClientAddressRow>()
+  for (const row of addressRows) addressByClient.set(Number(row.bsale_client_id), row)
 
   // Cobranza: solo el último snapshot COMPLETED (cifras referenciales).
   let snapshot: ClientsExportSnapshotMeta | null = null
   const receivableByClient = new Map<number, { pending: number; overdue: number; count: number }>()
   try {
-    const integraciones = integracionesAdmin()
     const { data: run } = await integraciones
       .from('bsale_receivable_snapshot_runs')
       .select('id,snapshot_at,snapshot_date,source,status,clients_total,clients_success,clients_unqueryable,clients_error,coverage_percent')
@@ -246,8 +304,21 @@ export async function getClientsExportData(): Promise<ClientsExportData> {
   }
 
   let lastDataUpdateAt: string | null = null
+  const addressCoverage: ClientsExportAddressCoverage = { complete: 0, partial: 0, missing: 0 }
   const clients: ClientsExportRow[] = clientRows.map(row => {
     const bsaleClientId = Number(row.bsale_client_id)
+    const mirrorAddress = addressByClient.get(bsaleClientId)
+    const address = cleanAddressPart(mirrorAddress?.address) || cleanAddressPart(row.address)
+    const city = cleanAddressPart(mirrorAddress?.city) || cleanAddressPart(row.city)
+    const commune = cleanAddressPart(mirrorAddress?.commune) || cleanAddressPart(row.commune)
+    // The mirror is authoritative when present. Do not reuse the legacy commercial
+    // region fallback: historical syncs populated it with the city value.
+    const region = cleanAddressPart(mirrorAddress?.region) || (mirrorAddress ? null : cleanAddressPart(row.region))
+    const presentAddressParts = [address, city, commune, region].filter(Boolean).length
+    if (presentAddressParts === 4) addressCoverage.complete += 1
+    else if (presentAddressParts > 0) addressCoverage.partial += 1
+    else addressCoverage.missing += 1
+    const navigationAddress = buildNavigationAddress(address, commune, city, region)
     const profile = profileByClient.get(bsaleClientId)
     const mainSeller = row.main_seller_name?.trim() || null
     const lastSeller = row.last_seller_name?.trim() || null
@@ -263,9 +334,10 @@ export async function getClientsExportData(): Promise<ClientsExportData> {
       business_name: row.business_name || `Cliente Bsale ${bsaleClientId}`,
       fantasy_name: row.fantasy_name,
       business_activity: row.business_activity,
-      city: row.city,
-      commune: row.commune,
-      region: row.region,
+      address,
+      city,
+      commune,
+      region,
       email: row.email,
       phone: row.phone || row.mobile,
       mobile: row.mobile,
@@ -298,6 +370,8 @@ export async function getClientsExportData(): Promise<ClientsExportData> {
       receivable_pending: receivables ? receivables.pending : null,
       receivable_overdue: receivables ? receivables.overdue : null,
       receivable_document_count: receivables ? receivables.count : null,
+      navigation_address: navigationAddress,
+      maps_url: buildMapsUrl(navigationAddress, address, commune, city),
     }
   })
 
@@ -312,5 +386,6 @@ export async function getClientsExportData(): Promise<ClientsExportData> {
     snapshot,
     lastDataUpdateAt,
     clients,
+    addressCoverage,
   }
 }

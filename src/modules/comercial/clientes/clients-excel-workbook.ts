@@ -27,6 +27,9 @@ const CLIENT_COLUMNS: ColumnDef[] = [
   { header: 'RUT', width: 15, type: 'text' },
   { header: 'Razón social', width: 38, type: 'text' },
   { header: 'Giro', width: 24, type: 'text' },
+  { header: 'Dirección física', width: 34, type: 'text' },
+  { header: 'Dirección completa para navegación', width: 48, type: 'text' },
+  { header: 'Ver en Google Maps', width: 22, type: 'text' },
   { header: 'Ciudad', width: 16, type: 'text' },
   { header: 'Comuna', width: 16, type: 'text' },
   { header: 'Región', width: 16, type: 'text' },
@@ -191,6 +194,9 @@ function writeClientRow(row: import('exceljs').Row, client: ClientsExportRow, co
     'RUT': client.rut,
     'Razón social': client.business_name,
     'Giro': client.business_activity,
+    'Dirección física': client.address,
+    'Dirección completa para navegación': client.navigation_address,
+    'Ver en Google Maps': client.maps_url,
     'Ciudad': client.city,
     'Comuna': client.commune,
     'Región': client.region,
@@ -218,6 +224,12 @@ function writeClientRow(row: import('exceljs').Row, client: ClientsExportRow, co
   }
   for (const [index, column] of columns.entries()) {
     setCell(row, index + 1, values[column.header] ?? null, column.type)
+  }
+  const mapsIndex = columns.findIndex(column => column.header === 'Ver en Google Maps')
+  if (mapsIndex >= 0 && client.maps_url) {
+    const cell = row.getCell(mapsIndex + 1)
+    cell.value = { text: 'Ver en Google Maps', hyperlink: client.maps_url, tooltip: client.navigation_address ?? undefined }
+    cell.font = { ...BODY_FONT, color: { argb: 'FF0563C1' }, underline: true }
   }
   const statusIndex = columns.findIndex(column => column.header === 'Estado comercial')
   if (statusIndex >= 0) {
@@ -441,6 +453,11 @@ function addNotesSheet(workbook: import('exceljs').Workbook, data: ClientsExport
     '',
     'CUENTAS INTERNAS',
     '• Los clientes identificados como internos se conservan y se marcan en la columna "Cliente interno". No se excluyen automáticamente.',
+    '',
+    'DIRECCIONES Y NAVEGACIÓN',
+    `• Cobertura: ${data.addressCoverage.complete} completas, ${data.addressCoverage.partial} parciales y ${data.addressCoverage.missing} inexistentes sobre ${data.clients.length} clientes.`,
+    '• Dirección física y comuna/ciudad/región provienen prioritariamente del espejo sincronizado de Bsale; la vista comercial se usa como respaldo si un cliente no existe en el espejo. No se reutiliza la región histórica cuando no está disponible en Bsale.',
+    '• El enlace de Google Maps se genera solo para direcciones clasificadas como domicilio específico: texto de dirección con número y comuna separada. No se geocodifica ni se infieren datos faltantes.',
   ]
   for (const line of lines) {
     const row = worksheet.addRow([line])
@@ -472,7 +489,7 @@ export async function buildClientsWorkbook(data: ClientsExportData): Promise<imp
     data,
     [...data.clients].sort(sortClients),
     'TODOS LOS CLIENTES',
-    [data.officialSalesDefinition],
+    [data.officialSalesDefinition, `Direcciones: ${data.addressCoverage.complete} completas, ${data.addressCoverage.partial} parciales, ${data.addressCoverage.missing} inexistentes. Los enlaces solo se generan para domicilios específicos.`],
   )
   addDataBars(allClientsSheet, CLIENT_COLUMNS, 5, data.clients.length)
 
@@ -481,12 +498,12 @@ export async function buildClientsWorkbook(data: ClientsExportData): Promise<imp
   for (const group of groups) {
     if (group.seller === 'SIN VENDEDOR') continue
     const sheetName = sanitizeSheetName(`Vend. ${group.seller}`, usedNames)
-    addClientSheet(workbook, sheetName, data, [...group.clients].sort(sortClients), `CARTERA · ${group.seller}`, [data.officialSalesDefinition])
+    addClientSheet(workbook, sheetName, data, [...group.clients].sort(sortClients), `CARTERA · ${group.seller}`, [data.officialSalesDefinition, 'Las columnas de dirección y navegación usan el mismo criterio y fuente que "Todos los Clientes".'])
   }
 
   const sinVendedor = data.clients.filter(client => client.assigned_seller === 'SIN VENDEDOR')
   if (sinVendedor.length > 0) {
-    addClientSheet(workbook, 'Sin Vendedor', data, [...sinVendedor].sort(sortClients), 'CLIENTES SIN VENDEDOR ASIGNADO', ['Clientes cuya asignación comercial no pudo determinarse (sin vendedor principal ni último vendedor registrado).'])
+    addClientSheet(workbook, 'Sin Vendedor', data, [...sinVendedor].sort(sortClients), 'CLIENTES SIN VENDEDOR ASIGNADO', ['Clientes cuya asignación comercial no pudo determinarse (sin vendedor principal ni último vendedor registrado).', 'Las columnas de dirección y navegación usan el mismo criterio y fuente que "Todos los Clientes".'])
   }
 
   if (data.clients.some(client => client.status === 'RIESGO' || client.status === 'PERDIDO')) {
