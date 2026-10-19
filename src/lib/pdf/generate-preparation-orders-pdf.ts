@@ -41,26 +41,26 @@ function statusLabel(status: string): string {
 }
 
 function drawDocumentHeader(doc: jsPDF, card: SalesOrderPreparationCardInfo, margin: number, width: number): number {
+  const headerHeight = 16
   doc.setFillColor(...BRAND)
-  doc.rect(0, 0, width, 26, 'F')
+  doc.rect(0, 0, width, headerHeight, 'F')
 
   doc.setTextColor(...WHITE)
   doc.setFont('helvetica', 'bold')
-  doc.setFontSize(12)
-  doc.text('DISTRIBUIDORA MYM / PetGroup', margin, 11)
+  doc.setFontSize(11)
+  doc.text('DISTRIBUIDORA MYM / PetGroup', margin, 7)
   doc.setFont('helvetica', 'normal')
-  doc.setFontSize(7)
-  doc.text('PREPARACIÓN DE BODEGA · DOCUMENTO OPERACIONAL', margin, 16.5)
-  doc.text('Venta de alimentos y accesorios para mascotas · Transporte', margin, 21)
+  doc.setFontSize(6.5)
+  doc.text('PREPARACIÓN DE BODEGA · DOCUMENTO OPERACIONAL', margin, 11.5)
 
   doc.setFont('helvetica', 'bold')
-  doc.setFontSize(16)
-  doc.text(`NV N° ${card.nv_folio}`, width - margin, 12, { align: 'right' })
+  doc.setFontSize(14)
+  doc.text(`NV N° ${card.nv_folio}`, width - margin, 7.5, { align: 'right' })
   doc.setFont('helvetica', 'normal')
-  doc.setFontSize(7.5)
-  doc.text(`Estado: ${statusLabel(card.status)}`, width - margin, 18, { align: 'right' })
+  doc.setFontSize(7)
+  doc.text(`Estado: ${statusLabel(card.status)}`, width - margin, 12, { align: 'right' })
 
-  return 34
+  return 20
 }
 
 function drawInfoBlock(
@@ -72,52 +72,105 @@ function drawInfoBlock(
   startY: number,
 ): number {
   const contentWidth = width - margin * 2
-  const colWidth = contentWidth / 2
-  const leftX = margin
-  const rightX = margin + colWidth + 4
+  const boxHeight = 22
+  const comuna = card.normalized_city || card.municipality_raw || card.city_raw || '—'
+  const colSplit = 0.55
+  const col1Width = contentWidth * colSplit
+  const leftX = margin + 3
+  const rightX = margin + col1Width + 3
 
-  const rowsLeft: Array<[string, string]> = [
-    ['Cliente', card.client_name || '—'],
-    ['RUT', clientData?.rut || 'No disponible'],
-    ['Dirección', card.address_raw || '—'],
-    ['Comuna', card.normalized_city || card.municipality_raw || card.city_raw || '—'],
-    ['Ciudad', card.city_raw || '—'],
-    ['Vendedor', card.seller_name || '—'],
-  ]
-  const rowsRight: Array<[string, string]> = [
-    ['Fecha emisión', formatDate(card.nv_emission_date)],
-    ['Fecha ruta', formatDate(card.route_date)],
-    ['Estado PetGroup', statusLabel(card.status)],
-    ['Unidades', String(card.total_quantity)],
-    ['Neto', formatMoney(card.net_amount)],
-    ['Total', formatMoney(card.gross_amount ?? card.total_amount)],
-  ]
-
-  const boxHeight = 44
+  // Recuadro exterior
   doc.setDrawColor(...BORDER)
   doc.setLineWidth(0.3)
+  doc.setFillColor(...WHITE)
   doc.rect(margin, startY, contentWidth, boxHeight)
-  doc.line(leftX + colWidth + 2, startY, leftX + colWidth + 2, startY + boxHeight)
+  doc.line(margin + col1Width, startY, margin + col1Width, startY + boxHeight)
 
-  const drawRows = (rows: Array<[string, string]>, x: number, y: number) => {
-    for (const [label, value] of rows) {
-      doc.setFont('helvetica', 'bold')
-      doc.setFontSize(7)
-      doc.setTextColor(...MUTED)
-      doc.text(label.toUpperCase(), x, y)
-      doc.setFont('helvetica', 'normal')
-      doc.setFontSize(8)
-      doc.setTextColor(...TEXT)
-      doc.text(doc.splitTextToSize(value, colWidth - 4), x, y + 3.6)
-      y += 6
-    }
-    return y
-  }
+  // Columna Izquierda: Cliente, Dirección, RUT / Comuna
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(6.5)
+  doc.setTextColor(...MUTED)
+  doc.text('CLIENTE:', leftX, startY + 4.5)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8)
+  doc.setTextColor(...TEXT)
+  doc.text(doc.splitTextToSize(card.client_name || '—', col1Width - 18), leftX + 14, startY + 4.5)
 
-  drawRows(rowsLeft, leftX + 3, startY + 6)
-  drawRows(rowsRight, rightX + 2, startY + 6)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(6.5)
+  doc.setTextColor(...MUTED)
+  doc.text('DIRECCIÓN:', leftX, startY + 10.5)
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(7.5)
+  doc.setTextColor(...TEXT)
+  doc.text(doc.splitTextToSize(card.address_raw || '—', col1Width - 20), leftX + 16, startY + 10.5)
 
-  return startY + boxHeight + 6
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(6.5)
+  doc.setTextColor(...MUTED)
+  doc.text('RUT / COMUNA:', leftX, startY + 16.5)
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(7.5)
+  doc.setTextColor(...TEXT)
+  const locDetail = `${clientData?.rut ? `${clientData.rut}  ·  ` : ''}${comuna}${card.city_raw && card.city_raw !== comuna ? ` (${card.city_raw})` : ''}`
+  doc.text(doc.splitTextToSize(locDetail, col1Width - 25), leftX + 22, startY + 16.5)
+
+  // Columna Derecha: Vendedor, Emisión, Ruta, Cantidad, Totales
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(6.5)
+  doc.setTextColor(...MUTED)
+  doc.text('VENDEDOR:', rightX, startY + 4.5)
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(7.5)
+  doc.setTextColor(...TEXT)
+  doc.text(doc.splitTextToSize(card.seller_name || 'Sin asignar', 36), rightX + 16, startY + 4.5)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(6.5)
+  doc.setTextColor(...MUTED)
+  doc.text('EMISIÓN:', width - margin - 35, startY + 4.5)
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(7.5)
+  doc.setTextColor(...TEXT)
+  doc.text(formatDate(card.nv_emission_date), width - margin - 20, startY + 4.5)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(6.5)
+  doc.setTextColor(...MUTED)
+  doc.text('FECHA RUTA:', rightX, startY + 10.5)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(7.5)
+  doc.setTextColor(...BRAND)
+  doc.text(formatDate(card.route_date), rightX + 18, startY + 10.5)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(6.5)
+  doc.setTextColor(...MUTED)
+  doc.text('ESTADO:', width - margin - 35, startY + 10.5)
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(7.5)
+  doc.setTextColor(...TEXT)
+  doc.text(statusLabel(card.status), width - margin - 20, startY + 10.5)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(6.5)
+  doc.setTextColor(...MUTED)
+  doc.text('UNIDADES:', rightX, startY + 16.5)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8)
+  doc.setTextColor(...TEXT)
+  doc.text(String(card.total_quantity), rightX + 16, startY + 16.5)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(6.5)
+  doc.setTextColor(...MUTED)
+  doc.text('TOTAL:', width - margin - 35, startY + 16.5)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(7.5)
+  doc.setTextColor(...TEXT)
+  doc.text(formatMoney(card.gross_amount ?? card.total_amount), width - margin - 23, startY + 16.5)
+
+  return startY + boxHeight + 4
 }
 
 export function generatePreparationOrdersPdf(entries: PreparationOrderPdfEntry[]): Blob {

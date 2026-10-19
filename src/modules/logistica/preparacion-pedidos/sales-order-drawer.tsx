@@ -187,135 +187,65 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
         </div>
 
         {/* Content */}
-         <div className="flex-1 overflow-y-auto p-5 space-y-5">
+         <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
           
-          {/* Comuna / Ruta — señal operacional */}
-          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-[#72383D]/25 bg-[#F8F2EE] px-4 py-3 shadow-xs">
-            <div className="flex items-center gap-2">
-              <MapPin className="w-4 h-4 text-[#72383D]" />
-              <span className="text-base font-bold uppercase tracking-wide text-[#72383D]">{comuna}</span>
-            </div>
-            {card.route_date && (
-              <span className="rounded-md border border-[#B38A55]/40 bg-[#F6EFE2] px-2.5 py-0.5 text-xs font-bold uppercase tracking-wider text-[#806238]">
-                Ruta {new Date(card.route_date).toLocaleDateString('es-CL')}
-              </span>
-            )}
-            <span className={`ml-auto px-2.5 py-0.5 rounded-md border text-xs font-semibold uppercase tracking-wider
-              ${card.status === 'PENDING_ROUTE_PREP' ? 'border-[#AC9C8D]/40 bg-white text-[#6B625C]' : ''}
-              ${card.status === 'IN_PREPARATION' ? 'border-[#B38A55]/40 bg-[#F6EFE2] text-[#806238]' : ''}
-              ${card.status === 'IN_AUDIT' ? 'border-[#72383D]/30 bg-white text-[#72383D]' : ''}
-            `}>
-              {statusLabel(card.status)}
-            </span>
-          </div>
-
-          {/* Info Client & Route */}
-          <div className="rounded-lg border border-[#DDD4CA] bg-white p-4 shadow-xs space-y-4">
-            <div>
-              <p className="text-xs font-bold text-theme-text-muted uppercase tracking-wider mb-1">Cliente</p>
-              <p className="font-semibold text-theme-text text-sm">{card.client_name}</p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-              <div>
-                <p className="text-xs font-bold text-theme-text-muted uppercase tracking-wider mb-1 flex items-center gap-1">
-                  <Hash className="w-3.5 h-3.5" /> RUT
-                </p>
-                <p className="font-medium text-theme-text text-sm">{clientData?.rut || 'No disponible'}</p>
+          {/* Encabezado Operativo Compacto */}
+          <div className="rounded-lg border border-[#DDD4CA] bg-white p-3.5 shadow-xs space-y-2.5">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-bold text-theme-text-muted uppercase tracking-wider">Cliente</p>
+                <h3 className="font-bold text-theme-text text-base leading-snug truncate" title={card.client_name}>
+                  {card.client_name}
+                </h3>
               </div>
-              <div>
-                <p className="text-xs font-bold text-theme-text-muted uppercase tracking-wider mb-1 flex items-center gap-1">
-                  <Building2 className="w-3.5 h-3.5" /> Comuna
-                </p>
-                <p className="font-medium text-theme-text text-sm">{comuna}</p>
-              </div>
-              <div className="col-span-2">
-                <p className="text-xs font-bold text-theme-text-muted uppercase tracking-wider mb-1 flex items-center gap-1">
-                  <MapPin className="w-3.5 h-3.5" /> Dirección
-                </p>
-                <p className="font-medium text-theme-text text-sm">{card.address_raw || 'Sin dirección registrada'}</p>
-              </div>
-              <div>
-                <p className="text-xs font-bold text-theme-text-muted uppercase tracking-wider mb-1">Ciudad</p>
-                <p className="font-medium text-theme-text text-sm">{card.city_raw || 'Sin ciudad'}</p>
-              </div>
-              <div>
-                <p className="text-xs font-bold text-theme-text-muted uppercase tracking-wider mb-1 flex items-center gap-1">
-                  <User className="w-3.5 h-3.5" /> Vendedor
-                </p>
-                <p className="font-medium text-theme-text text-sm truncate" title={card.seller_name || ''}>{card.seller_name || 'Sin asignar'}</p>
-              </div>
-              <div>
-                <p className="text-xs font-bold text-theme-text-muted uppercase tracking-wider mb-1">Fecha emisión</p>
-                <p className="font-medium text-theme-text text-sm">{dateStr}</p>
-              </div>
-              <div>
-                <p className="text-xs font-bold text-theme-text-muted uppercase tracking-wider mb-1">Cantidad total</p>
-                <p className="font-medium text-theme-text text-sm">{card.total_quantity} unidades</p>
-              </div>
-            </div>
-          </div>
-
-          {/* Estado Operativo */}
-          <div className="space-y-2">
-            <h3 className="text-xs font-bold text-theme-text uppercase tracking-wider flex items-center gap-2">
-              Estado Operativo
-            </h3>
-            <div className="rounded-lg border border-[#DDD4CA] bg-white p-4 shadow-xs flex items-center justify-between">
-              <div>
-                <p className="text-sm font-semibold text-theme-text">
+              <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                <span className="inline-flex items-center gap-1 rounded-md border border-[#72383D]/25 bg-[#F8F2EE] px-2.5 py-1 text-xs font-bold uppercase tracking-wide text-[#72383D]" title={comuna}>
+                  <MapPin className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate max-w-[140px]">{comuna}</span>
+                </span>
+                <span className={`px-2 py-0.5 rounded-md border text-xs font-semibold uppercase tracking-wider
+                  ${card.status === 'PENDING_ROUTE_PREP' ? 'border-[#AC9C8D]/40 bg-[#F5F0EA] text-[#6B625C]' : ''}
+                  ${card.status === 'IN_PREPARATION' ? 'border-[#B38A55]/40 bg-[#F6EFE2] text-[#806238]' : ''}
+                  ${card.status === 'IN_AUDIT' ? 'border-[#72383D]/30 bg-[#F5EDE9] text-[#72383D]' : ''}
+                `}>
                   {statusLabel(card.status)}
-                </p>
-                {card.route_date && (
-                  <p className="text-xs text-theme-text-muted mt-1">Ruta: {new Date(card.route_date).toLocaleDateString('es-CL')}</p>
-                )}
-                <p className="text-xs font-medium text-theme-accent mt-1">
-                  Preparación: {firstPrepMovement ? new Date(firstPrepMovement.created_at).toLocaleString('es-CL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Sin iniciar'}
-                </p>
-              </div>
-              <div className={`px-2.5 py-1 rounded-md border text-xs font-semibold uppercase tracking-wider
-                ${card.status === 'PENDING_ROUTE_PREP' ? 'border-[#AC9C8D]/40 bg-[#F5F0EA] text-[#6B625C]' : ''}
-                ${card.status === 'IN_PREPARATION' ? 'border-[#B38A55]/40 bg-[#F6EFE2] text-[#806238]' : ''}
-                ${card.status === 'IN_AUDIT' ? 'border-[#72383D]/30 bg-[#F5EDE9] text-[#72383D]' : ''}
-              `}>
-                {statusLabel(card.status)}
+                </span>
               </div>
             </div>
-          </div>
 
-          {/* Facturación */}
-          <div className="space-y-2">
-            <h3 className="text-xs font-bold text-theme-text uppercase tracking-wider flex items-center gap-2">
-              Facturación Bsale
-            </h3>
-            <div className="rounded-lg border border-[#DDD4CA] bg-white p-4 shadow-xs">
-              {card.is_invoiced ? (
-                <div className="flex items-start gap-3">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-sm font-semibold text-theme-text">Factura detectada</p>
-                    <p className="text-xs text-theme-text-muted mt-0.5">Folio: {card.invoice_folio}</p>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-start gap-3">
-                  <FileCheck className="w-5 h-5 text-theme-text-muted/60 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-sm font-medium text-theme-text">No facturada</p>
-                    <p className="text-xs text-theme-text-muted mt-1 leading-relaxed">
-                       Factura asociada aún no detectada desde Bsale. El estado operativo se actualizará automáticamente cuando corresponda.
-                    </p>
-                  </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1 border-t border-[#DDD4CA]/60 text-xs text-[#322D29]/75">
+              <div className="flex items-center gap-1">
+                <span className="font-semibold text-theme-text-muted">Emisión:</span>
+                <span className="font-medium text-theme-text">{dateStr}</span>
+              </div>
+              {card.route_date && (
+                <div className="flex items-center gap-1">
+                  <span className="font-semibold text-theme-text-muted">Ruta:</span>
+                  <span className="font-medium text-[#806238]">{new Date(card.route_date).toLocaleDateString('es-CL')}</span>
                 </div>
               )}
+              <div className="flex items-center gap-1">
+                <User className="w-3.5 h-3.5 text-[#322D29]/50" />
+                <span className="font-semibold text-theme-text-muted">Vendedor:</span>
+                <span className="font-medium text-theme-text truncate max-w-[130px]">{card.seller_name || 'Sin asignar'}</span>
+              </div>
+              <div className="flex items-center gap-1 ml-auto">
+                <Package className="w-3.5 h-3.5 text-[#72383D]" />
+                <span className="font-bold text-theme-text">{card.total_quantity} unidades</span>
+                {card.net_amount != null && (
+                  <span className="text-[#322D29]/60">(${card.net_amount.toLocaleString('es-CL')} neto)</span>
+                )}
+              </div>
             </div>
           </div>
 
-          {/* Items */}
+          {/* ── SECCIÓN PROTAGONISTA: PRODUCTOS A PREPARAR ── */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <h3 className="text-xs font-bold text-theme-text uppercase tracking-wider flex items-center gap-2">
-                <Package className="w-4 h-4" /> Productos ({card.total_quantity})
+              <h3 className="text-xs font-bold text-theme-text uppercase tracking-wider flex items-center gap-1.5">
+                <Package className="w-4 h-4 text-[#72383D]" />
+                <span>Productos a preparar</span>
+                <span className="text-[#72383D] font-extrabold">({card.total_quantity} unid.)</span>
               </h3>
               <span className="text-xs font-semibold text-theme-text">
                 Neto: ${card.net_amount?.toLocaleString('es-CL')}
@@ -332,23 +262,27 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
                   No se encontraron productos en esta nota de venta.
                 </div>
               ) : (
-                <div className="max-h-[360px] overflow-y-auto">
-                  <div className="grid grid-cols-[90px_1fr_56px] gap-2 border-b border-[#DDD4CA] bg-[#F8F5F1] px-3.5 py-2 text-[10px] font-bold uppercase tracking-wider text-[#6B625C]">
+                <div className="max-h-[420px] overflow-y-auto">
+                  <div className="grid grid-cols-[90px_1fr_60px] gap-2 border-b border-[#DDD4CA] bg-[#F8F5F1] px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wider text-[#6B625C] sticky top-0 z-10">
                     <span>SKU</span>
                     <span>Descripción / presentación</span>
                     <span className="text-center">Cant.</span>
                   </div>
                   <div className="divide-y divide-[#DDD4CA]/60">
                     {items.map((item) => (
-                      <div key={item.detail_id} className="grid grid-cols-[90px_1fr_56px] items-start gap-2 px-3.5 py-2.5 hover:bg-[#F8F5F1]/50 transition-colors">
-                        <p className="font-mono text-xs leading-relaxed text-theme-text-muted break-words">{item.sku || '—'}</p>
-                        <div className="min-w-0">
-                          <p className="text-xs font-semibold leading-snug text-theme-text">{item.product_name}</p>
+                      <div key={item.detail_id} className="grid grid-cols-[90px_1fr_60px] items-center gap-2 px-3.5 py-2.5 hover:bg-[#F8F5F1]/60 transition-colors">
+                        <p className="font-mono text-xs font-semibold text-theme-text break-words">{item.sku || '—'}</p>
+                        <div className="min-w-0 pr-1">
+                          <p className="text-xs font-medium leading-snug text-theme-text">{item.product_name}</p>
                           {item.unit_net_value != null && (
                             <p className="text-[11px] text-theme-text-muted mt-0.5">c/u ${item.unit_net_value.toLocaleString('es-CL')}</p>
                           )}
                         </div>
-                        <p className="text-center text-xs font-bold text-theme-text">{item.quantity}</p>
+                        <div className="flex justify-center">
+                          <span className="inline-flex min-w-[28px] h-6 items-center justify-center rounded bg-[#72383D]/10 text-xs font-bold text-[#72383D] px-1.5 tabular-nums">
+                            {item.quantity}
+                          </span>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -357,24 +291,115 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
             </div>
           </div>
 
+          {/* ── SECCIÓN SECUNDARIA: DETALLES DE DESPACHO Y CLIENTE ── */}
+          <details className="rounded-lg border border-[#DDD4CA] bg-white shadow-xs group">
+            <summary className="cursor-pointer px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-[#6B625C] hover:bg-[#F8F5F1] transition-colors flex items-center justify-between list-none">
+              <span className="flex items-center gap-1.5">
+                <Building2 className="w-3.5 h-3.5 text-[#72383D]" />
+                Datos de despacho y cliente
+              </span>
+              <span className="text-[10px] text-theme-text-muted font-normal group-open:rotate-180 transition-transform">▼</span>
+            </summary>
+            <div className="p-4 border-t border-[#DDD4CA]/60 space-y-3 bg-[#FCFBF9]">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 text-xs">
+                <div>
+                  <p className="font-bold text-theme-text-muted uppercase tracking-wider mb-0.5 flex items-center gap-1">
+                    <Hash className="w-3 h-3" /> RUT
+                  </p>
+                  <p className="font-medium text-theme-text">{clientData?.rut || 'No disponible'}</p>
+                </div>
+                <div>
+                  <p className="font-bold text-theme-text-muted uppercase tracking-wider mb-0.5 flex items-center gap-1">
+                    <Building2 className="w-3 h-3" /> Comuna
+                  </p>
+                  <p className="font-medium text-theme-text">{comuna}</p>
+                </div>
+                <div className="col-span-2">
+                  <p className="font-bold text-theme-text-muted uppercase tracking-wider mb-0.5 flex items-center gap-1">
+                    <MapPin className="w-3 h-3" /> Dirección
+                  </p>
+                  <p className="font-medium text-theme-text">{card.address_raw || 'Sin dirección registrada'}</p>
+                </div>
+                <div>
+                  <p className="font-bold text-theme-text-muted uppercase tracking-wider mb-0.5">Ciudad</p>
+                  <p className="font-medium text-theme-text">{card.city_raw || 'Sin ciudad'}</p>
+                </div>
+                <div>
+                  <p className="font-bold text-theme-text-muted uppercase tracking-wider mb-0.5 flex items-center gap-1">
+                    <User className="w-3 h-3" /> Vendedor
+                  </p>
+                  <p className="font-medium text-theme-text truncate" title={card.seller_name || ''}>{card.seller_name || 'Sin asignar'}</p>
+                </div>
+                <div>
+                  <p className="font-bold text-theme-text-muted uppercase tracking-wider mb-0.5">Fecha emisión</p>
+                  <p className="font-medium text-theme-text">{dateStr}</p>
+                </div>
+                <div>
+                  <p className="font-bold text-theme-text-muted uppercase tracking-wider mb-0.5">Cantidad total</p>
+                  <p className="font-medium text-theme-text">{card.total_quantity} unidades</p>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          {/* ── SECCIÓN SECUNDARIA: ESTADO OPERATIVO Y FACTURACIÓN ── */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Estado Operativo */}
+            <div className="rounded-lg border border-[#DDD4CA] bg-white p-3 shadow-xs space-y-1.5">
+              <div className="flex items-center justify-between">
+                <h4 className="text-[11px] font-bold text-theme-text uppercase tracking-wider">Estado Operativo</h4>
+                <div className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider
+                  ${card.status === 'PENDING_ROUTE_PREP' ? 'bg-[#F5F0EA] text-[#6B625C]' : ''}
+                  ${card.status === 'IN_PREPARATION' ? 'bg-[#F6EFE2] text-[#806238]' : ''}
+                  ${card.status === 'IN_AUDIT' ? 'bg-[#F5EDE9] text-[#72383D]' : ''}
+                `}>
+                  {statusLabel(card.status)}
+                </div>
+              </div>
+              {card.route_date && (
+                <p className="text-[11px] text-theme-text-muted">Ruta: {new Date(card.route_date).toLocaleDateString('es-CL')}</p>
+              )}
+              <p className="text-[11px] font-medium text-theme-accent">
+                Prep: {firstPrepMovement ? new Date(firstPrepMovement.created_at).toLocaleString('es-CL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Sin iniciar'}
+              </p>
+            </div>
+
+            {/* Facturación Bsale */}
+            <div className="rounded-lg border border-[#DDD4CA] bg-white p-3 shadow-xs space-y-1.5">
+              <h4 className="text-[11px] font-bold text-theme-text uppercase tracking-wider">Facturación Bsale</h4>
+              {card.is_invoiced ? (
+                <div className="flex items-center gap-2 text-xs">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span className="font-semibold text-theme-text">Factura: {card.invoice_folio}</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-xs text-theme-text-muted">
+                  <FileCheck className="w-4 h-4 text-theme-text-muted/60 shrink-0" />
+                  <span>No facturada</span>
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Historial de Movimientos */}
-          <div className="space-y-2">
-            <h3 className="text-xs font-bold text-theme-text uppercase tracking-wider flex items-center gap-2">
-              Historial de Movimientos ({movements.length})
-            </h3>
-            <div className="rounded-lg border border-[#DDD4CA] bg-white p-4 shadow-xs max-h-[200px] overflow-y-auto text-xs text-theme-text space-y-2">
+          <details className="rounded-lg border border-[#DDD4CA] bg-white shadow-xs group">
+            <summary className="cursor-pointer px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-[#6B625C] hover:bg-[#F8F5F1] transition-colors flex items-center justify-between list-none">
+              <span>Historial de Movimientos ({movements.length})</span>
+              <span className="text-[10px] text-theme-text-muted font-normal group-open:rotate-180 transition-transform">▼</span>
+            </summary>
+            <div className="p-3 border-t border-[#DDD4CA]/60 max-h-[180px] overflow-y-auto text-xs space-y-2 bg-[#FCFBF9]">
               {loadingMovements ? (
                 <div className="text-center text-xs text-theme-text-muted">Cargando historial...</div>
               ) : movements.length === 0 ? (
                 <div className="text-center text-xs text-theme-text-muted">Sin movimientos registrados.</div>
               ) : (
                 movements.map(m => (
-                  <div key={m.id} className="pb-2 border-b border-[#DDD4CA]/50 last:border-0 last:pb-0">
+                  <div key={m.id} className="pb-2 border-b border-[#DDD4CA]/40 last:border-0 last:pb-0">
                     <p className="font-semibold text-xs">{m.metadata?.moved_by_name || 'Sistema'}</p>
                     <p className="text-[11px] text-theme-text-muted">
                       {new Date(m.created_at).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                     </p>
-                    <p className="mt-1 text-xs">
+                    <p className="mt-0.5 text-xs">
                        <span className="text-theme-text-muted/70">{m.from_status ? statusLabel(m.from_status) : 'Inicio'}</span>
                       <span className="mx-1">→</span>
                        <span className="font-bold text-theme-accent">{statusLabel(m.to_status)}</span>
@@ -384,7 +409,7 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
                 ))
               )}
             </div>
-          </div>
+          </details>
 
         </div>
         

@@ -951,88 +951,93 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
           </div>
         </div>
 
-        {/* Filters Expansion */}
+        {/* Filters Expansion - Compacto y operacional */}
         {showAdvanced && (
-          <div className="mt-3 grid gap-4 border-t border-[#D1C7BD] pt-3 lg:grid-cols-[minmax(0,1.1fr)_minmax(260px,0.9fr)_auto]">
-            <section className="min-w-0">
-              <div className="mb-1.5 flex items-center justify-between gap-2">
-                <h2 className="text-[10px] font-bold uppercase tracking-wider text-[#6B625C]">Comunas</h2>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={selectAllComunas}
-                    disabled={comunaOptions.length === 0}
-                    className="text-xs font-semibold text-[#72383D] hover:underline disabled:opacity-40"
-                  >
-                    Seleccionar todas
-                  </button>
-                  <button
-                    type="button"
-                    onClick={clearComunas}
-                    disabled={selectedComunas.size === 0}
-                    className="text-xs font-semibold text-[#322D29]/60 hover:text-[#322D29] hover:underline disabled:opacity-40"
-                  >
-                    Limpiar
-                  </button>
-                </div>
+          <div className="mt-2.5 flex flex-col gap-2 border-t border-[#D1C7BD] pt-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <h2 className="text-[10px] font-bold uppercase tracking-wider text-[#6B625C]">Comunas ({comunaOptions.length})</h2>
+                <span className="text-[#D1C7BD]">·</span>
+                <button
+                  type="button"
+                  onClick={selectAllComunas}
+                  disabled={comunaOptions.length === 0}
+                  className="text-xs font-semibold text-[#72383D] hover:underline disabled:opacity-40"
+                >
+                  Seleccionar todas
+                </button>
+                <span className="text-[#D1C7BD]">·</span>
+                <button
+                  type="button"
+                  onClick={clearComunas}
+                  disabled={selectedComunas.size === 0}
+                  className="text-xs font-semibold text-[#322D29]/60 hover:text-[#322D29] hover:underline disabled:opacity-40"
+                >
+                  Limpiar
+                </button>
               </div>
 
-              <div className="max-h-44 overflow-y-auto rounded-lg border border-[#D1C7BD] bg-white shadow-xs">
-                {comunaOptions.length === 0 ? (
-                  <p className="px-3 py-4 text-center text-xs font-medium text-[#322D29]/50">Sin comunas en el board</p>
-                ) : (
-                  <ul className="divide-y divide-[#D1C7BD]/40">
-                    {comunaOptions.map(option => {
-                      const checked = effectiveSelectedComunas.has(option.key)
-                      return (
-                        <li key={option.key}>
-                          <label className="flex cursor-pointer items-center gap-2.5 px-3 py-1.5 text-xs transition-colors hover:bg-[#F5F0EA]">
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => toggleComunaFilter(option.key)}
-                              className="h-3.5 w-3.5 rounded shrink-0 accent-[#72383D]"
-                            />
-                            <span className="min-w-0 flex-1 truncate font-medium text-[#322D29]">{option.label}</span>
-                            <span className="shrink-0 text-xs font-semibold tabular-nums text-[#322D29]/50">{option.count}</span>
-                          </label>
-                        </li>
-                      )
-                    })}
-                  </ul>
+              <div className="flex flex-wrap items-center gap-2.5 ml-auto">
+                <div className="flex items-center gap-1.5">
+                  <h2 className="text-[10px] font-bold uppercase tracking-wider text-[#6B625C]">Vendedor:</h2>
+                  <select
+                    value={effectiveSellerKey}
+                    onChange={e => setFilterSellerKey(e.target.value)}
+                    className="rounded-lg border border-[#D1C7BD] bg-white px-2.5 py-1 text-xs font-medium text-[#322D29] focus:ring-2 focus:ring-[#72383D]/20 focus:border-[#72383D] focus:outline-none shadow-xs"
+                  >
+                    <option value="">Todos los vendedores</option>
+                    {sellerOptions.map(option => (
+                      <option key={option.key} value={option.key}>{option.label} ({option.count})</option>
+                    ))}
+                  </select>
+                </div>
+
+                {hasActiveFilterOrSort && (
+                  <button
+                    onClick={() => { clearFilters(); setSortBy('default') }}
+                    title="Limpiar filtros y orden"
+                    className="flex items-center gap-1 rounded-lg border border-[#D1C7BD] bg-white px-2.5 py-1 text-xs font-semibold text-[#322D29]/70 shadow-xs transition-colors hover:bg-[#F5F0EA] hover:text-[#322D29]"
+                  >
+                    <RotateCcw className="w-3 h-3" /> Limpiar filtros y orden
+                  </button>
                 )}
               </div>
-              <p className="mt-1 text-[10px] font-medium text-[#322D29]/50">
-                Sin selección se muestran todas las comunas.
-              </p>
-            </section>
+            </div>
 
-            <section className="min-w-0">
-              <h2 className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-[#6B625C]">Vendedor</h2>
-              <select
-                value={effectiveSellerKey}
-                onChange={e => setFilterSellerKey(e.target.value)}
-                className="w-full rounded-lg border border-[#D1C7BD] bg-white px-3 py-2 text-xs font-medium text-[#322D29] focus:ring-2 focus:ring-[#72383D]/20 focus:border-[#72383D] focus:outline-none shadow-xs"
-              >
-                <option value="">Todos los vendedores</option>
-                {sellerOptions.map(option => (
-                  <option key={option.key} value={option.key}>{option.label} ({option.count})</option>
-                ))}
-              </select>
-              <p className="mt-1 text-[10px] font-medium text-[#322D29]/50">
-                Sólo vendedores presentes en las NV del board.
-              </p>
-            </section>
-
-            <div className="flex items-start justify-end">
-              {hasActiveFilterOrSort && (
-                <button
-                  onClick={() => { clearFilters(); setSortBy('default') }}
-                  className="flex items-center gap-1.5 rounded-lg border border-[#D1C7BD] bg-white px-3 py-2 text-xs font-semibold text-[#322D29]/70 shadow-xs transition-colors hover:bg-[#F5F0EA] hover:text-[#322D29]"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" /> Limpiar filtros y orden
-                </button>
+            {/* Chips de Comunas con multiselección */}
+            <div className="flex flex-wrap items-center gap-1.5 max-h-24 overflow-y-auto p-1.5 rounded-lg border border-[#DDD4CA] bg-white/70 shadow-xs">
+              {comunaOptions.length === 0 ? (
+                <p className="px-2 py-1 text-xs text-[#322D29]/40 italic">Sin comunas en el board</p>
+              ) : (
+                comunaOptions.map(option => {
+                  const checked = effectiveSelectedComunas.has(option.key)
+                  return (
+                    <label
+                      key={option.key}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs cursor-pointer transition-all select-none ${
+                        checked
+                          ? 'bg-[#72383D] text-white shadow-xs font-semibold'
+                          : 'bg-white border border-[#DDD4CA] text-[#322D29]/75 hover:bg-[#F5F0EA] font-medium'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleComunaFilter(option.key)}
+                        className="h-3 w-3 rounded shrink-0 accent-[#72383D]"
+                      />
+                      <span>{option.label}</span>
+                      <span className={`text-[10px] tabular-nums font-bold ${checked ? 'text-white/80' : 'text-[#322D29]/50'}`}>
+                        {option.count}
+                      </span>
+                    </label>
+                  )
+                })
               )}
+            </div>
+            <div className="flex flex-wrap items-center justify-between text-[10px] font-medium text-[#322D29]/50">
+              <p>Sin selección se muestran todas las comunas.</p>
+              <p>Sólo vendedores presentes en las NV del board.</p>
             </div>
           </div>
         )}
