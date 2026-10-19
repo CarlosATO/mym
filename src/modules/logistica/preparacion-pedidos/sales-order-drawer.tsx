@@ -190,18 +190,18 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
          <div className="flex-1 overflow-y-auto p-5 space-y-5">
           
           {/* Comuna / Ruta — señal operacional */}
-          <div className="flex flex-wrap items-center gap-3 border border-[#72383D]/30 bg-[#F5EDE9] px-4 py-3">
+          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-[#72383D]/25 bg-[#F8F2EE] px-4 py-3 shadow-xs">
             <div className="flex items-center gap-2">
               <MapPin className="w-4 h-4 text-[#72383D]" />
-              <span className="text-base font-bold uppercase tracking-[0.08em] text-[#72383D]">{comuna}</span>
+              <span className="text-base font-bold uppercase tracking-wide text-[#72383D]">{comuna}</span>
             </div>
             {card.route_date && (
-              <span className="border border-[#B38A55]/40 bg-[#F6EFE2] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] text-[#806238]">
+              <span className="rounded-md border border-[#B38A55]/40 bg-[#F6EFE2] px-2.5 py-0.5 text-xs font-bold uppercase tracking-wider text-[#806238]">
                 Ruta {new Date(card.route_date).toLocaleDateString('es-CL')}
               </span>
             )}
-            <span className={`ml-auto px-2 py-0.5 border text-[9px] font-semibold uppercase tracking-[0.08em]
-              ${card.status === 'PENDING_ROUTE_PREP' ? 'border-[#AC9C8D]/30 bg-white text-[#6B625C]' : ''}
+            <span className={`ml-auto px-2.5 py-0.5 rounded-md border text-xs font-semibold uppercase tracking-wider
+              ${card.status === 'PENDING_ROUTE_PREP' ? 'border-[#AC9C8D]/40 bg-white text-[#6B625C]' : ''}
               ${card.status === 'IN_PREPARATION' ? 'border-[#B38A55]/40 bg-[#F6EFE2] text-[#806238]' : ''}
               ${card.status === 'IN_AUDIT' ? 'border-[#72383D]/30 bg-white text-[#72383D]' : ''}
             `}>
@@ -210,60 +210,60 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
           </div>
 
           {/* Info Client & Route */}
-          <div className="border border-[#D1C7BD] bg-white p-4 space-y-4">
+          <div className="rounded-lg border border-[#DDD4CA] bg-white p-4 shadow-xs space-y-4">
             <div>
-              <p className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider mb-1">Cliente</p>
-              <p className="font-medium text-theme-text text-sm">{card.client_name}</p>
+              <p className="text-xs font-bold text-theme-text-muted uppercase tracking-wider mb-1">Cliente</p>
+              <p className="font-semibold text-theme-text text-sm">{card.client_name}</p>
             </div>
 
             <div className="grid grid-cols-2 gap-x-4 gap-y-3">
               <div>
-                <p className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider mb-1 flex items-center gap-1">
+                <p className="text-xs font-bold text-theme-text-muted uppercase tracking-wider mb-1 flex items-center gap-1">
                   <Hash className="w-3.5 h-3.5" /> RUT
                 </p>
                 <p className="font-medium text-theme-text text-sm">{clientData?.rut || 'No disponible'}</p>
               </div>
               <div>
-                <p className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider mb-1 flex items-center gap-1">
+                <p className="text-xs font-bold text-theme-text-muted uppercase tracking-wider mb-1 flex items-center gap-1">
                   <Building2 className="w-3.5 h-3.5" /> Comuna
                 </p>
                 <p className="font-medium text-theme-text text-sm">{comuna}</p>
               </div>
               <div className="col-span-2">
-                <p className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider mb-1 flex items-center gap-1">
+                <p className="text-xs font-bold text-theme-text-muted uppercase tracking-wider mb-1 flex items-center gap-1">
                   <MapPin className="w-3.5 h-3.5" /> Dirección
                 </p>
                 <p className="font-medium text-theme-text text-sm">{card.address_raw || 'Sin dirección registrada'}</p>
               </div>
               <div>
-                <p className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider mb-1">Ciudad</p>
+                <p className="text-xs font-bold text-theme-text-muted uppercase tracking-wider mb-1">Ciudad</p>
                 <p className="font-medium text-theme-text text-sm">{card.city_raw || 'Sin ciudad'}</p>
               </div>
               <div>
-                <p className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider mb-1 flex items-center gap-1">
+                <p className="text-xs font-bold text-theme-text-muted uppercase tracking-wider mb-1 flex items-center gap-1">
                   <User className="w-3.5 h-3.5" /> Vendedor
                 </p>
                 <p className="font-medium text-theme-text text-sm truncate" title={card.seller_name || ''}>{card.seller_name || 'Sin asignar'}</p>
               </div>
               <div>
-                <p className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider mb-1">Fecha emisión</p>
+                <p className="text-xs font-bold text-theme-text-muted uppercase tracking-wider mb-1">Fecha emisión</p>
                 <p className="font-medium text-theme-text text-sm">{dateStr}</p>
               </div>
               <div>
-                <p className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider mb-1">Cantidad total</p>
+                <p className="text-xs font-bold text-theme-text-muted uppercase tracking-wider mb-1">Cantidad total</p>
                 <p className="font-medium text-theme-text text-sm">{card.total_quantity} unidades</p>
               </div>
             </div>
           </div>
 
           {/* Estado Operativo */}
-          <div className="space-y-3">
-            <h3 className="text-sm font-semibold text-theme-text uppercase tracking-wider flex items-center gap-2">
+          <div className="space-y-2">
+            <h3 className="text-xs font-bold text-theme-text uppercase tracking-wider flex items-center gap-2">
               Estado Operativo
             </h3>
-             <div className="border border-[#D1C7BD] bg-white p-4 flex items-center justify-between">
+            <div className="rounded-lg border border-[#DDD4CA] bg-white p-4 shadow-xs flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-theme-text">
+                <p className="text-sm font-semibold text-theme-text">
                   {statusLabel(card.status)}
                 </p>
                 {card.route_date && (
@@ -273,10 +273,10 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
                   Preparación: {firstPrepMovement ? new Date(firstPrepMovement.created_at).toLocaleString('es-CL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Sin iniciar'}
                 </p>
               </div>
-               <div className={`px-2 py-0.5 border text-[9px] font-semibold uppercase tracking-[0.08em]
-                 ${card.status === 'PENDING_ROUTE_PREP' ? 'border-[#AC9C8D]/30 bg-[#F5F0EA] text-[#6B625C]' : ''}
-                 ${card.status === 'IN_PREPARATION' ? 'border-[#B38A55]/40 bg-[#F6EFE2] text-[#806238]' : ''}
-                 ${card.status === 'IN_AUDIT' ? 'border-[#72383D]/30 bg-[#F5EDE9] text-[#72383D]' : ''}
+              <div className={`px-2.5 py-1 rounded-md border text-xs font-semibold uppercase tracking-wider
+                ${card.status === 'PENDING_ROUTE_PREP' ? 'border-[#AC9C8D]/40 bg-[#F5F0EA] text-[#6B625C]' : ''}
+                ${card.status === 'IN_PREPARATION' ? 'border-[#B38A55]/40 bg-[#F6EFE2] text-[#806238]' : ''}
+                ${card.status === 'IN_AUDIT' ? 'border-[#72383D]/30 bg-[#F5EDE9] text-[#72383D]' : ''}
               `}>
                 {statusLabel(card.status)}
               </div>
@@ -284,17 +284,17 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
           </div>
 
           {/* Facturación */}
-          <div className="space-y-3">
-            <h3 className="text-sm font-semibold text-theme-text uppercase tracking-wider flex items-center gap-2">
+          <div className="space-y-2">
+            <h3 className="text-xs font-bold text-theme-text uppercase tracking-wider flex items-center gap-2">
               Facturación Bsale
             </h3>
-            <div className="border border-theme-border rounded-xl p-4">
+            <div className="rounded-lg border border-[#DDD4CA] bg-white p-4 shadow-xs">
               {card.is_invoiced ? (
                 <div className="flex items-start gap-3">
-                  <CheckCircle2 className="w-5 h-5 text-green-500 shrink-0 mt-0.5" />
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
                   <div>
-                    <p className="text-sm font-medium text-theme-text">Factura detectada</p>
-                    <p className="text-sm text-theme-text-muted">Folio: {card.invoice_folio}</p>
+                    <p className="text-sm font-semibold text-theme-text">Factura detectada</p>
+                    <p className="text-xs text-theme-text-muted mt-0.5">Folio: {card.invoice_folio}</p>
                   </div>
                 </div>
               ) : (
@@ -302,7 +302,7 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
                   <FileCheck className="w-5 h-5 text-theme-text-muted/60 shrink-0 mt-0.5" />
                   <div>
                     <p className="text-sm font-medium text-theme-text">No facturada</p>
-                    <p className="text-xs text-theme-text-muted mt-1">
+                    <p className="text-xs text-theme-text-muted mt-1 leading-relaxed">
                        Factura asociada aún no detectada desde Bsale. El estado operativo se actualizará automáticamente cuando corresponda.
                     </p>
                   </div>
@@ -312,43 +312,43 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
           </div>
 
           {/* Items */}
-          <div className="space-y-3">
+          <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-theme-text uppercase tracking-wider flex items-center gap-2">
+              <h3 className="text-xs font-bold text-theme-text uppercase tracking-wider flex items-center gap-2">
                 <Package className="w-4 h-4" /> Productos ({card.total_quantity})
               </h3>
-              <span className="text-sm font-medium text-theme-text">
+              <span className="text-xs font-semibold text-theme-text">
                 Neto: ${card.net_amount?.toLocaleString('es-CL')}
               </span>
             </div>
             
-            <div className="border border-theme-border rounded-xl overflow-hidden">
+            <div className="rounded-lg border border-[#DDD4CA] bg-white shadow-xs overflow-hidden">
               {isLoadingItems ? (
-                <div className="p-8 text-center text-sm text-theme-text-muted">
+                <div className="p-8 text-center text-xs text-theme-text-muted">
                   Cargando productos...
                 </div>
               ) : items.length === 0 ? (
-                <div className="p-8 text-center text-sm text-theme-text-muted">
+                <div className="p-8 text-center text-xs text-theme-text-muted">
                   No se encontraron productos en esta nota de venta.
                 </div>
               ) : (
                 <div className="max-h-[360px] overflow-y-auto">
-                  <div className="grid grid-cols-[90px_1fr_56px] gap-2 border-b border-theme-border bg-[#F5F0EA] px-3 py-2 text-[9px] font-bold uppercase tracking-[0.08em] text-[#6B625C]">
+                  <div className="grid grid-cols-[90px_1fr_56px] gap-2 border-b border-[#DDD4CA] bg-[#F8F5F1] px-3.5 py-2 text-[10px] font-bold uppercase tracking-wider text-[#6B625C]">
                     <span>SKU</span>
                     <span>Descripción / presentación</span>
                     <span className="text-center">Cant.</span>
                   </div>
-                  <div className="divide-y divide-theme-border">
+                  <div className="divide-y divide-[#DDD4CA]/60">
                     {items.map((item) => (
-                      <div key={item.detail_id} className="grid grid-cols-[90px_1fr_56px] items-start gap-2 px-3 py-2.5 hover:bg-theme-border/10">
-                        <p className="font-mono text-[10px] leading-relaxed text-theme-text-muted break-words">{item.sku || '—'}</p>
+                      <div key={item.detail_id} className="grid grid-cols-[90px_1fr_56px] items-start gap-2 px-3.5 py-2.5 hover:bg-[#F8F5F1]/50 transition-colors">
+                        <p className="font-mono text-xs leading-relaxed text-theme-text-muted break-words">{item.sku || '—'}</p>
                         <div className="min-w-0">
-                          <p className="text-sm font-medium leading-snug text-theme-text">{item.product_name}</p>
+                          <p className="text-xs font-semibold leading-snug text-theme-text">{item.product_name}</p>
                           {item.unit_net_value != null && (
-                            <p className="text-[10px] text-theme-text-muted mt-0.5">c/u ${item.unit_net_value.toLocaleString('es-CL')}</p>
+                            <p className="text-[11px] text-theme-text-muted mt-0.5">c/u ${item.unit_net_value.toLocaleString('es-CL')}</p>
                           )}
                         </div>
-                        <p className="text-center text-sm font-bold text-theme-text">{item.quantity}</p>
+                        <p className="text-center text-xs font-bold text-theme-text">{item.quantity}</p>
                       </div>
                     ))}
                   </div>
@@ -358,28 +358,28 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
           </div>
 
           {/* Historial de Movimientos */}
-          <div className="space-y-3">
-            <h3 className="text-sm font-semibold text-theme-text uppercase tracking-wider flex items-center gap-2">
+          <div className="space-y-2">
+            <h3 className="text-xs font-bold text-theme-text uppercase tracking-wider flex items-center gap-2">
               Historial de Movimientos ({movements.length})
             </h3>
-            <div className="bg-theme-border/10 rounded-xl p-4 max-h-[200px] overflow-y-auto text-xs text-theme-text space-y-2">
+            <div className="rounded-lg border border-[#DDD4CA] bg-white p-4 shadow-xs max-h-[200px] overflow-y-auto text-xs text-theme-text space-y-2">
               {loadingMovements ? (
-                <div className="text-center text-theme-text-muted">Cargando historial...</div>
+                <div className="text-center text-xs text-theme-text-muted">Cargando historial...</div>
               ) : movements.length === 0 ? (
-                <div className="text-center text-theme-text-muted">Sin movimientos registrados.</div>
+                <div className="text-center text-xs text-theme-text-muted">Sin movimientos registrados.</div>
               ) : (
                 movements.map(m => (
-                  <div key={m.id} className="pb-2 border-b border-theme-border/50 last:border-0 last:pb-0">
-                    <p className="font-medium">{m.metadata?.moved_by_name || 'Sistema'}</p>
-                    <p className="text-theme-text-muted">
+                  <div key={m.id} className="pb-2 border-b border-[#DDD4CA]/50 last:border-0 last:pb-0">
+                    <p className="font-semibold text-xs">{m.metadata?.moved_by_name || 'Sistema'}</p>
+                    <p className="text-[11px] text-theme-text-muted">
                       {new Date(m.created_at).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                     </p>
-                    <p className="mt-1">
-                       <span className="text-theme-text-muted/60">{m.from_status ? statusLabel(m.from_status) : 'Inicio'}</span>
+                    <p className="mt-1 text-xs">
+                       <span className="text-theme-text-muted/70">{m.from_status ? statusLabel(m.from_status) : 'Inicio'}</span>
                       <span className="mx-1">→</span>
-                       <span className="font-semibold text-theme-accent">{statusLabel(m.to_status)}</span>
+                       <span className="font-bold text-theme-accent">{statusLabel(m.to_status)}</span>
                     </p>
-                    {m.observation && <p className="mt-1 italic opacity-80 text-orange-400">Obs: {m.observation}</p>}
+                    {m.observation && <p className="mt-1 italic opacity-85 text-amber-700 bg-amber-50 rounded px-1.5 py-0.5 text-[11px]">Obs: {m.observation}</p>}
                   </div>
                 ))
               )}
@@ -390,10 +390,10 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
         
         {/* Movimientos UI */}
         {pendingMoveAction && (
-          <div className="p-4 bg-theme-panel-hover border-t border-theme-border">
-            <p className="text-sm font-medium mb-2 text-theme-text">Observación requerida para: <span className="font-bold">{pendingMoveAction.label}</span></p>
+          <div className="p-4 bg-[#F8F5F1] border-t border-[#DDD4CA]">
+            <p className="text-xs font-bold mb-2 text-theme-text uppercase tracking-wider">Observación requerida para: <span className="text-[#72383D]">{pendingMoveAction.label}</span></p>
             <textarea
-              className="w-full bg-theme-base border border-theme-border rounded-lg p-2 text-sm text-theme-text mb-2 focus:border-theme-accent outline-none"
+              className="w-full bg-white border border-[#DDD4CA] rounded-lg p-2.5 text-xs text-theme-text mb-2 focus:ring-2 focus:ring-[#72383D]/20 focus:border-[#72383D] outline-none shadow-xs"
               placeholder="Indica el motivo de este cambio..."
               rows={3}
               value={observation}
@@ -404,13 +404,13 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
               <button 
                 disabled={isMoving || observation.trim() === ''}
                 onClick={() => executeMove(pendingMoveAction.toStatus, observation)}
-                className="flex-1 py-2 bg-theme-accent text-white rounded-lg text-sm font-medium disabled:opacity-50"
+                className="flex-1 py-2 bg-[#72383D] hover:bg-[#612F34] text-white rounded-lg text-xs font-semibold disabled:opacity-50 shadow-xs transition-colors"
               >
                 {isMoving ? 'Guardando...' : 'Confirmar'}
               </button>
               <button 
                 onClick={() => setPendingMoveAction(null)}
-                className="flex-1 py-2 bg-theme-border/50 text-theme-text rounded-lg text-sm font-medium"
+                className="flex-1 py-2 border border-[#DDD4CA] bg-white text-[#322D29]/75 hover:bg-[#F5F0EA] rounded-lg text-xs font-semibold shadow-xs transition-colors"
               >
                 Cancelar
               </button>
@@ -418,7 +418,7 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
           </div>
         )}
 
-        <div className="flex-none p-4 border-t border-theme-border bg-theme-panel">
+        <div className="flex-none p-4 border-t border-[#DDD4CA] bg-white">
           {moveError && !pendingMoveAction && <p className="text-xs text-red-500 mb-3 text-center">{moveError}</p>}
           {printError && <p className="text-xs text-red-500 mb-3 text-center">{printError}</p>}
 
@@ -427,7 +427,7 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
               <button
                 onClick={() => void handlePrintAndPrepare()}
                 disabled={!canPrint || isPrinting || isMoving}
-                className="w-full py-3 bg-[#72383D] hover:bg-[#612F34] text-white font-bold rounded-xl text-sm disabled:opacity-50 transition-colors flex items-center justify-center gap-2 uppercase tracking-[0.04em]"
+                className="w-full py-2.5 bg-[#72383D] hover:bg-[#612F34] text-white font-bold rounded-lg text-xs disabled:opacity-50 shadow-xs transition-colors flex items-center justify-center gap-2 uppercase tracking-wider"
               >
                 <Printer className="w-4 h-4" />
                 {isPrinting ? 'Generando documento…' : 'Imprimir y preparar'}
@@ -436,11 +436,11 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
                 <button
                   onClick={handlePrintOnly}
                   disabled={!canPrint || isPrinting}
-                  className="flex-1 py-2 px-3 bg-white border border-[#D1C7BD] hover:bg-[#F5F0EA] text-[#322D29]/70 font-medium rounded-xl text-xs disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
+                  className="flex-1 py-2 px-3 bg-white border border-[#DDD4CA] hover:bg-[#F5F0EA] text-[#322D29]/80 font-semibold rounded-lg text-xs disabled:opacity-50 shadow-xs transition-colors flex items-center justify-center gap-1.5"
                 >
                   <Printer className="w-3.5 h-3.5" /> Imprimir sin cambiar estado
                 </button>
-                <button onClick={() => handleMove('IN_PREPARATION', MOVEMENT_RULES.PENDING_ROUTE_PREP.IN_PREPARATION.backward, MOVEMENT_RULES.PENDING_ROUTE_PREP.IN_PREPARATION.label)} disabled={isMoving} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-xl text-xs disabled:opacity-50 transition-colors">
+                <button onClick={() => handleMove('IN_PREPARATION', MOVEMENT_RULES.PENDING_ROUTE_PREP.IN_PREPARATION.backward, MOVEMENT_RULES.PENDING_ROUTE_PREP.IN_PREPARATION.label)} disabled={isMoving} className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-xs disabled:opacity-50 shadow-xs transition-colors">
                   {MOVEMENT_RULES.PENDING_ROUTE_PREP.IN_PREPARATION.label}
                 </button>
               </div>
@@ -449,10 +449,10 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
 
           {!pendingMoveAction && card.status === 'IN_PREPARATION' && (
             <div className="flex gap-2 mb-3">
-              <button onClick={() => handleMove('IN_AUDIT', MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.backward, MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.label)} disabled={isMoving} className="flex-1 py-2 bg-purple-600 hover:bg-purple-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
+              <button onClick={() => handleMove('IN_AUDIT', MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.backward, MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.label)} disabled={isMoving} className="flex-1 py-2 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-lg text-xs disabled:opacity-50 shadow-xs transition-colors">
                 {MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.label}
               </button>
-              <button onClick={() => handleMove('PENDING_ROUTE_PREP', MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.backward, MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.label)} disabled={isMoving} className="flex-1 py-2 bg-orange-600 hover:bg-orange-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
+              <button onClick={() => handleMove('PENDING_ROUTE_PREP', MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.backward, MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.label)} disabled={isMoving} className="flex-1 py-2 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg text-xs disabled:opacity-50 shadow-xs transition-colors">
                 {MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.label}
               </button>
             </div>
@@ -460,10 +460,10 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
 
           {!pendingMoveAction && card.status === 'IN_AUDIT' && (
             <div className="flex gap-2 mb-3">
-              <button onClick={() => handleMove('IN_PREPARATION', MOVEMENT_RULES.IN_AUDIT.IN_PREPARATION.backward, MOVEMENT_RULES.IN_AUDIT.IN_PREPARATION.label)} disabled={isMoving} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
+              <button onClick={() => handleMove('IN_PREPARATION', MOVEMENT_RULES.IN_AUDIT.IN_PREPARATION.backward, MOVEMENT_RULES.IN_AUDIT.IN_PREPARATION.label)} disabled={isMoving} className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-xs disabled:opacity-50 shadow-xs transition-colors">
                 {MOVEMENT_RULES.IN_AUDIT.IN_PREPARATION.label}
               </button>
-              <button onClick={() => handleMove('PENDING_ROUTE_PREP', MOVEMENT_RULES.IN_AUDIT.PENDING_ROUTE_PREP.backward, MOVEMENT_RULES.IN_AUDIT.PENDING_ROUTE_PREP.label)} disabled={isMoving} className="flex-1 py-2 bg-orange-600 hover:bg-orange-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
+              <button onClick={() => handleMove('PENDING_ROUTE_PREP', MOVEMENT_RULES.IN_AUDIT.PENDING_ROUTE_PREP.backward, MOVEMENT_RULES.IN_AUDIT.PENDING_ROUTE_PREP.label)} disabled={isMoving} className="flex-1 py-2 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg text-xs disabled:opacity-50 shadow-xs transition-colors">
                 {MOVEMENT_RULES.IN_AUDIT.PENDING_ROUTE_PREP.label}
               </button>
             </div>
@@ -474,14 +474,14 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
               <button
                 onClick={handlePrintOnly}
                 disabled={!canPrint || isPrinting}
-                className="flex-1 py-2.5 px-4 bg-theme-border/20 hover:bg-theme-border/40 text-theme-text font-medium rounded-xl transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                className="flex-1 py-2 px-4 border border-[#DDD4CA] hover:bg-[#F5F0EA] text-[#322D29]/80 font-semibold rounded-lg text-xs transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50 shadow-xs"
               >
-                <Printer className="w-4 h-4" /> Imprimir
+                <Printer className="w-3.5 h-3.5" /> Imprimir
               </button>
             )}
             <button 
               onClick={onClose}
-              className="flex-1 py-2.5 px-4 bg-theme-border/50 hover:bg-theme-border/80 text-theme-text font-medium rounded-xl transition-colors"
+              className="flex-1 py-2 px-4 border border-[#DDD4CA] bg-white hover:bg-[#F5F0EA] text-[#322D29]/80 font-semibold rounded-lg text-xs transition-colors shadow-xs"
             >
               Cerrar detalle
             </button>

@@ -69,7 +69,7 @@ const COLUMNS: KanbanColumn[] = [
     colorHeader: 'bg-theme-base border-slate-300 dark:border-theme-border/80',
     colorBody: 'bg-theme-base/30',
     badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
-    dot: 'bg-orange-500',
+    dot: 'bg-amber-500',
   },
   {
     id: 'IN_PREPARATION',
@@ -105,10 +105,10 @@ function SummaryStat({ label, value, sub, title, accent = false }: {
   accent?: boolean
 }) {
   return (
-    <div className="flex min-w-0 items-baseline gap-1.5 border-l border-[#D1C7BD] pl-4 first:border-0 first:pl-0" title={title}>
-      <span className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#6B625C]">{label}</span>
-      <span className={`text-[15px] font-semibold tabular-nums ${accent ? 'text-[#72383D]' : 'text-[#322D29]'}`}>{value}</span>
-      {sub && <span className="text-[10px] font-medium text-[#322D29]/45">{sub}</span>}
+    <div className="flex min-w-0 items-baseline gap-1.5 border-l border-[#DDD4CA] pl-4 first:border-0 first:pl-0" title={title}>
+      <span className="text-[10px] font-bold uppercase tracking-wider text-[#6B625C]">{label}</span>
+      <span className={`text-sm font-bold tabular-nums ${accent ? 'text-[#72383D]' : 'text-[#322D29]'}`}>{value}</span>
+      {sub && <span className="text-xs font-medium text-[#322D29]/50">{sub}</span>}
     </div>
   )
 }
@@ -139,19 +139,29 @@ function DroppableColumn({
   })
 
   return (
-    <section ref={setNodeRef} className={`min-w-[240px] border bg-[#F5F0EA] transition-colors ${isOver ? 'border-[#72383D] bg-[#F1E4DD]' : 'border-[#D1C7BD]'}`}>
+    <section
+      ref={setNodeRef}
+      className={`flex flex-col min-w-[280px] rounded-xl border bg-[#F8F5F1] transition-all duration-150 ${
+        isOver
+          ? 'border-[#72383D] bg-[#F3ECE5] ring-2 ring-[#72383D]/20 shadow-md'
+          : 'border-[#DDD4CA] shadow-xs'
+      }`}
+    >
       {/* Column header */}
-      <div className="border-b border-[#D1C7BD] px-3 py-2">
-        <div className="flex items-center justify-between">
-          <h3 className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#72383D]">{col.title}</h3>
-          <span className="text-[10px] text-[#322D29]/50">{colCards.length}</span>
+      <div className="flex items-center justify-between border-b border-[#DDD4CA] px-3.5 py-2.5 bg-white/70 backdrop-blur-xs rounded-t-xl">
+        <div className="flex items-center gap-2">
+          <span className={`w-2.5 h-2.5 rounded-full ${col.dot} shadow-xs shrink-0`} />
+          <h3 className="text-xs font-bold uppercase tracking-wider text-[#322D29]">{col.title}</h3>
         </div>
+        <span className="flex items-center justify-center min-w-[22px] h-5 px-1.5 rounded-full bg-[#EAE3DA] text-[11px] font-bold text-[#6B625C]">{colCards.length}</span>
       </div>
 
       {/* Column body */}
-      <div className="space-y-2 p-2">
-          {colCards.length === 0 && (
-          <p className="pt-6 text-center text-[10px] font-medium text-theme-text-muted/60">Sin tarjetas</p>
+      <div className="flex-1 space-y-2.5 p-2.5 overflow-y-auto">
+        {colCards.length === 0 && (
+          <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-[#DDD4CA] bg-white/40">
+            <p className="text-xs font-medium text-[#322D29]/40">Sin tarjetas</p>
+          </div>
         )}
         {colCards.map((card, index) => {
           const comuna = getPreparationComuna(card)
@@ -162,8 +172,10 @@ function DroppableColumn({
             <Fragment key={card.card_id}>
               {showComunaDivider && (
                 <div className="flex items-center gap-2 pt-2 first:pt-0" title={`Comuna: ${comuna}`}>
-                  <span className="rounded-sm bg-[#72383D]/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.12em] text-[#72383D]">{comuna}</span>
-                  <span className="h-px flex-1 bg-[#D1C7BD]" />
+                  <span className="rounded-md border border-[#72383D]/20 bg-[#F5EDE9] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#72383D]">
+                    {comuna}
+                  </span>
+                  <span className="h-px flex-1 bg-[#DDD4CA]" />
                 </div>
               )}
               <SalesOrderCard
@@ -851,63 +863,66 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
   return (
     <div className="flex flex-col h-[calc(100vh-110px)] w-full overflow-hidden bg-[#EFE9E1] text-[#322D29]">
       {/* ── Header / Toolbar ── */}
-      <div className="flex-none px-4 py-2 border-b border-[#D1C7BD] bg-[#FCFBF9] shadow-sm z-10">
-        <div className="flex flex-wrap items-center gap-2">
+      <div className="flex-none px-4 py-2.5 border-b border-[#D1C7BD] bg-[#FCFBF9] shadow-xs z-10">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           
-          <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
-            <div className="flex items-center gap-1.5 shrink-0">
-              <KanbanSquare className="w-4 h-4 text-[#72383D] shrink-0" />
-            <h1 className="text-sm font-semibold text-[#322D29]">Preparación de Pedidos</h1>
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="p-1.5 rounded-lg bg-[#72383D]/10 text-[#72383D]">
+                <KanbanSquare className="w-4 h-4" />
+              </div>
+              <h1 className="text-sm font-bold tracking-tight text-[#322D29]">Preparación de Pedidos</h1>
             </div>
 
             <div
-              className={`text-[11px] font-medium ${
+              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold border ${
                 syncIsError
-                  ? 'text-[#8A4B4B]'
+                  ? 'border-[#8A4B4B]/30 bg-[#8A4B4B]/10 text-[#8A4B4B]'
                   : isSyncRunning
-                    ? 'text-[#806238]'
+                    ? 'border-amber-500/30 bg-amber-50 text-amber-800'
                     : syncIsFresh
-                      ? 'text-emerald-700'
-                      : 'text-[#322D29]/55'
+                      ? 'border-emerald-500/30 bg-emerald-50 text-emerald-800'
+                      : 'border-slate-300 bg-slate-50 text-slate-600'
               }`}
               title={syncError || undefined}
             >
-              {isSyncRunning ? 'Sincronizando…' : `Último sync: ${syncStatusLabel}`}
-              {syncRun ? ` · ${syncTrigger} ${syncTime ? new Date(syncTime).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : ''}` : ''}
+              <span className={`w-1.5 h-1.5 rounded-full ${syncIsError ? 'bg-red-500' : isSyncRunning ? 'bg-amber-500 animate-pulse' : syncIsFresh ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+              <span>{isSyncRunning ? 'Sincronizando…' : `Sync: ${syncStatusLabel}`}</span>
+              {syncRun ? <span className="opacity-75">· {syncTrigger} {syncTime ? new Date(syncTime).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : ''}</span> : null}
             </div>
           </div>
           
           {/* Controls */}
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => void runSync('manual')}
               disabled={isSyncing}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-bold border transition-colors ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border shadow-xs transition-colors ${
                 isSyncing
                    ? 'bg-[#F5F0EA] border-[#D1C7BD] text-[#322D29]/50 opacity-80 cursor-not-allowed'
-                   : 'bg-[#72383D] text-white hover:bg-[#612F34] border-transparent shadow-sm'
+                   : 'bg-[#72383D] text-white hover:bg-[#612F34] border-transparent'
               }`}
             >
               {isSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-              {isSyncing ? 'SINCRONIZANDO...' : 'ACTUALIZAR NOTAS DE VENTA'}
+              <span>{isSyncing ? 'Sincronizando...' : 'Actualizar NV'}</span>
             </button>
 
             <button
               onClick={() => setExclusionsOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-bold border bg-white border-[#D1C7BD] text-[#322D29]/70 hover:bg-[#F5F0EA] transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border bg-white border-[#D1C7BD] text-[#322D29]/80 hover:bg-[#F5F0EA] shadow-xs transition-colors"
             >
-              <ShieldCheck className="w-3.5 h-3.5" />
-              EXCLUSIONES
+              <ShieldCheck className="w-3.5 h-3.5 text-[#72383D]" />
+              <span>Exclusiones</span>
             </button>
 
-            <div className="relative w-60 ml-2">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#322D29]/40" />
+            <div className="relative w-56 sm:w-64">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#322D29]/45" />
               <input
                 type="text"
                 placeholder="Buscar NV, cliente, comuna, fecha..."
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
-                className="w-full pl-8 pr-2 py-1.5 bg-white border border-[#D1C7BD] text-[#322D29] font-medium focus:outline-none focus:border-[#72383D] transition-colors placeholder:text-[#322D29]/40"
+                className="w-full pl-8 pr-2.5 py-1.5 rounded-lg bg-white border border-[#D1C7BD] text-xs text-[#322D29] font-medium focus:outline-none focus:ring-2 focus:ring-[#72383D]/20 focus:border-[#72383D] shadow-xs transition-all placeholder:text-[#322D29]/40"
               />
             </div>
 
@@ -917,7 +932,7 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
                 value={sortBy}
                 onChange={e => setSortBy(e.target.value as PreparationSort)}
                 title="Ordenar tarjetas"
-                className="appearance-none py-1.5 pl-8 pr-6 bg-white border border-[#D1C7BD] text-[11px] font-medium text-[#322D29] focus:outline-none focus:border-[#72383D]"
+                className="appearance-none py-1.5 pl-8 pr-7 rounded-lg bg-white border border-[#D1C7BD] text-xs font-medium text-[#322D29] focus:outline-none focus:ring-2 focus:ring-[#72383D]/20 focus:border-[#72383D] shadow-xs transition-all cursor-pointer"
               >
                 <option value="default">Orden normal</option>
                 <option value="comuna">Ordenar por comuna</option>
@@ -928,10 +943,10 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
 
             <button
               onClick={() => setShowAdvanced(v => !v)}
-               className={`flex items-center gap-1 px-2.5 py-1.5 border text-[11px] font-bold transition-colors ${showAdvanced ? 'bg-[#F5EDE9] border-[#72383D]/30 text-[#72383D]' : 'bg-white border-[#D1C7BD] text-[#322D29]/55 hover:bg-[#F5F0EA]'}`}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold shadow-xs transition-colors ${showAdvanced ? 'bg-[#F5EDE9] border-[#72383D]/40 text-[#72383D]' : 'bg-white border-[#D1C7BD] text-[#322D29]/70 hover:bg-[#F5F0EA]'}`}
             >
               <SlidersHorizontal className="w-3.5 h-3.5" />
-              Filtros
+              <span>Filtros</span>
             </button>
           </div>
         </div>
@@ -941,13 +956,13 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
           <div className="mt-3 grid gap-4 border-t border-[#D1C7BD] pt-3 lg:grid-cols-[minmax(0,1.1fr)_minmax(260px,0.9fr)_auto]">
             <section className="min-w-0">
               <div className="mb-1.5 flex items-center justify-between gap-2">
-                <h2 className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#6B625C]">Comunas</h2>
+                <h2 className="text-[10px] font-bold uppercase tracking-wider text-[#6B625C]">Comunas</h2>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={selectAllComunas}
                     disabled={comunaOptions.length === 0}
-                    className="text-[10px] font-semibold text-[#72383D] hover:underline disabled:opacity-40"
+                    className="text-xs font-semibold text-[#72383D] hover:underline disabled:opacity-40"
                   >
                     Seleccionar todas
                   </button>
@@ -955,31 +970,31 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
                     type="button"
                     onClick={clearComunas}
                     disabled={selectedComunas.size === 0}
-                    className="text-[10px] font-semibold text-[#322D29]/55 hover:text-[#322D29] hover:underline disabled:opacity-40"
+                    className="text-xs font-semibold text-[#322D29]/60 hover:text-[#322D29] hover:underline disabled:opacity-40"
                   >
                     Limpiar
                   </button>
                 </div>
               </div>
 
-              <div className="max-h-44 overflow-y-auto border border-[#D1C7BD] bg-white">
+              <div className="max-h-44 overflow-y-auto rounded-lg border border-[#D1C7BD] bg-white shadow-xs">
                 {comunaOptions.length === 0 ? (
-                  <p className="px-3 py-4 text-center text-[10px] font-medium text-[#322D29]/50">Sin comunas en el board</p>
+                  <p className="px-3 py-4 text-center text-xs font-medium text-[#322D29]/50">Sin comunas en el board</p>
                 ) : (
-                  <ul className="divide-y divide-[#D1C7BD]/60">
+                  <ul className="divide-y divide-[#D1C7BD]/40">
                     {comunaOptions.map(option => {
                       const checked = effectiveSelectedComunas.has(option.key)
                       return (
                         <li key={option.key}>
-                          <label className="flex cursor-pointer items-center gap-2.5 px-2.5 py-1.5 text-[11px] transition-colors hover:bg-[#F5F0EA]">
+                          <label className="flex cursor-pointer items-center gap-2.5 px-3 py-1.5 text-xs transition-colors hover:bg-[#F5F0EA]">
                             <input
                               type="checkbox"
                               checked={checked}
                               onChange={() => toggleComunaFilter(option.key)}
-                              className="h-3.5 w-3.5 shrink-0 accent-[#72383D]"
+                              className="h-3.5 w-3.5 rounded shrink-0 accent-[#72383D]"
                             />
                             <span className="min-w-0 flex-1 truncate font-medium text-[#322D29]">{option.label}</span>
-                            <span className="shrink-0 text-[10px] font-semibold tabular-nums text-[#322D29]/45">{option.count}</span>
+                            <span className="shrink-0 text-xs font-semibold tabular-nums text-[#322D29]/50">{option.count}</span>
                           </label>
                         </li>
                       )
@@ -987,24 +1002,24 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
                   </ul>
                 )}
               </div>
-              <p className="mt-1 text-[9px] font-medium text-[#322D29]/45">
+              <p className="mt-1 text-[10px] font-medium text-[#322D29]/50">
                 Sin selección se muestran todas las comunas.
               </p>
             </section>
 
             <section className="min-w-0">
-              <h2 className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-[#6B625C]">Vendedor</h2>
+              <h2 className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-[#6B625C]">Vendedor</h2>
               <select
                 value={effectiveSellerKey}
                 onChange={e => setFilterSellerKey(e.target.value)}
-                className="w-full border border-[#D1C7BD] bg-white px-2 py-2 text-[11px] font-medium text-[#322D29] focus:border-[#72383D] focus:outline-none"
+                className="w-full rounded-lg border border-[#D1C7BD] bg-white px-3 py-2 text-xs font-medium text-[#322D29] focus:ring-2 focus:ring-[#72383D]/20 focus:border-[#72383D] focus:outline-none shadow-xs"
               >
                 <option value="">Todos los vendedores</option>
                 {sellerOptions.map(option => (
                   <option key={option.key} value={option.key}>{option.label} ({option.count})</option>
                 ))}
               </select>
-              <p className="mt-1 text-[9px] font-medium text-[#322D29]/45">
+              <p className="mt-1 text-[10px] font-medium text-[#322D29]/50">
                 Sólo vendedores presentes en las NV del board.
               </p>
             </section>
@@ -1013,7 +1028,7 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
               {hasActiveFilterOrSort && (
                 <button
                   onClick={() => { clearFilters(); setSortBy('default') }}
-                  className="flex items-center gap-1 border border-[#D1C7BD] bg-white px-2.5 py-2 text-[10px] font-bold text-[#322D29]/55 transition-colors hover:bg-[#F5F0EA] hover:text-[#322D29]"
+                  className="flex items-center gap-1.5 rounded-lg border border-[#D1C7BD] bg-white px-3 py-2 text-xs font-semibold text-[#322D29]/70 shadow-xs transition-colors hover:bg-[#F5F0EA] hover:text-[#322D29]"
                 >
                   <RotateCcw className="w-3.5 h-3.5" /> Limpiar filtros y orden
                 </button>
@@ -1026,7 +1041,7 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
       {/* ── Resumen operacional ── */}
       {!loading && !error && (
         <div className="flex-none border-b border-[#D1C7BD] bg-[#FCFBF9] px-4 py-2">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
             <SummaryStat
               label="NV"
               value={boardSummary.nvCount}
@@ -1050,7 +1065,7 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
               title={boardSummary.comunas.length > 0 ? boardSummary.comunas.join(' · ') : 'Sin comunas'}
             />
             {hasFilters && (
-              <span className="ml-auto border border-[#72383D]/20 bg-[#F5EDE9] px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-[#72383D]">
+              <span className="ml-auto rounded-md border border-[#72383D]/25 bg-[#F5EDE9] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#72383D]">
                 Vista filtrada
               </span>
             )}
@@ -1060,27 +1075,27 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
 
       {/* ── Barra de acciones de selección ── */}
       {selectionSummary.nvCount > 0 && (
-        <div className="flex-none border-b border-[#72383D]/25 bg-[#F5EDE9] px-4 py-2">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
-              <span className="font-bold uppercase tracking-[0.06em] text-[#72383D]">
+        <div className="flex-none border-b border-[#72383D]/20 bg-[#FBF6F3] px-4 py-2.5 transition-all">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+              <span className="font-bold text-[#72383D]">
                 {selectionSummary.nvCount} NV seleccionada{selectionSummary.nvCount === 1 ? '' : 's'}
               </span>
               {selectionSummary.amount > 0 && (
-                <span className="font-semibold text-[#322D29]/70">· {formatPreparationClp(selectionSummary.amount)}</span>
+                <span className="font-semibold text-[#322D29]/80">· {formatPreparationClp(selectionSummary.amount)}</span>
               )}
-              <span className="text-[#322D29]/60">· {selectionSummary.units} unidades</span>
+              <span className="text-[#322D29]/65">· {selectionSummary.units} unidades</span>
               {selectionSummary.comunas.length > 0 && (
-                <span className="text-[#322D29]/60">· {selectionSummary.comunas.join(' / ')}</span>
+                <span className="text-[#322D29]/65">· {selectionSummary.comunas.join(' / ')}</span>
               )}
             </div>
 
-            <div className="ml-auto flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => void handleBulkPrint('prepare')}
                 disabled={isBulkPrinting || isMoving}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#72383D] hover:bg-[#612F34] text-white text-[11px] font-bold uppercase tracking-[0.04em] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#72383D] hover:bg-[#612F34] text-white text-xs font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed shadow-xs transition-colors"
               >
                 {isBulkPrinting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Printer className="w-3.5 h-3.5" />}
                 {isBulkPrinting ? 'Procesando…' : `Imprimir y preparar (${selectionSummary.nvCount})`}
@@ -1089,7 +1104,7 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
                 type="button"
                 onClick={() => void handleBulkPrint('print')}
                 disabled={isBulkPrinting || isMoving}
-                className="flex items-center gap-1.5 px-3 py-1.5 border border-[#D1C7BD] bg-white hover:bg-[#F5F0EA] text-[#322D29]/75 text-[11px] font-bold disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#D1C7BD] bg-white hover:bg-[#F5F0EA] text-[#322D29]/80 text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed shadow-xs transition-colors"
               >
                 <Printer className="w-3.5 h-3.5" />
                 Imprimir sin mover
@@ -1098,14 +1113,14 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
                 type="button"
                 onClick={clearSelection}
                 disabled={isBulkPrinting || isMoving}
-                className="flex items-center gap-1 px-2 py-1.5 text-[10px] font-bold text-[#322D29]/55 hover:text-[#322D29] disabled:opacity-50 transition-colors"
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-[#322D29]/60 hover:text-[#322D29] hover:bg-black/5 disabled:opacity-50 transition-colors"
               >
                 <X className="w-3.5 h-3.5" /> Limpiar selección
               </button>
             </div>
           </div>
           {bulkPrintError && (
-            <p className="mt-2 border border-[#8A4B4B]/30 bg-white px-2 py-1 text-[10px] font-medium text-[#8A4B4B]">
+            <p className="mt-2 rounded-md border border-[#8A4B4B]/30 bg-[#8A4B4B]/10 px-2.5 py-1 text-xs font-medium text-[#8A4B4B]">
               {bulkPrintError}
             </p>
           )}
