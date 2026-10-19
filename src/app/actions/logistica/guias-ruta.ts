@@ -2,6 +2,9 @@
 
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
+import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 
 import { RouteGuide, CatalogOptions, RoutePersonnelType, RouteGuideProfitabilityV1 } from '@/modules/logistica/guias-ruta/types';
 import { requirePortalSystemAdmin } from '@/app/actions/portal/authorization';
@@ -236,7 +239,7 @@ export async function getRouteGuideCatalogOptions(): Promise<CatalogOptions> {
   const [routesRes, vehiclesRes, personnelRes] = await Promise.all([
     supabase.from('delivery_routes').select('id, company_id, route_name, description, is_active').eq('is_active', true).order('route_name'),
     supabase.from('route_vehicles').select('id, company_id, vehicle_name, plate_number, description, is_active').eq('is_active', true).order('vehicle_name'),
-    supabase.from('route_personnel').select('id, company_id, person_name, person_type, phone, email, is_active').eq('is_active', true).order('person_name'),
+    supabase.from('route_personnel').select('id, company_id, person_name, person_type, phone, email, is_active, portal_user_id').eq('is_active', true).order('person_name'),
   ]);
 
   if (routesRes.error) throw routesRes.error;
@@ -248,6 +251,69 @@ export async function getRouteGuideCatalogOptions(): Promise<CatalogOptions> {
     vehicles: vehiclesRes.data || [],
     personnel: personnelRes.data || [],
   };
+}
+
+export interface RouteDriverUserOption {
+  id: string;
+  label: string;
+  email: string;
+}
+
+export async function getRouteDriverUserOptions(): Promise<RouteDriverUserOption[]> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return [];
+
+  const companyId = await getActiveCompanyId();
+  if (!companyId) return [];
+  const { data: allowed } = await supabase.rpc('has_permission', {
+    p_permission_code: 'logistica.route_catalogs.manage',
+  });
+  if (allowed !== true) return [];
+
+  const coreAdmin = createSupabaseClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { db: { schema: 'core' }, auth: { autoRefreshToken: false, persistSession: false } }
+  );
+  const { data: access } = await coreAdmin
+    .from('user_company_access')
+    .select('user_id')
+    .eq('company_id', companyId)
+    .eq('is_active', true);
+  const userIds = (access ?? []).map(item => item.user_id);
+  if (userIds.length === 0) return [];
+
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from('users')
+    .select('id, email, nombre, apellido')
+    .in('id', userIds)
+    .eq('is_active', true)
+    .is('deleted_at', null)
+    .order('nombre');
+  return (data ?? []).map(item => ({
+    id: item.id,
+    email: item.email,
+    label: `${item.nombre} ${item.apellido} (${item.email})`,
+  }));
+}
+
+export async function linkRouteDriverUser(driverId: string, portalUserId: string | null) {
+  const supabase = await createLogisticaClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Not authenticated');
+  const companyId = await getActiveCompanyId();
+  if (!companyId) throw new Error('No se encontró empresa activa para el usuario.');
+
+  const { data, error } = await supabase.rpc('link_route_driver_user', {
+    p_company_id: companyId,
+    p_driver_id: driverId,
+    p_portal_user_id: portalUserId || null,
+  });
+  if (error) throw error;
+  if (!data?.success) throw new Error(data?.error || 'No se pudo vincular el conductor.');
+  return data;
 }
 
 // ---- Catalog Inline Creations ---------------------------------------------

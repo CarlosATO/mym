@@ -31,6 +31,7 @@ export interface RoutePersonnel {
   phone: string | null;
   email: string | null;
   is_active: boolean;
+  portal_user_id?: string | null;
 }
 
 export interface RouteGuideItem {

@@ -5,7 +5,7 @@ import { RouteGuideGrid, type SaleConditionOption } from './route-guide-grid';
 import { useRouteGuideGrid } from '../hooks/use-route-guide-grid';
 import { RouteGuideCombobox } from './route-guide-combobox';
 import { Save, Send, AlertTriangle, XCircle } from 'lucide-react';
-import { createDeliveryRouteInline, createRouteVehicleInline, createRoutePersonInline } from '@/app/actions/logistica/guias-ruta';
+import { createDeliveryRouteInline, createRouteVehicleInline, createRoutePersonInline, getRouteDriverUserOptions, linkRouteDriverUser, type RouteDriverUserOption } from '@/app/actions/logistica/guias-ruta';
 import { getActiveCompanyId } from '@/app/actions/companies';
 import type { RouteSaveDuplicateWarning, RouteDuplicateInvoice, SaveRouteGuideDraftResult } from '@/app/actions/logistica/guias-ruta';
 import { syncBsaleDocumentsForRouteGuide } from '@/app/actions/integraciones/bsale-sync';
@@ -61,6 +61,8 @@ export function RouteGuideForm({
   const [guideId, setGuideId] = useState(initialData?.id || '');
   const [guideNumber, setGuideNumber] = useState(initialData?.guide_number || '');
   const [status, setStatus] = useState(initialData?.status || '');
+  const [driverUsers, setDriverUsers] = useState<RouteDriverUserOption[]>([]);
+  const [driverLinkLoading, setDriverLinkLoading] = useState(false);
   
   const [errorMsg, setErrorMsg] = useState('');
   const [draftWarnings, setDraftWarnings] = useState<RouteSaveDuplicateWarning[]>([]);
@@ -90,6 +92,11 @@ export function RouteGuideForm({
   useEffect(() => {
     getSaleConditions().then(setSaleConditions).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!driverId || readOnly) return;
+    getRouteDriverUserOptions().then(setDriverUsers).catch(() => setDriverUsers([]));
+  }, [driverId, readOnly]);
 
   const routeOptions = injectCurrentOption(
     dedupOptions(catalogs?.routes || []),
@@ -153,7 +160,7 @@ export function RouteGuideForm({
       const newId = await createRoutePersonInline(name, 'DRIVER');
       setCatalogs(prev => ({
         ...prev,
-        personnel: [...prev.personnel, { id: newId, person_name: name, person_type: 'DRIVER', company_id: '', phone: '', email: '', is_active: true }]
+        personnel: [...prev.personnel, { id: newId, person_name: name, person_type: 'DRIVER', company_id: '', phone: '', email: '', is_active: true, portal_user_id: null }]
       }));
       setDriverId(newId);
     } catch (e: any) {
@@ -596,6 +603,32 @@ export function RouteGuideForm({
                   disabled={readOnly}
                 />
               </div>
+              {!readOnly && driverId && driverUsers.length > 0 && (
+                <select
+                  className="mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+                  value={catalogs.personnel.find(person => person.id === driverId)?.portal_user_id ?? ''}
+                  disabled={driverLinkLoading}
+                  onChange={async event => {
+                    setDriverLinkLoading(true);
+                    try {
+                      await linkRouteDriverUser(driverId, event.target.value || null);
+                      setCatalogs(prev => ({
+                        ...prev,
+                        personnel: prev.personnel.map(person => person.id === driverId
+                          ? { ...person, portal_user_id: event.target.value || null }
+                          : person),
+                      }));
+                    } catch (error: any) {
+                      setErrorMsg(error.message);
+                    } finally {
+                      setDriverLinkLoading(false);
+                    }
+                  }}
+                >
+                  <option value="">Sin usuario vinculado</option>
+                  {driverUsers.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+                </select>
+              )}
             </div>
 
             <div className="space-y-1">
