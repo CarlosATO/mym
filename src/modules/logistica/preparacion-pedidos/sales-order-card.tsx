@@ -4,7 +4,7 @@ import { MapPin, Package, User, Ban } from 'lucide-react'
 import { useRef } from 'react'
 import { SalesOrderPreparationCardInfo } from '@/app/actions/logistica/sales-order-preparation'
 import { useDraggable } from '@dnd-kit/core'
-import { formatPreparationClp, getPreparationCardAmount, getPreparationComuna } from './preparation-board-utils'
+import { formatPreparationClp, getPreparationCardAmount, getPreparationComuna, parseDateOnly } from './preparation-board-utils'
 
 interface SalesOrderCardProps {
   card: SalesOrderPreparationCardInfo
@@ -21,8 +21,8 @@ interface SalesOrderCardProps {
 
 function formatShortDate(value: string | null): string | null {
   if (!value) return null
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return null
+  const date = parseDateOnly(value)
+  if (!date) return null
   return date
     .toLocaleDateString('es-CL', { day: '2-digit', month: 'short' })
     .replace('.', '')
@@ -31,8 +31,8 @@ function formatShortDate(value: string | null): string | null {
 
 function formatFullDate(value: string | null): string | null {
   if (!value) return null
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return null
+  const date = parseDateOnly(value)
+  if (!date) return null
   return date.toLocaleDateString('es-CL', { day: '2-digit', month: 'long', year: 'numeric' })
 }
 

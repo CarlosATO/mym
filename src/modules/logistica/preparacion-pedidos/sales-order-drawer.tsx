@@ -5,6 +5,7 @@ import { SalesOrderPreparationCardInfo, SalesOrderPreparationItem, getSalesOrder
 import { generatePreparationOrdersPdf, openPreparationOrdersPdf } from '@/lib/pdf/generate-preparation-orders-pdf'
 import { useState, useEffect } from 'react'
 import { MOVEMENT_RULES } from './movement-rules'
+import { formatDateOnly, parseDateOnly } from './preparation-board-utils'
 
 interface SalesOrderDrawerProps {
   card: SalesOrderPreparationCardInfo | null
@@ -127,7 +128,10 @@ export function SalesOrderDrawer({
     }
   }
 
-  const dateStr = new Date(card.nv_emission_date).toLocaleDateString('es-CL', { day: 'numeric', month: 'long', year: 'numeric' })
+  const emissionDateObj = parseDateOnly(card.nv_emission_date)
+  const dateStr = emissionDateObj
+    ? emissionDateObj.toLocaleDateString('es-CL', { day: 'numeric', month: 'long', year: 'numeric' })
+    : '—'
   const firstPrepMovement = movements.find(m => m.to_status === 'IN_PREPARATION')
   const canPrint = !isLoadingItems
   const comuna = card.normalized_city || card.municipality_raw || card.city_raw || 'Sin comuna'
@@ -242,7 +246,7 @@ export function SalesOrderDrawer({
               {card.route_date && (
                 <div className="flex items-center gap-1">
                   <span className="font-semibold text-theme-text-muted">Ruta:</span>
-                  <span className="font-medium text-[#806238]">{new Date(card.route_date).toLocaleDateString('es-CL')}</span>
+                  <span className="font-medium text-[#806238]">{formatDateOnly(card.route_date)}</span>
                 </div>
               )}
               <div className="flex items-center gap-1">
@@ -378,7 +382,7 @@ export function SalesOrderDrawer({
                 </div>
               </div>
               {card.route_date && (
-                <p className="text-[11px] text-theme-text-muted">Ruta: {new Date(card.route_date).toLocaleDateString('es-CL')}</p>
+                <p className="text-[11px] text-theme-text-muted">Ruta: {formatDateOnly(card.route_date)}</p>
               )}
               <p className="text-[11px] font-medium text-theme-accent">
                 Prep: {firstPrepMovement ? new Date(firstPrepMovement.created_at).toLocaleString('es-CL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : (movementsLoaded ? 'Sin iniciar' : '—')}

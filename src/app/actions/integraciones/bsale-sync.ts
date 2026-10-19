@@ -3179,12 +3179,15 @@ export async function runIncrementalWarehouseBsaleRefresh(companyId: string) {
   })
 }
 
-export async function runOperationalWarehouseBsaleRefresh(companyId: string) {
+export async function runOperationalWarehouseBsaleRefresh(
+  companyId: string,
+  options?: { closureDocsRepairDays?: number }
+) {
   return syncBsaleSalesOrdersForPreparation(companyId, {
     trigger: 'WAREHOUSE_OPERATIONAL',
     discoverRecent: false,
     refreshActiveBoard: true,
-    closureDocsRepairDays: 90,
+    closureDocsRepairDays: options?.closureDocsRepairDays ?? 90,
   })
 }
 
@@ -3192,32 +3195,45 @@ export async function runManualWarehouseBsaleRefresh(companyId: string) {
   const incremental = await runIncrementalWarehouseBsaleRefresh(companyId)
   if (!incremental.success || !incremental.counts) return incremental
 
-  const operational = await runOperationalWarehouseBsaleRefresh(companyId)
-  if (!operational.counts) return operational
+  const operational = await runOperationalWarehouseBsaleRefresh(companyId, {
+    closureDocsRepairDays: 30,
+  })
 
   const incrementalCounts = incremental.counts
   const operationalCounts = operational.counts
+  const combinedCounts = operationalCounts ? {
+    ...operationalCounts,
+    discovery: incrementalCounts.discovery,
+    refresh: operationalCounts.refresh,
+    get_requests: incrementalCounts.get_requests + operationalCounts.get_requests,
+    documents: incrementalCounts.documents + operationalCounts.documents,
+    details: incrementalCounts.details + operationalCounts.details,
+    detail_errors: incrementalCounts.detail_errors + operationalCounts.detail_errors,
+    reference_errors: incrementalCounts.reference_errors + operationalCounts.reference_errors,
+    missing_details: incrementalCounts.missing_details + operationalCounts.missing_details,
+    new_cards: incrementalCounts.new_cards + operationalCounts.new_cards,
+    skipped_invoiced: incrementalCounts.skipped_invoiced + operationalCounts.skipped_invoiced,
+    relations_created: incrementalCounts.relations_created + operationalCounts.relations_created,
+    closed_invoiced: incrementalCounts.closed_invoiced + operationalCounts.closed_invoiced,
+    closed_cancelled: incrementalCounts.closed_cancelled + operationalCounts.closed_cancelled,
+    closed_non_operational: incrementalCounts.closed_non_operational + operationalCounts.closed_non_operational,
+    errors: incrementalCounts.errors + operationalCounts.errors,
+    duration_ms: incrementalCounts.duration_ms + operationalCounts.duration_ms,
+  } : incrementalCounts
+
+  if (!operational.success) {
+    return {
+      success: false,
+      status: operational.status,
+      error: operational.error ?? 'Error en conciliación operacional',
+      partial: true,
+      counts: combinedCounts,
+    }
+  }
+
   return {
     ...operational,
-    counts: {
-      ...operationalCounts,
-      discovery: incrementalCounts.discovery,
-      refresh: operationalCounts.refresh,
-      get_requests: incrementalCounts.get_requests + operationalCounts.get_requests,
-      documents: incrementalCounts.documents + operationalCounts.documents,
-      details: incrementalCounts.details + operationalCounts.details,
-      detail_errors: incrementalCounts.detail_errors + operationalCounts.detail_errors,
-      reference_errors: incrementalCounts.reference_errors + operationalCounts.reference_errors,
-      missing_details: incrementalCounts.missing_details + operationalCounts.missing_details,
-      new_cards: incrementalCounts.new_cards + operationalCounts.new_cards,
-      skipped_invoiced: incrementalCounts.skipped_invoiced + operationalCounts.skipped_invoiced,
-      relations_created: incrementalCounts.relations_created + operationalCounts.relations_created,
-      closed_invoiced: incrementalCounts.closed_invoiced + operationalCounts.closed_invoiced,
-      closed_cancelled: incrementalCounts.closed_cancelled + operationalCounts.closed_cancelled,
-      closed_non_operational: incrementalCounts.closed_non_operational + operationalCounts.closed_non_operational,
-      errors: incrementalCounts.errors + operationalCounts.errors,
-      duration_ms: incrementalCounts.duration_ms + operationalCounts.duration_ms,
-    },
+    counts: combinedCounts,
   }
 }
 

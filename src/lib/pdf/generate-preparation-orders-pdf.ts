@@ -21,6 +21,11 @@ const WHITE: [number, number, number] = [255, 255, 255]
 
 function formatDate(value: string | null | undefined): string {
   if (!value) return '—'
+  const match = String(value).trim().match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (match) {
+    const [, y, m, d] = match
+    return `${d}/${m}/${y}`
+  }
   const parsed = new Date(value)
   if (Number.isNaN(parsed.getTime())) return '—'
   return parsed.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric' })

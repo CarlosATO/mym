@@ -32,6 +32,39 @@ export type PreparationBoardSummary = {
 
 export type PreparationSelectionSummary = PreparationBoardSummary
 
+/**
+ * Parsea un campo DATE-only (ej. 'YYYY-MM-DD' o con prefijo 'YYYY-MM-DD')
+ * interpretándolo en tiempo local para evitar desfases de día por UTC.
+ */
+export function parseDateOnly(value: string | null | undefined): Date | null {
+  if (!value) return null
+  const str = String(value).trim()
+  const match = str.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (match) {
+    const year = Number(match[1])
+    const month = Number(match[2]) - 1
+    const day = Number(match[3])
+    return new Date(year, month, day)
+  }
+  const fallback = new Date(str)
+  return Number.isNaN(fallback.getTime()) ? null : fallback
+}
+
+export function formatDateOnly(
+  value: string | null | undefined,
+  options?: Intl.DateTimeFormatOptions
+): string {
+  if (!value) return '—'
+  const match = String(value).trim().match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (match && !options) {
+    const [, y, m, d] = match
+    return `${d}/${m}/${y}`
+  }
+  const date = parseDateOnly(value)
+  if (!date) return '—'
+  return date.toLocaleDateString('es-CL', options ?? { day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+
 function normalizeText(value: string | null | undefined): string {
   return (value ?? '')
     .normalize('NFD')
@@ -195,8 +228,10 @@ function compareFolio(a: PreparationSearchableCard, b: PreparationSearchableCard
 }
 
 function compareDate(a: PreparationSearchableCard, b: PreparationSearchableCard): number {
-  const timeA = a.nv_emission_date ? new Date(a.nv_emission_date).getTime() : Number.MAX_SAFE_INTEGER
-  const timeB = b.nv_emission_date ? new Date(b.nv_emission_date).getTime() : Number.MAX_SAFE_INTEGER
+  const dateA = parseDateOnly(a.nv_emission_date)
+  const dateB = parseDateOnly(b.nv_emission_date)
+  const timeA = dateA ? dateA.getTime() : Number.MAX_SAFE_INTEGER
+  const timeB = dateB ? dateB.getTime() : Number.MAX_SAFE_INTEGER
 
   if (timeA !== timeB) return timeA - timeB
   return compareFolio(a, b)

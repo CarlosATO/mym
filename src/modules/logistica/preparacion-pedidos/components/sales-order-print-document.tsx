@@ -2,7 +2,13 @@ import type { SalesOrderPreparationCardInfo, SalesOrderPreparationItem, SalesOrd
 
 function formatDate(dateStr: string | null) {
   if (!dateStr) return '—'
-  return new Date(dateStr).toLocaleDateString('es-CL')
+  const match = String(dateStr).trim().match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (match) {
+    const [, y, m, d] = match
+    return `${d}/${m}/${y}`
+  }
+  const date = new Date(dateStr)
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleDateString('es-CL')
 }
 
 function formatTime(dateStr: string | null) {

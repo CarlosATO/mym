@@ -505,7 +505,19 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
       } else {
         const message = res.error || 'Error al sincronizar Notas de Venta'
         setSyncError(message)
-        if (source === 'manual') toast.error(message)
+
+        // Resiliencia: si la fase incremental creó tarjetas válidamente,
+        // recargar el board para que la nueva NV sea visible de inmediato sin esperar otro intento.
+        const createdCount = res.data?.new_cards ?? 0
+        if (createdCount > 0 && mountedRef.current) {
+          detailCacheRef.current.clear()
+          await loadBoard()
+          if (source === 'manual') {
+            toast.error(`NV actualizadas (${createdCount} nueva${createdCount > 1 ? 's' : ''}), pero la conciliación posterior arrojó un error: ${message}`)
+          }
+        } else if (source === 'manual') {
+          toast.error(message)
+        }
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Error al sincronizar Notas de Venta'

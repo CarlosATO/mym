@@ -31,13 +31,18 @@ test('incremental no consulta el board y operacional sólo usa el board activo',
   assert.match(sync, /options\.discoverRecent[\s\S]*documenttypeid=5/)
 })
 
-test('manual ejecuta incremental y operacional, nunca FULL', () => {
+test('manual ejecuta incremental y operacional con ventana interactiva de 30 días, nunca FULL', () => {
   const manualStart = sync.indexOf('export async function runManualWarehouseBsaleRefresh')
   const manualEnd = sync.indexOf('/**', manualStart)
   const manual = sync.slice(manualStart, manualEnd)
   assert.match(manual, /runIncrementalWarehouseBsaleRefresh\(companyId\)/)
-  assert.match(manual, /runOperationalWarehouseBsaleRefresh\(companyId\)/)
+  assert.match(manual, /runOperationalWarehouseBsaleRefresh\(companyId,\s*\{\s*closureDocsRepairDays:\s*30,?\s*\}\)/)
   assert.doesNotMatch(manual, /runFullWarehouseBsaleRefresh/)
+})
+
+test('cron/background conserva 90 días por default sin duplicar pipelines', () => {
+  assert.match(operationalRoute, /runOperationalWarehouseBsaleRefresh\(COMPANY_ID\)/)
+  assert.match(sync, /closureDocsRepairDays:\s*options\?\.closureDocsRepairDays\s*\?\?\s*90/)
 })
 
 test('lock evita ejecuciones solapadas', () => {

@@ -887,6 +887,7 @@ export async function syncOperationalBsaleSalesOrders(): Promise<OperationalBsal
       return {
         ok: false,
         status: result.status,
+        data: result.counts,
         error: result.status === 'SKIPPED_LOCKED'
           ? 'Ya existe una sincronización en curso.'
           : result.error,
