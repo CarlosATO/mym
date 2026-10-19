@@ -191,6 +191,87 @@ export async function getSalesOrderPreparationItems(companyId: string, bsaleNvId
   return { data: data as SalesOrderPreparationItem[], error: null }
 }
 
+export type SalesOrderPreparationPrintData = {
+  itemsByNv: Record<string, SalesOrderPreparationItem[]>
+  clientByNv: Record<string, SalesOrderClientData>
+}
+
+export async function getSalesOrderPreparationPrintData(
+  companyId: string,
+  bsaleNvIds: number[],
+): Promise<{ data: SalesOrderPreparationPrintData | null; error: string | null }> {
+  const { supabase, error: permissionError } = await requireLogisticaView()
+  if (permissionError) return { data: null, error: permissionError }
+
+  const nvIds = [...new Set(bsaleNvIds.filter(id => Number.isFinite(id)))]
+  const empty: SalesOrderPreparationPrintData = { itemsByNv: {}, clientByNv: {} }
+  if (nvIds.length === 0) return { data: empty, error: null }
+
+  const { data: items, error: itemsError } = await supabase
+    .schema('integraciones')
+    .from('vw_bsale_sales_order_items_for_preparation')
+    .select('*')
+    .eq('company_id', companyId)
+    .in('nv_bsale_id', nvIds)
+    .order('product_name', { ascending: true })
+
+  if (itemsError) {
+    console.error('getSalesOrderPreparationPrintData items error:', itemsError)
+    return { data: null, error: itemsError.message }
+  }
+
+  const itemsByNv: Record<string, SalesOrderPreparationItem[]> = {}
+  for (const id of nvIds) itemsByNv[String(id)] = []
+  for (const item of (items ?? []) as SalesOrderPreparationItem[]) {
+    const key = String(item.nv_bsale_id)
+    if (!itemsByNv[key]) itemsByNv[key] = []
+    itemsByNv[key].push(item)
+  }
+
+  const { data: documents } = await supabase
+    .schema('integraciones')
+    .from('bsale_documents')
+    .select('bsale_id, client_id')
+    .eq('company_id', companyId)
+    .in('bsale_id', nvIds)
+
+  const clientIdByNv = new Map<number, number>()
+  for (const document of documents ?? []) {
+    if (document.client_id != null) {
+      clientIdByNv.set(Number(document.bsale_id), Number(document.client_id))
+    }
+  }
+
+  const clientIds = [...new Set([...clientIdByNv.values()])]
+  const clientsById = new Map<number, SalesOrderClientData>()
+
+  if (clientIds.length > 0) {
+    const { data: clients } = await supabase
+      .schema('integraciones')
+      .from('bsale_clients')
+      .select('bsale_client_id, code, phone, email')
+      .eq('company_id', companyId)
+      .in('bsale_client_id', clientIds)
+
+    for (const client of clients ?? []) {
+      clientsById.set(Number(client.bsale_client_id), {
+        rut: client.code ?? null,
+        phone: client.phone ?? null,
+        email: client.email ?? null,
+      })
+    }
+  }
+
+  const clientByNv: Record<string, SalesOrderClientData> = {}
+  for (const nvId of nvIds) {
+    const clientId = clientIdByNv.get(nvId)
+    const client = clientId != null ? clientsById.get(clientId) : null
+    if (client) clientByNv[String(nvId)] = client
+  }
+
+  return { data: { itemsByNv, clientByNv }, error: null }
+}
+
 export async function previewSalesOrderPreparationCandidates(companyId: string, fromDate: string, toDate: string) {
   const { supabase, error: permissionError } = await requireLogisticaView()
   if (permissionError) return { data: null, error: permissionError }

@@ -1,10 +1,11 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Search, SlidersHorizontal, KanbanSquare, Loader2, RotateCcw, RefreshCw, ShieldCheck } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react'
+import { Search, SlidersHorizontal, KanbanSquare, Loader2, RotateCcw, RefreshCw, ShieldCheck, Printer, ArrowUpDown, X } from 'lucide-react'
 import { 
   getSalesOrderPreparationBoard, 
   getSalesOrderPreparationItems,
+  getSalesOrderPreparationPrintData,
   syncOperationalBsaleSalesOrders,
   syncOperationalBsaleSalesOrdersIfStale,
   excludeSalesOrderPreparationNv,
@@ -25,6 +26,15 @@ import {
   markPreparationBoardFetch,
   recordPreparationDuration,
 } from './preparation-performance'
+import {
+  getPreparationComuna,
+  matchesPreparationSearch,
+  prunePreparationSelection,
+  sortPreparationCards,
+  summarizePreparationSelection,
+  type PreparationSort,
+} from './preparation-board-utils'
+import { generatePreparationOrdersPdf, openPreparationOrdersPdf } from '@/lib/pdf/generate-preparation-orders-pdf'
 import { SalesOrderCard } from './sales-order-card'
 import { SalesOrderDrawer } from './sales-order-drawer'
 import { PreparationExclusionDialog, type ExclusionConfirmInput, type ExclusionConfirmResult } from './preparation-exclusion-dialog'
@@ -72,7 +82,35 @@ const COLUMNS: KanbanColumn[] = [
   },
 ]
 
-function DroppableColumn({ col, colCards, pendingCardIds, onOpenCardDetails, canExclude, onExclude }: { col: KanbanColumn, colCards: SalesOrderPreparationCardInfo[], pendingCardIds: Set<string>, onOpenCardDetails: (c: SalesOrderPreparationCardInfo) => void, canExclude: boolean, onExclude: (c: SalesOrderPreparationCardInfo) => void }) {
+function closePrintWindow(target: Window | null) {
+  try {
+    if (target && !target.closed) target.close()
+  } catch {
+    // El navegador puede bloquear el cierre; no es un error operacional.
+  }
+}
+
+function DroppableColumn({
+  col,
+  colCards,
+  pendingCardIds,
+  onOpenCardDetails,
+  canExclude,
+  onExclude,
+  selectedCardIds,
+  onToggleSelection,
+  sortBy,
+}: {
+  col: KanbanColumn
+  colCards: SalesOrderPreparationCardInfo[]
+  pendingCardIds: Set<string>
+  onOpenCardDetails: (c: SalesOrderPreparationCardInfo) => void
+  canExclude: boolean
+  onExclude: (c: SalesOrderPreparationCardInfo) => void
+  selectedCardIds: Set<string>
+  onToggleSelection: (c: SalesOrderPreparationCardInfo) => void
+  sortBy: PreparationSort
+}) {
   const { setNodeRef, isOver } = useDroppable({
     id: col.id,
   })
@@ -92,16 +130,33 @@ function DroppableColumn({ col, colCards, pendingCardIds, onOpenCardDetails, can
           {colCards.length === 0 && (
           <p className="pt-6 text-center text-[10px] font-medium text-theme-text-muted/60">Sin tarjetas</p>
         )}
-        {colCards.map(card => (
-          <SalesOrderCard
-            key={card.card_id}
-            card={card}
-            isPending={pendingCardIds.has(card.card_id)}
-            onDoubleClick={() => onOpenCardDetails(card)}
-            canExclude={canExclude}
-            onExclude={onExclude}
-          />
-        ))}
+        {colCards.map((card, index) => {
+          const comuna = getPreparationComuna(card)
+          const previousComuna = index > 0 ? getPreparationComuna(colCards[index - 1]) : ''
+          const showComunaDivider = sortBy === 'comuna' && comuna !== previousComuna
+
+          return (
+            <Fragment key={card.card_id}>
+              {showComunaDivider && (
+                <div className="flex items-center gap-2 pt-2 first:pt-0">
+                  <span className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#72383D]/70">{comuna}</span>
+                  <span className="h-px flex-1 bg-[#D1C7BD]" />
+                </div>
+              )}
+              <SalesOrderCard
+                card={card}
+                isPending={pendingCardIds.has(card.card_id)}
+                onOpen={() => onOpenCardDetails(card)}
+                onDoubleClick={() => onOpenCardDetails(card)}
+                canExclude={canExclude}
+                onExclude={onExclude}
+                selectable={card.status === 'PENDING_ROUTE_PREP'}
+                selected={selectedCardIds.has(card.card_id)}
+                onToggleSelected={onToggleSelection}
+              />
+            </Fragment>
+          )
+        })}
       </div>
     </section>
   )
@@ -126,7 +181,13 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
   const [searchTerm, setSearchTerm] = useState('')
   const [filterCity, setFilterCity] = useState('')
   const [filterSeller, setFilterSeller] = useState('')
+  const [sortBy, setSortBy] = useState<PreparationSort>('default')
   const [showAdvanced, setShowAdvanced] = useState(false)
+
+  // Selección operacional (identidad por card_id, nunca por índice visual)
+  const [selectedCardIds, setSelectedCardIds] = useState<Set<string>>(new Set())
+  const [isBulkPrinting, setIsBulkPrinting] = useState(false)
+  const [bulkPrintError, setBulkPrintError] = useState<string | null>(null)
 
   // Drag & Drop
   const [activeCard, setActiveCard] = useState<SalesOrderPreparationCardInfo | null>(null)
@@ -145,6 +206,7 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
 
   const cardsRef = useRef<SalesOrderPreparationCardInfo[]>([])
   const boardRequestSeqRef = useRef(0)
+  const itemsRequestSeqRef = useRef(0)
   const pendingStatusByCardRef = useRef<Map<string, string>>(new Map())
   const pendingExclusionNvIdsRef = useRef<Set<number>>(new Set())
   const exclusionSnapshotsRef = useRef<Map<number, PreparationCardSnapshot<SalesOrderPreparationCardInfo>>>(new Map())
@@ -252,6 +314,7 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
 
       cardsRef.current = rows
       setCards(rows)
+      setSelectedCardIds(current => prunePreparationSelection(current, rows))
       setError(null)
       setSelectedCard(current => {
         if (!current) return current
@@ -406,9 +469,12 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
 
   const openCardDetails = async (card: SalesOrderPreparationCardInfo) => {
     if (!companyId) return
+    const requestId = ++itemsRequestSeqRef.current
     setSelectedCard(card)
+    setSelectedItems([])
     setLoadingItems(true)
     const res = await getSalesOrderPreparationItems(companyId, card.nv_bsale_id)
+    if (requestId !== itemsRequestSeqRef.current) return
     if (!res.error && res.data) {
       setSelectedItems(res.data)
     } else {
@@ -445,6 +511,12 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
       }
       pendingStatusByCardRef.current.delete(card.card_id)
       boardRequestSeqRef.current += 1
+      setSelectedCardIds(current => {
+        if (!current.has(card.card_id)) return current
+        const next = new Set(current)
+        next.delete(card.card_id)
+        return next
+      })
       toast.success(`NV #${card.nv_folio} movida exitosamente`)
       setPendingMovement(null)
       return true
@@ -466,6 +538,176 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
         return next
       })
       setIsMoving(false)
+    }
+  }
+
+  const toggleSelection = (card: SalesOrderPreparationCardInfo) => {
+    if (card.status !== 'PENDING_ROUTE_PREP') return
+    setSelectedCardIds(current => {
+      const next = new Set(current)
+      if (next.has(card.card_id)) next.delete(card.card_id)
+      else next.add(card.card_id)
+      return next
+    })
+  }
+
+  const clearSelection = () => {
+    setSelectedCardIds(new Set())
+    setBulkPrintError(null)
+  }
+
+  const moveCardsToPreparation = async (targets: SalesOrderPreparationCardInfo[]) => {
+    const operational = targets.filter(card => card.status === 'PENDING_ROUTE_PREP')
+    if (operational.length === 0) return { moved: [], failed: [] as Array<{ card: SalesOrderPreparationCardInfo; error: string }> }
+
+    const targetIds = new Set(operational.map(card => card.card_id))
+    setTransitionError(null)
+    setIsMoving(true)
+    setPendingCardIds(current => {
+      const next = new Set(current)
+      for (const id of targetIds) next.add(id)
+      return next
+    })
+    for (const card of operational) {
+      pendingStatusByCardRef.current.set(card.card_id, 'IN_PREPARATION')
+    }
+    boardRequestSeqRef.current += 1
+
+    const optimisticCards = cardsRef.current.map(item => (
+      targetIds.has(item.card_id) ? { ...item, status: 'IN_PREPARATION' } : item
+    ))
+    cardsRef.current = optimisticCards
+    setCards(optimisticCards)
+    setSelectedCard(current => (
+      current && targetIds.has(current.card_id) ? { ...current, status: 'IN_PREPARATION' } : current
+    ))
+
+    const results = await Promise.all(operational.map(async card => {
+      try {
+        const res = await moveSalesOrderPreparationCard({ cardId: card.card_id, toStatus: 'IN_PREPARATION' })
+        return { card, ok: res.ok, error: res.error ?? 'Desconocido' }
+      } catch (err) {
+        return {
+          card,
+          ok: false,
+          error: err instanceof Error ? err.message : 'Error desconocido',
+        }
+      }
+    }))
+
+    for (const card of operational) {
+      pendingStatusByCardRef.current.delete(card.card_id)
+    }
+    boardRequestSeqRef.current += 1
+
+    const moved = results.filter(result => result.ok).map(result => result.card)
+    const failed = results
+      .filter(result => !result.ok)
+      .map(result => ({ card: result.card, error: result.error }))
+
+    if (failed.length > 0) {
+      const failedIds = new Set(failed.map(failure => failure.card.card_id))
+      const rolledBack = cardsRef.current.map(item => (
+        failedIds.has(item.card_id) ? { ...item, status: 'PENDING_ROUTE_PREP' } : item
+      ))
+      cardsRef.current = rolledBack
+      setCards(rolledBack)
+      setSelectedCard(current => (
+        current && failedIds.has(current.card_id) ? { ...current, status: 'PENDING_ROUTE_PREP' } : current
+      ))
+      const message = failed
+        .map(failure => `NV #${failure.card.nv_folio}: ${failure.error}`)
+        .join(' · ')
+      setTransitionError(message)
+      toast.error(`No se pudieron preparar todas las NV · ${message}`)
+    } else {
+      toast.success(
+        operational.length === 1
+          ? `NV #${operational[0].nv_folio} pasó a preparación`
+          : `${operational.length} Notas de Venta pasaron a preparación`,
+      )
+    }
+
+    setSelectedCardIds(current => {
+      const next = new Set(current)
+      for (const card of moved) next.delete(card.card_id)
+      return next
+    })
+    setPendingCardIds(current => {
+      const next = new Set(current)
+      for (const id of targetIds) next.delete(id)
+      return next
+    })
+    setIsMoving(false)
+
+    return { moved, failed }
+  }
+
+  const handleBulkPrint = async (mode: 'prepare' | 'print') => {
+    const targets = cardsRef.current.filter(card => (
+      selectedCardIds.has(card.card_id) && card.status === 'PENDING_ROUTE_PREP'
+    ))
+    if (!companyId || targets.length === 0 || isBulkPrinting) return
+
+    const printWindow = window.open('', '_blank')
+    setIsBulkPrinting(true)
+    setBulkPrintError(null)
+
+    try {
+      const printData = await getSalesOrderPreparationPrintData(
+        companyId,
+        targets.map(card => card.nv_bsale_id),
+      )
+      if (printData.error || !printData.data) {
+        throw new Error(printData.error || 'No se pudieron cargar los datos de impresión.')
+      }
+
+      const entries = targets.map(card => ({
+        card,
+        items: printData.data?.itemsByNv[String(card.nv_bsale_id)] ?? [],
+        clientData: printData.data?.clientByNv[String(card.nv_bsale_id)] ?? null,
+      }))
+
+      // Primero se construye el documento. Si falla, ninguna tarjeta se mueve.
+      const blob = generatePreparationOrdersPdf(entries)
+
+      const moveResult = mode === 'prepare'
+        ? await moveCardsToPreparation(targets)
+        : { moved: [], failed: [] as Array<{ card: SalesOrderPreparationCardInfo; error: string }> }
+
+      openPreparationOrdersPdf(
+        blob,
+        printWindow,
+        targets.length === 1
+          ? `preparacion-nv-${targets[0].nv_folio}.pdf`
+          : `preparacion-${targets.length}-notas-venta.pdf`,
+      )
+
+      if (moveResult.failed.length > 0) {
+        const message = moveResult.failed
+          .map(failure => `NV #${failure.card.nv_folio}: ${failure.error}`)
+          .join(' · ')
+        setBulkPrintError(message)
+      } else if (mode === 'prepare') {
+        toast.success(
+          targets.length === 1
+            ? `NV #${targets[0].nv_folio} impresa y en preparación`
+            : `${targets.length} Notas de Venta impresas y en preparación`,
+        )
+      } else {
+        toast.success(
+          targets.length === 1
+            ? `NV #${targets[0].nv_folio} impresa sin cambiar estado`
+            : `${targets.length} Notas de Venta impresas sin cambiar estado`,
+        )
+      }
+    } catch (err) {
+      closePrintWindow(printWindow)
+      const message = err instanceof Error ? err.message : 'No se pudo generar el documento de preparación.'
+      setBulkPrintError(message)
+      toast.error(message)
+    } finally {
+      setIsBulkPrinting(false)
     }
   }
 
@@ -506,26 +748,29 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
   }
 
   // Unique options for selects
-  const cities = useMemo(() => [...new Set(cards.map(c => c.normalized_city || c.city_raw || '').filter(Boolean))].sort(), [cards])
+  const cities = useMemo(() => [...new Set(cards.map(getPreparationComuna))].sort((a, b) => a.localeCompare(b, 'es')), [cards])
   const sellers = useMemo(() => [...new Set(cards.map(c => c.seller_name || '').filter(Boolean))].sort(), [cards])
 
-  const filteredCards = useMemo(() => cards.filter(card => {
-    if (searchTerm) {
-      const term = searchTerm.toLowerCase()
-      const hit = (
-        String(card.nv_folio).toLowerCase().includes(term) ||
-        card.client_name.toLowerCase().includes(term) ||
-        (card.normalized_city ?? '').toLowerCase().includes(term) ||
-        (card.city_raw ?? '').toLowerCase().includes(term)
-      )
-      if (!hit) return false
-    }
-    if (filterCity && (card.normalized_city || card.city_raw) !== filterCity) return false
+  const searchFilteredCards = useMemo(() => cards.filter(card => {
+    if (!matchesPreparationSearch(card, searchTerm)) return false
+    if (filterCity && getPreparationComuna(card) !== filterCity) return false
     if (filterSeller && card.seller_name !== filterSeller) return false
     return true
   }), [cards, searchTerm, filterCity, filterSeller])
 
-  const hasFilters = searchTerm || filterCity || filterSeller
+  const filteredCards = useMemo(
+    () => sortPreparationCards(searchFilteredCards, sortBy),
+    [searchFilteredCards, sortBy],
+  )
+
+  const selectedCards = useMemo(
+    () => cards.filter(card => selectedCardIds.has(card.card_id) && card.status === 'PENDING_ROUTE_PREP'),
+    [cards, selectedCardIds],
+  )
+  const selectionSummary = useMemo(() => summarizePreparationSelection(selectedCards), [selectedCards])
+
+  const hasFilters = Boolean(searchTerm || filterCity || filterSeller)
+  const hasActiveFilterOrSort = hasFilters || sortBy !== 'default'
   const clearFilters = () => { setSearchTerm(''); setFilterCity(''); setFilterSeller('') }
   const syncRun = syncHealth?.latestSuccessfulRun
   const latestRun = syncHealth?.latestRun
@@ -549,15 +794,20 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
     <div className="flex flex-col h-[calc(100vh-110px)] w-full overflow-hidden bg-[#EFE9E1] text-[#322D29]">
       {/* ── Header / Toolbar ── */}
       <div className="flex-none px-4 py-2 border-b border-[#D1C7BD] bg-[#FCFBF9] shadow-sm z-10">
-        <div className="flex items-center gap-2 whitespace-nowrap">
+        <div className="flex flex-wrap items-center gap-2">
           
           <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
             <div className="flex items-center gap-1.5 shrink-0">
               <KanbanSquare className="w-4 h-4 text-[#72383D] shrink-0" />
             <h1 className="text-sm font-semibold text-[#322D29]">Preparación de Pedidos</h1>
-              <span className="px-1.5 py-0.5 bg-[#F5F0EA] text-[#322D29]/55 text-[10px] font-bold border border-[#D1C7BD] shrink-0">
-                {filteredCards.length}
+              <span className="px-1.5 py-0.5 bg-[#F5F0EA] text-[#322D29]/55 text-[10px] font-bold border border-[#D1C7BD] shrink-0" title="Total de tarjetas en el tablero">
+                {cards.length}
               </span>
+              {hasFilters && (
+                <span className="px-1.5 py-0.5 bg-white text-[#72383D] text-[10px] font-bold border border-[#72383D]/25 shrink-0" title="Tarjetas que coinciden con la búsqueda/filtros">
+                  {filteredCards.length} filtradas
+                </span>
+              )}
             </div>
 
             <div
@@ -600,16 +850,32 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
               EXCLUSIONES
             </button>
 
-            <div className="relative w-40 ml-2">
+            <div className="relative w-60 ml-2">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#322D29]/40" />
               <input
                 type="text"
-                placeholder="Buscar folio, cliente..."
+                placeholder="Buscar NV, cliente, comuna, fecha..."
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
                 className="w-full pl-8 pr-2 py-1.5 bg-white border border-[#D1C7BD] text-[#322D29] font-medium focus:outline-none focus:border-[#72383D] transition-colors placeholder:text-[#322D29]/40"
               />
             </div>
+
+            <div className="relative">
+              <ArrowUpDown className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#322D29]/45" />
+              <select
+                value={sortBy}
+                onChange={e => setSortBy(e.target.value as PreparationSort)}
+                title="Ordenar tarjetas"
+                className="appearance-none py-1.5 pl-8 pr-6 bg-white border border-[#D1C7BD] text-[11px] font-medium text-[#322D29] focus:outline-none focus:border-[#72383D]"
+              >
+                <option value="default">Orden normal</option>
+                <option value="comuna">Ordenar por comuna</option>
+                <option value="nv">Ordenar por NV</option>
+                <option value="date">Ordenar por fecha</option>
+              </select>
+            </div>
+
             <button
               onClick={() => setShowAdvanced(v => !v)}
                className={`flex items-center gap-1 px-2.5 py-1.5 border text-[11px] font-bold transition-colors ${showAdvanced ? 'bg-[#F5EDE9] border-[#72383D]/30 text-[#72383D]' : 'bg-white border-[#D1C7BD] text-[#322D29]/55 hover:bg-[#F5F0EA]'}`}
@@ -639,17 +905,68 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
               <option value="">Todos los vendedores</option>
               {sellers.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
-            {hasFilters && (
+            {hasActiveFilterOrSort && (
               <button
-                onClick={clearFilters}
+                onClick={() => { clearFilters(); setSortBy('default') }}
                 className="flex items-center gap-1 px-2 py-1.5 text-[10px] font-bold text-[#322D29]/55 hover:text-[#322D29] transition-colors ml-auto bg-white border border-transparent hover:border-[#D1C7BD]"
               >
-                <RotateCcw className="w-3.5 h-3.5" /> Limpiar filtros
+                <RotateCcw className="w-3.5 h-3.5" /> Limpiar filtros y orden
               </button>
             )}
           </div>
         )}
       </div>
+
+      {/* ── Barra de acciones de selección ── */}
+      {selectionSummary.nvCount > 0 && (
+        <div className="flex-none border-b border-[#72383D]/25 bg-[#F5EDE9] px-4 py-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+              <span className="font-bold uppercase tracking-[0.06em] text-[#72383D]">
+                {selectionSummary.nvCount} NV seleccionada{selectionSummary.nvCount === 1 ? '' : 's'}
+              </span>
+              <span className="text-[#322D29]/60">· {selectionSummary.units} unidades</span>
+              {selectionSummary.comunas.length > 0 && (
+                <span className="text-[#322D29]/60">· {selectionSummary.comunas.join(' / ')}</span>
+              )}
+            </div>
+
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void handleBulkPrint('prepare')}
+                disabled={isBulkPrinting || isMoving}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#72383D] hover:bg-[#612F34] text-white text-[11px] font-bold uppercase tracking-[0.04em] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {isBulkPrinting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Printer className="w-3.5 h-3.5" />}
+                {isBulkPrinting ? 'Procesando…' : `Imprimir y preparar (${selectionSummary.nvCount})`}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleBulkPrint('print')}
+                disabled={isBulkPrinting || isMoving}
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-[#D1C7BD] bg-white hover:bg-[#F5F0EA] text-[#322D29]/75 text-[11px] font-bold disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                Imprimir sin mover
+              </button>
+              <button
+                type="button"
+                onClick={clearSelection}
+                disabled={isBulkPrinting || isMoving}
+                className="flex items-center gap-1 px-2 py-1.5 text-[10px] font-bold text-[#322D29]/55 hover:text-[#322D29] disabled:opacity-50 transition-colors"
+              >
+                <X className="w-3.5 h-3.5" /> Limpiar selección
+              </button>
+            </div>
+          </div>
+          {bulkPrintError && (
+            <p className="mt-2 border border-[#8A4B4B]/30 bg-white px-2 py-1 text-[10px] font-medium text-[#8A4B4B]">
+              {bulkPrintError}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* ── Kanban Board ── */}
       <div className="flex-1 overflow-x-auto overflow-y-hidden bg-[#EFE9E1]">
@@ -671,7 +988,20 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
                 <div className="grid h-full min-w-[1000px] grid-cols-[repeat(3,minmax(320px,1fr))] gap-4">
                   {COLUMNS.map(col => {
                     const colCards = filteredCards.filter(c => c.status === col.id)
-                     return <DroppableColumn key={col.id} col={col} colCards={colCards} pendingCardIds={pendingCardIds} onOpenCardDetails={openCardDetails} canExclude={canManageExclusions} onExclude={setExcludeCard} />
+                     return (
+                       <DroppableColumn
+                         key={col.id}
+                         col={col}
+                         colCards={colCards}
+                         pendingCardIds={pendingCardIds}
+                         onOpenCardDetails={openCardDetails}
+                         canExclude={canManageExclusions}
+                         onExclude={setExcludeCard}
+                         selectedCardIds={selectedCardIds}
+                         onToggleSelection={toggleSelection}
+                         sortBy={sortBy}
+                       />
+                     )
                   })}
                 </div>
               </div>

@@ -1,8 +1,8 @@
 'use client'
 
-import { X, MapPin, Package, User, FileText, FileCheck, CheckCircle2, Printer } from 'lucide-react'
+import { X, MapPin, Package, User, FileText, FileCheck, CheckCircle2, Printer, Building2, Hash } from 'lucide-react'
 import { SalesOrderPreparationCardInfo, SalesOrderPreparationItem, getSalesOrderClientData, SalesOrderClientData, getSalesOrderPreparationMovements, SalesOrderPreparationMovement } from '@/app/actions/logistica/sales-order-preparation'
-import { SalesOrderPrintDocument } from './components/sales-order-print-document'
+import { generatePreparationOrdersPdf, openPreparationOrdersPdf } from '@/lib/pdf/generate-preparation-orders-pdf'
 import { useState, useEffect } from 'react'
 import { MOVEMENT_RULES } from './movement-rules'
 
@@ -16,6 +16,22 @@ interface SalesOrderDrawerProps {
 
 const statusLabel = (status: string) => status === 'PENDING_ROUTE_PREP' ? 'Pendiente' : status === 'IN_PREPARATION' ? 'En preparación' : status === 'IN_AUDIT' ? 'En auditoría' : 'Estado operativo'
 
+function openBlankPdfWindow(): Window | null {
+  try {
+    return window.open('', '_blank')
+  } catch {
+    return null
+  }
+}
+
+function closePdfWindow(target: Window | null) {
+  try {
+    if (target && !target.closed) target.close()
+  } catch {
+    // El navegador puede bloquear el cierre; no es un error operacional.
+  }
+}
+
 export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTransition }: SalesOrderDrawerProps) {
   const [clientData, setClientData] = useState<SalesOrderClientData | null>(null)
   
@@ -26,14 +42,23 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
   const [observation, setObservation] = useState('')
   const [isMoving, setIsMoving] = useState(false)
   const [moveError, setMoveError] = useState<string | null>(null)
+  const [isPrinting, setIsPrinting] = useState(false)
+  const [printError, setPrintError] = useState<string | null>(null)
 
   // This loader synchronizes the drawer history when the selected card changes.
   /* eslint-disable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
   useEffect(() => {
+    let cancelled = false
+    setClientData(null)
+
     if (card?.company_id && card?.nv_bsale_id) {
       getSalesOrderClientData(card.company_id, card.nv_bsale_id).then((res) => {
-        if (res.data) setClientData(res.data)
+        if (!cancelled && res.data) setClientData(res.data)
       })
+    }
+
+    return () => {
+      cancelled = true
     }
   }, [card?.company_id, card?.nv_bsale_id])
 
@@ -54,6 +79,7 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
     setPendingMoveAction(null)
     setObservation('')
     setMoveError(null)
+    setPrintError(null)
   }, [card?.card_id])
   /* eslint-enable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
 
@@ -84,32 +110,63 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
 
   const dateStr = new Date(card.nv_emission_date).toLocaleDateString('es-CL', { day: 'numeric', month: 'long', year: 'numeric' })
   const firstPrepMovement = movements.find(m => m.to_status === 'IN_PREPARATION')
+  const canPrint = !isLoadingItems
+  const comuna = card.normalized_city || card.municipality_raw || card.city_raw || 'Sin comuna'
 
+  const handlePrintOnly = () => {
+    if (!canPrint || isPrinting) return
+
+    const printWindow = openBlankPdfWindow()
+    setIsPrinting(true)
+    setPrintError(null)
+
+    try {
+      const blob = generatePreparationOrdersPdf([{ card, items, clientData }])
+      openPreparationOrdersPdf(blob, printWindow, `preparacion-nv-${card.nv_folio}.pdf`)
+    } catch (err) {
+      closePdfWindow(printWindow)
+      setPrintError(err instanceof Error ? err.message : 'No se pudo generar el PDF de preparación.')
+    } finally {
+      setIsPrinting(false)
+    }
+  }
+
+  const handlePrintAndPrepare = async () => {
+    if (!canPrint || isPrinting || isMoving || card.status !== 'PENDING_ROUTE_PREP') return
+
+    const printWindow = openBlankPdfWindow()
+    setIsPrinting(true)
+    setPrintError(null)
+
+    try {
+      // El documento se construye antes de mover la tarjeta: si falla, no cambia el estado.
+      const blob = generatePreparationOrdersPdf([{ card, items, clientData }])
+      const ok = await onTransition(card, 'IN_PREPARATION')
+
+      if (!ok) {
+        closePdfWindow(printWindow)
+        setPrintError('No se movió la NV: el servidor rechazó el cambio de estado. No se abrió el documento.')
+        return
+      }
+
+      openPreparationOrdersPdf(blob, printWindow, `preparacion-nv-${card.nv_folio}.pdf`)
+      await loadMovements()
+    } catch (err) {
+      closePdfWindow(printWindow)
+      setPrintError(err instanceof Error ? err.message : 'No se pudo generar el PDF de preparación.')
+    } finally {
+      setIsPrinting(false)
+    }
+  }
 
   return (
     <>
-      <div className="hidden print:block print:absolute print:inset-0 print:bg-white print:z-[9999]">
-        <style>{`
-          @media print {
-            body * { visibility: hidden !important; }
-            .sales-order-print-container, .sales-order-print-container * { visibility: visible !important; }
-            .sales-order-print-container { 
-              position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; margin: 0; padding: 0;
-            }
-            .drawer-no-print { display: none !important; }
-          }
-        `}</style>
-        <div className="sales-order-print-container">
-          <SalesOrderPrintDocument card={card} items={items} clientData={clientData} />
-        </div>
-      </div>
-
       <div 
-        className="fixed inset-0 bg-[#322D29]/35 backdrop-blur-sm z-50 transition-opacity drawer-no-print"
+        className="fixed inset-0 bg-[#322D29]/35 backdrop-blur-sm z-50 transition-opacity"
         onClick={onClose} 
       />
       
-      <div className="fixed inset-y-0 right-0 z-50 w-full max-w-xl bg-[#EFE9E1] border-l border-[#D1C7BD] shadow-2xl flex flex-col transition-transform transform drawer-no-print">
+      <div className="fixed inset-y-0 right-0 z-50 w-full max-w-2xl bg-[#EFE9E1] border-l border-[#D1C7BD] shadow-2xl flex flex-col transition-transform transform">
         {/* Header */}
         <div className="flex-none px-5 py-4 border-b border-[#D1C7BD] bg-white flex items-center justify-between">
           <div>
@@ -132,25 +189,69 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
         {/* Content */}
          <div className="flex-1 overflow-y-auto p-5 space-y-5">
           
+          {/* Comuna / Ruta — señal operacional */}
+          <div className="flex flex-wrap items-center gap-3 border border-[#72383D]/30 bg-[#F5EDE9] px-4 py-3">
+            <div className="flex items-center gap-2">
+              <MapPin className="w-4 h-4 text-[#72383D]" />
+              <span className="text-base font-bold uppercase tracking-[0.08em] text-[#72383D]">{comuna}</span>
+            </div>
+            {card.route_date && (
+              <span className="border border-[#B38A55]/40 bg-[#F6EFE2] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] text-[#806238]">
+                Ruta {new Date(card.route_date).toLocaleDateString('es-CL')}
+              </span>
+            )}
+            <span className={`ml-auto px-2 py-0.5 border text-[9px] font-semibold uppercase tracking-[0.08em]
+              ${card.status === 'PENDING_ROUTE_PREP' ? 'border-[#AC9C8D]/30 bg-white text-[#6B625C]' : ''}
+              ${card.status === 'IN_PREPARATION' ? 'border-[#B38A55]/40 bg-[#F6EFE2] text-[#806238]' : ''}
+              ${card.status === 'IN_AUDIT' ? 'border-[#72383D]/30 bg-white text-[#72383D]' : ''}
+            `}>
+              {statusLabel(card.status)}
+            </span>
+          </div>
+
           {/* Info Client & Route */}
-           <div className="border border-[#D1C7BD] bg-white p-4 space-y-4">
+          <div className="border border-[#D1C7BD] bg-white p-4 space-y-4">
             <div>
               <p className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider mb-1">Cliente</p>
               <p className="font-medium text-theme-text text-sm">{card.client_name}</p>
             </div>
-            
-            <div className="grid grid-cols-2 gap-4">
+
+            <div className="grid grid-cols-2 gap-x-4 gap-y-3">
               <div>
                 <p className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider mb-1 flex items-center gap-1">
-                  <MapPin className="w-3.5 h-3.5" /> Ciudad
+                  <Hash className="w-3.5 h-3.5" /> RUT
                 </p>
-                <p className="font-medium text-theme-text text-sm">{card.normalized_city || card.city_raw || 'Sin ciudad'}</p>
+                <p className="font-medium text-theme-text text-sm">{clientData?.rut || 'No disponible'}</p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider mb-1 flex items-center gap-1">
+                  <Building2 className="w-3.5 h-3.5" /> Comuna
+                </p>
+                <p className="font-medium text-theme-text text-sm">{comuna}</p>
+              </div>
+              <div className="col-span-2">
+                <p className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider mb-1 flex items-center gap-1">
+                  <MapPin className="w-3.5 h-3.5" /> Dirección
+                </p>
+                <p className="font-medium text-theme-text text-sm">{card.address_raw || 'Sin dirección registrada'}</p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider mb-1">Ciudad</p>
+                <p className="font-medium text-theme-text text-sm">{card.city_raw || 'Sin ciudad'}</p>
               </div>
               <div>
                 <p className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider mb-1 flex items-center gap-1">
                   <User className="w-3.5 h-3.5" /> Vendedor
                 </p>
                 <p className="font-medium text-theme-text text-sm truncate" title={card.seller_name || ''}>{card.seller_name || 'Sin asignar'}</p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider mb-1">Fecha emisión</p>
+                <p className="font-medium text-theme-text text-sm">{dateStr}</p>
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider mb-1">Cantidad total</p>
+                <p className="font-medium text-theme-text text-sm">{card.total_quantity} unidades</p>
               </div>
             </div>
           </div>
@@ -231,28 +332,26 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
                   No se encontraron productos en esta nota de venta.
                 </div>
               ) : (
-                <div className="divide-y divide-theme-border max-h-[300px] overflow-y-auto">
-                  {items.map((item) => (
-                    <div key={item.detail_id} className="p-3 hover:bg-theme-border/10 flex items-start gap-3">
-                      <div className="bg-theme-border/30 w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-xs font-bold text-theme-text">
-                        x{item.quantity}
+                <div className="max-h-[360px] overflow-y-auto">
+                  <div className="grid grid-cols-[90px_1fr_56px] gap-2 border-b border-theme-border bg-[#F5F0EA] px-3 py-2 text-[9px] font-bold uppercase tracking-[0.08em] text-[#6B625C]">
+                    <span>SKU</span>
+                    <span>Descripción / presentación</span>
+                    <span className="text-center">Cant.</span>
+                  </div>
+                  <div className="divide-y divide-theme-border">
+                    {items.map((item) => (
+                      <div key={item.detail_id} className="grid grid-cols-[90px_1fr_56px] items-start gap-2 px-3 py-2.5 hover:bg-theme-border/10">
+                        <p className="font-mono text-[10px] leading-relaxed text-theme-text-muted break-words">{item.sku || '—'}</p>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium leading-snug text-theme-text">{item.product_name}</p>
+                          {item.unit_net_value != null && (
+                            <p className="text-[10px] text-theme-text-muted mt-0.5">c/u ${item.unit_net_value.toLocaleString('es-CL')}</p>
+                          )}
+                        </div>
+                        <p className="text-center text-sm font-bold text-theme-text">{item.quantity}</p>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-theme-text truncate">{item.product_name}</p>
-                        {item.sku && <p className="text-xs text-theme-text-muted mt-0.5">SKU: {item.sku}</p>}
-                      </div>
-                      <div className="text-right shrink-0">
-                        {item.line_net_amount != null ? (
-                          <p className="text-xs font-semibold text-theme-text">${item.line_net_amount.toLocaleString('es-CL')}</p>
-                        ) : (
-                          <p className="text-xs font-semibold text-red-500">Sin dato neto</p>
-                        )}
-                        {item.unit_net_value != null && (
-                          <p className="text-[10px] text-theme-text-muted">c/u ${item.unit_net_value.toLocaleString('es-CL')}</p>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -321,12 +420,30 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
 
         <div className="flex-none p-4 border-t border-theme-border bg-theme-panel">
           {moveError && !pendingMoveAction && <p className="text-xs text-red-500 mb-3 text-center">{moveError}</p>}
-          
+          {printError && <p className="text-xs text-red-500 mb-3 text-center">{printError}</p>}
+
           {!pendingMoveAction && card.status === 'PENDING_ROUTE_PREP' && (
-            <div className="flex gap-2 mb-3">
-              <button onClick={() => handleMove('IN_PREPARATION', MOVEMENT_RULES.PENDING_ROUTE_PREP.IN_PREPARATION.backward, MOVEMENT_RULES.PENDING_ROUTE_PREP.IN_PREPARATION.label)} disabled={isMoving} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-xl text-sm disabled:opacity-50 transition-colors">
-                {MOVEMENT_RULES.PENDING_ROUTE_PREP.IN_PREPARATION.label}
+            <div className="flex flex-col gap-2 mb-3">
+              <button
+                onClick={() => void handlePrintAndPrepare()}
+                disabled={!canPrint || isPrinting || isMoving}
+                className="w-full py-3 bg-[#72383D] hover:bg-[#612F34] text-white font-bold rounded-xl text-sm disabled:opacity-50 transition-colors flex items-center justify-center gap-2 uppercase tracking-[0.04em]"
+              >
+                <Printer className="w-4 h-4" />
+                {isPrinting ? 'Generando documento…' : 'Imprimir y preparar'}
               </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={handlePrintOnly}
+                  disabled={!canPrint || isPrinting}
+                  className="flex-1 py-2 px-3 bg-white border border-[#D1C7BD] hover:bg-[#F5F0EA] text-[#322D29]/70 font-medium rounded-xl text-xs disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
+                >
+                  <Printer className="w-3.5 h-3.5" /> Imprimir sin cambiar estado
+                </button>
+                <button onClick={() => handleMove('IN_PREPARATION', MOVEMENT_RULES.PENDING_ROUTE_PREP.IN_PREPARATION.backward, MOVEMENT_RULES.PENDING_ROUTE_PREP.IN_PREPARATION.label)} disabled={isMoving} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-xl text-xs disabled:opacity-50 transition-colors">
+                  {MOVEMENT_RULES.PENDING_ROUTE_PREP.IN_PREPARATION.label}
+                </button>
+              </div>
             </div>
           )}
 
@@ -353,12 +470,15 @@ export function SalesOrderDrawer({ card, items, isLoadingItems, onClose, onTrans
           )}
 
           <div className="flex gap-3">
-            <button 
-              onClick={() => window.print()}
-              className="flex-1 py-2.5 px-4 bg-theme-border/20 hover:bg-theme-border/40 text-theme-text font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
-            >
-              <Printer className="w-4 h-4" /> Imprimir
-            </button>
+            {card.status !== 'PENDING_ROUTE_PREP' && (
+              <button
+                onClick={handlePrintOnly}
+                disabled={!canPrint || isPrinting}
+                className="flex-1 py-2.5 px-4 bg-theme-border/20 hover:bg-theme-border/40 text-theme-text font-medium rounded-xl transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                <Printer className="w-4 h-4" /> Imprimir
+              </button>
+            )}
             <button 
               onClick={onClose}
               className="flex-1 py-2.5 px-4 bg-theme-border/50 hover:bg-theme-border/80 text-theme-text font-medium rounded-xl transition-colors"
