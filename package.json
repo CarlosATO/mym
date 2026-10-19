@@ -32,6 +32,7 @@
     "test:logistica-legacy-archive": "node --test scripts/test-logistica-legacy-archive-contract.mjs",
     "test:logistica-legacy-reopen": "node --test scripts/test-logistica-legacy-reopen-contract.mjs",
     "test:logistica-legacy-datafix": "node --test scripts/test-logistica-legacy-datafix-contract.mjs",
+    "test:logistica-legacy-special": "node --test scripts/test-logistica-legacy-special-cleanup-contract.mjs scripts/test-logistica-legacy-special-cleanup-runtime.mjs",
     "preflight:logistica-legacy-datafix-jit": "node scripts/preflight-bsale-legacy-datafix-jit.mjs",
     "test:logistica-legacy-jit": "node --test scripts/test-logistica-legacy-jit-contract.mjs",
     "audit:bsale-warehouse-full": "node scripts/audit-bsale-warehouse-full.mjs",
