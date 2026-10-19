@@ -139,3 +139,57 @@ test('no se agregó auditoría, picking, rutas formales ni migraciones', () => {
   assert.doesNotMatch(drawer, /picking|auditor[ií]a autom[aá]tica/i)
   assert.doesNotMatch(actions, /CREATE TABLE|CREATE OR REPLACE FUNCTION/)
 })
+
+test('filtros dinámicos sólo desde el board actual, antes de filtrar', () => {
+  assert.match(panel, /buildPreparationComunaOptions\(cards\)/)
+  assert.match(panel, /buildPreparationSellerOptions\(cards\)/)
+  assert.match(panel, /effectiveSelectedComunas/)
+  assert.match(panel, /effectiveSellerKey/)
+  assert.match(panel, /matchesPreparationComunaFilter\(card, effectiveSelectedComunas\)/)
+  assert.match(panel, /matchesPreparationSellerFilter\(card, effectiveSellerKey\)/)
+  assert.doesNotMatch(panel, /localStorage/)
+  assert.doesNotMatch(panel, /getSalesOrderPreparationBoard\([^)]*(comuna|seller|searchTerm)/)
+})
+
+test('comunas multiselección con OR, contador y acciones todas/limpiar', () => {
+  assert.match(panel, /type="checkbox"/)
+  assert.match(panel, /toggleComunaFilter\(option\.key\)/)
+  assert.match(panel, /Seleccionar todas/)
+  assert.match(panel, /clearComunas/)
+  assert.match(panel, /option\.count/)
+  assert.match(panel, /Sin selección se muestran todas las comunas/)
+  assert.match(panel, /prunePreparationFilterKeys\(current, validComunaKeys\)/)
+})
+
+test('vendedores actuales deduplicados y sin huérfanos', () => {
+  assert.match(panel, /sellerOptions\.map\(option =>/)
+  assert.match(panel, /Sólo vendedores presentes en las NV del board/)
+  assert.match(panel, /sellerOptions\.some\(option => option\.key === filterSellerKey\)/)
+})
+
+test('resumen operacional con NV, monto bruto, unidades y comunas', () => {
+  assert.match(panel, /summarizePreparationBoard\(filteredCards\)/)
+  assert.match(panel, /formatPreparationClp\(boardSummary\.amount\)/)
+  assert.match(panel, /boardSummary\.units\.toLocaleString\('es-CL'\)/)
+  assert.match(panel, /boardSummary\.comunas\.length/)
+  assert.match(panel, /Monto total bruto de las Notas de Venta visibles/)
+})
+
+test('tarjeta V1.1 jerarquiza NV, cliente, comuna, fecha, unidades y monto', () => {
+  assert.match(card, /getPreparationCardAmount\(card\)/)
+  assert.match(card, /primaryDate/)
+  assert.match(card, /label: 'Ruta'/)
+  assert.match(card, /label: 'Emisión'/)
+  assert.match(card, /text-\[13px\] font-bold tabular-nums/)
+  assert.match(card, /line-clamp-2 text-\[13px\] font-semibold/)
+  assert.match(card, /formatPreparationClp\(amount\)/)
+  assert.match(card, /text-\[15px\] font-bold/)
+  assert.doesNotMatch(card, /Pendiente' : card\.status/)
+})
+
+test('fecha de ruta no se mezcla silenciosamente con emisión', () => {
+  assert.match(card, /Fecha de ruta:/)
+  assert.match(card, /Fecha de emisión:/)
+  assert.match(card, /routeDate &&/)
+  assert.match(card, /Emisión \{emissionDate/)
+})

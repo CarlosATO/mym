@@ -27,10 +27,17 @@ import {
   recordPreparationDuration,
 } from './preparation-performance'
 import {
+  buildPreparationComunaOptions,
+  buildPreparationSellerOptions,
+  formatPreparationClp,
   getPreparationComuna,
+  matchesPreparationComunaFilter,
   matchesPreparationSearch,
+  matchesPreparationSellerFilter,
+  prunePreparationFilterKeys,
   prunePreparationSelection,
   sortPreparationCards,
+  summarizePreparationBoard,
   summarizePreparationSelection,
   type PreparationSort,
 } from './preparation-board-utils'
@@ -90,6 +97,22 @@ function closePrintWindow(target: Window | null) {
   }
 }
 
+function SummaryStat({ label, value, sub, title, accent = false }: {
+  label: string
+  value: string | number
+  sub?: string
+  title?: string
+  accent?: boolean
+}) {
+  return (
+    <div className="flex min-w-0 items-baseline gap-1.5 border-l border-[#D1C7BD] pl-4 first:border-0 first:pl-0" title={title}>
+      <span className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#6B625C]">{label}</span>
+      <span className={`text-[15px] font-semibold tabular-nums ${accent ? 'text-[#72383D]' : 'text-[#322D29]'}`}>{value}</span>
+      {sub && <span className="text-[10px] font-medium text-[#322D29]/45">{sub}</span>}
+    </div>
+  )
+}
+
 function DroppableColumn({
   col,
   colCards,
@@ -138,8 +161,8 @@ function DroppableColumn({
           return (
             <Fragment key={card.card_id}>
               {showComunaDivider && (
-                <div className="flex items-center gap-2 pt-2 first:pt-0">
-                  <span className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#72383D]/70">{comuna}</span>
+                <div className="flex items-center gap-2 pt-2 first:pt-0" title={`Comuna: ${comuna}`}>
+                  <span className="rounded-sm bg-[#72383D]/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.12em] text-[#72383D]">{comuna}</span>
                   <span className="h-px flex-1 bg-[#D1C7BD]" />
                 </div>
               )}
@@ -179,8 +202,8 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
 
   // Filters
   const [searchTerm, setSearchTerm] = useState('')
-  const [filterCity, setFilterCity] = useState('')
-  const [filterSeller, setFilterSeller] = useState('')
+  const [selectedComunas, setSelectedComunas] = useState<Set<string>>(new Set())
+  const [filterSellerKey, setFilterSellerKey] = useState('')
   const [sortBy, setSortBy] = useState<PreparationSort>('default')
   const [showAdvanced, setShowAdvanced] = useState(false)
 
@@ -315,6 +338,10 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
       cardsRef.current = rows
       setCards(rows)
       setSelectedCardIds(current => prunePreparationSelection(current, rows))
+      const validComunaKeys = buildPreparationComunaOptions(rows)
+      const validSellerKeys = new Set(buildPreparationSellerOptions(rows).map(option => option.key))
+      setSelectedComunas(current => prunePreparationFilterKeys(current, validComunaKeys))
+      setFilterSellerKey(current => (current && !validSellerKeys.has(current) ? '' : current))
       setError(null)
       setSelectedCard(current => {
         if (!current) return current
@@ -747,16 +774,26 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
     }
   }
 
-  // Unique options for selects
-  const cities = useMemo(() => [...new Set(cards.map(getPreparationComuna))].sort((a, b) => a.localeCompare(b, 'es')), [cards])
-  const sellers = useMemo(() => [...new Set(cards.map(c => c.seller_name || '').filter(Boolean))].sort(), [cards])
+  // Opciones dinámicas: siempre desde el board actual completo, antes de filtrar.
+  const comunaOptions = useMemo(() => buildPreparationComunaOptions(cards), [cards])
+  const sellerOptions = useMemo(() => buildPreparationSellerOptions(cards), [cards])
+
+  const effectiveSelectedComunas = useMemo(() => {
+    const validKeys = new Set(comunaOptions.map(option => option.key))
+    return new Set([...selectedComunas].filter(key => validKeys.has(key)))
+  }, [selectedComunas, comunaOptions])
+
+  const effectiveSellerKey = useMemo(
+    () => (sellerOptions.some(option => option.key === filterSellerKey) ? filterSellerKey : ''),
+    [sellerOptions, filterSellerKey],
+  )
 
   const searchFilteredCards = useMemo(() => cards.filter(card => {
     if (!matchesPreparationSearch(card, searchTerm)) return false
-    if (filterCity && getPreparationComuna(card) !== filterCity) return false
-    if (filterSeller && card.seller_name !== filterSeller) return false
+    if (!matchesPreparationComunaFilter(card, effectiveSelectedComunas)) return false
+    if (!matchesPreparationSellerFilter(card, effectiveSellerKey)) return false
     return true
-  }), [cards, searchTerm, filterCity, filterSeller])
+  }), [cards, searchTerm, effectiveSelectedComunas, effectiveSellerKey])
 
   const filteredCards = useMemo(
     () => sortPreparationCards(searchFilteredCards, sortBy),
@@ -768,10 +805,31 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
     [cards, selectedCardIds],
   )
   const selectionSummary = useMemo(() => summarizePreparationSelection(selectedCards), [selectedCards])
+  const boardSummary = useMemo(() => summarizePreparationBoard(filteredCards), [filteredCards])
 
-  const hasFilters = Boolean(searchTerm || filterCity || filterSeller)
+  const hasFilters = Boolean(searchTerm || effectiveSelectedComunas.size > 0 || effectiveSellerKey)
   const hasActiveFilterOrSort = hasFilters || sortBy !== 'default'
-  const clearFilters = () => { setSearchTerm(''); setFilterCity(''); setFilterSeller('') }
+
+  const toggleComunaFilter = (key: string) => {
+    setSelectedComunas(current => {
+      const next = new Set(current)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const selectAllComunas = () => {
+    setSelectedComunas(new Set(comunaOptions.map(option => option.key)))
+  }
+
+  const clearComunas = () => setSelectedComunas(new Set())
+
+  const clearFilters = () => {
+    setSearchTerm('')
+    setSelectedComunas(new Set())
+    setFilterSellerKey('')
+  }
   const syncRun = syncHealth?.latestSuccessfulRun
   const latestRun = syncHealth?.latestRun
   const syncTrigger = syncRun?.trigger === 'SCHEDULED' ? 'SCHED' : syncRun?.trigger === 'MANUAL' ? 'MANUAL' : syncRun?.trigger || 'INIT'
@@ -800,14 +858,6 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
             <div className="flex items-center gap-1.5 shrink-0">
               <KanbanSquare className="w-4 h-4 text-[#72383D] shrink-0" />
             <h1 className="text-sm font-semibold text-[#322D29]">Preparación de Pedidos</h1>
-              <span className="px-1.5 py-0.5 bg-[#F5F0EA] text-[#322D29]/55 text-[10px] font-bold border border-[#D1C7BD] shrink-0" title="Total de tarjetas en el tablero">
-                {cards.length}
-              </span>
-              {hasFilters && (
-                <span className="px-1.5 py-0.5 bg-white text-[#72383D] text-[10px] font-bold border border-[#72383D]/25 shrink-0" title="Tarjetas que coinciden con la búsqueda/filtros">
-                  {filteredCards.length} filtradas
-                </span>
-              )}
             </div>
 
             <div
@@ -888,34 +938,125 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
 
         {/* Filters Expansion */}
         {showAdvanced && (
-          <div className="flex items-center gap-2 mt-3 pt-3 border-t border-[#D1C7BD]">
-            <select
-              value={filterCity}
-              onChange={e => setFilterCity(e.target.value)}
-              className="py-1.5 px-2 bg-white border border-[#D1C7BD] text-[11px] font-medium text-[#322D29] focus:outline-none focus:border-[#72383D]"
-            >
-              <option value="">Todas las comunas</option>
-              {cities.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-            <select
-              value={filterSeller}
-              onChange={e => setFilterSeller(e.target.value)}
-              className="py-1.5 px-2 bg-white border border-[#D1C7BD] text-[11px] font-medium text-[#322D29] focus:outline-none focus:border-[#72383D]"
-            >
-              <option value="">Todos los vendedores</option>
-              {sellers.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-            {hasActiveFilterOrSort && (
-              <button
-                onClick={() => { clearFilters(); setSortBy('default') }}
-                className="flex items-center gap-1 px-2 py-1.5 text-[10px] font-bold text-[#322D29]/55 hover:text-[#322D29] transition-colors ml-auto bg-white border border-transparent hover:border-[#D1C7BD]"
+          <div className="mt-3 grid gap-4 border-t border-[#D1C7BD] pt-3 lg:grid-cols-[minmax(0,1.1fr)_minmax(260px,0.9fr)_auto]">
+            <section className="min-w-0">
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <h2 className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#6B625C]">Comunas</h2>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={selectAllComunas}
+                    disabled={comunaOptions.length === 0}
+                    className="text-[10px] font-semibold text-[#72383D] hover:underline disabled:opacity-40"
+                  >
+                    Seleccionar todas
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearComunas}
+                    disabled={selectedComunas.size === 0}
+                    className="text-[10px] font-semibold text-[#322D29]/55 hover:text-[#322D29] hover:underline disabled:opacity-40"
+                  >
+                    Limpiar
+                  </button>
+                </div>
+              </div>
+
+              <div className="max-h-44 overflow-y-auto border border-[#D1C7BD] bg-white">
+                {comunaOptions.length === 0 ? (
+                  <p className="px-3 py-4 text-center text-[10px] font-medium text-[#322D29]/50">Sin comunas en el board</p>
+                ) : (
+                  <ul className="divide-y divide-[#D1C7BD]/60">
+                    {comunaOptions.map(option => {
+                      const checked = effectiveSelectedComunas.has(option.key)
+                      return (
+                        <li key={option.key}>
+                          <label className="flex cursor-pointer items-center gap-2.5 px-2.5 py-1.5 text-[11px] transition-colors hover:bg-[#F5F0EA]">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleComunaFilter(option.key)}
+                              className="h-3.5 w-3.5 shrink-0 accent-[#72383D]"
+                            />
+                            <span className="min-w-0 flex-1 truncate font-medium text-[#322D29]">{option.label}</span>
+                            <span className="shrink-0 text-[10px] font-semibold tabular-nums text-[#322D29]/45">{option.count}</span>
+                          </label>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
+              </div>
+              <p className="mt-1 text-[9px] font-medium text-[#322D29]/45">
+                Sin selección se muestran todas las comunas.
+              </p>
+            </section>
+
+            <section className="min-w-0">
+              <h2 className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-[#6B625C]">Vendedor</h2>
+              <select
+                value={effectiveSellerKey}
+                onChange={e => setFilterSellerKey(e.target.value)}
+                className="w-full border border-[#D1C7BD] bg-white px-2 py-2 text-[11px] font-medium text-[#322D29] focus:border-[#72383D] focus:outline-none"
               >
-                <RotateCcw className="w-3.5 h-3.5" /> Limpiar filtros y orden
-              </button>
-            )}
+                <option value="">Todos los vendedores</option>
+                {sellerOptions.map(option => (
+                  <option key={option.key} value={option.key}>{option.label} ({option.count})</option>
+                ))}
+              </select>
+              <p className="mt-1 text-[9px] font-medium text-[#322D29]/45">
+                Sólo vendedores presentes en las NV del board.
+              </p>
+            </section>
+
+            <div className="flex items-start justify-end">
+              {hasActiveFilterOrSort && (
+                <button
+                  onClick={() => { clearFilters(); setSortBy('default') }}
+                  className="flex items-center gap-1 border border-[#D1C7BD] bg-white px-2.5 py-2 text-[10px] font-bold text-[#322D29]/55 transition-colors hover:bg-[#F5F0EA] hover:text-[#322D29]"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" /> Limpiar filtros y orden
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>
+
+      {/* ── Resumen operacional ── */}
+      {!loading && !error && (
+        <div className="flex-none border-b border-[#D1C7BD] bg-[#FCFBF9] px-4 py-2">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+            <SummaryStat
+              label="NV"
+              value={boardSummary.nvCount}
+              sub={hasFilters ? `de ${cards.length}` : undefined}
+              title="Notas de venta visibles en el tablero"
+            />
+            <SummaryStat
+              label="Monto total"
+              value={formatPreparationClp(boardSummary.amount)}
+              title="Monto total bruto de las Notas de Venta visibles"
+              accent
+            />
+            <SummaryStat
+              label="Unidades"
+              value={boardSummary.units.toLocaleString('es-CL')}
+              title="Unidades totales de las Notas de Venta visibles"
+            />
+            <SummaryStat
+              label="Comunas"
+              value={boardSummary.comunas.length}
+              title={boardSummary.comunas.length > 0 ? boardSummary.comunas.join(' · ') : 'Sin comunas'}
+            />
+            {hasFilters && (
+              <span className="ml-auto border border-[#72383D]/20 bg-[#F5EDE9] px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-[#72383D]">
+                Vista filtrada
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── Barra de acciones de selección ── */}
       {selectionSummary.nvCount > 0 && (
@@ -925,6 +1066,9 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
               <span className="font-bold uppercase tracking-[0.06em] text-[#72383D]">
                 {selectionSummary.nvCount} NV seleccionada{selectionSummary.nvCount === 1 ? '' : 's'}
               </span>
+              {selectionSummary.amount > 0 && (
+                <span className="font-semibold text-[#322D29]/70">· {formatPreparationClp(selectionSummary.amount)}</span>
+              )}
               <span className="text-[#322D29]/60">· {selectionSummary.units} unidades</span>
               {selectionSummary.comunas.length > 0 && (
                 <span className="text-[#322D29]/60">· {selectionSummary.comunas.join(' / ')}</span>

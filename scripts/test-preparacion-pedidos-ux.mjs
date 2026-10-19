@@ -1,11 +1,17 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  buildPreparationComunaOptions,
+  buildPreparationSellerOptions,
   getPreparationComuna,
   groupCardsByComuna,
+  matchesPreparationComunaFilter,
   matchesPreparationSearch,
+  matchesPreparationSellerFilter,
+  prunePreparationFilterKeys,
   prunePreparationSelection,
   sortPreparationCards,
+  summarizePreparationBoard,
   summarizePreparationSelection,
 } from '../src/modules/logistica/preparacion-pedidos/preparation-board-utils.ts'
 import { generatePreparationOrdersPdf } from '../src/lib/pdf/generate-preparation-orders-pdf.ts'
@@ -178,4 +184,102 @@ test('PDF masivo contiene las 3 NV y una página por NV', async () => {
   assert.match(raw, /SKU-4994/)
   assert.match(raw, /SKU-5021/)
   assert.match(raw, /Cantidad/)
+})
+
+
+const filterCards = [
+  {
+    card_id: 'filter-1',
+    nv_folio: '6001',
+    client_name: 'Comercial Uno',
+    normalized_city: 'TALCA',
+    seller_name: 'ROBERTO GONZALEZ',
+    total_quantity: 4,
+    gross_amount: 1000,
+    status: 'PENDING_ROUTE_PREP',
+    nv_emission_date: '2026-10-19T12:00:00.000Z',
+  },
+  {
+    card_id: 'filter-2',
+    nv_folio: '6002',
+    client_name: 'Comercial Dos',
+    normalized_city: 'Talca',
+    seller_name: ' roberto   gonzalez ',
+    total_quantity: 5,
+    gross_amount: 2000,
+    status: 'PENDING_ROUTE_PREP',
+    nv_emission_date: '2026-10-18T12:00:00.000Z',
+  },
+  {
+    card_id: 'filter-3',
+    nv_folio: '6003',
+    client_name: 'Comercial Tres',
+    normalized_city: 'Molina',
+    seller_name: 'CHIQUINQUIRA ATENCIO',
+    total_quantity: 6,
+    total_amount: 3000,
+    status: 'PENDING_ROUTE_PREP',
+    nv_emission_date: '2026-10-17T12:00:00.000Z',
+  },
+  {
+    card_id: 'filter-4',
+    nv_folio: '6004',
+    client_name: 'Comercial Cuatro',
+    normalized_city: null,
+    city_raw: null,
+    municipality_raw: null,
+    seller_name: null,
+    total_quantity: 7,
+    status: 'PENDING_ROUTE_PREP',
+    nv_emission_date: '2026-10-16T12:00:00.000Z',
+  },
+]
+
+test('opciones de comuna sólo desde el board, deduplicadas y con conteo', () => {
+  const options = buildPreparationComunaOptions(filterCards)
+
+  assert.deepEqual(options.map(option => option.key), ['molina', 'sin comuna', 'talca'])
+  assert.deepEqual(options.map(option => option.label), ['Molina', 'Sin comuna', 'Talca'])
+  assert.deepEqual(options.map(option => option.count), [1, 1, 2])
+  assert.equal(options.some(option => !option.key || !option.label), false)
+})
+
+test('filtro de comunas es OR y sin selección muestra todas', () => {
+  const selected = new Set(['talca', 'molina'])
+  const visible = filterCards.filter(card => matchesPreparationComunaFilter(card, selected))
+
+  assert.deepEqual(visible.map(card => card.card_id), ['filter-1', 'filter-2', 'filter-3'])
+  assert.equal(filterCards.filter(card => matchesPreparationComunaFilter(card, new Set())).length, 4)
+  assert.equal(filterCards.filter(card => matchesPreparationComunaFilter(card, new Set(['molina']))).length, 1)
+})
+
+test('selecciones de comuna se podan cuando desaparecen tras un sync', () => {
+  const optionsAfterSync = buildPreparationComunaOptions([filterCards[0]])
+  const pruned = prunePreparationFilterKeys(new Set(['talca', 'molina']), optionsAfterSync)
+
+  assert.deepEqual([...pruned], ['talca'])
+})
+
+test('opciones de vendedor sólo actuales, deduplicadas y sin huérfanos', () => {
+  const options = buildPreparationSellerOptions(filterCards)
+
+  assert.deepEqual(options.map(option => option.key), ['chiquinquira atencio', 'roberto gonzalez'])
+  assert.deepEqual(options.map(option => option.label), ['Chiquinquira Atencio', 'Roberto Gonzalez'])
+  assert.deepEqual(options.map(option => option.count), [1, 2])
+  assert.equal(filterCards.filter(card => matchesPreparationSellerFilter(card, 'roberto gonzalez')).length, 2)
+  assert.equal(filterCards.filter(card => matchesPreparationSellerFilter(card, '')).length, 4)
+})
+
+test('resumen operacional usa NV, monto bruto, unidades y comunas', () => {
+  const summary = summarizePreparationBoard(filterCards)
+
+  assert.equal(summary.nvCount, 4)
+  assert.equal(summary.units, 22)
+  assert.equal(summary.amount, 6000)
+  assert.deepEqual(summary.comunas, ['Molina', 'Sin comuna', 'Talca'])
+
+  const filteredSummary = summarizePreparationBoard([filterCards[0], filterCards[1]])
+  assert.equal(filteredSummary.nvCount, 2)
+  assert.equal(filteredSummary.units, 9)
+  assert.equal(filteredSummary.amount, 3000)
 })
