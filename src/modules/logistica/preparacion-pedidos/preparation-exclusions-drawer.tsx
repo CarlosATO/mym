@@ -17,6 +17,7 @@ interface PreparationExclusionsDrawerProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   canRevoke: boolean
+  refreshToken?: number
   onChanged: () => Promise<void> | void
 }
 
@@ -29,7 +30,7 @@ function formatDate(value: string | null): string {
   return date.toLocaleString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-export function PreparationExclusionsDrawer({ open, onOpenChange, canRevoke, onChanged }: PreparationExclusionsDrawerProps) {
+export function PreparationExclusionsDrawer({ open, onOpenChange, canRevoke, refreshToken = 0, onChanged }: PreparationExclusionsDrawerProps) {
   const [rows, setRows] = useState<SalesOrderPreparationExclusion[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -52,13 +53,14 @@ export function PreparationExclusionsDrawer({ open, onOpenChange, canRevoke, onC
     setLoading(false)
   }, [])
 
-  // Recarga al abrir; el estado se actualiza de forma asíncrona tras el fetch.
+  // Recarga al abrir o cuando una exclusión confirmada incrementa el token.
+  // Si el drawer está cerrado, no se consulta el historial.
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (open) {
       void load()
     }
-  }, [open, load])
+  }, [open, load, refreshToken])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const handleOpenChange = (next: boolean) => {

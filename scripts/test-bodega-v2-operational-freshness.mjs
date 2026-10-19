@@ -33,7 +33,7 @@ test('la reconciliación se ejecuta después de documentos y detalles', () => {
 
 test('el botón usa el flujo operacional y conserva el refetch único explícito', () => {
   assert.match(action, /runManualWarehouseBsaleRefresh/)
-  assert.match(panel, /const res = await syncOperationalBsaleSalesOrders\(\)/)
+  assert.match(panel, /syncOperationalBsaleSalesOrders\(\)/)
   assert.match(panel, /await loadBoard\(\)/)
 })
 

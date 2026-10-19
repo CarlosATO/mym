@@ -1,16 +1,30 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Search, SlidersHorizontal, KanbanSquare, Loader2, RotateCcw, RefreshCw, ShieldCheck } from 'lucide-react'
 import { 
   getSalesOrderPreparationBoard, 
   getSalesOrderPreparationItems,
   syncOperationalBsaleSalesOrders,
+  syncOperationalBsaleSalesOrdersIfStale,
   excludeSalesOrderPreparationNv,
   SalesOrderPreparationCardInfo,
   SalesOrderPreparationItem,
 } from '@/app/actions/logistica/sales-order-preparation'
 import { getWarehousePreparationSyncHealth, type WarehousePreparationSyncHealth } from '@/app/actions/integraciones/sync'
+import {
+  PREPARATION_SYNC_CHECK_INTERVAL_MS,
+  PREPARATION_SYNC_STALE_AFTER_MINUTES,
+  mergePreparationBoardRows,
+  removeCardOptimistically,
+  restoreCardOptimistically,
+  shouldRefreshBoardAfterSync,
+  type PreparationCardSnapshot,
+} from './preparation-sync-policy'
+import {
+  markPreparationBoardFetch,
+  recordPreparationDuration,
+} from './preparation-performance'
 import { SalesOrderCard } from './sales-order-card'
 import { SalesOrderDrawer } from './sales-order-drawer'
 import { PreparationExclusionDialog, type ExclusionConfirmInput, type ExclusionConfirmResult } from './preparation-exclusion-dialog'
@@ -125,52 +139,225 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
   // Exclusiones administrativas
   const [excludeCard, setExcludeCard] = useState<SalesOrderPreparationCardInfo | null>(null)
   const [exclusionsOpen, setExclusionsOpen] = useState(false)
+  const [exclusionsVersion, setExclusionsVersion] = useState(0)
+
+  const [syncError, setSyncError] = useState<string | null>(null)
+
+  const cardsRef = useRef<SalesOrderPreparationCardInfo[]>([])
+  const boardRequestSeqRef = useRef(0)
+  const pendingStatusByCardRef = useRef<Map<string, string>>(new Map())
+  const pendingExclusionNvIdsRef = useRef<Set<number>>(new Set())
+  const exclusionSnapshotsRef = useRef<Map<number, PreparationCardSnapshot<SalesOrderPreparationCardInfo>>>(new Map())
+  const syncInFlightRef = useRef(false)
+  const lastAutoAttemptAtRef = useRef(0)
+  const lastSuccessfulRunIdRef = useRef<string | null>(null)
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    cardsRef.current = cards
+  }, [cards])
+
+  const persistExclusion = async (
+    card: SalesOrderPreparationCardInfo,
+    reason: string,
+    observation: string,
+  ) => {
+    const startedAt = performance.now()
+    try {
+      const res = await excludeSalesOrderPreparationNv({
+        bsaleNvId: card.nv_bsale_id,
+        reason,
+        observation,
+      })
+      if (!res.ok && res.status !== 'already_exists') {
+        throw new Error(res.error || 'No se pudo excluir la Nota de Venta.')
+      }
+
+      pendingExclusionNvIdsRef.current.delete(card.nv_bsale_id)
+      exclusionSnapshotsRef.current.delete(card.nv_bsale_id)
+      boardRequestSeqRef.current += 1
+      setExclusionsVersion(current => current + 1)
+
+      if (res.status === 'already_exists') {
+        toast.info(`La NV #${card.nv_folio} ya estaba excluida de preparación.`)
+      } else {
+        toast.success(`NV #${card.nv_folio} excluida de preparación`)
+      }
+    } catch (err: unknown) {
+      pendingExclusionNvIdsRef.current.delete(card.nv_bsale_id)
+      const snapshot = exclusionSnapshotsRef.current.get(card.nv_bsale_id) ?? null
+      exclusionSnapshotsRef.current.delete(card.nv_bsale_id)
+      boardRequestSeqRef.current += 1
+
+      if (snapshot) {
+        const restored = restoreCardOptimistically(cardsRef.current, snapshot)
+        cardsRef.current = restored
+        setCards(restored)
+      }
+
+      toast.error(err instanceof Error ? err.message : 'No se pudo excluir la Nota de Venta.')
+    } finally {
+      recordPreparationDuration('exclusionPersist', performance.now() - startedAt)
+    }
+  }
 
   const handleExclusionConfirm = async ({ reason, observation }: ExclusionConfirmInput): Promise<ExclusionConfirmResult> => {
     const card = excludeCard
     if (!card) return { ok: false, error: 'No hay Nota de Venta seleccionada.' }
-    const res = await excludeSalesOrderPreparationNv({
-      bsaleNvId: card.nv_bsale_id,
-      reason,
-      observation,
-    })
-    if (!res.ok && res.status !== 'already_exists') {
-      return { ok: false, error: res.error || 'No se pudo excluir la Nota de Venta.' }
+    if (pendingExclusionNvIdsRef.current.has(card.nv_bsale_id)) return { ok: true }
+
+    pendingExclusionNvIdsRef.current.add(card.nv_bsale_id)
+    boardRequestSeqRef.current += 1
+
+    const optimistic = removeCardOptimistically(cardsRef.current, card.card_id)
+    if (optimistic.snapshot) {
+      exclusionSnapshotsRef.current.set(card.nv_bsale_id, optimistic.snapshot)
     }
-    if (res.status === 'already_exists') {
-      toast.info(`La NV #${card.nv_folio} ya estaba excluida de preparación.`)
-    } else {
-      toast.success(`NV #${card.nv_folio} excluida de preparación`)
-    }
-    await loadBoard()
+    cardsRef.current = optimistic.cards
+    setCards(optimistic.cards)
+    setExcludeCard(null)
     setSelectedCard(current => current?.card_id === card.card_id ? null : current)
+
+    void persistExclusion(card, reason, observation)
     return { ok: true }
   }
 
-  const handleSyncBsale = async () => {
-    setIsSyncing(true)
+  const loadBoard = useCallback(async ({ showSpinner = false }: { showSpinner?: boolean } = {}) => {
+    const seq = ++boardRequestSeqRef.current
+    const startedAt = performance.now()
+    markPreparationBoardFetch()
+    if (showSpinner) setLoading(true)
+
     try {
-      const res = await syncOperationalBsaleSalesOrders()
-      if (!res.ok) {
-        toast.error(res.error || 'Error al actualizar Notas de Venta')
+      const activeCompanyId = await getActiveCompanyId()
+      if (seq !== boardRequestSeqRef.current) return
+      if (!activeCompanyId) {
+        setError('No se pudo determinar la empresa activa.')
+        return
+      }
+
+      setCompanyId(activeCompanyId)
+      const res = await getSalesOrderPreparationBoard(activeCompanyId)
+      if (seq !== boardRequestSeqRef.current) return
+
+      if (res.error) {
+        setError(res.error)
+        return
+      }
+
+      const rows = mergePreparationBoardRows(res.data || [], {
+        pendingStatuses: pendingStatusByCardRef.current,
+        pendingExclusionNvIds: pendingExclusionNvIdsRef.current,
+      })
+
+      cardsRef.current = rows
+      setCards(rows)
+      setError(null)
+      setSelectedCard(current => {
+        if (!current) return current
+        const next = rows.find(candidate => candidate.card_id === current.card_id)
+        return next ?? (pendingExclusionNvIdsRef.current.has(current.nv_bsale_id) ? null : current)
+      })
+    } catch (err: unknown) {
+      if (seq === boardRequestSeqRef.current) {
+        setError(err instanceof Error ? err.message : 'Error al cargar el tablero.')
+      }
+    } finally {
+      if (seq === boardRequestSeqRef.current) setLoading(false)
+      recordPreparationDuration('boardLoad', performance.now() - startedAt)
+    }
+  }, [])
+
+  const loadSyncHealth = useCallback(async () => {
+    try {
+      const health = await getWarehousePreparationSyncHealth()
+      if (!mountedRef.current) return null
+      setSyncHealth(health)
+      if (health.latestSuccessfulRun?.id) {
+        lastSuccessfulRunIdRef.current = health.latestSuccessfulRun.id
+      }
+      return health
+    } catch (err: unknown) {
+      if (mountedRef.current) {
+        setSyncError(err instanceof Error ? err.message : 'Error leyendo estado de sincronización.')
+      }
+      return null
+    }
+  }, [])
+
+  const runSync = useCallback(async (source: 'manual' | 'auto') => {
+    if (syncInFlightRef.current) return
+
+    syncInFlightRef.current = true
+    setIsSyncing(true)
+    const startedAt = performance.now()
+    const previousRunId = lastSuccessfulRunIdRef.current
+
+    try {
+      const res = source === 'manual'
+        ? await syncOperationalBsaleSalesOrders()
+        : await syncOperationalBsaleSalesOrdersIfStale()
+
+      if (!mountedRef.current) return
+
+      if (res.health) {
+        setSyncHealth(res.health)
+        if (res.health.latestSuccessfulRun?.id) {
+          lastSuccessfulRunIdRef.current = res.health.latestSuccessfulRun.id
+        }
+      } else if (source === 'manual' && res.ok) {
+        void loadSyncHealth()
+      }
+
+      const didRun = res.ok && !res.skipped
+      const nextRunId = res.health?.latestSuccessfulRun?.id ?? null
+      const refresh = shouldRefreshBoardAfterSync({ didRun, previousRunId, nextRunId })
+
+      if (res.ok) {
+        setSyncError(null)
+        if (refresh && mountedRef.current) await loadBoard()
+
+        if (source === 'manual') {
+          const {
+            discovery = 0,
+            new_cards = 0,
+            refresh: refreshed = 0,
+            closed_invoiced = 0,
+            detail_errors = 0,
+          } = res.data || {}
+          const suffix = detail_errors > 0 ? ` · ${detail_errors} con error de detalles` : ''
+          toast.success(`Notas de Venta actualizadas · ${discovery} descubiertas · ${new_cards} nuevas · ${refreshed} revisadas · ${closed_invoiced} cerradas${suffix}`)
+        }
+      } else if (res.status === 'SKIPPED_LOCKED') {
+        setSyncError(null)
+        if (source === 'manual') toast.info('Ya existe una sincronización de Notas de Venta en curso.')
       } else {
-        const {
-          discovery = 0,
-          new_cards = 0,
-          refresh = 0,
-          closed_invoiced = 0,
-          detail_errors = 0,
-        } = res.data || {}
-        const suffix = detail_errors > 0 ? ` · ${detail_errors} con error de detalles` : ''
-        toast.success(`Notas de Venta actualizadas · ${discovery} descubiertas · ${new_cards} nuevas · ${refresh} revisadas · ${closed_invoiced} cerradas${suffix}`)
-        await loadBoard()
+        const message = res.error || 'Error al sincronizar Notas de Venta'
+        setSyncError(message)
+        if (source === 'manual') toast.error(message)
       }
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Error al actualizar Notas de Venta')
+      const message = err instanceof Error ? err.message : 'Error al sincronizar Notas de Venta'
+      if (mountedRef.current) {
+        setSyncError(message)
+        if (source === 'manual') toast.error(message)
+      }
     } finally {
-      setIsSyncing(false)
+      recordPreparationDuration('sync', performance.now() - startedAt)
+      syncInFlightRef.current = false
+      if (mountedRef.current) setIsSyncing(false)
     }
-  }
+  }, [loadBoard, loadSyncHealth])
+
+  const maybeAutoSync = useCallback(async (reason: 'mount' | 'interval' | 'visibility') => {
+    if (!mountedRef.current || syncInFlightRef.current) return
+
+    const now = Date.now()
+    if (reason !== 'mount' && now - lastAutoAttemptAtRef.current < 30_000) return
+    lastAutoAttemptAtRef.current = now
+
+    await runSync('auto')
+  }, [runSync])
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -180,48 +367,42 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
     })
   )
 
-  const loadBoard = async () => {
-    setLoading(true)
-    const activeCompanyId = await getActiveCompanyId()
-    if (!activeCompanyId) {
-      setError('No se pudo determinar la empresa activa.')
-      setLoading(false)
-      return
-    }
-    setCompanyId(activeCompanyId)
-    const res = await getSalesOrderPreparationBoard(activeCompanyId)
-    if (res.error) {
-      setError(res.error)
-    } else {
-      setCards(res.data || [])
-      // If a card is selected, update its reference to the new one so the drawer updates
-      setSelectedCard(prev => prev ? (res.data?.find(c => c.card_id === prev.card_id) || prev) : prev)
-    }
-    setLoading(false)
-    
-    const [syncResult] = await Promise.all([getWarehousePreparationSyncHealth()])
-    setSyncHealth(syncResult)
-  }
-
   useEffect(() => {
-    loadBoard()
-  }, [])
-
-  useEffect(() => {
-    if (!companyId) return
+    mountedRef.current = true
     let cancelled = false
-    const refreshBoard = async () => {
-      const res = await getSalesOrderPreparationBoard(companyId)
-      if (cancelled || res.error) return
-      setCards(res.data || [])
-      setSelectedCard(prev => prev ? (res.data?.find(c => c.card_id === prev.card_id) || prev) : prev)
-    }
-    const interval = window.setInterval(() => { void refreshBoard() }, 45_000)
+
+    void (async () => {
+      await loadBoard({ showSpinner: true })
+      if (cancelled) return
+      await loadSyncHealth()
+      if (cancelled) return
+      void maybeAutoSync('mount')
+    })()
+
     return () => {
       cancelled = true
-      window.clearInterval(interval)
+      mountedRef.current = false
     }
-  }, [companyId])
+  }, [loadBoard, loadSyncHealth, maybeAutoSync])
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void maybeAutoSync('interval')
+    }, PREPARATION_SYNC_CHECK_INTERVAL_MS)
+
+    return () => window.clearInterval(interval)
+  }, [maybeAutoSync])
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void maybeAutoSync('visibility')
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [maybeAutoSync])
 
   const openCardDetails = async (card: SalesOrderPreparationCardInfo) => {
     if (!companyId) return
@@ -241,23 +422,38 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
     const fromStatus = card.status
     setTransitionError(null)
     setPendingCardIds(current => new Set(current).add(card.card_id))
-    setCards(current => current.map(item => item.card_id === card.card_id ? { ...item, status: toStatus } : item))
+    pendingStatusByCardRef.current.set(card.card_id, toStatus)
+    boardRequestSeqRef.current += 1
+
+    const optimisticCards = cardsRef.current.map(item => item.card_id === card.card_id ? { ...item, status: toStatus } : item)
+    cardsRef.current = optimisticCards
+    setCards(optimisticCards)
     setSelectedCard(current => current?.card_id === card.card_id ? { ...current, status: toStatus } : current)
     setIsMoving(true)
     try {
       const res = await moveSalesOrderPreparationCard({ cardId: card.card_id, toStatus, observation })
       if (!res.ok) {
-        setCards(current => current.map(item => item.card_id === card.card_id ? { ...item, status: fromStatus } : item))
+        pendingStatusByCardRef.current.delete(card.card_id)
+        boardRequestSeqRef.current += 1
+        const rolledBack = cardsRef.current.map(item => item.card_id === card.card_id ? { ...item, status: fromStatus } : item)
+        cardsRef.current = rolledBack
+        setCards(rolledBack)
         setSelectedCard(current => current?.card_id === card.card_id ? { ...current, status: fromStatus } : current)
         setTransitionError(res.error ?? 'No se pudo guardar el cambio.')
         toast.error(`Error al mover: ${res.error ?? 'Desconocido'}`)
         return false
       }
+      pendingStatusByCardRef.current.delete(card.card_id)
+      boardRequestSeqRef.current += 1
       toast.success(`NV #${card.nv_folio} movida exitosamente`)
       setPendingMovement(null)
       return true
     } catch (cause) {
-      setCards(current => current.map(item => item.card_id === card.card_id ? { ...item, status: fromStatus } : item))
+      pendingStatusByCardRef.current.delete(card.card_id)
+      boardRequestSeqRef.current += 1
+      const rolledBack = cardsRef.current.map(item => item.card_id === card.card_id ? { ...item, status: fromStatus } : item)
+      cardsRef.current = rolledBack
+      setCards(rolledBack)
       setSelectedCard(current => current?.card_id === card.card_id ? { ...current, status: fromStatus } : current)
       const message = cause instanceof Error ? cause.message : 'No se pudo guardar el cambio.'
       setTransitionError(message)
@@ -332,8 +528,22 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
   const hasFilters = searchTerm || filterCity || filterSeller
   const clearFilters = () => { setSearchTerm(''); setFilterCity(''); setFilterSeller('') }
   const syncRun = syncHealth?.latestSuccessfulRun
+  const latestRun = syncHealth?.latestRun
   const syncTrigger = syncRun?.trigger === 'SCHEDULED' ? 'SCHED' : syncRun?.trigger === 'MANUAL' ? 'MANUAL' : syncRun?.trigger || 'INIT'
   const syncTime = syncRun?.completed_at || syncRun?.started_at
+  const syncAge = syncHealth?.lastSuccessAgeMinutes ?? null
+  const isSyncRunning = isSyncing || latestRun?.status === 'STARTED'
+  const syncIsError = Boolean(syncError) || latestRun?.status === 'FAILED' || latestRun?.status === 'PARTIAL'
+  const syncIsFresh = syncAge !== null && syncAge < PREPARATION_SYNC_STALE_AFTER_MINUTES
+  const syncStatusLabel = isSyncRunning
+    ? 'Sincronizando…'
+    : syncIsError
+      ? 'ERROR'
+      : syncIsFresh
+        ? 'Actualizado'
+        : syncHealth
+          ? 'Desactualizado'
+          : 'Sin evidencia'
 
   return (
     <div className="flex flex-col h-[calc(100vh-110px)] w-full overflow-hidden bg-[#EFE9E1] text-[#322D29]">
@@ -350,15 +560,27 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
               </span>
             </div>
 
-            <div className="text-[11px] text-[#322D29]/55 font-medium">
-              {syncRun ? `Último sync: OK · ${syncTrigger} ${syncTime ? new Date(syncTime).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : ''}` : 'Sin evidencia de sync'}
+            <div
+              className={`text-[11px] font-medium ${
+                syncIsError
+                  ? 'text-[#8A4B4B]'
+                  : isSyncRunning
+                    ? 'text-[#806238]'
+                    : syncIsFresh
+                      ? 'text-emerald-700'
+                      : 'text-[#322D29]/55'
+              }`}
+              title={syncError || undefined}
+            >
+              {isSyncRunning ? 'Sincronizando…' : `Último sync: ${syncStatusLabel}`}
+              {syncRun ? ` · ${syncTrigger} ${syncTime ? new Date(syncTime).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : ''}` : ''}
             </div>
           </div>
           
           {/* Controls */}
           <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={handleSyncBsale}
+              onClick={() => void runSync('manual')}
               disabled={isSyncing}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-bold border transition-colors ${
                 isSyncing
@@ -367,7 +589,7 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
               }`}
             >
               {isSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-              {isSyncing ? 'ACTUALIZANDO...' : 'ACTUALIZAR NOTAS DE VENTA'}
+              {isSyncing ? 'SINCRONIZANDO...' : 'ACTUALIZAR NOTAS DE VENTA'}
             </button>
 
             <button
@@ -494,6 +716,7 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
         open={exclusionsOpen}
         onOpenChange={setExclusionsOpen}
         canRevoke={canManageExclusions}
+        refreshToken={exclusionsVersion}
         onChanged={loadBoard}
       />
 

@@ -36,8 +36,8 @@ test('drag no abre accidentalmente el drawer y el detalle sigue accesible', () =
 })
 
 test('la transición actualiza localmente y no recarga el board', () => {
-  assert.match(panel, /setCards\(current => current\.map\(item => item\.card_id === card\.card_id \? \{ \.\.\.item, status: toStatus \} : item\)\)/)
-  assert.match(panel, /setCards\(current => current\.map\(item => item\.card_id === card\.card_id \? \{ \.\.\.item, status: fromStatus \} : item\)\)/)
+  assert.match(panel, /const optimisticCards = cardsRef\.current\.map\(item => item\.card_id === card\.card_id \? \{ \.\.\.item, status: toStatus \} : item\)/)
+  assert.match(panel, /const rolledBack = cardsRef\.current\.map\(item => item\.card_id === card\.card_id \? \{ \.\.\.item, status: fromStatus \} : item\)/)
   assert.match(panel, /const transitionCard = async/)
   assert.doesNotMatch(panel.match(/const transitionCard[\s\S]*?\n  }/)?.[0] ?? '', /loadBoard\(\)/)
 })

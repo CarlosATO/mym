@@ -3,6 +3,8 @@
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getActiveCompanyId } from '@/app/actions/companies'
+import { getWarehousePreparationSyncHealth, type WarehousePreparationSyncHealth } from '@/app/actions/integraciones/sync'
+import { decidePreparationSync } from '@/modules/logistica/preparacion-pedidos/preparation-sync-policy'
 
 async function requireLogisticaView() {
   const supabase = await createClient()
@@ -757,7 +759,7 @@ export async function authorizeSalesOrderRouteException(params: {
   return data as any
 }
 
-type OperationalBsaleSyncCounts = {
+export type OperationalBsaleSyncCounts = {
   discovery: number
   refresh: number
   details: number
@@ -769,7 +771,16 @@ type OperationalBsaleSyncCounts = {
   skipped_invoiced: number
 }
 
-export async function syncOperationalBsaleSalesOrders(): Promise<{ ok: boolean, data?: OperationalBsaleSyncCounts, error?: string, status?: string }> {
+export type OperationalBsaleSyncResult = {
+  ok: boolean
+  data?: OperationalBsaleSyncCounts
+  error?: string
+  status?: string
+  skipped?: 'fresh' | 'running' | 'throttled'
+  health?: WarehousePreparationSyncHealth
+}
+
+export async function syncOperationalBsaleSalesOrders(): Promise<OperationalBsaleSyncResult> {
   try {
     const supabase = await createClient()
     const { data: { user }, error: authError } = await supabase.auth.getUser()
@@ -803,6 +814,36 @@ export async function syncOperationalBsaleSalesOrders(): Promise<{ ok: boolean, 
     return { ok: true, data: result.counts }
   } catch (err: unknown) {
     console.error('[syncOperationalBsaleSalesOrders] Exception:', err)
+    return { ok: false, error: err instanceof Error ? err.message : 'Error desconocido' }
+  }
+}
+
+export async function syncOperationalBsaleSalesOrdersIfStale(): Promise<OperationalBsaleSyncResult> {
+  try {
+    const health = await getWarehousePreparationSyncHealth()
+    const latestRunAgeMinutes = health.latestRun?.started_at
+      ? Math.floor((Date.now() - new Date(health.latestRun.started_at).getTime()) / 60000)
+      : null
+    const decision = decidePreparationSync({
+      lastSuccessAgeMinutes: health.lastSuccessAgeMinutes,
+      latestRunStatus: health.latestRun?.status ?? null,
+      latestRunAgeMinutes,
+    })
+
+    if (decision.action === 'skip') {
+      return { ok: true, skipped: decision.reason, health }
+    }
+
+    const result = await syncOperationalBsaleSalesOrders()
+    const nextHealth = await getWarehousePreparationSyncHealth()
+
+    if (!result.ok && result.status === 'SKIPPED_LOCKED') {
+      return { ok: true, skipped: 'running', status: result.status, health: nextHealth }
+    }
+
+    return { ...result, health: nextHealth }
+  } catch (err: unknown) {
+    console.error('[syncOperationalBsaleSalesOrdersIfStale] Exception:', err)
     return { ok: false, error: err instanceof Error ? err.message : 'Error desconocido' }
   }
 }
