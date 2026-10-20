@@ -99,6 +99,70 @@ jobs:
             exit 1
           done
 
+  receptions:
+    needs: sync
+    if: always() && (inputs.snapshot_only != true && inputs.snapshot_only != 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Sync Bsale reception costs
+        env:
+          SYNC_URL: ${{ secrets.PRODUCTION_SYNC_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -uo pipefail
+
+          if [ "${GITHUB_EVENT_NAME:-}" = "schedule" ]; then
+            local_day="$(TZ=America/Santiago date +%u)"
+            local_hour="$(TZ=America/Santiago date +%H)"
+            local_hour_number=$((10#$local_hour))
+            if [ "$local_day" -gt 6 ] || [ "$local_hour_number" -lt 8 ] || [ "$local_hour_number" -gt 20 ]; then
+              echo "Outside scheduled receptions window in America/Santiago: day=$local_day hour=$local_hour"
+              exit 0
+            fi
+          fi
+
+          if [ -z "$SYNC_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "Missing PRODUCTION_SYNC_URL or CRON_SECRET"
+            exit 1
+          fi
+
+          receptions_url="${SYNC_URL%/api/cron/sync-replenishment}/api/cron/bsale-receptions"
+          max_attempts=2
+          for attempt in $(seq 1 "$max_attempts"); do
+            response_file="$(mktemp)"
+            curl_exit=0
+            http_code="$(curl -sS -X POST "$receptions_url" \
+              -H "Authorization: Bearer ${CRON_SECRET}" \
+              -H "Content-Type: application/json" \
+              --max-time 540 \
+              -o "$response_file" \
+              -w "%{http_code}" || curl_exit=$?)"
+            body="$(cat "$response_file")"
+            rm -f "$response_file"
+            echo "Receptions attempt ${attempt}/${max_attempts}: HTTP ${http_code:-000} · curl exit: ${curl_exit}"
+            echo "Response: ${body:0:2000}"
+
+            if [ "$http_code" = "200" ]; then
+              exit 0
+            fi
+            if [ "$http_code" = "409" ] && echo "$body" | grep -q 'SKIPPED_LOCKED'; then
+              echo "Receptions skipped: another reception sync is running."
+              exit 0
+            fi
+            if [ "$http_code" = "401" ]; then
+              echo "Unauthorized: check CRON_SECRET / endpoint auth."
+              exit 1
+            fi
+            if [ "$attempt" -lt "$max_attempts" ] && { [ "$http_code" = "000" ] || [ "$curl_exit" -ne 0 ] || [[ "$http_code" =~ ^5 ]]; }; then
+              echo "Retrying receptions in 30 seconds..."
+              sleep 30
+              continue
+            fi
+            echo "Receptions sync failed."
+            exit 1
+          done
+
   receivables-snapshot:
     needs: sync
     if: always() && (needs.sync.result == 'success' || inputs.snapshot_only == true || inputs.snapshot_only == 'true')

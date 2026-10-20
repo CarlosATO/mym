@@ -13,6 +13,7 @@
     "start": "next start",
     "test:bsale-client-metrics-refresh": "node --experimental-strip-types --test scripts/test-bsale-client-metrics-refresh.mjs",
     "test:bsale-clients-sync": "node --experimental-strip-types --test scripts/test-bsale-clients-sync.mjs",
+    "test:bsale-sync-repair": "node --experimental-strip-types --test scripts/test-bsale-products-mirror-sync.mjs scripts/test-bsale-receptions-scheduled.mjs",
     "test:bsale-receivable-snapshot": "node --experimental-strip-types --test scripts/test-bsale-receivable-snapshot.mjs",
     "test:cobranza-v2": "node --test scripts/test-cobranza-v2-contract.mjs",
     "test:cobranza-tasks": "node --experimental-strip-types --test scripts/test-cobranza-tasks.mjs scripts/test-cobranza-tasks-contract.mjs",

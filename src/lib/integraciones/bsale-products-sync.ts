@@ -36,11 +36,63 @@ import {
   SyncTriggerType
 } from './sync-core'
 import { getBsaleConfigForCompany } from '@/lib/bsale/company-config'
+import { normalizeSku } from '@/lib/bsale/client'
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 function computeHash(payload: any): string {
   return crypto.createHash('md5').update(JSON.stringify(payload)).digest('hex')
+}
+
+export type BsaleIntegrationMirrorRecords = {
+  variants: Record<string, unknown>[]
+  products: Record<string, unknown>[]
+}
+
+export function buildBsaleIntegrationMirrorRecords(
+  allVariants: any[],
+  companyId: string,
+): BsaleIntegrationMirrorRecords {
+  const syncedAt = new Date().toISOString()
+  const variants: Record<string, unknown>[] = []
+  const productsById = new Map<number, Record<string, unknown>>()
+
+  for (const variant of allVariants) {
+    const bsaleVariantId = Number(variant.id)
+    const bsaleProductId = variant.product?.id ? Number(variant.product.id) : 0
+    const barcode = String(variant.barCode || '').trim()
+    variants.push({
+      company_id: companyId,
+      bsale_id: bsaleVariantId,
+      bsale_product_id: bsaleProductId,
+      code: normalizeSku(variant.code || ''),
+      description: variant.description || null,
+      bar_code: barcode === '0' || barcode === 'null' || barcode === 'undefined' ? null : barcode || null,
+      state: variant.state ?? null,
+      unlimited_stock: variant.unlimitedStock === 1,
+      allow_negative_stock: variant.allowNegativeStock === 1,
+      raw_json: variant,
+      synced_at: syncedAt,
+    })
+
+    if (bsaleProductId > 0 && !productsById.has(bsaleProductId)) {
+      const product = variant.product
+      productsById.set(bsaleProductId, {
+        company_id: companyId,
+        bsale_id: bsaleProductId,
+        name: product?.name || '',
+        description: product?.description || null,
+        classification: product?.classification ?? null,
+        stock_control: product?.stockControl === 1,
+        state: product?.state ?? null,
+        product_type_id: product?.product_type?.id ? Number(product.product_type.id) : null,
+        raw_json: product ?? {},
+        synced_at: syncedAt,
+      })
+    }
+  }
+
+  return { variants, products: [...productsById.values()] }
 }
 
 export interface SyncBsaleProductsOptions {
@@ -150,7 +202,6 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
       if (offset > totalCount + limit) hasMore = false
     }
 
-    const integracionesRecords = []
     const productsRecords = []
     const observedAt = new Date().toISOString()
     const brandRecords = collectBsaleBrandRecords(allVariants, companyId, observedAt)
@@ -181,18 +232,6 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
       if (barcode) stats.withBarcode++
       if (bsaleTypeId) stats.withProductType++
 
-      integracionesRecords.push({
-        company_id: companyId,
-        bsale_id: bsaleVariantId,
-        bsale_product_id: bsaleProductId,
-        code: sku,
-        description: description,
-        bar_code: barcode,
-        state: bsaleVariantState,
-        raw_json: v,
-        synced_at: new Date().toISOString()
-      })
-
       productsRecords.push({
         company_id: companyId,
         source: 'BSALE',
@@ -213,6 +252,23 @@ export async function syncBsaleProducts(options: SyncBsaleProductsOptions) {
         last_bsale_sync_at: observedAt
       })
     }
+
+    // Mantener el espejo canónico de integraciones sin volver a consultar Bsale.
+    const mirror = buildBsaleIntegrationMirrorRecords(allVariants, companyId)
+    await executeSequentialBatches(mirror.variants, async (batch) => {
+      const { error } = await admin.schema('integraciones').from('bsale_variants').upsert(batch, {
+        onConflict: 'company_id,bsale_id',
+        ignoreDuplicates: false,
+      })
+      if (error) throw new Error(`Error actualizando espejo bsale_variants: ${error.message}`)
+    })
+    await executeSequentialBatches(mirror.products, async (batch) => {
+      const { error } = await admin.schema('integraciones').from('bsale_products').upsert(batch, {
+        onConflict: 'company_id,bsale_id',
+        ignoreDuplicates: false,
+      })
+      if (error) throw new Error(`Error actualizando espejo bsale_products: ${error.message}`)
+    })
 
     // Evaluate against existing
     const existingProducts: any[] = []
