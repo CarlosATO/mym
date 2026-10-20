@@ -16,36 +16,42 @@ import {
 type ModuleSidebarProps = {
   identity: ModuleIdentity
   navigation: { home?: ModuleNavItem; primaryAction?: ModuleNavItem; groups: ModuleNavGroup[] }
-  collapsed: boolean
-  responsiveCollapsed: boolean
+  expanded: boolean
   mobileOpen: boolean
+  mobileViewport: boolean
   permissions: string[]
   variant: 'default' | 'financial'
   onToggle: () => void
   onNavigate: () => void
 }
 
-export function ModuleSidebar({ identity, navigation, collapsed, responsiveCollapsed, mobileOpen, permissions, variant, onToggle, onNavigate }: ModuleSidebarProps) {
+export function ModuleSidebar({ identity, navigation, expanded, mobileOpen, mobileViewport, permissions, variant, onToggle, onNavigate }: ModuleSidebarProps) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const location = { pathname, searchParams }
-  const effectiveCollapsed = (collapsed || responsiveCollapsed) && !mobileOpen
+  const effectiveCollapsed = !expanded
   const visibleGroups = navigation.groups
     .map(group => ({ ...group, items: group.items.filter(item => isVisible(item, permissions)) }))
     .filter(group => group.items.length > 0)
   const home = navigation.home && isVisible(navigation.home, permissions) ? navigation.home : null
-  const sidebarWidth = collapsed || responsiveCollapsed ? 'md:w-[68px]' : 'md:w-[244px]'
+  const sidebarWidth = expanded ? 'md:w-[244px]' : 'md:w-[68px]'
   const primaryAction = navigation.primaryAction && isVisible(navigation.primaryAction, permissions) ? navigation.primaryAction : null
+  const toggleLabel = expanded ? 'Contraer navegación' : 'Expandir navegación'
 
   return (
-    <aside className={cn(
-      'fixed left-3 top-3 bottom-3 z-40 flex flex-col overflow-hidden rounded-[20px] border text-theme-sidebar-text shadow-lg transition-[width,transform] duration-200',
-      variant === 'financial'
-        ? 'border-[#AC9C8D]/40 bg-[#322D29] text-[#EFE9E1]'
-        : 'border-theme-sidebar-border bg-theme-sidebar-bg',
-      sidebarWidth,
-      mobileOpen ? 'translate-x-0 w-[244px]' : '-translate-x-[calc(100%+0.75rem)] md:translate-x-0'
-    )}>
+    <aside
+      id="module-sidebar"
+      inert={mobileViewport && !mobileOpen ? true : undefined}
+      aria-hidden={mobileViewport && !mobileOpen ? true : undefined}
+      className={cn(
+        'fixed left-3 top-3 bottom-3 z-40 flex flex-col overflow-hidden rounded-[20px] border text-theme-sidebar-text shadow-lg transition-[width,transform] duration-200',
+        variant === 'financial'
+          ? 'border-[#AC9C8D]/40 bg-[#322D29] text-[#EFE9E1]'
+          : 'border-theme-sidebar-border bg-theme-sidebar-bg',
+        sidebarWidth,
+        mobileOpen ? 'translate-x-0 w-[244px]' : '-translate-x-[calc(100%+0.75rem)] md:translate-x-0'
+      )}
+    >
       <div className={cn(
         'flex h-[76px] shrink-0 items-center border-b px-4',
         variant === 'financial' ? 'border-[#AC9C8D]/30 bg-[#322D29]' : 'border-theme-sidebar-border bg-theme-sidebar-surface',
@@ -62,7 +68,7 @@ export function ModuleSidebar({ identity, navigation, collapsed, responsiveColla
 
       {primaryAction && <PrimaryAction item={primaryAction} collapsed={effectiveCollapsed} searchParams={searchParams} onNavigate={onNavigate} />}
 
-      <nav className="flex-1 overflow-y-auto px-3 py-4">
+      <nav className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
         {home && <SidebarItem item={home} location={location} collapsed={effectiveCollapsed} permissions={permissions} variant={variant} onNavigate={onNavigate} />}
         {visibleGroups.map(group => {
           const groupActive = group.items.some(item => isBranchActive(item, location))
@@ -81,13 +87,14 @@ export function ModuleSidebar({ identity, navigation, collapsed, responsiveColla
         })}
       </nav>
 
-      <div className={cn('border-t p-3', variant === 'financial' ? 'border-[#AC9C8D]/30 bg-[#322D29]' : 'border-theme-sidebar-border bg-theme-sidebar-surface', effectiveCollapsed && 'md:px-2')}>
+      <div className={cn('shrink-0 border-t p-3', variant === 'financial' ? 'border-[#AC9C8D]/30 bg-[#322D29]' : 'border-theme-sidebar-border bg-theme-sidebar-surface', effectiveCollapsed && 'md:px-2')}>
         <button
-          title={collapsed ? 'Expandir navegación' : responsiveCollapsed ? 'Navegación compacta en este ancho' : 'Contraer navegación'}
-          aria-label={collapsed ? 'Expandir navegación' : responsiveCollapsed ? 'Navegación compacta en este ancho' : 'Contraer navegación'}
-          aria-expanded={!effectiveCollapsed}
+          title={toggleLabel}
+          aria-label={toggleLabel}
+          aria-expanded={expanded}
+          aria-controls="module-sidebar"
           onClick={onToggle}
-          className={cn('hidden w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold md:flex', variant === 'financial' ? 'text-[#AC9C8D] hover:bg-white/10 hover:text-[#EFE9E1]' : 'text-theme-sidebar-muted hover:bg-theme-sidebar-hover hover:text-theme-sidebar-text')}
+          className={cn('hidden w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset md:flex', variant === 'financial' ? 'text-[#AC9C8D] hover:bg-white/10 hover:text-[#EFE9E1] focus-visible:ring-[#AC9C8D]' : 'text-theme-sidebar-muted hover:bg-theme-sidebar-hover hover:text-theme-sidebar-text focus-visible:ring-theme-sidebar-accent')}
         >
           {effectiveCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
           {!effectiveCollapsed && 'Contraer menú'}

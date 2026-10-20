@@ -17,6 +17,7 @@
     "test:cobranza-v2": "node --test scripts/test-cobranza-v2-contract.mjs",
     "test:cobranza-tasks": "node --experimental-strip-types --test scripts/test-cobranza-tasks.mjs scripts/test-cobranza-tasks-contract.mjs",
     "test:cobranza-responsive": "node --test scripts/test-cobranza-responsive-contract.mjs",
+    "test:module-sidebar-responsive": "node --experimental-strip-types --test scripts/test-module-sidebar-responsive-contract.mjs",
     "test:cobranza-2b": "node --test scripts/test-cobranza-2b-contract.mjs",
     "test:cobranza-unknown": "node --test scripts/test-cobranza-unknown-recovery.mjs",
     "test:cobranza-closed-recent": "node --test scripts/test-cobranza-closed-recent.mjs",

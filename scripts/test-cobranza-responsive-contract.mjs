@@ -30,17 +30,17 @@ test('los filtros permiten wrap sin generar overflow', () => {
   assert.match(view, /mt-2\.5 flex flex-wrap items-center gap-1\.5 border-b border-\[#D1C7BD\]/)
 })
 
-test('el sidebar global se auto-compacta según el ancho y respeta el toggle manual', () => {
+test('el sidebar global conserva la preferencia de escritorio y el overlay temporal', () => {
   assert.match(shell, /const WIDE_VIEWPORT_QUERY = '\(min-width: 1536px\)'/)
-  assert.match(shell, /const responsiveCollapsed = !isWideViewport/)
-  assert.match(shell, /const effectiveCollapsed = collapsed \|\| responsiveCollapsed/)
-  assert.match(shell, /const next = !value/)
+  assert.match(shell, /const MOBILE_VIEWPORT_QUERY = '\(max-width: 767px\)'/)
+  assert.match(shell, /const sidebarState = resolveSidebarState\(\{/)
+  assert.doesNotMatch(shell, /const responsiveCollapsed = !isWideViewport/)
   assert.match(shell, /window\.localStorage\.setItem\(STORAGE_KEY/)
 })
 
-test('el sidebar usa ancho compacto y conserva accesibilidad en modo colapsado', () => {
-  assert.match(sidebar, /const sidebarWidth = collapsed \|\| responsiveCollapsed \? 'md:w-\[68px\]' : 'md:w-\[244px\]'/)
-  assert.match(sidebar, /const effectiveCollapsed = \(collapsed \|\| responsiveCollapsed\) && !mobileOpen/)
+test('el sidebar usa el estado real y conserva accesibilidad en modo colapsado', () => {
+  assert.match(sidebar, /const sidebarWidth = expanded \? 'md:w-\[244px\]' : 'md:w-\[68px\]'/)
+  assert.match(sidebar, /const effectiveCollapsed = !expanded/)
   assert.match(sidebar, /aria-label=\{collapsed \? item\.label : undefined\}/)
-  assert.match(sidebar, /aria-expanded=\{!effectiveCollapsed\}/)
+  assert.match(sidebar, /aria-expanded=\{expanded\}/)
 })
