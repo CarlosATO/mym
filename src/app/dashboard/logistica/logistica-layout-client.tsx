@@ -92,7 +92,7 @@ const pageHeaders: Record<string, { title: string; breadcrumb: string[]; descrip
 
 interface LogisticaLayoutClientProps {
   children: React.ReactNode
-  profile: { nombre: string; apellido: string; email: string; roles: { name: string } }
+  profile: { id: string; nombre: string; apellido: string; email: string; roles: { name: string } }
   permissions: string[]
 }
 
@@ -187,7 +187,14 @@ export function LogisticaLayoutClient({ children, profile, permissions }: Logist
       )
     }
   } else if (activeTab === 'preparacion_pedidos') {
-    content = <SalesOrderPreparationPanel roleName={profile.roles?.name} />
+    content = (
+      <SalesOrderPreparationPanel
+        roleName={profile.roles?.name}
+        currentUserId={profile.id}
+        currentUserName={`${profile.nombre ?? ''} ${profile.apellido ?? ''}`.trim()}
+        permissions={permissions}
+      />
+    )
   } else if (activeTab === 'consultas') {
     if (activeActionId === 'stock') {
       content = <StockPanel />

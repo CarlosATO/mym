@@ -5,6 +5,7 @@ import { useRef } from 'react'
 import { SalesOrderPreparationCardInfo } from '@/app/actions/logistica/sales-order-preparation'
 import { useDraggable } from '@dnd-kit/core'
 import { formatPreparationClp, getPreparationCardAmount, getPreparationComuna, parseDateOnly } from './preparation-board-utils'
+import { getPreparationLockLabel } from './preparation-lock-policy'
 
 interface SalesOrderCardProps {
   card: SalesOrderPreparationCardInfo
@@ -17,6 +18,8 @@ interface SalesOrderCardProps {
   selectable?: boolean
   selected?: boolean
   onToggleSelected?: (card: SalesOrderPreparationCardInfo) => void
+  currentUserId?: string | null
+  dragDisabled?: boolean
 }
 
 function formatShortDate(value: string | null): string | null {
@@ -47,6 +50,8 @@ export function SalesOrderCard({
   selectable = false,
   selected = false,
   onToggleSelected,
+  currentUserId = null,
+  dragDisabled = false,
 }: SalesOrderCardProps) {
   const routeDate = formatShortDate(card.route_date)
   const routeFullDate = formatFullDate(card.route_date)
@@ -57,12 +62,18 @@ export function SalesOrderCard({
     : { label: 'Emisión', value: emissionDate ?? '—', title: `Fecha de emisión: ${emissionFullDate ?? '—'}` }
   const comuna = getPreparationComuna(card)
   const amount = getPreparationCardAmount(card)
+  const lockLabel = getPreparationLockLabel({
+    status: card.status,
+    currentUserId,
+    lockedByUserId: card.locked_by_user_id,
+    lockedByName: card.locked_by_user_name,
+  })
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null)
 
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: card.card_id,
     data: { card },
-    disabled: isOverlay || isPending
+    disabled: isOverlay || isPending || dragDisabled
   })
 
   const style = transform && !isOverlay ? {
@@ -164,6 +175,11 @@ export function SalesOrderCard({
             {routeDate && (
               <span className="text-[11px] font-normal text-[#322D29]/60" title={`Fecha de emisión: ${emissionFullDate ?? '—'}`}>
                 Emisión {emissionDate ?? '—'}
+              </span>
+            )}
+            {lockLabel && (
+              <span className="text-[11px] font-medium text-[#806238]" title={lockLabel}>
+                {lockLabel}
               </span>
             )}
           </div>

@@ -1,12 +1,13 @@
 'use client'
 
-import { X, MapPin, Package, User, FileText, FileCheck, CheckCircle2, Printer, Building2, Hash, AlertTriangle } from 'lucide-react'
+import { X, MapPin, Package, User, FileText, FileCheck, CheckCircle2, Printer, Building2, Hash, AlertTriangle, LockKeyhole } from 'lucide-react'
 import { SalesOrderPreparationCardInfo, SalesOrderPreparationItem, SalesOrderPreparationLine, confirmSalesOrderPreparationLine, getSalesOrderClientData, SalesOrderClientData, getSalesOrderPreparationLines, getSalesOrderPreparationMovements, SalesOrderPreparationMovement } from '@/app/actions/logistica/sales-order-preparation'
 import { generatePreparationOrdersPdf, openPreparationOrdersPdf } from '@/lib/pdf/generate-preparation-orders-pdf'
 import { useState, useEffect } from 'react'
 import { MOVEMENT_RULES } from './movement-rules'
 import { formatDateOnly, parseDateOnly } from './preparation-board-utils'
 import { PREPARATION_INCIDENT_REASONS } from './preparation-incidents'
+import { canClaimPreparation as canClaimPreparationView, canTakeoverPreparation as canTakeoverPreparationView, isPreparationLockError, isPreparationReadOnly } from './preparation-lock-policy'
 
 interface SalesOrderDrawerProps {
   card: SalesOrderPreparationCardInfo | null
@@ -18,8 +19,13 @@ interface SalesOrderDrawerProps {
   preparationLinesError?: string | null
   clientData?: SalesOrderClientData | null
   isLoadingItems: boolean
+  currentUserId: string
+  canClaimPreparation: boolean
+  canTakeoverPreparation: boolean
+  onTakePreparation: (card: SalesOrderPreparationCardInfo) => void | Promise<void>
+  onOwnershipConflict: () => void | Promise<void>
   onClose: () => void
-  onTransition: (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string) => Promise<boolean>
+  onTransition: (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string) => Promise<{ ok: boolean; error?: string }>
 }
 
 const statusLabel = (status: string) => status === 'PENDING_ROUTE_PREP' ? 'Pendiente' : status === 'IN_PREPARATION' ? 'En preparación' : status === 'IN_AUDIT' ? 'En auditoría' : 'Estado operativo'
@@ -50,6 +56,11 @@ export function SalesOrderDrawer({
   preparationLinesError = null,
   clientData: clientDataProp,
   isLoadingItems,
+  currentUserId,
+  canClaimPreparation,
+  canTakeoverPreparation,
+  onTakePreparation,
+  onOwnershipConflict,
   onClose,
   onTransition,
 }: SalesOrderDrawerProps) {
@@ -72,6 +83,7 @@ export function SalesOrderDrawer({
   const [incidentObservation, setIncidentObservation] = useState('')
   const [lineError, setLineError] = useState<string | null>(null)
   const [savingLineId, setSavingLineId] = useState<string | null>(null)
+  const [isTakingPreparation, setIsTakingPreparation] = useState(false)
   const [auditSummaryOpen, setAuditSummaryOpen] = useState(false)
 
   // Solo consulta cliente si el padre no lo entregó ya precargado.
@@ -111,6 +123,7 @@ export function SalesOrderDrawer({
     setPrintError(null)
     setLineDrafts({})
     setIncidentLine(null)
+    setIsTakingPreparation(false)
     setAuditSummaryOpen(false)
   }, [card?.card_id])
   /* eslint-enable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
@@ -124,7 +137,38 @@ export function SalesOrderDrawer({
 
   if (!card) return null
 
+  const lockView = {
+    status: card.status,
+    currentUserId,
+    lockedByUserId: card.locked_by_user_id,
+    lockedByName: card.locked_by_user_name,
+    canManage: canClaimPreparation,
+    canTakeover: canTakeoverPreparation,
+  }
+  const isReadOnly = isPreparationReadOnly(lockView)
+  const showClaimPreparation = canClaimPreparationView(lockView)
+  const showTakeoverPreparation = canTakeoverPreparationView(lockView)
+  const lockOwnerName = card.locked_by_user_name || 'otro usuario'
+
+  const reportLockConflict = (message: string | null | undefined) => {
+    if (isPreparationLockError(message)) void onOwnershipConflict()
+  }
+
+  const handleTakePreparation = async () => {
+    if (isTakingPreparation) return
+    setIsTakingPreparation(true)
+    try {
+      await onTakePreparation(card)
+    } finally {
+      setIsTakingPreparation(false)
+    }
+  }
+
   const handleMove = async (toStatus: string, requireObs: boolean, label: string) => {
+    if (isReadOnly) {
+      setMoveError('Esta preparación está asignada a otro usuario.')
+      return
+    }
     if (toStatus === 'IN_AUDIT' && card?.status === 'IN_PREPARATION') {
       if (pendingLines.length > 0) {
         setMoveError(`Faltan ${pendingLines.length} producto${pendingLines.length === 1 ? '' : 's'} por confirmar.`)
@@ -147,10 +191,11 @@ export function SalesOrderDrawer({
   const executeMove = async (toStatus: string, obs?: string) => {
     setIsMoving(true)
     setMoveError(null)
-    const ok = await onTransition(card, toStatus, obs)
+    const result = await onTransition(card, toStatus, obs)
     setIsMoving(false)
-    if (!ok) {
-      setMoveError('No se pudo guardar el cambio. La tarjeta volvió a su estado anterior.')
+    if (!result.ok) {
+      setMoveError(result.error || 'No se pudo guardar el cambio. La tarjeta volvió a su estado anterior.')
+      reportLockConflict(result.error)
       return
     }
     setPendingMoveAction(null)
@@ -174,6 +219,10 @@ export function SalesOrderDrawer({
 
   const savePreparationLine = async (line: SalesOrderPreparationLine, quantity: number, reasonCode?: string, observationText?: string, excluded = false) => {
     if (!card?.company_id || savingLineId) return
+    if (isReadOnly) {
+      setLineError('Esta preparación está asignada a otro usuario.')
+      return
+    }
     setSavingLineId(line.id)
     setLineError(null)
     const result = await confirmSalesOrderPreparationLine({
@@ -187,6 +236,7 @@ export function SalesOrderDrawer({
     setSavingLineId(null)
     if (result.error || !result.data) {
       setLineError(result.error || 'No se pudo confirmar la línea.')
+      reportLockConflict(result.error)
       return
     }
     onPreparationLineChange(result.data)
@@ -201,6 +251,10 @@ export function SalesOrderDrawer({
   }
 
   const confirmLineInput = (line: SalesOrderPreparationLine, excluded = false) => {
+    if (isReadOnly) {
+      setLineError('Esta preparación está asignada a otro usuario.')
+      return
+    }
     const raw = excluded
       ? '0'
       : (lineDrafts[line.id] ?? (line.prepared_quantity == null ? '' : String(line.prepared_quantity)))
@@ -261,11 +315,12 @@ export function SalesOrderDrawer({
     try {
       // El documento se construye antes de mover la tarjeta: si falla, no cambia el estado.
       const blob = generatePreparationOrdersPdf([{ card, items, clientData }])
-      const ok = await onTransition(card, 'IN_PREPARATION')
+      const moveResult = await onTransition(card, 'IN_PREPARATION')
 
-      if (!ok) {
+      if (!moveResult.ok) {
         closePdfWindow(printWindow)
-        setPrintError('No se movió la NV: el servidor rechazó el cambio de estado. No se abrió el documento.')
+        setPrintError(moveResult.error || 'No se movió la NV: el servidor rechazó el cambio de estado. No se abrió el documento.')
+        reportLockConflict(moveResult.error)
         return
       }
 
@@ -404,6 +459,36 @@ export function SalesOrderDrawer({
             </div>
           </div>
 
+          {card.status === 'IN_PREPARATION' && (isReadOnly || showClaimPreparation || showTakeoverPreparation) && (
+            <div className="rounded-lg border border-amber-300/70 bg-amber-50 px-3.5 py-3 text-xs text-amber-900 shadow-xs">
+              <div className="flex items-start gap-2">
+                <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-bold">
+                    {card.locked_by_user_id
+                      ? `Esta Nota de Venta está siendo preparada por ${lockOwnerName}.`
+                      : 'Esta preparación aún no tiene responsable.'}
+                  </p>
+                  <p className="mt-0.5 text-amber-900/75">
+                    {isReadOnly
+                      ? 'Modo sólo lectura. Puedes consultar e imprimir, pero no modificar cantidades ni mover la tarjeta.'
+                      : 'Tienes el control exclusivo de esta preparación.'}
+                  </p>
+                </div>
+                {(showClaimPreparation || showTakeoverPreparation) && (
+                  <button
+                    type="button"
+                    onClick={() => void handleTakePreparation()}
+                    disabled={isTakingPreparation}
+                    className="shrink-0 rounded-md bg-[#72383D] px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-[#612F34] disabled:opacity-50"
+                  >
+                    {isTakingPreparation ? 'Tomando…' : 'Tomar preparación'}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* ── SECCIÓN PROTAGONISTA: PRODUCTOS A PREPARAR ── */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -457,15 +542,15 @@ export function SalesOrderDrawer({
                             <p className="text-[10px] text-theme-text-muted mt-0.5">{state}</p>
                           </div>
                           <span className="text-center text-xs font-bold tabular-nums text-theme-text">{line.requested_quantity}</span>
-                          <input type="number" min={0} max={line.requested_quantity} step="any" aria-label={`Cantidad a despachar de ${line.product_name}`} placeholder={line.prepared_quantity == null ? '—' : undefined} value={quantity} disabled={savingLineId === line.id || line.excluded_from_dispatch} onFocus={() => setLineDrafts(current => ({ ...current, [line.id]: '' }))} onBlur={() => setLineDrafts(current => {
+                          <input type="number" min={0} max={line.requested_quantity} step="any" aria-label={`Cantidad a despachar de ${line.product_name}`} placeholder={line.prepared_quantity == null ? '—' : undefined} value={quantity} disabled={savingLineId === line.id || line.excluded_from_dispatch || isReadOnly} onFocus={() => setLineDrafts(current => ({ ...current, [line.id]: '' }))} onBlur={() => setLineDrafts(current => {
                             if (current[line.id]?.trim() !== '') return current
                             const next = { ...current }
                             delete next[line.id]
                             return next
                           })} onChange={event => setLineDrafts(current => ({ ...current, [line.id]: event.target.value }))} onKeyDown={event => { if (event.key === 'Enter') confirmLineInput(line) }} className="w-full rounded border border-[#D1C7BD] bg-white px-1.5 py-1 text-center text-xs tabular-nums placeholder:text-theme-text-muted focus:border-[#72383D] focus:outline-none focus:ring-1 focus:ring-[#72383D]/20 disabled:bg-[#F0ECE8]" />
                           <div className="flex flex-col gap-1">
-                            <button type="button" disabled={savingLineId === line.id || line.excluded_from_dispatch} onClick={() => confirmLineInput(line)} className="text-[10px] font-bold text-[#72383D] hover:underline disabled:opacity-40">Confirmar</button>
-                            <button type="button" disabled={savingLineId === line.id || line.excluded_from_dispatch} onClick={() => confirmLineInput(line, true)} className="text-[10px] font-semibold text-[#8A4B4B] hover:underline disabled:opacity-40">Excluir</button>
+                            <button type="button" disabled={savingLineId === line.id || line.excluded_from_dispatch || isReadOnly} onClick={() => confirmLineInput(line)} className="text-[10px] font-bold text-[#72383D] hover:underline disabled:opacity-40">Confirmar</button>
+                            <button type="button" disabled={savingLineId === line.id || line.excluded_from_dispatch || isReadOnly} onClick={() => confirmLineInput(line, true)} className="text-[10px] font-semibold text-[#8A4B4B] hover:underline disabled:opacity-40">Excluir</button>
                           </div>
                         </div>
                       )
@@ -669,10 +754,10 @@ export function SalesOrderDrawer({
 
           {!pendingMoveAction && card.status === 'IN_PREPARATION' && (
             <div className="flex gap-2 mb-3">
-              <button onClick={() => handleMove('IN_AUDIT', MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.backward, MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.label)} disabled={isMoving} className="flex-1 py-2 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-lg text-xs disabled:opacity-50 shadow-xs transition-colors">
+              <button onClick={() => handleMove('IN_AUDIT', MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.backward, MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.label)} disabled={isMoving || isReadOnly} className="flex-1 py-2 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-lg text-xs disabled:opacity-50 shadow-xs transition-colors">
                 {MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.label}
               </button>
-              <button onClick={() => handleMove('PENDING_ROUTE_PREP', MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.backward, MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.label)} disabled={isMoving} className="flex-1 py-2 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg text-xs disabled:opacity-50 shadow-xs transition-colors">
+              <button onClick={() => handleMove('PENDING_ROUTE_PREP', MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.backward, MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.label)} disabled={isMoving || isReadOnly} className="flex-1 py-2 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg text-xs disabled:opacity-50 shadow-xs transition-colors">
                 {MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.label}
               </button>
             </div>

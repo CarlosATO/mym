@@ -39,7 +39,11 @@ test('la transición actualiza localmente y no recarga el board', () => {
   assert.match(panel, /const optimisticCards = cardsRef\.current\.map\(item => item\.card_id === card\.card_id \? \{ \.\.\.item, status: toStatus \} : item\)/)
   assert.match(panel, /const rolledBack = cardsRef\.current\.map\(item => item\.card_id === card\.card_id \? \{ \.\.\.item, status: fromStatus \} : item\)/)
   assert.match(panel, /const transitionCard = async/)
-  assert.doesNotMatch(panel.match(/const transitionCard[\s\S]*?\n  }/)?.[0] ?? '', /loadBoard\(\)/)
+  const transitionBody = panel.match(/const transitionCard[\s\S]*?\n  }/)?.[0] ?? ''
+  assert.match(transitionBody, /const optimisticCards = cardsRef\.current\.map/)
+  assert.match(transitionBody, /if \(isPreparationLockError\(res\.error\)\) void loadBoard\(\)/)
+  assert.match(transitionBody, /if \(isPreparationLockError\(message\)\) void loadBoard\(\)/)
+  assert.doesNotMatch(transitionBody, /^\s*await loadBoard\(\)/m)
 })
 
 test('la mutación por tarjeta evita concurrencia y mantiene contadores derivados', () => {

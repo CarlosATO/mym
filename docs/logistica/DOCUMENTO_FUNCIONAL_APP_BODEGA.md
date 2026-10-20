@@ -29,11 +29,28 @@ Nunca modificar la cantidad solicitada original para hacerla coincidir con la ca
 
 ## 2. Toma de Nota de Venta
 
-Una Nota de Venta pendiente podrá ser tomada por un bodeguero.
-Conceptualmente el estado pasa de:
-`PENDING_ROUTE_PREP` → `IN_PREPARATION`
+Una Nota de Venta pendiente puede ser tomada por un bodeguero. Al pasar de
+`PENDING_ROUTE_PREP` → `IN_PREPARATION` se adquiere el control exclusivo en la
+misma transacción: `assigned_user_id`, `locked_by_user_id` y `locked_at`.
 
-La futura implementación deberá garantizar mediante mecanismos de locking que una NV es tomada por un solo preparador activo simultáneamente, debido a que el locking actual es insuficiente.
+Reglas cerradas:
+
+* Una NV en preparación tiene un solo preparador activo.
+* El lock se adquiere atómicamente al iniciar preparación; dos usuarios que
+  intenten tomarla simultáneamente no pueden ganar ambos.
+* Otros usuarios autorizados pueden leer y consultar la NV, pero no modificar
+  cantidades, excluir líneas, generar incidencias ni mover la tarjeta.
+* La escritura operacional exige ser el propietario del lock, validado en DB.
+* Volver a Pendiente o enviar a Auditoría libera el lock, conserva
+  `assigned_user_id` y mantiene snapshot, cantidades, incidencias e historial.
+* Las tarjetas legacy `IN_PREPARATION` sin responsable quedan en sólo lectura
+  hasta que un usuario con `logistica.preparation.manage` las tome.
+* El lock no expira por tiempo ni por desconexión; se libera sólo con una
+  acción explícita.
+* Un usuario con `logistica.preparation.authorize_exception` puede realizar
+  takeover de una preparación ajena con motivo obligatorio. El cambio queda
+  trazado en `sales_order_preparation_movements` sin borrar historial.
+* La sincronización Bsale no modifica ni libera locks.
 
 ---
 

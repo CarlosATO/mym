@@ -10,10 +10,12 @@ import {
   syncOperationalBsaleSalesOrders,
   syncOperationalBsaleSalesOrdersIfStale,
   excludeSalesOrderPreparationNv,
+  takeSalesOrderPreparationCard,
   SalesOrderPreparationCardInfo,
   SalesOrderPreparationItem,
   SalesOrderPreparationLine,
   type SalesOrderClientData,
+  type SalesOrderPreparationLock,
 } from '@/app/actions/logistica/sales-order-preparation'
 import {
   type PreparationDetailEntry,
@@ -57,6 +59,8 @@ import {
 import { generatePreparationOrdersPdf, openPreparationOrdersPdf } from '@/lib/pdf/generate-preparation-orders-pdf'
 import { SalesOrderCard } from './sales-order-card'
 import { SalesOrderDrawer } from './sales-order-drawer'
+import { PreparationLockDialog } from './preparation-lock-dialog'
+import { isPreparationLockError, isPreparationReadOnly } from './preparation-lock-policy'
 import { PreparationExclusionDialog, type ExclusionConfirmInput, type ExclusionConfirmResult } from './preparation-exclusion-dialog'
 import { PreparationExclusionsDrawer } from './preparation-exclusions-drawer'
 import { DndContext, DragEndEvent, DragStartEvent, DragOverlay, useDroppable, useSensor, useSensors, PointerSensor } from '@dnd-kit/core'
@@ -102,6 +106,23 @@ const COLUMNS: KanbanColumn[] = [
   },
 ]
 
+type PreparationLockPatch = Partial<Pick<
+  SalesOrderPreparationCardInfo,
+  'assigned_user_id' | 'assigned_user_name' | 'locked_by_user_id' | 'locked_by_user_name' | 'locked_at'
+>>
+
+function readPreparationLockPatch(value: unknown): PreparationLockPatch | null {
+  if (!value || typeof value !== 'object') return null
+  const source = value as Record<string, unknown>
+  const patch: PreparationLockPatch = {}
+  if ('assigned_user_id' in source) patch.assigned_user_id = (source.assigned_user_id as string | null) ?? null
+  if ('assigned_user_name' in source) patch.assigned_user_name = (source.assigned_user_name as string | null) ?? null
+  if ('locked_by_user_id' in source) patch.locked_by_user_id = (source.locked_by_user_id as string | null) ?? null
+  if ('locked_by_user_name' in source) patch.locked_by_user_name = (source.locked_by_user_name as string | null) ?? null
+  if ('locked_at' in source) patch.locked_at = (source.locked_at as string | null) ?? null
+  return Object.keys(patch).length > 0 ? patch : null
+}
+
 function closePrintWindow(target: Window | null) {
   try {
     if (target && !target.closed) target.close()
@@ -136,6 +157,7 @@ function DroppableColumn({
   selectedCardIds,
   onToggleSelection,
   sortBy,
+  currentUserId,
 }: {
   col: KanbanColumn
   colCards: SalesOrderPreparationCardInfo[]
@@ -146,6 +168,7 @@ function DroppableColumn({
   selectedCardIds: Set<string>
   onToggleSelection: (c: SalesOrderPreparationCardInfo) => void
   sortBy: PreparationSort
+  currentUserId: string | null
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: col.id,
@@ -201,6 +224,12 @@ function DroppableColumn({
                 selectable={card.status === 'PENDING_ROUTE_PREP'}
                 selected={selectedCardIds.has(card.card_id)}
                 onToggleSelected={onToggleSelection}
+                currentUserId={currentUserId}
+                dragDisabled={isPreparationReadOnly({
+                  status: card.status,
+                  currentUserId,
+                  lockedByUserId: card.locked_by_user_id,
+                })}
               />
             </Fragment>
           )
@@ -210,8 +239,21 @@ function DroppableColumn({
   )
 }
 
-export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: string }) {
+export function SalesOrderPreparationPanel({
+  roleName = '',
+  currentUserId,
+  currentUserName,
+  permissions = [],
+}: {
+  roleName?: string
+  currentUserId: string
+  currentUserName: string
+  permissions?: string[]
+}) {
   const canManageExclusions = roleName === 'SUPER_USUARIO' || roleName === 'GERENCIA'
+  const isSystemAdmin = permissions.includes('system.admin')
+  const canManagePreparation = isSystemAdmin || permissions.includes('logistica.preparation.manage')
+  const canTakeoverPreparation = isSystemAdmin || permissions.includes('logistica.preparation.authorize_exception')
 
   const [companyId, setCompanyId] = useState<string | null>(null)
   const [cards, setCards] = useState<SalesOrderPreparationCardInfo[]>([])
@@ -253,6 +295,10 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
   const [excludeCard, setExcludeCard] = useState<SalesOrderPreparationCardInfo | null>(null)
   const [exclusionsOpen, setExclusionsOpen] = useState(false)
   const [exclusionsVersion, setExclusionsVersion] = useState(0)
+
+  // Toma / takeover de preparación
+  const [lockTakeoverCard, setLockTakeoverCard] = useState<SalesOrderPreparationCardInfo | null>(null)
+  const [claimingCardId, setClaimingCardId] = useState<string | null>(null)
 
   const [syncError, setSyncError] = useState<string | null>(null)
 
@@ -717,6 +763,57 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
     }
   }
 
+  const applyPreparationLockPatchToState = (cardId: string, patch: PreparationLockPatch) => {
+    const nextCards = cardsRef.current.map(card => card.card_id === cardId ? { ...card, ...patch } : card)
+    cardsRef.current = nextCards
+    setCards(nextCards)
+    setSelectedCard(current => current?.card_id === cardId ? { ...current, ...patch } : current)
+  }
+
+  const claimPreparation = async (card: SalesOrderPreparationCardInfo, reason?: string) => {
+    if ((!canManagePreparation && !canTakeoverPreparation) || claimingCardId) {
+      return { ok: false, error: 'No tienes permiso para tomar esta preparación.' }
+    }
+    setClaimingCardId(card.card_id)
+    try {
+      const result = await takeSalesOrderPreparationCard({ cardId: card.card_id, reason })
+      if (result.error || !result.data) {
+        toast.error(result.error || 'No se pudo tomar la preparación.')
+        return { ok: false, error: result.error || 'No se pudo tomar la preparación.' }
+      }
+      const patch = readPreparationLockPatch(result.data)
+      if (patch) applyPreparationLockPatchToState(card.card_id, patch)
+      toast.success(result.data.event === 'PREPARATION_LOCK_TAKEOVER'
+        ? `Preparación de NV #${card.nv_folio} tomada`
+        : `Preparación de NV #${card.nv_folio} asignada a ti`)
+      return { ok: true }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'No se pudo tomar la preparación.'
+      toast.error(message)
+      return { ok: false, error: message }
+    } finally {
+      setClaimingCardId(null)
+    }
+  }
+
+  const handleTakePreparation = async (card: SalesOrderPreparationCardInfo) => {
+    if (!card.locked_by_user_id) {
+      await claimPreparation(card)
+      return
+    }
+    setLockTakeoverCard(card)
+  }
+
+  const handleTakeoverConfirm = async (reason: string) => {
+    if (!lockTakeoverCard) return { ok: false, error: 'No hay tarjeta seleccionada.' }
+    return claimPreparation(lockTakeoverCard, reason)
+  }
+
+  const handleOwnershipConflict = async () => {
+    toast.error('La preparación fue tomada por otro usuario. Se actualizó a sólo lectura.')
+    await loadBoard()
+  }
+
   const handlePreparationLinesChange = (lines: SalesOrderPreparationLine[]) => {
     setSelectedPreparationLines(lines)
     const cardId = lines[0]?.card_id ?? selectedCardRef.current?.card_id
@@ -728,8 +825,10 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
     patchPreparationLine(preparationLinesCacheRef.current, line)
   }
 
-  const transitionCard = async (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string) => {
-    if (pendingCardIds.has(card.card_id) || card.status === toStatus) return false
+  const transitionCard = async (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string): Promise<{ ok: boolean; error?: string }> => {
+    if (pendingCardIds.has(card.card_id) || card.status === toStatus) {
+      return { ok: false, error: 'La tarjeta ya está siendo procesada o ya se encuentra en ese estado.' }
+    }
     const fromStatus = card.status
     setTransitionError(null)
     setPendingCardIds(current => new Set(current).add(card.card_id))
@@ -752,10 +851,13 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
         setSelectedCard(current => current?.card_id === card.card_id ? { ...current, status: fromStatus } : current)
         setTransitionError(res.error ?? 'No se pudo guardar el cambio.')
         toast.error(`Error al mover: ${res.error ?? 'Desconocido'}`)
-        return false
+        if (isPreparationLockError(res.error)) void loadBoard()
+        return { ok: false, error: res.error ?? 'No se pudo guardar el cambio.' }
       }
       pendingStatusByCardRef.current.delete(card.card_id)
       boardRequestSeqRef.current += 1
+      const lockPatch = readPreparationLockPatch(res.data)
+      if (lockPatch) applyPreparationLockPatchToState(card.card_id, lockPatch)
       setSelectedCardIds(current => {
         if (!current.has(card.card_id)) return current
         const next = new Set(current)
@@ -764,7 +866,7 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
       })
       toast.success(`NV #${card.nv_folio} movida exitosamente`)
       setPendingMovement(null)
-      return true
+      return { ok: true }
     } catch (cause) {
       pendingStatusByCardRef.current.delete(card.card_id)
       boardRequestSeqRef.current += 1
@@ -775,7 +877,8 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
       const message = cause instanceof Error ? cause.message : 'No se pudo guardar el cambio.'
       setTransitionError(message)
       toast.error(`Error al mover: ${message}`)
-      return false
+      if (isPreparationLockError(message)) void loadBoard()
+      return { ok: false, error: message }
     } finally {
       setPendingCardIds(current => {
         const next = new Set(current)
@@ -830,7 +933,7 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
     const results = await Promise.all(operational.map(async card => {
       try {
         const res = await moveSalesOrderPreparationCard({ cardId: card.card_id, toStatus: 'IN_PREPARATION' })
-        return { card, ok: res.ok, error: res.error ?? 'Desconocido' }
+        return { card, ok: res.ok, error: res.error ?? 'Desconocido', data: res.data }
       } catch (err) {
         return {
           card,
@@ -865,7 +968,26 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
         .join(' · ')
       setTransitionError(message)
       toast.error(`No se pudieron preparar todas las NV · ${message}`)
-    } else {
+    }
+
+    const lockPatches = new Map<string, PreparationLockPatch>()
+    for (const result of results) {
+      if (!result.ok) continue
+      const patch = readPreparationLockPatch(result.data)
+      if (patch) lockPatches.set(result.card.card_id, patch)
+    }
+    if (lockPatches.size > 0) {
+      const patchedCards = cardsRef.current.map(item => (
+        lockPatches.has(item.card_id) ? { ...item, ...lockPatches.get(item.card_id) } : item
+      ))
+      cardsRef.current = patchedCards
+      setCards(patchedCards)
+      setSelectedCard(current => (
+        current && lockPatches.has(current.card_id) ? { ...current, ...lockPatches.get(current.card_id) } : current
+      ))
+    }
+
+    if (failed.length === 0) {
       toast.success(
         operational.length === 1
           ? `NV #${operational[0].nv_folio} pasó a preparación`
@@ -1370,6 +1492,7 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
                          selectedCardIds={selectedCardIds}
                          onToggleSelection={toggleSelection}
                          sortBy={sortBy}
+                         currentUserId={currentUserId}
                        />
                      )
                   })}
@@ -1394,6 +1517,11 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
         preparationLinesError={preparationLinesError}
         clientData={selectedClientData}
         isLoadingItems={loadingItems}
+        currentUserId={currentUserId}
+        canClaimPreparation={canManagePreparation}
+        canTakeoverPreparation={canTakeoverPreparation}
+        onTakePreparation={handleTakePreparation}
+        onOwnershipConflict={handleOwnershipConflict}
         onClose={() => setSelectedCard(null)}
         onTransition={transitionCard}
       />
@@ -1409,6 +1537,14 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
         label={pendingMovement?.label ?? ''}
         isMoving={isMoving}
         error={transitionError}
+      />
+
+      <PreparationLockDialog
+        card={lockTakeoverCard}
+        currentUserName={currentUserName}
+        open={!!lockTakeoverCard}
+        onOpenChange={(next) => { if (!next) setLockTakeoverCard(null) }}
+        onConfirm={handleTakeoverConfirm}
       />
 
       <PreparationExclusionDialog

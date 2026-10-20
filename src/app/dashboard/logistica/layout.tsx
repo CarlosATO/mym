@@ -26,8 +26,8 @@ export default async function Layout({ children }: { children: React.ReactNode }
     .maybeSingle()
 
   const profileWithRole = profile
-    ? { ...profile, roles: { name: (profile.roles as { name?: string } | null)?.name ?? '' } }
-    : { nombre: '', apellido: '', email: '', roles: { name: '' } }
+    ? { ...profile, id: user.id, roles: { name: (profile.roles as { name?: string } | null)?.name ?? '' } }
+    : { id: user.id, nombre: '', apellido: '', email: '', roles: { name: '' } }
 
   return (
     <LogisticaLayoutClient profile={profileWithRole} permissions={permissionCodes}>

@@ -48,6 +48,10 @@ export type SalesOrderPreparationCardInfo = {
   status: string
   priority: number
   assigned_user_id: string | null
+  assigned_user_name?: string | null
+  locked_by_user_id: string | null
+  locked_by_user_name?: string | null
+  locked_at: string | null
   route_date: string | null
   normalized_city: string | null
   nv_bsale_id: number
@@ -206,7 +210,34 @@ export async function getSalesOrderPreparationBoard(companyId: string) {
     return { data: [], error: error.message }
   }
 
-  return { data: data as SalesOrderPreparationCardInfo[], error: null }
+  const rows = (data ?? []) as SalesOrderPreparationCardInfo[]
+  const userIds = [...new Set(rows.flatMap(row => [row.assigned_user_id, row.locked_by_user_id]).filter((id): id is string => Boolean(id)))]
+  const nameById = new Map<string, string>()
+
+  if (userIds.length > 0) {
+    const { data: users, error: usersError } = await createAdminClient()
+      .from('users')
+      .select('id, nombre, apellido')
+      .in('id', userIds)
+
+    if (usersError) {
+      console.error('getSalesOrderPreparationBoard users error:', usersError)
+    } else {
+      for (const user of users ?? []) {
+        const name = `${user.nombre ?? ''} ${user.apellido ?? ''}`.trim()
+        if (name) nameById.set(String(user.id), name)
+      }
+    }
+  }
+
+  return {
+    data: rows.map(row => ({
+      ...row,
+      assigned_user_name: row.assigned_user_id ? nameById.get(row.assigned_user_id) ?? null : null,
+      locked_by_user_name: row.locked_by_user_id ? nameById.get(row.locked_by_user_id) ?? null : null,
+    })),
+    error: null,
+  }
 }
 
 export async function getSalesOrderPreparationItems(companyId: string, bsaleNvId: number) {
@@ -315,6 +346,52 @@ export async function confirmSalesOrderPreparationLine(params: {
     return { data: null, error: error.message }
   }
   return { data: data as SalesOrderPreparationLine, error: null }
+}
+
+export type SalesOrderPreparationLock = {
+  card_id: string
+  assigned_user_id: string | null
+  assigned_user_name: string | null
+  locked_by_user_id: string | null
+  locked_by_user_name: string | null
+  locked_at: string | null
+  event?: string
+}
+
+export async function takeSalesOrderPreparationCard(params: {
+  cardId: string
+  reason?: string | null
+}): Promise<{ data: SalesOrderPreparationLock | null; error: string | null }> {
+  try {
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { data: null, error: 'No autorizado' }
+
+    const companyId = await getActiveCompanyId(user)
+    if (!companyId) return { data: null, error: 'No se pudo determinar la empresa activa' }
+
+    const { data, error } = await supabase
+      .schema('logistica')
+      .rpc('take_sales_order_preparation_card', {
+        p_company_id: companyId,
+        p_card_id: params.cardId,
+        p_reason: params.reason?.trim() || null,
+      })
+
+    if (error) {
+      console.error('[takeSalesOrderPreparationCard] RPC error', {
+        cardId: params.cardId,
+        message: error.message,
+        code: error.code,
+      })
+      return { data: null, error: error.message }
+    }
+
+    return { data: data as SalesOrderPreparationLock, error: null }
+  } catch (err: unknown) {
+    console.error('[takeSalesOrderPreparationCard] Exception:', err)
+    return { data: null, error: err instanceof Error ? err.message : 'Error desconocido' }
+  }
 }
 
 export type SalesOrderPreparationPrintData = {
