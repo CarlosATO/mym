@@ -70,6 +70,16 @@ import { moveSalesOrderPreparationCard } from '@/app/actions/logistica/sales-ord
 import { toast } from 'sonner'
 import { getActiveCompanyId } from '@/app/actions/companies'
 import { getSalesOrderAuditBoardLocks, type AuditBoardLock, type SalesOrderAuditFinalizeResult } from '@/app/actions/logistica/sales-order-audit'
+import { getSalesOrderPreparationProfitabilitySummaryV1 } from '@/app/actions/logistica/sales-order-preparation-profitability'
+import {
+  aggregatePreparationProfitability,
+  cachePreparationProfitability,
+  formatPreparationProfitabilityPercent,
+  getCachedPreparationProfitability,
+  getCachedPreparationProfitabilityMap,
+  invalidatePreparationProfitabilityCache,
+  type PreparationProfitabilitySummaryV1,
+} from './preparation-profitability'
 import { SalesOrderAuditDrawer } from '@/modules/logistica/auditoria/sales-order-audit-drawer'
 
 type KanbanColumn = {
@@ -149,10 +159,10 @@ function SummaryStat({ label, value, sub, title, accent = false }: {
   accent?: boolean
 }) {
   return (
-    <div className="flex min-w-0 items-baseline gap-1.5 border-l border-[#DDD4CA] pl-4 first:border-0 first:pl-0" title={title}>
-      <span className="text-[10px] font-bold uppercase tracking-wider text-[#6B625C]">{label}</span>
-      <span className={`text-sm font-bold tabular-nums ${accent ? 'text-[#72383D]' : 'text-[#322D29]'}`}>{value}</span>
-      {sub && <span className="text-xs font-medium text-[#322D29]/50">{sub}</span>}
+    <div className="flex min-w-0 items-baseline gap-1" title={title}>
+      <span className="text-[9px] font-bold uppercase tracking-wider text-[#6B625C]">{label}</span>
+      <span className={`text-[12px] font-bold tabular-nums ${accent ? 'text-[#72383D]' : 'text-[#322D29]'}`}>{value}</span>
+      {sub && <span className="text-[10px] font-medium text-[#322D29]/45">{sub}</span>}
     </div>
   )
 }
@@ -185,30 +195,34 @@ function DroppableColumn({
   const { setNodeRef, isOver } = useDroppable({
     id: col.id,
   })
+  const columnSummary = summarizePreparationBoard(colCards)
 
   return (
     <section
       ref={setNodeRef}
-      className={`flex flex-col min-w-[280px] rounded-xl border bg-[#F8F5F1] transition-all duration-150 ${
+      className={`flex h-full w-[300px] min-w-[300px] max-w-[300px] shrink-0 flex-col overflow-hidden rounded-lg border bg-[#F8F5F1] transition-all duration-150 ${
         isOver
           ? 'border-[#72383D] bg-[#F3ECE5] ring-2 ring-[#72383D]/20 shadow-md'
           : 'border-[#DDD4CA] shadow-xs'
       }`}
     >
       {/* Column header */}
-      <div className="flex items-center justify-between border-b border-[#DDD4CA] px-3.5 py-2.5 bg-white/70 backdrop-blur-xs rounded-t-xl">
-        <div className="flex items-center gap-2">
-          <span className={`w-2.5 h-2.5 rounded-full ${col.dot} shadow-xs shrink-0`} />
-          <h3 className="text-xs font-bold uppercase tracking-wider text-[#322D29]">{col.title}</h3>
+      <div className="sticky top-0 z-10 border-b border-[#DDD4CA] bg-white/90 px-2.5 py-1.5 backdrop-blur-xs">
+        <div className="flex items-center justify-between gap-1.5">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className={`h-2 w-2 shrink-0 rounded-full ${col.dot}`} />
+            <h3 className="truncate text-[10px] font-bold uppercase tracking-wider text-[#322D29]">{col.title}</h3>
+          </div>
+          <span className="flex h-4 min-w-[18px] items-center justify-center rounded-full bg-[#EAE3DA] px-1.5 text-[10px] font-bold tabular-nums text-[#6B625C]">{colCards.length}</span>
         </div>
-        <span className="flex items-center justify-center min-w-[22px] h-5 px-1.5 rounded-full bg-[#EAE3DA] text-[11px] font-bold text-[#6B625C]">{colCards.length}</span>
+        <p className="mt-0.5 pl-3.5 text-[10px] font-semibold tabular-nums text-[#6B625C]">{formatPreparationClp(columnSummary.amount)}</p>
       </div>
 
       {/* Column body */}
-      <div className="flex-1 space-y-2.5 p-2.5 overflow-y-auto">
+      <div className="flex-1 space-y-2 overflow-y-auto p-2">
         {colCards.length === 0 && (
-          <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-[#DDD4CA] bg-white/40">
-            <p className="text-xs font-medium text-[#322D29]/40">Sin tarjetas</p>
+          <div className="flex min-h-[72px] items-center justify-center rounded-md border border-dashed border-[#DDD4CA] bg-white/40">
+            <p className="text-[11px] font-medium text-[#322D29]/40">Sin pedidos</p>
           </div>
         )}
         {colCards.map((card, index) => {
@@ -219,8 +233,8 @@ function DroppableColumn({
           return (
             <Fragment key={card.card_id}>
               {showComunaDivider && (
-                <div className="flex items-center gap-2 pt-2 first:pt-0" title={`Comuna: ${comuna}`}>
-                  <span className="rounded-md border border-[#72383D]/20 bg-[#F5EDE9] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#72383D]">
+                <div className="flex items-center gap-1.5 pt-1.5 first:pt-0" title={`Comuna: ${comuna}`}>
+                  <span className="rounded border border-[#72383D]/20 bg-[#F5EDE9] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[#72383D]">
                     {comuna}
                   </span>
                   <span className="h-px flex-1 bg-[#DDD4CA]" />
@@ -318,6 +332,12 @@ export function SalesOrderPreparationPanel({
 
   const [syncError, setSyncError] = useState<string | null>(null)
 
+  // Rentabilidad V1 (batch en background; no bloquea el board)
+  const [profitabilityByNv, setProfitabilityByNv] = useState<Record<string, PreparationProfitabilitySummaryV1>>({})
+  const [profitabilityLoading, setProfitabilityLoading] = useState(false)
+  const [profitabilityError, setProfitabilityError] = useState<string | null>(null)
+  const [profitabilityVersion, setProfitabilityVersion] = useState(0)
+
   const cardsRef = useRef<SalesOrderPreparationCardInfo[]>([])
   const boardRequestSeqRef = useRef(0)
   const itemsRequestSeqRef = useRef(0)
@@ -330,6 +350,8 @@ export function SalesOrderPreparationPanel({
   const pendingExclusionNvIdsRef = useRef<Set<number>>(new Set())
   const exclusionSnapshotsRef = useRef<Map<number, PreparationCardSnapshot<SalesOrderPreparationCardInfo>>>(new Map())
   const syncInFlightRef = useRef(false)
+  const profitabilitySeqRef = useRef(0)
+  const profitabilityInFlightRef = useRef<Set<number>>(new Set())
   const lastAutoAttemptAtRef = useRef(0)
   const lastSuccessfulRunIdRef = useRef<string | null>(null)
   const mountedRef = useRef(true)
@@ -337,6 +359,62 @@ export function SalesOrderPreparationPanel({
   useEffect(() => {
     cardsRef.current = cards
   }, [cards])
+
+  const profitabilityNvKey = useMemo(
+    () => [...new Set(cards.map(card => Number(card.nv_bsale_id)).filter(value => Number.isSafeInteger(value) && value > 0))]
+      .sort((a, b) => a - b)
+      .join(','),
+    [cards],
+  )
+
+  useEffect(() => {
+    if (!companyId) return
+
+    const nvIds = profitabilityNvKey ? profitabilityNvKey.split(',').map(value => Number(value)) : []
+    if (nvIds.length === 0) {
+      setProfitabilityByNv({})
+      setProfitabilityLoading(false)
+      setProfitabilityError(null)
+      return
+    }
+
+    setProfitabilityByNv(getCachedPreparationProfitabilityMap(nvIds))
+
+    const missing = nvIds.filter(nvId => (
+      !getCachedPreparationProfitability(nvId) && !profitabilityInFlightRef.current.has(nvId)
+    ))
+    if (missing.length === 0) {
+      setProfitabilityLoading(false)
+      setProfitabilityError(null)
+      return
+    }
+
+    const seq = ++profitabilitySeqRef.current
+    setProfitabilityLoading(true)
+    setProfitabilityError(null)
+    for (const nvId of missing) profitabilityInFlightRef.current.add(nvId)
+
+    getSalesOrderPreparationProfitabilitySummaryV1({ companyId, nvIds: missing })
+      .then(result => {
+        if (!mountedRef.current || seq !== profitabilitySeqRef.current) return
+        if (result.error) {
+          setProfitabilityError(result.error)
+          if (process.env.NODE_ENV !== 'production') {
+            console.debug('[preparation-profitability][failed]', { error: result.error })
+          }
+          return
+        }
+        cachePreparationProfitability(Object.values(result.data))
+        setProfitabilityByNv(getCachedPreparationProfitabilityMap(nvIds))
+        setProfitabilityError(null)
+      })
+      .finally(() => {
+        for (const nvId of missing) profitabilityInFlightRef.current.delete(nvId)
+        if (mountedRef.current && seq === profitabilitySeqRef.current) {
+          setProfitabilityLoading(false)
+        }
+      })
+  }, [companyId, profitabilityNvKey, profitabilityVersion])
 
   const refreshAuditLocks = useCallback(async () => {
     const ids = cardsRef.current
@@ -589,6 +667,8 @@ export function SalesOrderPreparationPanel({
         if (refresh && mountedRef.current) {
           detailCacheRef.current.clear()
           preparationLinesCacheRef.current.clear()
+          invalidatePreparationProfitabilityCache()
+          setProfitabilityVersion(current => current + 1)
           await loadBoard()
         }
 
@@ -1223,6 +1303,25 @@ export function SalesOrderPreparationPanel({
   )
   const selectionSummary = useMemo(() => summarizePreparationSelection(selectedCards), [selectedCards])
   const boardSummary = useMemo(() => summarizePreparationBoard(filteredCards), [filteredCards])
+  const profitabilitySummary = useMemo(
+    () => aggregatePreparationProfitability(filteredCards, profitabilityByNv),
+    [filteredCards, profitabilityByNv],
+  )
+  const profitabilityUtilityLabel = profitabilitySummary
+    ? formatPreparationClp(profitabilitySummary.estimatedGrossProfit)
+    : '—'
+  const profitabilityMarginLabel = profitabilitySummary
+    ? formatPreparationProfitabilityPercent(profitabilitySummary.estimatedMarginPct)
+    : '—'
+  const profitabilityCoverageLabel = profitabilitySummary
+    ? profitabilitySummary.costStatus === 'UNAVAILABLE'
+      ? 'Sin costo'
+      : profitabilitySummary.costStatus === 'PARTIAL'
+        ? `${formatPreparationProfitabilityPercent(profitabilitySummary.costCoveragePct)} · Parcial`
+        : formatPreparationProfitabilityPercent(profitabilitySummary.costCoveragePct)
+    : profitabilityError
+      ? 'No disponible'
+      : '—'
 
   const hasFilters = Boolean(searchTerm || effectiveSelectedComunas.size > 0 || effectiveSellerKey)
   const hasActiveFilterOrSort = hasFilters || sortBy !== 'default'
@@ -1268,15 +1367,15 @@ export function SalesOrderPreparationPanel({
   return (
     <div className="flex flex-col h-[calc(100vh-110px)] w-full overflow-hidden bg-[#EFE9E1] text-[#322D29]">
       {/* ── Header / Toolbar ── */}
-      <div className="flex-none px-4 py-2.5 border-b border-[#D1C7BD] bg-[#FCFBF9] shadow-xs z-10">
+      <div className="flex-none px-3 py-2 border-b border-[#D1C7BD] bg-[#FCFBF9] shadow-xs z-10">
         <div className="flex flex-wrap items-center justify-between gap-3">
           
           <div className="flex items-center gap-3 min-w-0">
             <div className="flex items-center gap-2 shrink-0">
-              <div className="p-1.5 rounded-lg bg-[#72383D]/10 text-[#72383D]">
+              <div className="p-1 rounded-md bg-[#72383D]/10 text-[#72383D]">
                 <KanbanSquare className="w-4 h-4" />
               </div>
-              <h1 className="text-sm font-bold tracking-tight text-[#322D29]">Preparación de Pedidos</h1>
+              <h1 className="text-[13px] font-bold tracking-tight text-[#322D29]">Preparación de Pedidos</h1>
             </div>
 
             <div
@@ -1298,7 +1397,7 @@ export function SalesOrderPreparationPanel({
           </div>
           
           {/* Controls */}
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
             <button
               onClick={() => void runSync('manual')}
               disabled={isSyncing}
@@ -1450,8 +1549,8 @@ export function SalesOrderPreparationPanel({
 
       {/* ── Resumen operacional ── */}
       {!loading && !error && (
-        <div className="flex-none border-b border-[#D1C7BD] bg-[#FCFBF9] px-4 py-2">
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
+        <div className="flex-none border-b border-[#D1C7BD] bg-[#FCFBF9] px-3 py-1.5">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
             <SummaryStat
               label="NV"
               value={boardSummary.nvCount}
@@ -1459,10 +1558,26 @@ export function SalesOrderPreparationPanel({
               title="Notas de venta visibles en el tablero"
             />
             <SummaryStat
-              label="Monto total"
+              label="Monto bruto"
               value={formatPreparationClp(boardSummary.amount)}
-              title="Monto total bruto de las Notas de Venta visibles"
+              title="Monto bruto de las Notas de Venta visibles (gross_amount ?? total_amount)"
               accent
+            />
+            <SummaryStat
+              label="Utilidad est."
+              value={profitabilityUtilityLabel}
+              title={profitabilityLoading ? 'Calculando rentabilidad…' : 'Venta neta cubierta menos último costo válido de recepción.'}
+              accent
+            />
+            <SummaryStat
+              label="Margen"
+              value={profitabilityMarginLabel}
+              title="Utilidad estimada sobre venta neta con costo disponible."
+            />
+            <SummaryStat
+              label="Cobertura costo"
+              value={profitabilityCoverageLabel}
+              title="Porcentaje de la venta neta para la que existe costo de compra disponible."
             />
             <SummaryStat
               label="Unidades"
@@ -1553,8 +1668,8 @@ export function SalesOrderPreparationPanel({
               onDragEnd={handleDragEnd}
               onDragCancel={handleDragCancel}
             >
-              <div className="h-full overflow-x-auto p-4">
-                <div className="grid h-full min-w-[1360px] grid-cols-[repeat(4,minmax(300px,1fr))] gap-4">
+              <div className="h-full p-3">
+                <div className="flex h-full w-max min-w-full items-stretch gap-3">
                   {COLUMNS.map(col => {
                     const colCards = filteredCards.filter(c => c.status === col.id)
                      return (

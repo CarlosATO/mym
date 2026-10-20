@@ -14,9 +14,11 @@ test('el tablero declara las cuatro columnas operacionales incluida Auditadas', 
     'PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT', 'AUDITED',
   ])
   assert.doesNotMatch(panel, /Facturada \/ Lista|Canceladas|INVOICED_READY_FOR_ROUTE|CANCELLED/)
-  assert.match(panel, /grid-cols-\[repeat\(4,minmax\(300px,1fr\)\)\]/)
-  assert.match(panel, /overflow-x-auto[^\n]*p-4/)
-  assert.match(panel, /min-w-\[1360px\]/)
+  assert.match(panel, /w-\[300px\] min-w-\[300px\] max-w-\[300px\] shrink-0/)
+  assert.doesNotMatch(panel, /minmax\(300px,1fr\)/)
+  assert.match(panel, /flex-1 overflow-x-auto overflow-y-hidden/)
+  assert.match(panel, /h-full p-3/)
+  assert.match(panel, /flex h-full w-max min-w-full items-stretch gap-3/)
 })
 
 test('las transiciones operacionales y retrocesos conservan sus reglas', () => {
