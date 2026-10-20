@@ -22,7 +22,8 @@ interface PreparationExclusionDialogProps {
 const statusLabel = (status: string) =>
   status === 'PENDING_ROUTE_PREP' ? 'Pendiente' :
   status === 'IN_PREPARATION' ? 'En preparación' :
-  status === 'IN_AUDIT' ? 'En auditoría' : status
+  status === 'IN_AUDIT' ? 'En auditoría' :
+  status === 'AUDITED' ? 'Auditada' : status
 
 export function PreparationExclusionDialog({ card, open, onOpenChange, onConfirm }: PreparationExclusionDialogProps) {
   const [reason, setReason] = useState('')

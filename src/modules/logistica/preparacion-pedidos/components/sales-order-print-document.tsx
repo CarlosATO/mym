@@ -25,7 +25,8 @@ function statusToLegible(status: string) {
   const map: Record<string, string> = {
     'PENDING_ROUTE_PREP': 'Pendiente de preparación',
     'IN_PREPARATION': 'En preparación',
-    'IN_AUDIT': 'En auditoría'
+    'IN_AUDIT': 'En auditoría',
+    'AUDITED': 'Auditada'
   }
   return map[status] || status
 }

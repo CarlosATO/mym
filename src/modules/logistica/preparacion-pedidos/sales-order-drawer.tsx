@@ -28,7 +28,7 @@ interface SalesOrderDrawerProps {
   onTransition: (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string) => Promise<{ ok: boolean; error?: string }>
 }
 
-const statusLabel = (status: string) => status === 'PENDING_ROUTE_PREP' ? 'Pendiente' : status === 'IN_PREPARATION' ? 'En preparación' : status === 'IN_AUDIT' ? 'En auditoría' : 'Estado operativo'
+const statusLabel = (status: string) => status === 'PENDING_ROUTE_PREP' ? 'Pendiente' : status === 'IN_PREPARATION' ? 'En preparación' : status === 'IN_AUDIT' ? 'En auditoría' : status === 'AUDITED' ? 'Auditada' : 'Estado operativo'
 
 function openBlankPdfWindow(): Window | null {
   try {

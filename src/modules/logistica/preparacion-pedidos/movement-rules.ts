@@ -19,6 +19,12 @@ export function getMovementRule(fromStatus: string, toStatus: string) {
   if (toStatus === 'CANCELLED') {
     return { error: 'La cancelación requiere un flujo separado.' };
   }
+  if (toStatus === 'AUDITED') {
+    return { error: 'El estado Auditada sólo se obtiene finalizando la Auditoría.' };
+  }
+  if (fromStatus === 'AUDITED') {
+    return { error: 'Una Nota de Venta Auditada es terminal y no puede moverse manualmente.' };
+  }
 
   const rulesFrom = MOVEMENT_RULES[fromStatus as keyof typeof MOVEMENT_RULES];
   if (!rulesFrom) return { error: 'Estado de origen inválido.' };

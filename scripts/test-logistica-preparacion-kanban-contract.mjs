@@ -9,14 +9,14 @@ const rules = await readFile(new URL('movement-rules.ts', root), 'utf8')
 const actions = await readFile(new URL('../../../app/actions/logistica/sales-order-preparation.ts', root), 'utf8')
 const drawer = await readFile(new URL('sales-order-drawer.tsx', root), 'utf8')
 
-test('el tablero sólo declara las tres columnas operacionales', () => {
+test('el tablero declara las cuatro columnas operacionales incluida Auditadas', () => {
   assert.deepEqual([...panel.matchAll(/id: '([^']+)'/g)].map(match => match[1]), [
-    'PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT',
+    'PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT', 'AUDITED',
   ])
   assert.doesNotMatch(panel, /Facturada \/ Lista|Canceladas|INVOICED_READY_FOR_ROUTE|CANCELLED/)
-  assert.match(panel, /grid-cols-\[repeat\(3,minmax\(320px,1fr\)\)\]/)
+  assert.match(panel, /grid-cols-\[repeat\(4,minmax\(300px,1fr\)\)\]/)
   assert.match(panel, /overflow-x-auto[^\n]*p-4/)
-  assert.match(panel, /min-w-\[1000px\]/)
+  assert.match(panel, /min-w-\[1360px\]/)
 })
 
 test('las transiciones operacionales y retrocesos conservan sus reglas', () => {

@@ -244,22 +244,46 @@ Conceptualmente el estado pasa de:
 
 La Auditoría **NO** debe modificar retrospectivamente los datos originales declarados durante Picking, sino agregar su propia capa de verificación.
 
-## 2. Principio Central: Auditoría Parcialmente Ciega
-El auditor debe conocer: NV, cliente, SKU, producto solicitado y cantidad solicitada.
-Antes de realizar su propio conteo **NO debe ver**: cantidad preparada, faltante declarado, ni resultado esperado según Picking, para evitar confirmaciones visuales automáticas.
+## 2. Principio Central: AUDITORÍA COMPARATIVA VISIBLE
+Auditoría trabaja con tres capas independientes:
 
-El auditor primero escanea, cuenta, registra y confirma.
-Después de confirmar la línea, el sistema muestra la comparación: `SOLICITADO` | `PREPARADO` | `AUDITADO`.
+* **SOLICITADO:** lo pedido originalmente por el cliente.
+* **PREPARADO:** lo declarado por Bodega.
+* **AUDITADO:** lo encontrado físicamente por el auditor.
+
+El auditor ve la comparación `SOLICITADO | PREPARADO | AUDITADO` y registra el auditado de forma independiente. La comparación visible no autoriza copiar ni modificar las capas anteriores.
+
+Reglas absolutas:
+
+* `requested_quantity_snapshot` es inmutable desde Auditoría.
+* `prepared_quantity_snapshot` es inmutable desde Auditoría.
+* `audit_quantity` es un registro nuevo e independiente.
+* Auditoría no modifica la NV, no modifica Preparación y no modifica Bsale.
+
+`audit_quantity` usa tres estados de dato:
+
+* `NULL`: línea todavía no auditada.
+* `0`: el auditor confirmó físicamente cero.
+* `> 0`: cantidad física encontrada.
+
+No existe tope superior contra solicitado ni contra preparado: el auditor puede registrar un exceso físico. Un exceso genera incidencia y nunca cambia la NV.
 
 ## 3. Toma de Auditoría e Independencia
-Una NV en `IN_AUDIT` podrá ser tomada por un auditor.
-Se debe garantizar que una NV es tomada por un solo auditor activo simultáneamente.
-**Regla de independencia:** El mismo usuario que preparó una NV NO debe auditar esa misma NV (salvo excepción futura autorizada).
+Una NV en `IN_AUDIT` puede ser tomada por un auditor mediante una operación atómica con `SELECT ... FOR UPDATE`.
+
+* Sólo un auditor puede modificar una NV simultáneamente.
+* Otros usuarios autorizados pueden consultar, pero no escribir.
+* El lock de Auditoría es propio y no reutiliza el lock de Preparación.
+* El lock no expira por tiempo, heartbeat, desconexión ni cierre de navegador. Se libera sólo con una acción explícita.
+* **Independencia obligatoria:** el mismo usuario que preparó la NV no puede auditarla. Se usa `assigned_user_id` de Preparación como identidad del preparador final. El rechazo es: “No puedes auditar una preparación realizada por ti.”
+* Un usuario con `logistica.audit.authorize_exception` puede tomar una auditoría ajena con motivo obligatorio. No existe excepción para que el preparador audite su propia NV.
 
 ## 4. Información Inicial Mostrada al Auditor
-Al abrir una NV, mostrar: Folio NV, Cliente, Cantidad total de líneas, Cantidad total solicitada, Cantidad de líneas pendientes, Cantidad de líneas aprobadas, Estado de Auditoría.
-Por cada línea pendiente: SKU, Nombre producto, Cantidad solicitada, Estado de la línea.
-No mostrar cantidades preparadas ni motivos de faltante hasta que el auditor confirme su resultado.
+Al abrir una NV, mostrar: Folio NV, Cliente, Cantidad total de líneas, Cantidad total solicitada, Cantidad de líneas pendientes, Cantidad de líneas confirmadas, Estado de Auditoría y responsable actual del lock.
+
+Por cada línea: SKU, Nombre producto, `SOLICITADO`, `PREPARADO` y `AUDITADO`. El auditor registra el auditado sin copiar automáticamente las otras capas.
+
+El snapshot de Auditoría se materializa una sola vez desde `logistica.sales_order_preparation_lines`. Es idempotente y no se rematerializa si la sesión ya existe.
 
 ## 5. Validación Obligatoria Mediante Barcode
 Para auditar, el trabajador debe escanear el producto físico.
@@ -268,47 +292,86 @@ Para auditar, el trabajador debe escanear el producto físico.
 * **CASO C (Incorrecto):** Pertenece a otro producto. Bloqueo obligatorio. Constituye una posible incidencia de preparación.
 
 ## 6. Conteo Físico y Comparación
-El auditor registra exclusivamente lo que existe físicamente. No copia la cantidad solicitada ni la preparada automáticamente.
-Al confirmar, el sistema compara:
+El auditor registra exclusivamente lo que existe físicamente. La validación principal es `AUDITADO vs PREPARADO`.
 
-* **CASO 1: Preparado = Auditado = Solicitado**
-  Resultado: `APROBADO`. La línea queda sellada.
-* **CASO 2: Preparado = Auditado < Solicitado**
-  Resultado: `FALTANTE CONFIRMADO` / `PREPARACIÓN CORRECTA`. No es un error humano, es `FALTANTE / DISPONIBILIDAD`.
-* **CASO 3: Preparado > Auditado**
-  Resultado: `INCIDENCIA DE PREPARACIÓN`. Hay menos físicamente que lo declarado.
-* **CASO 4: Preparado < Auditado**
-  Resultado: `INCIDENCIA DE PREPARACIÓN`. Hay más físicamente que lo declarado.
-* **CASO 5: Producto incorrecto**
-  Resultado: `PRODUCTO INCORRECTO` / `INCIDENCIA OBLIGATORIA`. La línea regresa a corrección.
-* **CASO 6: Producto faltante completamente**
-  Si Picking declaró > 0 y Auditor encuentra 0 → `INCIDENCIA DE PREPARACIÓN`.
-  Si Picking declaró 0 y Auditor encuentra 0 → `FALTANTE CONFIRMADO` / `PREPARACIÓN CORRECTA`.
+Estados de línea:
+
+* `PENDING`: `audit_quantity IS NULL`.
+* `CONFIRMED`: `audit_quantity = prepared_quantity_snapshot`.
+* `INCIDENT`: `audit_quantity <> prepared_quantity_snapshot` o existe una incidencia no cuantitativa.
+
+Casos funcionales:
+
+* **Solicitado 5 / Preparado 5 / Auditado 5:** `CONFORME`.
+* **Solicitado 5 / Preparado 4 / Auditado 4:** `CONFORME CON PREPARACIÓN`. El faltante contra la NV ya fue declarado por Bodega; no es error de preparación.
+* **Solicitado 5 / Preparado 4 / Auditado 3:** `INCIDENCIA`. Hay diferencia entre lo declarado y lo encontrado.
+* **Solicitado 2 / Preparado 2 / Auditado 3:** `INCIDENCIA POR EXCESO FÍSICO`. La NV sigue siendo 2; no se agrega la unidad al pedido ni se modifica `requested_quantity` o `prepared_quantity`.
+* **Solicitado 2 / Preparado 1 / Auditado 3:** `INCIDENCIA`. Se conservan los tres valores `2 / 1 / 3`.
+* **Preparado 0 / Auditado 0:** `CONFORME CON PREPARACIÓN` (incluye líneas excluidas conservadas en el snapshot).
+* **Preparado 0 / Auditado > 0:** `INCIDENCIA`.
+
+Una **incidencia física manual** (`WRONG_PRODUCT`, `DAMAGED_PRODUCT`, `PRODUCT_NOT_FOUND`, `OTHER`) siempre deja la línea `INCIDENT`, aunque `AUDITADO = PREPARADO`. No modifica el solicitado, el preparado ni la NV.
+`PRODUCT_NOT_FOUND` sólo es válido con `audit_quantity = 0`; con cantidad mayor se rechaza.
 
 ## 7. Incidencias de Auditoría
-Catálogo: `CANTIDAD MENOR A LA DECLARADA`, `CANTIDAD MAYOR A LA DECLARADA`, `PRODUCTO INCORRECTO`, `PRODUCTO DAÑADO`, `PRODUCTO NO ENCONTRADO`, `OTRO` (comentario obligatorio).
-La incidencia registra: NV, línea, productos involucrados, cantidades, tipo de incidencia, observación, auditor y fecha/hora.
+Estructura independiente de las incidencias de Preparación. Catálogo inicial:
+
+* `QUANTITY_LOWER_THAN_PREPARED`
+* `QUANTITY_GREATER_THAN_PREPARED`
+* `WRONG_PRODUCT`
+* `DAMAGED_PRODUCT`
+* `PRODUCT_NOT_FOUND`
+* `OTHER` (observación obligatoria)
+
+Las diferencias puramente cuantitativas se clasifican automáticamente según `AUDITADO vs PREPARADO`, sin pedir un motivo redundante. Cada incidencia conserva: empresa, auditoría, línea, tarjeta, línea de preparación, solicitado snapshot, preparado snapshot, auditado, diferencia, tipo, observación, estado, auditor y fecha/hora.
+
+Estado inicial `OPEN`. El modelo soporta `RESOLVED` y `SUPERSEDED`; una corrección del propio auditor deja la incidencia anterior como `SUPERSEDED` sin borrar historial.
 
 ## 8. Evidencia Fotográfica
-* **Foto obligatoria:** `PRODUCTO INCORRECTO`, `PRODUCTO DAÑADO`.
-* **Foto opcional:** `CANTIDAD MENOR A LA DECLARADA`, `CANTIDAD MAYOR A LA DECLARADA`, `PRODUCTO NO ENCONTRADO`, `OTRO`.
+* **Foto obligatoria:** `WRONG_PRODUCT`, `DAMAGED_PRODUCT`.
+* **Foto opcional:** `QUANTITY_LOWER_THAN_PREPARED`, `QUANTITY_GREATER_THAN_PREPARED`, `PRODUCT_NOT_FOUND`, `OTHER`.
 
-## 9. Sellado de Líneas y Devolución Focalizada
-Una incidencia en una línea **NO** invalida toda la NV. Las líneas aprobadas quedan **SELLADAS** (no requieren volver a prepararse ni auditarse, no se pueden modificar, conservan su resultado).
-Las líneas con incidencias regresan a corrección (Conceptualmente: `AUDITORÍA` → `CORRECCIÓN DE PICKING`).
-El preparador recibe detalles de la línea, motivo, diferencia, observación y evidencia.
+Las imágenes no se guardan en PostgreSQL. Se usa un bucket privado `audit-evidence` con path `{company_id}/{card_id}/{audit_id}/{archivo}` y metadata en `logistica.sales_order_audit_attachments`. El backend impide el pre-cierre si falta evidencia obligatoria.
 
-## 10. Corrección y Reauditoría
+## 8.1. Bultos y Foto Global
+* `package_count` es un dato físico independiente de unidades, productos y líneas. Ejemplo válido: 37 unidades, 18 productos, 2 bultos.
+* Se puede registrar o modificar mientras la Auditoría está abierta.
+* Sólo puede ser `>= 0` al editarlo; es obligatorio `>= 1` para finalizar la Auditoría.
+* La foto global del despacho es opcional, única por sesión y distinta de las fotos por incidencia. Queda preparada para una futura comparación con la foto de entrega del transportista.
+
+## 9. Sellado de Líneas y Devolución Focalizada (diseño futuro)
+Una `INCIDENCIA DE AUDITORÍA` en una línea **NO** invalida toda la NV. Las líneas conformes quedan **SELLADAS** y conservan su resultado.
+El diseño futuro contempla que las líneas con incidencia regresen a corrección (`AUDITORÍA` → `CORRECCIÓN DE PICKING`). Este bloque no implementa esa transición ni la modificación de Preparación.
+
+## 10. Corrección y Reauditoría (diseño futuro, no implementado)
 * **Quién corrige:** Cualquier preparador autorizado (no obliga al original). Conserva trazabilidad.
 * **Qué puede hacer:** Solo actuar sobre líneas devueltas. Puede agregar/retirar unidades, reemplazar productos dañados/incorrectos, o corregir cantidad física (confirmando que no existen).
 * **Reauditoría obligatoria:** Toda línea corregida regresa a Auditoría (`INCIDENCIA` → `CORRECCIÓN` → `REAUDITORÍA`). Solo se reauditan las corregidas.
 * **Quién reaudita:** Cualquier auditor distinto del usuario que realizó la corrección.
 * **Ciclos de corrección:** Una línea puede fallar múltiples veces. Se conserva todo el historial sin sobrescribir incidencias anteriores.
 
-## 11. Cierre de Auditoría
-* **Sin incidencias:** Si todas las líneas están aprobadas o son faltante confirmado (preparación correcta), se puede `FINALIZAR AUDITORÍA`. Muestra resumen.
-* **Con incidencias:** No se permite finalizar si hay líneas pendientes de corrección.
-* **Resultado funcional:** Al cerrar, se genera una fotografía definitiva de cantidades, incidencias, correcciones, usuarios, evidencias, timestamps y ciclos de retrabajo.
+## 11. Pre-cierre y Finalización
+Existe una validación de pre-cierre (`can_finalize`) que comprueba:
+
+* todas las líneas auditadas;
+* ninguna incidencia `OPEN`;
+* `package_count >= 1`;
+* evidencia fotográfica obligatoria presente en incidencias `WRONG_PRODUCT` y `DAMAGED_PRODUCT`.
+
+El pre-cierre es informativo. La finalización vuelve a validar todo dentro de la misma transacción mediante `logistica.finalize_sales_order_audit`.
+
+Al finalizar correctamente:
+
+* la sesión de Auditoría pasa a `COMPLETED` y registra `completed_at`;
+* se libera el lock de Auditoría (`locked_by_user_id` y `locked_at` quedan NULL);
+* se conserva `assigned_auditor_user_id`;
+* la tarjeta pasa de `IN_AUDIT` a `AUDITED`;
+* se conserva `assigned_user_id` del preparador;
+* se registra el movimiento `IN_AUDIT → AUDITED` con evento `AUDIT_COMPLETED`, `audit_id`, `package_count`, `auditor_user_id` y presencia de foto global.
+
+`AUDITED` significa que la preparación fue auditada físicamente, sin incidencias abiertas y con cantidad final de bultos definida. No significa facturada, asignada a ruta, cargada ni entregada.
+
+La única vía para entrar a `AUDITED` es finalizar la Auditoría. El drag & drop genérico no permite entrar ni salir de ese estado. Una Auditoría `COMPLETED` es de sólo lectura: no admite confirmar líneas, modificar bultos, agregar evidencias ni tomar lock. Las evidencias históricas siguen siendo consultables.
 
 ## 12. Métricas Futuras de Auditoría
 El diseño permitirá medir:
@@ -324,5 +387,5 @@ Auditor cuenta: A=10, B=4, C=2
 **Resultados:**
 * A → APROBADO (sellado).
 * B → FALTANTE CONFIRMADO / PREPARACIÓN CORRECTA (sellado).
-* C → INCIDENCIA DE PREPARACIÓN (vuelve a corrección).
-Después: C se corrige, se reaudita, se aprueba. La NV cierra Auditoría.
+* C → INCIDENCIA DE AUDITORÍA (diseño futuro: vuelve a corrección).
+El cierre de Auditoría sí está implementado para líneas sin incidencias abiertas. El flujo de corrección y reauditoría posterior a una incidencia sigue siendo diseño futuro.

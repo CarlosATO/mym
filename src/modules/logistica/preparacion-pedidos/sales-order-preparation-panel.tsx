@@ -69,6 +69,8 @@ import { MovementObservationDialog } from './movement-observation-dialog'
 import { moveSalesOrderPreparationCard } from '@/app/actions/logistica/sales-order-preparation'
 import { toast } from 'sonner'
 import { getActiveCompanyId } from '@/app/actions/companies'
+import { getSalesOrderAuditBoardLocks, type AuditBoardLock, type SalesOrderAuditFinalizeResult } from '@/app/actions/logistica/sales-order-audit'
+import { SalesOrderAuditDrawer } from '@/modules/logistica/auditoria/sales-order-audit-drawer'
 
 type KanbanColumn = {
   id: string
@@ -103,6 +105,14 @@ const COLUMNS: KanbanColumn[] = [
     colorBody: 'bg-theme-base/30',
     badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
     dot: 'bg-purple-500',
+  },
+  {
+    id: 'AUDITED',
+    title: 'Auditadas',
+    colorHeader: 'bg-theme-base border-slate-300 dark:border-theme-border/80',
+    colorBody: 'bg-theme-base/30',
+    badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
+    dot: 'bg-emerald-500',
   },
 ]
 
@@ -158,6 +168,7 @@ function DroppableColumn({
   onToggleSelection,
   sortBy,
   currentUserId,
+  auditLocks,
 }: {
   col: KanbanColumn
   colCards: SalesOrderPreparationCardInfo[]
@@ -169,6 +180,7 @@ function DroppableColumn({
   onToggleSelection: (c: SalesOrderPreparationCardInfo) => void
   sortBy: PreparationSort
   currentUserId: string | null
+  auditLocks: Record<string, AuditBoardLock>
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: col.id,
@@ -225,7 +237,8 @@ function DroppableColumn({
                 selected={selectedCardIds.has(card.card_id)}
                 onToggleSelected={onToggleSelection}
                 currentUserId={currentUserId}
-                dragDisabled={isPreparationReadOnly({
+                auditLock={auditLocks[card.card_id] ?? null}
+                dragDisabled={card.status === 'AUDITED' || isPreparationReadOnly({
                   status: card.status,
                   currentUserId,
                   lockedByUserId: card.locked_by_user_id,
@@ -254,9 +267,12 @@ export function SalesOrderPreparationPanel({
   const isSystemAdmin = permissions.includes('system.admin')
   const canManagePreparation = isSystemAdmin || permissions.includes('logistica.preparation.manage')
   const canTakeoverPreparation = isSystemAdmin || permissions.includes('logistica.preparation.authorize_exception')
+  const canManageAudit = isSystemAdmin || permissions.includes('logistica.audit.manage')
+  const canAuthorizeAuditException = isSystemAdmin || permissions.includes('logistica.audit.authorize_exception')
 
   const [companyId, setCompanyId] = useState<string | null>(null)
   const [cards, setCards] = useState<SalesOrderPreparationCardInfo[]>([])
+  const [auditLocks, setAuditLocks] = useState<Record<string, AuditBoardLock>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   
@@ -321,6 +337,36 @@ export function SalesOrderPreparationPanel({
   useEffect(() => {
     cardsRef.current = cards
   }, [cards])
+
+  const refreshAuditLocks = useCallback(async () => {
+    const ids = cardsRef.current
+      .filter(card => card.status === 'IN_AUDIT')
+      .map(card => card.card_id)
+    if (ids.length === 0) {
+      setAuditLocks({})
+      return
+    }
+    const result = await getSalesOrderAuditBoardLocks(ids)
+    if (result.data) setAuditLocks(result.data)
+  }, [])
+
+  const auditCardKey = useMemo(
+    () => cards.filter(card => card.status === 'IN_AUDIT').map(card => card.card_id).sort().join(','),
+    [cards],
+  )
+
+  useEffect(() => {
+    if (!auditCardKey) {
+      setAuditLocks({})
+      return
+    }
+    let cancelled = false
+    const ids = auditCardKey.split(',')
+    getSalesOrderAuditBoardLocks(ids).then(result => {
+      if (!cancelled && result.data) setAuditLocks(result.data)
+    })
+    return () => { cancelled = true }
+  }, [auditCardKey])
 
   useEffect(() => {
     selectedCardRef.current = selectedCard
@@ -648,6 +694,14 @@ export function SalesOrderPreparationPanel({
 
   const openCardDetails = async (card: SalesOrderPreparationCardInfo) => {
     if (!companyId) return
+    if (card.status === 'IN_AUDIT') {
+      setSelectedCard(card)
+      return
+    }
+    if (card.status === 'AUDITED') {
+      setSelectedCard(card)
+      return
+    }
     const requestId = ++itemsRequestSeqRef.current
     const clickStart = performance.now()
     setSelectedCard(card)
@@ -812,6 +866,29 @@ export function SalesOrderPreparationPanel({
   const handleOwnershipConflict = async () => {
     toast.error('La preparación fue tomada por otro usuario. Se actualizó a sólo lectura.')
     await loadBoard()
+  }
+
+  const handleAuditOwnershipConflict = async () => {
+    toast.error('La auditoría fue tomada por otro usuario. Se actualizó a sólo lectura.')
+    await loadBoard()
+    await refreshAuditLocks()
+  }
+
+  const handleAuditFinalized = (result: SalesOrderAuditFinalizeResult) => {
+    const nextCards = cardsRef.current.map(item => (
+      item.card_id === result.card_id ? { ...item, status: 'AUDITED' } : item
+    ))
+    cardsRef.current = nextCards
+    setCards(nextCards)
+    setSelectedCard(current => (
+      current?.card_id === result.card_id ? { ...current, status: 'AUDITED' } : current
+    ))
+    setAuditLocks(current => {
+      if (!(result.card_id in current)) return current
+      const next = { ...current }
+      delete next[result.card_id]
+      return next
+    })
   }
 
   const handlePreparationLinesChange = (lines: SalesOrderPreparationLine[]) => {
@@ -1477,7 +1554,7 @@ export function SalesOrderPreparationPanel({
               onDragCancel={handleDragCancel}
             >
               <div className="h-full overflow-x-auto p-4">
-                <div className="grid h-full min-w-[1000px] grid-cols-[repeat(3,minmax(320px,1fr))] gap-4">
+                <div className="grid h-full min-w-[1360px] grid-cols-[repeat(4,minmax(300px,1fr))] gap-4">
                   {COLUMNS.map(col => {
                     const colCards = filteredCards.filter(c => c.status === col.id)
                      return (
@@ -1493,6 +1570,7 @@ export function SalesOrderPreparationPanel({
                          onToggleSelection={toggleSelection}
                          sortBy={sortBy}
                          currentUserId={currentUserId}
+                         auditLocks={auditLocks}
                        />
                      )
                   })}
@@ -1500,31 +1578,45 @@ export function SalesOrderPreparationPanel({
               </div>
               <DragOverlay zIndex={9999}>
                 {activeCard ? (
-                   <SalesOrderCard card={activeCard} isOverlay isPending={pendingCardIds.has(activeCard.card_id)} />
+                   <SalesOrderCard card={activeCard} isOverlay isPending={pendingCardIds.has(activeCard.card_id)} currentUserId={currentUserId} auditLock={auditLocks[activeCard.card_id] ?? null} />
                 ) : null}
               </DragOverlay>
             </DndContext>
         )}
       </div>
 
-      <SalesOrderDrawer
-        card={selectedCard}
-        items={selectedItems}
-        preparationLines={selectedPreparationLines}
-        onPreparationLinesChange={handlePreparationLinesChange}
-        onPreparationLineChange={handlePreparationLineChange}
-        isLoadingPreparationLines={loadingPreparationLines}
-        preparationLinesError={preparationLinesError}
-        clientData={selectedClientData}
-        isLoadingItems={loadingItems}
-        currentUserId={currentUserId}
-        canClaimPreparation={canManagePreparation}
-        canTakeoverPreparation={canTakeoverPreparation}
-        onTakePreparation={handleTakePreparation}
-        onOwnershipConflict={handleOwnershipConflict}
-        onClose={() => setSelectedCard(null)}
-        onTransition={transitionCard}
-      />
+      {selectedCard?.status === 'IN_AUDIT' || selectedCard?.status === 'AUDITED' ? (
+        <SalesOrderAuditDrawer
+          card={selectedCard}
+          currentUserId={currentUserId}
+          currentUserName={currentUserName}
+          canManage={canManageAudit}
+          canAuthorizeException={canAuthorizeAuditException}
+          onClose={() => setSelectedCard(null)}
+          onAuditLockChange={() => { void refreshAuditLocks() }}
+          onOwnershipConflict={handleAuditOwnershipConflict}
+          onFinalized={handleAuditFinalized}
+        />
+      ) : (
+        <SalesOrderDrawer
+          card={selectedCard}
+          items={selectedItems}
+          preparationLines={selectedPreparationLines}
+          onPreparationLinesChange={handlePreparationLinesChange}
+          onPreparationLineChange={handlePreparationLineChange}
+          isLoadingPreparationLines={loadingPreparationLines}
+          preparationLinesError={preparationLinesError}
+          clientData={selectedClientData}
+          isLoadingItems={loadingItems}
+          currentUserId={currentUserId}
+          canClaimPreparation={canManagePreparation}
+          canTakeoverPreparation={canTakeoverPreparation}
+          onTakePreparation={handleTakePreparation}
+          onOwnershipConflict={handleOwnershipConflict}
+          onClose={() => setSelectedCard(null)}
+          onTransition={transitionCard}
+        />
+      )}
       
       <MovementObservationDialog
         isOpen={!!pendingMovement}

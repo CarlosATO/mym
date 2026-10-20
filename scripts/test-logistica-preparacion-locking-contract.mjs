@@ -108,7 +108,7 @@ test('UI owner, read-only, claim y takeover están conectados', () => {
   assert.match(drawer, /TOMAR|Tomar preparación/)
   assert.match(drawer, /disabled=\{isMoving \|\| isReadOnly\}/)
   assert.match(drawer, /savingLineId === line\.id \|\| line\.excluded_from_dispatch \|\| isReadOnly/)
-  assert.match(panel, /dragDisabled=\{isPreparationReadOnly\(/)
+  assert.match(panel, /dragDisabled=\{card\.status === 'AUDITED' \|\| isPreparationReadOnly\(/)
   assert.match(card, /disabled: isOverlay \|\| isPending \|\| dragDisabled/)
   assert.match(dialog, /Tomar preparación de otro usuario/)
   assert.match(dialog, /El motivo es obligatorio/)

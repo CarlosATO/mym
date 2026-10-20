@@ -7,6 +7,12 @@ import { useDraggable } from '@dnd-kit/core'
 import { formatPreparationClp, getPreparationCardAmount, getPreparationComuna, parseDateOnly } from './preparation-board-utils'
 import { getPreparationLockLabel } from './preparation-lock-policy'
 
+export type SalesOrderCardAuditLock = {
+  locked_by_user_id: string | null
+  locked_by_user_name: string | null
+  assigned_auditor_user_name: string | null
+}
+
 interface SalesOrderCardProps {
   card: SalesOrderPreparationCardInfo
   onDoubleClick?: () => void
@@ -20,6 +26,7 @@ interface SalesOrderCardProps {
   onToggleSelected?: (card: SalesOrderPreparationCardInfo) => void
   currentUserId?: string | null
   dragDisabled?: boolean
+  auditLock?: SalesOrderCardAuditLock | null
 }
 
 function formatShortDate(value: string | null): string | null {
@@ -52,6 +59,7 @@ export function SalesOrderCard({
   onToggleSelected,
   currentUserId = null,
   dragDisabled = false,
+  auditLock = null,
 }: SalesOrderCardProps) {
   const routeDate = formatShortDate(card.route_date)
   const routeFullDate = formatFullDate(card.route_date)
@@ -68,6 +76,15 @@ export function SalesOrderCard({
     lockedByUserId: card.locked_by_user_id,
     lockedByName: card.locked_by_user_name,
   })
+  const auditLabel = card.status === 'AUDITED'
+    ? 'Auditada'
+    : card.status === 'IN_AUDIT' && auditLock
+    ? auditLock.locked_by_user_id === currentUserId
+      ? 'Tu auditoría'
+      : auditLock.locked_by_user_name || auditLock.assigned_auditor_user_name
+        ? `Audita: ${auditLock.locked_by_user_name || auditLock.assigned_auditor_user_name}`
+        : 'Sin auditor asignado'
+    : null
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null)
 
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
@@ -180,6 +197,11 @@ export function SalesOrderCard({
             {lockLabel && (
               <span className="text-[11px] font-medium text-[#806238]" title={lockLabel}>
                 {lockLabel}
+              </span>
+            )}
+            {auditLabel && (
+              <span className="text-[11px] font-medium text-[#5B4A78]" title={auditLabel}>
+                {auditLabel}
               </span>
             )}
           </div>
