@@ -27,6 +27,7 @@
     "test:cobranza-progress": "node --test scripts/test-cobranza-progress-contract.mjs",
     "test:cobranza-progress-ui": "node --test scripts/test-cobranza-progress-ui.mjs",
     "test:logistica-preparacion-kanban": "node --test scripts/test-logistica-preparacion-kanban-contract.mjs",
+    "test:logistica-preparacion-cantidades": "node --test scripts/test-logistica-preparacion-cantidades-contract.mjs",
     "test:preparacion-pedidos-fast": "node --experimental-strip-types --test scripts/test-preparacion-pedidos-fast.mjs scripts/test-preparacion-pedidos-fast-contract.mjs",
     "test:preparacion-pedidos-ux": "node --experimental-strip-types --test scripts/test-preparacion-pedidos-ux.mjs scripts/test-preparacion-pedidos-ux-contract.mjs",
     "test:preparacion-pedidos-detail-cache": "node --experimental-strip-types --test scripts/test-preparacion-pedidos-detail-cache.mjs",

@@ -1,6 +1,7 @@
 import type {
   SalesOrderPreparationItem,
   SalesOrderClientData,
+  SalesOrderPreparationLine,
   SalesOrderPreparationPrintData,
 } from '@/app/actions/logistica/sales-order-preparation'
 
@@ -52,6 +53,44 @@ export function prunePreparationDetailCache(
   for (const nvId of [...cache.keys()]) {
     if (!activeSet.has(nvId)) {
       cache.delete(nvId)
+      removed += 1
+    }
+  }
+  return removed
+}
+
+export type PreparationLinesCache = Map<string, SalesOrderPreparationLine[]>
+
+export function createPreparationLinesCache(): PreparationLinesCache {
+  return new Map<string, SalesOrderPreparationLine[]>()
+}
+
+export function putPreparationLines(
+  cache: PreparationLinesCache,
+  cardId: string,
+  lines: SalesOrderPreparationLine[],
+): void {
+  cache.set(cardId, lines)
+}
+
+export function patchPreparationLine(
+  cache: PreparationLinesCache,
+  line: SalesOrderPreparationLine,
+): void {
+  const current = cache.get(line.card_id)
+  if (!current) return
+  cache.set(line.card_id, current.map(existing => existing.id === line.id ? line : existing))
+}
+
+export function prunePreparationLinesCache(
+  cache: PreparationLinesCache,
+  activeCardIds: Iterable<string>,
+): number {
+  const activeSet = new Set(activeCardIds)
+  let removed = 0
+  for (const cardId of [...cache.keys()]) {
+    if (!activeSet.has(cardId)) {
+      cache.delete(cardId)
       removed += 1
     }
   }

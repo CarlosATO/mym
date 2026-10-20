@@ -5,19 +5,24 @@ import { Search, SlidersHorizontal, KanbanSquare, Loader2, RotateCcw, RefreshCw,
 import { 
   getSalesOrderPreparationBoard, 
   getSalesOrderPreparationItems,
+  getSalesOrderPreparationLines,
   getSalesOrderPreparationPrintData,
   syncOperationalBsaleSalesOrders,
   syncOperationalBsaleSalesOrdersIfStale,
   excludeSalesOrderPreparationNv,
   SalesOrderPreparationCardInfo,
   SalesOrderPreparationItem,
+  SalesOrderPreparationLine,
   type SalesOrderClientData,
 } from '@/app/actions/logistica/sales-order-preparation'
 import {
   type PreparationDetailEntry,
   getUncachedNvIds,
-  putPreparationDetailsBatch,
+  patchPreparationLine,
   prunePreparationDetailCache,
+  prunePreparationLinesCache,
+  putPreparationDetailsBatch,
+  putPreparationLines,
 } from './preparation-detail-cache'
 import { getWarehousePreparationSyncHealth, type WarehousePreparationSyncHealth } from '@/app/actions/integraciones/sync'
 import {
@@ -32,6 +37,7 @@ import {
 import {
   markPreparationBoardFetch,
   recordPreparationDuration,
+  tracePreparationOpenPhase,
 } from './preparation-performance'
 import {
   buildPreparationComunaOptions,
@@ -217,6 +223,9 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
   // Drawer state
   const [selectedCard, setSelectedCard] = useState<SalesOrderPreparationCardInfo | null>(null)
   const [selectedItems, setSelectedItems] = useState<SalesOrderPreparationItem[]>([])
+  const [selectedPreparationLines, setSelectedPreparationLines] = useState<SalesOrderPreparationLine[]>([])
+  const [loadingPreparationLines, setLoadingPreparationLines] = useState(false)
+  const [preparationLinesError, setPreparationLinesError] = useState<string | null>(null)
   const [selectedClientData, setSelectedClientData] = useState<SalesOrderClientData | null>(null)
   const [loadingItems, setLoadingItems] = useState(false)
 
@@ -252,6 +261,7 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
   const itemsRequestSeqRef = useRef(0)
   const prefetchSeqRef = useRef(0)
   const detailCacheRef = useRef<Map<number, PreparationDetailEntry>>(new Map())
+  const preparationLinesCacheRef = useRef<Map<string, SalesOrderPreparationLine[]>>(new Map())
   const prefetchInFlightRef = useRef<Set<number>>(new Set())
   const selectedCardRef = useRef<SalesOrderPreparationCardInfo | null>(null)
   const pendingStatusByCardRef = useRef<Map<string, string>>(new Map())
@@ -421,8 +431,9 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
         return next ?? (pendingExclusionNvIdsRef.current.has(current.nv_bsale_id) ? null : current)
       })
 
-      // Poda de cache: remover NVs que ya no pertenecen al board
+      // Poda de cache: remover NVs/tarjetas que ya no pertenecen al board
       prunePreparationDetailCache(detailCacheRef.current, rows.map(r => r.nv_bsale_id))
+      prunePreparationLinesCache(preparationLinesCacheRef.current, rows.map(r => r.card_id))
 
       // Precarga batch de detalles en segundo plano sin bloquear el renderizado del board
       void prefetchPreparationDetails(activeCompanyId, rows.map(r => r.nv_bsale_id))
@@ -485,6 +496,7 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
         setSyncError(null)
         if (refresh && mountedRef.current) {
           detailCacheRef.current.clear()
+          preparationLinesCacheRef.current.clear()
           await loadBoard()
         }
 
@@ -511,6 +523,7 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
         const createdCount = res.data?.new_cards ?? 0
         if (createdCount > 0 && mountedRef.current) {
           detailCacheRef.current.clear()
+          preparationLinesCacheRef.current.clear()
           await loadBoard()
           if (source === 'manual') {
             toast.error(`NV actualizadas (${createdCount} nueva${createdCount > 1 ? 's' : ''}), pero la conciliación posterior arrojó un error: ${message}`)
@@ -592,6 +605,24 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
     const requestId = ++itemsRequestSeqRef.current
     const clickStart = performance.now()
     setSelectedCard(card)
+    setPreparationLinesError(null)
+
+    // La fotografía persistida se mantiene visible: sólo se vacía si no hay cache válida.
+    const cachedLines = card.status === 'IN_PREPARATION'
+      ? preparationLinesCacheRef.current.get(card.card_id) ?? null
+      : null
+    if (cachedLines) {
+      setSelectedPreparationLines(cachedLines)
+      setLoadingPreparationLines(false)
+    } else {
+      setSelectedPreparationLines([])
+      setLoadingPreparationLines(card.status === 'IN_PREPARATION')
+    }
+
+    tracePreparationOpenPhase('A.drawerState', performance.now() - clickStart, {
+      status: card.status,
+      linesCacheHit: cachedLines !== null,
+    })
 
     // A. Cache HIT: Apertura instantánea sin round-trips
     const cached = detailCacheRef.current.get(card.nv_bsale_id)
@@ -599,6 +630,24 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
       setSelectedItems(cached.items)
       setSelectedClientData(cached.clientData)
       setLoadingItems(false)
+      tracePreparationOpenPhase('B.detailCache', performance.now() - clickStart, { hit: true })
+
+      if (card.status === 'IN_PREPARATION' && cachedLines === null) {
+        const linesStartedAt = performance.now()
+        const lines = await getSalesOrderPreparationLines(companyId, card.card_id)
+        tracePreparationOpenPhase('D.preparationLines', performance.now() - linesStartedAt, {
+          source: 'rpc',
+          error: Boolean(lines.error),
+        })
+        if (requestId === itemsRequestSeqRef.current && mountedRef.current) {
+          if (!lines.error) putPreparationLines(preparationLinesCacheRef.current, card.card_id, lines.data)
+          setSelectedPreparationLines(lines.data)
+          setPreparationLinesError(lines.error)
+          setLoadingPreparationLines(false)
+        }
+      }
+
+      tracePreparationOpenPhase('H.operationalRender', performance.now() - clickStart)
       recordPreparationDuration('cardOpen', performance.now() - clickStart)
       return
     }
@@ -609,7 +658,25 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
     setLoadingItems(true)
 
     try {
+      const linesPromise = card.status === 'IN_PREPARATION' && cachedLines === null
+        ? (async () => {
+          const linesStartedAt = performance.now()
+          const result = await getSalesOrderPreparationLines(companyId, card.card_id)
+          tracePreparationOpenPhase('D.preparationLines', performance.now() - linesStartedAt, {
+            source: 'rpc',
+            error: Boolean(result.error),
+          })
+          return result
+        })()
+        : Promise.resolve({ data: cachedLines ?? [], error: null })
+
+      const printStartedAt = performance.now()
       const res = await getSalesOrderPreparationPrintData(companyId, [card.nv_bsale_id])
+      tracePreparationOpenPhase('C.printData', performance.now() - printStartedAt, {
+        hit: false,
+        error: Boolean(res.error),
+      })
+      const lines = await linesPromise
       if (requestId !== itemsRequestSeqRef.current || !mountedRef.current) return
 
       if (res.data) {
@@ -626,17 +693,39 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
         setSelectedItems([])
         setSelectedClientData(null)
       }
+      if (card.status === 'IN_PREPARATION') {
+        if (!lines.error && cachedLines === null) {
+          putPreparationLines(preparationLinesCacheRef.current, card.card_id, lines.data)
+        }
+        setSelectedPreparationLines(lines.data)
+        setPreparationLinesError(lines.error)
+      }
+      setLoadingPreparationLines(false)
     } catch (err: unknown) {
       if (requestId === itemsRequestSeqRef.current && mountedRef.current) {
         setSelectedItems([])
         setSelectedClientData(null)
+        setPreparationLinesError(err instanceof Error ? err.message : 'No se pudieron cargar las líneas de preparación.')
+        setLoadingPreparationLines(false)
       }
     } finally {
       if (requestId === itemsRequestSeqRef.current && mountedRef.current) {
         setLoadingItems(false)
+        tracePreparationOpenPhase('H.operationalRender', performance.now() - clickStart)
         recordPreparationDuration('cardOpen', performance.now() - clickStart)
       }
     }
+  }
+
+  const handlePreparationLinesChange = (lines: SalesOrderPreparationLine[]) => {
+    setSelectedPreparationLines(lines)
+    const cardId = lines[0]?.card_id ?? selectedCardRef.current?.card_id
+    if (cardId) putPreparationLines(preparationLinesCacheRef.current, cardId, lines)
+  }
+
+  const handlePreparationLineChange = (line: SalesOrderPreparationLine) => {
+    setSelectedPreparationLines(current => current.map(existing => existing.id === line.id ? line : existing))
+    patchPreparationLine(preparationLinesCacheRef.current, line)
   }
 
   const transitionCard = async (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string) => {
@@ -1298,6 +1387,11 @@ export function SalesOrderPreparationPanel({ roleName = '' }: { roleName?: strin
       <SalesOrderDrawer
         card={selectedCard}
         items={selectedItems}
+        preparationLines={selectedPreparationLines}
+        onPreparationLinesChange={handlePreparationLinesChange}
+        onPreparationLineChange={handlePreparationLineChange}
+        isLoadingPreparationLines={loadingPreparationLines}
+        preparationLinesError={preparationLinesError}
         clientData={selectedClientData}
         isLoadingItems={loadingItems}
         onClose={() => setSelectedCard(null)}

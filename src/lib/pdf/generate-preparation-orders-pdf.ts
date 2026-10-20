@@ -4,11 +4,13 @@ import type {
   SalesOrderClientData,
   SalesOrderPreparationCardInfo,
   SalesOrderPreparationItem,
+  SalesOrderPreparationLine,
 } from '@/app/actions/logistica/sales-order-preparation'
 
 export type PreparationOrderPdfEntry = {
   card: SalesOrderPreparationCardInfo
   items: SalesOrderPreparationItem[]
+  preparationLines?: SalesOrderPreparationLine[]
   clientData?: SalesOrderClientData | null
 }
 
@@ -56,7 +58,13 @@ function drawDocumentHeader(doc: jsPDF, card: SalesOrderPreparationCardInfo, mar
   doc.text('DISTRIBUIDORA MYM / PetGroup', margin, 7)
   doc.setFont('helvetica', 'normal')
   doc.setFontSize(6.5)
-  doc.text('PREPARACIÓN DE BODEGA · DOCUMENTO OPERACIONAL', margin, 11.5)
+  doc.text(
+    card.status === 'IN_PREPARATION'
+      ? 'PREPARACIÓN DE BODEGA · EN PREPARACIÓN'
+      : 'PREPARACIÓN DE BODEGA · DOCUMENTO OPERACIONAL',
+    margin,
+    11.5,
+  )
 
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(14)
@@ -178,6 +186,13 @@ function drawInfoBlock(
   return startY + boxHeight + 4
 }
 
+function preparationLineStatusLabel(line: SalesOrderPreparationLine): string {
+  if (line.excluded_from_dispatch) return 'Excluida / Con incidencia'
+  if (line.line_status === 'INCIDENT') return 'Con incidencia'
+  if (line.line_status === 'CONFIRMED') return 'Confirmada'
+  return 'Pendiente'
+}
+
 export function generatePreparationOrdersPdf(entries: PreparationOrderPdfEntry[]): Blob {
   if (entries.length === 0) {
     throw new Error('No hay Notas de Venta para generar el documento.')
@@ -193,21 +208,37 @@ export function generatePreparationOrdersPdf(entries: PreparationOrderPdfEntry[]
     let cursorY = drawDocumentHeader(doc, entry.card, margin, width)
     cursorY = drawInfoBlock(doc, entry.card, entry.clientData, margin, width, cursorY)
 
+    const isOperational = entry.card.status === 'IN_PREPARATION'
+    const preparationLines = entry.preparationLines ?? []
+    const lineCount = isOperational ? preparationLines.length : entry.items.length
+
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(8.5)
     doc.setTextColor(...BRAND)
-    doc.text('PRODUCTOS A PREPARAR', margin, cursorY)
+    doc.text(isOperational ? 'PRODUCTOS EN PREPARACIÓN' : 'PRODUCTOS A PREPARAR', margin, cursorY)
     cursorY += 3
 
     autoTable(doc, {
-      head: [['SKU', 'Descripción / presentación', 'Cantidad']],
-      body: entry.items.length > 0
-        ? entry.items.map(item => [
-            item.sku || '—',
-            item.product_name || '—',
-            String(item.quantity),
-          ])
-        : [['—', 'Sin líneas disponibles para esta Nota de Venta', '—']],
+      head: [isOperational
+        ? ['SKU', 'Descripción / presentación', 'Solicitado', 'Preparado', 'Estado']
+        : ['SKU', 'Descripción / presentación', 'Cantidad']],
+      body: isOperational
+        ? preparationLines.length > 0
+          ? preparationLines.map(line => [
+              line.sku || '—',
+              line.product_name || '—',
+              String(line.requested_quantity),
+              line.prepared_quantity == null ? '—' : String(line.prepared_quantity),
+              preparationLineStatusLabel(line),
+            ])
+          : [['—', 'Sin líneas operacionales disponibles para esta Nota de Venta', '—', '—', '—']]
+        : entry.items.length > 0
+          ? entry.items.map(item => [
+              item.sku || '—',
+              item.product_name || '—',
+              String(item.quantity),
+            ])
+          : [['—', 'Sin líneas disponibles para esta Nota de Venta', '—']],
       startY: cursorY,
       margin: { left: margin, right: margin, bottom: 20 },
       styles: {
@@ -226,8 +257,12 @@ export function generatePreparationOrdersPdf(entries: PreparationOrderPdfEntry[]
       },
       columnStyles: {
         0: { cellWidth: 30, font: 'courier' },
-        1: { cellWidth: width - margin * 2 - 52 },
-        2: { cellWidth: 22, halign: 'center', fontStyle: 'bold' },
+        1: { cellWidth: isOperational ? width - margin * 2 - 93 : width - margin * 2 - 52 },
+        2: { cellWidth: 20, halign: 'center', fontStyle: 'bold' },
+        ...(isOperational ? {
+          3: { cellWidth: 20, halign: 'center', fontStyle: 'bold' },
+          4: { cellWidth: 23, halign: 'center', fontSize: 7 },
+        } : { }),
       },
       alternateRowStyles: { fillColor: PALE },
     })
@@ -247,8 +282,17 @@ export function generatePreparationOrdersPdf(entries: PreparationOrderPdfEntry[]
     doc.setFont('helvetica', 'normal')
     doc.setFontSize(7.5)
     doc.setTextColor(...MUTED)
-    doc.text(`Líneas: ${entry.items.length} · Unidades: ${entry.card.total_quantity}`, margin, finalY + 5)
-    doc.text(`Neto: ${formatMoney(entry.card.net_amount)} · Total: ${formatMoney(entry.card.gross_amount ?? entry.card.total_amount)}`, margin, finalY + 9)
+    if (isOperational) {
+      const requestedTotal = preparationLines.reduce((sum, line) => sum + line.requested_quantity, 0)
+      const preparedTotal = preparationLines.reduce((sum, line) => sum + (line.prepared_quantity == null ? 0 : line.prepared_quantity), 0)
+      const pendingCount = preparationLines.filter(line => line.prepared_quantity == null || line.line_status === 'PENDING').length
+      const incidentCount = preparationLines.filter(line => line.line_status === 'INCIDENT').length
+      doc.text(`Líneas: ${lineCount} · Solicitadas: ${requestedTotal} · Preparadas: ${preparedTotal}`, margin, finalY + 5)
+      doc.text(`Pendientes de confirmar: ${pendingCount} líneas · Incidencias: ${incidentCount}`, margin, finalY + 9)
+    } else {
+      doc.text(`Líneas: ${lineCount} · Unidades: ${entry.card.total_quantity}`, margin, finalY + 5)
+    }
+    doc.text(`Neto: ${formatMoney(entry.card.net_amount)} · Total: ${formatMoney(entry.card.gross_amount ?? entry.card.total_amount)}`, margin, finalY + (isOperational ? 13 : 9))
 
     doc.setDrawColor(...TEXT)
     doc.line(margin + 8, finalY + 28, margin + 50, finalY + 28)

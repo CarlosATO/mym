@@ -89,6 +89,8 @@ test('PDF usa un documento con page break por NV y tablas legibles', () => {
   assert.match(pdf, /autoTable\(doc/)
   assert.match(pdf, /'SKU', 'Descripción \/ presentación', 'Cantidad'/)
   assert.match(pdf, /doc\.output\('blob'\)/)
+  assert.match(pdf, /PREPARACIÓN DE BODEGA · EN PREPARACIÓN/)
+  assert.match(pdf, /Solicitado.*Preparado.*Estado/)
 })
 
 test('impresión masiva reutiliza una carga batch y no N+1', () => {

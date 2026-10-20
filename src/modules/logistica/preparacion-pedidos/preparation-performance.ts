@@ -26,6 +26,15 @@ export function markPreparationBoardFetch() {
   snapshot.boardFetches += 1
 }
 
+export function tracePreparationOpenPhase(
+  phase: string,
+  durationMs: number,
+  detail?: Record<string, unknown>,
+) {
+  if (!isEnabled()) return
+  console.debug(`[preparacion-open] ${phase} ${Math.max(0, Math.round(durationMs))}ms`, detail ?? '')
+}
+
 export function recordPreparationDuration(metric: PreparationMetric, durationMs: number) {
   const rounded = Math.max(0, Math.round(durationMs))
   if (metric === 'boardLoad') snapshot.boardLoadMs.push(rounded)

@@ -1,15 +1,21 @@
 'use client'
 
-import { X, MapPin, Package, User, FileText, FileCheck, CheckCircle2, Printer, Building2, Hash } from 'lucide-react'
-import { SalesOrderPreparationCardInfo, SalesOrderPreparationItem, getSalesOrderClientData, SalesOrderClientData, getSalesOrderPreparationMovements, SalesOrderPreparationMovement } from '@/app/actions/logistica/sales-order-preparation'
+import { X, MapPin, Package, User, FileText, FileCheck, CheckCircle2, Printer, Building2, Hash, AlertTriangle } from 'lucide-react'
+import { SalesOrderPreparationCardInfo, SalesOrderPreparationItem, SalesOrderPreparationLine, confirmSalesOrderPreparationLine, getSalesOrderClientData, SalesOrderClientData, getSalesOrderPreparationLines, getSalesOrderPreparationMovements, SalesOrderPreparationMovement } from '@/app/actions/logistica/sales-order-preparation'
 import { generatePreparationOrdersPdf, openPreparationOrdersPdf } from '@/lib/pdf/generate-preparation-orders-pdf'
 import { useState, useEffect } from 'react'
 import { MOVEMENT_RULES } from './movement-rules'
 import { formatDateOnly, parseDateOnly } from './preparation-board-utils'
+import { PREPARATION_INCIDENT_REASONS } from './preparation-incidents'
 
 interface SalesOrderDrawerProps {
   card: SalesOrderPreparationCardInfo | null
   items: SalesOrderPreparationItem[]
+  preparationLines: SalesOrderPreparationLine[]
+  onPreparationLinesChange: (lines: SalesOrderPreparationLine[]) => void
+  onPreparationLineChange: (line: SalesOrderPreparationLine) => void
+  isLoadingPreparationLines: boolean
+  preparationLinesError?: string | null
   clientData?: SalesOrderClientData | null
   isLoadingItems: boolean
   onClose: () => void
@@ -37,6 +43,11 @@ function closePdfWindow(target: Window | null) {
 export function SalesOrderDrawer({
   card,
   items,
+  preparationLines,
+  onPreparationLinesChange,
+  onPreparationLineChange,
+  isLoadingPreparationLines,
+  preparationLinesError = null,
   clientData: clientDataProp,
   isLoadingItems,
   onClose,
@@ -55,6 +66,13 @@ export function SalesOrderDrawer({
   const [moveError, setMoveError] = useState<string | null>(null)
   const [isPrinting, setIsPrinting] = useState(false)
   const [printError, setPrintError] = useState<string | null>(null)
+  const [lineDrafts, setLineDrafts] = useState<Record<string, string>>({})
+  const [incidentLine, setIncidentLine] = useState<{ line: SalesOrderPreparationLine; quantity: number; excluded: boolean } | null>(null)
+  const [incidentReason, setIncidentReason] = useState('')
+  const [incidentObservation, setIncidentObservation] = useState('')
+  const [lineError, setLineError] = useState<string | null>(null)
+  const [savingLineId, setSavingLineId] = useState<string | null>(null)
+  const [auditSummaryOpen, setAuditSummaryOpen] = useState(false)
 
   // Solo consulta cliente si el padre no lo entregó ya precargado.
   /* eslint-disable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
@@ -91,6 +109,9 @@ export function SalesOrderDrawer({
     setObservation('')
     setMoveError(null)
     setPrintError(null)
+    setLineDrafts({})
+    setIncidentLine(null)
+    setAuditSummaryOpen(false)
   }, [card?.card_id])
   /* eslint-enable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
 
@@ -104,6 +125,16 @@ export function SalesOrderDrawer({
   if (!card) return null
 
   const handleMove = async (toStatus: string, requireObs: boolean, label: string) => {
+    if (toStatus === 'IN_AUDIT' && card?.status === 'IN_PREPARATION') {
+      if (pendingLines.length > 0) {
+        setMoveError(`Faltan ${pendingLines.length} producto${pendingLines.length === 1 ? '' : 's'} por confirmar.`)
+        return
+      }
+      if (incidentLines.length > 0) {
+        setAuditSummaryOpen(true)
+        return
+      }
+    }
     if (requireObs) {
       setPendingMoveAction({ toStatus, requireObs, label })
       setObservation('')
@@ -123,9 +154,75 @@ export function SalesOrderDrawer({
       return
     }
     setPendingMoveAction(null)
+    if (toStatus === 'IN_PREPARATION') {
+      const lines = await getSalesOrderPreparationLines(card.company_id, card.card_id)
+      onPreparationLinesChange(lines.data)
+    }
     if (movementsLoaded) {
       await loadMovements()
     }
+  }
+
+  const operationalLines = card?.status === 'IN_PREPARATION' ? preparationLines : []
+  const pendingLines = operationalLines.filter(line => line.prepared_quantity === null || line.line_status === 'PENDING')
+  const incidentLines = operationalLines.filter(line => line.line_status === 'INCIDENT')
+  const reasonLabel = (reason: string) => ({
+    SIN_STOCK: 'Sin stock', STOCK_INSUFICIENTE: 'Stock insuficiente', PRODUCTO_DANADO: 'Producto dañado',
+    PRODUCTO_VENCIDO_NO_APTO: 'Producto vencido / no apto', ERROR_PEDIDO: 'Error de pedido',
+    SOLICITUD_CLIENTE: 'Solicitud del cliente', OTRO: 'Otro',
+  } as Record<string, string>)[reason] || reason
+
+  const savePreparationLine = async (line: SalesOrderPreparationLine, quantity: number, reasonCode?: string, observationText?: string, excluded = false) => {
+    if (!card?.company_id || savingLineId) return
+    setSavingLineId(line.id)
+    setLineError(null)
+    const result = await confirmSalesOrderPreparationLine({
+      companyId: card.company_id,
+      lineId: line.id,
+      preparedQuantity: quantity,
+      reasonCode,
+      observation: observationText,
+      excluded,
+    })
+    setSavingLineId(null)
+    if (result.error || !result.data) {
+      setLineError(result.error || 'No se pudo confirmar la línea.')
+      return
+    }
+    onPreparationLineChange(result.data)
+    setLineDrafts(current => {
+      const next = { ...current }
+      delete next[line.id]
+      return next
+    })
+    setIncidentLine(null)
+    setIncidentReason('')
+    setIncidentObservation('')
+  }
+
+  const confirmLineInput = (line: SalesOrderPreparationLine, excluded = false) => {
+    const raw = excluded
+      ? '0'
+      : (lineDrafts[line.id] ?? (line.prepared_quantity == null ? '' : String(line.prepared_quantity)))
+    if (raw.trim() === '') {
+      setLineError('Ingresa una cantidad antes de confirmar.')
+      return
+    }
+    const quantity = Number(raw)
+    if (!Number.isFinite(quantity) || quantity < 0 || quantity > line.requested_quantity) {
+      setLineError('La cantidad debe estar entre 0 y la cantidad solicitada.')
+      return
+    }
+    // Cero y "Excluir" son la misma realidad operacional: la línea no se despacha.
+    const effectiveExcluded = excluded || quantity === 0
+    if (quantity === line.requested_quantity && !effectiveExcluded) {
+      void savePreparationLine(line, quantity)
+      return
+    }
+    setIncidentLine({ line, quantity, excluded: effectiveExcluded })
+    setIncidentReason('')
+    setIncidentObservation('')
+    setLineError(null)
   }
 
   const emissionDateObj = parseDateOnly(card.nv_emission_date)
@@ -144,7 +241,7 @@ export function SalesOrderDrawer({
     setPrintError(null)
 
     try {
-      const blob = generatePreparationOrdersPdf([{ card, items, clientData }])
+      const blob = generatePreparationOrdersPdf([{ card, items, preparationLines, clientData }])
       openPreparationOrdersPdf(blob, printWindow, `preparacion-nv-${card.nv_folio}.pdf`)
     } catch (err) {
       closePdfWindow(printWindow)
@@ -173,6 +270,8 @@ export function SalesOrderDrawer({
       }
 
       openPreparationOrdersPdf(blob, printWindow, `preparacion-nv-${card.nv_folio}.pdf`)
+      const lines = await getSalesOrderPreparationLines(card.company_id, card.card_id)
+      onPreparationLinesChange(lines.data)
       if (movementsLoaded) {
         await loadMovements()
       }
@@ -186,6 +285,47 @@ export function SalesOrderDrawer({
 
   return (
     <>
+      {incidentLine && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-[#322D29]/40 p-4" role="dialog" aria-modal="true" aria-labelledby="preparation-incident-title">
+          <div className="w-full max-w-sm rounded-lg border border-[#D1C7BD] bg-white p-4 shadow-2xl">
+            <h3 id="preparation-incident-title" className="flex items-center gap-2 text-sm font-bold text-theme-text"><AlertTriangle className="h-4 w-4 text-[#8A4B4B]" /> Incidencia de preparación</h3>
+            <div className="mt-3 space-y-1 text-xs text-theme-text-muted">
+              <p className="font-semibold text-theme-text">NV #{card.nv_folio} · {incidentLine.line.sku || 'Sin SKU'}</p>
+              <p>{incidentLine.line.product_name}</p>
+              <p>Solicitado: <strong>{incidentLine.line.requested_quantity}</strong> · A despachar: <strong>{incidentLine.quantity}</strong> · Diferencia: <strong>{incidentLine.quantity - incidentLine.line.requested_quantity}</strong></p>
+            </div>
+            <label className="mt-4 block text-xs font-semibold text-theme-text">Motivo *</label>
+            <select value={incidentReason} onChange={event => setIncidentReason(event.target.value)} className="mt-1 w-full rounded border border-[#D1C7BD] bg-white px-2 py-2 text-xs text-theme-text">
+              <option value="">Seleccionar motivo</option>
+              {PREPARATION_INCIDENT_REASONS.map(reason => <option key={reason} value={reason}>{reasonLabel(reason)}</option>)}
+            </select>
+            <label className="mt-3 block text-xs font-semibold text-theme-text">Observación {incidentReason === 'OTRO' ? '*' : '(opcional)'}</label>
+            <textarea value={incidentObservation} onChange={event => setIncidentObservation(event.target.value)} rows={3} className="mt-1 w-full resize-none rounded border border-[#D1C7BD] bg-white px-2 py-2 text-xs text-theme-text" />
+            <div className="mt-4 flex gap-2">
+              <button type="button" onClick={() => setIncidentLine(null)} disabled={savingLineId !== null} className="flex-1 rounded border border-[#D1C7BD] px-3 py-2 text-xs font-semibold text-theme-text">Cancelar</button>
+              <button type="button" onClick={() => void savePreparationLine(incidentLine.line, incidentLine.quantity, incidentReason, incidentObservation, incidentLine.excluded)} disabled={!incidentReason || (incidentReason === 'OTRO' && !incidentObservation.trim()) || savingLineId !== null} className="flex-1 rounded bg-[#72383D] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{savingLineId ? 'Guardando...' : 'Confirmar incidencia'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {auditSummaryOpen && (
+        <div className="fixed inset-0 z-[65] flex items-center justify-center bg-[#322D29]/35 p-4" role="dialog" aria-modal="true">
+          <div className="w-full max-w-md rounded-lg border border-[#D1C7BD] bg-white p-5 shadow-2xl">
+            <h3 className="text-sm font-bold text-theme-text">Confirmar envío a Auditoría</h3>
+            <p className="mt-2 text-xs leading-relaxed text-theme-text-muted">Esta preparación contiene diferencias. Las incidencias quedarán pendientes de gestión administrativa. La Nota de Venta será enviada a Auditoría con las cantidades preparadas.</p>
+            <div className="mt-3 rounded border border-[#DDD4CA] bg-[#FCFBF9] p-3 text-xs text-theme-text">
+              <p>Líneas completas: <strong>{operationalLines.filter(line => line.line_status === 'CONFIRMED').length}</strong></p>
+              <p>Líneas con diferencia: <strong>{incidentLines.length}</strong></p>
+              <p>Unidades solicitadas: <strong>{operationalLines.reduce((sum, line) => sum + line.requested_quantity, 0)}</strong></p>
+              <p>Unidades preparadas: <strong>{operationalLines.reduce((sum, line) => sum + (line.prepared_quantity ?? 0), 0)}</strong></p>
+            </div>
+            <div className="mt-4 flex gap-2">
+              <button type="button" onClick={() => setAuditSummaryOpen(false)} className="flex-1 rounded border border-[#D1C7BD] px-3 py-2 text-xs font-semibold text-theme-text">Cancelar</button>
+              <button type="button" onClick={() => { setAuditSummaryOpen(false); void executeMove('IN_AUDIT') }} disabled={isMoving} className="flex-1 rounded bg-purple-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Enviar a Auditoría</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div 
         className="fixed inset-0 bg-[#322D29]/35 backdrop-blur-sm z-50 transition-opacity"
         onClick={onClose} 
@@ -282,38 +422,65 @@ export function SalesOrderDrawer({
                 <div className="p-8 text-center text-xs text-theme-text-muted">
                   Cargando productos...
                 </div>
+              ) : card.status === 'IN_PREPARATION' && isLoadingPreparationLines && preparationLines.length === 0 ? (
+                <div className="p-8 text-center text-xs text-theme-text-muted">
+                  Inicializando fotografía de preparación...
+                </div>
+              ) : card.status === 'IN_PREPARATION' && preparationLinesError && preparationLines.length === 0 ? (
+                <div className="p-8 text-center text-xs text-[#8A4B4B]">
+                  {preparationLinesError}
+                </div>
+              ) : card.status === 'IN_PREPARATION' && preparationLines.length === 0 ? (
+                <div className="p-8 text-center text-xs text-theme-text-muted">
+                  Esta nota de venta no tiene líneas de preparación registradas.
+                </div>
               ) : items.length === 0 ? (
                 <div className="p-8 text-center text-xs text-theme-text-muted">
                   No se encontraron productos en esta nota de venta.
                 </div>
               ) : (
                 <div className="max-h-[420px] overflow-y-auto">
-                  <div className="grid grid-cols-[90px_1fr_60px] gap-2 border-b border-[#DDD4CA] bg-[#F8F5F1] px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wider text-[#6B625C] sticky top-0 z-10">
+                  <div className={`grid gap-2 border-b border-[#DDD4CA] bg-[#F8F5F1] px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wider text-[#6B625C] sticky top-0 z-10 ${card.status === 'IN_PREPARATION' ? 'grid-cols-[72px_1fr_62px_72px_78px]' : 'grid-cols-[90px_1fr_60px]'}`}>
                     <span>SKU</span>
                     <span>Descripción / presentación</span>
-                    <span className="text-center">Cant.</span>
+                    {card.status === 'IN_PREPARATION' ? <><span className="text-center">Solicitado</span><span className="text-center">A despachar</span><span className="text-center">Acción</span></> : <span className="text-center">Cant.</span>}
                   </div>
                   <div className="divide-y divide-[#DDD4CA]/60">
-                    {items.map((item) => (
+                    {card.status === 'IN_PREPARATION' ? preparationLines.map(line => {
+                      const quantity = lineDrafts[line.id] ?? (line.prepared_quantity == null ? '' : String(line.prepared_quantity))
+                      const state = line.excluded_from_dispatch ? 'Excluida' : line.line_status === 'PENDING' ? 'Pendiente' : line.line_status === 'INCIDENT' ? 'Con incidencia' : 'Confirmada'
+                      return (
+                        <div key={line.id} className={`grid grid-cols-[72px_1fr_62px_72px_78px] items-center gap-2 px-3.5 py-2.5 transition-colors ${line.excluded_from_dispatch ? 'bg-[#F4F0EC] opacity-70' : 'hover:bg-[#F8F5F1]/60'}`}>
+                          <p className="font-mono text-xs font-semibold text-theme-text break-words">{line.sku || '—'}</p>
+                          <div className="min-w-0 pr-1">
+                            <p className="text-xs font-medium leading-snug text-theme-text">{line.product_name}</p>
+                            <p className="text-[10px] text-theme-text-muted mt-0.5">{state}</p>
+                          </div>
+                          <span className="text-center text-xs font-bold tabular-nums text-theme-text">{line.requested_quantity}</span>
+                          <input type="number" min={0} max={line.requested_quantity} step="any" aria-label={`Cantidad a despachar de ${line.product_name}`} placeholder={line.prepared_quantity == null ? '—' : undefined} value={quantity} disabled={savingLineId === line.id || line.excluded_from_dispatch} onFocus={() => setLineDrafts(current => ({ ...current, [line.id]: '' }))} onBlur={() => setLineDrafts(current => {
+                            if (current[line.id]?.trim() !== '') return current
+                            const next = { ...current }
+                            delete next[line.id]
+                            return next
+                          })} onChange={event => setLineDrafts(current => ({ ...current, [line.id]: event.target.value }))} onKeyDown={event => { if (event.key === 'Enter') confirmLineInput(line) }} className="w-full rounded border border-[#D1C7BD] bg-white px-1.5 py-1 text-center text-xs tabular-nums placeholder:text-theme-text-muted focus:border-[#72383D] focus:outline-none focus:ring-1 focus:ring-[#72383D]/20 disabled:bg-[#F0ECE8]" />
+                          <div className="flex flex-col gap-1">
+                            <button type="button" disabled={savingLineId === line.id || line.excluded_from_dispatch} onClick={() => confirmLineInput(line)} className="text-[10px] font-bold text-[#72383D] hover:underline disabled:opacity-40">Confirmar</button>
+                            <button type="button" disabled={savingLineId === line.id || line.excluded_from_dispatch} onClick={() => confirmLineInput(line, true)} className="text-[10px] font-semibold text-[#8A4B4B] hover:underline disabled:opacity-40">Excluir</button>
+                          </div>
+                        </div>
+                      )
+                    }) : items.map((item) => (
                       <div key={item.detail_id} className="grid grid-cols-[90px_1fr_60px] items-center gap-2 px-3.5 py-2.5 hover:bg-[#F8F5F1]/60 transition-colors">
                         <p className="font-mono text-xs font-semibold text-theme-text break-words">{item.sku || '—'}</p>
-                        <div className="min-w-0 pr-1">
-                          <p className="text-xs font-medium leading-snug text-theme-text">{item.product_name}</p>
-                          {item.unit_net_value != null && (
-                            <p className="text-[11px] text-theme-text-muted mt-0.5">c/u ${item.unit_net_value.toLocaleString('es-CL')}</p>
-                          )}
-                        </div>
-                        <div className="flex justify-center">
-                          <span className="inline-flex min-w-[28px] h-6 items-center justify-center rounded bg-[#72383D]/10 text-xs font-bold text-[#72383D] px-1.5 tabular-nums">
-                            {item.quantity}
-                          </span>
-                        </div>
+                        <div className="min-w-0 pr-1"><p className="text-xs font-medium leading-snug text-theme-text">{item.product_name}</p>{item.unit_net_value != null && <p className="text-[11px] text-theme-text-muted mt-0.5">c/u ${item.unit_net_value.toLocaleString('es-CL')}</p>}</div>
+                        <div className="flex justify-center"><span className="inline-flex min-w-[28px] h-6 items-center justify-center rounded bg-[#72383D]/10 text-xs font-bold text-[#72383D] px-1.5 tabular-nums">{item.quantity}</span></div>
                       </div>
                     ))}
                   </div>
                 </div>
               )}
             </div>
+            {lineError && card.status === 'IN_PREPARATION' && <p className="text-xs text-[#8A4B4B]">{lineError}</p>}
           </div>
 
           {/* ── SECCIÓN SECUNDARIA: DETALLES DE DESPACHO Y CLIENTE ── */}

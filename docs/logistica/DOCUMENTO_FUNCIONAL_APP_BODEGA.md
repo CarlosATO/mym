@@ -131,14 +131,14 @@ Resultado: `CANTIDAD SUPERIOR A LA SOLICITADA`. Nunca permitir `prepared_quantit
 
 ## 7. Diferencia vs Error Humano
 
-Una diferencia documentada durante la preparación y confirmada por Auditoría se clasifica como `FALTANTE / DISPONIBILIDAD`, **NO** como `ERROR DE PREPARACIÓN`.
+Una diferencia documentada durante la preparación genera una incidencia auditable y se clasifica como `FALTANTE / DISPONIBILIDAD`, **NO** como `ERROR DE PREPARACIÓN`.
 Un `ERROR DE PREPARACIÓN` ocurre cuando lo declarado por el bodeguero difiere de lo hallado posteriormente por el auditor.
 
 ---
 
 ## 8. Finalizar Preparación
 
-El botón `FINALIZAR PREPARACIÓN` puede utilizarse aunque existan faltantes. No se exige completar todas las líneas.
+Cada línea debe quedar confirmada antes de enviar la tarjeta a Auditoría. Una línea con `prepared_quantity = NULL` sigue pendiente aunque visualmente el input muestre 0, por lo que el sistema bloquea el avance e informa cuántas líneas faltan por confirmar.
 
 Mostrará un resumen:
 * Productos completos y con faltantes
@@ -154,7 +154,7 @@ Conceptualmente: `IN_PREPARATION` → `IN_AUDIT`.
 
 ---
 
-## 9. Fotografía Operacional (Congelado al Finalizar)
+## 9. Fotografía Operacional (Congelado al Entrar a Preparación)
 
 Debe registrarse:
 * Qué pidió la NV
@@ -196,13 +196,25 @@ El diseño permitirá medir:
 
 ## DECISIONES PENDIENTES
 
-1. Modificación de NV Bsale ante faltantes.
+1. Emisión administrativa de cambios en Bsale ante faltantes. PetGroup no modifica, elimina, anula ni recrea documentos Bsale en este bloque; el administrador realizará los cambios manualmente.
 2. Regla de facturación cuando preparado < solicitado.
-3. NV modificada mientras está siendo preparada.
+3. NV modificada mientras está siendo preparada. El snapshot propio de PetGroup permanece congelado y el espejo Bsale continúa sincronizándose.
 4. NV anulada mientras está siendo preparada.
 5. Política de sustitución comercial de productos.
 6. Estado definitivo posterior a Auditoría.
 7. Escalamiento por múltiples ciclos de corrección.
+
+### Reglas actuales de cantidades e incidencias
+
+* `requested_quantity` se congela al crear la fotografía de preparación y nunca se sobrescribe.
+* `prepared_quantity` inicia en `NULL`; el 0 visual inicial no significa 0 confirmado.
+* Una cantidad exacta confirma la línea sin incidencia. Una cantidad menor o una exclusión exige motivo; `OTRO` exige observación.
+* Las líneas excluidas se conservan con `prepared_quantity = 0`, incidencia `LINE_EXCLUDED` y no se consideran despacho físico.
+* Confirmar explícitamente `prepared_quantity = 0` y pulsar `Excluir` son la misma operación: ambos exigen motivo, generan `LINE_EXCLUDED` con `REMOVE_LINE`, marcan `excluded_from_dispatch = true` y conservan la línea, el solicitado y el historial.
+* Las incidencias confirmadas son inmutables en la práctica: una nueva confirmación deja la anterior como `SUPERSEDED` y crea el nuevo estado activo cuando corresponde.
+* La tarjeta puede pasar a Auditoría con incidencias `OPEN`, pero nunca con líneas pendientes. Auditoría recibe sólo las cantidades preparadas y las incidencias quedan disponibles para la futura gestión administrativa.
+* La futura reconciliación comparará snapshot, preparado esperado y Bsale observado con estados automática, no coincide o revisión manual. No se implementa aquí.
+* La facturación futura no debe ignorar incidencias administrativas pendientes.
 
 ---
 

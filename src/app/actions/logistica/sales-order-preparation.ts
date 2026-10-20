@@ -6,6 +6,12 @@ import { getActiveCompanyId } from '@/app/actions/companies'
 import { getWarehousePreparationSyncHealth, type WarehousePreparationSyncHealth } from '@/app/actions/integraciones/sync'
 import { decidePreparationSync } from '@/modules/logistica/preparacion-pedidos/preparation-sync-policy'
 
+function logPreparationDiagnostics(label: string, detail: Record<string, unknown>) {
+  if (process.env.NODE_ENV !== 'production') {
+    console.debug(`[preparacion-open][server] ${label}`, detail)
+  }
+}
+
 async function requireLogisticaView() {
   const supabase = await createClient()
   const { data: allowed, error } = await supabase.rpc('has_permission', {
@@ -15,6 +21,18 @@ async function requireLogisticaView() {
   return {
     supabase,
     error: error || allowed !== true ? 'No autorizado para consultar Preparación de Pedidos.' : null,
+  }
+}
+
+async function requireLogisticaManage() {
+  const supabase = await createClient()
+  const { data: allowed, error } = await supabase.rpc('has_permission', {
+    p_permission_code: 'logistica.preparation.manage',
+  })
+
+  return {
+    supabase,
+    error: error || allowed !== true ? 'No tienes permiso para gestionar la preparación de pedidos.' : null,
   }
 }
 
@@ -68,6 +86,26 @@ export type SalesOrderPreparationItem = {
   line_net_amount: number | null
   line_tax_amount: number | null
   line_gross_amount: number | null
+}
+
+export type SalesOrderPreparationLine = {
+  id: string
+  company_id: string
+  card_id: string
+  bsale_nv_id: number
+  bsale_detail_id: number
+  bsale_variant_id: number | null
+  sku: string | null
+  product_name: string
+  requested_quantity: number
+  prepared_quantity: number | null
+  line_status: 'PENDING' | 'CONFIRMED' | 'INCIDENT'
+  excluded_from_dispatch: boolean
+  confirmed_by: string | null
+  confirmed_at: string | null
+  source_snapshot: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
 }
 
 export type PreviewCandidatesResult = {
@@ -191,6 +229,94 @@ export async function getSalesOrderPreparationItems(companyId: string, bsaleNvId
   return { data: data as SalesOrderPreparationItem[], error: null }
 }
 
+export async function getSalesOrderPreparationLines(
+  companyId: string,
+  cardId: string,
+): Promise<{ data: SalesOrderPreparationLine[]; error: string | null }> {
+  const startedAt = performance.now()
+  const { supabase, error: permissionError } = await requireLogisticaView()
+  const preflightMs = performance.now() - startedAt
+  if (permissionError) return { data: [], error: permissionError }
+
+  // Lectura directa: el snapshot ya se materializa en la transición a preparación.
+  // Evita pagar materialize() en cada apertura. El RPC queda sólo como fallback legado.
+  const readStartedAt = performance.now()
+  const { data, error } = await supabase
+    .schema('logistica')
+    .from('sales_order_preparation_lines')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('card_id', cardId)
+    .order('bsale_detail_id', { ascending: true })
+  const readMs = performance.now() - readStartedAt
+
+  if (error) {
+    console.error('getSalesOrderPreparationLines error:', error)
+    return { data: [], error: error.message }
+  }
+
+  if ((data ?? []).length > 0) {
+    logPreparationDiagnostics('lines', {
+      cardId,
+      source: 'table',
+      preflightMs: Math.round(preflightMs),
+      readMs: Math.round(readMs),
+      rows: data?.length ?? 0,
+    })
+    return { data: (data ?? []) as SalesOrderPreparationLine[], error: null }
+  }
+
+  const rpcStartedAt = performance.now()
+  const { data: materialized, error: rpcError } = await supabase.schema('logistica').rpc('get_sales_order_preparation_lines', {
+    p_company_id: companyId,
+    p_card_id: cardId,
+  })
+  logPreparationDiagnostics('lines', {
+    cardId,
+    source: 'rpc-fallback',
+    preflightMs: Math.round(preflightMs),
+    readMs: Math.round(readMs),
+    rpcMs: Math.round(performance.now() - rpcStartedAt),
+    rows: materialized?.length ?? 0,
+  })
+  if (rpcError) {
+    console.error('getSalesOrderPreparationLines error:', rpcError)
+    return { data: [], error: rpcError.message }
+  }
+  return { data: (materialized ?? []) as SalesOrderPreparationLine[], error: null }
+}
+
+export async function confirmSalesOrderPreparationLine(params: {
+  companyId: string
+  lineId: string
+  preparedQuantity: number
+  reasonCode?: string | null
+  observation?: string | null
+  excluded?: boolean
+}): Promise<{ data: SalesOrderPreparationLine | null; error: string | null }> {
+  // The manage permission is the only required preflight; the view check was a redundant round-trip.
+  const { supabase, error: permissionError } = await requireLogisticaManage()
+  if (permissionError) return { data: null, error: permissionError }
+
+  // Una cantidad preparada igual a 0 siempre es exclusión operacional de la línea,
+  // venga del input numérico o del botón Excluir.
+  const excluded = params.excluded === true || params.preparedQuantity === 0
+
+  const { data, error } = await supabase.schema('logistica').rpc('confirm_sales_order_preparation_line', {
+    p_company_id: params.companyId,
+    p_line_id: params.lineId,
+    p_prepared_quantity: params.preparedQuantity,
+    p_reason_code: params.reasonCode?.trim() || null,
+    p_observation: params.observation?.trim() || null,
+    p_excluded: excluded,
+  })
+  if (error) {
+    console.error('confirmSalesOrderPreparationLine error:', error)
+    return { data: null, error: error.message }
+  }
+  return { data: data as SalesOrderPreparationLine, error: null }
+}
+
 export type SalesOrderPreparationPrintData = {
   itemsByNv: Record<string, SalesOrderPreparationItem[]>
   clientByNv: Record<string, SalesOrderClientData>
@@ -200,7 +326,9 @@ export async function getSalesOrderPreparationPrintData(
   companyId: string,
   bsaleNvIds: number[],
 ): Promise<{ data: SalesOrderPreparationPrintData | null; error: string | null }> {
+  const startedAt = performance.now()
   const { supabase, error: permissionError } = await requireLogisticaView()
+  const preflightMs = performance.now() - startedAt
   if (permissionError) return { data: null, error: permissionError }
 
   const nvIds = [...new Set(bsaleNvIds.filter(id => Number.isFinite(id)))]
@@ -268,6 +396,12 @@ export async function getSalesOrderPreparationPrintData(
     const client = clientId != null ? clientsById.get(clientId) : null
     if (client) clientByNv[String(nvId)] = client
   }
+
+  logPreparationDiagnostics('printData', {
+    nvs: nvIds.length,
+    preflightMs: Math.round(preflightMs),
+    totalMs: Math.round(performance.now() - startedAt),
+  })
 
   return { data: { itemsByNv, clientByNv }, error: null }
 }

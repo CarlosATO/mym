@@ -3,9 +3,13 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import {
   createPreparationDetailCache,
+  createPreparationLinesCache,
   getUncachedNvIds,
-  putPreparationDetailsBatch,
+  patchPreparationLine,
   prunePreparationDetailCache,
+  prunePreparationLinesCache,
+  putPreparationDetailsBatch,
+  putPreparationLines,
 } from '../src/modules/logistica/preparacion-pedidos/preparation-detail-cache.ts'
 import { generatePreparationOrdersPdf } from '../src/lib/pdf/generate-preparation-orders-pdf.ts'
 
@@ -13,6 +17,7 @@ const root = new URL('../', import.meta.url)
 const panelSource = await readFile(new URL('src/modules/logistica/preparacion-pedidos/sales-order-preparation-panel.tsx', root), 'utf8')
 const drawerSource = await readFile(new URL('src/modules/logistica/preparacion-pedidos/sales-order-drawer.tsx', root), 'utf8')
 const cacheSource = await readFile(new URL('src/modules/logistica/preparacion-pedidos/preparation-detail-cache.ts', root), 'utf8')
+const actionSource = await readFile(new URL('src/app/actions/logistica/sales-order-preparation.ts', root), 'utf8')
 
 test('1. board carga antes que prefetch y no se bloquea por él', () => {
   // loadBoard debe actualizar cards antes de lanzar el prefetch
@@ -112,6 +117,28 @@ test('7. Pendiente → En preparación conserva cache en memoria', () => {
   assert.doesNotMatch(transBody, /detailCacheRef/)
 })
 
+test('7b. volver a Pendiente conserva líneas y al volver a Preparación recupera valores', () => {
+  const cache = createPreparationLinesCache()
+  putPreparationLines(cache, 'card-1', [
+    { id: 'line-1', card_id: 'card-1', requested_quantity: 2, prepared_quantity: 1, line_status: 'INCIDENT' },
+    { id: 'line-2', card_id: 'card-1', requested_quantity: 1, prepared_quantity: 0, line_status: 'INCIDENT', excluded_from_dispatch: true },
+  ])
+
+  const card = { card_id: 'card-1', nv_bsale_id: 92486, status: 'IN_PREPARATION' }
+  const pending = { ...card, status: 'PENDING_ROUTE_PREP' }
+  const reopened = { ...card, status: 'IN_PREPARATION' }
+
+  assert.equal(pending.nv_bsale_id, reopened.nv_bsale_id)
+  assert.deepEqual(cache.get(reopened.card_id)?.map(line => line.prepared_quantity), [1, 0])
+  assert.equal(cache.get(reopened.card_id)?.[0].requested_quantity, 2)
+
+  const transitionStart = panelSource.indexOf('const transitionCard = async')
+  const transitionEnd = panelSource.indexOf('const toggleSelection', transitionStart)
+  const transitionBody = panelSource.slice(transitionStart, transitionEnd)
+  assert.doesNotMatch(transitionBody, /preparationLinesCacheRef\.current\.clear/)
+  assert.doesNotMatch(transitionBody, /preparationLinesCacheRef\.current\.delete/)
+})
+
 test('8. historial de movimientos NO carga al abrir drawer', () => {
   // useEffect de card_id en drawer resetea sin cargar
   assert.match(drawerSource, /setMovements\(\[\]\)/)
@@ -158,6 +185,64 @@ test('12. sync limpia/actualiza cache correctamente', () => {
   assert.ok(cache.has(100))
   assert.ok(!cache.has(200))
   assert.ok(cache.has(300))
+})
+
+test('12b. cache de líneas: cache hit reutiliza la fotografía sin vaciar ni pedir RPC', () => {
+  const cache = createPreparationLinesCache()
+  const lines = [
+    {
+      id: 'line-1',
+      card_id: 'card-1',
+      requested_quantity: 2,
+      prepared_quantity: 1,
+      line_status: 'INCIDENT',
+      excluded_from_dispatch: false,
+    },
+  ]
+  putPreparationLines(cache, 'card-1', lines)
+
+  assert.deepEqual(cache.get('card-1'), lines)
+
+  const openStart = panelSource.indexOf('const openCardDetails = async')
+  const openEnd = panelSource.indexOf('const handlePreparationLinesChange', openStart)
+  const openBody = panelSource.slice(openStart, openEnd)
+
+  assert.match(openBody, /preparationLinesCacheRef\.current\.get\(card\.card_id\)/)
+  assert.match(openBody, /if \(cachedLines\) \{[\s\S]*setSelectedPreparationLines\(cachedLines\)[\s\S]*setLoadingPreparationLines\(false\)/)
+  assert.match(openBody, /cachedLines === null/)
+  assert.match(openBody, /if \(!lines\.error\) putPreparationLines/)
+
+  const pruneRemoved = prunePreparationLinesCache(cache, ['card-2'])
+  assert.equal(pruneRemoved, 1)
+  assert.equal(cache.has('card-1'), false)
+})
+
+test('12c. confirmar una línea parchea la cache sin invalidar el resto', () => {
+  const cache = createPreparationLinesCache()
+  putPreparationLines(cache, 'card-1', [
+    { id: 'line-1', card_id: 'card-1', prepared_quantity: 1 },
+    { id: 'line-2', card_id: 'card-1', prepared_quantity: 2 },
+  ])
+
+  patchPreparationLine(cache, { id: 'line-1', card_id: 'card-1', prepared_quantity: 0, excluded_from_dispatch: true })
+
+  assert.deepEqual(cache.get('card-1')?.map(line => line.prepared_quantity), [0, 2])
+  assert.equal(cache.get('card-1')?.[0].excluded_from_dispatch, true)
+  assert.match(panelSource, /patchPreparationLine\(preparationLinesCacheRef\.current, line\)/)
+})
+
+test('12d. isLoading sólo bloquea cuando aún no hay líneas válidas y distingue error/vacío', () => {
+  assert.match(drawerSource, /isLoadingPreparationLines && preparationLines\.length === 0/)
+  assert.match(drawerSource, /preparationLinesError && preparationLines\.length === 0/)
+  assert.match(drawerSource, /no tiene líneas de preparación registradas/)
+  assert.match(drawerSource, /Inicializando fotografía de preparación\.\.\./)
+})
+
+test('12e. lectura de líneas evita materialize en cada apertura y usa RPC sólo como fallback', () => {
+  assert.match(actionSource, /from\('sales_order_preparation_lines'\)[\s\S]*?\.eq\('card_id', cardId\)/)
+  assert.match(actionSource, /if \(\(data \?\? \[\]\)\.length > 0\)/)
+  assert.match(actionSource, /source: 'rpc-fallback'/)
+  assert.match(actionSource, /rpc\('get_sales_order_preparation_lines'/)
 })
 
 test('13. fallo en prefetch no bloquea el board ni lanza toasts intrusivos', () => {
