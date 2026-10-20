@@ -1786,6 +1786,7 @@ export function SalesOrderPreparationPanel({
           card={selectedCard}
           currentUserId={currentUserId}
           currentUserName={currentUserName}
+          isSuperUsuario={roleName === 'SUPER_USUARIO'}
           canManage={canManageAudit}
           canAuthorizeException={canAuthorizeAuditException}
           onClose={() => setSelectedCard(null)}

@@ -65,6 +65,7 @@ interface SalesOrderAuditDrawerProps {
   card: SalesOrderPreparationCardInfo
   currentUserId: string
   currentUserName: string
+  isSuperUsuario: boolean
   canManage: boolean
   canAuthorizeException: boolean
   onClose: () => void
@@ -116,6 +117,7 @@ export function SalesOrderAuditDrawer({
   card,
   currentUserId,
   currentUserName,
+  isSuperUsuario,
   canManage,
   canAuthorizeException,
   onClose,
@@ -162,11 +164,12 @@ export function SalesOrderAuditDrawer({
   const summary = useMemo(() => summarizeAuditDetail(detail), [detail])
   const preparerId = audit?.prepared_by_user_id_snapshot ?? card.assigned_user_id ?? null
   const isPreparer = Boolean(preparerId && preparerId === currentUserId)
+  const isSelfAuditBlocked = isPreparer && !isSuperUsuario
   const isOwner = Boolean(audit?.locked_by_user_id && audit.locked_by_user_id === currentUserId)
   const isLockedByOther = Boolean(audit?.locked_by_user_id && !isOwner)
   const isFinalized = card.status === 'AUDITED' || audit?.status === 'COMPLETED'
-  const canWrite = canManage && isOwner && !isPreparer && !isFinalized
-  const canTake = !isFinalized && canManage && !isPreparer && !isOwner && Boolean(
+  const canWrite = canManage && isOwner && !isSelfAuditBlocked && !isFinalized
+  const canTake = !isFinalized && canManage && !isSelfAuditBlocked && !isOwner && Boolean(
     !audit || !audit.locked_by_user_id || (isLockedByOther && canAuthorizeException)
   )
   const packageCount = audit?.package_count ?? null
@@ -273,7 +276,7 @@ export function SalesOrderAuditDrawer({
 
   const handleTake = async (reason?: string | null): Promise<{ ok: boolean; error?: string }> => {
     if (!canManage) return { ok: false, error: 'No tienes permiso para gestionar Auditoría.' }
-    if (isPreparer) return { ok: false, error: 'No puedes auditar una preparación realizada por ti.' }
+    if (isSelfAuditBlocked) return { ok: false, error: 'No puedes auditar una preparación realizada por ti.' }
     setTaking(true)
     setTakeError(null)
     try {
@@ -816,20 +819,20 @@ export function SalesOrderAuditDrawer({
 
                 {!isFinalized && (
                   <>
-                {isPreparer && (
+                {isSelfAuditBlocked && (
                   <div className="rounded-lg border border-amber-300/70 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-900">
                     <p className="flex items-center gap-2 font-bold"><LockKeyhole className="h-4 w-4" /> No puedes auditar una preparación realizada por ti.</p>
                     <p className="mt-0.5 text-xs">Puedes consultar la Auditoría en modo sólo lectura.</p>
                   </div>
                 )}
 
-                {!isPreparer && !canManage && (
+                {!isSelfAuditBlocked && !canManage && (
                   <div className="rounded-lg border border-[#8A4B4B]/30 bg-[#8A4B4B]/10 px-3.5 py-2.5 text-sm text-[#8A4B4B]">
                     No tienes permiso para gestionar Auditoría.
                   </div>
                 )}
 
-                {!isPreparer && canManage && isLockedByOther && (
+                {!isSelfAuditBlocked && canManage && isLockedByOther && (
                   <div className="rounded-lg border border-amber-300/70 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-900">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
@@ -845,7 +848,7 @@ export function SalesOrderAuditDrawer({
                   </div>
                 )}
 
-                {!isPreparer && canManage && !audit && (
+                {!isSelfAuditBlocked && canManage && !audit && (
                   <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#DDD4CA] bg-white px-3.5 py-2.5 text-sm text-theme-text">
                     <div>
                       <p className="font-bold">Esta Nota de Venta aún no tiene auditoría iniciada.</p>
@@ -859,7 +862,7 @@ export function SalesOrderAuditDrawer({
                   </div>
                 )}
 
-                {!isPreparer && canManage && audit && !audit.locked_by_user_id && (
+                {!isSelfAuditBlocked && canManage && audit && !audit.locked_by_user_id && (
                   <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300/70 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-900">
                     <p className="font-bold">Esta auditoría aún no tiene responsable.</p>
                     {canTake && (
@@ -870,7 +873,7 @@ export function SalesOrderAuditDrawer({
                   </div>
                 )}
 
-                {isOwner && !isPreparer && (
+                {isOwner && !isSelfAuditBlocked && (
                   <div className="rounded-lg border border-emerald-300/70 bg-emerald-50 px-3.5 py-2.5 text-sm text-emerald-900">
                     <p className="flex items-center gap-2 font-bold"><ShieldCheck className="h-4 w-4" /> Tu auditoría</p>
                     <p className="mt-0.5 text-xs">Tienes el control exclusivo de esta Auditoría. Los cambios se registran contra tu usuario.</p>

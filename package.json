@@ -38,6 +38,7 @@
     "test:logistica-auditoria-base": "node --experimental-strip-types --test scripts/test-logistica-auditoria-base.mjs",
     "test:logistica-auditoria-ux": "node --experimental-strip-types --test scripts/test-logistica-auditoria-ux.mjs",
     "test:logistica-auditoria-finalizacion": "node --experimental-strip-types --test scripts/test-logistica-auditoria-finalizacion.mjs",
+    "test:logistica-auditoria-superuser-self-audit": "node --experimental-strip-types --test scripts/test-logistica-auditoria-superuser-self-audit.mjs",
     "test:preparacion-pedidos-fast": "node --experimental-strip-types --test scripts/test-preparacion-pedidos-fast.mjs scripts/test-preparacion-pedidos-fast-contract.mjs",
     "test:preparacion-pedidos-ux": "node --experimental-strip-types --test scripts/test-preparacion-pedidos-ux.mjs scripts/test-preparacion-pedidos-ux-contract.mjs",
     "test:preparacion-pedidos-detail-cache": "node --experimental-strip-types --test scripts/test-preparacion-pedidos-detail-cache.mjs",

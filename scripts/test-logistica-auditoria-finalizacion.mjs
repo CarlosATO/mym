@@ -244,7 +244,7 @@ test('29. finalize success no vacía el detail', () => {
 
 test('30. card AUDITED usa audit COMPLETED', () => {
   assert.match(drawer, /const isFinalized = card\.status === 'AUDITED' \|\| audit\?\.status === 'COMPLETED'/)
-  assert.match(drawer, /const canWrite = canManage && isOwner && !isPreparer && !isFinalized/)
+  assert.match(drawer, /const canWrite = canManage && isOwner && !isSelfAuditBlocked && !isFinalized/)
 })
 
 test('31. get detail permite lectura COMPLETED', () => {

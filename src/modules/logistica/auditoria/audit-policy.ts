@@ -133,6 +133,7 @@ export function deriveAuditLineStatus(
 export type AuditTakeInput = {
   actorUserId: string | null
   preparerUserId: string | null
+  isSuperUsuario?: boolean
   lockedByUserId: string | null
   canManage: boolean
   canAuthorizeException: boolean
@@ -149,7 +150,9 @@ export function evaluateAuditTake(input: AuditTakeInput): AuditTakeDecision {
   if (!input.actorUserId) {
     return { ok: false, error: 'No autorizado', event: null }
   }
-  if (input.preparerUserId && input.actorUserId === input.preparerUserId) {
+  if (input.preparerUserId
+      && input.actorUserId === input.preparerUserId
+      && !input.isSuperUsuario) {
     return { ok: false, error: 'No puedes auditar una preparación realizada por ti.', event: null }
   }
   if (!input.canManage) {

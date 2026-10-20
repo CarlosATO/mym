@@ -189,7 +189,7 @@ test('21. Preparador no puede tomar Auditoría', () => {
 test('22. Otro auditor deja la vista en sólo lectura', () => {
   assert.match(drawer, /Esta Nota de Venta está siendo auditada por/)
   assert.match(drawer, /Modo sólo lectura/)
-  assert.match(drawer, /canManage && isOwner && !isPreparer/)
+  assert.match(drawer, /canManage && isOwner && !isSelfAuditBlocked/)
   assert.equal(isAuditLockError('Esta auditoría está asignada a otro usuario.'), true)
 })
 
