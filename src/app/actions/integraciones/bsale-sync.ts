@@ -2325,12 +2325,51 @@ export async function releaseSyncLock(companyId: string, lockName: string, runId
     .eq('run_id', runId);
 }
 
-async function materializePreparationAfterSalesSync(companyId: string) {
+async function materializePreparationAfterSalesSync(companyId: string, runId?: string) {
   const { data, error } = await integrDb()
     .schema('logistica')
     .rpc('reconcile_bodega_preparation_cards', { p_company_id: companyId })
 
   if (error) throw new Error(`Error reconciliando preparación: ${error.message}`)
+
+  // La verificación comercial ocurre después de actualizar el espejo y
+  // reconciliar tarjetas. Un fallo aquí no debe romper la sincronización Bsale.
+  let verificationError: string | null = null
+  try {
+    const verification = await integrDb()
+      .schema('logistica')
+      .rpc('verify_open_preparation_incidents_v1', {
+        p_company_id: companyId,
+        p_bsale_nv_ids: null,
+      })
+    verificationError = verification.error?.message ?? null
+  } catch (error) {
+    verificationError = error instanceof Error ? error.message : String(error)
+  }
+
+  if (verificationError) {
+    const message = `Error verificando incidencias comerciales: ${verificationError}`
+    console.error('[materializePreparationAfterSalesSync]', message)
+    if (runId) {
+      try {
+        const { error: logError } = await integrDb()
+          .schema('integraciones')
+          .from('sync_errors')
+          .insert({
+            sync_run_id: runId,
+            company_id: companyId,
+            provider: 'BSALE',
+            entity: 'PREPARATION_INCIDENTS',
+            error_code: 'VERIFICATION_FAILED',
+            error_message: message,
+          })
+        if (logError) console.error('[materializePreparationAfterSalesSync] sync_errors insert failed:', logError.message)
+      } catch (logError) {
+        console.error('[materializePreparationAfterSalesSync] sync_errors insert failed:', logError)
+      }
+    }
+  }
+
   return data as {
     discovered?: number
     skipped_invoiced?: number
@@ -2547,7 +2586,7 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
     let preparationResult: Awaited<ReturnType<typeof materializePreparationAfterSalesSync>> | null = null;
     if (finalStatus !== 'FAILED') {
       try {
-        preparationResult = await materializePreparationAfterSalesSync(companyId);
+        preparationResult = await materializePreparationAfterSalesSync(companyId, runId);
         console.log(`[runReplenishmentBsaleSync] Preparation: created=${preparationResult.created || 0} discovered=${preparationResult.discovered || 0}`);
       } catch (preparationErr: unknown) {
         finalStatus = 'PARTIAL';
@@ -3110,7 +3149,7 @@ export async function syncBsaleSalesOrdersForPreparation(
     }
 
     // Materialization is the existing single preparation projection step.
-    const preparationResult = await materializePreparationAfterSalesSync(companyId)
+    const preparationResult = await materializePreparationAfterSalesSync(companyId, runId)
     const totalErrors = documentErrors + detailErrors + referenceErrors + refreshErrors
     const finalStatus = totalErrors > 0 ? 'PARTIAL' : 'COMPLETED'
     const durationMs = Date.now() - startTime
@@ -3487,7 +3526,7 @@ export async function runFullWarehouseBsaleRefresh(companyId: string): Promise<W
     // Never project a partial mirror into the Kanban. Re-running the FULL will
     // finish the mirror first, then reconcile from a complete Bsale snapshot.
     const preparation = metrics.errors === 0
-      ? await materializePreparationAfterSalesSync(companyId)
+      ? await materializePreparationAfterSalesSync(companyId, run?.id)
       : null
     metrics.links_created = preparation?.relations_created || 0
     metrics.cards_created = preparation?.created || 0
