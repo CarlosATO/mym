@@ -5,13 +5,19 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import crypto from 'node:crypto'
 import { MANUAL_DISPATCH_LOCK_NAME, MANUAL_DISPATCH_LOCK_TTL_MINUTES } from '@/lib/integraciones/bsale-receivable-snapshot-runner'
+import { classifyReceivablesSnapshotExecution, type ReceivablesSnapshotExecution } from '@/lib/integraciones/receivables-snapshot-execution-state'
 
 const WORKFLOW_FILE = 'bsale-replenishment-sync.yml'
 const DEFAULT_REPOSITORY = 'CarlosATO/mym'
+const SNAPSHOT_WORKER_LOCK_NAME = 'bsale_receivable_snapshot'
+const SYNC_LOCK_NAME = 'bsale_replenishment_sync'
 
 export type ReceivablesSnapshotStatus = {
   lastCompletedAt: string | null
   activeRunId: string | null
+  executionState: ReceivablesSnapshotExecution
+  canResume: boolean
+  lastProgressAt: string | null
   status: 'RUNNING' | 'COMPLETED' | 'PARTIAL' | 'FAILED' | null
   clientsTotal: number
   clientsProcessed: number
@@ -35,6 +41,9 @@ function emptyStatus(): ReceivablesSnapshotStatus {
   return {
     lastCompletedAt: null,
     activeRunId: null,
+    executionState: 'IDLE',
+    canResume: false,
+    lastProgressAt: null,
     status: null,
     clientsTotal: 0,
     clientsProcessed: 0,
@@ -69,29 +78,66 @@ export async function getReceivablesSnapshotStatus(): Promise<ReceivablesSnapsho
   const errorSummary = source.error_summary && typeof source.error_summary === 'object'
     ? source.error_summary as Record<string, unknown>
     : null
+  const isRateLimited = Boolean(active && errorSummary?.code === 'TRANSIENT_GLOBAL_RATE_LIMIT')
+  let lastProgressAt: string | null = null
+  let hasLiveLock = false
+  if (active?.id) {
+    const admin = createAdminClient().schema('integraciones')
+    const [progressResult, lockResult] = await Promise.all([
+      admin.from('bsale_receivable_snapshot_clients')
+        .select('processed_at')
+        .eq('run_id', active.id)
+        .order('processed_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      admin.from('bsale_sync_locks')
+        .select('lock_name')
+        .eq('company_id', companyId)
+        .in('lock_name', [SNAPSHOT_WORKER_LOCK_NAME, MANUAL_DISPATCH_LOCK_NAME, SYNC_LOCK_NAME])
+        .gt('expires_at', new Date().toISOString()),
+    ])
+    if (progressResult.error || lockResult.error) {
+      throw new Error((progressResult.error || lockResult.error)?.message ?? 'No se pudo comprobar la actividad de Cobranzas.')
+    }
+    lastProgressAt = progressResult.data?.processed_at ?? null
+    hasLiveLock = Boolean(lockResult.data?.length)
+  }
+  const executionState = classifyReceivablesSnapshotExecution({
+    runStatus: active?.status ?? null,
+    snapshotAt: active?.snapshot_at ?? null,
+    lastProgressAt,
+    lastRateLimitAt: isRateLimited && typeof errorSummary?.recorded_at === 'string'
+      ? errorSummary.recorded_at : null,
+    hasLiveLock,
+    rateLimited: isRateLimited,
+  })
   const clientsProcessed = Number(source.clients_success || 0)
     + Number(source.clients_unqueryable || 0)
     + Number(source.clients_error || 0)
-  const retryAfter = Number(errorSummary?.retry_after_seconds)
+  const retryAfter = errorSummary?.retry_after_seconds == null
+    ? null : Number(errorSummary.retry_after_seconds)
   return {
     lastCompletedAt: completedResult.data?.completed_at || completedResult.data?.snapshot_at || null,
     activeRunId: active?.id ? String(active.id) : null,
+    executionState,
+    canResume: executionState === 'INTERRUPTED' || executionState === 'PAUSED',
+    lastProgressAt,
     status: source.status as ReceivablesSnapshotStatus['status'],
     clientsTotal: Number(source.clients_total || 0),
     clientsProcessed,
     clientsSuccess: Number(source.clients_success || 0),
     clientsUnqueryable: Number(source.clients_unqueryable || 0),
     clientsError: Number(source.clients_error || 0),
-    rateLimited: Boolean(active && errorSummary?.code === 'TRANSIENT_GLOBAL_RATE_LIMIT'),
-    retryAfterSeconds: Number.isFinite(retryAfter) ? retryAfter : null,
-    updatedAt: source.completed_at || source.snapshot_at || null,
+    rateLimited: isRateLimited,
+    retryAfterSeconds: retryAfter !== null && Number.isFinite(retryAfter) ? retryAfter : null,
+    updatedAt: lastProgressAt || source.completed_at || source.snapshot_at || null,
   }
 }
 
 export async function requestReceivablesSnapshot(): Promise<{ accepted: boolean; status: ReceivablesSnapshotStatus }> {
   await companyContext()
   const status = await getReceivablesSnapshotStatus()
-  if (status.activeRunId) return { accepted: false, status }
+  if (status.activeRunId && !status.canResume) return { accepted: false, status }
 
   const companyId = await companyContext()
   const admin = createAdminClient().schema('integraciones')
@@ -137,5 +183,5 @@ export async function requestReceivablesSnapshot(): Promise<{ accepted: boolean;
     await admin.from('bsale_sync_locks').delete().eq('company_id', companyId).eq('lock_name', MANUAL_DISPATCH_LOCK_NAME).eq('run_id', claimId)
     throw error
   }
-  return { accepted: true, status }
+  return { accepted: true, status: { ...status, executionState: 'ACTIVE', canResume: false } }
 }
