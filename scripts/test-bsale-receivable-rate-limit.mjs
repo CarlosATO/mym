@@ -36,6 +36,8 @@ class FakeQuery {
     this.operation = null
     this.payload = null
     this.filters = new Map()
+    this.start = 0
+    this.end = Number.MAX_SAFE_INTEGER
   }
 
   select() { if (!this.operation) this.operation = 'select'; return this }
@@ -43,6 +45,8 @@ class FakeQuery {
   update(payload) { this.operation = 'update'; this.payload = payload; return this }
   eq(column, value) { this.filters.set(column, value); return this }
   in() { return this }
+  order() { return this }
+  range(start, end) { this.start = start; this.end = end; return this }
   single() { return Promise.resolve(this.resolve(true)) }
   maybeSingle() { return Promise.resolve(this.resolve(false)) }
   then(resolve, reject) { return Promise.resolve(this.resolve(false)).then(resolve, reject) }
@@ -74,7 +78,7 @@ class FakeQuery {
       return { data: null, error: null }
     }
     if (this.table === 'bsale_receivable_snapshot_clients' && this.operation === 'select') {
-      if (this.filters.has('run_id')) return { data: this.db.clientRows.map(row => ({ client_id: row.client_id })), error: null }
+      if (this.filters.has('run_id')) return { data: this.db.clientRows.filter(row => row.run_id === this.filters.get('run_id')).slice(this.start, this.end + 1).map(row => ({ client_id: row.client_id, result: row.result })), error: null }
       const clientId = Number(this.filters.get('bsale_client_id'))
       return { data: this.db.clients.find(client => client.bsale_client_id === clientId) ?? null, error: null }
     }
@@ -85,6 +89,9 @@ class FakeQuery {
     if (this.table === 'bsale_receivable_snapshot_clients' && this.operation === 'insert') {
       this.db.clientRows.push(...(Array.isArray(this.payload) ? this.payload : [this.payload]))
       return { data: null, error: null }
+    }
+    if (this.table === 'bsale_receivable_snapshot_documents' && this.operation === 'select') {
+      return { data: this.db.documentRows.filter(row => row.run_id === this.filters.get('run_id')).slice(this.start, this.end + 1).map(row => ({ total_amount_owed: row.total_amount_owed })), error: null }
     }
     if (this.table === 'bsale_receivable_snapshot_documents' && this.operation === 'insert') {
       this.db.documentRows.push(...(Array.isArray(this.payload) ? this.payload : [this.payload]))
@@ -163,6 +170,68 @@ test('resume retries the same client first and does not duplicate processed clie
   assert.equal(new Set(db.clientRows.map(row => row.client_id)).size, 3)
   assert.equal(resumed.status, 'COMPLETED')
   assert.equal(db.run.error_summary, null)
+})
+
+test('resume reconciles stale run counters with all persisted client and document rows', async () => {
+  const db = new FakeDb([1, 2, 3, 4])
+  db.run = {
+    id: 'interrupted-run', company_id: companyId, status: 'RUNNING',
+    clients_total: 4, clients_success: 1, clients_unqueryable: 0,
+    clients_error: 0, documents_total: 1, total_amount_owed: 10,
+  }
+  db.clientRows.push(
+    { run_id: 'interrupted-run', company_id: companyId, client_id: 1, result: 'SUCCESS' },
+    { run_id: 'interrupted-run', company_id: companyId, client_id: 2, result: 'SUCCESS' },
+  )
+  db.documentRows.push(
+    { run_id: 'interrupted-run', total_amount_owed: 10 },
+    { run_id: 'interrupted-run', total_amount_owed: 20 },
+  )
+  const requested = []
+  const resumed = await snapshotReceivablesBatch({
+    db, companyId, clientIds: [1, 2, 3, 4], runId: 'interrupted-run', limit: 20,
+    fetchJson: async path => {
+      const clientId = Number(path.match(/clientid=(\d+)/)[1])
+      requested.push(clientId)
+      return { overdue_documents: [{ id: 100 + clientId, totalAmountOwed: clientId * 10 }], upcoming_documents: [] }
+    },
+  })
+  assert.deepEqual(requested, [3, 4])
+  assert.equal(resumed.status, 'COMPLETED')
+  assert.equal(db.run.clients_success, 4)
+  assert.equal(db.run.documents_total, 4)
+  assert.equal(db.run.total_amount_owed, 100)
+  assert.equal(db.run.coverage_percent, 100)
+  assert.equal(db.clientRows.length, 4)
+  assert.equal(db.documentRows.length, 4)
+  assert.deepEqual(resumed.remainingClientIds, [])
+})
+
+test('resume reconciles persisted counters even when Bsale responds with 429', async () => {
+  const db = new FakeDb([1, 2, 3])
+  db.run = {
+    id: 'paused-run', company_id: companyId, status: 'RUNNING',
+    clients_total: 3, clients_success: 1, clients_unqueryable: 0,
+    clients_error: 0, documents_total: 1, total_amount_owed: 10,
+  }
+  db.clientRows.push(
+    { run_id: 'paused-run', company_id: companyId, client_id: 1, result: 'SUCCESS' },
+    { run_id: 'paused-run', company_id: companyId, client_id: 2, result: 'SUCCESS' },
+  )
+  db.documentRows.push(
+    { run_id: 'paused-run', total_amount_owed: 10 },
+    { run_id: 'paused-run', total_amount_owed: 20 },
+  )
+  const resumed = await snapshotReceivablesBatch({
+    db, companyId, clientIds: [1, 2, 3], runId: 'paused-run', limit: 20,
+    fetchJson: async () => { throw rateLimitError() },
+  })
+  assert.equal(resumed.status, 'RUNNING')
+  assert.equal(db.run.clients_success, 2)
+  assert.equal(db.run.documents_total, 2)
+  assert.equal(db.run.total_amount_owed, 30)
+  assert.deepEqual(resumed.remainingClientIds, [3])
+  assert.deepEqual(resumed.rateLimited, { retryAfterSeconds: 60 })
 })
 
 test('non-429 HTTP errors preserve HTTP_ERROR semantics', async () => {
