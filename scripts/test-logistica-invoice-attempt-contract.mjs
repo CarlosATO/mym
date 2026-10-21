@@ -4,7 +4,10 @@ import test from 'node:test'
 
 const sql = await readFile(new URL('../supabase/migrations/20261021140000_logistica_invoice_attempts_readonly.sql', import.meta.url), 'utf8')
 const repairSql = await readFile(new URL('../supabase/migrations/20261021143000_logistica_invoice_attempts_ambiguity_fix.sql', import.meta.url), 'utf8')
+const retrySql = await readFile(new URL('../supabase/migrations/20261021160000_logistica_invoice_retryable_state.sql', import.meta.url), 'utf8')
+const retryPayloadSql = await readFile(new URL('../supabase/migrations/20261021170000_logistica_invoice_retry_payload_audit.sql', import.meta.url), 'utf8')
 const core = await import('../src/lib/integraciones/invoice-attempt-contract.ts')
+const emission = await import('../src/lib/integraciones/invoice-emission-contract.ts')
 
 test('migration has immutable attempt states, active idempotency and server locking', () => {
   assert.match(sql, /sales_order_invoice_attempts_active_key/)
@@ -67,4 +70,24 @@ test('forward repair removes PL/pgSQL document alias ambiguity', () => {
   assert.match(repairSql, /SELECT doc\.\* INTO doc_row/)
   assert.match(repairSql, /FROM integraciones\.bsale_documents doc/)
   assert.doesNotMatch(repairSql, /SELECT d\.\* INTO d/)
+})
+
+test('UNKNOWN can become retryable without creating an attempt or incrementing retries', () => {
+  assert.match(retrySql, /mark_sales_order_invoice_retryable/)
+  assert.match(retrySql, /status NOT IN \('UNKNOWN', 'RECONCILIATION_REQUIRED'\)/)
+  assert.match(retrySql, /status = 'FAILED_RETRYABLE'/)
+  assert.match(retrySql, /retry_count', a\.retry_count/)
+  assert.doesNotMatch(retrySql, /INSERT INTO logistica\.sales_order_invoice_attempts/)
+})
+
+test('FAILED_RETRYABLE reuses the persisted salesId and records the effective retry payload', () => {
+  const existingAttempt = { sales_id: 'PETGROUP:FACTURA:586cf837a6a4e6a7d82a2a20e0772017', retry_count: 0 }
+  assert.equal(existingAttempt.sales_id, emission.TARGET_INVOICE_SALES_ID)
+  assert.match(retryPayloadSql, /existing\.sales_id IS DISTINCT FROM p_sales_id/)
+  assert.match(retryPayloadSql, /retry_count = next_retry_count/)
+  assert.match(retryPayloadSql, /effective_payload_snapshot = p_payload_snapshot/)
+  assert.match(retryPayloadSql, /payload_history = payload_history \|\|/)
+  assert.match(retryPayloadSql, /status IN \('SUBMITTING', 'UNKNOWN', 'RECONCILIATION_REQUIRED'\)/)
+  assert.match(retryPayloadSql, /status = 'FAILED_RETRYABLE'/)
+  assert.match(retryPayloadSql, /payload_snapshot, effective_payload_snapshot, payload_history/)
 })

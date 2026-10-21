@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { FileText, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -160,15 +160,19 @@ export function InvoiceReviewModal({
   )
 }
 
-export function InvoiceConfirmationModal({ open, snapshot, onOpenChange, onEmissionBlocked, onConfirm, resetAfterMs }: { open: boolean; snapshot: InvoiceReviewSnapshot | null; onOpenChange: (open: boolean) => void; onEmissionBlocked: () => void; onConfirm?: () => Promise<{ status: string }>; resetAfterMs?: number }) {
+export function InvoiceConfirmationModal({ open, snapshot, onOpenChange, onEmissionBlocked, onConfirm, resetAfterMs }: { open: boolean; snapshot: InvoiceReviewSnapshot | null; onOpenChange: (open: boolean) => void; onEmissionBlocked: () => void; onConfirm?: () => Promise<{ status: string; error?: string | null }>; resetAfterMs?: number }) {
   const [submitting, setSubmitting] = useState(false)
+  const [blocked, setBlocked] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  useEffect(() => { setBlocked(false); setErrorMessage(null) }, [snapshot?.card_id])
   if (!snapshot) return null
-  const handleSubmit = async () => { if (submitting) return; setSubmitting(true); if (!onConfirm) { onEmissionBlocked(); if (resetAfterMs) window.setTimeout(() => setSubmitting(false), resetAfterMs); return } const result = await onConfirm(); if (result.status === 'EMISSION_DISABLED') onEmissionBlocked(); else if (result.status === 'CONFIRMED') onOpenChange(false); setSubmitting(false) }
-  return <Dialog open={open} onOpenChange={next => { if (!submitting) onOpenChange(next) }}>
+  const handleSubmit = async () => { if (submitting || blocked) return; setSubmitting(true); if (!onConfirm) { onEmissionBlocked(); if (resetAfterMs) window.setTimeout(() => setSubmitting(false), resetAfterMs); return } const result = await onConfirm(); if (result.status === 'EMISSION_DISABLED') onEmissionBlocked(); else if (result.status === 'CONFIRMED') onOpenChange(false); else { setErrorMessage(result.error ?? 'No fue posible emitir la factura en Bsale.'); if (['UNKNOWN', 'BSALE_REJECTED', 'INVOICE_IN_PROGRESS', 'RECONCILIATION_REQUIRED'].includes(result.status)) setBlocked(true) } setSubmitting(false) }
+  return <Dialog open={open} onOpenChange={next => { if (!submitting && !blocked) onOpenChange(next) }}>
     <DialogContent className="w-[calc(100vw-2rem)] max-w-lg border-[#DDD4CA] bg-[#FCFAF7] text-[#322D29]">
       <DialogHeader><DialogTitle>Confirmar facturación real</DialogTitle><DialogDescription>Está a punto de realizar una facturación real para el cliente {snapshot.client_name} por un monto de {formatInvoiceClp(snapshot.total_amount)} correspondiente a la NV #{snapshot.folio}. ¿Está seguro de continuar?</DialogDescription></DialogHeader>
-      <div className="rounded-md border border-[#E5DDD5] bg-white px-3 py-2 text-xs"><p><strong>NV:</strong> #{snapshot.folio}</p><p><strong>Cliente:</strong> {snapshot.client_name}</p><p><strong>Monto:</strong> {formatInvoiceClp(snapshot.total_amount)}</p></div>
-      <DialogFooter><Button variant="outline" disabled={submitting} onClick={() => onOpenChange(false)}>Cancelar</Button><Button disabled={submitting} onClick={handleSubmit} className="bg-[#72383D] text-white hover:bg-[#612F34]">{submitting ? 'Emitiendo factura…' : 'Emitir factura'}</Button></DialogFooter>
+       <div className="rounded-md border border-[#E5DDD5] bg-white px-3 py-2 text-xs"><p><strong>NV:</strong> #{snapshot.folio}</p><p><strong>Cliente:</strong> {snapshot.client_name}</p><p><strong>Monto:</strong> {formatInvoiceClp(snapshot.total_amount)}</p></div>
+       {errorMessage && <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-950"><p>{errorMessage}</p>{blocked && <p className="mt-1 font-semibold">La emisión queda bloqueada hasta reconciliar el intento existente.</p>}</div>}
+       <DialogFooter><Button variant="outline" disabled={submitting || blocked} onClick={() => onOpenChange(false)}>Cancelar</Button><Button disabled={submitting || blocked} onClick={handleSubmit} className="bg-[#72383D] text-white hover:bg-[#612F34]">{submitting ? 'Emitiendo factura…' : blocked ? 'Reconciliación requerida' : 'Emitir factura'}</Button></DialogFooter>
     </DialogContent>
   </Dialog>
 }

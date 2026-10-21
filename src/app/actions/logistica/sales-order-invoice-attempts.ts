@@ -3,9 +3,9 @@
 import { requireWmsPermission } from './authorization'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { bsaleFetchForCompany, bsaleFetchResourceForCompany } from '@/lib/bsale/client'
+import { BsaleApiError, bsaleFetchForCompany, bsaleFetchResourceForCompany } from '@/lib/bsale/client'
 import { bsaleWriteForCompany } from '@/lib/bsale/write-client'
-import { buildInvoiceEmissionIdentity, buildInvoiceEmissionPayload, chileToday, invoiceEmissionEnabled, TARGET_INVOICE_CASE, validateTargetInvoiceDocument } from '@/lib/integraciones/invoice-emission-contract'
+import { buildInvoiceEmissionIdentity, buildInvoiceEmissionPayload, chileDateToBsaleEpoch, chileToday, formatBsaleRejection, invoiceEmissionEnabled, TARGET_INVOICE_CASE, TARGET_INVOICE_SALES_ID, validateTargetInvoiceDocument } from '@/lib/integraciones/invoice-emission-contract'
 
 const PREPARE_PERMISSION = 'logistica.preparation.manage'
 
@@ -45,6 +45,13 @@ function dateFromBsaleEpoch(value: unknown): string | null {
 
 async function markAttempt(db: Awaited<ReturnType<typeof createClient>>, name: 'mark_sales_order_invoice_unknown' | 'mark_sales_order_invoice_reconciliation_required', attemptId: string, error: string) {
   return db.schema('logistica').rpc(name, { p_attempt_id: attemptId, p_error: error })
+}
+
+function describeBsaleRejection(error: unknown): string {
+  if (error instanceof BsaleApiError) {
+    return formatBsaleRejection({ status: error.status, message: error.message, body: error.body })
+  }
+  return formatBsaleRejection({ message: error instanceof Error ? error.message : 'UNKNOWN_ERROR' })
 }
 
 async function mirrorConfirmedInvoice(companyId: string, document: Record<string, any>) {
@@ -131,6 +138,7 @@ export async function emitSalesOrderInvoice(cardId: string) {
   }
 
   const emissionDate = chileToday()
+  const emissionDateEpoch = chileDateToBsaleEpoch(emissionDate)
   const snapshot = {
     company_id: auth.companyId,
     canonical_bsale_token: card.canonical_bsale_token,
@@ -158,14 +166,32 @@ export async function emitSalesOrderInvoice(cardId: string) {
     total: 5598,
   }
   const identity = buildInvoiceEmissionIdentity(snapshot)
+  const { data: existingAttempt, error: existingAttemptError } = await db.schema('logistica').from('sales_order_invoice_attempts')
+    .select('id,status,sales_id,fingerprint,retry_count')
+    .eq('card_id', card.id)
+    .eq('current_bsale_nv_id', TARGET_INVOICE_CASE.currentNvId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (existingAttemptError) return { status: 'PREVALIDATION_FAILED' as const, error: existingAttemptError.message }
+  if (identity.salesId !== TARGET_INVOICE_SALES_ID) return { status: 'PREVALIDATION_FAILED' as const, error: 'El salesId calculado no coincide con el contrato persistido.' }
+  if (existingAttempt && (existingAttempt.sales_id !== TARGET_INVOICE_SALES_ID || existingAttempt.fingerprint !== identity.fingerprint)) {
+    return { status: 'PREVALIDATION_FAILED' as const, error: 'El attempt existente no coincide con la identidad persistida.' }
+  }
+  if (existingAttempt?.status === 'CONFIRMED') return { status: 'ALREADY_INVOICED' as const, attempt_id: existingAttempt.id, error: null }
+  if (existingAttempt && ['SUBMITTING', 'UNKNOWN', 'RECONCILIATION_REQUIRED'].includes(existingAttempt.status)) {
+    return { status: 'INVOICE_IN_PROGRESS' as const, attempt_id: existingAttempt.id, error: null }
+  }
+  const attemptSalesId = existingAttempt?.sales_id ?? TARGET_INVOICE_SALES_ID
+  const attemptFingerprint = existingAttempt?.fingerprint ?? identity.fingerprint
   const payload = buildInvoiceEmissionPayload({
     officeId: TARGET_INVOICE_CASE.officeId,
     priceListId: TARGET_INVOICE_CASE.priceListId,
-    emissionDate,
-    expirationDate: emissionDate,
+    emissionDate: emissionDateEpoch,
+    expirationDate: emissionDateEpoch,
     clientId: TARGET_INVOICE_CASE.clientId,
     sellerId: Number(sellerItems[0].id),
-    salesId: identity.salesId,
+    salesId: attemptSalesId,
     details: [{ detailId: 334790, quantity: 1 }, { detailId: 334791, quantity: 1 }],
   })
   const { data: started, error: startError } = await db.schema('logistica').rpc('begin_sales_order_invoice_submission', {
@@ -173,8 +199,8 @@ export async function emitSalesOrderInvoice(cardId: string) {
     p_card_id: card.id,
     p_current_bsale_nv_id: TARGET_INVOICE_CASE.currentNvId,
     p_canonical_bsale_token: card.canonical_bsale_token,
-    p_sales_id: identity.salesId,
-    p_fingerprint: identity.fingerprint,
+    p_sales_id: attemptSalesId,
+    p_fingerprint: attemptFingerprint,
     p_payload_snapshot: payload,
     p_nv_snapshot: { client_id: 1005, office_id: 1, totals: snapshot.totals, current_bsale_nv_id: 92513, historical_bsale_nv_id: 92486, folio: '5032' },
     p_detail_snapshots: snapshot.details,
@@ -188,15 +214,16 @@ export async function emitSalesOrderInvoice(cardId: string) {
     posted = await bsaleWriteForCompany<Record<string, any>>({ companyId: auth.companyId, path: '/documents.json', body: payload })
   } catch (error) {
     const timeout = error instanceof Error && /abort|timeout/i.test(error.message)
-    await markAttempt(db, 'mark_sales_order_invoice_unknown', attemptId, timeout ? 'BSALE_TIMEOUT' : 'BSALE_REJECTED')
-    return { status: timeout ? 'UNKNOWN' as const : 'BSALE_REJECTED' as const, attempt_id: attemptId, error: null }
+    const rejection = timeout ? 'BSALE_TIMEOUT' : describeBsaleRejection(error)
+    await markAttempt(db, 'mark_sales_order_invoice_unknown', attemptId, rejection)
+    return { status: timeout ? 'UNKNOWN' as const : 'BSALE_REJECTED' as const, attempt_id: attemptId, error: timeout ? null : rejection }
   }
 
   const invoiceId = Number(posted.id)
   const invoice = Number.isSafeInteger(invoiceId) && invoiceId > 0
     ? await bsaleFetchResourceForCompany<Record<string, any>>({ companyId: auth.companyId, path: `/documents/${invoiceId}.json`, params: { expand: 'details,payments' } })
     : posted
-  const validation = validateTargetInvoiceDocument(invoice, identity.salesId)
+  const validation = validateTargetInvoiceDocument(invoice, attemptSalesId)
   if (!validation.ok) {
     await markAttempt(db, 'mark_sales_order_invoice_reconciliation_required', attemptId, validation.reason)
     return { status: 'RECONCILIATION_REQUIRED' as const, attempt_id: attemptId, error: validation.reason }

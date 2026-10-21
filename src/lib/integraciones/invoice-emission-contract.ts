@@ -39,13 +39,14 @@ export const TARGET_INVOICE_CASE = {
   priceListId: 4,
   detailIds: [334790, 334791],
 } as const
+export const TARGET_INVOICE_SALES_ID = 'PETGROUP:FACTURA:586cf837a6a4e6a7d82a2a20e0772017' as const
 
 export type InvoiceEmissionPayload = {
   documentTypeId: 5
   officeId: number
   priceListId: number
-  emissionDate: string
-  expirationDate: string
+  emissionDate: number
+  expirationDate: number
   declareSii: 1
   clientId: number
   sellerId: number
@@ -70,8 +71,8 @@ export function invoiceEmissionEnabled(): boolean {
 export function buildInvoiceEmissionPayload(input: {
   officeId: number
   priceListId: number
-  emissionDate: string
-  expirationDate: string
+  emissionDate: number
+  expirationDate: number
   clientId: number
   sellerId: number
   salesId: string
@@ -103,6 +104,39 @@ export function chileToday(now = new Date()): string {
     month: '2-digit',
     day: '2-digit',
   }).format(now)
+}
+
+/** Converts a Chile calendar date to Bsale's UTC-midnight Unix date. */
+export function chileDateToBsaleEpoch(date: string): number {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date)
+  if (!match) throw new Error(`INVALID_CHILE_DATE:${date}`)
+  const epoch = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) / 1000
+  if (!Number.isInteger(epoch)) throw new Error(`INVALID_BSALE_DATE:${date}`)
+  return epoch
+}
+
+function sanitizeBsaleBody(body: string | undefined): string {
+  if (!body) return ''
+  try {
+    const redact = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(redact)
+      if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+          key,
+          /token|authorization|secret|password/i.test(key) ? '[REDACTED]' : redact(item),
+        ]))
+      }
+      return value
+    }
+    return JSON.stringify(redact(JSON.parse(body))).slice(0, 700)
+  } catch {
+    return body.replace(/(access_token|authorization|token|secret|password)\s*[:=]\s*[^,\s]+/gi, '$1=[REDACTED]').slice(0, 700)
+  }
+}
+
+export function formatBsaleRejection(input: { status?: number; message: string; body?: string }): string {
+  const body = sanitizeBsaleBody(input.body)
+  return ['BSALE_REJECTED', input.status == null ? null : `http_status=${input.status}`, `message=${input.message}`, body ? `body=${body}` : null].filter(Boolean).join('|').slice(0, 1000)
 }
 
 export function validateTargetInvoiceDocument(document: any, expectedSalesId: string): { ok: true } | { ok: false; reason: string } {

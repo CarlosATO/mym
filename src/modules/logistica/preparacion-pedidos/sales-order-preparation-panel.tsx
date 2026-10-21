@@ -2226,7 +2226,7 @@ export function SalesOrderPreparationPanel({
           } else if (result.status !== 'EMISSION_DISABLED') {
             toast.error(result.error ?? `Emisión no completada: ${result.status}`)
           }
-          return { status: result.status }
+          return { status: result.status, error: result.error }
         }}
       />
       {invoiceDocuments.length > 0 && (
