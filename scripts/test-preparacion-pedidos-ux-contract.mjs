@@ -178,7 +178,7 @@ test('resumen operacional con NV, monto bruto, rentabilidad, unidades y comunas'
   assert.match(panel, /Monto bruto de las Notas de Venta visibles \(gross_amount \?\? total_amount\)/)
   assert.match(panel, /label="Utilidad est\."/)
   assert.match(panel, /label="Margen"/)
-  assert.match(panel, /label="Cobertura costo"/)
+  assert.match(panel, /label="Costo identificado"/)
 })
 
 test('tarjeta compacta jerarquiza NV, cliente, comuna, fecha, unidades y monto', () => {

@@ -70,7 +70,7 @@ import { moveSalesOrderPreparationCard } from '@/app/actions/logistica/sales-ord
 import { toast } from 'sonner'
 import { getActiveCompanyId } from '@/app/actions/companies'
 import { getSalesOrderAuditBoardLocks, type AuditBoardLock, type SalesOrderAuditFinalizeResult } from '@/app/actions/logistica/sales-order-audit'
-import { getSalesOrderPreparationProfitabilitySummaryV1 } from '@/app/actions/logistica/sales-order-preparation-profitability'
+import { getSalesOrderPreparationMissingCostLinesV1, getSalesOrderPreparationProfitabilitySummaryV1 } from '@/app/actions/logistica/sales-order-preparation-profitability'
 import {
   aggregatePreparationProfitability,
   cachePreparationProfitability,
@@ -78,8 +78,16 @@ import {
   getCachedPreparationProfitability,
   getCachedPreparationProfitabilityMap,
   invalidatePreparationProfitabilityCache,
+  cacheMissingCostLinesForNvs,
+  countPreparationNvsWithMissingCost,
+  getCachedMissingCostLinesForNvs,
+  getMissingCostLineNvsToLoad,
+  invalidatePreparationMissingCostLinesCache,
+  sumPreparationMissingCostNet,
+  type PreparationMissingCostLineV1,
   type PreparationProfitabilitySummaryV1,
 } from './preparation-profitability'
+import { PreparationMissingCostDialog } from './preparation-missing-cost-dialog'
 import { SalesOrderAuditDrawer } from '@/modules/logistica/auditoria/sales-order-audit-drawer'
 
 type KanbanColumn = {
@@ -151,20 +159,37 @@ function closePrintWindow(target: Window | null) {
   }
 }
 
-function SummaryStat({ label, value, sub, title, accent = false }: {
+function SummaryStat({ label, value, sub, title, accent = false, onClick, ariaLabel }: {
   label: string
   value: string | number
   sub?: string
   title?: string
   accent?: boolean
+  onClick?: () => void
+  ariaLabel?: string
 }) {
-  return (
-    <div className="flex min-w-0 items-baseline gap-1" title={title}>
+  const content = (
+    <>
       <span className="text-[9px] font-bold uppercase tracking-wider text-[#6B625C]">{label}</span>
       <span className={`text-[12px] font-bold tabular-nums ${accent ? 'text-[#72383D]' : 'text-[#322D29]'}`}>{value}</span>
       {sub && <span className="text-[10px] font-medium text-[#322D29]/45">{sub}</span>}
-    </div>
+    </>
   )
+  const className = 'flex min-w-0 items-baseline gap-1 whitespace-nowrap text-left'
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        title={title}
+        aria-label={ariaLabel}
+        className={`${className} cursor-pointer hover:text-[#72383D] hover:underline decoration-[#72383D]/40 underline-offset-2`}
+      >
+        {content}
+      </button>
+    )
+  }
+  return <div className={className} title={title}>{content}</div>
 }
 
 function DroppableColumn({
@@ -338,6 +363,12 @@ export function SalesOrderPreparationPanel({
   const [profitabilityError, setProfitabilityError] = useState<string | null>(null)
   const [profitabilityVersion, setProfitabilityVersion] = useState(0)
 
+  // Detalle lazy de artículos sin costo
+  const [missingCostOpen, setMissingCostOpen] = useState(false)
+  const [missingCostRows, setMissingCostRows] = useState<PreparationMissingCostLineV1[]>([])
+  const [missingCostLoading, setMissingCostLoading] = useState(false)
+  const [missingCostError, setMissingCostError] = useState<string | null>(null)
+
   const cardsRef = useRef<SalesOrderPreparationCardInfo[]>([])
   const boardRequestSeqRef = useRef(0)
   const itemsRequestSeqRef = useRef(0)
@@ -352,6 +383,7 @@ export function SalesOrderPreparationPanel({
   const syncInFlightRef = useRef(false)
   const profitabilitySeqRef = useRef(0)
   const profitabilityInFlightRef = useRef<Set<number>>(new Set())
+  const missingCostSeqRef = useRef(0)
   const lastAutoAttemptAtRef = useRef(0)
   const lastSuccessfulRunIdRef = useRef<string | null>(null)
   const mountedRef = useRef(true)
@@ -668,6 +700,7 @@ export function SalesOrderPreparationPanel({
           detailCacheRef.current.clear()
           preparationLinesCacheRef.current.clear()
           invalidatePreparationProfitabilityCache()
+          invalidatePreparationMissingCostLinesCache()
           setProfitabilityVersion(current => current + 1)
           await loadBoard()
         }
@@ -1313,15 +1346,59 @@ export function SalesOrderPreparationPanel({
   const profitabilityMarginLabel = profitabilitySummary
     ? formatPreparationProfitabilityPercent(profitabilitySummary.estimatedMarginPct)
     : '—'
+  const visibleProfitabilityNvIds = useMemo(
+    () => [...new Set(filteredCards.map(card => Number(card.nv_bsale_id)).filter(value => Number.isSafeInteger(value) && value > 0))],
+    [filteredCards],
+  )
+  const missingCostNvCount = useMemo(
+    () => countPreparationNvsWithMissingCost(visibleProfitabilityNvIds, profitabilityByNv),
+    [visibleProfitabilityNvIds, profitabilityByNv],
+  )
+  const missingCostNetAmount = useMemo(
+    () => sumPreparationMissingCostNet(visibleProfitabilityNvIds, profitabilityByNv),
+    [visibleProfitabilityNvIds, profitabilityByNv],
+  )
   const profitabilityCoverageLabel = profitabilitySummary
-    ? profitabilitySummary.costStatus === 'UNAVAILABLE'
-      ? 'Sin costo'
-      : profitabilitySummary.costStatus === 'PARTIAL'
-        ? `${formatPreparationProfitabilityPercent(profitabilitySummary.costCoveragePct)} · Parcial`
-        : formatPreparationProfitabilityPercent(profitabilitySummary.costCoveragePct)
+    ? `${formatPreparationProfitabilityPercent(profitabilitySummary.costCoveragePct)}${missingCostNvCount > 0 ? ` · ${missingCostNvCount} NV` : ''}`
     : profitabilityError
       ? 'No disponible'
       : '—'
+  const canOpenMissingCostDetail = missingCostNvCount > 0 && !profitabilityLoading && !profitabilityError
+
+  const openMissingCostDetail = async () => {
+    if (!companyId || !canOpenMissingCostDetail) return
+    const nvIds = visibleProfitabilityNvIds
+    setMissingCostOpen(true)
+    setMissingCostError(null)
+
+    const toLoad = getMissingCostLineNvsToLoad(nvIds)
+    if (toLoad.length === 0) {
+      setMissingCostRows(getCachedMissingCostLinesForNvs(nvIds))
+      setMissingCostLoading(false)
+      return
+    }
+
+    const seq = ++missingCostSeqRef.current
+    setMissingCostLoading(true)
+    try {
+      const result = await getSalesOrderPreparationMissingCostLinesV1({ companyId, nvIds: toLoad })
+      if (seq !== missingCostSeqRef.current) return
+      if (result.error) {
+        setMissingCostError(result.error)
+        setMissingCostRows(getCachedMissingCostLinesForNvs(nvIds))
+        return
+      }
+      cacheMissingCostLinesForNvs(toLoad, result.data)
+      setMissingCostRows(getCachedMissingCostLinesForNvs(nvIds))
+      setMissingCostError(null)
+    } catch (err: unknown) {
+      if (seq !== missingCostSeqRef.current) return
+      setMissingCostError(err instanceof Error ? err.message : 'No se pudo cargar el detalle de costos.')
+      setMissingCostRows(getCachedMissingCostLinesForNvs(nvIds))
+    } finally {
+      if (seq === missingCostSeqRef.current) setMissingCostLoading(false)
+    }
+  }
 
   const hasFilters = Boolean(searchTerm || effectiveSelectedComunas.size > 0 || effectiveSellerKey)
   const hasActiveFilterOrSort = hasFilters || sortBy !== 'default'
@@ -1575,9 +1652,13 @@ export function SalesOrderPreparationPanel({
               title="Utilidad estimada sobre venta neta con costo disponible."
             />
             <SummaryStat
-              label="Cobertura costo"
+              label="Costo identificado"
               value={profitabilityCoverageLabel}
-              title="Porcentaje de la venta neta para la que existe costo de compra disponible."
+              title={canOpenMissingCostDetail
+                ? 'Porcentaje de la venta neta con costo de compra identificado. Clic para ver artículos sin costo.'
+                : 'Porcentaje de la venta neta con costo de compra identificado.'}
+              onClick={canOpenMissingCostDetail ? () => { void openMissingCostDetail() } : undefined}
+              ariaLabel={canOpenMissingCostDetail ? `Ver ${missingCostNvCount} NV con costos faltantes` : undefined}
             />
             <SummaryStat
               label="Unidades"
@@ -1733,6 +1814,16 @@ export function SalesOrderPreparationPanel({
         />
       )}
       
+      <PreparationMissingCostDialog
+        open={missingCostOpen}
+        loading={missingCostLoading}
+        error={missingCostError}
+        rows={missingCostRows}
+        missingNvCount={missingCostNvCount}
+        missingNetAmount={missingCostNetAmount}
+        onOpenChange={setMissingCostOpen}
+      />
+
       <MovementObservationDialog
         isOpen={!!pendingMovement}
         onClose={() => setPendingMovement(null)}

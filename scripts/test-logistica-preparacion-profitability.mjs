@@ -41,7 +41,8 @@ test('1. una sola llamada batch y ninguna llamada por tarjeta', () => {
   assert.match(panel, /getSalesOrderPreparationProfitabilitySummaryV1\(\{ companyId, nvIds: missing \}\)/)
   assert.equal((panel.match(/getSalesOrderPreparationProfitabilitySummaryV1\(/g) ?? []).length, 1)
   assert.match(action, /\.rpc\('get_sales_order_preparation_profitability_summary_v1'/)
-  assert.equal((action.match(/\.rpc\(/g) ?? []).length, 1)
+  assert.equal((action.match(/rpc\('get_sales_order_preparation_profitability_summary_v1'/g) ?? []).length, 1)
+  assert.equal((action.match(/rpc\('get_sales_order_preparation_missing_cost_lines_v1'/g) ?? []).length, 1)
 })
 
 test('2. el board se renderiza antes de rentabilidad', () => {

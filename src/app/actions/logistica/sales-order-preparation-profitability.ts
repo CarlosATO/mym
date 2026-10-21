@@ -1,7 +1,7 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
-import type { PreparationProfitabilitySummaryV1 } from '@/modules/logistica/preparacion-pedidos/preparation-profitability'
+import type { PreparationMissingCostLineV1, PreparationProfitabilitySummaryV1 } from '@/modules/logistica/preparacion-pedidos/preparation-profitability'
 
 export async function getSalesOrderPreparationProfitabilitySummaryV1(params: {
   companyId: string
@@ -44,5 +44,44 @@ export async function getSalesOrderPreparationProfitabilitySummaryV1(params: {
   } catch (err: unknown) {
     console.error('[getSalesOrderPreparationProfitabilitySummaryV1] Exception:', err)
     return { data: {}, error: err instanceof Error ? err.message : 'Error desconocido' }
+  }
+}
+
+export async function getSalesOrderPreparationMissingCostLinesV1(params: {
+  companyId: string
+  nvIds: Array<number | string>
+}): Promise<{ data: PreparationMissingCostLineV1[]; error: string | null }> {
+  try {
+    const companyId = params.companyId?.trim()
+    if (!companyId) return { data: [], error: 'Empresa inválida.' }
+
+    const nvIds = [...new Set(
+      params.nvIds
+        .map(value => Number(value))
+        .filter(value => Number.isSafeInteger(value) && value > 0),
+    )]
+    if (nvIds.length === 0) return { data: [], error: null }
+
+    const supabase = await createClient()
+    const { data, error } = await supabase
+      .schema('logistica')
+      .rpc('get_sales_order_preparation_missing_cost_lines_v1', {
+        p_company_id: companyId,
+        p_bsale_nv_ids: nvIds,
+      })
+
+    if (error) {
+      console.error('[getSalesOrderPreparationMissingCostLinesV1] RPC error', {
+        companyId,
+        nvCount: nvIds.length,
+        message: error.message,
+      })
+      return { data: [], error: error.message }
+    }
+
+    return { data: (data ?? []) as PreparationMissingCostLineV1[], error: null }
+  } catch (err: unknown) {
+    console.error('[getSalesOrderPreparationMissingCostLinesV1] Exception:', err)
+    return { data: [], error: err instanceof Error ? err.message : 'Error desconocido' }
   }
 }

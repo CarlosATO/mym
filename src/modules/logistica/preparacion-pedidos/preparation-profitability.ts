@@ -113,3 +113,70 @@ export function formatPreparationProfitabilityPercent(value: number | null | und
     maximumFractionDigits: 2,
   }).format(value)}%`
 }
+
+export type PreparationMissingCostLineV1 = {
+  bsale_nv_id: number
+  nv_folio: string | null
+  variant_id: number | null
+  sku: string | null
+  product_name: string
+  quantity: number
+  line_net_amount: number
+  cost_status: 'SIN_COSTO'
+}
+
+const missingCostLinesCache = new Map<number, PreparationMissingCostLineV1[]>()
+
+export function getMissingCostLineNvsToLoad(nvBsaleIds: number[]): number[] {
+  return [...new Set(nvBsaleIds.map(value => Number(value)).filter(value => Number.isSafeInteger(value) && value > 0))]
+    .filter(nvBsaleId => !missingCostLinesCache.has(nvBsaleId))
+}
+
+export function cacheMissingCostLinesForNvs(
+  nvBsaleIds: number[],
+  rows: PreparationMissingCostLineV1[],
+): void {
+  const grouped = new Map<number, PreparationMissingCostLineV1[]>()
+  for (const row of rows) {
+    const nvId = Number(row.bsale_nv_id)
+    const current = grouped.get(nvId)
+    if (current) current.push(row)
+    else grouped.set(nvId, [row])
+  }
+  for (const nvId of new Set(nvBsaleIds.map(value => Number(value)).filter(value => Number.isSafeInteger(value) && value > 0))) {
+    missingCostLinesCache.set(nvId, grouped.get(nvId) ?? [])
+  }
+}
+
+export function getCachedMissingCostLinesForNvs(nvBsaleIds: number[]): PreparationMissingCostLineV1[] {
+  const rows: PreparationMissingCostLineV1[] = []
+  for (const nvId of new Set(nvBsaleIds.map(value => Number(value)))) {
+    rows.push(...(missingCostLinesCache.get(nvId) ?? []))
+  }
+  return rows
+}
+
+export function invalidatePreparationMissingCostLinesCache(): void {
+  missingCostLinesCache.clear()
+}
+
+export function countPreparationNvsWithMissingCost(
+  nvBsaleIds: number[],
+  summariesByNv: Record<string, PreparationProfitabilitySummaryV1>,
+): number {
+  return [...new Set(nvBsaleIds.map(value => Number(value)))].filter(nvId => {
+    const summary = summariesByNv[String(nvId)]
+    return summary?.cost_status === 'PARTIAL' || summary?.cost_status === 'UNAVAILABLE'
+  }).length
+}
+
+export function sumPreparationMissingCostNet(
+  nvBsaleIds: number[],
+  summariesByNv: Record<string, PreparationProfitabilitySummaryV1>,
+): number {
+  return [...new Set(nvBsaleIds.map(value => Number(value)))].reduce((total, nvId) => {
+    const summary = summariesByNv[String(nvId)]
+    if (!summary || summary.cost_status === 'COMPLETE') return total
+    return total + Number(summary.uncovered_sales_net ?? 0)
+  }, 0)
+}
