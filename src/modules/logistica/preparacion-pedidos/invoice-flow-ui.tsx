@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { FileText, Loader2, Pencil } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -244,9 +244,35 @@ export function InvoiceConfirmationModal({ open, snapshot, onOpenChange, onEmiss
   const [submitting, setSubmitting] = useState(false)
   const [blocked, setBlocked] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  useEffect(() => { setBlocked(false); setErrorMessage(null) }, [snapshot?.card_id])
+  const submittingRef = useRef(false)
+  useEffect(() => { submittingRef.current = false; setSubmitting(false); setBlocked(false); setErrorMessage(null) }, [snapshot?.card_id])
   if (!snapshot) return null
-  const handleSubmit = async () => { if (submitting || blocked) return; setSubmitting(true); if (!onConfirm) { onEmissionBlocked(); if (resetAfterMs) window.setTimeout(() => setSubmitting(false), resetAfterMs); return } const result = await onConfirm(); if (result.status === 'EMISSION_DISABLED') onEmissionBlocked(); else if (result.status === 'CONFIRMED') onOpenChange(false); else { setErrorMessage(result.error ?? 'No fue posible emitir la factura en Bsale.'); if (['UNKNOWN', 'BSALE_REJECTED', 'INVOICE_IN_PROGRESS', 'RECONCILIATION_REQUIRED'].includes(result.status)) setBlocked(true) } setSubmitting(false) }
+  const handleSubmit = async () => {
+    if (submittingRef.current || blocked) return
+    submittingRef.current = true
+    setSubmitting(true)
+    if (!onConfirm) {
+      onEmissionBlocked()
+      if (resetAfterMs) window.setTimeout(() => { submittingRef.current = false; setSubmitting(false) }, resetAfterMs)
+      return
+    }
+    try {
+      const result = await onConfirm()
+      if (result.status === 'EMISSION_DISABLED') onEmissionBlocked()
+      else if (result.status === 'CONFIRMED') onOpenChange(false)
+      else {
+        setErrorMessage(result.error ?? 'No fue posible emitir la factura en Bsale.')
+        if (['UNKNOWN', 'BSALE_REJECTED', 'INVOICE_IN_PROGRESS', 'RECONCILIATION_REQUIRED'].includes(result.status)) setBlocked(true)
+      }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'No fue posible emitir la factura en Bsale.')
+    } finally {
+      if (!blocked) {
+        submittingRef.current = false
+        setSubmitting(false)
+      }
+    }
+  }
   return <Dialog open={open} onOpenChange={next => { if (!submitting && !blocked) onOpenChange(next) }}>
     <DialogContent className="w-[calc(100vw-2rem)] max-w-lg border-[#DDD4CA] bg-[#FCFAF7] text-[#322D29]">
       <DialogHeader><DialogTitle>Confirmar facturación real</DialogTitle><DialogDescription>Está a punto de realizar una facturación real para el cliente {snapshot.client_name} por un monto de {formatInvoiceClp(snapshot.total_amount)} correspondiente a la NV #{snapshot.folio}. ¿Está seguro de continuar?</DialogDescription></DialogHeader>

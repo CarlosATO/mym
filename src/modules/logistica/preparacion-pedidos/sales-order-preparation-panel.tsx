@@ -76,6 +76,7 @@ import { createInvoicePreviewCache, getInvoicePreviewCacheKey, invalidateInvoice
 import { createInvoiceDocumentCache, getInvoiceDocumentCacheKey, invalidateInvoiceDocuments, isInvoiceDocumentFresh, type InvoiceDocumentCache } from './invoice-document-cache'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { getActiveCompanyId } from '@/app/actions/companies'
+import { emitSalesOrderInvoice } from '@/app/actions/logistica/sales-order-invoice-attempts'
 import { getSalesOrderAuditBoardLocks, type AuditBoardLock, type SalesOrderAuditFinalizeResult } from '@/app/actions/logistica/sales-order-audit'
 import { getSalesOrderPreparationMissingCostLinesV1, getSalesOrderPreparationProfitabilitySummaryV1 } from '@/app/actions/logistica/sales-order-preparation-profitability'
 import {
@@ -1217,6 +1218,21 @@ export function SalesOrderPreparationPanel({
     recordPreparationDuration('invoicePreviewOpen', performance.now() - startedAt)
   }
 
+  const confirmInvoiceEmission = async () => {
+    const snapshot = invoiceReviewSnapshot
+    if (!snapshot) return { status: 'PREVALIDATION_FAILED', error: 'No hay una revisión de facturación activa.' }
+
+    const result = await emitSalesOrderInvoice(snapshot.card_id)
+    if (result.status === 'CONFIRMED') {
+      invalidateInvoicePreview(invoicePreviewCacheRef.current, snapshot.card_id, snapshot.current_bsale_nv_id)
+      invalidateInvoiceDocuments(invoiceDocumentCacheRef.current, snapshot.card_id, snapshot.current_bsale_nv_id)
+      setInvoiceReviewSnapshot(null)
+      toast.success(`Factura emitida para NV #${snapshot.folio}.`)
+      await loadBoard({ showSpinner: false })
+    }
+    return { status: result.status, error: result.error ?? null }
+  }
+
   const openCommercialIncidents = async (card: SalesOrderPreparationCardInfo) => {
     if (!companyId || card.status !== 'AUDITED') return
     const seq = ++commercialIncidentsSeqRef.current
@@ -2221,12 +2237,13 @@ export function SalesOrderPreparationPanel({
          }}
          onConfigureClient={() => toast.info('Configure la forma de pago predeterminada desde Cliente 360.')}
       />
-      <InvoiceConfirmationModal
-        open={invoiceConfirmationOpen}
-        snapshot={invoiceReviewSnapshot}
-        onOpenChange={setInvoiceConfirmationOpen}
-        onEmissionBlocked={() => toast.error('La emisión real está deshabilitada: contrato Bsale aún no habilitado.')}
-      />
+       <InvoiceConfirmationModal
+         open={invoiceConfirmationOpen}
+         snapshot={invoiceReviewSnapshot}
+         onOpenChange={setInvoiceConfirmationOpen}
+         onConfirm={confirmInvoiceEmission}
+         onEmissionBlocked={() => toast.error('La emisión real está deshabilitada: contrato Bsale aún no habilitado.')}
+       />
       {invoiceDocuments.length > 0 && (
         <Dialog open onOpenChange={open => { if (!open) setInvoiceDocuments([]) }}>
           <DialogContent className="w-[calc(100vw-2rem)] !max-w-[1100px] max-h-[88vh] overflow-y-auto border-[#DDD4CA] bg-[#FCFAF7] text-[#322D29]">

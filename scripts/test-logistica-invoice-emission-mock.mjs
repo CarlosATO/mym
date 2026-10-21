@@ -127,3 +127,13 @@ test('server gate defaults off unless explicitly true', () => {
   if (previous == null) delete process.env.BSALE_INVOICE_EMISSION_ENABLED
   else process.env.BSALE_INVOICE_EMISSION_ENABLED = previous
 })
+
+test('confirmation UI uses a single server-side card identifier and maps terminal states', async () => {
+  const ui = await (await import('node:fs/promises')).readFile(new URL('../src/modules/logistica/preparacion-pedidos/invoice-flow-ui.tsx', import.meta.url), 'utf8')
+  const panel = await (await import('node:fs/promises')).readFile(new URL('../src/modules/logistica/preparacion-pedidos/sales-order-preparation-panel.tsx', import.meta.url), 'utf8')
+  assert.match(panel, /emitSalesOrderInvoice\(snapshot\.card_id\)/)
+  assert.match(ui, /submittingRef\.current/)
+  assert.match(ui, /if \(!onConfirm\)/)
+  assert.match(ui, /BSALE_REJECTED.*INVOICE_IN_PROGRESS.*RECONCILIATION_REQUIRED/)
+  assert.doesNotMatch(panel, /draft_payload.*emitSalesOrderInvoice|emitSalesOrderInvoice\([^)]*payload/)
+})
