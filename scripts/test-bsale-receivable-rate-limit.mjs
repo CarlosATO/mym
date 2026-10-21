@@ -234,6 +234,31 @@ test('resume reconciles persisted counters even when Bsale responds with 429', a
   assert.deepEqual(resumed.rateLimited, { retryAfterSeconds: 60 })
 })
 
+test('resume paginates more than 1000 persisted clients without duplicating any', async () => {
+  const ids = Array.from({ length: 1001 }, (_, index) => index + 1)
+  const db = new FakeDb(ids)
+  db.run = {
+    id: 'large-interrupted-run', company_id: companyId, status: 'RUNNING',
+    clients_total: ids.length, clients_success: 900, clients_unqueryable: 0,
+    clients_error: 0, documents_total: 0, total_amount_owed: 0,
+  }
+  db.clientRows = ids.slice(0, 1000).map(clientId => ({
+    run_id: 'large-interrupted-run', company_id: companyId, client_id: clientId, result: 'SUCCESS',
+  }))
+  const requested = []
+  const result = await snapshotReceivablesBatch({
+    db, companyId, clientIds: ids, runId: 'large-interrupted-run', limit: 20,
+    fetchJson: async path => {
+      requested.push(Number(path.split('clientid=')[1]))
+      return { overdue_documents: [], upcoming_documents: [] }
+    },
+  })
+  assert.deepEqual(requested, [1001])
+  assert.equal(result.status, 'COMPLETED')
+  assert.equal(db.run.clients_success, 1001)
+  assert.equal(db.clientRows.length, 1001)
+})
+
 test('non-429 HTTP errors preserve HTTP_ERROR semantics', async () => {
   assert.deepEqual(classifySnapshotError(new Error('Bsale HTTP 500: unavailable')), {
     httpStatus: 500,
@@ -263,6 +288,8 @@ test('runner is sequential, releases its lock, and pauses instead of looping aft
   assert.match(runnerSource, /await releaseLock\(db, SNAPSHOT_LOCK_NAME, lockRunId\)/)
   assert.match(runnerSource, /!batchResult\.rateLimited/)
   assert.match(routeSource, /status: 202/)
+  assert.match(routeSource, /describeSnapshotError\(error\)/)
+  assert.match(routeSource, /console\.error\('\[receivables-snapshot\] Execution failed'/)
 })
 
 test('workflow cooldown stays within the ten-minute job budget', () => {
