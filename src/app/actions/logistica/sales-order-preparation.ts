@@ -343,6 +343,181 @@ export async function getSalesOrderPreparationItems(companyId: string, bsaleNvId
   return { data: data as SalesOrderPreparationItem[], error: null }
 }
 
+/** Read-only snapshot for the invoice review UI. It deliberately has no Bsale mutation path. */
+export async function getInvoiceReviewSnapshot(companyId: string, cardId: string) {
+  const { supabase, error: permissionError } = await requireLogisticaView()
+  if (permissionError) return { data: null, error: permissionError }
+
+  const board = await getSalesOrderPreparationBoard(companyId)
+  const card = board.data.find(row => row.card_id === cardId)
+  if (!card) return { data: null, error: 'No se encontró la Nota de Venta vigente.' }
+
+  const items = await getSalesOrderPreparationItems(companyId, card.nv_bsale_id)
+  if (items.error) return { data: null, error: items.error }
+
+  const readiness = (await getSalesOrderRouteReadiness(companyId)).data
+    .find(row => row.card_id === cardId)?.route_readiness
+
+  const { data: document } = await supabase
+    .schema('integraciones')
+    .from('bsale_documents')
+    .select('emission_date, net_amount, tax_amount, total_amount, client_id, sale_condition_id')
+    .eq('company_id', companyId)
+    .eq('bsale_id', card.nv_bsale_id)
+    .maybeSingle()
+  const { data: client } = await supabase
+    .schema('integraciones')
+    .from('bsale_clients')
+    .select('bsale_client_id, business_name, code, activity, address, commune, city, region, email, phone')
+    .eq('company_id', companyId)
+    .eq('bsale_client_id', document?.client_id ?? -1)
+    .maybeSingle()
+
+  return {
+    data: {
+      card_id: card.card_id,
+      historical_bsale_nv_id: card.nv_bsale_id,
+      current_bsale_nv_id: card.nv_bsale_id,
+      folio: card.nv_folio,
+      client_name: client?.business_name ?? card.client_name,
+      emission_date: document?.emission_date ?? card.nv_emission_date,
+      office_name: null,
+      sale_condition_name: null,
+      seller_name: card.seller_name,
+      price_list_name: null,
+      client_rut: client?.code ?? null,
+      client_activity: client?.activity ?? null,
+      client_address: client?.address ?? card.address_raw,
+      client_commune: client?.commune ?? card.municipality_raw,
+      client_city: client?.city ?? card.city_raw,
+      client_region: client?.region ?? null,
+      client_email: client?.email ?? null,
+      client_phone: client?.phone ?? null,
+      total_amount: document?.total_amount ?? card.total_amount,
+      net_amount: document?.net_amount ?? card.net_amount,
+      tax_amount: document?.tax_amount ?? card.tax_amount,
+      readiness: readiness === 'READY_TO_INVOICE' ? 'READY_TO_INVOICE' : 'NOT_READY_CONTRACT',
+      lines: items.data.map(item => ({
+        detail_id: item.detail_id,
+        sku: item.sku,
+        product_name: item.product_name,
+        quantity: item.quantity,
+        unit_value: item.unit_value,
+        total_amount: item.total_amount,
+      })),
+    },
+    error: null,
+  }
+}
+
+export type InvoiceReviewPreviewRequest = {
+  card_id: string
+  current_bsale_nv_id: number
+  folio: string
+  seller_name: string | null
+}
+
+/** Batch presentation read for READY cards. Emission validation remains a separate fresh server contract. */
+export async function getInvoiceReviewPreviews(
+  companyId: string,
+  requests: InvoiceReviewPreviewRequest[],
+) {
+  const { supabase, error: permissionError } = await requireLogisticaView()
+  if (permissionError) return { data: {}, error: permissionError }
+
+  const unique = [...new Map(
+    requests
+      .filter(request => Number.isSafeInteger(request.current_bsale_nv_id))
+      .map(request => [`${request.card_id}:${request.current_bsale_nv_id}`, request]),
+  ).values()]
+  if (unique.length === 0) return { data: {}, error: null }
+
+  const nvIds = unique.map(request => request.current_bsale_nv_id)
+  const { data: documents, error: documentsError } = await supabase
+    .schema('integraciones')
+    .from('bsale_documents')
+    .select('bsale_id, emission_date, net_amount, tax_amount, total_amount, client_id')
+    .eq('company_id', companyId)
+    .in('bsale_id', nvIds)
+  if (documentsError) return { data: {}, error: documentsError.message }
+
+  const clientIds = [...new Set((documents ?? []).map(document => Number(document.client_id)).filter(Number.isSafeInteger))]
+  const { data: clients, error: clientsError } = clientIds.length > 0
+    ? await supabase
+      .schema('integraciones')
+      .from('bsale_clients')
+      .select('bsale_client_id, business_name, code, activity, address, commune, city, region, email, phone')
+      .eq('company_id', companyId)
+      .in('bsale_client_id', clientIds)
+    : { data: [], error: null }
+  if (clientsError) return { data: {}, error: clientsError.message }
+
+  const { data: items, error: itemsError } = await supabase
+    .schema('integraciones')
+    .from('vw_bsale_sales_order_items_for_preparation')
+    .select('*')
+    .eq('company_id', companyId)
+    .in('nv_bsale_id', nvIds)
+    .order('product_name', { ascending: true })
+  if (itemsError) return { data: {}, error: itemsError.message }
+
+  const documentByNv = new Map((documents ?? []).map(document => [Number(document.bsale_id), document]))
+  const clientById = new Map((clients ?? []).map(client => [Number(client.bsale_client_id), client]))
+  const itemsByNv = new Map<number, SalesOrderPreparationItem[]>()
+  for (const item of (items ?? []) as SalesOrderPreparationItem[]) {
+    const current = itemsByNv.get(item.nv_bsale_id) ?? []
+    current.push(item)
+    itemsByNv.set(item.nv_bsale_id, current)
+  }
+
+  const data: Record<string, unknown> = {}
+  for (const request of unique) {
+    const document = documentByNv.get(request.current_bsale_nv_id)
+    const client = document?.client_id == null ? null : clientById.get(Number(document.client_id))
+    data[`${request.card_id}:${request.current_bsale_nv_id}`] = {
+      card_id: request.card_id,
+      historical_bsale_nv_id: request.current_bsale_nv_id,
+      current_bsale_nv_id: request.current_bsale_nv_id,
+      folio: request.folio,
+      client_name: client?.business_name ?? 'Cliente no disponible',
+      emission_date: document?.emission_date ?? null,
+      office_name: null,
+      sale_condition_name: null,
+      seller_name: request.seller_name,
+      price_list_name: null,
+      client_rut: client?.code ?? null,
+      client_activity: client?.activity ?? null,
+      client_address: client?.address ?? null,
+      client_commune: client?.commune ?? null,
+      client_city: client?.city ?? null,
+      client_region: client?.region ?? null,
+      client_email: client?.email ?? null,
+      client_phone: client?.phone ?? null,
+      total_amount: document?.total_amount ?? null,
+      net_amount: document?.net_amount ?? null,
+      tax_amount: document?.tax_amount ?? null,
+      readiness: 'READY_TO_INVOICE',
+      lines: (itemsByNv.get(request.current_bsale_nv_id) ?? []).map(item => ({
+        detail_id: item.detail_id,
+        sku: item.sku,
+        product_name: item.product_name,
+        quantity: item.quantity,
+        unit_value: item.unit_value,
+        total_amount: item.total_amount,
+      })),
+    }
+  }
+
+  logPreparationDiagnostics('invoicePreviewBatch', {
+    requested: requests.length,
+    unique: unique.length,
+    documents: documents?.length ?? 0,
+    clients: clients?.length ?? 0,
+    items: items?.length ?? 0,
+  })
+  return { data, error: null }
+}
+
 export async function getSalesOrderPreparationLines(
   companyId: string,
   cardId: string,

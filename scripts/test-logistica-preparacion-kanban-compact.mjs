@@ -11,9 +11,9 @@ const auditDrawer = await readFile(new URL('../auditoria/sales-order-audit-drawe
 const rules = await readFile(new URL('movement-rules.ts', root), 'utf8')
 const packageJson = JSON.parse(await readFile(new URL('../../../../package.json', root), 'utf8'))
 
-test('1. mantiene las tres columnas operacionales y agrega readiness derivado', () => {
+test('1. mantiene las columnas operacionales y agrega readiness derivado', () => {
   assert.deepEqual([...panel.matchAll(/id: '([^']+)'/g)].map(match => match[1]), [
-    'PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT', 'INCIDENTS', 'READY_TO_INVOICE',
+    'PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT', 'INCIDENTS', 'READY_TO_INVOICE', 'INVOICED_READY_FOR_ROUTE',
   ])
 })
 
@@ -90,7 +90,7 @@ test('14. checkbox de selección existente', () => {
 })
 
 test('15. AUDITED no es arrastrable', () => {
-  assert.match(panel, /dragDisabled=\{card\.status === 'AUDITED' \|\| isPreparationReadOnly\(/)
+  assert.match(panel, /dragDisabled=\{card\.status === 'AUDITED' \|\| card\.status === 'INVOICED_READY_FOR_ROUTE' \|\| isPreparationReadOnly\(/)
   assert.match(card, /disabled: isOverlay \|\| isPending \|\| dragDisabled/)
 })
 

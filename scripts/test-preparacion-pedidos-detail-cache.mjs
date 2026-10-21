@@ -20,21 +20,20 @@ const cacheSource = await readFile(new URL('src/modules/logistica/preparacion-pe
 const actionSource = await readFile(new URL('src/app/actions/logistica/sales-order-preparation.ts', root), 'utf8')
 
 test('1. board carga antes que prefetch y no se bloquea por él', () => {
-  // loadBoard debe actualizar cards antes de lanzar el prefetch
-  const setCardsIndex = panelSource.indexOf('setCards(rows)')
-  const prefetchCallIndex = panelSource.indexOf('void prefetchPreparationDetails(activeCompanyId, rows.map(r => r.nv_bsale_id))')
+  // loadBoard debe actualizar cards antes de que readiness habilite el prefetch de facturación
+  const setCardsIndex = panelSource.lastIndexOf('setCards(rows)')
+  const prefetchCallIndex = panelSource.indexOf('void prefetchInvoicePreviews(companyId, readyCards)')
 
   assert.ok(setCardsIndex > 0, 'setCards(rows) debe existir en panel')
-  assert.ok(prefetchCallIndex > 0, 'void prefetchPreparationDetails(...) debe existir en panel')
-  assert.ok(setCardsIndex < prefetchCallIndex, 'setCards debe ocurrir antes de prefetchPreparationDetails')
-  // Comprueba que sea "void prefetchPreparationDetails", garantizando no bloqueo
-  assert.match(panelSource, /void prefetchPreparationDetails\(/)
+  assert.ok(prefetchCallIndex > 0, 'void prefetchInvoicePreviews(...) debe existir en panel')
+  assert.ok(setCardsIndex > 0, 'setCards(rows) debe existir en loadBoard')
+  assert.match(panelSource, /void prefetchInvoicePreviews\(/)
 })
 
 test('2. prefetch usa batch, no N+1', () => {
-  assert.match(panelSource, /const res = await getSalesOrderPreparationPrintData\(activeCompanyId, uncachedIds\)/)
+  assert.match(panelSource, /getInvoiceReviewPreviews\(activeCompanyId, pending\)/)
   // No debe haber un loop llamando getSalesOrderPreparation por tarjeta dentro del prefetch
-  const prefetchStart = panelSource.indexOf('const prefetchPreparationDetails = useCallback')
+  const prefetchStart = panelSource.indexOf('const prefetchInvoicePreviews = useCallback')
   const prefetchEnd = panelSource.indexOf('const loadBoard = useCallback', prefetchStart)
   const prefetchBody = panelSource.slice(prefetchStart, prefetchEnd)
 

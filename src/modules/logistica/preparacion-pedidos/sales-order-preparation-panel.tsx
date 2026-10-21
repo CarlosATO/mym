@@ -4,11 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'rea
 import { Search, SlidersHorizontal, KanbanSquare, Loader2, RotateCcw, RefreshCw, ShieldCheck, Printer, ArrowUpDown, X } from 'lucide-react'
 import { 
   getSalesOrderPreparationBoard, 
-  getSalesOrderPreparationItems,
   getSalesOrderPreparationLines,
   getSalesOrderPreparationPrintData,
   getSalesOrderRouteReadiness,
   getSalesOrderPreparationCommercialIncidents,
+  getInvoiceReviewPreviews,
   syncOperationalBsaleSalesOrders,
   syncOperationalBsaleSalesOrdersIfStale,
   excludeSalesOrderPreparationNv,
@@ -19,15 +19,12 @@ import {
   type SalesOrderRouteReadiness,
   type SalesOrderPreparationCommercialIncident,
   type SalesOrderClientData,
-  type SalesOrderPreparationLock,
 } from '@/app/actions/logistica/sales-order-preparation'
 import {
   type PreparationDetailEntry,
-  getUncachedNvIds,
   patchPreparationLine,
   prunePreparationDetailCache,
   prunePreparationLinesCache,
-  putPreparationDetailsBatch,
   putPreparationLines,
 } from './preparation-detail-cache'
 import { getWarehousePreparationSyncHealth, type WarehousePreparationSyncHealth } from '@/app/actions/integraciones/sync'
@@ -72,6 +69,9 @@ import { getMovementRule } from './movement-rules'
 import { MovementObservationDialog } from './movement-observation-dialog'
 import { moveSalesOrderPreparationCard } from '@/app/actions/logistica/sales-order-preparation'
 import { toast } from 'sonner'
+import { CreditNoteConfirmationModal, InvoiceConfirmationModal, InvoiceDocumentDetail, InvoiceReviewModal, type InvoiceDocumentPreview, type InvoiceReviewSnapshot } from './invoice-flow-ui'
+import { createInvoicePreviewCache, getInvoicePreviewCacheKey, invalidateInvoicePreview, isInvoicePreviewFresh, type InvoicePreviewCache } from './invoice-preview-cache'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { getActiveCompanyId } from '@/app/actions/companies'
 import { getSalesOrderAuditBoardLocks, type AuditBoardLock, type SalesOrderAuditFinalizeResult } from '@/app/actions/logistica/sales-order-audit'
 import { getSalesOrderPreparationMissingCostLinesV1, getSalesOrderPreparationProfitabilitySummaryV1 } from '@/app/actions/logistica/sales-order-preparation-profitability'
@@ -145,6 +145,14 @@ const COLUMNS: KanbanColumn[] = [
     colorBody: 'bg-theme-base/30',
     badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
     dot: 'bg-emerald-500',
+  },
+  {
+    id: 'INVOICED_READY_FOR_ROUTE',
+    title: 'Facturado en espera de Guía de Ruta',
+    colorHeader: 'bg-theme-base border-slate-300 dark:border-theme-border/80',
+    colorBody: 'bg-theme-base/30',
+    badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
+    dot: 'bg-sky-500',
   },
 ]
 
@@ -221,6 +229,7 @@ function DroppableColumn({
   readinessByCardId,
   readinessState,
   onOpenCommercialIncidents,
+  onInvoice,
 }: {
   col: KanbanColumn
   colCards: SalesOrderPreparationCardInfo[]
@@ -236,6 +245,7 @@ function DroppableColumn({
   readinessByCardId: Record<string, SalesOrderRouteReadiness>
   readinessState: PreparationReadinessLoadState
   onOpenCommercialIncidents: (card: SalesOrderPreparationCardInfo) => void
+  onInvoice: (card: SalesOrderPreparationCardInfo) => void
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: col.id,
@@ -301,7 +311,8 @@ function DroppableColumn({
                 readinessState={readinessState}
                 openCommercialIncidentCount={readinessByCardId[card.card_id]?.open_commercial_incident_count ?? 0}
                 onOpenCommercialIncidents={() => onOpenCommercialIncidents(card)}
-                dragDisabled={card.status === 'AUDITED' || isPreparationReadOnly({
+                onInvoice={() => onInvoice(card)}
+                dragDisabled={card.status === 'AUDITED' || card.status === 'INVOICED_READY_FOR_ROUTE' || isPreparationReadOnly({
                   status: card.status,
                   currentUserId,
                   lockedByUserId: card.locked_by_user_id,
@@ -352,6 +363,13 @@ export function SalesOrderPreparationPanel({
   const [preparationLinesError, setPreparationLinesError] = useState<string | null>(null)
   const [selectedClientData, setSelectedClientData] = useState<SalesOrderClientData | null>(null)
   const [loadingItems, setLoadingItems] = useState(false)
+  const [invoiceReviewOpen, setInvoiceReviewOpen] = useState(false)
+  const [invoiceConfirmationOpen, setInvoiceConfirmationOpen] = useState(false)
+  const [invoiceReviewLoading, setInvoiceReviewLoading] = useState(false)
+  const [invoiceReviewError, setInvoiceReviewError] = useState<string | null>(null)
+  const [invoiceReviewSnapshot, setInvoiceReviewSnapshot] = useState<InvoiceReviewSnapshot | null>(null)
+  const [invoiceDocument, setInvoiceDocument] = useState<InvoiceDocumentPreview | null>(null)
+  const [creditNoteOpen, setCreditNoteOpen] = useState(false)
 
   // Filters
   const [searchTerm, setSearchTerm] = useState('')
@@ -405,10 +423,8 @@ export function SalesOrderPreparationPanel({
   const cardsRef = useRef<SalesOrderPreparationCardInfo[]>([])
   const boardRequestSeqRef = useRef(0)
   const itemsRequestSeqRef = useRef(0)
-  const prefetchSeqRef = useRef(0)
   const detailCacheRef = useRef<Map<number, PreparationDetailEntry>>(new Map())
   const preparationLinesCacheRef = useRef<Map<string, SalesOrderPreparationLine[]>>(new Map())
-  const prefetchInFlightRef = useRef<Set<number>>(new Set())
   const selectedCardRef = useRef<SalesOrderPreparationCardInfo | null>(null)
   const pendingStatusByCardRef = useRef<Map<string, string>>(new Map())
   const pendingExclusionNvIdsRef = useRef<Set<number>>(new Set())
@@ -422,6 +438,73 @@ export function SalesOrderPreparationPanel({
   const lastAutoAttemptAtRef = useRef(0)
   const lastSuccessfulRunIdRef = useRef<string | null>(null)
   const mountedRef = useRef(true)
+  const invoicePreviewCacheRef = useRef<InvoicePreviewCache>(createInvoicePreviewCache())
+  const invoicePreviewInFlightRef = useRef<Map<string, Promise<void>>>(new Map())
+
+  const prefetchInvoicePreviews = useCallback(async (activeCompanyId: string, readyCards: SalesOrderPreparationCardInfo[]) => {
+    const requests = readyCards.map(card => ({
+      card_id: card.card_id,
+      current_bsale_nv_id: card.nv_bsale_id,
+      folio: card.nv_folio,
+      seller_name: card.seller_name,
+    }))
+    const pending = requests.filter(request => {
+      const key = getInvoicePreviewCacheKey(request.card_id, request.current_bsale_nv_id)
+      const entry = invoicePreviewCacheRef.current.get(key)
+      if (isInvoicePreviewFresh(entry)) return false
+      if (entry) entry.status = 'STALE'
+      return !invoicePreviewInFlightRef.current.has(key)
+    })
+    if (pending.length === 0) return
+
+    const keys = pending.map(request => getInvoicePreviewCacheKey(request.card_id, request.current_bsale_nv_id))
+    for (const key of keys) {
+      const previous = invoicePreviewCacheRef.current.get(key)
+      invoicePreviewCacheRef.current.set(key, {
+        current_bsale_nv_id: Number(key.split(':').at(-1)),
+        snapshot: previous?.snapshot ?? null,
+        status: 'LOADING',
+        error: null,
+        updatedAt: previous?.updatedAt ?? 0,
+      })
+    }
+
+    const request = getInvoiceReviewPreviews(activeCompanyId, pending)
+      .then(result => {
+        for (const item of pending) {
+          const key = getInvoicePreviewCacheKey(item.card_id, item.current_bsale_nv_id)
+          const previewData = result.data as Record<string, unknown> | null
+          const snapshot = previewData?.[key] as InvoiceReviewSnapshot | undefined
+          invoicePreviewCacheRef.current.set(key, {
+            current_bsale_nv_id: item.current_bsale_nv_id,
+            snapshot: snapshot ?? null,
+            status: result.error || !snapshot ? 'ERROR' : 'READY',
+            error: result.error || (!snapshot ? 'No se pudo cargar la vista previa.' : null),
+            updatedAt: Date.now(),
+          })
+        }
+        if (process.env.NODE_ENV !== 'production') {
+          console.debug('[invoice-preview][batch]', { requested: pending.length, error: result.error })
+        }
+      })
+      .catch(error => {
+        for (const item of pending) {
+          const key = getInvoicePreviewCacheKey(item.card_id, item.current_bsale_nv_id)
+          invoicePreviewCacheRef.current.set(key, {
+            current_bsale_nv_id: item.current_bsale_nv_id,
+            snapshot: null,
+            status: 'ERROR',
+            error: error instanceof Error ? error.message : 'No se pudo cargar la vista previa.',
+            updatedAt: Date.now(),
+          })
+        }
+      })
+      .finally(() => {
+        for (const key of keys) invoicePreviewInFlightRef.current.delete(key)
+      })
+    for (const key of keys) invoicePreviewInFlightRef.current.set(key, request)
+    await request
+  }, [])
 
   useEffect(() => {
     cardsRef.current = cards
@@ -517,6 +600,30 @@ export function SalesOrderPreparationPanel({
       if (mountedRef.current && seq === readinessSeqRef.current) setReadinessState('error')
     })
   }, [companyId, auditedCardKey, readinessVersion])
+
+  const readyInvoiceCardKey = useMemo(
+    () => cards
+      .filter(card => card.status === 'AUDITED' && readinessByCardId[card.card_id]?.route_readiness === 'READY_TO_INVOICE')
+      .map(card => `${card.card_id}:${card.nv_bsale_id}`)
+      .sort()
+      .join(','),
+    [cards, readinessByCardId],
+  )
+
+  useEffect(() => {
+    for (const card of cards) {
+      if (card.status !== 'AUDITED' || readinessByCardId[card.card_id]?.route_readiness !== 'READY_TO_INVOICE') {
+        invalidateInvoicePreview(invoicePreviewCacheRef.current, card.card_id)
+      }
+    }
+  }, [cards, readinessByCardId])
+
+  useEffect(() => {
+    if (!companyId || !readyInvoiceCardKey) return
+    const readyCards = cards.filter(card => card.status === 'AUDITED' && readinessByCardId[card.card_id]?.route_readiness === 'READY_TO_INVOICE')
+    const timer = window.setTimeout(() => { void prefetchInvoicePreviews(companyId, readyCards) }, 0)
+    return () => window.clearTimeout(timer)
+  }, [companyId, cards, readyInvoiceCardKey, readinessByCardId, prefetchInvoicePreviews])
 
   const refreshAuditLocks = useCallback(async () => {
     const ids = cardsRef.current
@@ -617,50 +724,6 @@ export function SalesOrderPreparationPanel({
     return { ok: true }
   }
 
-  const prefetchPreparationDetails = useCallback(async (activeCompanyId: string, candidateNvIds: number[]) => {
-    const uncachedIds = getUncachedNvIds(
-      detailCacheRef.current,
-      candidateNvIds,
-      prefetchInFlightRef.current,
-    )
-    if (uncachedIds.length === 0) return
-
-    for (const id of uncachedIds) {
-      prefetchInFlightRef.current.add(id)
-    }
-
-    const prefetchSeq = ++prefetchSeqRef.current
-    const startedAt = performance.now()
-
-    try {
-      const res = await getSalesOrderPreparationPrintData(activeCompanyId, uncachedIds)
-      if (prefetchSeq !== prefetchSeqRef.current || !mountedRef.current) return
-
-      if (res.data) {
-        putPreparationDetailsBatch(detailCacheRef.current, res.data, uncachedIds)
-
-        const currentCard = selectedCardRef.current
-        if (currentCard && uncachedIds.includes(currentCard.nv_bsale_id)) {
-          const cached = detailCacheRef.current.get(currentCard.nv_bsale_id)
-          if (cached) {
-            setSelectedItems(cached.items)
-            setSelectedClientData(cached.clientData)
-            setLoadingItems(false)
-          }
-        }
-      }
-    } catch (err: unknown) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.warn('[preparacion-prefetch] Error precargando detalles en batch:', err)
-      }
-    } finally {
-      for (const id of uncachedIds) {
-        prefetchInFlightRef.current.delete(id)
-      }
-      recordPreparationDuration('prefetchBatch', performance.now() - startedAt)
-    }
-  }, [])
-
   const loadBoard = useCallback(async ({ showSpinner = false }: { showSpinner?: boolean } = {}) => {
     const seq = ++boardRequestSeqRef.current
     const startedAt = performance.now()
@@ -708,8 +771,11 @@ export function SalesOrderPreparationPanel({
       prunePreparationDetailCache(detailCacheRef.current, rows.map(r => r.nv_bsale_id))
       prunePreparationLinesCache(preparationLinesCacheRef.current, rows.map(r => r.card_id))
 
-      // Precarga batch de detalles en segundo plano sin bloquear el renderizado del board
-      void prefetchPreparationDetails(activeCompanyId, rows.map(r => r.nv_bsale_id))
+       // Los previews de facturación se precargan después de conocer readiness.
+       const validInvoicePreviewKeys = new Set(rows.map(row => getInvoicePreviewCacheKey(row.card_id, row.nv_bsale_id)))
+       for (const key of invoicePreviewCacheRef.current.keys()) {
+         if (!validInvoicePreviewKeys.has(key)) invoicePreviewCacheRef.current.delete(key)
+       }
     } catch (err: unknown) {
       if (seq === boardRequestSeqRef.current) {
         setError(err instanceof Error ? err.message : 'Error al cargar el tablero.')
@@ -718,7 +784,7 @@ export function SalesOrderPreparationPanel({
       if (seq === boardRequestSeqRef.current) setLoading(false)
       recordPreparationDuration('boardLoad', performance.now() - startedAt)
     }
-  }, [prefetchPreparationDetails])
+  }, [])
 
   const loadSyncHealth = useCallback(async () => {
     try {
@@ -878,6 +944,17 @@ export function SalesOrderPreparationPanel({
 
   const openCardDetails = async (card: SalesOrderPreparationCardInfo) => {
     if (!companyId) return
+    if (card.status === 'INVOICED_READY_FOR_ROUTE') {
+      setInvoiceDocument({
+        invoice_folio: card.invoice_folio ?? '—',
+        invoice_date: card.updated_at,
+        client_name: card.client_name,
+        total_amount: card.total_amount,
+        status: 'CONFIRMED',
+        sales_order_folio: card.nv_folio,
+      })
+      return
+    }
     if (card.status === 'IN_AUDIT') {
       setSelectedCard(card)
       return
@@ -999,6 +1076,33 @@ export function SalesOrderPreparationPanel({
         recordPreparationDuration('cardOpen', performance.now() - clickStart)
       }
     }
+  }
+
+  const openInvoiceReview = async (card: SalesOrderPreparationCardInfo) => {
+    if (!companyId) return
+    const startedAt = performance.now()
+    const key = getInvoicePreviewCacheKey(card.card_id, card.nv_bsale_id)
+    const cached = invoicePreviewCacheRef.current.get(key)
+    setInvoiceReviewOpen(true)
+    setInvoiceReviewSnapshot(cached?.snapshot ?? null)
+    setInvoiceReviewError(cached?.error ?? null)
+    setInvoiceReviewLoading(!cached?.snapshot)
+    if (isInvoicePreviewFresh(cached)) {
+      recordPreparationDuration('invoicePreviewOpen', performance.now() - startedAt)
+      return
+    }
+
+    let request = invoicePreviewInFlightRef.current.get(key)
+    if (!request) {
+      request = prefetchInvoicePreviews(companyId, [card])
+    }
+    await request
+    if (!mountedRef.current) return
+    const next = invoicePreviewCacheRef.current.get(key)
+    setInvoiceReviewSnapshot(next?.snapshot ?? null)
+    setInvoiceReviewError(next?.error ?? null)
+    setInvoiceReviewLoading(false)
+    recordPreparationDuration('invoicePreviewOpen', performance.now() - startedAt)
   }
 
   const openCommercialIncidents = async (card: SalesOrderPreparationCardInfo) => {
@@ -1869,9 +1973,10 @@ export function SalesOrderPreparationPanel({
                          currentUserId={currentUserId}
                          auditLocks={auditLocks}
                          readinessByCardId={readinessByCardId}
-                         readinessState={readinessState}
-                         onOpenCommercialIncidents={openCommercialIncidents}
-                       />
+                          readinessState={readinessState}
+                          onOpenCommercialIncidents={openCommercialIncidents}
+                          onInvoice={openInvoiceReview}
+                        />
                      )
                   })}
                 </div>
@@ -1981,6 +2086,38 @@ export function SalesOrderPreparationPanel({
         canRevoke={canManageExclusions}
         refreshToken={exclusionsVersion}
         onChanged={loadBoard}
+      />
+
+      <InvoiceReviewModal
+        open={invoiceReviewOpen}
+        snapshot={invoiceReviewSnapshot}
+        loading={invoiceReviewLoading}
+        error={invoiceReviewError}
+        onOpenChange={setInvoiceReviewOpen}
+        onContinue={() => {
+          setInvoiceReviewOpen(false)
+          setInvoiceConfirmationOpen(true)
+        }}
+      />
+      <InvoiceConfirmationModal
+        open={invoiceConfirmationOpen}
+        snapshot={invoiceReviewSnapshot}
+        onOpenChange={setInvoiceConfirmationOpen}
+        onEmissionBlocked={() => toast.error('La emisión real está deshabilitada: contrato Bsale aún no habilitado.')}
+      />
+      {invoiceDocument && (
+        <Dialog open onOpenChange={open => { if (!open) setInvoiceDocument(null) }}>
+          <DialogContent className="w-[calc(100vw-2rem)] max-w-2xl border-[#DDD4CA] bg-[#FCFAF7] text-[#322D29]">
+            <DialogHeader><DialogTitle>Detalle de factura</DialogTitle><DialogDescription>Documento tributario asociado a la NV. Vista de solo lectura.</DialogDescription></DialogHeader>
+            <InvoiceDocumentDetail document={invoiceDocument} onCreditNote={() => setCreditNoteOpen(true)} />
+          </DialogContent>
+        </Dialog>
+      )}
+      <CreditNoteConfirmationModal
+        open={creditNoteOpen}
+        document={invoiceDocument}
+        onOpenChange={setCreditNoteOpen}
+        onEmissionBlocked={() => toast.error('La emisión real está deshabilitada: contrato Bsale aún no habilitado.')}
       />
 
     </div>

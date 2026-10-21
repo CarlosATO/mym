@@ -1,6 +1,6 @@
 'use client'
 
-import { Ban } from 'lucide-react'
+import { Ban, FileText } from 'lucide-react'
 import { useRef } from 'react'
 import { SalesOrderPreparationCardInfo } from '@/app/actions/logistica/sales-order-preparation'
 import { useDraggable } from '@dnd-kit/core'
@@ -32,6 +32,7 @@ interface SalesOrderCardProps {
   readinessState?: PreparationReadinessLoadState
   openCommercialIncidentCount?: number
   onOpenCommercialIncidents?: () => void
+  onInvoice?: () => void
 }
 
 function formatShortDate(value: string | null): string | null {
@@ -68,6 +69,7 @@ export function SalesOrderCard({
   readinessState = 'loading',
   openCommercialIncidentCount = 0,
   onOpenCommercialIncidents,
+  onInvoice,
 }: SalesOrderCardProps) {
   const routeDate = formatShortDate(card.route_date)
   const routeFullDate = formatFullDate(card.route_date)
@@ -92,6 +94,7 @@ export function SalesOrderCard({
         : 'Sin auditor'
     : null
   const isFinalized = card.status === 'AUDITED'
+  const isReadyToInvoice = isFinalized && routeReadiness === 'READY_TO_INVOICE'
   const readinessLabel = isFinalized ? getPreparationReadinessLabel(routeReadiness, readinessState) : null
   const responsibilityLabel = isFinalized ? readinessLabel : auditLabel ?? lockLabel
   const responsibilityTone = isFinalized && routeReadiness === 'BLOCKED'
@@ -223,7 +226,7 @@ export function SalesOrderCard({
         )}
       </div>
 
-      {(responsibilityLabel || isPending || (canExclude && !isOverlay && card.status === 'PENDING_ROUTE_PREP')) && (
+      {(responsibilityLabel || isPending || onInvoice || (canExclude && !isOverlay && card.status === 'PENDING_ROUTE_PREP')) && (
         <div className="mt-1 flex min-h-[15px] items-center justify-between gap-2">
           <span className={`min-w-0 truncate text-[9.5px] font-semibold ${responsibilityTone}`} title={responsibilityLabel ?? undefined}>
             {isFinalized && routeReadiness === 'READY_TO_INVOICE' ? '✓ ' : ''}{responsibilityLabel}
@@ -246,6 +249,21 @@ export function SalesOrderCard({
             )}
             {isPending && (
               <span className="text-[9px] font-semibold uppercase tracking-wider text-[#806238]">Guardando…</span>
+            )}
+            {isReadyToInvoice && !isOverlay && onInvoice && (
+              <button
+                type="button"
+                data-card-action
+                onPointerDown={event => event.stopPropagation()}
+                onClick={event => {
+                  event.stopPropagation()
+                  onInvoice()
+                }}
+                onDoubleClick={event => event.stopPropagation()}
+                className="inline-flex items-center gap-0.5 rounded bg-[#72383D] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white hover:bg-[#612F34]"
+              >
+                <FileText className="h-2.5 w-2.5" /> Facturar
+              </button>
             )}
             {canExclude && !isOverlay && card.status === 'PENDING_ROUTE_PREP' && (
               <button

@@ -1,0 +1,52 @@
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import test from 'node:test'
+
+const root = new URL('../', import.meta.url)
+const ui = fs.readFileSync(new URL('src/modules/logistica/preparacion-pedidos/invoice-flow-ui.tsx', root), 'utf8')
+const panel = fs.readFileSync(new URL('src/modules/logistica/preparacion-pedidos/sales-order-preparation-panel.tsx', root), 'utf8')
+const previewPage = fs.readFileSync(new URL('src/app/dev/logistica/invoice-flow-preview/page.tsx', root), 'utf8')
+const preview = fs.readFileSync(new URL('src/modules/logistica/preparacion-pedidos/invoice-flow-preview.tsx', root), 'utf8')
+const middleware = fs.readFileSync(new URL('src/middleware.ts', root), 'utf8')
+
+test('invoice UI preserves the current NV fixture and safety copy', () => {
+  assert.match(ui, /historical_bsale_nv_id: 92486/)
+  assert.match(ui, /current_bsale_nv_id: 92513/)
+  assert.match(ui, /detail_id: 334790/)
+  assert.match(ui, /emission_date: '2026-10-19'/)
+  assert.match(ui, /quantity: 1/)
+  assert.match(ui, /GOOFY NATURAL YOGURT 20UND/)
+  assert.match(ui, /PAWISE BOLA LUMINOSA 3\.5CM/)
+  assert.match(ui, /total_amount: 5598/)
+  assert.match(ui, /net_amount: 4704/)
+  assert.match(ui, /tax_amount: 894/)
+  assert.match(ui, /Emitir factura/)
+  assert.match(ui, /Emitir Nota de Crédito/)
+  assert.match(ui, /Verifica los datos antes de emitir la factura\./)
+  assert.match(ui, /w-\[85vw\]/)
+  assert.match(ui, /max-w-\[1100px\]/)
+  assert.match(ui, /sm:!max-w-\[1100px\]/)
+  assert.match(ui, /max-h-\[88vh\]/)
+  assert.doesNotMatch(ui, /Invalid Date/)
+  assert.match(ui, /No disponible/)
+  assert.doesNotMatch(ui, /ID vigente/)
+  assert.doesNotMatch(ui, /detalle \$\{line\.detail_id\}/)
+  assert.doesNotMatch(ui, /current_bsale_nv_id\}/)
+  assert.doesNotMatch(ui, /Sucursal \/ Oficina|Condición de venta|Vendedor|Lista de precios/)
+  assert.doesNotMatch(ui, /SecuritySummary/)
+  assert.doesNotMatch(ui, /fetch\(/)
+})
+
+test('preparation panel exposes the route-guide column without emission calls', () => {
+  assert.match(panel, /INVOICED_READY_FOR_ROUTE/)
+  assert.match(panel, /Facturado en espera de Guía de Ruta/)
+  assert.match(panel, /getInvoiceReviewPreviews/)
+  assert.doesNotMatch(panel, /emitInvoice|createInvoiceAttempt|POST.*bsale/i)
+})
+
+test('preview is development-only, fixture-only and has no productive action imports', () => {
+  assert.match(previewPage, /process\.env\.NODE_ENV !== 'development'/)
+  assert.match(previewPage, /notFound\(\)/)
+  assert.doesNotMatch(preview, /getInvoiceReviewSnapshot|createClient|fetch\(/)
+  assert.match(middleware, /invoice-flow-preview/)
+})

@@ -15,6 +15,10 @@ const cronRoutes = [
 ]
 
 export async function middleware(request: NextRequest) {
+  if (request.nextUrl.pathname === '/dev/logistica/invoice-flow-preview') {
+    return NextResponse.next()
+  }
+
   let supabaseResponse = NextResponse.next({ request })
 
   const supabase = createServerClient(

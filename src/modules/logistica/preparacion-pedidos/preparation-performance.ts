@@ -1,4 +1,4 @@
-type PreparationMetric = 'boardLoad' | 'exclusionPersist' | 'sync' | 'prefetchBatch' | 'cardOpen'
+type PreparationMetric = 'boardLoad' | 'exclusionPersist' | 'sync' | 'prefetchBatch' | 'cardOpen' | 'invoicePreviewOpen'
 
 type PreparationPerformanceSnapshot = {
   boardFetches: number
@@ -7,6 +7,7 @@ type PreparationPerformanceSnapshot = {
   syncMs: number[]
   prefetchBatchMs: number[]
   cardOpenMs: number[]
+  invoicePreviewOpenMs: number[]
 }
 
 const snapshot: PreparationPerformanceSnapshot = {
@@ -16,6 +17,7 @@ const snapshot: PreparationPerformanceSnapshot = {
   syncMs: [],
   prefetchBatchMs: [],
   cardOpenMs: [],
+  invoicePreviewOpenMs: [],
 }
 
 function isEnabled() {
@@ -42,6 +44,7 @@ export function recordPreparationDuration(metric: PreparationMetric, durationMs:
   if (metric === 'sync') snapshot.syncMs.push(rounded)
   if (metric === 'prefetchBatch') snapshot.prefetchBatchMs.push(rounded)
   if (metric === 'cardOpen') snapshot.cardOpenMs.push(rounded)
+  if (metric === 'invoicePreviewOpen') snapshot.invoicePreviewOpenMs.push(rounded)
 
   if (isEnabled()) {
     console.debug(`[preparacion-perf] ${metric} ${rounded}ms`)
@@ -56,6 +59,7 @@ export function getPreparationPerformanceSnapshot(): PreparationPerformanceSnaps
     syncMs: [...snapshot.syncMs],
     prefetchBatchMs: [...snapshot.prefetchBatchMs],
     cardOpenMs: [...snapshot.cardOpenMs],
+    invoicePreviewOpenMs: [...snapshot.invoicePreviewOpenMs],
   }
 }
 
@@ -66,4 +70,5 @@ export function resetPreparationPerformance() {
   snapshot.syncMs = []
   snapshot.prefetchBatchMs = []
   snapshot.cardOpenMs = []
+  snapshot.invoicePreviewOpenMs = []
 }

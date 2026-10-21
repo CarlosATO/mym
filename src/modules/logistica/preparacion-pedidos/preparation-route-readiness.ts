@@ -1,4 +1,4 @@
-export type PreparationRouteReadiness = 'INCIDENTS' | 'READY_TO_INVOICE' | 'BLOCKED'
+export type PreparationRouteReadiness = 'INCIDENTS' | 'READY_TO_INVOICE' | 'BLOCKED' | 'INVOICED_READY_FOR_ROUTE'
 
 export type PreparationReadinessLoadState = 'loading' | 'ready' | 'error'
 
@@ -21,6 +21,7 @@ export function getPreparationColumnId(
   if (status === 'AUDITED') {
     return readiness === 'READY_TO_INVOICE' ? 'READY_TO_INVOICE' : 'INCIDENTS'
   }
+  if (status === 'INVOICED_READY_FOR_ROUTE') return 'INVOICED_READY_FOR_ROUTE'
   return status
 }
 
@@ -41,5 +42,6 @@ export function getPreparationReadinessLabel(
   if (readiness === 'BLOCKED') return 'Bloqueada'
   if (readiness === 'READY_TO_INVOICE') return 'Lista para facturar'
   if (readiness === 'INCIDENTS') return 'Incidencias'
+  if (readiness === 'INVOICED_READY_FOR_ROUTE') return 'Facturada · lista para ruta'
   return 'Elegibilidad no disponible'
 }
