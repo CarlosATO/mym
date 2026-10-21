@@ -9,10 +9,11 @@ const rules = await readFile(new URL('movement-rules.ts', root), 'utf8')
 const actions = await readFile(new URL('../../../app/actions/logistica/sales-order-preparation.ts', root), 'utf8')
 const drawer = await readFile(new URL('sales-order-drawer.tsx', root), 'utf8')
 
-test('el tablero declara las cuatro columnas operacionales incluida Auditadas', () => {
+test('el tablero declara columnas operacionales y readiness derivado', () => {
   assert.deepEqual([...panel.matchAll(/id: '([^']+)'/g)].map(match => match[1]), [
-    'PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT', 'AUDITED',
+    'PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT', 'INCIDENTS', 'READY_TO_INVOICE',
   ])
+  assert.doesNotMatch(panel, /title: ['"]Auditadas['"]/)
   assert.doesNotMatch(panel, /Facturada \/ Lista|Canceladas|INVOICED_READY_FOR_ROUTE|CANCELLED/)
   assert.match(panel, /w-\[300px\] min-w-\[300px\] max-w-\[300px\] shrink-0/)
   assert.doesNotMatch(panel, /minmax\(300px,1fr\)/)

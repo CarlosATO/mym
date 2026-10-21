@@ -35,6 +35,7 @@
     "test:logistica-preparacion-profitability": "node --experimental-strip-types --test scripts/test-logistica-preparacion-profitability.mjs",
     "test:logistica-preparacion-cost-coverage": "node --experimental-strip-types --test scripts/test-logistica-preparacion-cost-coverage.mjs",
     "test:logistica-route-readiness": "node --experimental-strip-types --test scripts/test-logistica-route-readiness.mjs",
+    "test:logistica-kanban-route-readiness": "node --experimental-strip-types --test scripts/test-logistica-kanban-route-readiness.mjs",
     "test:logistica-auditoria-base": "node --experimental-strip-types --test scripts/test-logistica-auditoria-base.mjs",
     "test:logistica-auditoria-ux": "node --experimental-strip-types --test scripts/test-logistica-auditoria-ux.mjs",
     "test:logistica-auditoria-finalizacion": "node --experimental-strip-types --test scripts/test-logistica-auditoria-finalizacion.mjs",

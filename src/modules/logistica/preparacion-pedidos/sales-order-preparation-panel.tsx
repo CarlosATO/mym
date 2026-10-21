@@ -7,6 +7,8 @@ import {
   getSalesOrderPreparationItems,
   getSalesOrderPreparationLines,
   getSalesOrderPreparationPrintData,
+  getSalesOrderRouteReadiness,
+  getSalesOrderPreparationCommercialIncidents,
   syncOperationalBsaleSalesOrders,
   syncOperationalBsaleSalesOrdersIfStale,
   excludeSalesOrderPreparationNv,
@@ -14,6 +16,8 @@ import {
   SalesOrderPreparationCardInfo,
   SalesOrderPreparationItem,
   SalesOrderPreparationLine,
+  type SalesOrderRouteReadiness,
+  type SalesOrderPreparationCommercialIncident,
   type SalesOrderClientData,
   type SalesOrderPreparationLock,
 } from '@/app/actions/logistica/sales-order-preparation'
@@ -89,6 +93,8 @@ import {
 } from './preparation-profitability'
 import { PreparationMissingCostDialog } from './preparation-missing-cost-dialog'
 import { SalesOrderAuditDrawer } from '@/modules/logistica/auditoria/sales-order-audit-drawer'
+import { PreparationCommercialIncidentsDialog } from './preparation-commercial-incidents-dialog'
+import { getPreparationColumnId, type PreparationReadinessLoadState } from './preparation-route-readiness'
 
 type KanbanColumn = {
   id: string
@@ -102,7 +108,7 @@ type KanbanColumn = {
 const COLUMNS: KanbanColumn[] = [
   {
     id: 'PENDING_ROUTE_PREP',
-    title: 'Pendiente',
+    title: 'Pendientes',
     colorHeader: 'bg-theme-base border-slate-300 dark:border-theme-border/80',
     colorBody: 'bg-theme-base/30',
     badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
@@ -125,8 +131,16 @@ const COLUMNS: KanbanColumn[] = [
     dot: 'bg-purple-500',
   },
   {
-    id: 'AUDITED',
-    title: 'Auditadas',
+    id: 'INCIDENTS',
+    title: 'Incidencias',
+    colorHeader: 'bg-theme-base border-slate-300 dark:border-theme-border/80',
+    colorBody: 'bg-theme-base/30',
+    badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
+    dot: 'bg-red-500',
+  },
+  {
+    id: 'READY_TO_INVOICE',
+    title: 'Pendientes de facturación',
     colorHeader: 'bg-theme-base border-slate-300 dark:border-theme-border/80',
     colorBody: 'bg-theme-base/30',
     badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
@@ -204,6 +218,9 @@ function DroppableColumn({
   sortBy,
   currentUserId,
   auditLocks,
+  readinessByCardId,
+  readinessState,
+  onOpenCommercialIncidents,
 }: {
   col: KanbanColumn
   colCards: SalesOrderPreparationCardInfo[]
@@ -216,6 +233,9 @@ function DroppableColumn({
   sortBy: PreparationSort
   currentUserId: string | null
   auditLocks: Record<string, AuditBoardLock>
+  readinessByCardId: Record<string, SalesOrderRouteReadiness>
+  readinessState: PreparationReadinessLoadState
+  onOpenCommercialIncidents: (card: SalesOrderPreparationCardInfo) => void
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: col.id,
@@ -277,6 +297,10 @@ function DroppableColumn({
                 onToggleSelected={onToggleSelection}
                 currentUserId={currentUserId}
                 auditLock={auditLocks[card.card_id] ?? null}
+                routeReadiness={readinessByCardId[card.card_id]?.route_readiness ?? null}
+                readinessState={readinessState}
+                openCommercialIncidentCount={readinessByCardId[card.card_id]?.open_commercial_incident_count ?? 0}
+                onOpenCommercialIncidents={() => onOpenCommercialIncidents(card)}
                 dragDisabled={card.status === 'AUDITED' || isPreparationReadOnly({
                   status: card.status,
                   currentUserId,
@@ -311,6 +335,9 @@ export function SalesOrderPreparationPanel({
 
   const [companyId, setCompanyId] = useState<string | null>(null)
   const [cards, setCards] = useState<SalesOrderPreparationCardInfo[]>([])
+  const [readinessByCardId, setReadinessByCardId] = useState<Record<string, SalesOrderRouteReadiness>>({})
+  const [readinessState, setReadinessState] = useState<PreparationReadinessLoadState>('loading')
+  const [readinessVersion, setReadinessVersion] = useState(0)
   const [auditLocks, setAuditLocks] = useState<Record<string, AuditBoardLock>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -369,6 +396,12 @@ export function SalesOrderPreparationPanel({
   const [missingCostLoading, setMissingCostLoading] = useState(false)
   const [missingCostError, setMissingCostError] = useState<string | null>(null)
 
+  // Detalle lazy de tareas comerciales abiertas
+  const [commercialIncidentsCard, setCommercialIncidentsCard] = useState<SalesOrderPreparationCardInfo | null>(null)
+  const [commercialIncidents, setCommercialIncidents] = useState<SalesOrderPreparationCommercialIncident[]>([])
+  const [commercialIncidentsLoading, setCommercialIncidentsLoading] = useState(false)
+  const [commercialIncidentsError, setCommercialIncidentsError] = useState<string | null>(null)
+
   const cardsRef = useRef<SalesOrderPreparationCardInfo[]>([])
   const boardRequestSeqRef = useRef(0)
   const itemsRequestSeqRef = useRef(0)
@@ -384,6 +417,8 @@ export function SalesOrderPreparationPanel({
   const profitabilitySeqRef = useRef(0)
   const profitabilityInFlightRef = useRef<Set<number>>(new Set())
   const missingCostSeqRef = useRef(0)
+  const readinessSeqRef = useRef(0)
+  const commercialIncidentsSeqRef = useRef(0)
   const lastAutoAttemptAtRef = useRef(0)
   const lastSuccessfulRunIdRef = useRef<string | null>(null)
   const mountedRef = useRef(true)
@@ -447,6 +482,41 @@ export function SalesOrderPreparationPanel({
         }
       })
   }, [companyId, profitabilityNvKey, profitabilityVersion])
+
+  const auditedCardKey = useMemo(
+    () => cards
+      .filter(card => card.status === 'AUDITED')
+      .map(card => card.card_id)
+      .sort()
+      .join(','),
+    [cards],
+  )
+
+  useEffect(() => {
+    if (!companyId || !auditedCardKey) {
+      setReadinessByCardId({})
+      setReadinessState('ready')
+      return
+    }
+
+    const seq = ++readinessSeqRef.current
+    setReadinessByCardId({})
+    setReadinessState('loading')
+
+    getSalesOrderRouteReadiness(companyId).then(result => {
+      if (!mountedRef.current || seq !== readinessSeqRef.current) return
+      if (result.error) {
+        setReadinessState('error')
+        return
+      }
+      const byCardId: Record<string, SalesOrderRouteReadiness> = {}
+      for (const row of result.data) byCardId[row.card_id] = row
+      setReadinessByCardId(byCardId)
+      setReadinessState('ready')
+    }).catch(() => {
+      if (mountedRef.current && seq === readinessSeqRef.current) setReadinessState('error')
+    })
+  }, [companyId, auditedCardKey, readinessVersion])
 
   const refreshAuditLocks = useCallback(async () => {
     const ids = cardsRef.current
@@ -621,6 +691,7 @@ export function SalesOrderPreparationPanel({
 
       cardsRef.current = rows
       setCards(rows)
+      setReadinessVersion(current => current + 1)
       setSelectedCardIds(current => prunePreparationSelection(current, rows))
       const validComunaKeys = buildPreparationComunaOptions(rows)
       const validSellerKeys = new Set(buildPreparationSellerOptions(rows).map(option => option.key))
@@ -927,6 +998,30 @@ export function SalesOrderPreparationPanel({
         tracePreparationOpenPhase('H.operationalRender', performance.now() - clickStart)
         recordPreparationDuration('cardOpen', performance.now() - clickStart)
       }
+    }
+  }
+
+  const openCommercialIncidents = async (card: SalesOrderPreparationCardInfo) => {
+    if (!companyId || card.status !== 'AUDITED') return
+    const seq = ++commercialIncidentsSeqRef.current
+    setCommercialIncidentsCard(card)
+    setCommercialIncidents([])
+    setCommercialIncidentsError(null)
+    setCommercialIncidentsLoading(true)
+    try {
+      const result = await getSalesOrderPreparationCommercialIncidents({
+        companyId,
+        cardId: card.card_id,
+      })
+      if (seq !== commercialIncidentsSeqRef.current || !mountedRef.current) return
+      setCommercialIncidents(result.data)
+      setCommercialIncidentsError(result.error)
+    } catch (err: unknown) {
+      if (seq === commercialIncidentsSeqRef.current && mountedRef.current) {
+        setCommercialIncidentsError(err instanceof Error ? err.message : 'No se pudieron cargar las tareas comerciales.')
+      }
+    } finally {
+      if (seq === commercialIncidentsSeqRef.current) setCommercialIncidentsLoading(false)
     }
   }
 
@@ -1290,6 +1385,10 @@ export function SalesOrderPreparationPanel({
     const toStatus = over.id as string
 
     if (fromStatus === toStatus) return
+    if (fromStatus === 'AUDITED' || toStatus === 'INCIDENTS' || toStatus === 'READY_TO_INVOICE') {
+      toast.info('Las tarjetas auditadas cambian según la elegibilidad comercial.')
+      return
+    }
 
     const { rule, error } = getMovementRule(fromStatus, toStatus)
     if (error) {
@@ -1752,7 +1851,9 @@ export function SalesOrderPreparationPanel({
               <div className="h-full p-3">
                 <div className="flex h-full w-max min-w-full items-stretch gap-3">
                   {COLUMNS.map(col => {
-                    const colCards = filteredCards.filter(c => c.status === col.id)
+                    const colCards = filteredCards.filter(card => (
+                      getPreparationColumnId(card.status, readinessByCardId[card.card_id]?.route_readiness) === col.id
+                    ))
                      return (
                        <DroppableColumn
                          key={col.id}
@@ -1767,6 +1868,9 @@ export function SalesOrderPreparationPanel({
                          sortBy={sortBy}
                          currentUserId={currentUserId}
                          auditLocks={auditLocks}
+                         readinessByCardId={readinessByCardId}
+                         readinessState={readinessState}
+                         onOpenCommercialIncidents={openCommercialIncidents}
                        />
                      )
                   })}
@@ -1774,7 +1878,16 @@ export function SalesOrderPreparationPanel({
               </div>
               <DragOverlay zIndex={9999}>
                 {activeCard ? (
-                   <SalesOrderCard card={activeCard} isOverlay isPending={pendingCardIds.has(activeCard.card_id)} currentUserId={currentUserId} auditLock={auditLocks[activeCard.card_id] ?? null} />
+                    <SalesOrderCard
+                      card={activeCard}
+                      isOverlay
+                      isPending={pendingCardIds.has(activeCard.card_id)}
+                      currentUserId={currentUserId}
+                      auditLock={auditLocks[activeCard.card_id] ?? null}
+                      routeReadiness={readinessByCardId[activeCard.card_id]?.route_readiness ?? null}
+                      readinessState={readinessState}
+                      openCommercialIncidentCount={readinessByCardId[activeCard.card_id]?.open_commercial_incident_count ?? 0}
+                    />
                 ) : null}
               </DragOverlay>
             </DndContext>
@@ -1823,6 +1936,15 @@ export function SalesOrderPreparationPanel({
         missingNvCount={missingCostNvCount}
         missingNetAmount={missingCostNetAmount}
         onOpenChange={setMissingCostOpen}
+      />
+
+      <PreparationCommercialIncidentsDialog
+        open={commercialIncidentsCard !== null}
+        loading={commercialIncidentsLoading}
+        error={commercialIncidentsError}
+        nvFolio={commercialIncidentsCard?.nv_folio ?? null}
+        incidents={commercialIncidents}
+        onClose={() => setCommercialIncidentsCard(null)}
       />
 
       <MovementObservationDialog

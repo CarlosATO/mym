@@ -11,9 +11,9 @@ const auditDrawer = await readFile(new URL('../auditoria/sales-order-audit-drawe
 const rules = await readFile(new URL('movement-rules.ts', root), 'utf8')
 const packageJson = JSON.parse(await readFile(new URL('../../../../package.json', root), 'utf8'))
 
-test('1. mantiene las cuatro columnas actuales', () => {
+test('1. mantiene las tres columnas operacionales y agrega readiness derivado', () => {
   assert.deepEqual([...panel.matchAll(/id: '([^']+)'/g)].map(match => match[1]), [
-    'PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT', 'AUDITED',
+    'PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT', 'INCIDENTS', 'READY_TO_INVOICE',
   ])
 })
 
@@ -75,11 +75,11 @@ test('12. monto visible y compacto', () => {
   assert.match(card, /text-\[11px\] font-bold tabular-nums/)
 })
 
-test('13. responsable, auditoría y estado Auditada visibles', () => {
+test('13. responsable, auditoría y readiness de Auditada visibles', () => {
   assert.match(card, /getPreparationLockLabel/)
   assert.match(card, /Tu auditoría/)
   assert.match(card, /Audita: /)
-  assert.match(card, /isFinalized \? 'Auditada'/)
+  assert.match(card, /isFinalized \? getPreparationReadinessLabel/)
   assert.match(card, /✓ /)
 })
 
@@ -129,7 +129,8 @@ test('20. drag & drop y reglas no se reimplementan', () => {
 })
 
 test('21. valorización por columna usa filteredCards y el monto canónico', () => {
-  assert.match(panel, /const colCards = filteredCards\.filter\(c => c\.status === col\.id\)/)
+  assert.match(panel, /const colCards = filteredCards\.filter\(card => \(/)
+  assert.match(panel, /getPreparationColumnId\(card\.status, readinessByCardId\[card\.card_id\]/)
   assert.match(panel, /summarizePreparationBoard\(colCards\)/)
   assert.match(panel, /formatPreparationClp\(columnSummary\.amount\)/)
   assert.doesNotMatch(panel, /getPreparationCardAmount\(card\)/)

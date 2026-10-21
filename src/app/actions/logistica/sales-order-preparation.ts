@@ -112,6 +112,89 @@ export type SalesOrderPreparationLine = {
   updated_at: string
 }
 
+export type SalesOrderRouteReadiness = {
+  card_id: string
+  company_id: string
+  bsale_nv_id: number
+  bsale_nv_folio: string | null
+  has_open_commercial_incidents: boolean
+  open_commercial_incident_count: number
+  route_readiness: 'INCIDENTS' | 'READY_TO_INVOICE' | 'BLOCKED'
+  bsale_nv_state: number | null
+  bsale_nv_found: boolean
+}
+
+export type SalesOrderPreparationCommercialIncident = {
+  id: string
+  card_id: string
+  bsale_nv_id: number
+  nv_folio: string | null
+  sku: string | null
+  product_name: string
+  required_bsale_action: 'SET_QUANTITY' | 'REMOVE_LINE'
+  bsale_observed_quantity: number | null
+  expected_bsale_quantity: number
+  observation: string | null
+  reason_code: string | null
+  created_at: string
+}
+
+export async function getSalesOrderRouteReadiness(companyId: string): Promise<{
+  data: SalesOrderRouteReadiness[]
+  error: string | null
+}> {
+  const { supabase, error: permissionError } = await requireLogisticaView()
+  if (permissionError) return { data: [], error: permissionError }
+
+  const activeCompanyId = await getActiveCompanyId()
+  if (!activeCompanyId || activeCompanyId !== companyId) {
+    return { data: [], error: 'Empresa activa inválida.' }
+  }
+
+  const { data, error } = await supabase
+    .schema('logistica')
+    .rpc('get_sales_order_route_readiness_v1', { p_company_id: companyId })
+
+  if (error) {
+    console.error('[getSalesOrderRouteReadiness] error:', error)
+    return { data: [], error: error.message }
+  }
+
+  return { data: (data ?? []) as SalesOrderRouteReadiness[], error: null }
+}
+
+export async function getSalesOrderPreparationCommercialIncidents(params: {
+  companyId: string
+  cardId: string
+}): Promise<{
+  data: SalesOrderPreparationCommercialIncident[]
+  error: string | null
+}> {
+  const { supabase, error: permissionError } = await requireLogisticaView()
+  if (permissionError) return { data: [], error: permissionError }
+
+  const activeCompanyId = await getActiveCompanyId()
+  if (!activeCompanyId || activeCompanyId !== params.companyId) {
+    return { data: [], error: 'Empresa activa inválida.' }
+  }
+
+  const { data, error } = await supabase
+    .schema('logistica')
+    .from('sales_order_preparation_incidents')
+    .select('id, card_id, bsale_nv_id, nv_folio, sku, product_name, required_bsale_action, bsale_observed_quantity, expected_bsale_quantity, observation, reason_code, created_at')
+    .eq('company_id', params.companyId)
+    .eq('card_id', params.cardId)
+    .eq('status', 'OPEN')
+    .order('created_at', { ascending: true })
+
+  if (error) {
+    console.error('[getSalesOrderPreparationCommercialIncidents] error:', error)
+    return { data: [], error: error.message }
+  }
+
+  return { data: (data ?? []) as SalesOrderPreparationCommercialIncident[], error: null }
+}
+
 export type PreviewCandidatesResult = {
   total_candidates: number
   already_materialized: number

@@ -6,6 +6,7 @@ import { SalesOrderPreparationCardInfo } from '@/app/actions/logistica/sales-ord
 import { useDraggable } from '@dnd-kit/core'
 import { formatPreparationClp, getPreparationCardAmount, getPreparationComuna, parseDateOnly } from './preparation-board-utils'
 import { getPreparationLockLabel } from './preparation-lock-policy'
+import { getPreparationReadinessLabel, type PreparationReadinessLoadState, type PreparationRouteReadiness } from './preparation-route-readiness'
 
 export type SalesOrderCardAuditLock = {
   locked_by_user_id: string | null
@@ -27,6 +28,10 @@ interface SalesOrderCardProps {
   currentUserId?: string | null
   dragDisabled?: boolean
   auditLock?: SalesOrderCardAuditLock | null
+  routeReadiness?: PreparationRouteReadiness | null
+  readinessState?: PreparationReadinessLoadState
+  openCommercialIncidentCount?: number
+  onOpenCommercialIncidents?: () => void
 }
 
 function formatShortDate(value: string | null): string | null {
@@ -59,6 +64,10 @@ export function SalesOrderCard({
   currentUserId = null,
   dragDisabled = false,
   auditLock = null,
+  routeReadiness = null,
+  readinessState = 'loading',
+  openCommercialIncidentCount = 0,
+  onOpenCommercialIncidents,
 }: SalesOrderCardProps) {
   const routeDate = formatShortDate(card.route_date)
   const routeFullDate = formatFullDate(card.route_date)
@@ -83,9 +92,14 @@ export function SalesOrderCard({
         : 'Sin auditor'
     : null
   const isFinalized = card.status === 'AUDITED'
-  const responsibilityLabel = isFinalized ? 'Auditada' : auditLabel ?? lockLabel
-  const responsibilityTone = isFinalized
-    ? 'text-emerald-700'
+  const readinessLabel = isFinalized ? getPreparationReadinessLabel(routeReadiness, readinessState) : null
+  const responsibilityLabel = isFinalized ? readinessLabel : auditLabel ?? lockLabel
+  const responsibilityTone = isFinalized && routeReadiness === 'BLOCKED'
+    ? 'text-[#8A4B4B]'
+    : isFinalized && routeReadiness === 'READY_TO_INVOICE'
+      ? 'text-emerald-700'
+      : isFinalized
+        ? 'text-[#806238]'
     : card.status === 'IN_AUDIT'
       ? 'text-[#5B4A78]'
       : 'text-[#806238]'
@@ -212,9 +226,24 @@ export function SalesOrderCard({
       {(responsibilityLabel || isPending || (canExclude && !isOverlay && card.status === 'PENDING_ROUTE_PREP')) && (
         <div className="mt-1 flex min-h-[15px] items-center justify-between gap-2">
           <span className={`min-w-0 truncate text-[9.5px] font-semibold ${responsibilityTone}`} title={responsibilityLabel ?? undefined}>
-            {isFinalized ? '✓ ' : ''}{responsibilityLabel}
+            {isFinalized && routeReadiness === 'READY_TO_INVOICE' ? '✓ ' : ''}{responsibilityLabel}
           </span>
           <div className="flex shrink-0 items-center gap-1">
+            {isFinalized && openCommercialIncidentCount > 0 && onOpenCommercialIncidents && (
+              <button
+                type="button"
+                data-card-action
+                onPointerDown={event => event.stopPropagation()}
+                onClick={event => {
+                  event.stopPropagation()
+                  onOpenCommercialIncidents()
+                }}
+                onDoubleClick={event => event.stopPropagation()}
+                className="rounded px-1 py-0.5 text-[9px] font-semibold text-[#72383D] hover:bg-[#F5EDE9] hover:underline"
+              >
+                {openCommercialIncidentCount} {openCommercialIncidentCount === 1 ? 'tarea pendiente' : 'tareas pendientes'}
+              </button>
+            )}
             {isPending && (
               <span className="text-[9px] font-semibold uppercase tracking-wider text-[#806238]">Guardando…</span>
             )}
