@@ -577,12 +577,17 @@ export async function snapshotReceivablesBatch({
     }
   }
 
-  const { data: processedRows, error: processedError } = await db.schema('integraciones')
-    .from('bsale_receivable_snapshot_clients')
-    .select('client_id')
-    .eq('run_id', run.runId)
-  if (processedError) throw processedError
-  const processedClientIds = (processedRows || []).map(row => Number(row.client_id))
+  const processedRows = await collectPagedRows(async (offset, pageSize) => {
+    const { data, error } = await db.schema('integraciones')
+      .from('bsale_receivable_snapshot_clients')
+      .select('client_id')
+      .eq('run_id', run.runId)
+      .order('client_id', { ascending: true })
+      .range(offset, offset + pageSize - 1)
+    if (error) throw error
+    return data || []
+  })
+  const processedClientIds = processedRows.map(row => Number(row.client_id))
   const batchClientIds = selectPendingClientIds(uniqueClientIds, processedClientIds, limit)
   const skippedClientIds = uniqueClientIds.filter(clientId => processedClientIds.includes(clientId))
   const context = { db, companyId, fetchJson, runId: run.runId, snapshotAt: run.snapshotAt, snapshotDate: run.snapshotDate }
@@ -604,6 +609,10 @@ export async function snapshotReceivablesBatch({
   const persisted = await readPersistedSnapshotTotals(db, run.runId)
   if (persisted.processedClientIds.size > run.clientsTotal) {
     throw new Error('El snapshot tiene más clientes persistidos que el universo original.')
+  }
+  const universeIds = new Set(uniqueClientIds)
+  if ([...persisted.processedClientIds].some(clientId => !universeIds.has(clientId))) {
+    throw new Error('Los clientes persistidos no pertenecen al universo actual del snapshot.')
   }
   const status = snapshotRunStatus(run.clientsTotal, persisted.processedClientIds.size, persisted.clientsError)
   const rateLimitSummary = rateLimited ? {
