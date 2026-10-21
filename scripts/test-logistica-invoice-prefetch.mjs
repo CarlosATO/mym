@@ -42,12 +42,18 @@ test('batch action uses set-based reads and does not call Bsale', () => {
   assert.match(action, /urlPdf|urlXml|urlPublicView/)
   assert.doesNotMatch(action, /\.eq\('number'|\.eq\('total_amount'|\.eq\('client_id'/)
   assert.doesNotMatch(action, /POST.*bsale|PUT.*bsale|DELETE.*bsale/i)
+  assert.match(action, /commercialCatalogCache/)
+  assert.doesNotMatch(action, /AUDITED_EFFECTIVE_CONDITIONS|BSALE_UI_AUDIT/)
+  assert.match(action, /invoice_emission_date/)
 })
 
 test('panel prefetches only ready cards and opens from the same in-flight promise', () => {
   assert.match(panel, /status === 'AUDITED' && readinessByCardId\[card\.card_id\]\?\.route_readiness === 'READY_TO_INVOICE'/)
   assert.match(panel, /invoicePreviewInFlightRef\.current\.get\(key\)/)
   assert.match(panel, /prefetchInvoicePreviews\(companyId, \[card\]\)/)
+  assert.match(panel, /cacheStatus: cached\?\.status \?\? 'MISS'/)
+  assert.match(panel, /void prefetchInvoicePreviews\(companyId, readyCards\)/)
+  assert.doesNotMatch(panel, /setTimeout\(\(\) => \{ void prefetchInvoicePreviews/)
   assert.match(panel, /status === 'INVOICED_READY_FOR_ROUTE'/)
   assert.match(panel, /prefetchInvoiceDocuments\(companyId, invoicedCards\)/)
   assert.match(panel, /invoiceDocumentInFlightRef\.current\.get\(key\)/)

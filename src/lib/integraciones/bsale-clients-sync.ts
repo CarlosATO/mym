@@ -11,6 +11,7 @@ import {
 } from './sync-core'
 import { getBsaleConfigForCompany } from '@/lib/bsale/company-config'
 import { canDeactivateAbsentClients, getAbsentBsaleClientIds } from './bsale-clients-sync-logic'
+import { normalizeBsaleClientCommercialFields } from './bsale-client-commercial-normalization'
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -94,6 +95,15 @@ export async function syncBsaleClients(options: SyncBsaleClientsOptions) {
   }
 
   try {
+    const [{ data: paymentTypeCatalog, error: paymentTypeCatalogError }, { data: saleConditionCatalog, error: saleConditionCatalogError }] = await Promise.all([
+      admin.schema('integraciones').from('bsale_payment_types').select('bsale_id, name').eq('company_id', companyId).eq('is_active', true),
+      admin.schema('integraciones').from('bsale_sale_conditions').select('bsale_id, name').eq('company_id', companyId).eq('state', 0),
+    ])
+    if (paymentTypeCatalogError) throw paymentTypeCatalogError
+    if (saleConditionCatalogError) throw saleConditionCatalogError
+    const paymentTypeNames = new Map((paymentTypeCatalog ?? []).map(row => [Number(row.bsale_id), row.name]))
+    const saleConditionNames = new Map((saleConditionCatalog ?? []).map(row => [Number(row.bsale_id), row.name]))
+
     // 2. Fetch clients
     let offset = 0
     const limit = 50
@@ -166,7 +176,7 @@ export async function syncBsaleClients(options: SyncBsaleClientsOptions) {
       const city = client.city ? client.city.trim() : null
       const commune = client.municipality ? client.municipality.trim() : null
       
-      const creditLimit = client.maxCredit ? parseFloat(client.maxCredit) : null
+      const commercial = normalizeBsaleClientCommercialFields(client, { paymentTypeNames, saleConditionNames })
       const hash = computeHash(client)
 
       integracionesRecords.push({
@@ -183,14 +193,19 @@ export async function syncBsaleClients(options: SyncBsaleClientsOptions) {
         address: address,
         city: city,
         commune: commune,
-        region: null,
+        region: commercial.region,
         district: null,
         activity: client.activity,
         company: client.company,
         client_type: null,
-        price_list_id: client.price_list?.id || null,
-        payment_type_id: client.payment_type?.id || null,
-        credit_limit: creditLimit,
+        price_list_id: commercial.price_list_id,
+        price_list_name: commercial.price_list_name,
+        payment_type_id: commercial.payment_type_id,
+        payment_type_name: commercial.payment_type_name,
+        sale_condition_id: commercial.sale_condition_id,
+        sale_condition_name: commercial.sale_condition_name,
+        has_credit: commercial.has_credit,
+        credit_limit: commercial.credit_limit,
         credit_days: null,
         is_active_bsale: client.state === 0,
         raw_payload: client,
@@ -213,9 +228,9 @@ export async function syncBsaleClients(options: SyncBsaleClientsOptions) {
         address: address,
         city: city,
         commune: commune,
-        region: client.city || null,
+        region: commercial.region,
         business_activity: client.activity || null,
-        credit_limit: creditLimit,
+        credit_limit: commercial.credit_limit,
         is_active: client.state === 0,
         last_bsale_sync_at: new Date().toISOString()
       })

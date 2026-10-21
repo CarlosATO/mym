@@ -120,10 +120,11 @@ export async function emitSalesOrderInvoice(cardId: string) {
     return { status: 'PREVALIDATION_FAILED' as const, error: 'La card no coincide con el caso autorizado.' }
   }
 
-  const [nv, sellers, client, paymentTypes, saleConditions] = await Promise.all([
+  const [nv, sellers, client, syncedClient, paymentTypes, saleConditions] = await Promise.all([
     bsaleFetchResourceForCompany<Record<string, any>>({ companyId: auth.companyId, path: `/documents/${TARGET_INVOICE_CASE.currentNvId}.json`, params: { expand: 'details,payments' } }),
     bsaleFetchForCompany<Record<string, any>>({ companyId: auth.companyId, path: `/documents/${TARGET_INVOICE_CASE.currentNvId}/sellers.json` }),
     bsaleFetchResourceForCompany<Record<string, any>>({ companyId: auth.companyId, path: `/clients/${TARGET_INVOICE_CASE.clientId}.json` }),
+    db.schema('integraciones').from('bsale_clients').select('payment_type_id,payment_type_name').eq('company_id', auth.companyId).eq('bsale_client_id', TARGET_INVOICE_CASE.clientId).maybeSingle(),
     bsaleFetchForCompany<Record<string, any>>({ companyId: auth.companyId, path: '/payment_types.json', params: { state: 0 } }),
     bsaleFetchForCompany<Record<string, any>>({ companyId: auth.companyId, path: '/sale_conditions.json', params: { state: 0 } }),
   ])
@@ -133,6 +134,14 @@ export async function emitSalesOrderInvoice(cardId: string) {
     && Number(nv.totalAmount) === 5598 && Number(nv.netAmount) === 4704 && Number(nv.taxAmount) === 894
   const sellerItems = sellers.items ?? []
   const hasCredit = Number(client.hasCredit) === 1
+  const paymentTypeId = syncedClient.data?.payment_type_id == null ? null : Number(syncedClient.data.payment_type_id)
+  if (syncedClient.error) {
+    return { status: 'PREVALIDATION_FAILED' as const, error: 'No es posible facturar porque el cliente no tiene una forma de pago configurada.' }
+  }
+  if (paymentTypeId == null || !Number.isInteger(paymentTypeId) || paymentTypeId <= 0) {
+    return { status: 'PREVALIDATION_FAILED' as const, error: 'No es posible facturar porque el cliente no tiene una forma de pago configurada.' }
+  }
+  const configuredPaymentTypeId = Number(paymentTypeId)
   if (Number(nv.id) !== 92513 || Number(nv.number) !== 5032 || Number(nv.document_type?.id) !== 23 || Number(nv.state) !== 0 || Number(nv.client?.id) !== 1005 || Number(nv.office?.id) !== 1 || Number(nv.priceList?.id) !== 4 || !exactDetails || !Array.isArray(paymentTypes.items) || !Array.isArray(saleConditions.items) || hasCredit || sellerItems.length !== 1) {
     return { status: 'PREVALIDATION_FAILED' as const, error: 'El pre-flight live no coincide con el contrato autorizado.' }
   }
@@ -193,6 +202,7 @@ export async function emitSalesOrderInvoice(cardId: string) {
     sellerId: Number(sellerItems[0].id),
     salesId: attemptSalesId,
     details: [{ detailId: 334790, quantity: 1 }, { detailId: 334791, quantity: 1 }],
+    payments: [{ paymentTypeId: configuredPaymentTypeId, amount: 5598, recordDate: emissionDateEpoch }],
   })
   const { data: started, error: startError } = await db.schema('logistica').rpc('begin_sales_order_invoice_submission', {
     p_company_id: auth.companyId,

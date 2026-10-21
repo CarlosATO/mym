@@ -77,7 +77,6 @@ import { createInvoiceDocumentCache, getInvoiceDocumentCacheKey, invalidateInvoi
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { getActiveCompanyId } from '@/app/actions/companies'
 import { getSalesOrderAuditBoardLocks, type AuditBoardLock, type SalesOrderAuditFinalizeResult } from '@/app/actions/logistica/sales-order-audit'
-import { emitSalesOrderInvoice } from '@/app/actions/logistica/sales-order-invoice-attempts'
 import { getSalesOrderPreparationMissingCostLinesV1, getSalesOrderPreparationProfitabilitySummaryV1 } from '@/app/actions/logistica/sales-order-preparation-profitability'
 import {
   aggregatePreparationProfitability,
@@ -99,6 +98,7 @@ import { PreparationMissingCostDialog } from './preparation-missing-cost-dialog'
 import { SalesOrderAuditDrawer } from '@/modules/logistica/auditoria/sales-order-audit-drawer'
 import { PreparationCommercialIncidentsDialog } from './preparation-commercial-incidents-dialog'
 import { getPreparationColumnId, type PreparationReadinessLoadState } from './preparation-route-readiness'
+import { buildInvoiceDraftPayload, type InvoiceCommercialSelection } from './invoice-commercial'
 
 type KanbanColumn = {
   id: string
@@ -702,8 +702,7 @@ export function SalesOrderPreparationPanel({
   useEffect(() => {
     if (!companyId || !readyInvoiceCardKey) return
     const readyCards = cards.filter(card => card.status === 'AUDITED' && readinessByCardId[card.card_id]?.route_readiness === 'READY_TO_INVOICE')
-    const timer = window.setTimeout(() => { void prefetchInvoicePreviews(companyId, readyCards) }, 0)
-    return () => window.clearTimeout(timer)
+     void prefetchInvoicePreviews(companyId, readyCards)
   }, [companyId, cards, readyInvoiceCardKey, readinessByCardId, prefetchInvoicePreviews])
 
   const invoicedCardKey = useMemo(
@@ -1193,6 +1192,9 @@ export function SalesOrderPreparationPanel({
     const startedAt = performance.now()
     const key = getInvoicePreviewCacheKey(card.card_id, card.nv_bsale_id)
     const cached = invoicePreviewCacheRef.current.get(key)
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug('[invoice-preview][open]', { key, cacheStatus: cached?.status ?? 'MISS', fresh: isInvoicePreviewFresh(cached) })
+    }
     setInvoiceReviewOpen(true)
     setInvoiceReviewSnapshot(cached?.snapshot ?? null)
     setInvoiceReviewError(cached?.error ?? null)
@@ -2206,28 +2208,24 @@ export function SalesOrderPreparationPanel({
         loading={invoiceReviewLoading}
         error={invoiceReviewError}
         onOpenChange={setInvoiceReviewOpen}
-        onContinue={() => {
-          setInvoiceReviewOpen(false)
-          setInvoiceConfirmationOpen(true)
-        }}
+         onContinue={(selection: InvoiceCommercialSelection) => {
+           if (invoiceReviewSnapshot) {
+             setInvoiceReviewSnapshot({
+               ...invoiceReviewSnapshot,
+               commercial_selection: selection,
+               draft_payload: buildInvoiceDraftPayload(selection, invoiceReviewSnapshot.total_amount, invoiceReviewSnapshot.invoice_emission_date ?? invoiceReviewSnapshot.emission_date),
+             })
+           }
+           setInvoiceReviewOpen(false)
+           setInvoiceConfirmationOpen(true)
+         }}
+         onConfigureClient={() => toast.info('Configure la forma de pago predeterminada desde Cliente 360.')}
       />
       <InvoiceConfirmationModal
         open={invoiceConfirmationOpen}
         snapshot={invoiceReviewSnapshot}
         onOpenChange={setInvoiceConfirmationOpen}
         onEmissionBlocked={() => toast.error('La emisión real está deshabilitada: contrato Bsale aún no habilitado.')}
-        onConfirm={async () => {
-          const result = await emitSalesOrderInvoice(invoiceReviewSnapshot?.card_id ?? '')
-          if (result.status === 'CONFIRMED') {
-            toast.success(`Factura #${result.folio ?? 'confirmada'} emitida y reconciliada.`)
-            setInvoiceReviewOpen(false)
-            setInvoiceConfirmationOpen(false)
-            await loadBoard()
-          } else if (result.status !== 'EMISSION_DISABLED') {
-            toast.error(result.error ?? `Emisión no completada: ${result.status}`)
-          }
-          return { status: result.status, error: result.error }
-        }}
       />
       {invoiceDocuments.length > 0 && (
         <Dialog open onOpenChange={open => { if (!open) setInvoiceDocuments([]) }}>

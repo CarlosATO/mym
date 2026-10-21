@@ -52,6 +52,7 @@ export type InvoiceEmissionPayload = {
   sellerId: number
   salesId: string
   details: Array<{ detailId: number; quantity: number }>
+  payments: Array<{ paymentTypeId: number; amount: number; recordDate: number }>
 }
 
 export type InvoiceEmissionSnapshot = FacturableSnapshot & {
@@ -77,6 +78,7 @@ export function buildInvoiceEmissionPayload(input: {
   sellerId: number
   salesId: string
   details: Array<{ detailId: number; quantity: number }>
+  payments: Array<{ paymentTypeId: number; amount: number; recordDate: number }>
 }): InvoiceEmissionPayload {
   return {
     documentTypeId: 5,
@@ -89,6 +91,7 @@ export function buildInvoiceEmissionPayload(input: {
     sellerId: input.sellerId,
     salesId: input.salesId,
     details: input.details,
+    payments: input.payments,
   }
 }
 

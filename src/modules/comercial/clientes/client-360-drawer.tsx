@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from 'react'
 import { AlertTriangle, CalendarDays, Mail, MapPin, Phone, TrendingUp, UserRoundCheck, X } from 'lucide-react'
-import { getCommercialCustomerBehavior, getCommercialCustomerMetricDocuments, getCommercialCustomerPurchaseMix, getCommercialCustomerReceivables, getCommercialDocumentDetail, type CommercialCustomerBehavior, type CommercialCustomerBehaviorDocument, type CommercialCustomerMetricDocuments, type CommercialCustomerMetricKey, type CommercialCustomerPurchaseMix, type CommercialCustomerPurchaseMixProduct, type CommercialCustomerReceivables, type CommercialCustomerReceivablesInvoice, type CommercialDocumentDetail } from '@/app/actions/comercial/customers'
+import { getCommercialCustomerBehavior, getCommercialCustomerCommercialTerms, getCommercialCustomerMetricDocuments, getCommercialCustomerPurchaseMix, getCommercialCustomerReceivables, getCommercialDocumentDetail, type CommercialCustomerBehavior, type CommercialCustomerBehaviorDocument, type CommercialCustomerCommercialTerms, type CommercialCustomerMetricDocuments, type CommercialCustomerMetricKey, type CommercialCustomerPurchaseMix, type CommercialCustomerPurchaseMixProduct, type CommercialCustomerReceivables, type CommercialCustomerReceivablesInvoice, type CommercialDocumentDetail } from '@/app/actions/comercial/customers'
 import type { CommercialCustomerExplorer } from '@/app/actions/comercial/customers'
 import { cn } from '@/lib/utils'
 
@@ -367,7 +367,7 @@ function DocumentDetailModal({ detail, loading, error, onClose }: { detail: Comm
   )
 }
 
-function SummaryTab({ customer, alerts, noSeller, onOpenMetric }: { customer: CommercialCustomerExplorer; alerts: { label: string; tone: string }[]; noSeller: boolean; onOpenMetric: MetricOpenHandler }) {
+function SummaryTab({ customer, alerts, noSeller, onOpenMetric, commercialTerms }: { customer: CommercialCustomerExplorer; alerts: { label: string; tone: string }[]; noSeller: boolean; onOpenMetric: MetricOpenHandler; commercialTerms: CommercialCustomerCommercialTerms | null }) {
   return (
     <div className="space-y-4">
       <Section title="Ventas oficiales">
@@ -382,6 +382,17 @@ function SummaryTab({ customer, alerts, noSeller, onOpenMetric }: { customer: Co
           </div>
           <div className="text-[10px] text-theme-text-muted/45">Mes actual bruto {fmtMoney(customer.official_sales_current_month_gross)} · NC mes {fmtMoney(customer.credit_notes_current_month)} · Última factura {fmtDate(customer.last_invoice_date)} · {customer.days_since_last_invoice != null ? `${customer.days_since_last_invoice} días sin compra` : 'sin fecha de última factura'}</div>
         </div>
+      </Section>
+
+      <Section title="Condiciones comerciales">
+        <div className="grid grid-cols-2 gap-2">
+          <InfoRow label="Forma de pago predeterminada" value={commercialTerms?.default_payment_type_name} />
+          <InfoRow label="Condición de venta predeterminada" value={commercialTerms?.default_sale_condition_name} />
+          <InfoRow label="Crédito habilitado" value={commercialTerms?.credit_enabled == null ? null : commercialTerms.credit_enabled ? 'Sí' : 'No'} />
+          <InfoRow label="Límite de crédito" value={commercialTerms?.credit_limit == null ? null : fmtMoney(commercialTerms.credit_limit)} />
+          <InfoRow label="Lista de precios" value={commercialTerms?.price_list_name} />
+        </div>
+        <p className="text-[10px] text-theme-text-muted/55">Sólo lectura desde el espejo Bsale. No modifica el cliente.</p>
       </Section>
 
       <Section title="Correcciones / Notas de crédito">
@@ -919,7 +930,15 @@ function Client360DrawerContent({ customer, onClose, initialTab = 'summary' }: {
   const [documentDetailError, setDocumentDetailError] = useState<string | null>(null)
   const [documentDetailLoading, setDocumentDetailLoading] = useState(false)
   const [showDocumentDetail, setShowDocumentDetail] = useState(false)
+  const [commercialTerms, setCommercialTerms] = useState<CommercialCustomerCommercialTerms | null>(null)
   const [isPending, startTransition] = useTransition()
+
+  useEffect(() => {
+    startTransition(async () => {
+      const result = await getCommercialCustomerCommercialTerms({ bsaleClientId: customer.bsale_client_id })
+      if (!('error' in result)) setCommercialTerms(result)
+    })
+  }, [customer.bsale_client_id])
 
   useEffect(() => {
     if (behavior || behaviorError || activeTab === 'summary' || activeTab === 'products' || activeTab === 'receivables') return
@@ -1051,7 +1070,7 @@ function Client360DrawerContent({ customer, onClose, initialTab = 'summary' }: {
         </header>
 
         <div className="flex-1 overflow-y-auto px-5 py-3.5">
-          {activeTab === 'summary' && <SummaryTab customer={customer} alerts={alerts} noSeller={noSeller} onOpenMetric={openMetricDocuments} />}
+           {activeTab === 'summary' && <SummaryTab customer={customer} alerts={alerts} noSeller={noSeller} onOpenMetric={openMetricDocuments} commercialTerms={commercialTerms} />}
           {activeTab === 'purchases' && <PurchasesTab behavior={behavior} loading={isPending} error={behaviorError} />}
           {activeTab === 'documents' && (isPending ? <LoadingState /> : behaviorError ? <EmptyState>{behaviorError}</EmptyState> : behavior ? <DocumentsTable documents={behavior.recentDocuments} onOpenDocument={openDocumentDetail} /> : <EmptyState>Selecciona esta pestaña para cargar documentos.</EmptyState>)}
           {activeTab === 'products' && <PurchaseMixTab mix={purchaseMix} loading={purchaseMixLoading} error={purchaseMixError} />}

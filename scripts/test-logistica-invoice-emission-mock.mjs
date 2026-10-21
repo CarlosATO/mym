@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import fs from 'node:fs'
 import { createControlledInvoiceCoordinator } from '../src/lib/integraciones/invoice-emission-coordinator.ts'
 import { buildInvoiceEmissionIdentity, buildInvoiceEmissionPayload, chileDateToBsaleEpoch, chileToday, formatBsaleRejection, invoiceEmissionEnabled, TARGET_INVOICE_SALES_ID, validateTargetInvoiceDocument } from '../src/lib/integraciones/invoice-emission-contract.ts'
 
@@ -12,7 +13,9 @@ const payload = buildInvoiceEmissionPayload({
   sellerId: 28,
   salesId: 'PETGROUP:FACTURA:demo-5032',
   details: [{ detailId: 334790, quantity: 1 }, { detailId: 334791, quantity: 1 }],
+  payments: [{ paymentTypeId: 8, amount: 5598, recordDate: 1792540800 }],
 })
+const emissionAction = fs.readFileSync(new URL('../src/app/actions/logistica/sales-order-invoice-attempts.ts', import.meta.url), 'utf8')
 
 const document = {
   salesId: payload.salesId,
@@ -65,6 +68,11 @@ test('fingerprint changes and an existing confirmed invoice cannot create a seco
 test('payload and target validation preserve 5032 details and omit dispatch', () => {
   assert.deepEqual(payload.details, [{ detailId: 334790, quantity: 1 }, { detailId: 334791, quantity: 1 }])
   assert.equal(payload.declareSii, 1)
+  assert.deepEqual(payload.payments, [{ paymentTypeId: 8, amount: 5598, recordDate: 1792540800 }])
+  assert.match(emissionAction, /payment_type_id/)
+  assert.match(emissionAction, /payments: \[\{ paymentTypeId: configuredPaymentTypeId, amount: 5598/)
+  assert.match(emissionAction, /No es posible facturar porque el cliente no tiene una forma de pago configurada\./)
+  assert.doesNotMatch(emissionAction, /BSALE_UI_AUDIT/)
   assert.equal(typeof payload.emissionDate, 'number')
   assert.equal(typeof payload.expirationDate, 'number')
   assert.equal(Number.isInteger(payload.emissionDate), true)

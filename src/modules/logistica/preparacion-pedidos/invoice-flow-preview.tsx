@@ -87,7 +87,7 @@ export function InvoiceFlowPreview() {
 
     <p className="text-center text-[11px] font-semibold text-[#6B625C]">PDF/XML no se descargan en precarga · sin lecturas productivas · sin escrituras · sin emisión real</p></div>
 
-    <InvoiceReviewModal open={reviewOpen} snapshot={invoiceUiFixture5032} onOpenChange={setReviewOpen} onContinue={() => { setReviewOpen(false); setConfirmationOpen(true) }} />
+    <InvoiceReviewModal open={reviewOpen} snapshot={invoiceUiFixture5032} onOpenChange={setReviewOpen} onContinue={selection => { setConfirmationOpen(true); void selection }} />
     <InvoiceConfirmationModal open={confirmationOpen} snapshot={invoiceUiFixture5032} onOpenChange={setConfirmationOpen} onEmissionBlocked={() => undefined} resetAfterMs={900} />
     {documents.length > 0 && <Dialog open onOpenChange={open => { if (!open) setDocuments([]) }}><DialogContent className="w-[calc(100vw-2rem)] !max-w-[1100px] max-h-[88vh] overflow-y-auto border-[#DDD4CA] bg-[#FCFAF7] text-[#322D29]"><DialogHeader><DialogTitle>Documento tributario</DialogTitle><DialogDescription>Fixture documental local. Los enlaces oficiales son demostrativos.</DialogDescription></DialogHeader><InvoiceDocumentsDetail documents={documents} onCreditNote={document => { setCreditNoteDocument(document); setCreditNoteOpen(true) }} /></DialogContent></Dialog>}
     <CreditNoteConfirmationModal open={creditNoteOpen} document={creditNoteDocument} onOpenChange={setCreditNoteOpen} onEmissionBlocked={() => undefined} resetAfterMs={900} />
