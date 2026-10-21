@@ -160,10 +160,10 @@ export function InvoiceReviewModal({
   )
 }
 
-export function InvoiceConfirmationModal({ open, snapshot, onOpenChange, onEmissionBlocked, resetAfterMs }: { open: boolean; snapshot: InvoiceReviewSnapshot | null; onOpenChange: (open: boolean) => void; onEmissionBlocked: () => void; resetAfterMs?: number }) {
+export function InvoiceConfirmationModal({ open, snapshot, onOpenChange, onEmissionBlocked, onConfirm, resetAfterMs }: { open: boolean; snapshot: InvoiceReviewSnapshot | null; onOpenChange: (open: boolean) => void; onEmissionBlocked: () => void; onConfirm?: () => Promise<{ status: string }>; resetAfterMs?: number }) {
   const [submitting, setSubmitting] = useState(false)
   if (!snapshot) return null
-  const handleSubmit = () => { if (submitting) return; setSubmitting(true); onEmissionBlocked(); if (resetAfterMs) window.setTimeout(() => setSubmitting(false), resetAfterMs) }
+  const handleSubmit = async () => { if (submitting) return; setSubmitting(true); if (!onConfirm) { onEmissionBlocked(); if (resetAfterMs) window.setTimeout(() => setSubmitting(false), resetAfterMs); return } const result = await onConfirm(); if (result.status === 'EMISSION_DISABLED') onEmissionBlocked(); else if (result.status === 'CONFIRMED') onOpenChange(false); setSubmitting(false) }
   return <Dialog open={open} onOpenChange={next => { if (!submitting) onOpenChange(next) }}>
     <DialogContent className="w-[calc(100vw-2rem)] max-w-lg border-[#DDD4CA] bg-[#FCFAF7] text-[#322D29]">
       <DialogHeader><DialogTitle>Confirmar facturación real</DialogTitle><DialogDescription>Está a punto de realizar una facturación real para el cliente {snapshot.client_name} por un monto de {formatInvoiceClp(snapshot.total_amount)} correspondiente a la NV #{snapshot.folio}. ¿Está seguro de continuar?</DialogDescription></DialogHeader>

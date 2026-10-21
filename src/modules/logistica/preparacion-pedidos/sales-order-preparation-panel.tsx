@@ -77,6 +77,7 @@ import { createInvoiceDocumentCache, getInvoiceDocumentCacheKey, invalidateInvoi
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { getActiveCompanyId } from '@/app/actions/companies'
 import { getSalesOrderAuditBoardLocks, type AuditBoardLock, type SalesOrderAuditFinalizeResult } from '@/app/actions/logistica/sales-order-audit'
+import { emitSalesOrderInvoice } from '@/app/actions/logistica/sales-order-invoice-attempts'
 import { getSalesOrderPreparationMissingCostLinesV1, getSalesOrderPreparationProfitabilitySummaryV1 } from '@/app/actions/logistica/sales-order-preparation-profitability'
 import {
   aggregatePreparationProfitability,
@@ -2215,6 +2216,18 @@ export function SalesOrderPreparationPanel({
         snapshot={invoiceReviewSnapshot}
         onOpenChange={setInvoiceConfirmationOpen}
         onEmissionBlocked={() => toast.error('La emisión real está deshabilitada: contrato Bsale aún no habilitado.')}
+        onConfirm={async () => {
+          const result = await emitSalesOrderInvoice(invoiceReviewSnapshot?.card_id ?? '')
+          if (result.status === 'CONFIRMED') {
+            toast.success(`Factura #${result.folio ?? 'confirmada'} emitida y reconciliada.`)
+            setInvoiceReviewOpen(false)
+            setInvoiceConfirmationOpen(false)
+            await loadBoard()
+          } else if (result.status !== 'EMISSION_DISABLED') {
+            toast.error(result.error ?? `Emisión no completada: ${result.status}`)
+          }
+          return { status: result.status }
+        }}
       />
       {invoiceDocuments.length > 0 && (
         <Dialog open onOpenChange={open => { if (!open) setInvoiceDocuments([]) }}>
