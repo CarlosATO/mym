@@ -26,7 +26,7 @@ test('discovery y refresh quedan separados y el refresh tiene concurrencia limit
 })
 
 test('la reconciliación se ejecuta después de documentos y detalles', () => {
-  assert.match(sync, /const preparationResult = await materializePreparationAfterSalesSync\(companyId\)/)
+  assert.match(sync, /const preparationResult = await materializePreparationAfterSalesSync\(companyId(?:, runId)?\)/)
   assert.match(sync, /relations_created: preparationResult\?\.relations_created/)
   assert.match(sync, /cards_closed: \(preparationResult\?\.closed_invoiced \|\| 0\)/)
 })
