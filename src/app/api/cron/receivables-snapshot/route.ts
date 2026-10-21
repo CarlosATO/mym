@@ -33,7 +33,7 @@ export async function POST(request: Request) {
   } catch (error) {
     // Diagnose non-Error objects returned by downstream clients without logging tokens or request headers.
     console.error('[receivables-snapshot] Execution failed', describeSnapshotError(error))
-    return NextResponse.json({ success: false, error: 'Receivables snapshot failed' }, { status: 500 })
+    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Receivables snapshot failed' }, { status: 500 })
   }
 }
 
