@@ -452,6 +452,64 @@ export async function snapshotReceivablesForClients({
   }
 }
 
+/**
+ * Reconcile counters from durable rows instead of trusting the last batch update.
+ * A request may stop after persisting clients/documents but before finishRun().
+ */
+async function readPersistedSnapshotTotals(db: SupabaseClient<any, any, any>, runId: string) {
+  const clientRows = await collectPagedRows(async (offset, pageSize) => {
+    const { data, error } = await db.schema('integraciones')
+      .from('bsale_receivable_snapshot_clients')
+      .select('client_id,result')
+      .eq('run_id', runId)
+      .order('client_id', { ascending: true })
+      .range(offset, offset + pageSize - 1)
+    if (error) throw error
+    return data || []
+  })
+  const documentRows = await collectPagedRows(async (offset, pageSize) => {
+    const { data, error } = await db.schema('integraciones')
+      .from('bsale_receivable_snapshot_documents')
+      .select('total_amount_owed')
+      .eq('run_id', runId)
+      .order('id', { ascending: true })
+      .range(offset, offset + pageSize - 1)
+    if (error) throw error
+    return data || []
+  })
+
+  const processedClientIds = new Set<number>()
+  let clientsSuccess = 0
+  let clientsUnqueryable = 0
+  let clientsError = 0
+  for (const row of clientRows) {
+    const clientId = Number(row.client_id)
+    if (!Number.isFinite(clientId) || processedClientIds.has(clientId)) {
+      throw new Error('El snapshot contiene identificadores de clientes inválidos o duplicados.')
+    }
+    processedClientIds.add(clientId)
+    if (row.result === 'SUCCESS') clientsSuccess += 1
+    else if (row.result === 'UNPAID_DOCUMENTS_CLIENT_INVALID') clientsUnqueryable += 1
+    else if (row.result === 'HTTP_ERROR') clientsError += 1
+    else throw new Error('El snapshot contiene un resultado de cliente desconocido.')
+  }
+
+  let totalAmountOwed = 0
+  for (const row of documentRows) {
+    const amount = Number(row.total_amount_owed)
+    if (!Number.isFinite(amount)) throw new Error('El snapshot contiene un saldo documental inválido.')
+    totalAmountOwed += amount
+  }
+  return {
+    processedClientIds,
+    clientsSuccess,
+    clientsUnqueryable,
+    clientsError,
+    documentsTotal: documentRows.length,
+    totalAmountOwed,
+  }
+}
+
 export async function snapshotReceivablesBatch({
   db,
   companyId,
@@ -529,7 +587,6 @@ export async function snapshotReceivablesBatch({
   const skippedClientIds = uniqueClientIds.filter(clientId => processedClientIds.includes(clientId))
   const context = { db, companyId, fetchJson, runId: run.runId, snapshotAt: run.snapshotAt, snapshotDate: run.snapshotDate }
   const results: SnapshotRunResult[] = []
-  const processedBatchClientIds: number[] = []
   let rateLimited: SnapshotBatchResult['rateLimited']
   for (const clientId of batchClientIds) {
     const result = await processClient(context, clientId)
@@ -538,16 +595,17 @@ export async function snapshotReceivablesBatch({
       break
     }
     results.push(result)
-    processedBatchClientIds.push(clientId)
   }
 
   const clients = results.flatMap(result => result.client ? [result.client] : [])
   const documents = results.flatMap(result => result.documents)
-  const clientsSuccess = clients.filter(client => client.result === 'SUCCESS').length
-  const clientsUnqueryable = clients.filter(client => client.result === 'UNPAID_DOCUMENTS_CLIENT_INVALID').length
-  const clientsError = clients.filter(client => client.result === 'HTTP_ERROR').length
-  const processedClients = processedClientIds.length + processedBatchClientIds.length
-  const status = snapshotRunStatus(run.clientsTotal, processedClients, run.clientsError + clientsError)
+  // Recover fully persisted rows, including any clients saved just before an earlier crash.
+  // Never add the new batch to possibly stale run-level counters.
+  const persisted = await readPersistedSnapshotTotals(db, run.runId)
+  if (persisted.processedClientIds.size > run.clientsTotal) {
+    throw new Error('El snapshot tiene más clientes persistidos que el universo original.')
+  }
+  const status = snapshotRunStatus(run.clientsTotal, persisted.processedClientIds.size, persisted.clientsError)
   const rateLimitSummary = rateLimited ? {
     code: 'TRANSIENT_GLOBAL_RATE_LIMIT',
     retry_after_seconds: rateLimited.retryAfterSeconds,
@@ -555,27 +613,23 @@ export async function snapshotReceivablesBatch({
   } : null
   await finishRun(db, run.runId, {
     status,
-    clientsSuccess: run.clientsSuccess + clientsSuccess,
-    clientsUnqueryable: run.clientsUnqueryable + clientsUnqueryable,
-    clientsError: run.clientsError + clientsError,
-    documentsTotal: run.documentsTotal + documents.length,
-    totalAmountOwed: run.totalAmountOwed + documents.reduce((sum, document) => sum + document.total_amount_owed, 0),
-    coveragePercent: snapshotEffectiveCoveragePercent(
-      run.clientsSuccess + clientsSuccess,
-      run.clientsTotal,
-    ),
+    clientsSuccess: persisted.clientsSuccess,
+    clientsUnqueryable: persisted.clientsUnqueryable,
+    clientsError: persisted.clientsError,
+    documentsTotal: persisted.documentsTotal,
+    totalAmountOwed: persisted.totalAmountOwed,
+    coveragePercent: snapshotEffectiveCoveragePercent(persisted.clientsSuccess, run.clientsTotal),
     completedAt: status === 'RUNNING' ? null : new Date().toISOString(),
     errorSummary: rateLimitSummary,
   })
 
-  const processedAfterBatch = new Set([...processedClientIds, ...processedBatchClientIds])
   return {
     runId: run.runId,
     clients,
     documents,
     totalAmountOwed: documents.reduce((sum, document) => sum + document.total_amount_owed, 0),
     status,
-    remainingClientIds: uniqueClientIds.filter(clientId => !processedAfterBatch.has(clientId)),
+    remainingClientIds: uniqueClientIds.filter(clientId => !persisted.processedClientIds.has(clientId)),
     skippedClientIds,
     rateLimited,
   }
