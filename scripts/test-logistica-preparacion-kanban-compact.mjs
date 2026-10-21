@@ -71,7 +71,7 @@ test('11. unidades compactas con texto accesible', () => {
 })
 
 test('12. monto visible y compacto', () => {
-  assert.match(card, /formatPreparationClp\(amount\)/)
+  assert.match(card, /formatPreparationClp\(invoiceDisplayAmount\)/)
   assert.match(card, /text-\[11px\] font-bold tabular-nums/)
 })
 

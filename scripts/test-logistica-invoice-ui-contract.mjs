@@ -7,6 +7,7 @@ const ui = fs.readFileSync(new URL('src/modules/logistica/preparacion-pedidos/in
 const panel = fs.readFileSync(new URL('src/modules/logistica/preparacion-pedidos/sales-order-preparation-panel.tsx', root), 'utf8')
 const previewPage = fs.readFileSync(new URL('src/app/dev/logistica/invoice-flow-preview/page.tsx', root), 'utf8')
 const preview = fs.readFileSync(new URL('src/modules/logistica/preparacion-pedidos/invoice-flow-preview.tsx', root), 'utf8')
+const card = fs.readFileSync(new URL('src/modules/logistica/preparacion-pedidos/sales-order-card.tsx', root), 'utf8')
 const middleware = fs.readFileSync(new URL('src/middleware.ts', root), 'utf8')
 
 test('invoice UI preserves the current NV fixture and safety copy', () => {
@@ -44,9 +45,31 @@ test('preparation panel exposes the route-guide column without emission calls', 
   assert.doesNotMatch(panel, /emitInvoice|createInvoiceAttempt|POST.*bsale/i)
 })
 
+test('factured card supports one or multiple linked invoices without an emission action', () => {
+  assert.match(card, /INVOICED_READY_FOR_ROUTE/)
+  assert.match(card, /invoiceDocuments\.length > 1/)
+  assert.match(card, /Ver factura/)
+  assert.doesNotMatch(card, /is_invoiced/)
+  assert.doesNotMatch(card, /Facturado en espera de Guía de Ruta/)
+})
+
+test('document detail exposes conditional official URLs and keeps credit note secondary', () => {
+  assert.match(ui, /Documento oficial Bsale/)
+  assert.match(ui, /official_url/)
+  assert.match(ui, /pdf_url/)
+  assert.match(ui, /xml_url/)
+  assert.match(ui, /Anular con Nota de Crédito/)
+  assert.match(ui, /target="_blank"/)
+  assert.doesNotMatch(ui, /iframe/)
+})
+
 test('preview is development-only, fixture-only and has no productive action imports', () => {
   assert.match(previewPage, /process\.env\.NODE_ENV !== 'development'/)
   assert.match(previewPage, /notFound\(\)/)
   assert.doesNotMatch(preview, /getInvoiceReviewSnapshot|createClient|fetch\(/)
+  assert.match(preview, /DEMO-5032-A/)
+  assert.match(preview, /DEMO-5032-B/)
+  assert.match(preview, /DEMO-NC-5032-A/)
+  assert.match(preview, /documents\.length > 1/)
   assert.match(middleware, /invoice-flow-preview/)
 })

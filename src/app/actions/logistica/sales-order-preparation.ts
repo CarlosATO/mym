@@ -417,6 +417,160 @@ export type InvoiceReviewPreviewRequest = {
   seller_name: string | null
 }
 
+export type InvoiceDocumentPreviewRequest = {
+  card_id: string
+  current_bsale_nv_id: number
+  sales_order_folio: string
+  client_name: string
+}
+
+export type InvoiceDocumentPreviewReadModel = {
+  invoice_bsale_id: number
+  invoice_folio: string
+  invoice_date: string | null
+  client_name: string
+  client_rut: string | null
+  net_amount: number | null
+  tax_amount: number | null
+  total_amount: number | null
+  document_status: 'CONFIRMED' | 'CANCELLED' | 'UNKNOWN'
+  sales_order_folio: string
+  official_url: string | null
+  pdf_url: string | null
+  xml_url: string | null
+  related_detail_count: number
+  related_detail_ids: number[]
+}
+
+function readRawDocumentUrl(rawJson: unknown, ...keys: string[]): string | null {
+  if (!rawJson || typeof rawJson !== 'object') return null
+  const raw = rawJson as Record<string, unknown>
+  for (const key of keys) {
+    const value = raw[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return null
+}
+
+/** Batch read of linked invoice metadata. It never downloads or refreshes Bsale files. */
+export async function getInvoiceDocumentPreviews(
+  companyId: string,
+  requests: InvoiceDocumentPreviewRequest[],
+) {
+  const { supabase, error: permissionError } = await requireLogisticaView()
+  if (permissionError) return { data: {}, error: permissionError }
+
+  const unique = [...new Map(
+    requests
+      .filter(request => Number.isSafeInteger(request.current_bsale_nv_id))
+      .map(request => [`${request.card_id}:${request.current_bsale_nv_id}`, request]),
+  ).values()]
+  if (unique.length === 0) return { data: {}, error: null }
+
+  const nvIds = unique.map(request => request.current_bsale_nv_id)
+  const { data: links, error: linksError } = await supabase
+    .schema('integraciones')
+    .from('bsale_invoice_sales_order_links')
+    .select('invoice_bsale_id, invoice_detail_bsale_id, sales_order_bsale_id, sales_order_detail_bsale_id')
+    .eq('company_id', companyId)
+    .in('sales_order_bsale_id', nvIds)
+  if (linksError) return { data: {}, error: linksError.message }
+
+  const invoiceIds = [...new Set((links ?? []).map(link => Number(link.invoice_bsale_id)).filter(Number.isSafeInteger))]
+  if (invoiceIds.length === 0) {
+    return { data: Object.fromEntries(unique.map(request => [`${request.card_id}:${request.current_bsale_nv_id}`, []])), error: null }
+  }
+
+  const [{ data: documents, error: documentsError }, { data: details, error: detailsError }] = await Promise.all([
+    supabase
+      .schema('integraciones')
+      .from('bsale_documents')
+      .select('bsale_id, number, emission_date, net_amount, tax_amount, total_amount, document_type_id, state, client_id, url_pdf, raw_json')
+      .eq('company_id', companyId)
+      .eq('document_type_id', 5)
+      .in('bsale_id', invoiceIds),
+    supabase
+      .schema('integraciones')
+      .from('bsale_document_details')
+      .select('bsale_id, bsale_document_id, quantity')
+      .eq('company_id', companyId)
+      .in('bsale_document_id', invoiceIds),
+  ])
+  if (documentsError) return { data: {}, error: documentsError.message }
+  if (detailsError) return { data: {}, error: detailsError.message }
+
+  const clientIds = [...new Set((documents ?? []).map(document => Number(document.client_id)).filter(Number.isSafeInteger))]
+  const { data: clients, error: clientsError } = clientIds.length > 0
+    ? await supabase
+      .schema('integraciones')
+      .from('bsale_clients')
+      .select('bsale_client_id, business_name, code')
+      .eq('company_id', companyId)
+      .in('bsale_client_id', clientIds)
+    : { data: [], error: null }
+  if (clientsError) return { data: {}, error: clientsError.message }
+
+  const documentById = new Map((documents ?? []).map(document => [Number(document.bsale_id), document]))
+  const clientById = new Map((clients ?? []).map(client => [Number(client.bsale_client_id), client]))
+  const detailIdsByInvoice = new Map<number, Set<number>>()
+  for (const detail of details ?? []) {
+    const invoiceId = Number(detail.bsale_document_id)
+    const list = detailIdsByInvoice.get(invoiceId) ?? new Set<number>()
+    list.add(Number(detail.bsale_id))
+    detailIdsByInvoice.set(invoiceId, list)
+  }
+
+  const data: Record<string, InvoiceDocumentPreviewReadModel[]> = {}
+  for (const request of unique) {
+    const requestLinks = (links ?? []).filter(link => Number(link.sales_order_bsale_id) === request.current_bsale_nv_id)
+    const invoiceIdsForRequest = [...new Set(requestLinks.map(link => Number(link.invoice_bsale_id)))]
+    data[`${request.card_id}:${request.current_bsale_nv_id}`] = invoiceIdsForRequest
+      .map(invoiceId => {
+        const document = documentById.get(invoiceId)
+        if (!document) return null
+        const rawJson = document.raw_json
+        const cancellationStatus = readRawDocumentUrl(rawJson, 'cancellationStatus')
+        const documentStatus = cancellationStatus || Number(document.state) === 1
+          ? 'CANCELLED'
+          : Number(document.state) === 0 ? 'CONFIRMED' : 'UNKNOWN'
+        const client = document.client_id == null ? null : clientById.get(Number(document.client_id))
+        const relatedDetailIds = requestLinks
+          .filter(link => Number(link.invoice_bsale_id) === invoiceId)
+          .map(link => Number(link.sales_order_detail_bsale_id))
+        const invoiceDetailIds = detailIdsByInvoice.get(invoiceId) ?? new Set<number>()
+        const pdfUrl = readRawDocumentUrl(rawJson, 'urlPdf', 'urlPdfOriginal') ?? document.url_pdf ?? null
+        const officialUrl = readRawDocumentUrl(rawJson, 'urlPublicView', 'urlPublicViewOriginal') ?? pdfUrl
+        return {
+          invoice_bsale_id: invoiceId,
+          invoice_folio: String(document.number ?? invoiceId),
+          invoice_date: document.emission_date ?? null,
+          client_name: client?.business_name ?? request.client_name,
+          client_rut: client?.code ?? null,
+          net_amount: document.net_amount == null ? null : Number(document.net_amount),
+          tax_amount: document.tax_amount == null ? null : Number(document.tax_amount),
+          total_amount: document.total_amount == null ? null : Number(document.total_amount),
+          document_status: documentStatus,
+          sales_order_folio: request.sales_order_folio,
+          official_url: officialUrl,
+          pdf_url: pdfUrl,
+          xml_url: readRawDocumentUrl(rawJson, 'urlXml'),
+          related_detail_count: [...invoiceDetailIds].filter(detailId => requestLinks.some(link => Number(link.invoice_detail_bsale_id) === detailId)).length,
+          related_detail_ids: relatedDetailIds,
+        } satisfies InvoiceDocumentPreviewReadModel
+      })
+      .filter((document): document is InvoiceDocumentPreviewReadModel => document !== null)
+  }
+
+  logPreparationDiagnostics('invoiceDocumentBatch', {
+    requested: requests.length,
+    unique: unique.length,
+    links: links?.length ?? 0,
+    invoices: invoiceIds.length,
+    documents: documents?.length ?? 0,
+  })
+  return { data, error: null }
+}
+
 /** Batch presentation read for READY cards. Emission validation remains a separate fresh server contract. */
 export async function getInvoiceReviewPreviews(
   companyId: string,

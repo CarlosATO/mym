@@ -41,13 +41,23 @@ export type InvoiceReviewSnapshot = {
 }
 
 export type InvoiceDocumentPreview = {
+  invoice_bsale_id?: number
   invoice_folio: string
   invoice_date: string | null
   client_name: string
+  client_rut?: string | null
+  net_amount?: number | null
+  tax_amount?: number | null
   total_amount: number | null
   status: 'CONFIRMED' | 'CANCELLED'
+  document_status?: 'CONFIRMED' | 'CANCELLED' | 'UNKNOWN'
   sales_order_folio: string
   credit_note_folio?: string | null
+  official_url?: string | null
+  pdf_url?: string | null
+  xml_url?: string | null
+  related_detail_count?: number
+  related_detail_ids?: number[]
 }
 
 export const invoiceUiFixture5032: InvoiceReviewSnapshot = {
@@ -172,9 +182,18 @@ export function CreditNoteConfirmationModal({ open, document, onOpenChange, onEm
   </Dialog>
 }
 
+function InvoiceDocumentBlock({ document, onCreditNote }: { document: InvoiceDocumentPreview; onCreditNote: (document: InvoiceDocumentPreview) => void }) {
+  const cancelled = (document.document_status ?? document.status) === 'CANCELLED'
+  const knownStatus = document.document_status && document.document_status !== 'UNKNOWN'
+  return <section className="space-y-4 rounded-lg border border-[#E5DDD5] bg-white p-4"><div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><FileText className="h-4 w-4 text-[#72383D]" /><h3 className="text-sm font-bold">Factura N.º {document.invoice_folio}</h3></div><span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${cancelled ? 'bg-[#F5EDE9] text-[#8A4B4B]' : 'bg-emerald-50 text-emerald-800'}`}>{cancelled ? 'Anulada' : 'Facturada'}</span></div><section><p className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[#6B625C]">Datos del documento</p><div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4"><div><p className="text-[9px] uppercase text-[#6B625C]">NV origen</p><p className="font-bold">#{document.sales_order_folio}</p></div><div><p className="text-[9px] uppercase text-[#6B625C]">Fecha emisión</p><p className="font-bold">{formatInvoiceDate(document.invoice_date)}</p></div><div><p className="text-[9px] uppercase text-[#6B625C]">Cliente</p><p className="truncate font-bold">{document.client_name}</p></div><div><p className="text-[9px] uppercase text-[#6B625C]">RUT</p><p className="font-bold">{formatInvoiceRut(document.client_rut ?? null) ?? 'No disponible'}</p></div></div><div className="mt-3 ml-auto w-full max-w-xs border-t border-[#E5DDD5] pt-2 text-xs">{document.net_amount != null && <div className="flex justify-between py-0.5"><span className="text-[#6B625C]">Neto</span><span>{formatInvoiceClp(document.net_amount)}</span></div>}{document.tax_amount != null && <div className="flex justify-between py-0.5"><span className="text-[#6B625C]">IVA</span><span>{formatInvoiceClp(document.tax_amount)}</span></div>}<div className="mt-1 flex justify-between border-t border-[#E5DDD5] pt-2 text-sm font-bold"><span>Total</span><span className="text-[#72383D]">{formatInvoiceClp(document.total_amount)}</span></div></div></section><section className="rounded-lg border border-[#D8CFC5] bg-[#FCFAF7] p-3"><p className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[#6B625C]">Documento oficial Bsale</p>{knownStatus && <p className="mb-2 text-xs text-[#4F4842]">Estado Bsale: <strong>{cancelled ? 'Anulada' : 'Confirmada'}</strong></p>}<div className="flex flex-wrap items-center gap-2">{document.official_url && <a href={document.official_url} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center rounded-md bg-[#72383D] px-3 text-xs font-bold text-white hover:bg-[#612F34]">Ver factura oficial</a>}{document.pdf_url && <a href={document.pdf_url} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center rounded-md border border-[#B8ABA0] px-3 text-xs font-semibold text-[#4F4842] hover:bg-white">Descargar PDF</a>}{document.xml_url && <a href={document.xml_url} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center rounded-md px-2 text-[11px] font-semibold text-[#6B625C] underline underline-offset-2">XML</a>}{!document.official_url && !document.pdf_url && !document.xml_url && <span className="text-xs text-[#6B625C]">Documento oficial no disponible en el mirror.</span>}</div></section>{cancelled && document.credit_note_folio && <p className="text-xs font-semibold text-[#8A4B4B]">Nota de Crédito #{document.credit_note_folio} conservada como documento relacionado.</p>}{!cancelled && <div className="border-t border-[#E5DDD5] pt-3"><p className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[#6B625C]">Acción secundaria</p><Button variant="outline" size="sm" onClick={() => onCreditNote(document)} className="text-[#72383D]">Anular con Nota de Crédito</Button></div>}</section>
+}
+
+export function InvoiceDocumentsDetail({ documents, onCreditNote }: { documents: InvoiceDocumentPreview[]; onCreditNote: (document: InvoiceDocumentPreview) => void }) {
+  return <div className="space-y-4">{documents.map(document => <InvoiceDocumentBlock key={`${document.invoice_bsale_id ?? document.invoice_folio}:${document.invoice_folio}`} document={document} onCreditNote={onCreditNote} />)}</div>
+}
+
 export function InvoiceDocumentDetail({ document, onCreditNote }: { document: InvoiceDocumentPreview; onCreditNote: () => void }) {
-  const cancelled = document.status === 'CANCELLED'
-  return <section className="space-y-3 rounded-lg border border-[#E5DDD5] bg-white p-4"><div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><FileText className="h-4 w-4 text-[#72383D]" /><h3 className="text-xs font-bold uppercase tracking-wider">Documento tributario</h3></div><span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${cancelled ? 'bg-[#F5EDE9] text-[#8A4B4B]' : 'bg-emerald-50 text-emerald-800'}`}>{cancelled ? 'Anulada' : 'Facturada'}</span></div><div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4"><div><p className="text-[9px] uppercase text-[#6B625C]">Factura</p><p className="font-bold">#{document.invoice_folio}</p></div><div><p className="text-[9px] uppercase text-[#6B625C]">NV relacionada</p><p className="font-bold">#{document.sales_order_folio}</p></div><div><p className="text-[9px] uppercase text-[#6B625C]">Cliente</p><p className="truncate font-bold">{document.client_name}</p></div><div><p className="text-[9px] uppercase text-[#6B625C]">Monto</p><p className="font-bold">{formatInvoiceClp(document.total_amount)}</p></div></div>{cancelled && document.credit_note_folio && <p className="text-xs font-semibold text-[#8A4B4B]">Nota de Crédito #{document.credit_note_folio}</p>}{!cancelled && <Button variant="outline" size="sm" onClick={onCreditNote} className="text-[#72383D]">Anular con Nota de Crédito</Button>}</section>
+  return <InvoiceDocumentsDetail documents={[document]} onCreditNote={() => onCreditNote()} />
 }
 
 export const invoiceUiSafetyCopy = {
