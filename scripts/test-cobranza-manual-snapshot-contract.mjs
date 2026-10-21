@@ -58,11 +58,25 @@ test('la UI separa progreso técnico y cobertura efectiva', () => {
 })
 
 test('la UI hace polling controlado, bloquea doble ejecución y refresca al finalizar', () => {
-  assert.match(control, /POLL_MS = 7000/)
+  assert.match(control, /POLL_MS = 15000/)
   assert.match(control, /setInterval\(\(\) => \{ void refresh\(\) \}, POLL_MS\)/)
   assert.match(control, /disabled=\{running\}/)
   assert.match(control, /router\.refresh\(\)/)
   assert.match(control, /BSale solicitó una pausa/)
+  assert.match(control, /status\.executionState !== 'ACTIVE'/)
+  assert.match(control, /Sincronización interrumpida/)
+  assert.match(control, /Reanudar sincronización/)
+  assert.match(control, /const resumable = interrupted \|\| paused/)
+})
+
+test('el servidor detecta actividad real y solo autoriza reanudar ejecuciones detenidas', () => {
+  assert.match(action, /classifyReceivablesSnapshotExecution/)
+  assert.match(action, /bsale_receivable_snapshot_clients/)
+  assert.match(action, /\.order\('processed_at', \{ ascending: false \}\)/)
+  assert.match(action, /bsale_sync_locks/)
+  assert.match(action, /gt\('expires_at'/)
+  assert.match(action, /if \(status\.activeRunId && !status\.canResume\)/)
+  assert.match(action, /executionState: 'ACTIVE', canResume: false/)
 })
 
 test('Cobranzas recibe estado inicial sin cambiar su fuente de datos', () => {
