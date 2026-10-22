@@ -64,6 +64,7 @@ export type InvoiceReviewSnapshot = {
 export type InvoiceDocumentPreview = {
   invoice_bsale_id?: number
   invoice_folio: string
+  payment_method_name?: string | null
   invoice_date: string | null
   client_name: string
   client_rut?: string | null

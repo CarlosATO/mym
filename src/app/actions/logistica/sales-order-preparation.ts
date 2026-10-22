@@ -498,6 +498,7 @@ export type InvoiceDocumentPreviewRequest = {
 export type InvoiceDocumentPreviewReadModel = {
   invoice_bsale_id: number
   invoice_folio: string
+  payment_method_name: string | null
   invoice_date: string | null
   client_name: string
   client_rut: string | null
@@ -505,6 +506,7 @@ export type InvoiceDocumentPreviewReadModel = {
   tax_amount: number | null
   total_amount: number | null
   document_status: 'CONFIRMED' | 'CANCELLED' | 'UNKNOWN'
+  status: 'CONFIRMED' | 'CANCELLED'
   sales_order_folio: string
   official_url: string | null
   pdf_url: string | null
@@ -575,7 +577,7 @@ export async function getInvoiceDocumentPreviews(
     ? await supabase
       .schema('integraciones')
       .from('bsale_clients')
-      .select('bsale_client_id, business_name, code')
+       .select('bsale_client_id, business_name, code, payment_type_name')
       .eq('company_id', companyId)
       .in('bsale_client_id', clientIds)
     : { data: [], error: null }
@@ -613,14 +615,16 @@ export async function getInvoiceDocumentPreviews(
         const officialUrl = readRawDocumentUrl(rawJson, 'urlPublicView', 'urlPublicViewOriginal') ?? pdfUrl
         return {
           invoice_bsale_id: invoiceId,
-          invoice_folio: String(document.number ?? invoiceId),
+           invoice_folio: String(document.number ?? invoiceId),
+           payment_method_name: client?.payment_type_name ?? null,
           invoice_date: document.emission_date ?? null,
           client_name: client?.business_name ?? request.client_name,
           client_rut: client?.code ?? null,
           net_amount: document.net_amount == null ? null : Number(document.net_amount),
           tax_amount: document.tax_amount == null ? null : Number(document.tax_amount),
           total_amount: document.total_amount == null ? null : Number(document.total_amount),
-          document_status: documentStatus,
+           document_status: documentStatus,
+           status: documentStatus === 'CANCELLED' ? 'CANCELLED' : 'CONFIRMED',
           sales_order_folio: request.sales_order_folio,
           official_url: officialUrl,
           pdf_url: pdfUrl,

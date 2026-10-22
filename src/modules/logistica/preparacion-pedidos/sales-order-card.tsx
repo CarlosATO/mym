@@ -93,7 +93,7 @@ export function SalesOrderCard({
   const invoiceSummary = invoiceDocuments.length > 1
     ? `${invoiceDocuments.length} facturas · ${formatPreparationClp(invoicedAmount)} facturado`
     : invoiceDocuments[0]
-      ? `Factura #${invoiceDocuments[0].invoice_folio}`
+      ? `Factura #${invoiceDocuments[0].invoice_folio}${invoiceDocuments[0].payment_method_name ? ` · ${invoiceDocuments[0].payment_method_name}` : ''}`
       : 'Factura disponible'
   const lockLabel = getPreparationLockLabel({
     status: card.status,
