@@ -5,6 +5,9 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { getActiveCompanyId } from '@/app/actions/companies'
 import { getWarehousePreparationSyncHealth, type WarehousePreparationSyncHealth } from '@/app/actions/integraciones/sync'
 import { decidePreparationSync } from '@/modules/logistica/preparacion-pedidos/preparation-sync-policy'
+import type { InvoicePaymentTypeOption, InvoiceSaleConditionOption } from '@/modules/logistica/preparacion-pedidos/invoice-commercial'
+import { chileToday } from '@/lib/integraciones/invoice-emission-contract'
+import { extractBsaleRelationIdFromHref } from '@/lib/integraciones/bsale-client-commercial-normalization'
 
 function logPreparationDiagnostics(label: string, detail: Record<string, unknown>) {
   if (process.env.NODE_ENV !== 'production') {
@@ -40,6 +43,48 @@ export type SalesOrderClientData = {
   rut: string | null
   phone: string | null
   email: string | null
+}
+
+const NON_INVOICE_PAYMENT_TYPES = new Set(['NOTA CREDITO DEVOLUCION', 'ABONO DE CLIENTE'])
+
+const commercialCatalogCache = new Map<string, { expiresAt: number; data: { paymentTypes: InvoicePaymentTypeOption[]; saleConditions: InvoiceSaleConditionOption[] } }>()
+
+function readRawUnixDate(value: unknown): string | null {
+  const timestamp = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN
+  if (!Number.isFinite(timestamp)) return null
+  const date = new Date(timestamp * 1000)
+  return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10)
+}
+
+async function getInvoiceCommercialCatalog(companyId: string, supabase: Awaited<ReturnType<typeof createClient>>) {
+  const cached = commercialCatalogCache.get(companyId)
+  if (cached && cached.expiresAt > Date.now()) return cached.data
+
+  const [{ data: paymentTypes, error: paymentTypesError }, { data: saleConditions, error: saleConditionsError }] = await Promise.all([
+    supabase.schema('integraciones').from('bsale_payment_types').select('bsale_id, name').eq('company_id', companyId).eq('is_active', true).order('name'),
+    supabase.schema('integraciones').from('bsale_sale_conditions').select('bsale_id, name, state, raw_json').eq('company_id', companyId).eq('state', 0).order('name'),
+  ])
+
+  if (paymentTypesError) throw paymentTypesError
+  if (saleConditionsError) throw saleConditionsError
+
+  const invoicePaymentTypes: InvoicePaymentTypeOption[] = (paymentTypes ?? [])
+    .filter(type => !NON_INVOICE_PAYMENT_TYPES.has(String(type.name).trim().toUpperCase()))
+    .map(type => ({ bsale_id: Number(type.bsale_id), name: type.name }))
+    .filter(type => Number.isSafeInteger(type.bsale_id))
+  const invoiceSaleConditions: InvoiceSaleConditionOption[] = (saleConditions ?? []).map(condition => {
+    const raw = condition.raw_json && typeof condition.raw_json === 'object' ? condition.raw_json as Record<string, unknown> : {}
+    return {
+      bsale_id: Number(condition.bsale_id),
+      name: condition.name,
+      time_condition: typeof raw.timeCondition === 'number' ? raw.timeCondition : null,
+      time_unity: typeof raw.timeUnity === 'number' ? raw.timeUnity : null,
+    }
+  }).filter(condition => Number.isSafeInteger(condition.bsale_id))
+
+  const data = { paymentTypes: invoicePaymentTypes, saleConditions: invoiceSaleConditions }
+  commercialCatalogCache.set(companyId, { expiresAt: Date.now() + 5 * 60_000, data })
+  return data
 }
 
 export type SalesOrderPreparationCardInfo = {
@@ -361,17 +406,25 @@ export async function getInvoiceReviewSnapshot(companyId: string, cardId: string
   const { data: document } = await supabase
     .schema('integraciones')
     .from('bsale_documents')
-    .select('emission_date, net_amount, tax_amount, total_amount, client_id, sale_condition_id')
+    .select('emission_date, net_amount, tax_amount, total_amount, client_id, raw_json')
     .eq('company_id', companyId)
     .eq('bsale_id', card.nv_bsale_id)
     .maybeSingle()
   const { data: client } = await supabase
     .schema('integraciones')
     .from('bsale_clients')
-    .select('bsale_client_id, business_name, code, activity, address, commune, city, region, email, phone')
+    .select('bsale_client_id, business_name, code, activity, address, commune, city, region, email, phone, payment_type_id, payment_type_name, sale_condition_id, sale_condition_name, has_credit, price_list_id, price_list_name, credit_limit, raw_payload')
     .eq('company_id', companyId)
     .eq('bsale_client_id', document?.client_id ?? -1)
     .maybeSingle()
+
+  const catalog = await getInvoiceCommercialCatalog(companyId, supabase)
+  const documentRaw = document?.raw_json && typeof document.raw_json === 'object' ? document.raw_json as Record<string, unknown> : {}
+  const clientRaw = client?.raw_payload && typeof client.raw_payload === 'object' ? client.raw_payload as Record<string, unknown> : {}
+  const effectiveSaleConditionId = extractBsaleRelationIdFromHref(documentRaw.sale_condition ?? documentRaw.saleCondition, 'sale_conditions')
+  const defaultSaleConditionId = client?.sale_condition_id == null ? extractBsaleRelationIdFromHref(clientRaw.sale_condition, 'sale_conditions') : Number(client.sale_condition_id)
+  const saleCondition = catalog.saleConditions.find(option => option.bsale_id === (effectiveSaleConditionId ?? defaultSaleConditionId)) ?? null
+  const paymentType = catalog.paymentTypes.find(option => option.bsale_id === Number(client?.payment_type_id)) ?? null
 
   return {
     data: {
@@ -382,9 +435,27 @@ export async function getInvoiceReviewSnapshot(companyId: string, cardId: string
       client_name: client?.business_name ?? card.client_name,
       emission_date: document?.emission_date ?? card.nv_emission_date,
       office_name: null,
-      sale_condition_name: null,
+      sale_condition_name: saleCondition?.name ?? null,
+      client_id: client?.bsale_client_id ?? null,
+      default_payment_type_id: client?.payment_type_id == null ? null : Number(client.payment_type_id),
+      default_payment_type_name: client?.payment_type_name ?? paymentType?.name ?? null,
+      default_sale_condition_id: defaultSaleConditionId,
+      default_sale_condition_name: client?.sale_condition_name ?? (defaultSaleConditionId == null ? null : catalog.saleConditions.find(option => option.bsale_id === defaultSaleConditionId)?.name ?? null),
+      effective_sale_condition_id: effectiveSaleConditionId,
+      effective_sale_condition_label: saleCondition?.name ?? null,
+      effective_sale_condition_source: effectiveSaleConditionId != null ? 'BSALE_DOCUMENT' : defaultSaleConditionId != null ? 'BSALE_CLIENT_FALLBACK' : null,
+      effective_time_condition: saleCondition?.time_condition ?? null,
+      effective_time_unity: saleCondition?.time_unity ?? null,
+      invoice_emission_date: chileToday(),
+      payment_type_options: catalog.paymentTypes,
+      sale_condition_options: catalog.saleConditions,
+      credit_enabled: client?.has_credit ?? null,
+      credit_limit: client?.credit_limit == null ? null : Number(client.credit_limit),
+      price_list_id: client?.price_list_id == null ? null : Number(client.price_list_id),
+      expiration_date: readRawUnixDate(documentRaw.expirationDate),
+      nv_expiration_date: readRawUnixDate(documentRaw.expirationDate),
       seller_name: card.seller_name,
-      price_list_name: null,
+      price_list_name: client?.price_list_name ?? null,
       client_rut: client?.code ?? null,
       client_activity: client?.activity ?? null,
       client_address: client?.address ?? card.address_raw,
@@ -417,6 +488,160 @@ export type InvoiceReviewPreviewRequest = {
   seller_name: string | null
 }
 
+export type InvoiceDocumentPreviewRequest = {
+  card_id: string
+  current_bsale_nv_id: number
+  sales_order_folio: string
+  client_name: string
+}
+
+export type InvoiceDocumentPreviewReadModel = {
+  invoice_bsale_id: number
+  invoice_folio: string
+  invoice_date: string | null
+  client_name: string
+  client_rut: string | null
+  net_amount: number | null
+  tax_amount: number | null
+  total_amount: number | null
+  document_status: 'CONFIRMED' | 'CANCELLED' | 'UNKNOWN'
+  sales_order_folio: string
+  official_url: string | null
+  pdf_url: string | null
+  xml_url: string | null
+  related_detail_count: number
+  related_detail_ids: number[]
+}
+
+function readRawDocumentUrl(rawJson: unknown, ...keys: string[]): string | null {
+  if (!rawJson || typeof rawJson !== 'object') return null
+  const raw = rawJson as Record<string, unknown>
+  for (const key of keys) {
+    const value = raw[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return null
+}
+
+/** Batch read of linked invoice metadata. It never downloads or refreshes Bsale files. */
+export async function getInvoiceDocumentPreviews(
+  companyId: string,
+  requests: InvoiceDocumentPreviewRequest[],
+) {
+  const { supabase, error: permissionError } = await requireLogisticaView()
+  if (permissionError) return { data: {}, error: permissionError }
+
+  const unique = [...new Map(
+    requests
+      .filter(request => Number.isSafeInteger(request.current_bsale_nv_id))
+      .map(request => [`${request.card_id}:${request.current_bsale_nv_id}`, request]),
+  ).values()]
+  if (unique.length === 0) return { data: {}, error: null }
+
+  const nvIds = unique.map(request => request.current_bsale_nv_id)
+  const { data: links, error: linksError } = await supabase
+    .schema('integraciones')
+    .from('bsale_invoice_sales_order_links')
+    .select('invoice_bsale_id, invoice_detail_bsale_id, sales_order_bsale_id, sales_order_detail_bsale_id')
+    .eq('company_id', companyId)
+    .in('sales_order_bsale_id', nvIds)
+  if (linksError) return { data: {}, error: linksError.message }
+
+  const invoiceIds = [...new Set((links ?? []).map(link => Number(link.invoice_bsale_id)).filter(Number.isSafeInteger))]
+  if (invoiceIds.length === 0) {
+    return { data: Object.fromEntries(unique.map(request => [`${request.card_id}:${request.current_bsale_nv_id}`, []])), error: null }
+  }
+
+  const [{ data: documents, error: documentsError }, { data: details, error: detailsError }] = await Promise.all([
+    supabase
+      .schema('integraciones')
+      .from('bsale_documents')
+      .select('bsale_id, number, emission_date, net_amount, tax_amount, total_amount, document_type_id, state, client_id, url_pdf, raw_json')
+      .eq('company_id', companyId)
+      .eq('document_type_id', 5)
+      .in('bsale_id', invoiceIds),
+    supabase
+      .schema('integraciones')
+      .from('bsale_document_details')
+      .select('bsale_id, bsale_document_id, quantity')
+      .eq('company_id', companyId)
+      .in('bsale_document_id', invoiceIds),
+  ])
+  if (documentsError) return { data: {}, error: documentsError.message }
+  if (detailsError) return { data: {}, error: detailsError.message }
+
+  const clientIds = [...new Set((documents ?? []).map(document => Number(document.client_id)).filter(Number.isSafeInteger))]
+  const { data: clients, error: clientsError } = clientIds.length > 0
+    ? await supabase
+      .schema('integraciones')
+      .from('bsale_clients')
+      .select('bsale_client_id, business_name, code')
+      .eq('company_id', companyId)
+      .in('bsale_client_id', clientIds)
+    : { data: [], error: null }
+  if (clientsError) return { data: {}, error: clientsError.message }
+
+  const documentById = new Map((documents ?? []).map(document => [Number(document.bsale_id), document]))
+  const clientById = new Map((clients ?? []).map(client => [Number(client.bsale_client_id), client]))
+  const detailIdsByInvoice = new Map<number, Set<number>>()
+  for (const detail of details ?? []) {
+    const invoiceId = Number(detail.bsale_document_id)
+    const list = detailIdsByInvoice.get(invoiceId) ?? new Set<number>()
+    list.add(Number(detail.bsale_id))
+    detailIdsByInvoice.set(invoiceId, list)
+  }
+
+  const data: Record<string, InvoiceDocumentPreviewReadModel[]> = {}
+  for (const request of unique) {
+    const requestLinks = (links ?? []).filter(link => Number(link.sales_order_bsale_id) === request.current_bsale_nv_id)
+    const invoiceIdsForRequest = [...new Set(requestLinks.map(link => Number(link.invoice_bsale_id)))]
+    data[`${request.card_id}:${request.current_bsale_nv_id}`] = invoiceIdsForRequest
+      .map(invoiceId => {
+        const document = documentById.get(invoiceId)
+        if (!document) return null
+        const rawJson = document.raw_json
+        const cancellationStatus = readRawDocumentUrl(rawJson, 'cancellationStatus')
+        const documentStatus = cancellationStatus || Number(document.state) === 1
+          ? 'CANCELLED'
+          : Number(document.state) === 0 ? 'CONFIRMED' : 'UNKNOWN'
+        const client = document.client_id == null ? null : clientById.get(Number(document.client_id))
+        const relatedDetailIds = requestLinks
+          .filter(link => Number(link.invoice_bsale_id) === invoiceId)
+          .map(link => Number(link.sales_order_detail_bsale_id))
+        const invoiceDetailIds = detailIdsByInvoice.get(invoiceId) ?? new Set<number>()
+        const pdfUrl = readRawDocumentUrl(rawJson, 'urlPdf', 'urlPdfOriginal') ?? document.url_pdf ?? null
+        const officialUrl = readRawDocumentUrl(rawJson, 'urlPublicView', 'urlPublicViewOriginal') ?? pdfUrl
+        return {
+          invoice_bsale_id: invoiceId,
+          invoice_folio: String(document.number ?? invoiceId),
+          invoice_date: document.emission_date ?? null,
+          client_name: client?.business_name ?? request.client_name,
+          client_rut: client?.code ?? null,
+          net_amount: document.net_amount == null ? null : Number(document.net_amount),
+          tax_amount: document.tax_amount == null ? null : Number(document.tax_amount),
+          total_amount: document.total_amount == null ? null : Number(document.total_amount),
+          document_status: documentStatus,
+          sales_order_folio: request.sales_order_folio,
+          official_url: officialUrl,
+          pdf_url: pdfUrl,
+          xml_url: readRawDocumentUrl(rawJson, 'urlXml'),
+          related_detail_count: [...invoiceDetailIds].filter(detailId => requestLinks.some(link => Number(link.invoice_detail_bsale_id) === detailId)).length,
+          related_detail_ids: relatedDetailIds,
+        } satisfies InvoiceDocumentPreviewReadModel
+      })
+      .filter((document): document is InvoiceDocumentPreviewReadModel => document !== null)
+  }
+
+  logPreparationDiagnostics('invoiceDocumentBatch', {
+    requested: requests.length,
+    unique: unique.length,
+    links: links?.length ?? 0,
+    invoices: invoiceIds.length,
+    documents: documents?.length ?? 0,
+  })
+  return { data, error: null }
+}
+
 /** Batch presentation read for READY cards. Emission validation remains a separate fresh server contract. */
 export async function getInvoiceReviewPreviews(
   companyId: string,
@@ -436,7 +661,7 @@ export async function getInvoiceReviewPreviews(
   const { data: documents, error: documentsError } = await supabase
     .schema('integraciones')
     .from('bsale_documents')
-    .select('bsale_id, emission_date, net_amount, tax_amount, total_amount, client_id')
+    .select('bsale_id, emission_date, net_amount, tax_amount, total_amount, client_id, raw_json')
     .eq('company_id', companyId)
     .in('bsale_id', nvIds)
   if (documentsError) return { data: {}, error: documentsError.message }
@@ -446,7 +671,7 @@ export async function getInvoiceReviewPreviews(
     ? await supabase
       .schema('integraciones')
       .from('bsale_clients')
-      .select('bsale_client_id, business_name, code, activity, address, commune, city, region, email, phone')
+      .select('bsale_client_id, business_name, code, activity, address, commune, city, region, email, phone, payment_type_id, payment_type_name, sale_condition_id, sale_condition_name, has_credit, price_list_id, price_list_name, credit_limit, raw_payload')
       .eq('company_id', companyId)
       .in('bsale_client_id', clientIds)
     : { data: [], error: null }
@@ -461,6 +686,8 @@ export async function getInvoiceReviewPreviews(
     .order('product_name', { ascending: true })
   if (itemsError) return { data: {}, error: itemsError.message }
 
+  const catalog = await getInvoiceCommercialCatalog(companyId, supabase)
+
   const documentByNv = new Map((documents ?? []).map(document => [Number(document.bsale_id), document]))
   const clientById = new Map((clients ?? []).map(client => [Number(client.bsale_client_id), client]))
   const itemsByNv = new Map<number, SalesOrderPreparationItem[]>()
@@ -474,6 +701,14 @@ export async function getInvoiceReviewPreviews(
   for (const request of unique) {
     const document = documentByNv.get(request.current_bsale_nv_id)
     const client = document?.client_id == null ? null : clientById.get(Number(document.client_id))
+    const documentRaw = document?.raw_json && typeof document.raw_json === 'object' ? document.raw_json as Record<string, unknown> : {}
+    const clientRaw = client?.raw_payload && typeof client.raw_payload === 'object' ? client.raw_payload as Record<string, unknown> : {}
+    const effectiveSaleConditionId = extractBsaleRelationIdFromHref(documentRaw.sale_condition ?? documentRaw.saleCondition, 'sale_conditions')
+    const defaultSaleConditionId = client?.sale_condition_id == null ? extractBsaleRelationIdFromHref(clientRaw.sale_condition, 'sale_conditions') : Number(client.sale_condition_id)
+    const effectiveConditionId = effectiveSaleConditionId ?? defaultSaleConditionId
+    const defaultPaymentTypeId = client?.payment_type_id == null ? null : Number(client.payment_type_id)
+    const defaultPaymentType = catalog.paymentTypes.find(option => option.bsale_id === defaultPaymentTypeId) ?? null
+    const effectiveCondition = catalog.saleConditions.find(option => option.bsale_id === effectiveConditionId) ?? null
     data[`${request.card_id}:${request.current_bsale_nv_id}`] = {
       card_id: request.card_id,
       historical_bsale_nv_id: request.current_bsale_nv_id,
@@ -482,9 +717,27 @@ export async function getInvoiceReviewPreviews(
       client_name: client?.business_name ?? 'Cliente no disponible',
       emission_date: document?.emission_date ?? null,
       office_name: null,
-      sale_condition_name: null,
+      sale_condition_name: effectiveCondition?.name ?? null,
+      client_id: client?.bsale_client_id ?? null,
+      default_payment_type_id: client?.payment_type_id == null ? null : Number(client.payment_type_id),
+      default_payment_type_name: client?.payment_type_name ?? defaultPaymentType?.name ?? null,
+      default_sale_condition_id: defaultSaleConditionId,
+      default_sale_condition_name: client?.sale_condition_name ?? (defaultSaleConditionId == null ? null : catalog.saleConditions.find(option => option.bsale_id === defaultSaleConditionId)?.name ?? null),
+      effective_sale_condition_id: effectiveSaleConditionId,
+      effective_sale_condition_label: effectiveCondition?.name ?? null,
+      effective_sale_condition_source: effectiveSaleConditionId != null ? 'BSALE_DOCUMENT' : defaultSaleConditionId != null ? 'BSALE_CLIENT_FALLBACK' : null,
+      effective_time_condition: effectiveCondition?.time_condition ?? null,
+      effective_time_unity: effectiveCondition?.time_unity ?? null,
+      invoice_emission_date: chileToday(),
+      payment_type_options: catalog.paymentTypes,
+      sale_condition_options: catalog.saleConditions,
+      credit_enabled: client?.has_credit ?? null,
+      credit_limit: client?.credit_limit == null ? null : Number(client.credit_limit),
+      price_list_id: client?.price_list_id == null ? null : Number(client.price_list_id),
+      expiration_date: readRawUnixDate(documentRaw.expirationDate),
+      nv_expiration_date: readRawUnixDate(documentRaw.expirationDate),
       seller_name: request.seller_name,
-      price_list_name: null,
+      price_list_name: client?.price_list_name ?? null,
       client_rut: client?.code ?? null,
       client_activity: client?.activity ?? null,
       client_address: client?.address ?? null,

@@ -3,6 +3,7 @@
 import { Ban, FileText } from 'lucide-react'
 import { useRef } from 'react'
 import { SalesOrderPreparationCardInfo } from '@/app/actions/logistica/sales-order-preparation'
+import type { InvoiceDocumentPreview } from './invoice-flow-ui'
 import { useDraggable } from '@dnd-kit/core'
 import { formatPreparationClp, getPreparationCardAmount, getPreparationComuna, parseDateOnly } from './preparation-board-utils'
 import { getPreparationLockLabel } from './preparation-lock-policy'
@@ -33,6 +34,8 @@ interface SalesOrderCardProps {
   openCommercialIncidentCount?: number
   onOpenCommercialIncidents?: () => void
   onInvoice?: () => void
+  invoiceDocuments?: InvoiceDocumentPreview[]
+  onViewInvoice?: () => void
 }
 
 function formatShortDate(value: string | null): string | null {
@@ -70,6 +73,8 @@ export function SalesOrderCard({
   openCommercialIncidentCount = 0,
   onOpenCommercialIncidents,
   onInvoice,
+  invoiceDocuments = [],
+  onViewInvoice,
 }: SalesOrderCardProps) {
   const routeDate = formatShortDate(card.route_date)
   const routeFullDate = formatFullDate(card.route_date)
@@ -80,6 +85,16 @@ export function SalesOrderCard({
     : { value: emissionDate ?? '—', title: `Fecha de emisión: ${emissionFullDate ?? '—'}` }
   const comuna = getPreparationComuna(card)
   const amount = getPreparationCardAmount(card)
+  const isInvoiced = card.status === 'INVOICED_READY_FOR_ROUTE'
+  const invoicedAmount = invoiceDocuments.reduce((sum, document) => sum + (document.total_amount ?? 0), 0)
+  const invoiceDisplayAmount = invoiceDocuments.length > 1
+    ? invoicedAmount
+    : invoiceDocuments[0]?.total_amount ?? (isInvoiced ? card.total_amount : amount)
+  const invoiceSummary = invoiceDocuments.length > 1
+    ? `${invoiceDocuments.length} facturas · ${formatPreparationClp(invoicedAmount)} facturado`
+    : invoiceDocuments[0]
+      ? `Factura #${invoiceDocuments[0].invoice_folio}`
+      : 'Factura disponible'
   const lockLabel = getPreparationLockLabel({
     status: card.status,
     currentUserId,
@@ -219,17 +234,17 @@ export function SalesOrderCard({
           <span className="px-0.5 text-[#322D29]/30">·</span>
           {primaryDate.value}
         </span>
-        {amount != null && (
+        {invoiceDisplayAmount != null && (
           <span className="shrink-0 text-[11px] font-bold tabular-nums leading-none text-[#322D29]" title="Monto total de la Nota de Venta">
-            {formatPreparationClp(amount)}
+            {formatPreparationClp(invoiceDisplayAmount)}
           </span>
         )}
       </div>
 
-      {(responsibilityLabel || isPending || onInvoice || (canExclude && !isOverlay && card.status === 'PENDING_ROUTE_PREP')) && (
+      {(responsibilityLabel || isInvoiced || isPending || onInvoice || (canExclude && !isOverlay && card.status === 'PENDING_ROUTE_PREP')) && (
         <div className="mt-1 flex min-h-[15px] items-center justify-between gap-2">
-          <span className={`min-w-0 truncate text-[9.5px] font-semibold ${responsibilityTone}`} title={responsibilityLabel ?? undefined}>
-            {isFinalized && routeReadiness === 'READY_TO_INVOICE' ? '✓ ' : ''}{responsibilityLabel}
+          <span className={`min-w-0 truncate text-[9.5px] font-semibold ${isInvoiced ? 'text-emerald-700' : responsibilityTone}`} title={isInvoiced ? invoiceSummary : responsibilityLabel ?? undefined}>
+            {isInvoiced ? <><span className="mr-1 rounded bg-emerald-50 px-1 py-0.5 text-[8px] font-bold uppercase tracking-wider text-emerald-800">Facturada</span>{invoiceSummary}</> : <>{isFinalized && routeReadiness === 'READY_TO_INVOICE' ? '✓ ' : ''}{responsibilityLabel}</>}
           </span>
           <div className="flex shrink-0 items-center gap-1">
             {isFinalized && openCommercialIncidentCount > 0 && onOpenCommercialIncidents && (
@@ -263,6 +278,21 @@ export function SalesOrderCard({
                 className="inline-flex items-center gap-0.5 rounded bg-[#72383D] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white hover:bg-[#612F34]"
               >
                 <FileText className="h-2.5 w-2.5" /> Facturar
+              </button>
+            )}
+            {isInvoiced && !isOverlay && onViewInvoice && (
+              <button
+                type="button"
+                data-card-action
+                onPointerDown={event => event.stopPropagation()}
+                onClick={event => {
+                  event.stopPropagation()
+                  onViewInvoice()
+                }}
+                onDoubleClick={event => event.stopPropagation()}
+                className="inline-flex items-center gap-0.5 rounded border border-[#72383D]/35 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[#72383D] hover:bg-[#F5EDE9]"
+              >
+                <FileText className="h-2.5 w-2.5" /> Ver factura
               </button>
             )}
             {canExclude && !isOverlay && card.status === 'PENDING_ROUTE_PREP' && (

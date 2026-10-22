@@ -33,8 +33,9 @@ export async function getSaleConditions(): Promise<SaleConditionOption[]> {
 
   const { data, error } = await supabase
     .from('bsale_sale_conditions')
-    .select('id, bsale_id, name')
+    .select('id, bsale_id, name, state, raw_json')
     .eq('company_id', companyId)
+    .eq('state', 0)
     .order('name', { ascending: true })
 
   if (error || !data) {

@@ -101,6 +101,45 @@ export interface CommercialCustomerExplorer {
   has_address: boolean
 }
 
+export type CommercialCustomerCommercialTerms = {
+  default_payment_type_id: number | null
+  default_payment_type_name: string | null
+  default_sale_condition_id: number | null
+  default_sale_condition_name: string | null
+  credit_enabled: boolean | null
+  credit_limit: number | null
+  price_list_id: number | null
+  price_list_name: string | null
+}
+
+export async function getCommercialCustomerCommercialTerms(params: { bsaleClientId: number }): Promise<CommercialCustomerCommercialTerms | { error: string }> {
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { error: 'No se pudo determinar la empresa activa.' }
+  const integraciones = createSupabaseClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    serviceKey,
+    { db: { schema: 'integraciones' }, auth: { autoRefreshToken: false, persistSession: false } },
+  )
+  const [{ data: client, error: clientError }, { data: paymentTypes, error: paymentError }] = await Promise.all([
+    integraciones.from('bsale_clients').select('payment_type_id, payment_type_name, sale_condition_id, sale_condition_name, has_credit, price_list_id, price_list_name, credit_limit').eq('company_id', companyId).eq('bsale_client_id', params.bsaleClientId).maybeSingle(),
+    integraciones.from('bsale_payment_types').select('bsale_id, name').eq('company_id', companyId).eq('is_active', true),
+  ])
+  if (clientError || paymentError) return { error: clientError?.message ?? paymentError?.message ?? 'No se pudieron leer las condiciones comerciales.' }
+
+  const paymentTypeId = client?.payment_type_id == null ? null : Number(client.payment_type_id)
+  const paymentType = (paymentTypes ?? []).find(type => Number(type.bsale_id) === paymentTypeId)
+  return {
+    default_payment_type_id: paymentTypeId,
+    default_payment_type_name: client?.payment_type_name ?? paymentType?.name ?? null,
+    default_sale_condition_id: client?.sale_condition_id == null ? null : Number(client.sale_condition_id),
+    default_sale_condition_name: client?.sale_condition_name ?? null,
+    credit_enabled: client?.has_credit ?? null,
+    credit_limit: client?.credit_limit == null ? null : Number(client.credit_limit),
+    price_list_id: client?.price_list_id == null ? null : Number(client.price_list_id),
+    price_list_name: client?.price_list_name ?? null,
+  }
+}
+
 export interface CommercialCustomerStats {
   total: number
   active: number

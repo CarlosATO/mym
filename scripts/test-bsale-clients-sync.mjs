@@ -33,6 +33,14 @@ test('fetch incompleto por error nunca permite desactivar ausentes', () => {
   assert.match(syncSource, /throw new Error\('Bsale clients pagination ended before the complete list was fetched'\)/)
 })
 
+test('normalizes commercial fields from catalog-backed data and preserves region', () => {
+  assert.match(syncSource, /normalizeBsaleClientCommercialFields\(client, \{ paymentTypeNames, saleConditionNames \}\)/)
+  assert.match(syncSource, /region: commercial\.region/)
+  assert.match(syncSource, /sale_condition_id: commercial\.sale_condition_id/)
+  assert.match(syncSource, /has_credit: commercial\.has_credit/)
+  assert.doesNotMatch(syncSource, /sale_condition\?\.id/)
+})
+
 test('sync completo sin ausentes reporta cero desactivaciones', () => {
   assert.deepEqual(getAbsentBsaleClientIds([1, 2], [1, 2]), [])
 })
