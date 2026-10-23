@@ -5,7 +5,8 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { BsaleApiError, bsaleFetchForCompany, bsaleFetchResourceForCompany } from '@/lib/bsale/client'
 import { bsaleWriteForCompany } from '@/lib/bsale/write-client'
-import { buildInvoiceEmissionIdentity, buildInvoiceEmissionPayload, chileDateToBsaleEpoch, chileToday, formatBsaleRejection, invoiceEmissionEnabled, TARGET_INVOICE_CASE, TARGET_INVOICE_SALES_ID, validateTargetInvoiceDocument } from '@/lib/integraciones/invoice-emission-contract'
+import { buildInvoiceEmissionIdentity, buildInvoiceEmissionPayload, chileDateToBsaleEpoch, chileToday, formatBsaleRejection, invoiceEmissionEnabled, validateCompleteInvoiceLines, validateInvoiceDocument } from '@/lib/integraciones/invoice-emission-contract'
+import type { InvoiceCommercialSelection } from '@/modules/logistica/preparacion-pedidos/invoice-commercial'
 
 const PREPARE_PERMISSION = 'logistica.preparation.manage'
 
@@ -106,113 +107,164 @@ async function mirrorConfirmedInvoice(companyId: string, document: Record<string
   }
 }
 
-/** Real emission path. It is server-gated and remains disabled unless explicitly enabled. */
-export async function emitSalesOrderInvoice(cardId: string) {
+function readBsaleRelationId(value: unknown): number | null {
+  if (!value || typeof value !== 'object') return null
+  const relation = value as { id?: unknown; href?: unknown }
+  const direct = Number(relation.id)
+  if (Number.isSafeInteger(direct) && direct > 0) return direct
+  const match = typeof relation.href === 'string' ? /\/([0-9]+)(?:\.json)?$/.exec(relation.href) : null
+  const fromHref = Number(match?.[1])
+  return Number.isSafeInteger(fromHref) && fromHref > 0 ? fromHref : null
+}
+
+/** Real emission path. Every document value comes from the current NV or the confirmed selection. */
+export async function emitSalesOrderInvoice(cardId: string, selection?: InvoiceCommercialSelection | null) {
   const auth = await requireWmsPermission(PREPARE_PERMISSION)
   if (!invoiceEmissionEnabled()) return { status: 'EMISSION_DISABLED' as const, error: null }
 
   const db = await createClient()
+  const { data: prevalidation, error: prevalidationError } = await db.schema('logistica').rpc('invoice_attempt_prevalidate', { p_company_id: auth.companyId, p_card_id: cardId })
+  if (prevalidationError || !prevalidation?.ready) {
+    return { status: 'PREVALIDATION_FAILED' as const, error: prevalidationError?.message ?? 'La NV no está habilitada para facturación.' }
+  }
+
   const { data: card, error: cardError } = await db.schema('logistica').from('sales_order_preparation_cards')
     .select('id, company_id, status, bsale_nv_id, bsale_nv_folio, canonical_bsale_token, current_bsale_nv_id')
     .eq('id', cardId).eq('company_id', auth.companyId).maybeSingle()
   if (cardError || !card) return { status: 'PREVALIDATION_FAILED' as const, error: 'No se encontró la card.' }
-  if (card.bsale_nv_folio !== TARGET_INVOICE_CASE.folio || Number(card.current_bsale_nv_id) !== TARGET_INVOICE_CASE.currentNvId || card.status !== 'AUDITED') {
-    return { status: 'PREVALIDATION_FAILED' as const, error: 'La card no coincide con el caso autorizado.' }
+  const currentNvId = Number(prevalidation.current_bsale_nv_id)
+  if (!Number.isSafeInteger(currentNvId) || Number(card.current_bsale_nv_id) !== currentNvId || card.status !== 'AUDITED') {
+    return { status: 'PREVALIDATION_FAILED' as const, error: 'La card cambió mientras se validaba la NV.' }
   }
 
-  const [nv, sellers, client, syncedClient, paymentTypes, saleConditions] = await Promise.all([
-    bsaleFetchResourceForCompany<Record<string, any>>({ companyId: auth.companyId, path: `/documents/${TARGET_INVOICE_CASE.currentNvId}.json`, params: { expand: 'details,payments' } }),
-    bsaleFetchForCompany<Record<string, any>>({ companyId: auth.companyId, path: `/documents/${TARGET_INVOICE_CASE.currentNvId}/sellers.json` }),
-    bsaleFetchResourceForCompany<Record<string, any>>({ companyId: auth.companyId, path: `/clients/${TARGET_INVOICE_CASE.clientId}.json` }),
-    db.schema('integraciones').from('bsale_clients').select('payment_type_id,payment_type_name').eq('company_id', auth.companyId).eq('bsale_client_id', TARGET_INVOICE_CASE.clientId).maybeSingle(),
+  const [nv, sellers, paymentTypes, saleConditions] = await Promise.all([
+    bsaleFetchResourceForCompany<Record<string, any>>({ companyId: auth.companyId, path: `/documents/${currentNvId}.json`, params: { expand: 'details,payments' } }),
+    bsaleFetchForCompany<Record<string, any>>({ companyId: auth.companyId, path: `/documents/${currentNvId}/sellers.json` }),
     bsaleFetchForCompany<Record<string, any>>({ companyId: auth.companyId, path: '/payment_types.json', params: { state: 0 } }),
     bsaleFetchForCompany<Record<string, any>>({ companyId: auth.companyId, path: '/sale_conditions.json', params: { state: 0 } }),
   ])
   const details = Array.isArray(nv.details?.items) ? nv.details.items : []
-  const exactDetails = details.length === 2
-    && details.every((detail: Record<string, any>) => [334790, 334791].includes(Number(detail.id)) && Number(detail.quantity) === 1)
-    && Number(nv.totalAmount) === 5598 && Number(nv.netAmount) === 4704 && Number(nv.taxAmount) === 894
   const sellerItems = sellers.items ?? []
-  const hasCredit = Number(client.hasCredit) === 1
-  const paymentTypeId = syncedClient.data?.payment_type_id == null ? null : Number(syncedClient.data.payment_type_id)
-  if (syncedClient.error) {
-    return { status: 'PREVALIDATION_FAILED' as const, error: 'No es posible facturar porque el cliente no tiene una forma de pago configurada.' }
+  const clientId = Number(nv.client?.id)
+  const officeId = Number(nv.office?.id)
+  const priceListId = Number(nv.priceList?.id)
+  const saleConditionId = selection?.sale_condition_id ?? readBsaleRelationId(nv.saleCondition ?? nv.sale_condition)
+  const [{ data: client, error: clientError }, { data: syncedClient, error: syncedClientError }] = await Promise.all([
+    bsaleFetchResourceForCompany<Record<string, any>>({ companyId: auth.companyId, path: `/clients/${clientId}.json` }),
+    db.schema('integraciones').from('bsale_clients').select('payment_type_id,payment_type_name').eq('company_id', auth.companyId).eq('bsale_client_id', clientId).maybeSingle(),
+  ])
+  const paymentTypeId = syncedClient?.payment_type_id == null ? null : Number(syncedClient.payment_type_id)
+  const selectedPaymentTypeId = selection?.payment_type_id ?? paymentTypeId
+  const confirmedExpirationDate = selection?.expiration_date
+  if (selectedPaymentTypeId == null || !Number.isSafeInteger(selectedPaymentTypeId) || selectedPaymentTypeId <= 0 || saleConditionId == null || !Number.isSafeInteger(saleConditionId) || saleConditionId <= 0 || !confirmedExpirationDate) {
+    return { status: 'PREVALIDATION_FAILED' as const, error: 'La facturación requiere forma de pago, condición y vencimiento confirmados.' }
   }
-  if (paymentTypeId == null || !Number.isInteger(paymentTypeId) || paymentTypeId <= 0) {
-    return { status: 'PREVALIDATION_FAILED' as const, error: 'No es posible facturar porque el cliente no tiene una forma de pago configurada.' }
+  if (clientError || syncedClientError || Number(client?.id) !== clientId || !Number.isSafeInteger(clientId) || !Number.isSafeInteger(officeId) || !Number.isSafeInteger(priceListId) || Number(nv.id) !== currentNvId || Number(nv.document_type?.id) !== 23 || Number(nv.state) !== 0 || sellerItems.length !== 1 || !Array.isArray(paymentTypes.items) || !paymentTypes.items.some((item: Record<string, any>) => Number(item.id) === selectedPaymentTypeId) || !Array.isArray(saleConditions.items) || !saleConditions.items.some((item: Record<string, any>) => Number(item.id) === saleConditionId)) {
+    return { status: 'PREVALIDATION_FAILED' as const, error: 'La NV vigente no tiene datos comerciales completos para facturar.' }
   }
-  const configuredPaymentTypeId = Number(paymentTypeId)
-  if (Number(nv.id) !== 92513 || Number(nv.number) !== 5032 || Number(nv.document_type?.id) !== 23 || Number(nv.state) !== 0 || Number(nv.client?.id) !== 1005 || Number(nv.office?.id) !== 1 || Number(nv.priceList?.id) !== 4 || !exactDetails || !Array.isArray(paymentTypes.items) || !Array.isArray(saleConditions.items) || hasCredit || sellerItems.length !== 1) {
-    return { status: 'PREVALIDATION_FAILED' as const, error: 'El pre-flight live no coincide con el contrato autorizado.' }
-  }
+
+  const { data: mirrorDetails, error: mirrorDetailsError } = await db.schema('integraciones').from('bsale_document_details')
+    .select('bsale_id,quantity')
+    .eq('company_id', auth.companyId)
+    .eq('bsale_document_id', currentNvId)
+  if (mirrorDetailsError || !mirrorDetails?.length) return { status: 'PREVALIDATION_FAILED' as const, error: mirrorDetailsError?.message ?? 'No hay detalle vigente espejado para la NV.' }
+  const { data: links, error: linksError } = await db.schema('integraciones').from('bsale_invoice_sales_order_links')
+    .select('sales_order_detail_bsale_id,invoice_detail_bsale_id,invoice_bsale_id')
+    .eq('company_id', auth.companyId)
+    .eq('sales_order_bsale_id', currentNvId)
+  if (linksError) return { status: 'PREVALIDATION_FAILED' as const, error: linksError.message }
+  const preparedDetails = mirrorDetails.map(detail => ({
+    detail_id: Number(detail.bsale_id),
+    quantity: Number(detail.quantity),
+    billable_quantity: Number(detail.quantity),
+  }))
+  const completeLines = validateCompleteInvoiceLines(
+    details.map((detail: Record<string, any>) => ({ detailId: Number(detail.id), quantity: Number(detail.quantity) })),
+    preparedDetails.map(detail => ({ detailId: detail.detail_id, quantity: detail.billable_quantity })),
+    links?.length ?? 0,
+  )
+  if (!completeLines.ok) return { status: 'PREVALIDATION_FAILED' as const, error: completeLines.reason === 'INVOICE_ALREADY_LINKED' ? 'La NV ya tiene una factura vinculada y requiere revisión antes de volver a facturar.' : 'La NV vigente no coincide íntegramente con su espejo facturable.' }
+  const preparedById = new Map(preparedDetails.map(detail => [detail.detail_id, detail]))
 
   const emissionDate = chileToday()
   const emissionDateEpoch = chileDateToBsaleEpoch(emissionDate)
-  const snapshot = {
-    company_id: auth.companyId,
-    canonical_bsale_token: card.canonical_bsale_token,
-    current_bsale_nv_id: TARGET_INVOICE_CASE.currentNvId,
-    client_id: TARGET_INVOICE_CASE.clientId,
-    office_id: TARGET_INVOICE_CASE.officeId,
-    sale_condition_id: null,
-    historical_bsale_nv_id: TARGET_INVOICE_CASE.historicalNvId,
-    folio: TARGET_INVOICE_CASE.folio,
-    seller_id: Number(sellerItems[0].id),
-    price_list_id: TARGET_INVOICE_CASE.priceListId,
-    emission_date: emissionDate,
-    expiration_date: emissionDate,
-    totals: { net: 4704, tax: 894, total: 5598 },
-    details: details.map((detail: Record<string, any>) => ({
+  const expirationDateEpoch = chileDateToBsaleEpoch(confirmedExpirationDate)
+  const sellerId = Number(sellerItems[0].id)
+  const snapshotDetails = details.map((detail: Record<string, any>) => {
+    const preparedDetail = preparedById.get(Number(detail.id))
+    if (!preparedDetail) throw new Error('DETAIL_SNAPSHOT_MISSING')
+    return {
       detail_id: Number(detail.id),
       variant_id: Number(detail.variant?.id),
       sku: detail.variant?.code ?? null,
       quantity: Number(detail.quantity),
-      billable_quantity: Number(detail.quantity),
+      billable_quantity: Number(preparedDetail.billable_quantity),
+      net_unit_value: Number(detail.netUnitValue),
+      total_unit_value: Number(detail.totalUnitValue),
       net_amount: Number(detail.netAmount),
       tax_amount: Number(detail.taxAmount),
       total_amount: Number(detail.totalAmount),
-    })),
-    total: 5598,
+      net_discount: Number(detail.netDiscount ?? 0),
+    }
+  })
+  const fullTotals = { net: Number(nv.netAmount), tax: Number(nv.taxAmount), total: Number(nv.totalAmount) }
+  const snapshot = {
+    company_id: auth.companyId,
+    canonical_bsale_token: card.canonical_bsale_token,
+    current_bsale_nv_id: currentNvId,
+    client_id: clientId,
+    office_id: officeId,
+    sale_condition_id: String(saleConditionId),
+    payment_type_id: selectedPaymentTypeId,
+    historical_bsale_nv_id: Number(card.bsale_nv_id),
+    folio: String(nv.number),
+    seller_id: sellerId,
+    price_list_id: priceListId,
+    emission_date: emissionDate,
+    expiration_date: confirmedExpirationDate,
+    totals: fullTotals,
+    details: snapshotDetails,
+    total: fullTotals.total,
   }
   const identity = buildInvoiceEmissionIdentity(snapshot)
   const { data: existingAttempt, error: existingAttemptError } = await db.schema('logistica').from('sales_order_invoice_attempts')
     .select('id,status,sales_id,fingerprint,retry_count')
     .eq('card_id', card.id)
-    .eq('current_bsale_nv_id', TARGET_INVOICE_CASE.currentNvId)
+    .eq('current_bsale_nv_id', currentNvId)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
   if (existingAttemptError) return { status: 'PREVALIDATION_FAILED' as const, error: existingAttemptError.message }
-  if (identity.salesId !== TARGET_INVOICE_SALES_ID) return { status: 'PREVALIDATION_FAILED' as const, error: 'El salesId calculado no coincide con el contrato persistido.' }
-  if (existingAttempt && (existingAttempt.sales_id !== TARGET_INVOICE_SALES_ID || existingAttempt.fingerprint !== identity.fingerprint)) {
-    return { status: 'PREVALIDATION_FAILED' as const, error: 'El attempt existente no coincide con la identidad persistida.' }
-  }
   if (existingAttempt?.status === 'CONFIRMED') return { status: 'ALREADY_INVOICED' as const, attempt_id: existingAttempt.id, error: null }
   if (existingAttempt && ['SUBMITTING', 'UNKNOWN', 'RECONCILIATION_REQUIRED'].includes(existingAttempt.status)) {
     return { status: 'INVOICE_IN_PROGRESS' as const, attempt_id: existingAttempt.id, error: null }
   }
-  const attemptSalesId = existingAttempt?.sales_id ?? TARGET_INVOICE_SALES_ID
+  if (existingAttempt && (existingAttempt.sales_id !== identity.salesId || existingAttempt.fingerprint !== identity.fingerprint)) {
+    return { status: 'PREVALIDATION_FAILED' as const, error: 'El attempt existente no coincide con la identidad persistida.' }
+  }
+  const attemptSalesId = existingAttempt?.sales_id ?? identity.salesId
   const attemptFingerprint = existingAttempt?.fingerprint ?? identity.fingerprint
   const payload = buildInvoiceEmissionPayload({
-    officeId: TARGET_INVOICE_CASE.officeId,
-    priceListId: TARGET_INVOICE_CASE.priceListId,
+    officeId,
+    priceListId,
+    saleConditionId,
     emissionDate: emissionDateEpoch,
-    expirationDate: emissionDateEpoch,
-    clientId: TARGET_INVOICE_CASE.clientId,
-    sellerId: Number(sellerItems[0].id),
+    expirationDate: expirationDateEpoch,
+    clientId,
+    sellerId,
     salesId: attemptSalesId,
-    details: [{ detailId: 334790, quantity: 1 }, { detailId: 334791, quantity: 1 }],
-    payments: [{ paymentTypeId: configuredPaymentTypeId, amount: 5598, recordDate: emissionDateEpoch }],
+    details: snapshotDetails.map((detail: Record<string, any>) => ({ detailId: detail.detail_id, quantity: detail.quantity })),
+    payments: [{ paymentTypeId: selectedPaymentTypeId, amount: fullTotals.total, recordDate: emissionDateEpoch }],
   })
   const { data: started, error: startError } = await db.schema('logistica').rpc('begin_sales_order_invoice_submission', {
     p_company_id: auth.companyId,
     p_card_id: card.id,
-    p_current_bsale_nv_id: TARGET_INVOICE_CASE.currentNvId,
+    p_current_bsale_nv_id: currentNvId,
     p_canonical_bsale_token: card.canonical_bsale_token,
     p_sales_id: attemptSalesId,
     p_fingerprint: attemptFingerprint,
     p_payload_snapshot: payload,
-    p_nv_snapshot: { client_id: 1005, office_id: 1, totals: snapshot.totals, current_bsale_nv_id: 92513, historical_bsale_nv_id: 92486, folio: '5032' },
+    p_nv_snapshot: { client_id: clientId, office_id: officeId, totals: snapshot.totals, current_bsale_nv_id: currentNvId, historical_bsale_nv_id: Number(card.bsale_nv_id), folio: String(nv.number), sale_condition_id: saleConditionId, price_list_id: priceListId },
     p_detail_snapshots: snapshot.details,
   })
   if (startError) return { status: 'PREVALIDATION_FAILED' as const, error: startError.message }
@@ -233,7 +285,22 @@ export async function emitSalesOrderInvoice(cardId: string) {
   const invoice = Number.isSafeInteger(invoiceId) && invoiceId > 0
     ? await bsaleFetchResourceForCompany<Record<string, any>>({ companyId: auth.companyId, path: `/documents/${invoiceId}.json`, params: { expand: 'details,payments' } })
     : posted
-  const validation = validateTargetInvoiceDocument(invoice, attemptSalesId)
+  const validation = validateInvoiceDocument(invoice, {
+    salesId: attemptSalesId,
+    clientId,
+    officeId,
+    totals: snapshot.totals,
+    details: snapshotDetails.map((detail: Record<string, any>) => ({
+      detailId: detail.detail_id,
+      quantity: detail.quantity,
+      netUnitValue: detail.net_unit_value,
+      totalUnitValue: detail.total_unit_value,
+      netAmount: detail.net_amount,
+      taxAmount: detail.tax_amount,
+      totalAmount: detail.total_amount,
+      netDiscount: detail.net_discount,
+    })),
+  })
   if (!validation.ok) {
     await markAttempt(db, 'mark_sales_order_invoice_reconciliation_required', attemptId, validation.reason)
     return { status: 'RECONCILIATION_REQUIRED' as const, attempt_id: attemptId, error: validation.reason }

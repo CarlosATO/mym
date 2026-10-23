@@ -95,6 +95,9 @@ export function SalesOrderCard({
     : invoiceDocuments[0]
       ? `Factura #${invoiceDocuments[0].invoice_folio}`
       : 'Factura disponible'
+  const amountTitle = isInvoiced
+    ? 'Importe total de la factura confirmada'
+    : 'Monto total de la Nota de Venta'
   const lockLabel = getPreparationLockLabel({
     status: card.status,
     currentUserId,
@@ -235,7 +238,7 @@ export function SalesOrderCard({
           {primaryDate.value}
         </span>
         {invoiceDisplayAmount != null && (
-          <span className="shrink-0 text-[11px] font-bold tabular-nums leading-none text-[#322D29]" title="Monto total de la Nota de Venta">
+          <span className="shrink-0 text-[11px] font-bold tabular-nums leading-none text-[#322D29]" title={amountTitle}>
             {formatPreparationClp(invoiceDisplayAmount)}
           </span>
         )}
