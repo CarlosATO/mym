@@ -1,6 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createBsalePurchaseReceiptDependencies } from './bsale-purchase-receipt-adapter'
-import { chooseUniqueReconciliationCandidate, reconcilePurchaseReceipt, sendPurchaseReceipt, type PurchaseReceiptPayload } from './bsale-purchase-receipt-core'
+import { chooseUniqueReconciliationCandidate, purchaseReceiptPayloadError, reconcilePurchaseReceipt, sendPurchaseReceipt, type PurchaseReceiptPayload } from './bsale-purchase-receipt-core'
 
 type Operation = { operation_id: string; status: 'PREPARED' | 'SENDING' | 'CONFIRMED' | 'FAILED' | 'RECONCILIATION_REQUIRED'; reception_id: number | null; error: string | null; payload: PurchaseReceiptPayload | null }
 function parse(value: unknown): Operation { return value as Operation }
@@ -30,15 +30,18 @@ export async function syncPurchaseReceipt(companyId: string, userId: string, rec
   const operation = parse(prepared)
   if (operation.status === 'CONFIRMED') return { status: 'CONFIRMED' as const, operationId: operation.operation_id, receptionId: operation.reception_id, error: null, payload: operation.payload }
   if (operation.status === 'FAILED') {
-    const { error } = await db.schema('integraciones').rpc('retry_failed_bsale_purchase_receipt_operation', { p_operation_id: operation.operation_id, p_user_id: userId })
-    if (error) return { status: 'FAILED' as const, operationId: operation.operation_id, receptionId: null, error: error.message, payload: operation.payload }
-    return syncPurchaseReceipt(companyId, userId, receiptId)
+    return { status: 'FAILED' as const, operationId: operation.operation_id, receptionId: operation.reception_id, error: operation.error || 'La sincronización BSale falló y requiere corrección explícita.', payload: operation.payload }
   }
   if (operation.status === 'RECONCILIATION_REQUIRED') return reconcilePurchaseReceiptOperation(companyId, userId, operation.operation_id)
   if (operation.status === 'SENDING') return { status: 'SENDING' as const, operationId: operation.operation_id, receptionId: operation.reception_id, error: operation.error, payload: operation.payload }
   const { data: claim, error: claimError } = await db.schema('integraciones').rpc('claim_bsale_purchase_receipt_operation', { p_operation_id: operation.operation_id })
   if (claimError) return { status: 'RECONCILIATION_REQUIRED' as const, operationId: operation.operation_id, receptionId: null, error: claimError.message, payload: operation.payload }
   if (!(claim as { claimed?: boolean }).claimed) return { status: 'SENDING' as const, operationId: operation.operation_id, receptionId: operation.reception_id, error: 'Otra solicitud está enviando esta recepción.', payload: operation.payload }
+  const payloadError = purchaseReceiptPayloadError(operation.payload)
+  if (payloadError) {
+    const completed = await finish(db, operation.operation_id, { status: 'FAILED', receptionId: null, error: payloadError })
+    return { status: 'FAILED' as const, operationId: completed.operation_id, receptionId: completed.reception_id, error: completed.error, payload: completed.payload }
+  }
   const result = await sendPurchaseReceipt(operation.payload as PurchaseReceiptPayload, createBsalePurchaseReceiptDependencies(companyId))
   const completed = await finish(db, operation.operation_id, result)
   return { status: completed.status === 'CONFIRMED' ? 'CONFIRMED' as const : completed.status === 'FAILED' ? 'FAILED' as const : 'RECONCILIATION_REQUIRED' as const, operationId: completed.operation_id, receptionId: completed.reception_id, error: completed.error, payload: completed.payload }

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { reconcilePurchaseReceipt, autoSyncIsAllowed, buildPurchaseReceiptNote, buildPurchaseReceiptPayload, chooseUniqueReconciliationCandidate, numericDocumentNumber, sendPurchaseReceipt, syncAfterLocalReceipt, verifyPurchaseReceipt } from '../src/lib/integraciones/bsale-purchase-receipt-core.ts'
+import { reconcilePurchaseReceipt, autoSyncIsAllowed, buildPurchaseReceiptNote, buildPurchaseReceiptPayload, chooseUniqueReconciliationCandidate, numericDocumentNumber, purchaseReceiptPayloadError, sendPurchaseReceipt, syncAfterLocalReceipt, verifyPurchaseReceipt } from '../src/lib/integraciones/bsale-purchase-receipt-core.ts'
 
 const base = { documentType: 'FA', documentNumber: '4545', officeId: 1, receiptNumber: 'REC-000001', poCorrelative: 'OC-2026-000031', serviceVariantId: 4554 }
 test('note preserves identifiers and truncates unicode observation to 100 chars', () => {
@@ -28,9 +28,27 @@ test('payload maps FA/GD, accepted conditions, weighted product and one service 
   assert.deepEqual(payload.details, [{ variantId: 10, quantity: 12, cost: 5500 }, { variantId: 4554, quantity: 1, cost: 80000 }])
   assert.equal(buildPurchaseReceiptPayload({ ...base, documentType: 'GD', lines: [{ itemType: 'SERVICE', condition: 'CONFORME', quantity: 1, netAmount: 1 }] }).document, 'GUÍA')
 })
+test('document number accepts only one ASCII numeric value without trimming', () => {
+  for (const value of ['874.548', '874-548', '874 548', ' 874548 ', '874548-874549', '874548,874549', 'ABC123', '']) {
+    assert.throws(() => numericDocumentNumber(value), /Ingrese un solo número de documento/)
+  }
+  assert.equal(numericDocumentNumber('874548'), 874548)
+  assert.equal(numericDocumentNumber('000874548'), 874548)
+})
+
 test('invalid document number and missing product variant are rejected', () => {
-  assert.throws(() => numericDocumentNumber('45-A'))
   assert.throws(() => buildPurchaseReceiptPayload({ ...base, lines: [{ itemType: 'PRODUCT', condition: 'CONFORME', quantity: 1, netAmount: 1 }] }))
+})
+
+test('invalid BSale snapshots never make a remote request', async () => {
+  let requests = 0
+  const remote = { createReception: async () => { requests += 1; return { id: 1 } }, getReception: async () => ({}), getDetails: async () => [], findReceptions: async () => [] }
+  for (const snapshot of [null, {}, { document: 'FACTURA', officeId: 1, documentNumber: 1, note: 'x', details: [] }]) {
+    assert.ok(purchaseReceiptPayloadError(snapshot))
+    const result = await sendPurchaseReceipt(snapshot, remote)
+    assert.equal(result.status, 'FAILED')
+  }
+  assert.equal(requests, 0)
 })
 test('remote timeout is reconciliation-required and definitive 4xx is failed', async () => {
   const snapshot = buildPurchaseReceiptPayload({ ...base, lines: [{ itemType: 'SERVICE', condition: 'CONFORME', quantity: 1, netAmount: 10 }] })

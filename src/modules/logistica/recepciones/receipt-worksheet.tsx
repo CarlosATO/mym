@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useMemo, Fragment } from 'react'
 import { useRouter } from 'next/navigation'
-import { getPurchaseOrderForReceipt, createPurchaseReceipt } from '@/app/actions/logistica/recepciones'
+import { getActiveReceiptWarehouses, getPurchaseOrderForReceipt, createPurchaseReceipt, type ReceiptWarehouseOption } from '@/app/actions/logistica/recepciones'
 import { getLocations, type Location } from '@/app/actions/logistica/locations'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
@@ -42,6 +42,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
   const [poDetail, setPoDetail] = useState<any | null>(null)
   const [loading, setLoading] = useState(true)
   const [locations, setLocations] = useState<Location[]>([])
+  const [warehouses, setWarehouses] = useState<ReceiptWarehouseOption[]>([])
   const [receivingType, setReceivingType] = useState<'WAREHOUSE' | 'OFFICE'>('WAREHOUSE')
   const [mainWarehouseId, setMainWarehouseId] = useState('')
   const [generalNotes, setGeneralNotes] = useState('')
@@ -89,9 +90,10 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
     async function loadData() {
       try {
         setLoading(true)
-        const [detail, locsRes] = await Promise.all([
+        const [detail, locsRes, warehouseOptions] = await Promise.all([
           getPurchaseOrderForReceipt(poId),
-          getLocations({ pageSize: 10000 })
+          getLocations({ pageSize: 10000 }),
+          getActiveReceiptWarehouses(),
         ])
 
         if (!detail) {
@@ -103,6 +105,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
         setPoDetail(detail)
         const activeLocations = locsRes.data.filter(l => l.is_active)
         setLocations(activeLocations)
+        setWarehouses(warehouseOptions)
         
         // Set default receiving warehouse
         const poWarehouse = detail.po.warehouse_id || ''
@@ -138,6 +141,19 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
     }
     loadData()
   }, [poId, router])
+
+  function handleMainWarehouseChange(warehouseId: string) {
+    setMainWarehouseId(warehouseId)
+    setItemInputs(current => {
+      const next = { ...current }
+      for (const item of poDetail?.items ?? []) {
+        if (item.warehouse_id) continue
+        const defaultLocationId = locations.find(location => location.warehouse_id === warehouseId)?.id || ''
+        next[item.id] = (next[item.id] || []).map(split => split.location_id ? split : { ...split, location_id: defaultLocationId })
+      }
+      return next
+    })
+  }
 
   // Split control handlers
   function addSplit(itemId: string) {
@@ -290,8 +306,12 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
       return
     }
 
-    if (!['FA', 'GD'].includes(documentType) || !documentNumber.trim()) {
+    if (!['FA', 'GD'].includes(documentType)) {
       toast.error('Debe indicar si el documento es FACTURA o GUIA y registrar su número.')
+      return
+    }
+    if (!/^[0-9]+$/.test(documentNumber)) {
+      toast.error('Ingrese un solo número de documento, sin puntos, guiones ni espacios.')
       return
     }
 
@@ -543,14 +563,28 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
                 </div>
               </div>
               
-              {!isServiceOnly && <div className="flex flex-col justify-end">
+               {!isServiceOnly && <div className="flex flex-col justify-end">
                 <div className="flex items-end justify-between mb-1 gap-1">
                   <span className="text-theme-text-muted uppercase tracking-wider text-[9px] font-semibold leading-tight">Bodega Ingreso</span>
                   <span className="text-[8px] text-theme-text-muted/60 uppercase whitespace-nowrap hidden sm:inline-block">Dato de origen</span>
                 </div>
-                <div className="flex items-center h-8 rounded-lg border border-theme-border/50 bg-theme-text/[0.02] px-2.5 text-[11px] font-semibold text-theme-text shadow-sm cursor-default truncate">
-                  {receivingType === 'OFFICE' ? '—' : (poDetail.po.warehouse_name || 'No asignada')}
-                </div>
+                 {poDetail.po.warehouse_id ? (
+                   <div className="flex items-center h-8 rounded-lg border border-theme-border/50 bg-theme-text/[0.02] px-2.5 text-[11px] font-semibold text-theme-text shadow-sm cursor-default truncate">
+                     {receivingType === 'OFFICE' ? '—' : poDetail.po.warehouse_name}
+                   </div>
+                 ) : (
+                   <select
+                     value={receivingType === 'OFFICE' ? '' : mainWarehouseId}
+                     onChange={e => handleMainWarehouseChange(e.target.value)}
+                     disabled={receivingType === 'OFFICE'}
+                     className={cn(erpSelectClass, 'w-full h-8 px-2 text-xs')}
+                   >
+                     <option value="">Seleccionar bodega...</option>
+                     {warehouses.map(warehouse => (
+                       <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>
+                     ))}
+                   </select>
+                 )}
               </div>}
             </div>
           </div>
