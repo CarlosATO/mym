@@ -16,6 +16,15 @@ import {
   X,
 } from "lucide-react";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import {
   getCommissionsSyncHealth,
   triggerManualCommissionsSync,
   type CommissionSyncHealth,
@@ -35,6 +44,7 @@ import {
   listComisionesV2FamilyPlans,
   listComisionesV2PeriodSimulation,
   listComisionesV2SellerProfiles,
+  updateComisionesV2SellerProfileState,
   listComisionesV2SettlementDrafts,
   listComisionesV2SettlementIssued,
   listComisionesV2SupplierFamilies,
@@ -1585,6 +1595,11 @@ export function ComisionesV2Inspection({
   >([]);
   const [sellerLoading, setSellerLoading] = useState(false);
   const [sellerError, setSellerError] = useState<string | null>(null);
+  const [sellerSavingId, setSellerSavingId] = useState<number | null>(null);
+  const [sellerUpdateError, setSellerUpdateError] = useState<{
+    sellerName: string;
+    message: string;
+  } | null>(null);
   const [planCache, setPlanCache] = useState<
     ComisionesV2FamilyPlanListItem[] | null
   >(null);
@@ -1921,9 +1936,14 @@ export function ComisionesV2Inspection({
   }
 
   async function requestDraftCreation() {
+    const selectedProfile = sellerProfiles.find(
+      (profile) => profile.seller_bsale_id === selectedSellerId,
+    );
     if (
       !canManage ||
       selectedSellerId == null ||
+      !selectedProfile?.active ||
+      !selectedProfile.is_commissionable ||
       loading ||
       !/^\d{4}-\d{2}-\d{2}$/.test(from) ||
       !/^\d{4}-\d{2}-\d{2}$/.test(to) ||
@@ -2268,6 +2288,48 @@ export function ComisionesV2Inspection({
     setCanManage(result.canManage === true);
     setCanIssue(result.canIssue === true);
   }, []);
+
+  const saveSellerProfileState = useCallback(
+    async (
+      profile: ComisionesV2SellerProfile,
+      state: { active: boolean; isCommissionable: boolean },
+    ) => {
+      if (!canManage || sellerSavingId != null) return;
+      setSellerSavingId(profile.seller_bsale_id);
+      setSellerUpdateError(null);
+      const result = await updateComisionesV2SellerProfileState({
+        sellerBsaleId: profile.seller_bsale_id,
+        active: state.active,
+        isCommissionable: state.isCommissionable,
+      });
+      setSellerSavingId(null);
+      if (result.error || !result.data) {
+        setSellerUpdateError({
+          sellerName: profile.seller_name,
+          message: result.error ?? "No se pudo guardar el estado del vendedor.",
+        });
+        return;
+      }
+      setSellerProfiles((current) =>
+        current.map((item) =>
+          item.seller_bsale_id === result.data!.seller_bsale_id
+            ? {
+                ...item,
+                active: result.data!.active,
+                is_commissionable: result.data!.is_commissionable,
+              }
+            : item,
+        ),
+      );
+      simulationStaleRef.current = true;
+      if (activeCompanyRef.current) {
+        batchCacheRef.current.delete(
+          `${activeCompanyRef.current}:${from}:${to}`,
+        );
+      }
+    },
+    [canManage, from, sellerSavingId, to],
+  );
 
   const loadPlanList = useCallback(
     async (options?: { force?: boolean }): Promise<boolean> => {
@@ -2840,15 +2902,14 @@ export function ComisionesV2Inspection({
             >
               <option value="">Seleccionar vendedor</option>
               {sellerProfiles
-                .filter(
-                  (profile) => profile.active && profile.is_commissionable,
-                )
+                .filter((profile) => profile.active)
                 .map((profile) => (
                   <option
                     key={profile.seller_bsale_id}
                     value={profile.seller_bsale_id}
                   >
                     {profile.seller_name} · {profile.seller_bsale_id}
+                    {!profile.is_commissionable ? " · No comisionable" : ""}
                   </option>
                 ))}
             </select>
@@ -2974,7 +3035,16 @@ export function ComisionesV2Inspection({
               type="button"
               onClick={() => void requestDraftCreation()}
               disabled={
-                draftBusy || loading || selectedSellerId == null || from > to
+                draftBusy ||
+                loading ||
+                selectedSellerId == null ||
+                from > to ||
+                !sellerProfiles.some(
+                  (profile) =>
+                    profile.seller_bsale_id === selectedSellerId &&
+                    profile.active &&
+                    profile.is_commissionable,
+                )
               }
               className="h-9 shrink-0 whitespace-nowrap rounded-lg border border-theme-accent/40 bg-theme-surface px-3 text-xs font-bold text-theme-accent hover:bg-theme-accent/5 disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -2996,8 +3066,8 @@ export function ComisionesV2Inspection({
               Vendedores V2
             </p>
             <p className="mt-1 text-xs text-theme-text-muted/70">
-              Perfiles replicados desde la configuración validada de V1. Esta
-              sección es sólo lectura.
+               Administra los estados V2. Los cambios quedan auditados con el
+               usuario y la fecha de modificación.
             </p>
           </div>
           <button
@@ -3042,6 +3112,9 @@ export function ComisionesV2Inspection({
             profiles={sellerProfiles}
             loading={sellerLoading}
             error={sellerError}
+            canManage={canManage}
+            savingSellerId={sellerSavingId}
+            onSave={(profile, state) => void saveSellerProfileState(profile, state)}
           />
         </div>
       )}
@@ -3264,6 +3337,42 @@ export function ComisionesV2Inspection({
           }}
         />
       )}
+      <Dialog
+        open={sellerUpdateError !== null}
+        onOpenChange={(open) => {
+          if (!open) setSellerUpdateError(null);
+        }}
+      >
+        <DialogContent
+          showCloseButton={false}
+          className="border-red-500/25 bg-theme-surface text-theme-text sm:max-w-md"
+        >
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-600">
+              <AlertTriangle className="h-5 w-5" />
+              No se pudo guardar el vendedor
+            </DialogTitle>
+            <DialogDescription className="text-theme-text-muted">
+              El valor anterior se conserva y no se muestra una confirmación de
+              cambio.
+            </DialogDescription>
+          </DialogHeader>
+          {sellerUpdateError && (
+            <div className="space-y-2 rounded-lg border border-theme-border bg-theme-text/[0.03] p-3 text-sm">
+              <p>
+                <span className="font-semibold text-theme-text">Vendedor:</span>{" "}
+                {sellerUpdateError.sellerName}
+              </p>
+              <p className="text-theme-text-muted">{sellerUpdateError.message}</p>
+            </div>
+          )}
+          <DialogFooter>
+            <Button type="button" onClick={() => setSellerUpdateError(null)}>
+              Entendido
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -6439,10 +6548,19 @@ function SellerProfilesTable({
   profiles,
   loading,
   error,
+  canManage,
+  savingSellerId,
+  onSave,
 }: {
   profiles: ComisionesV2SellerProfile[];
   loading: boolean;
   error: string | null;
+  canManage: boolean;
+  savingSellerId: number | null;
+  onSave: (
+    profile: ComisionesV2SellerProfile,
+    state: { active: boolean; isCommissionable: boolean },
+  ) => void;
 }) {
   if (loading) return <LoadingState />;
   if (error)
@@ -6467,6 +6585,7 @@ function SellerProfilesTable({
             <th className="w-36 px-4">ID Bsale</th>
             <th className="w-40 px-4">Comisionable</th>
             <th className="w-36 px-4">Estado</th>
+            {canManage && <th className="w-32 px-4">Acción</th>}
           </tr>
         </thead>
         <tbody className="divide-y divide-theme-border/50">
@@ -6482,17 +6601,58 @@ function SellerProfilesTable({
                 {profile.seller_bsale_id}
               </td>
               <td className="px-4 py-3">
-                <Badge
-                  value={profile.is_commissionable ? "Sí" : "No"}
-                  tone={profile.is_commissionable ? "green" : "muted"}
-                />
+                {canManage ? (
+                  <select
+                    value={profile.is_commissionable ? "yes" : "no"}
+                    disabled={savingSellerId !== null}
+                    onChange={(event) =>
+                      onSave(profile, {
+                        active: profile.active,
+                        isCommissionable: event.target.value === "yes",
+                      })
+                    }
+                    className="h-8 rounded-md border border-theme-border bg-theme-surface px-2 text-xs text-theme-text"
+                    aria-label={`Comisionable de ${profile.seller_name}`}
+                  >
+                    <option value="yes">Sí</option>
+                    <option value="no">No</option>
+                  </select>
+                ) : (
+                  <Badge
+                    value={profile.is_commissionable ? "Sí" : "No"}
+                    tone={profile.is_commissionable ? "green" : "muted"}
+                  />
+                )}
               </td>
               <td className="px-4 py-3">
-                <Badge
-                  value={profile.active ? "Activo" : "Inactivo"}
-                  tone={profile.active ? "green" : "muted"}
-                />
+                {canManage ? (
+                  <select
+                    value={profile.active ? "active" : "inactive"}
+                    disabled={savingSellerId !== null}
+                    onChange={(event) =>
+                      onSave(profile, {
+                        active: event.target.value === "active",
+                        isCommissionable: profile.is_commissionable,
+                      })
+                    }
+                    className="h-8 rounded-md border border-theme-border bg-theme-surface px-2 text-xs text-theme-text"
+                    aria-label={`Estado de ${profile.seller_name}`}
+                  >
+                    <option value="active">Activo</option>
+                    <option value="inactive">Inactivo</option>
+                  </select>
+                ) : (
+                  <Badge
+                    value={profile.active ? "Activo" : "Inactivo"}
+                    tone={profile.active ? "green" : "muted"}
+                  />
+                )}
               </td>
+              {canManage && (
+                <td className="px-4 py-3 text-[11px] text-theme-text-muted">
+                  {savingSellerId === profile.seller_bsale_id ? "Guardando..." : "Guardado automático"}
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
