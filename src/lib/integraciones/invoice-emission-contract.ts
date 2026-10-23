@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto'
 
-type FacturableSnapshot = {
+export type FacturableSnapshot = {
   company_id: string
   canonical_bsale_token: string
   current_bsale_nv_id: number
   client_id: number | null
   office_id: number | null
   sale_condition_id: string | null
+  payment_type_id: number | null
   details: Array<Record<string, unknown>>
   total: number | null
 }
@@ -30,21 +31,12 @@ function invoiceAttemptSalesId(companyId: string, canonicalToken: string, finger
 }
 
 export const INVOICE_EMISSION_DISABLED = 'EMISSION_DISABLED' as const
-export const TARGET_INVOICE_CASE = {
-  folio: '5032',
-  historicalNvId: 92486,
-  currentNvId: 92513,
-  clientId: 1005,
-  officeId: 1,
-  priceListId: 4,
-  detailIds: [334790, 334791],
-} as const
-export const TARGET_INVOICE_SALES_ID = 'PETGROUP:FACTURA:586cf837a6a4e6a7d82a2a20e0772017' as const
 
 export type InvoiceEmissionPayload = {
   documentTypeId: 5
   officeId: number
   priceListId: number
+  saleConditionId: number
   emissionDate: number
   expirationDate: number
   declareSii: 1
@@ -72,6 +64,7 @@ export function invoiceEmissionEnabled(): boolean {
 export function buildInvoiceEmissionPayload(input: {
   officeId: number
   priceListId: number
+  saleConditionId: number
   emissionDate: number
   expirationDate: number
   clientId: number
@@ -84,6 +77,7 @@ export function buildInvoiceEmissionPayload(input: {
     documentTypeId: 5,
     officeId: input.officeId,
     priceListId: input.priceListId,
+    saleConditionId: input.saleConditionId,
     emissionDate: input.emissionDate,
     expirationDate: input.expirationDate,
     declareSii: 1,
@@ -142,18 +136,51 @@ export function formatBsaleRejection(input: { status?: number; message: string; 
   return ['BSALE_REJECTED', input.status == null ? null : `http_status=${input.status}`, `message=${input.message}`, body ? `body=${body}` : null].filter(Boolean).join('|').slice(0, 1000)
 }
 
-export function validateTargetInvoiceDocument(document: any, expectedSalesId: string): { ok: true } | { ok: false; reason: string } {
+export function validateInvoiceDocument(document: any, expected: {
+  salesId: string
+  clientId: number
+  officeId: number
+  totals: { net: number; tax: number; total: number }
+  details: Array<{
+    detailId: number
+    quantity: number
+    netUnitValue?: number
+    totalUnitValue?: number
+    netAmount?: number
+    taxAmount?: number
+    totalAmount?: number
+    netDiscount?: number
+  }>
+}): { ok: true } | { ok: false; reason: string } {
   if (Number(document?.document_type?.id) !== 5) return { ok: false, reason: 'DOCUMENT_TYPE_MISMATCH' }
-  if (Number(document?.client?.id) !== TARGET_INVOICE_CASE.clientId) return { ok: false, reason: 'CLIENT_MISMATCH' }
-  if (Number(document?.office?.id) !== TARGET_INVOICE_CASE.officeId) return { ok: false, reason: 'OFFICE_MISMATCH' }
-  if (Number(document?.netAmount) !== 4704 || Number(document?.taxAmount) !== 894 || Number(document?.totalAmount) !== 5598) return { ok: false, reason: 'TOTALS_MISMATCH' }
-  if (document?.salesId !== expectedSalesId) return { ok: false, reason: 'SALES_ID_MISMATCH' }
+  if (Number(document?.client?.id) !== expected.clientId) return { ok: false, reason: 'CLIENT_MISMATCH' }
+  if (Number(document?.office?.id) !== expected.officeId) return { ok: false, reason: 'OFFICE_MISMATCH' }
+  if (Number(document?.netAmount) !== expected.totals.net || Number(document?.taxAmount) !== expected.totals.tax || Number(document?.totalAmount) !== expected.totals.total) return { ok: false, reason: 'TOTALS_MISMATCH' }
+  if (document?.salesId !== expected.salesId) return { ok: false, reason: 'SALES_ID_MISMATCH' }
   const details = Array.isArray(document?.details?.items) ? document.details.items : []
-  if (details.length !== 2) return { ok: false, reason: 'DETAIL_COUNT_MISMATCH' }
-  const expected = new Map([[334790, 1], [334791, 1]])
+  if (details.length !== expected.details.length) return { ok: false, reason: 'DETAIL_COUNT_MISMATCH' }
+  const expectedDetails = new Map(expected.details.map(detail => [detail.detailId, detail.quantity]))
   for (const detail of details) {
     const related = Number(detail.relatedDetailId)
-    if (!expected.has(related) || Number(detail.quantity) !== expected.get(related)) return { ok: false, reason: 'RELATED_DETAIL_ID_NOT_PROVABLE' }
+    if (!expectedDetails.has(related) || Number(detail.quantity) !== expectedDetails.get(related)) return { ok: false, reason: 'RELATED_DETAIL_ID_NOT_PROVABLE' }
+    const expectedDetail = expected.details.find(item => item.detailId === related)
+    for (const field of ['netUnitValue', 'totalUnitValue', 'netAmount', 'taxAmount', 'totalAmount', 'netDiscount'] as const) {
+      if (expectedDetail?.[field] != null && Number(detail[field]) !== expectedDetail[field]) return { ok: false, reason: `DETAIL_${field.toUpperCase()}_MISMATCH` }
+    }
+  }
+  return { ok: true }
+}
+
+export function validateCompleteInvoiceLines(
+  current: Array<{ detailId: number; quantity: number }>,
+  mirrored: Array<{ detailId: number; quantity: number }>,
+  linkedInvoiceCount: number,
+): { ok: true } | { ok: false; reason: string } {
+  if (linkedInvoiceCount > 0) return { ok: false, reason: 'INVOICE_ALREADY_LINKED' }
+  if (current.length === 0 || current.length !== mirrored.length) return { ok: false, reason: 'DETAIL_LINES_MISMATCH' }
+  const mirroredById = new Map(mirrored.map(line => [line.detailId, line.quantity]))
+  for (const line of current) {
+    if (line.quantity <= 0 || mirroredById.get(line.detailId) !== line.quantity) return { ok: false, reason: 'DETAIL_QUANTITY_MISMATCH' }
   }
   return { ok: true }
 }

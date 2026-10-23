@@ -4,6 +4,7 @@ export type ControlledInvoiceInput = {
   salesId: string
   fingerprint: string
   payload: Record<string, unknown>
+  expected: Omit<ControlledInvoiceDocument, 'salesId' | 'documentTypeId' | 'details'> & { details: Array<{ relatedDetailId: number; quantity: number }> }
 }
 
 export type ControlledInvoiceDocument = {
@@ -28,13 +29,13 @@ export function createControlledInvoiceCoordinator(transport: ControlledInvoiceT
   const validate = (input: ControlledInvoiceInput, document: ControlledInvoiceDocument) => (
     document.salesId === input.salesId
     && document.documentTypeId === 5
-    && document.clientId === 1005
-    && document.officeId === 1
-    && document.netAmount === 4704
-    && document.taxAmount === 894
-    && document.totalAmount === 5598
-    && document.details.length === 2
-    && document.details.every(detail => (detail.relatedDetailId === 334790 || detail.relatedDetailId === 334791) && detail.quantity === 1)
+    && document.clientId === input.expected.clientId
+    && document.officeId === input.expected.officeId
+    && document.netAmount === input.expected.netAmount
+    && document.taxAmount === input.expected.taxAmount
+    && document.totalAmount === input.expected.totalAmount
+    && document.details.length === input.expected.details.length
+    && document.details.every(detail => input.expected.details.some(expected => expected.relatedDetailId === detail.relatedDetailId && expected.quantity === detail.quantity))
   )
 
   async function emit(input: ControlledInvoiceInput, enabled: boolean) {

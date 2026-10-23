@@ -81,8 +81,8 @@ test('UNKNOWN can become retryable without creating an attempt or incrementing r
 })
 
 test('FAILED_RETRYABLE reuses the persisted salesId and records the effective retry payload', () => {
-  const existingAttempt = { sales_id: 'PETGROUP:FACTURA:586cf837a6a4e6a7d82a2a20e0772017', retry_count: 0 }
-  assert.equal(existingAttempt.sales_id, emission.TARGET_INVOICE_SALES_ID)
+  const existingAttempt = { sales_id: core.invoiceAttemptSalesId('c', 't', 'fp'), retry_count: 0 }
+  assert.equal(existingAttempt.sales_id, core.invoiceAttemptSalesId('c', 't', 'fp'))
   assert.match(retryPayloadSql, /existing\.sales_id IS DISTINCT FROM p_sales_id/)
   assert.match(retryPayloadSql, /retry_count = next_retry_count/)
   assert.match(retryPayloadSql, /effective_payload_snapshot = p_payload_snapshot/)

@@ -1222,7 +1222,7 @@ export function SalesOrderPreparationPanel({
     const snapshot = invoiceReviewSnapshot
     if (!snapshot) return { status: 'PREVALIDATION_FAILED', error: 'No hay una revisión de facturación activa.' }
 
-    const result = await emitSalesOrderInvoice(snapshot.card_id)
+    const result = await emitSalesOrderInvoice(snapshot.card_id, snapshot.commercial_selection)
     if (result.status === 'CONFIRMED') {
       invalidateInvoicePreview(invoicePreviewCacheRef.current, snapshot.card_id, snapshot.current_bsale_nv_id)
       invalidateInvoiceDocuments(invoiceDocumentCacheRef.current, snapshot.card_id, snapshot.current_bsale_nv_id)
