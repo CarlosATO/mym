@@ -2621,3 +2621,5 @@ export async function listComisionesV2SettlementIssued(): Promise<{
   }
   return { data: (data ?? []) as ComisionesV2SettlementIssuedListItem[] };
 }
+
+// Deployment retrigger (2026-10-23): Railway build was interrupted during dependency installation; no functional changes.
