@@ -142,6 +142,7 @@
     "test:merma-submit-outcome": "node --experimental-strip-types --test scripts/test-merma-submit-outcome.mjs",
     "test:mermas-manual-worker-credit-note": "node --test scripts/test-mermas-manual-worker-credit-note.mjs",
     "test:mermas-operator-read-access": "node --test scripts/test-mermas-operator-read-access.mjs",
+    "test:mermas-worker-account-read-only": "node --test scripts/test-mermas-worker-account-read-only.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },

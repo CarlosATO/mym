@@ -41,6 +41,7 @@ import {
 } from "@/app/actions/logistica/mermas";
 import { formatInstantInSantiago } from "@/lib/datetime";
 import { createClient as createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { useMermasModule } from "./mermas-module-provider";
 
 const money = new Intl.NumberFormat("es-CL", {
   style: "currency",
@@ -142,6 +143,10 @@ function MoneyStat({ label, value, strong = false }: { label: string; value: num
 // ─── Panel principal ─────────────────────────────────────────────────────────
 
 export function WorkerAccountPanel() {
+  const { bootstrap } = useMermasModule();
+  const canRegisterPayment = bootstrap.canCreate;
+  const canAddCreditNote = bootstrap.canAuthorize;
+  const canVoidPayment = bootstrap.canAuthorize;
   const [accounts, setAccounts] = useState<WorkerAccountV2[]>([]);
   const [search, setSearch] = useState("");
   const [loaded, setLoaded] = useState(false);
@@ -321,6 +326,9 @@ export function WorkerAccountPanel() {
         <WorkerAccountDetailPanel
           detail={detail}
           onClose={() => setDetail(null)}
+          canRegisterPayment={canRegisterPayment}
+          canAddCreditNote={canAddCreditNote}
+          canVoidPayment={canVoidPayment}
           onPayment={() => setPaymentOpen(true)}
           onVoidPayment={setVoidPayment}
           onCreditNote={setCreditNoteCharge}
@@ -570,12 +578,18 @@ function AccountMobileRow({ account, onClick }: { account: WorkerAccountV2; onCl
 
 function WorkerAccountDetailPanel({
   detail,
+  canRegisterPayment,
+  canAddCreditNote,
+  canVoidPayment,
   onClose,
   onPayment,
   onVoidPayment,
   onCreditNote,
 }: {
   detail: WorkerAccountDetailV2;
+  canRegisterPayment: boolean;
+  canAddCreditNote: boolean;
+  canVoidPayment: boolean;
   onClose: () => void;
   onPayment: () => void;
   onVoidPayment: (payment: WorkerAccountDetailV2["payments"][number]) => void;
@@ -616,14 +630,14 @@ function WorkerAccountDetailPanel({
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <button
+              {canRegisterPayment && <button
                 type="button"
                 onClick={onPayment}
                 disabled={detail.summary.official_balance <= 0}
                 className="rounded-lg bg-theme-accent px-3 py-1.5 text-xs font-bold text-white hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Registrar pago
-              </button>
+              </button>}
               <button
                 type="button"
                 onClick={onClose}
@@ -660,12 +674,12 @@ function WorkerAccountDetailPanel({
             </div>
             <div className="space-y-2">
               {charges.map((charge) => (
-                <ChargeCard key={charge.charge_id} charge={charge} onCreditNote={onCreditNote} />
+                <ChargeCard key={charge.charge_id} charge={charge} canAddCreditNote={canAddCreditNote} onCreditNote={onCreditNote} />
               ))}
             </div>
           </section>
 
-          <PaymentsSection payments={detail.payments} onVoidPayment={onVoidPayment} />
+          <PaymentsSection payments={detail.payments} canVoidPayment={canVoidPayment} onVoidPayment={onVoidPayment} />
           <KardexSection movements={detail.movements} />
         </div>
       </section>
@@ -675,7 +689,7 @@ function WorkerAccountDetailPanel({
 
 // ─── ChargeCard ──────────────────────────────────────────────────────────────
 
-function ChargeCard({ charge, onCreditNote }: { charge: WorkerAccountChargeV2; onCreditNote: (charge: WorkerAccountChargeV2) => void }) {
+function ChargeCard({ charge, canAddCreditNote, onCreditNote }: { charge: WorkerAccountChargeV2; canAddCreditNote: boolean; onCreditNote: (charge: WorkerAccountChargeV2) => void }) {
   const [itemsOpen, setItemsOpen] = useState(false);
   const status = chargeStatus(charge);
   const isDimmed = status === "PAGADO" || status === "SALDADO" || status === "SALDADO POR NC" || status === "REVERSADO";
@@ -698,7 +712,7 @@ function ChargeCard({ charge, onCreditNote }: { charge: WorkerAccountChargeV2; o
             <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${chargeStatusClass(status)}`}>
               {status}
             </span>
-            {charge.source_type === "BSALE_BOLETA" && charge.outstanding_amount > 0 && (
+            {canAddCreditNote && charge.source_type === "BSALE_BOLETA" && charge.outstanding_amount > 0 && (
               <button type="button" onClick={() => onCreditNote(charge)} className="rounded-full border border-theme-accent px-2 py-0.5 text-[10px] font-bold text-theme-accent hover:bg-theme-accent/10">
                 Agregar nota de crédito
               </button>
@@ -805,9 +819,11 @@ function ChargeCard({ charge, onCreditNote }: { charge: WorkerAccountChargeV2; o
 
 function PaymentsSection({
   payments,
+  canVoidPayment,
   onVoidPayment,
 }: {
   payments: WorkerAccountDetailV2["payments"];
+  canVoidPayment: boolean;
   onVoidPayment: (payment: WorkerAccountDetailV2["payments"][number]) => void;
 }) {
   return (
@@ -845,7 +861,7 @@ function PaymentsSection({
                      <ExternalLink className="h-3.5 w-3.5" />
                      Comprobante
                    </button>
-                   {payment.status === "ACTIVE" && (
+                    {canVoidPayment && payment.status === "ACTIVE" && (
                      <button
                        type="button"
                        onClick={() => onVoidPayment(payment)}
