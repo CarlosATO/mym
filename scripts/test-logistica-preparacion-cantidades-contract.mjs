@@ -7,6 +7,7 @@ const migration = await readFile(new URL('supabase/migrations/20261020120000_log
 const zeroExclusionMigration = await readFile(new URL('supabase/migrations/20261020130000_logistica_preparation_zero_exclusion_invariant.sql', root), 'utf8')
 const actions = await readFile(new URL('src/app/actions/logistica/sales-order-preparation.ts', root), 'utf8')
 const drawer = await readFile(new URL('src/modules/logistica/preparacion-pedidos/sales-order-drawer.tsx', root), 'utf8')
+const lineValidation = await readFile(new URL('src/modules/logistica/preparacion-pedidos/preparation-line-validation.ts', root), 'utf8')
 const pdf = await readFile(new URL('src/lib/pdf/generate-preparation-orders-pdf.ts', root), 'utf8')
 const docs = await readFile(new URL('docs/logistica/DOCUMENTO_FUNCIONAL_APP_BODEGA.md', root), 'utf8')
 const panel = await readFile(new URL('src/modules/logistica/preparacion-pedidos/sales-order-preparation-panel.tsx', root), 'utf8')
@@ -56,7 +57,7 @@ test('el input cero se puede reemplazar y una confirmación exitosa parchea sól
 })
 
 test('la transición a auditoría mantiene el bloqueo de líneas pendientes', () => {
-  assert.match(drawer, /line\.prepared_quantity === null \|\| line\.line_status === 'PENDING'/)
+  assert.match(lineValidation, /line\.prepared_quantity === null \|\| line\.line_status === 'PENDING'/)
   assert.match(migration, /AND \(line_status = 'PENDING' OR prepared_quantity IS NULL\)/)
 })
 

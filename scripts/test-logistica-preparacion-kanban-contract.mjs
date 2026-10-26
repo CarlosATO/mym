@@ -56,6 +56,19 @@ test('la mutación por tarjeta evita concurrencia y mantiene contadores derivado
   assert.match(card, /disabled: isOverlay \|\| isPending/)
 })
 
+test('el arrastre a auditoría valida líneas frescas antes de mutar', () => {
+  assert.match(panel, /if \(fromStatus === 'IN_PREPARATION' && toStatus === 'IN_AUDIT'\)/)
+  assert.match(panel, /getSalesOrderPreparationLines\(card\.company_id, card\.card_id\)/)
+  assert.match(panel, /linesResult\.error \|\| linesResult\.data\.length === 0/)
+  assert.match(panel, /getPreparationLineValidation\(linesResult\.data\)/)
+  assert.match(panel, /No se puede enviar a auditoría/)
+  assert.match(panel, /tiene productos con cantidades pendientes de confirmar/)
+  assert.match(panel, /Esta Nota de Venta tiene incidencias de preparación/)
+  assert.match(panel, /auditValidationCardIdsRef\.current\.add\(card\.card_id\)/)
+  assert.match(panel, /auditValidationCardIdsRef\.current\.delete\(card\.card_id\)/)
+  assert.match(drawer, /getPreparationLineValidation\(operationalLines\)/)
+})
+
 test('el drawer comparte la transición del tablero y usa estados humanos', () => {
   assert.match(panel, /onTransition=\{transitionCard\}/)
   assert.match(drawer, /onTransition: \(card: SalesOrderPreparationCardInfo, toStatus: string/)

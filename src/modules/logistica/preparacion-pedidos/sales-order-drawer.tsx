@@ -7,6 +7,7 @@ import { Fragment, useState, useEffect } from 'react'
 import { MOVEMENT_RULES } from './movement-rules'
 import { parseDateOnly } from './preparation-board-utils'
 import { PREPARATION_INCIDENT_REASONS } from './preparation-incidents'
+import { getPreparationLineValidation } from './preparation-line-validation'
 import { canClaimPreparation as canClaimPreparationView, canTakeoverPreparation as canTakeoverPreparationView, isPreparationLockError, isPreparationReadOnly } from './preparation-lock-policy'
 
 interface SalesOrderDrawerProps {
@@ -249,8 +250,7 @@ export function SalesOrderDrawer({
   }
 
   const operationalLines = card?.status === 'IN_PREPARATION' ? preparationLines : []
-  const pendingLines = operationalLines.filter(line => line.prepared_quantity === null || line.line_status === 'PENDING')
-  const incidentLines = operationalLines.filter(line => line.line_status === 'INCIDENT')
+  const { pendingLines, incidentLines } = getPreparationLineValidation(operationalLines)
   const reasonLabel = (reason: string) => ({
     SIN_STOCK: 'Sin stock', STOCK_INSUFICIENTE: 'Stock insuficiente', PRODUCTO_DANADO: 'Producto dañado',
     PRODUCTO_VENCIDO_NO_APTO: 'Producto vencido / no apto', ERROR_PEDIDO: 'Error de pedido',
