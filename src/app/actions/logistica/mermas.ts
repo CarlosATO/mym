@@ -27,6 +27,8 @@ const MERMA_WORKER_PAYMENT_MIME_TYPES = new Set([
   "image/jpeg",
   "image/png",
 ]);
+const MERMA_WORKER_CREDIT_NOTE_BUCKET = "mermas-worker-credit-notes";
+const MERMA_WORKER_CREDIT_NOTE_MAX_SIZE = 10 * 1024 * 1024;
 
 function db(schema: string) {
   return createSupabaseClient(url, serviceKey, {
@@ -282,6 +284,20 @@ export type WorkerAccountDetailV2 = {
     amount: number;
     status: string;
     occurred_at: string;
+  }>;
+};
+
+export type WorkerCreditNoteUpload = WorkerPaymentUpload;
+export type WorkerCreditNoteContext = {
+  original_amount: number;
+  document_number: string | null;
+  credit_notes: Array<{
+    charge_id: string;
+    number: string | null;
+    date: string | null;
+    amount: number;
+    observation: string | null;
+    has_evidence: boolean;
   }>;
 };
 
@@ -727,6 +743,117 @@ export async function getWorkerAccountDetailV2(employeeId: string): Promise<{
     return { data: null, error: "No se pudo cargar el detalle V2 de la cuenta corriente." };
   }
   return { data: data as WorkerAccountDetailV2 | null };
+}
+
+export async function getWorkerCreditNoteContext(chargeId: string): Promise<{ data: WorkerCreditNoteContext | null; error?: string }> {
+  try {
+    const authorization = await requireWmsPermission("logistica.mermas.account.view");
+    if (!/^[0-9a-f-]{36}$/i.test(chargeId)) return { data: null, error: "Boleta inválida." };
+    const { data, error } = await db("mermas").rpc("get_worker_credit_note_context", {
+      p_company_id: authorization.companyId,
+      p_user_id: authorization.user.id,
+      p_charge_id: chargeId,
+    });
+    if (error) throw error;
+    const context = data as WorkerCreditNoteContext;
+    return { data: { ...context, original_amount: Number(context.original_amount), credit_notes: context.credit_notes.map((note) => ({ ...note, amount: Number(note.amount) })) } };
+  } catch (error) {
+    return { data: null, error: error instanceof Error ? error.message : "No se pudo cargar el contexto de la Boleta." };
+  }
+}
+
+export async function prepareWorkerCreditNoteUpload(file: {
+  employee_id: string;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+}): Promise<{ data?: WorkerCreditNoteUpload; error?: string }> {
+  try {
+    const authorization = await requireWmsPermission("logistica.mermas.authorize");
+    const supabase = await createClient();
+    const { data: auth } = await supabase.auth.getUser();
+    if (!auth.user) return { error: "No autorizado" };
+    if (!/^[0-9a-f-]{36}$/i.test(file.employee_id) || file.mime_type !== "application/pdf") return { error: "La evidencia debe ser un PDF." };
+    if (!Number.isInteger(file.size_bytes) || file.size_bytes <= 0 || file.size_bytes > MERMA_WORKER_CREDIT_NOTE_MAX_SIZE) return { error: "El PDF debe pesar entre 1 byte y 10 MB." };
+    const safeName = file.file_name.replace(/[^a-zA-Z0-9._-]/g, "_") || "nota-credito.pdf";
+    const uploadId = randomUUID();
+    const storagePath = `${authorization.companyId}/${file.employee_id}/credit-note/${uploadId}/${safeName.endsWith(".pdf") ? safeName : `${safeName}.pdf`}`;
+    const { data, error } = await db("mermas").storage.from(MERMA_WORKER_CREDIT_NOTE_BUCKET).createSignedUploadUrl(storagePath);
+    if (error || !data?.signedUrl || !data.token) throw new Error("No se pudo preparar la carga segura del PDF.");
+    return { data: { upload_id: uploadId, upload_token: data.token, validation_token: signMermaEvidenceSession(authorization.companyId, auth.user.id, uploadId, [storagePath]), storage_path: storagePath, signed_upload_url: data.signedUrl, original_filename: storagePath.split("/").pop()!, mime_type: "application/pdf", size_bytes: file.size_bytes } };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo preparar el PDF." };
+  }
+}
+
+export async function cleanupWorkerCreditNoteUpload(upload: { upload_id: string; validation_token: string; storage_path: string }): Promise<{ success?: boolean; error?: string }> {
+  try {
+    const authorization = await requireWmsPermission("logistica.mermas.authorize");
+    const supabase = await createClient();
+    const { data: auth } = await supabase.auth.getUser();
+    const expected = signMermaEvidenceSession(authorization.companyId, auth.user?.id ?? "", upload.upload_id, [upload.storage_path]);
+    if (!auth.user || !hasValidMermaEvidenceSignature(upload.validation_token, expected) || !upload.storage_path.startsWith(`${authorization.companyId}/`)) return { error: "No autorizado" };
+    await db("mermas").storage.from(MERMA_WORKER_CREDIT_NOTE_BUCKET).remove([upload.storage_path]);
+    return { success: true };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo limpiar el PDF." };
+  }
+}
+
+export async function registerManualWorkerCreditNote(input: {
+  employee_id: string;
+  original_charge_id: string;
+  credit_note_number: string;
+  credit_note_date: string;
+  amount: number;
+  upload_id: string;
+  validation_token: string;
+  storage_path: string;
+  original_filename: string;
+  mime_type: string;
+  size_bytes: number;
+  observation?: string;
+}): Promise<{ success: boolean; data?: { charge_id: string; balance_before: number; balance_after: number }; error?: string }> {
+  try {
+    const authorization = await requireWmsPermission("logistica.mermas.authorize");
+    const supabase = await createClient();
+    const { data: auth } = await supabase.auth.getUser();
+    if (!auth.user || !/^[0-9a-f-]{36}$/i.test(input.employee_id) || !/^[0-9a-f-]{36}$/i.test(input.original_charge_id) || !/^[0-9a-f-]{36}$/i.test(input.upload_id)) return { success: false, error: "Datos de la NC inválidos." };
+    const expectedToken = signMermaEvidenceSession(authorization.companyId, auth.user.id, input.upload_id, [input.storage_path]);
+    const expectedPrefix = `${authorization.companyId}/${input.employee_id}/credit-note/${input.upload_id}/`;
+    if (!hasValidMermaEvidenceSignature(input.validation_token, expectedToken) || !input.storage_path.startsWith(expectedPrefix)) return { success: false, error: "La evidencia no es válida para esta operación." };
+    if (input.mime_type !== "application/pdf" || !Number.isInteger(input.size_bytes) || input.size_bytes <= 0 || input.size_bytes > MERMA_WORKER_CREDIT_NOTE_MAX_SIZE) return { success: false, error: "La evidencia debe ser un PDF de hasta 10 MB." };
+    const object = await db("mermas").storage.from(MERMA_WORKER_CREDIT_NOTE_BUCKET).info(input.storage_path);
+    const metadata = object.data as { size?: number | string; contentType?: string; mimetype?: string } | null;
+    if (object.error || !metadata || Number(metadata.size) !== input.size_bytes || (metadata.contentType ?? metadata.mimetype) !== "application/pdf") return { success: false, error: "No se pudo validar el PDF subido." };
+    const { data: pdfObject, error: downloadError } = await db("mermas").storage.from(MERMA_WORKER_CREDIT_NOTE_BUCKET).download(input.storage_path);
+    if (downloadError || !pdfObject) return { success: false, error: "No se pudo leer el PDF subido." };
+    const signature = new TextDecoder().decode(await pdfObject.slice(0, 5).arrayBuffer());
+    if (signature !== "%PDF-") return { success: false, error: "El archivo no contiene una firma PDF válida." };
+    const { data, error } = await db("mermas").rpc("register_manual_worker_credit_note", {
+      p_company_id: authorization.companyId, p_user_id: auth.user.id, p_original_charge_id: input.original_charge_id,
+      p_credit_note_number: input.credit_note_number.trim(), p_credit_note_date: input.credit_note_date, p_amount: input.amount,
+      p_upload_id: input.upload_id, p_storage_path: input.storage_path, p_original_filename: input.original_filename,
+      p_mime_type: input.mime_type, p_size_bytes: input.size_bytes, p_observation: input.observation?.trim() || null,
+    });
+    if (error) throw error;
+    return { success: true, data: data as { charge_id: string; balance_before: number; balance_after: number } };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : "No se pudo registrar la Nota de Crédito." };
+  }
+}
+
+export async function getWorkerCreditNoteEvidenceUrl(chargeId: string): Promise<{ url?: string; error?: string }> {
+  try {
+    const authorization = await requireWmsPermission("logistica.mermas.account.view");
+    const { data: evidence, error } = await db("mermas").from("worker_credit_note_evidence").select("storage_path").eq("company_id", authorization.companyId).eq("charge_id", chargeId).maybeSingle();
+    if (error || !evidence) return { error: "PDF de respaldo no encontrado." };
+    const { data, error: signedError } = await db("mermas").storage.from(MERMA_WORKER_CREDIT_NOTE_BUCKET).createSignedUrl(evidence.storage_path, 300);
+    if (signedError || !data?.signedUrl) return { error: "No se pudo generar el acceso temporal al PDF." };
+    return { url: data.signedUrl };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No se pudo abrir el PDF." };
+  }
 }
 
 export async function prepareWorkerPaymentUpload(file: {
