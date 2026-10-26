@@ -138,7 +138,7 @@ export function MermasStockExitPanel() {
   return (
     <div className="min-h-[calc(100vh-9.5rem)] bg-theme-bg p-4 sm:p-6">
       <div className="mx-auto max-w-7xl space-y-5">
-        {view === "new" ? (
+        {view === "new" && bootstrap.isSuperUser ? (
           <MermasStockExitCreateForm
             onBack={showHistory}
              onCreated={(successMessage) => {
@@ -158,9 +158,9 @@ export function MermasStockExitPanel() {
                 <button type="button" onClick={() => void loadHistory()} disabled={refreshing} className="inline-flex h-10 items-center gap-2 rounded-xl border border-theme-border px-3 text-xs font-semibold text-theme-text-muted hover:bg-theme-text/5 disabled:opacity-50">
                   <RefreshCw className={refreshing ? "h-4 w-4 animate-spin" : "h-4 w-4"} /> Actualizar
                 </button>
-                <button type="button" onClick={startNewExit} className="inline-flex h-10 items-center gap-2 rounded-xl bg-theme-accent px-4 text-xs font-semibold text-white hover:bg-theme-accent-hover">
+                {bootstrap.isSuperUser && <button type="button" onClick={startNewExit} className="inline-flex h-10 items-center gap-2 rounded-xl bg-theme-accent px-4 text-xs font-semibold text-white hover:bg-theme-accent-hover">
                   <Plus className="h-4 w-4" /> Nueva salida
-                </button>
+                </button>}
               </div>
             </header>
             {message && <Notice tone="success">{message}</Notice>}

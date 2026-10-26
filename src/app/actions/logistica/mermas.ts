@@ -3,7 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { getActiveCompany, getActiveCompanyId } from "@/app/actions/companies";
-import { requireWmsPermission } from "./authorization";
+import { hasWmsPermission, requireWmsPermission } from "./authorization";
 import { syncBsaleMermas } from "@/lib/integraciones/bsale-mermas-sync";
 import { executeMermaBsaleOutbound } from "@/lib/integraciones/bsale-mermas-outbound-orchestrator";
 import { executeMermaBsaleReception, reconcileMermaBsaleReception, type MermaBsaleReceptionInput } from "@/lib/integraciones/bsale-mermas-reception-orchestrator";
@@ -68,12 +68,15 @@ export type MermasBootstrap = {
   canCreate: boolean;
   canCreateRequest: boolean;
   canAuthorize: boolean;
+  canViewAuthorization: boolean;
   canSync: boolean;
   canUseInternalSale: boolean;
   isSuperUser: boolean;
   canReviewPayments: boolean;
   canViewAccounts: boolean;
   canEditSettings: boolean;
+  canViewSettings: boolean;
+  canViewStockExits: boolean;
   canViewWarehouse: boolean;
   canViewPendingCount: boolean;
   pricingSettings: MermaPricingSettings;
@@ -985,6 +988,22 @@ async function requireMermasSuperUser() {
   return authorization;
 }
 
+async function requireMermasAuthorizationView() {
+  const authorization = await requireWmsPermission("logistica.mermas.view");
+  const canView = await hasWmsPermission(authorization.user.id, "logistica.mermas.authorization.view");
+  const canAuthorize = await hasWmsPermission(authorization.user.id, "logistica.mermas.authorize");
+  if (!canView && !canAuthorize) throw new Error("No autorizado para consultar pendientes de autorización");
+  return authorization;
+}
+
+async function requireMermasStockExitView() {
+  try {
+    return await requireWmsPermission("logistica.mermas.stock_exit.view");
+  } catch {
+    return requireMermasSuperUser();
+  }
+}
+
 export async function getWorkerPaymentReviewAccess() {
   try {
     await requireWorkerPaymentReviewer();
@@ -1006,6 +1025,9 @@ export async function getMermasBootstrap(): Promise<MermasBootstrap> {
     "logistica.mermas.sync",
     "logistica.mermas.warehouse.view",
     "logistica.mermas.pending.view",
+    "logistica.mermas.authorization.view",
+    "logistica.mermas.stock_exit.view",
+    "logistica.mermas.settings.view",
   ] as const;
   const permissionResults = await Promise.all(
     permissionCodes.map(async (permissionCode) => {
@@ -1019,6 +1041,9 @@ export async function getMermasBootstrap(): Promise<MermasBootstrap> {
     (typeof permissionCodes)[number],
     boolean
   >;
+  const canViewAuthorization = permissions["logistica.mermas.authorization.view"] || permissions["logistica.mermas.authorize"];
+  const canViewSettingsPermission = permissions["logistica.mermas.settings.view"];
+  const canViewStockExitsPermission = permissions["logistica.mermas.stock_exit.view"];
   const [{ data: isSuperUser, error: superUserError }, { data: setting, error: settingError }] =
     await Promise.all([
       db("portal").rpc("is_super_usuario", { p_user_id: authorization.user.id }),
@@ -1029,6 +1054,8 @@ export async function getMermasBootstrap(): Promise<MermasBootstrap> {
         .maybeSingle(),
     ]);
   const superUser = !superUserError && isSuperUser === true;
+  const canViewSettings = canViewSettingsPermission || superUser;
+  const canViewStockExits = canViewStockExitsPermission || superUser;
   const canViewPendingCount = permissions["logistica.mermas.pending.view"];
   const { count: pendingCount } = canViewPendingCount
     ? await db("mermas")
@@ -1053,12 +1080,15 @@ export async function getMermasBootstrap(): Promise<MermasBootstrap> {
     canCreate: permissions["logistica.mermas.create"],
     canCreateRequest: permissions["logistica.mermas.request.create"],
     canAuthorize: permissions["logistica.mermas.authorize"],
+    canViewAuthorization,
     canSync: permissions["logistica.mermas.sync"],
     canUseInternalSale: permissions["logistica.mermas.internal_sale.create"],
     isSuperUser: superUser,
     canReviewPayments: superUser,
     canViewAccounts: permissions["logistica.mermas.account.view"],
     canEditSettings: superUser && !settingError,
+    canViewSettings,
+    canViewStockExits,
     canViewWarehouse: permissions["logistica.mermas.warehouse.view"],
     canViewPendingCount,
     pricingSettings,
@@ -2633,7 +2663,7 @@ export async function getMermasAuthorizationPending(): Promise<{
   data: MermaAuthorizationRow[];
   error?: string;
 }> {
-  const authorization = await requireWmsPermission("logistica.mermas.authorize");
+  const authorization = await requireMermasAuthorizationView();
   const database = db("mermas");
   const { data: movements, error } = await database
     .from("movements")
@@ -2737,7 +2767,7 @@ export async function getMermaMovementReview(movementId: string): Promise<{
   data: { movement: MermaAuthorizationRow; evidence: MermaEvidence[] } | null;
   error?: string;
 }> {
-  const authorization = await requireWmsPermission("logistica.mermas.view");
+  const authorization = await requireMermasAuthorizationView();
   const database = db("mermas");
   const { data: rawMovement, error: movementError } = await database
     .from("movements")
@@ -2747,10 +2777,6 @@ export async function getMermaMovementReview(movementId: string): Promise<{
     .maybeSingle();
   if (movementError || !rawMovement)
     return { data: null, error: "Entrada no encontrada o ya autorizada" };
-  if (rawMovement.authorization_status === "PENDIENTE_AUTORIZACION") {
-    await requireWmsPermission("logistica.mermas.authorize");
-  }
-
   const [{ data: line }, { data: request }, { data: variant }, { data: evidenceRows }, { data: consumption }] = await Promise.all([
     rawMovement.request_line_id
       ? database.from("request_lines").select("id, reason").eq("id", rawMovement.request_line_id).maybeSingle()
@@ -2986,10 +3012,15 @@ export async function getMermasWarehouse(): Promise<{
 
 export async function getMermasStockExitAccess() {
   try {
-    await requireMermasSuperUser();
+    await requireWmsPermission("logistica.mermas.stock_exit.view");
     return true;
   } catch {
-    return false;
+    try {
+      await requireMermasSuperUser();
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -2998,10 +3029,15 @@ export async function getMermasStockExitCatalog(): Promise<{
   error?: string;
 }> {
   try {
-    await requireMermasSuperUser();
+    await requireWmsPermission("logistica.mermas.stock_exit.view");
     return getMermasWarehouse();
   } catch (error) {
-    return { data: [], error: error instanceof Error ? error.message : "No se pudo cargar el stock de Mermas." };
+    try {
+      await requireMermasSuperUser();
+      return getMermasWarehouse();
+    } catch {
+      return { data: [], error: error instanceof Error ? error.message : "No se pudo cargar el stock de Mermas." };
+    }
   }
 }
 
@@ -3048,6 +3084,7 @@ export async function createMermasBsaleRegularization(
   input: MermaBsaleReceptionInput,
 ): Promise<MermaBsaleRegularizationResponse> {
   try {
+    await requireMermasSuperUser();
     if (!input.idempotencyKey || !Array.isArray(input.items) || input.items.length === 0) {
       return { success: false, status: "FAILED", error: "La regularización requiere una clave y productos." };
     }
@@ -3067,6 +3104,7 @@ export async function createMermasBsaleRegularization(
 
 export async function reconcileMermasBsaleReception(operationId: string): Promise<MermaBsaleRegularizationResponse> {
   try {
+    await requireMermasSuperUser();
     if (!operationId?.trim()) return { success: false, status: "RECONCILIATION_REQUIRED", error: "La operación de recepción es obligatoria." };
     const result = await reconcileMermaBsaleReception(operationId);
     return {
@@ -3087,7 +3125,7 @@ export async function getMermasStockExitOperations(): Promise<{
   error?: string;
 }> {
   try {
-    const authorization = await requireMermasSuperUser();
+    const authorization = await requireMermasStockExitView();
     const { data, error } = await db("mermas").rpc("get_stock_exit_operations", {
       p_company_id: authorization.companyId,
       p_user_id: authorization.user.id,
@@ -3125,7 +3163,7 @@ export async function getMermasStockExitOperationDetail(
   operationId: string,
 ): Promise<{ data: MermaStockExitOperationDetail | null; error?: string }> {
   try {
-    const authorization = await requireMermasSuperUser();
+    const authorization = await requireMermasStockExitView();
     const { data, error } = await db("mermas").rpc("get_stock_exit_operation_detail", {
       p_company_id: authorization.companyId,
       p_user_id: authorization.user.id,

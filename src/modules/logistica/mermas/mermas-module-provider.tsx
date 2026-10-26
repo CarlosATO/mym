@@ -223,7 +223,7 @@ export function MermasModuleProvider({
       if (cancelled) return;
       const warm = async () => {
         await Promise.all([
-          bootstrap.canAuthorize ? ensureAuthorizationLoaded() : Promise.resolve(),
+          bootstrap.canViewAuthorization ? ensureAuthorizationLoaded() : Promise.resolve(),
           bootstrap.canView ? ensureArchivedLoaded() : Promise.resolve(),
         ]);
         if (bootstrap.canViewWarehouse) await ensureWarehouseLoaded();

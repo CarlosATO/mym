@@ -14,7 +14,7 @@ import { MermaEvidenceViewer } from "./mermas-evidence-viewer";
 import { useMermasModule } from "./mermas-module-provider";
 
 export function MermasAuthorizationPanel() {
-  const { authorization, ensureAuthorizationLoaded, invalidateMermaMovementViews } = useMermasModule();
+  const { bootstrap, authorization, ensureAuthorizationLoaded, invalidateMermaMovementViews } = useMermasModule();
   const rows = authorization.data;
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<{
@@ -251,7 +251,7 @@ export function MermasAuthorizationPanel() {
             <div className="mt-5">
               <MermaEvidenceViewer evidence={selected.evidence} />
             </div>
-             {selected.movement.authorization_status !== "RECHAZADA" && (
+              {bootstrap.canAuthorize && selected.movement.authorization_status !== "RECHAZADA" && (
                <div className="mt-5 space-y-3">
                  <label className="block text-xs font-semibold text-theme-text">
                    Motivo del rechazo *

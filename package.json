@@ -141,6 +141,7 @@
     "test:bsale-purchase-receipt": "node --experimental-strip-types --test scripts/test-bsale-purchase-receipt-core.mjs",
     "test:merma-submit-outcome": "node --experimental-strip-types --test scripts/test-merma-submit-outcome.mjs",
     "test:mermas-manual-worker-credit-note": "node --test scripts/test-mermas-manual-worker-credit-note.mjs",
+    "test:mermas-operator-read-access": "node --test scripts/test-mermas-operator-read-access.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },

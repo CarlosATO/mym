@@ -211,7 +211,7 @@ function MermaOperations() {
 
   return (
     <div className="space-y-4 p-4 sm:p-5">
-        {tab === "configuration" && pricingSettings?.can_edit && (
+        {tab === "configuration" && bootstrap.canViewSettings && (
           <MermasPricingSettingsPanel
             settings={pricingSettings}
             onSaved={(settings) => {
@@ -242,7 +242,7 @@ function MermaOperations() {
             </span>
           </button>
         )}
-         {(tab === "requests" || (tab === "authorization" && !bootstrap.canAuthorize)) && (
+         {(tab === "requests" || (tab === "authorization" && !bootstrap.canViewAuthorization)) && (
           <>
             {pending > 0 && (
               <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
@@ -350,7 +350,7 @@ function MermaOperations() {
             )}
           </>
         )}
-         {tab === "authorization" && bootstrap.canAuthorize ? (
+         {tab === "authorization" && bootstrap.canViewAuthorization ? (
           <MermasAuthorizationPanel />
         ) : tab === "archived" ? (
           <MermasArchivedPanel />
@@ -585,11 +585,11 @@ function MermasPricingSettingsPanel({
             <label className="text-xs font-medium text-theme-text-muted">
                 Porcentaje para precio sugerido
               <div className="mt-1 flex items-center gap-2">
-                <input aria-label="Porcentaje de precio venta trabajadores" type="number" min="0" step="0.001" value={value} onChange={(event) => setValue(event.target.value)} placeholder="No configurado" className="h-9 w-32 rounded-lg border border-theme-border bg-theme-surface px-2 text-sm text-theme-text outline-none focus:border-theme-accent" />
+                <input aria-label="Porcentaje de precio venta trabajadores" readOnly={!settings.can_edit} disabled={!settings.can_edit} type="number" min="0" step="0.001" value={value} onChange={(event) => setValue(event.target.value)} placeholder="No configurado" className="h-9 w-32 rounded-lg border border-theme-border bg-theme-surface px-2 text-sm text-theme-text outline-none focus:border-theme-accent disabled:cursor-not-allowed disabled:opacity-70" />
                 <span className="text-sm text-theme-text">%</span>
               </div>
             </label>
-            <button type="button" onClick={() => void save()} disabled={saving} className="h-9 rounded-lg bg-theme-accent px-3 text-xs font-semibold text-white hover:bg-theme-accent-hover disabled:opacity-50">{saving ? "GUARDANDO..." : "GUARDAR"}</button>
+            {settings.can_edit && <button type="button" onClick={() => void save()} disabled={saving} className="h-9 rounded-lg bg-theme-accent px-3 text-xs font-semibold text-white hover:bg-theme-accent-hover disabled:opacity-50">{saving ? "GUARDANDO..." : "GUARDAR"}</button>}
           </div>
         </div>
         <div className="rounded-xl border border-theme-border bg-theme-text/[0.018] p-4">
@@ -600,10 +600,10 @@ function MermasPricingSettingsPanel({
               Tope mensual por trabajador
               <div className="mt-1 flex items-center gap-2">
                 <span className="text-sm text-theme-text">$</span>
-                <input aria-label="Tope mensual por trabajador" type="number" min="1" step="1" value={monthlyLimit} onChange={(event) => setMonthlyLimit(event.target.value)} placeholder="No configurado" className="h-9 w-36 rounded-lg border border-theme-border bg-theme-surface px-2 text-sm text-theme-text outline-none focus:border-theme-accent" />
+                <input aria-label="Tope mensual por trabajador" readOnly={!settings.can_edit} disabled={!settings.can_edit} type="number" min="1" step="1" value={monthlyLimit} onChange={(event) => setMonthlyLimit(event.target.value)} placeholder="No configurado" className="h-9 w-36 rounded-lg border border-theme-border bg-theme-surface px-2 text-sm text-theme-text outline-none focus:border-theme-accent disabled:cursor-not-allowed disabled:opacity-70" />
               </div>
             </label>
-            <button type="button" onClick={() => void save()} disabled={saving} className="h-9 rounded-lg bg-theme-accent px-3 text-xs font-semibold text-white hover:bg-theme-accent-hover disabled:opacity-50">{saving ? "GUARDANDO..." : "GUARDAR"}</button>
+            {settings.can_edit && <button type="button" onClick={() => void save()} disabled={saving} className="h-9 rounded-lg bg-theme-accent px-3 text-xs font-semibold text-white hover:bg-theme-accent-hover disabled:opacity-50">{saving ? "GUARDANDO..." : "GUARDAR"}</button>}
           </div>
         </div>
       </div>

@@ -98,7 +98,7 @@ export const mermasNavigation: ModuleNavigation = {
       items: [
         { id: 'mermas_solicitud', label: 'Solicitud de merma', icon: Trash2, target: { href: '/dashboard/logistica/mermas' }, active: mermasViewMatcher(), visibility: { allOf: ['logistica.mermas.view'] } },
         { id: 'mermas_bodega', label: 'Bodega de Mermas', icon: Warehouse, target: { pathname: '/dashboard/logistica/mermas', query: { view: 'warehouse' } }, active: mermasViewMatcher('warehouse'), visibility: { allOf: ['logistica.mermas.warehouse.view'] } },
-        { id: 'mermas_salidas', label: 'Salidas', icon: ArrowLeftRight, target: { href: '/dashboard/logistica/mermas/salidas' }, active: mermasPathMatcher('/dashboard/logistica/mermas/salidas'), visibility: { allOf: ['system.admin'] } },
+        { id: 'mermas_salidas', label: 'Salidas', icon: ArrowLeftRight, target: { href: '/dashboard/logistica/mermas/salidas' }, active: mermasPathMatcher('/dashboard/logistica/mermas/salidas'), visibility: { anyOf: ['logistica.mermas.stock_exit.view', 'system.admin'] } },
         { id: 'mermas_venta_trabajadores', label: 'Venta a trabajadores', icon: ShoppingCart, target: { href: '/dashboard/logistica/mermas/venta-trabajadores' }, active: mermasPathMatcher('/dashboard/logistica/mermas/venta-trabajadores'), visibility: { allOf: ['logistica.mermas.internal_sale.create'] } },
       ],
     },
@@ -106,7 +106,7 @@ export const mermasNavigation: ModuleNavigation = {
       id: 'mermas_control',
       label: 'Control',
       items: [
-        { id: 'mermas_autorizacion', label: 'Pendientes de autorización', icon: ShieldCheck, target: { pathname: '/dashboard/logistica/mermas', query: { view: 'authorization' } }, active: mermasViewMatcher('authorization'), visibility: { allOf: ['logistica.mermas.authorize'] } },
+        { id: 'mermas_autorizacion', label: 'Pendientes de autorización', icon: ShieldCheck, target: { pathname: '/dashboard/logistica/mermas', query: { view: 'authorization' } }, active: mermasViewMatcher('authorization'), visibility: { anyOf: ['logistica.mermas.authorization.view', 'logistica.mermas.authorize'] } },
         { id: 'mermas_cuenta', label: 'Cuenta corriente', icon: WalletCards, target: { href: '/dashboard/logistica/mermas/cuenta-corriente' }, active: mermasPathMatcher('/dashboard/logistica/mermas/cuenta-corriente'), visibility: { allOf: ['logistica.mermas.account.view'] } },
         { id: 'mermas_archivadas', label: 'Archivadas', icon: Archive, target: { pathname: '/dashboard/logistica/mermas', query: { view: 'archived' } }, active: mermasViewMatcher('archived'), visibility: { allOf: ['logistica.mermas.view'] } },
       ],
@@ -122,7 +122,7 @@ export const mermasNavigation: ModuleNavigation = {
       id: 'mermas_configuracion',
       label: 'Configuración',
       items: [
-        { id: 'mermas_config', label: 'Configuración de Mermas', icon: SlidersHorizontal, target: { pathname: '/dashboard/logistica/mermas', query: { view: 'configuration' } }, active: mermasViewMatcher('configuration'), visibility: { allOf: ['system.admin'] } },
+        { id: 'mermas_config', label: 'Configuración de Mermas', icon: SlidersHorizontal, target: { pathname: '/dashboard/logistica/mermas', query: { view: 'configuration' } }, active: mermasViewMatcher('configuration'), visibility: { anyOf: ['logistica.mermas.settings.view', 'system.admin'] } },
       ],
     },
   ],

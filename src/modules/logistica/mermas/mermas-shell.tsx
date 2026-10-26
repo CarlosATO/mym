@@ -17,10 +17,10 @@ export function MermasShell({ children }: { children: React.ReactNode }) {
   const [syncError, setSyncError] = useState("");
 
   useEffect(() => {
-    if (pathname === "/dashboard/logistica/mermas" && searchParams.get("view") === "authorization" && !bootstrap.canAuthorize) {
+    if (pathname === "/dashboard/logistica/mermas" && searchParams.get("view") === "authorization" && !bootstrap.canViewAuthorization) {
       router.replace("/dashboard/logistica/mermas");
     }
-  }, [bootstrap.canAuthorize, pathname, router, searchParams]);
+  }, [bootstrap.canViewAuthorization, pathname, router, searchParams]);
 
   async function sync() {
     setSyncing(true);
