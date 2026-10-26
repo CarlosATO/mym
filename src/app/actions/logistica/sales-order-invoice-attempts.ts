@@ -6,6 +6,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { BsaleApiError, bsaleFetchForCompany, bsaleFetchResourceForCompany } from '@/lib/bsale/client'
 import { bsaleWriteForCompany } from '@/lib/bsale/write-client'
 import { buildInvoiceEmissionIdentity, buildInvoiceEmissionPayload, chileDateToBsaleEpoch, chileToday, formatBsaleRejection, invoiceEmissionEnabled, validateCompleteInvoiceLines, validateInvoiceDocument } from '@/lib/integraciones/invoice-emission-contract'
+import { evaluateInvoiceCommercialValidation } from '@/lib/integraciones/invoice-commercial-validation'
 import type { InvoiceCommercialSelection } from '@/modules/logistica/preparacion-pedidos/invoice-commercial'
 
 const PREPARE_PERMISSION = 'logistica.preparation.manage'
@@ -107,16 +108,6 @@ async function mirrorConfirmedInvoice(companyId: string, document: Record<string
   }
 }
 
-function readBsaleRelationId(value: unknown): number | null {
-  if (!value || typeof value !== 'object') return null
-  const relation = value as { id?: unknown; href?: unknown }
-  const direct = Number(relation.id)
-  if (Number.isSafeInteger(direct) && direct > 0) return direct
-  const match = typeof relation.href === 'string' ? /\/([0-9]+)(?:\.json)?$/.exec(relation.href) : null
-  const fromHref = Number(match?.[1])
-  return Number.isSafeInteger(fromHref) && fromHref > 0 ? fromHref : null
-}
-
 /** Real emission path. Every document value comes from the current NV or the confirmed selection. */
 export async function emitSalesOrderInvoice(cardId: string, selection?: InvoiceCommercialSelection | null) {
   const auth = await requireWmsPermission(PREPARE_PERMISSION)
@@ -148,18 +139,31 @@ export async function emitSalesOrderInvoice(cardId: string, selection?: InvoiceC
   const clientId = Number(nv.client?.id)
   const officeId = Number(nv.office?.id)
   const priceListId = Number(nv.priceList?.id)
-  const saleConditionId = selection?.sale_condition_id ?? readBsaleRelationId(nv.saleCondition ?? nv.sale_condition)
-  const [{ data: client, error: clientError }, { data: syncedClient, error: syncedClientError }] = await Promise.all([
+  const [client, { data: syncedClient, error: syncedClientError }] = await Promise.all([
     bsaleFetchResourceForCompany<Record<string, any>>({ companyId: auth.companyId, path: `/clients/${clientId}.json` }),
     db.schema('integraciones').from('bsale_clients').select('payment_type_id,payment_type_name').eq('company_id', auth.companyId).eq('bsale_client_id', clientId).maybeSingle(),
   ])
   const paymentTypeId = syncedClient?.payment_type_id == null ? null : Number(syncedClient.payment_type_id)
-  const selectedPaymentTypeId = selection?.payment_type_id ?? paymentTypeId
-  const confirmedExpirationDate = selection?.expiration_date
-  if (selectedPaymentTypeId == null || !Number.isSafeInteger(selectedPaymentTypeId) || selectedPaymentTypeId <= 0 || saleConditionId == null || !Number.isSafeInteger(saleConditionId) || saleConditionId <= 0 || !confirmedExpirationDate) {
+  const commercialValidation = evaluateInvoiceCommercialValidation({
+    currentNvId,
+    nv,
+    sellers,
+    paymentTypes,
+    saleConditions,
+    client,
+    clientError: false,
+    syncedClientError: Boolean(syncedClientError),
+    paymentTypeId,
+    selection: selection ?? null,
+  })
+  const { selectedPaymentTypeId, saleConditionId, confirmedExpirationDate } = commercialValidation
+  if (commercialValidation.missingCommercialFields) {
     return { status: 'PREVALIDATION_FAILED' as const, error: 'La facturación requiere forma de pago, condición y vencimiento confirmados.' }
   }
-  if (clientError || syncedClientError || Number(client?.id) !== clientId || !Number.isSafeInteger(clientId) || !Number.isSafeInteger(officeId) || !Number.isSafeInteger(priceListId) || Number(nv.id) !== currentNvId || Number(nv.document_type?.id) !== 23 || Number(nv.state) !== 0 || sellerItems.length !== 1 || !Array.isArray(paymentTypes.items) || !paymentTypes.items.some((item: Record<string, any>) => Number(item.id) === selectedPaymentTypeId) || !Array.isArray(saleConditions.items) || !saleConditions.items.some((item: Record<string, any>) => Number(item.id) === saleConditionId)) {
+  if (selectedPaymentTypeId == null || saleConditionId == null || !confirmedExpirationDate) {
+    return { status: 'PREVALIDATION_FAILED' as const, error: 'La facturación requiere forma de pago, condición y vencimiento confirmados.' }
+  }
+  if (commercialValidation.commercialBlockTriggered) {
     return { status: 'PREVALIDATION_FAILED' as const, error: 'La NV vigente no tiene datos comerciales completos para facturar.' }
   }
 
