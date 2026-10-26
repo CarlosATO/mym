@@ -2505,7 +2505,7 @@ export async function getComisionesV2OfficialPdfPreview(
     return {
       data: {
         base64: buffer.toString("base64"),
-        filename: `liquidacion_comisiones_${settlement.settlement_code || settlementId}_emitida.pdf`,
+        filename: `bono_produccion_${settlement.settlement_code || settlementId}_emitida.pdf`,
       },
     };
   } catch (verificationError) {

@@ -1804,7 +1804,7 @@ export function ComisionesV2Inspection({
       const blob = generateComisionesV2DraftPdf(draftDetail, logo);
       setDraftPdfPreview({
         base64: await blobToBase64(blob),
-        filename: `liquidacion_comisiones_borrador_${draftDetail.settlement.id}.pdf`,
+        filename: `bono_produccion_borrador_${draftDetail.settlement.id}.pdf`,
       });
     } catch (error) {
       setDraftNotice(
@@ -1826,7 +1826,7 @@ export function ComisionesV2Inspection({
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `liquidacion_comisiones_borrador_${draftDetail.settlement.id}_detalle.xlsx`;
+      anchor.download = `bono_produccion_borrador_${draftDetail.settlement.id}_detalle.xlsx`;
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (error) {
@@ -1849,7 +1849,7 @@ export function ComisionesV2Inspection({
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `liquidacion_comisiones_${issuedDetail.settlement.settlement_code || issuedDetail.settlement.id}_detalle.xlsx`;
+      anchor.download = `bono_produccion_${issuedDetail.settlement.settlement_code || issuedDetail.settlement.id}_detalle.xlsx`;
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (error) {
@@ -2079,7 +2079,7 @@ export function ComisionesV2Inspection({
       );
     }
     setSimulationRefreshNotice(
-      "La consulta de Emisión E.P. quedó desactualizada y se recargará al volver.",
+      "La consulta de Bono de producción quedó desactualizada y se recargará al volver.",
     );
   }, [from, to]);
 
@@ -2762,7 +2762,7 @@ export function ComisionesV2Inspection({
                 onClick={() => selectSection("LINES")}
                 className={`rounded-md px-3 py-1.5 text-xs font-semibold ${section === "LINES" ? "bg-theme-accent text-white" : "text-theme-text-muted hover:text-theme-text"}`}
               >
-                  Emisión E.P.
+                Bono de producción
               </button>
               <button
                 type="button"
@@ -4100,7 +4100,7 @@ function SettlementDraftsSection({
               No hay borradores de liquidación.
             </p>
             <p className="mt-1 text-xs text-theme-text-muted">
-              Crea uno desde la pestaña Emisión E.P.
+              Crea uno desde la pestaña Bono de producción.
             </p>
           </div>
         </div>
@@ -4440,7 +4440,7 @@ function LegacySettlementDraftsSection({
               No hay borradores de liquidación.
             </p>
             <p className="mt-1 text-xs text-theme-text-muted">
-              Crea uno desde la pestaña Emisión E.P.
+              Crea uno desde la pestaña Bono de producción.
             </p>
           </div>
         </div>

@@ -308,7 +308,7 @@ export async function exportCommissionSettlementPdf(
       : header.status === "ISSUED"
         ? "emitida"
         : "anulada";
-  const filename = `liquidacion_comisiones_${header.settlement_code || "borrador"}_${suffix}.pdf`;
+  const filename = `bono_produccion_${header.settlement_code || "borrador"}_${suffix}.pdf`;
 
   return { base64: buffer.toString("base64"), filename };
 }
@@ -375,7 +375,7 @@ export async function exportCommissionSettlementXlsx(
       : header.status === "ISSUED"
         ? "emitida"
         : "anulada";
-  const filename = `liquidacion_comisiones_${header.settlement_code || "borrador"}_${suffix}_detalle.xlsx`;
+  const filename = `bono_produccion_${header.settlement_code || "borrador"}_${suffix}_detalle.xlsx`;
 
   return { base64: wbout, filename };
 }

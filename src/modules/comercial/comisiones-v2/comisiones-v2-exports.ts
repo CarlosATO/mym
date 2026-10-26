@@ -242,7 +242,7 @@ export function generateComisionesV2DraftPdf(detail: ComisionesV2SettlementDetai
   doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.text('PetGroup', width - margin, 13, { align: 'right' })
 
   let cursorY = 42
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(18); doc.setTextColor(...DARK_HEADER); doc.text('LIQUIDACIÓN DE COMISIONES', margin, cursorY)
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(18); doc.setTextColor(...DARK_HEADER); doc.text('BONO DE PRODUCCIÓN', margin, cursorY)
   const badgeText = isDraft ? 'BORRADOR' : 'EMITIDA'; const badgeWidth = doc.getTextWidth(badgeText) + 6
   doc.setFillColor(...AMBER); doc.roundedRect(width - margin - badgeWidth, cursorY - 3, badgeWidth, 5.5, 1, 1, 'F'); doc.setFontSize(7); doc.setTextColor(255, 255, 255); doc.text(badgeText, width - margin - badgeWidth / 2, cursorY + 1.5, { align: 'center' })
   cursorY += 7; doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...MID_GRAY); doc.text(`Código: ${isDraft ? '—' : options.settlementCode ?? '—'}`, margin, cursorY); doc.text(isDraft ? 'Pendiente de emisión' : `N° ${options.settlementNumber ?? '—'}`, width - margin, cursorY, { align: 'right' })
@@ -269,7 +269,7 @@ export function generateComisionesV2DraftPdf(detail: ComisionesV2SettlementDetai
   const supplierRows = topSupplierChartRows(buildSnapshotSupplierChartRows(detail))
   if (supplierRows.length > 0) drawSupplierChart(doc, supplierRows, finalY + 29, width)
   const totalPages = doc.getNumberOfPages(); for (let page = 1; page <= totalPages; page++) { doc.setPage(page); footer(doc, page, totalPages, isDraft) }
-  doc.setProperties({ title: `Liquidación de Comisiones ${options.settlementCode ?? 'borrador'}`, subject: isDraft ? 'Borrador V2 desde snapshot' : 'Liquidación V2 emitida desde snapshot', author: 'DISTRIBUIDORA MYM' })
+  doc.setProperties({ title: `Bono de producción ${options.settlementCode ?? 'borrador'}`, subject: isDraft ? 'Borrador V2 desde snapshot' : 'Bono de producción V2 emitido desde snapshot', author: 'DISTRIBUIDORA MYM' })
   if (!isDraft && options.issuedAt) {
     const creationDate = new Date(options.issuedAt)
     if (Number.isNaN(creationDate.getTime())) throw new Error('INVALID_OFFICIAL_PDF_TIMESTAMP')

@@ -100,7 +100,7 @@ export function generateCommissionSettlementPdfBlob(
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(18)
   doc.setTextColor(...DARK_HEADER)
-  const titleStr = 'LIQUIDACIÓN DE COMISIONES'
+  const titleStr = 'BONO DE PRODUCCIÓN'
   doc.text(titleStr, margin, cursorY)
 
   const statusText = isDraft ? 'BORRADOR' : isIssued ? 'EMITIDA' : 'ANULADA'
@@ -308,8 +308,8 @@ export function generateCommissionSettlementPdfBlob(
   }
 
   doc.setProperties({
-    title: `Liquidación de Comisiones ${header.settlement_code || ''}`,
-    subject: `Liquidación ${header.settlement_code || ''} - ${header.seller_name || ''}`,
+    title: `Bono de producción ${header.settlement_code || ''}`,
+    subject: `Bono de producción ${header.settlement_code || ''} - ${header.seller_name || ''}`,
     author: cName,
   })
 

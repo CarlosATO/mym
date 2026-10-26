@@ -38,7 +38,7 @@ export const comercialNavigation: ModuleNavigation = {
       items: [
         {
           id: 'comisiones-v2-emision',
-          label: 'Emisión E.P.',
+          label: 'Bono de producción',
           icon: BarChart3,
           target: { pathname: `${comercialBase}/comisiones-v2`, query: { section: 'LINES' } },
           active: ({ pathname, searchParams }) => isV2SectionActive(pathname, searchParams.get('section'), 'LINES'),
