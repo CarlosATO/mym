@@ -165,7 +165,7 @@ export function generateCommissionSettlementPdfBlob(
     { label: 'Neto +', value: formatCurrency(netoPositivo) },
     { label: 'Neto NC', value: formatCurrency(netoNc) },
     { label: 'Neto final', value: formatCurrency(netoFinal) },
-    { label: 'Comisión', value: formatCurrency(comisionFinal) },
+     { label: 'Bono', value: formatCurrency(comisionFinal) },
     { label: '% efectivo', value: netoFinal ? `${(comisionFinal / netoFinal * 100).toFixed(2)}%` : '0.00%' },
   ]
   const kpiCol = usableWidth / kpis.length
@@ -254,7 +254,7 @@ export function generateCommissionSettlementPdfBlob(
 
   autoTable(doc, {
     startY: cursorY,
-    head: [['Factura', 'Cliente', 'Pago', 'Neto venta', 'Neto NC', 'Neto final', 'Comisión', 'Observación']],
+     head: [['Factura', 'Cliente', 'Pago', 'Neto venta', 'Neto NC', 'Neto final', 'Bono', 'Observación']],
     body: invoiceRows,
     margin: { left: margin, right: margin },
     styles: { fontSize: 6.5, textColor: [...DARK_TEXT], lineColor: [...LIGHT_BORDER], lineWidth: 0.3 },
@@ -283,7 +283,7 @@ export function generateCommissionSettlementPdfBlob(
     { label: 'Neto NC', value: formatCurrency(netoNc), bold: false },
     { label: '', value: '', bold: false },
     { label: 'NETO FINAL', value: formatCurrency(netoFinal), bold: true },
-    { label: 'COMISIÓN TOTAL', value: formatCurrency(comisionFinal), bold: true, color: [...EMERALD] as [number, number, number] },
+     { label: 'BONO TOTAL', value: formatCurrency(comisionFinal), bold: true, color: [...EMERALD] as [number, number, number] },
   ]
 
   let ty = finalY + 4.5
