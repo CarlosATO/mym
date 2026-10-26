@@ -128,12 +128,14 @@ test('20. drag & drop y reglas no se reimplementan', () => {
   assert.match(rules, /fromStatus === 'AUDITED'/)
 })
 
-test('21. valorización por columna usa filteredCards y el monto canónico', () => {
-  assert.match(panel, /const colCards = filteredCards\.filter\(card => \(/)
+test('21. valorización por columna agrupa filteredCards y usa el monto canónico', () => {
+  assert.match(panel, /const columnData = useMemo\(\(\) => \{/)
+  assert.match(panel, /column\.cards\.push\(card\)/)
+  assert.match(panel, /column\.amount \+= getPreparationCardAmount\(card\) \?\? 0/)
   assert.match(panel, /getPreparationColumnId\(card\.status, readinessByCardId\[card\.card_id\]/)
-  assert.match(panel, /summarizePreparationBoard\(colCards\)/)
-  assert.match(panel, /formatPreparationClp\(columnSummary\.amount\)/)
-  assert.doesNotMatch(panel, /getPreparationCardAmount\(card\)/)
+  assert.match(panel, /const column = columnData\[col\.id\]/)
+  assert.match(panel, /formatPreparationClp\(columnAmount\)/)
+  assert.doesNotMatch(panel, /const colCards = filteredCards\.filter\(card => \(/)
 })
 
 test('22. valorización respeta gross_amount ?? total_amount y columna vacía = $ 0', () => {

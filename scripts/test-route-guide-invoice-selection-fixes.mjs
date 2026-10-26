@@ -23,6 +23,36 @@ test('create exige documento, attempt confirmado, card elegible y evidencia NV',
   assert.match(sql, /bsale_invoice_sales_order_links l[\s\S]*?l\.sales_order_bsale_id = v_card_nv/)
 })
 
+test('la selección y el guardado respetan las exclusiones administrativas', () => {
+  assert.match(sql, /get_route_invoice_draft_rows[\s\S]*?NOT logistica\.preparation_card_is_excluded/)
+  assert.match(sql, /get_route_invoice_selection_candidates[\s\S]*?NOT logistica\.preparation_card_is_excluded/)
+  assert.match(sql, /c\.status = 'INVOICED_READY_FOR_ROUTE'[\s\S]*?NOT logistica\.preparation_card_is_excluded/)
+  assert.match(sql, /create_route_guide_draft_from_invoices[\s\S]*?preparation_card_is_excluded/)
+})
+
+test('los duplicados manuales conservan su contrato y Preparación queda protegida', () => {
+  const trigger = sql.slice(
+    sql.indexOf('CREATE OR REPLACE FUNCTION logistica.populate_route_invoice_identity()'),
+    sql.indexOf('DROP TRIGGER IF EXISTS populate_route_invoice_identity')
+  )
+  assert.match(trigger, /v_new_origin = 'PREPARATION_SELECTION'/)
+  assert.match(trigger, /rg\.creation_origin = 'PREPARATION_SELECTION'/)
+  assert.match(trigger, /Manual\/manual duplicates remain historical warnings/)
+  assert.match(sql, /Manual duplicate warnings remain unchanged/)
+})
+
+test('el origen persistente cubre los cuatro escenarios y libera al cancelar', () => {
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS creation_origin text NOT NULL DEFAULT 'MANUAL'/)
+  assert.match(sql, /'PREPARATION_SELECTION'/)
+  assert.match(sql, /status IN \('DRAFT', 'DISPATCHED'\)/)
+  assert.match(sql, /creation_origin IN \('MANUAL', 'PREPARATION_SELECTION'\)/)
+  assert.match(sql, /lock_route_invoice_identity/)
+  assert.match(sql, /create_route_guide_draft_unchecked[\s\S]*?lock_route_invoice_identity/)
+  assert.match(sql, /update_route_guide_draft_unchecked[\s\S]*?lock_route_invoice_identity/)
+  assert.match(sql, /dispatch_route_guide_unchecked[\s\S]*?lock_route_invoice_identity/)
+  assert.doesNotMatch(sql, /status IN \('DRAFT', 'DISPATCHED', 'CANCELLED'\)/)
+})
+
 test('locks are deterministas y los duplicados ignoran CANCELLED', () => {
   const ids = [92560, 92551, 92555, 92551].filter((id, i, all) => all.indexOf(id) === i).sort((a, b) => a - b)
   assert.deepEqual(ids, [92551, 92555, 92560])
@@ -32,8 +62,12 @@ test('locks are deterministas y los duplicados ignoran CANCELLED', () => {
 })
 
 test('dispatch prioriza ID tecnico y conserva fallback legacy', () => {
-  assert.match(sql, /mine\.invoice_bsale_id IS NOT NULL AND theirs\.invoice_bsale_id = mine\.invoice_bsale_id/)
-  assert.match(sql, /mine\.invoice_bsale_id IS NULL AND theirs\.invoice_bsale_id IS NULL AND theirs\.invoice_number = mine\.invoice_number/)
+  assert.match(sql, /theirs\.invoice_bsale_id = mine\.invoice_bsale_id/)
+  assert.match(sql, /theirs\.invoice_number = mine\.invoice_number/)
+})
+
+test('el trigger también valida identidad al mover una línea de empresa o guía', () => {
+  assert.match(sql, /BEFORE INSERT OR UPDATE OF company_id, route_guide_id, invoice_number, invoice_bsale_id/)
 })
 
 test('la migration falla antes de DROP si aparece una dependencia de la vista', () => {

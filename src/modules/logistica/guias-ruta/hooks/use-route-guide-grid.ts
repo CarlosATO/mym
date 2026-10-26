@@ -1,6 +1,6 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import { RouteGuideItem } from '../types';
-import { validateRouteGuideGrid, parseChileanMoney, ensureTrailingEmptyRow, isEmptyRouteGuideRow } from '../utils/route-guide-validation';
+import { validateRouteGuideGrid, parseChileanMoney, ensureTrailingEmptyRow } from '../utils/route-guide-validation';
 
 // Columnas en el orden exacto en que se presentan en la UI/Grilla para poder mapear el pegado
 const GRID_COLUMNS = [
@@ -17,10 +17,17 @@ type GridColumnKey = typeof GRID_COLUMNS[number];
 
 export function useRouteGuideGrid(initialItems: RouteGuideItem[] = []) {
   const [items, setItems] = useState<RouteGuideItem[]>(() => {
-    let initial = initialItems.length > 0 ? initialItems : [];
+    const initial = initialItems.length > 0 ? initialItems : [];
     // Ensure always trailing row
     return ensureTrailingEmptyRow(validateRouteGuideGrid(initial));
   });
+  const [itemsRevision, setItemsRevision] = useState(0);
+  const itemsRevisionRef = useRef(0);
+
+  const markItemsChanged = useCallback(() => {
+    itemsRevisionRef.current += 1;
+    setItemsRevision(itemsRevisionRef.current);
+  }, []);
 
   function createEmptyItem(): Partial<RouteGuideItem> {
     return {
@@ -35,6 +42,7 @@ export function useRouteGuideGrid(initialItems: RouteGuideItem[] = []) {
   }
 
   const handleCellChange = useCallback((rowIndex: number, columnId: GridColumnKey, value: string) => {
+    markItemsChanged();
     setItems(prevItems => {
       const newItems = [...prevItems];
       newItems[rowIndex] = {
@@ -44,7 +52,7 @@ export function useRouteGuideGrid(initialItems: RouteGuideItem[] = []) {
       
       return ensureTrailingEmptyRow(validateRouteGuideGrid(newItems));
     });
-  }, []);
+  }, [markItemsChanged]);
 
   const handlePaste = useCallback((e: React.ClipboardEvent, startRow: number, startColKey: GridColumnKey) => {
     e.preventDefault();
@@ -59,9 +67,9 @@ export function useRouteGuideGrid(initialItems: RouteGuideItem[] = []) {
 
     if (startColIndex === -1) return;
 
+    markItemsChanged();
     setItems(prevItems => {
       const newItems = [...prevItems];
-      let hasMutated = false;
 
       for (let r = 0; r < rows.length; r++) {
         const rowData = rows[r];
@@ -84,7 +92,6 @@ export function useRouteGuideGrid(initialItems: RouteGuideItem[] = []) {
           if (targetColIndex < GRID_COLUMNS.length) {
             const colKey = GRID_COLUMNS[targetColIndex];
             currentItem[colKey] = cells[c].trim();
-            hasMutated = true;
           }
         }
         
@@ -96,9 +103,10 @@ export function useRouteGuideGrid(initialItems: RouteGuideItem[] = []) {
       }
       return ensureTrailingEmptyRow(validateRouteGuideGrid(newItems));
     });
-  }, []);
+  }, [markItemsChanged]);
 
   const addRow = useCallback(() => {
+    markItemsChanged();
     setItems(prev => {
       // Si el botón se presiona y la última ya estaba vacía, el ensureTrailingEmptyRow la borraría.
       // Así que bypass para permitir forzar la adición si el usuario realmente insiste (aunque va contra la regla pura, es UX normal).
@@ -106,18 +114,25 @@ export function useRouteGuideGrid(initialItems: RouteGuideItem[] = []) {
       // Pero el usuario pidió estrictamente: "Si hay múltiples filas vacías al final, dejar solo una."
       return ensureTrailingEmptyRow(validated);
     });
-  }, []);
+  }, [markItemsChanged]);
 
   const removeRow = useCallback((indexToRemove: number) => {
+    markItemsChanged();
     setItems(prev => {
       const newItems = prev.filter((_, idx) => idx !== indexToRemove);
       return ensureTrailingEmptyRow(validateRouteGuideGrid(newItems));
     });
-  }, []);
+  }, [markItemsChanged]);
 
   const clearGrid = useCallback(() => {
+    markItemsChanged();
     setItems(ensureTrailingEmptyRow(validateRouteGuideGrid([])));
-  }, []);
+  }, [markItemsChanged]);
+
+  const replacePersistedItems = useCallback((persistedItems: RouteGuideItem[]) => {
+    markItemsChanged();
+    setItems(ensureTrailingEmptyRow(persistedItems));
+  }, [markItemsChanged]);
 
   // Calcular totales en vivo
   const totals = useMemo(() => {
@@ -181,6 +196,9 @@ export function useRouteGuideGrid(initialItems: RouteGuideItem[] = []) {
     addRow,
     removeRow,
     clearGrid,
-    setItems
+    setItems,
+    itemsRevision,
+    itemsRevisionRef,
+    replacePersistedItems
   };
 }

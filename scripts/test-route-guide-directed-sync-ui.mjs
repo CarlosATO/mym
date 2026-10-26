@@ -29,5 +29,5 @@ test('usa mensajes operacionales y evita doble submit', () => {
   assert.match(source, /verificationSequence/)
   assert.match(source, /actionInProgress/)
   assert.match(source, /verificationRef\.current\?\.key === key\) verificationRef\.current = null/)
-  assert.match(source, /\}, \[guideId, readOnly, invoiceSetKey\]\)/)
+  assert.match(source, /\}, \[guideId, readOnly, invoiceSetKey, isInvoiceSelection\]\)/)
 })

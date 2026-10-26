@@ -48,6 +48,7 @@ import {
   buildPreparationComunaOptions,
   buildPreparationSellerOptions,
   formatPreparationClp,
+  getPreparationCardAmount,
   getPreparationComuna,
   matchesPreparationComunaFilter,
   matchesPreparationSearch,
@@ -109,6 +110,8 @@ type KanbanColumn = {
   badge: string
   dot: string
 }
+
+const ROUTE_OPEN_PERF_STORAGE_KEY = 'mym.route-open-performance'
 
 const COLUMNS: KanbanColumn[] = [
   {
@@ -237,6 +240,7 @@ function DroppableColumn({
   onInvoice,
   onViewInvoice,
   getInvoiceDocuments,
+  columnAmount,
 }: {
   col: KanbanColumn
   colCards: SalesOrderPreparationCardInfo[]
@@ -255,12 +259,11 @@ function DroppableColumn({
   onInvoice: (card: SalesOrderPreparationCardInfo) => void
   onViewInvoice: (card: SalesOrderPreparationCardInfo) => void
   getInvoiceDocuments: (card: SalesOrderPreparationCardInfo) => InvoiceDocumentPreview[]
+  columnAmount: number
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: col.id,
   })
-  const columnSummary = summarizePreparationBoard(colCards)
-
   return (
     <section
       ref={setNodeRef}
@@ -279,7 +282,7 @@ function DroppableColumn({
           </div>
           <span className="flex h-4 min-w-[18px] items-center justify-center rounded-full bg-[#EAE3DA] px-1.5 text-[10px] font-bold tabular-nums text-[#6B625C]">{colCards.length}</span>
         </div>
-        <p className="mt-0.5 pl-3.5 text-[10px] font-semibold tabular-nums text-[#6B625C]">{formatPreparationClp(columnSummary.amount)}</p>
+        <p className="mt-0.5 pl-3.5 text-[10px] font-semibold tabular-nums text-[#6B625C]">{formatPreparationClp(columnAmount)}</p>
       </div>
 
       {/* Column body */}
@@ -311,7 +314,7 @@ function DroppableColumn({
                 onDoubleClick={() => onOpenCardDetails(card)}
                 canExclude={canExclude}
                 onExclude={onExclude}
-                selectable={card.status === 'PENDING_ROUTE_PREP'}
+                selectable={card.status === 'PENDING_ROUTE_PREP' || card.status === 'INVOICED_READY_FOR_ROUTE'}
                 selected={selectedCardIds.has(card.card_id)}
                 onToggleSelected={onToggleSelection}
                 currentUserId={currentUserId}
@@ -394,6 +397,7 @@ export function SalesOrderPreparationPanel({
   const [selectedCardIds, setSelectedCardIds] = useState<Set<string>>(new Set())
   const [isBulkPrinting, setIsBulkPrinting] = useState(false)
   const [bulkPrintError, setBulkPrintError] = useState<string | null>(null)
+  const [isPreparingRoute, setIsPreparingRoute] = useState(false)
 
   // Drag & Drop
   const [activeCard, setActiveCard] = useState<SalesOrderPreparationCardInfo | null>(null)
@@ -442,6 +446,7 @@ export function SalesOrderPreparationPanel({
   const pendingExclusionNvIdsRef = useRef<Set<number>>(new Set())
   const exclusionSnapshotsRef = useRef<Map<number, PreparationCardSnapshot<SalesOrderPreparationCardInfo>>>(new Map())
   const syncInFlightRef = useRef(false)
+  const preparingRouteRef = useRef(false)
   const profitabilitySeqRef = useRef(0)
   const profitabilityInFlightRef = useRef<Set<number>>(new Set())
   const missingCostSeqRef = useRef(0)
@@ -454,7 +459,7 @@ export function SalesOrderPreparationPanel({
   const invoicePreviewInFlightRef = useRef<Map<string, Promise<void>>>(new Map())
   const invoiceDocumentCacheRef = useRef<InvoiceDocumentCache>(createInvoiceDocumentCache())
   const invoiceDocumentInFlightRef = useRef<Map<string, Promise<void>>>(new Map())
-  const [, setInvoiceDocumentCacheVersion] = useState(0)
+  const [invoiceDocumentCacheVersion, setInvoiceDocumentCacheVersion] = useState(0)
 
   const prefetchInvoicePreviews = useCallback(async (activeCompanyId: string, readyCards: SalesOrderPreparationCardInfo[]) => {
     const requests = readyCards.map(card => ({
@@ -473,7 +478,7 @@ export function SalesOrderPreparationPanel({
     if (pending.length === 0) return
 
     const keys = pending.map(request => getInvoicePreviewCacheKey(request.card_id, request.current_bsale_nv_id))
-    for (const key of keys) {
+      for (const key of keys) {
       const previous = invoicePreviewCacheRef.current.get(key)
       invoicePreviewCacheRef.current.set(key, {
         current_bsale_nv_id: Number(key.split(':').at(-1)),
@@ -481,8 +486,9 @@ export function SalesOrderPreparationPanel({
         status: 'LOADING',
         error: null,
         updatedAt: previous?.updatedAt ?? 0,
-      })
-    }
+        })
+      }
+      setInvoiceDocumentCacheVersion(version => version + 1)
 
     const request = getInvoiceReviewPreviews(activeCompanyId, pending)
       .then(result => {
@@ -1027,6 +1033,16 @@ export function SalesOrderPreparationPanel({
   }, [loadBoard, loadSyncHealth, maybeAutoSync])
 
   useEffect(() => {
+    const resetRoutePreparation = () => {
+      preparingRouteRef.current = false
+      setIsPreparingRoute(false)
+    }
+
+    window.addEventListener('pageshow', resetRoutePreparation)
+    return () => window.removeEventListener('pageshow', resetRoutePreparation)
+  }, [])
+
+  useEffect(() => {
     const interval = window.setInterval(() => {
       void maybeAutoSync('interval')
     }, PREPARATION_SYNC_CHECK_INTERVAL_MS)
@@ -1407,7 +1423,7 @@ export function SalesOrderPreparationPanel({
   }
 
   const toggleSelection = (card: SalesOrderPreparationCardInfo) => {
-    if (card.status !== 'PENDING_ROUTE_PREP') return
+    if (card.status !== 'PENDING_ROUTE_PREP' && card.status !== 'INVOICED_READY_FOR_ROUTE') return
     setSelectedCardIds(current => {
       const next = new Set(current)
       if (next.has(card.card_id)) next.delete(card.card_id)
@@ -1661,10 +1677,85 @@ export function SalesOrderPreparationPanel({
     [searchFilteredCards, sortBy],
   )
 
+  const columnData = useMemo(() => {
+    const data: Record<string, { cards: SalesOrderPreparationCardInfo[]; amount: number }> = Object.fromEntries(
+      COLUMNS.map(column => [column.id, { cards: [], amount: 0 }]),
+    )
+
+    for (const card of filteredCards) {
+      const columnId = getPreparationColumnId(card.status, readinessByCardId[card.card_id]?.route_readiness)
+      const column = data[columnId]
+      if (!column) continue
+      column.cards.push(card)
+      column.amount += getPreparationCardAmount(card) ?? 0
+    }
+
+    return data
+  }, [filteredCards, readinessByCardId])
+
   const selectedCards = useMemo(
-    () => cards.filter(card => selectedCardIds.has(card.card_id) && card.status === 'PENDING_ROUTE_PREP'),
+    () => cards.filter(card => selectedCardIds.has(card.card_id) && (card.status === 'PENDING_ROUTE_PREP' || card.status === 'INVOICED_READY_FOR_ROUTE')),
     [cards, selectedCardIds],
   )
+  const selectedPendingCards = useMemo(
+    () => selectedCards.filter(card => card.status === 'PENDING_ROUTE_PREP'),
+    [selectedCards],
+  )
+  const selectedRouteCards = useMemo(
+    () => selectedCards.filter(card => card.status === 'INVOICED_READY_FOR_ROUTE'),
+    [selectedCards],
+  )
+  const selectedInvoiceDocumentInfo = useMemo(() => selectedRouteCards.map(card => {
+    const entry = invoiceDocumentCacheRef.current.get(getInvoiceDocumentCacheKey(card.card_id, card.nv_bsale_id))
+    const invoiceIds = [...new Set((entry?.documents ?? [])
+      .filter(document => document.status === 'CONFIRMED' && Number.isSafeInteger(document.invoice_bsale_id))
+      .map(document => Number(document.invoice_bsale_id)))]
+    return { card, entry, invoiceIds }
+  }), [selectedRouteCards, invoiceDocumentCacheVersion])
+  const selectedInvoicedCards = useMemo(
+    () => selectedInvoiceDocumentInfo.filter(item => item.invoiceIds.length > 0),
+    [selectedInvoiceDocumentInfo],
+  )
+  const selectedInvoiceIds = useMemo(
+    () => [...new Set(selectedInvoicedCards.flatMap(item => item.invoiceIds))],
+    [selectedInvoicedCards],
+  )
+  const selectedInvoiceDocumentsLoading = selectedInvoiceDocumentInfo.some(({ entry }) => !entry || entry.status === 'LOADING' || entry.status === 'STALE')
+  const selectedInvoiceDocumentsError = selectedInvoiceDocumentInfo.find(({ entry }) => entry?.status === 'ERROR')?.entry?.error ?? null
+  const selectedInvoiceDocumentsWithoutIdentity = !selectedInvoiceDocumentsLoading
+    && !selectedInvoiceDocumentsError
+    && selectedInvoiceDocumentInfo.some(item => item.invoiceIds.length === 0)
+  const isMixedStageSelection = selectedPendingCards.length > 0 && selectedRouteCards.length > 0
+  const canPrepareOrders = selectedCards.length > 0 && selectedPendingCards.length === selectedCards.length
+  const canPrepareRoute = selectedCards.length > 0
+    && selectedRouteCards.length === selectedCards.length
+    && selectedInvoiceDocumentInfo.length === selectedCards.length
+    && selectedInvoiceDocumentInfo.every(({ entry, invoiceIds }) => entry?.status === 'READY' && invoiceIds.length > 0)
+  const handlePrepareRoute = () => {
+    if (preparingRouteRef.current) return
+
+    preparingRouteRef.current = true
+    setIsPreparingRoute(true)
+    try {
+      if (process.env.NODE_ENV === 'development') {
+        sessionStorage.setItem(ROUTE_OPEN_PERF_STORAGE_KEY, JSON.stringify({ startedAt: Date.now() }))
+        console.debug('[route-open] navigation-start')
+      }
+      const params = new URLSearchParams({ tab: 'movimientos', action: 'guias_ruta' })
+      selectedInvoiceIds.forEach(invoiceId => params.append('invoice_bsale_id', String(invoiceId)))
+      window.location.assign(`/dashboard/logistica?${params.toString()}`)
+    } catch {
+      if (process.env.NODE_ENV === 'development') {
+        try {
+          sessionStorage.removeItem(ROUTE_OPEN_PERF_STORAGE_KEY)
+        } catch {
+          // Storage may be unavailable in privacy-restricted browser contexts.
+        }
+      }
+      preparingRouteRef.current = false
+      setIsPreparingRoute(false)
+    }
+  }
   const selectionSummary = useMemo(() => summarizePreparationSelection(selectedCards), [selectedCards])
   const boardSummary = useMemo(() => summarizePreparationBoard(filteredCards), [filteredCards])
   const profitabilitySummary = useMemo(
@@ -2028,24 +2119,40 @@ export function SalesOrderPreparationPanel({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => void handleBulkPrint('prepare')}
-                disabled={isBulkPrinting || isMoving}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#72383D] hover:bg-[#612F34] text-white text-xs font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed shadow-xs transition-colors"
-              >
-                {isBulkPrinting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Printer className="w-3.5 h-3.5" />}
-                {isBulkPrinting ? 'Procesando…' : `Imprimir y preparar (${selectionSummary.nvCount})`}
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleBulkPrint('print')}
-                disabled={isBulkPrinting || isMoving}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#D1C7BD] bg-white hover:bg-[#F5F0EA] text-[#322D29]/80 text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed shadow-xs transition-colors"
-              >
-                <Printer className="w-3.5 h-3.5" />
-                Imprimir sin mover
-              </button>
+              {canPrepareRoute && (
+                <button
+                  type="button"
+                  onClick={handlePrepareRoute}
+                  disabled={isPreparingRoute}
+                  aria-busy={isPreparingRoute}
+                  className="flex items-center gap-1.5 rounded-lg bg-[#72383D] px-3 py-1.5 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-[#5F2F33] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isPreparingRoute && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  {isPreparingRoute ? 'Preparando guía…' : `Preparar Guía de Ruta (${selectedInvoiceIds.length})`}
+                </button>
+              )}
+              {canPrepareOrders && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void handleBulkPrint('prepare')}
+                    disabled={isBulkPrinting || isMoving}
+                    className="flex items-center gap-1.5 rounded-lg bg-[#72383D] px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-white shadow-xs transition-colors hover:bg-[#612F34] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isBulkPrinting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Printer className="h-3.5 w-3.5" />}
+                    {isBulkPrinting ? 'Procesando…' : `Imprimir y preparar (${selectionSummary.nvCount})`}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleBulkPrint('print')}
+                    disabled={isBulkPrinting || isMoving}
+                    className="flex items-center gap-1.5 rounded-lg border border-[#D1C7BD] bg-white px-3 py-1.5 text-xs font-semibold text-[#322D29]/80 shadow-xs transition-colors hover:bg-[#F5F0EA] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Printer className="h-3.5 w-3.5" />
+                    Imprimir sin mover
+                  </button>
+                </>
+              )}
               <button
                 type="button"
                 onClick={clearSelection}
@@ -2056,6 +2163,26 @@ export function SalesOrderPreparationPanel({
               </button>
             </div>
           </div>
+          {isMixedStageSelection && (
+            <p className="mt-2 rounded-md border border-amber-500/30 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800">
+              Selecciona únicamente pedidos pendientes o facturas en espera de Guía de Ruta; no se pueden operar etapas mezcladas.
+            </p>
+          )}
+          {!isMixedStageSelection && selectedInvoiceDocumentsLoading && (
+            <p className="mt-2 rounded-md border border-sky-500/30 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-800">
+              Consultando las facturas vinculadas…
+            </p>
+          )}
+          {!isMixedStageSelection && selectedInvoiceDocumentsError && (
+            <p className="mt-2 rounded-md border border-red-500/30 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-800">
+              No se pudieron consultar las facturas vinculadas: {selectedInvoiceDocumentsError}
+            </p>
+          )}
+          {!isMixedStageSelection && selectedInvoiceDocumentsWithoutIdentity && (
+            <p className="mt-2 rounded-md border border-amber-500/30 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800">
+              Una o más facturas seleccionadas aún no tienen una identidad técnica disponible para preparar la guía.
+            </p>
+          )}
           {bulkPrintError && (
             <p className="mt-2 rounded-md border border-[#8A4B4B]/30 bg-[#8A4B4B]/10 px-2.5 py-1 text-xs font-medium text-[#8A4B4B]">
               {bulkPrintError}
@@ -2083,14 +2210,13 @@ export function SalesOrderPreparationPanel({
               <div className="h-full p-3">
                 <div className="flex h-full w-max min-w-full items-stretch gap-3">
                   {COLUMNS.map(col => {
-                    const colCards = filteredCards.filter(card => (
-                      getPreparationColumnId(card.status, readinessByCardId[card.card_id]?.route_readiness) === col.id
-                    ))
-                     return (
-                       <DroppableColumn
+                    const column = columnData[col.id]
+                    return (
+                      <DroppableColumn
                          key={col.id}
                          col={col}
-                         colCards={colCards}
+                         colCards={column?.cards ?? []}
+                         columnAmount={column?.amount ?? 0}
                          pendingCardIds={pendingCardIds}
                          onOpenCardDetails={openCardDetails}
                          canExclude={canManageExclusions}

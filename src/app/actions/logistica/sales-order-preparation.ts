@@ -115,6 +115,9 @@ export type SalesOrderPreparationCardInfo = {
   tax_amount: number | null
   gross_amount: number | null
   invoice_folio: string | null
+  read_model_invoice_bsale_id?: number | null
+  read_model_invoice_folio?: string | null
+  read_model_invoice_total_amount?: number | null
   is_invoiced: boolean
   created_at: string
   updated_at: string
@@ -927,18 +930,32 @@ export async function getSalesOrderPreparationPrintData(
   const empty: SalesOrderPreparationPrintData = { itemsByNv: {}, clientByNv: {} }
   if (nvIds.length === 0) return { data: empty, error: null }
 
-  const { data: items, error: itemsError } = await supabase
-    .schema('integraciones')
-    .from('vw_bsale_sales_order_items_for_preparation')
-    .select('*')
-    .eq('company_id', companyId)
-    .in('nv_bsale_id', nvIds)
-    .order('product_name', { ascending: true })
+  const [itemsResult, documentsResult] = await Promise.allSettled([
+    supabase
+      .schema('integraciones')
+      .from('vw_bsale_sales_order_items_for_preparation')
+      .select('*')
+      .eq('company_id', companyId)
+      .in('nv_bsale_id', nvIds)
+      .order('product_name', { ascending: true }),
+    supabase
+      .schema('integraciones')
+      .from('bsale_documents')
+      .select('bsale_id, client_id')
+      .eq('company_id', companyId)
+      .in('bsale_id', nvIds),
+  ])
+
+  if (itemsResult.status === 'rejected') throw itemsResult.reason
+  const { data: items, error: itemsError } = itemsResult.value
 
   if (itemsError) {
     console.error('getSalesOrderPreparationPrintData items error:', itemsError)
     return { data: null, error: itemsError.message }
   }
+
+  if (documentsResult.status === 'rejected') throw documentsResult.reason
+  const { data: documents } = documentsResult.value
 
   const itemsByNv: Record<string, SalesOrderPreparationItem[]> = {}
   for (const id of nvIds) itemsByNv[String(id)] = []
@@ -947,13 +964,6 @@ export async function getSalesOrderPreparationPrintData(
     if (!itemsByNv[key]) itemsByNv[key] = []
     itemsByNv[key].push(item)
   }
-
-  const { data: documents } = await supabase
-    .schema('integraciones')
-    .from('bsale_documents')
-    .select('bsale_id, client_id')
-    .eq('company_id', companyId)
-    .in('bsale_id', nvIds)
 
   const clientIdByNv = new Map<number, number>()
   for (const document of documents ?? []) {

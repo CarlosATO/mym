@@ -118,9 +118,13 @@ export function validateRouteGuideGrid(items: Partial<RouteGuideItem>[]): RouteG
     }
 
     validatedItems.push({
+      id: item.id,
+      route_guide_id: item.route_guide_id,
       line_number: index + 1,
+      invoice_bsale_id: item.invoice_bsale_id,
       invoice_number: item.invoice_number || '',
       customer_name: item.customer_name || '',
+      customer_bsale_id: item.customer_bsale_id,
       customer_address: item.customer_address || '',
       commune: item.commune || '',
       amount: item.amount || '', // Guardamos el valor crudo original en UI
@@ -130,6 +134,7 @@ export function validateRouteGuideGrid(items: Partial<RouteGuideItem>[]): RouteG
       validation_status: errors.length > 0 ? 'INVALID' : 'VALID',
       validation_errors: errors,
       notes: item.notes || '',
+      settlement_status: item.settlement_status,
     });
   });
 

@@ -4,7 +4,7 @@ import { formatCurrency } from '../utils/route-guide-formatters';
 import { Plus, Trash2, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export interface SaleConditionOption {
+export interface RoutePaymentTypeOption {
   id: string;
   bsale_id: number;
   name: string;
@@ -20,7 +20,7 @@ interface RouteGuideGridProps {
   onRemoveRow: (index: number) => void;
   onClearGrid: () => void;
   readOnly?: boolean;
-  saleConditions?: SaleConditionOption[];
+  paymentTypes?: RoutePaymentTypeOption[];
 }
 
 export function RouteGuideGrid({
@@ -31,7 +31,7 @@ export function RouteGuideGrid({
   onRemoveRow,
   onClearGrid,
   readOnly = false,
-  saleConditions = []
+  paymentTypes = []
 }: RouteGuideGridProps) {
   const tableRef = useRef<HTMLTableElement>(null);
 
@@ -168,7 +168,18 @@ export function RouteGuideGrid({
             {items.map((item, idx) => {
               const isInvalid = item.validation_status === 'INVALID';
               const hasData = item.invoice_number || item.customer_name || item.amount || item.payment_method_original;
-              const hasCurrentSaleCondition = saleConditions.some(condition => condition.name === item.payment_method_original);
+              const currentPayment = item.payment_method_original?.trim() || '';
+              const currentPaymentType = paymentTypes.find(paymentType => paymentType.name.toLocaleLowerCase() === currentPayment.toLocaleLowerCase());
+              const paymentOptions = [
+                ...paymentTypes,
+                ...(currentPayment && !currentPaymentType ? [{
+                  id: `historical-${currentPayment}`,
+                  bsale_id: -1,
+                  name: currentPayment,
+                  normalized: item.payment_method_normalized,
+                  label: `${currentPayment} (histórica)`,
+                }] : []),
+              ];
               const rowClass = isInvalid && hasData ? 'bg-red-500/[0.02] hover:bg-red-500/[0.04]' : 'bg-theme-text/[0.02] hover:bg-theme-text/[0.04]';
               
               return (
@@ -241,7 +252,7 @@ export function RouteGuideGrid({
                   </td>
 
                   <td className="px-1 py-1 relative group">
-                    {saleConditions.length > 0 && !readOnly ? (
+                    {paymentTypes.length > 0 && !readOnly ? (
                       <select
                         className={cn(
                           "w-full h-8 px-2 rounded-lg border border-transparent focus:border-theme-accent/50 focus:ring-1 focus:ring-theme-accent/30 bg-transparent text-xs text-theme-text appearance-none cursor-pointer",
@@ -249,16 +260,16 @@ export function RouteGuideGrid({
                           isInvalid && !item.payment_method_original && hasData ? "border-red-500/50 bg-red-500/5" : "",
                           item.payment_method_normalized === 'UNKNOWN' && item.payment_method_original?.trim() ? "border-orange-500/50 bg-orange-500/5" : ""
                         )}
-                        value={item.payment_method_original}
+                        value={currentPaymentType?.name || currentPayment}
                         onChange={(e) => onCellChange(idx, 'payment_method_original', e.target.value)}
                         disabled={readOnly}
                       >
                         <option value="">Seleccionar...</option>
-                        {item.payment_method_normalized === 'AL_DIA' && !hasCurrentSaleCondition && (
+                        {item.payment_method_normalized === 'AL_DIA' && !currentPaymentType && (
                           <option value={item.payment_method_original}>Al día</option>
                         )}
-                        {saleConditions.map((sc) => (
-                          <option key={sc.id} value={sc.name}>{sc.label}</option>
+                        {paymentOptions.map((paymentType) => (
+                          <option key={paymentType.id} value={paymentType.name}>{paymentType.label}</option>
                         ))}
                       </select>
                     ) : (
@@ -274,7 +285,7 @@ export function RouteGuideGrid({
                           onChange={(e) => onCellChange(idx, 'payment_method_original', e.target.value)}
                           onPaste={(e) => onPaste(e, idx, 'payment_method_original')}
                           onKeyDown={(e) => handleKeyDown(e, idx, 5)}
-                          disabled={readOnly || saleConditions.length > 0}
+                          disabled={readOnly || paymentTypes.length > 0}
                           placeholder="Efectivo/Cheque..."
                         />
                         {item.payment_method_normalized === 'UNKNOWN' && item.payment_method_original?.trim() && (

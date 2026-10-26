@@ -6,7 +6,8 @@ import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 
-import { RouteGuide, CatalogOptions, RoutePersonnelType, RouteGuideProfitabilityV1 } from '@/modules/logistica/guias-ruta/types';
+import { RouteGuide, RouteGuideItem, CatalogOptions, RoutePersonnelType, RouteGuideProfitabilityV1 } from '@/modules/logistica/guias-ruta/types';
+import { normalizePaymentMethodAdvanced } from '@/modules/logistica/guias-ruta/utils/payment-normalizer';
 import { requirePortalSystemAdmin } from '@/app/actions/portal/authorization';
 import { getActiveCompanyId } from '@/app/actions/companies';
 import { syncBsaleDocumentsForRouteGuide } from '@/app/actions/integraciones/bsale-sync';
@@ -188,7 +189,7 @@ export async function getRouteGuideById(id: string): Promise<RouteGuide | null> 
   const { data: items, error: itemsError } = await supabase
     .from('route_guide_items')
     .select(`
-      id, route_guide_id, line_number, invoice_number,
+      id, route_guide_id, line_number, invoice_bsale_id, invoice_number,
       customer_name, customer_address, commune,
       amount, payment_method_original, payment_method_normalized,
       requires_settlement, validation_status, validation_errors,
@@ -202,6 +203,53 @@ export async function getRouteGuideById(id: string): Promise<RouteGuide | null> 
   }
 
   return { ...guide, items: items ?? [] } as RouteGuide;
+}
+
+export async function getRouteGuidePaymentTypes() {
+  const supabase = await createClient();
+  const companyId = await getActiveCompanyId();
+  if (!companyId) return [];
+
+  const { data, error } = await supabase
+    .schema('integraciones')
+    .from('bsale_payment_types')
+    .select('id, bsale_id, name')
+    .eq('company_id', companyId)
+    .eq('is_active', true)
+    .order('name', { ascending: true });
+
+  if (error || !data) return [];
+
+  const seenNames = new Set<string>();
+  return data.flatMap(paymentType => {
+    const name = String(paymentType.name ?? '').trim();
+    const nameKey = name.toLocaleLowerCase();
+    const bsaleId = Number(paymentType.bsale_id);
+    if (!name || seenNames.has(nameKey) || !Number.isSafeInteger(bsaleId)) return [];
+    seenNames.add(nameKey);
+    return [{
+      id: paymentType.id,
+      bsale_id: bsaleId,
+      name,
+      normalized: normalizePaymentMethodAdvanced(name).normalized,
+      label: name,
+    }];
+  });
+}
+
+export async function getRouteInvoiceDraftRows(invoiceBsaleIds: number[]) {
+  const supabase = await createLogisticaClient();
+  const companyId = await getActiveCompanyId();
+  if (!companyId) throw new Error('No se encontró empresa activa para el usuario.');
+  const ids = [...new Set(invoiceBsaleIds.filter(Number.isSafeInteger))];
+  if (ids.length === 0) return [];
+  const { data, error } = await supabase.rpc('get_route_invoice_draft_rows', {
+    p_company_id: companyId,
+    p_invoice_bsale_ids: ids,
+  });
+  if (error) throw error;
+  if (!data?.success) throw new Error(data?.error || 'No se pudieron cargar las facturas seleccionadas.');
+  return (data.items ?? []) as RouteGuideItem[];
 }
 
 export async function getRouteGuideProfitabilityV1(id: string): Promise<RouteGuideProfitabilityV1> {
@@ -390,13 +438,31 @@ export async function saveRouteGuideDraft(
   const companyId = await getActiveCompanyId();
   if (!companyId) throw new Error('No se encontró empresa activa para el usuario.');
 
+  // For invoice-backed rows, never trust commercial values from the browser.
+  // Resolve them again through the authenticated read contract before writing.
+  const invoiceIds = [...new Set(itemsData
+    .map(item => Number(item.invoice_bsale_id))
+    .filter(Number.isSafeInteger))];
+  let authoritativeItems = itemsData;
+  if (!guideId && invoiceIds.length > 0) {
+    const canonicalItems = await getRouteInvoiceDraftRows(invoiceIds);
+    const byId = new Map(canonicalItems.map(item => [Number(item.invoice_bsale_id), item]));
+    authoritativeItems = itemsData.map(item => {
+      const canonical = byId.get(Number(item.invoice_bsale_id));
+      return canonical ? { ...canonical, line_number: item.line_number, notes: item.notes || '' } : item;
+    });
+    if (authoritativeItems.some(item => Number.isSafeInteger(Number(item.invoice_bsale_id)) && !byId.has(Number(item.invoice_bsale_id)))) {
+      throw new Error('Una o más facturas seleccionadas ya no están disponibles para crear la guía.');
+    }
+  }
+
   if (guideId) {
     // UPDATE existing draft
     const { data, error } = await supabase.rpc('update_route_guide_draft', {
       p_company_id: companyId,
       p_guide_id: guideId,
       p_guide_data: guideData,
-      p_items_data: itemsData,
+      p_items_data: authoritativeItems,
       p_user_id: userData.user.id,
     });
     if (error) throw error;
@@ -409,9 +475,25 @@ export async function saveRouteGuideDraft(
     };
   } else {
     // CREATE new draft
+      if (invoiceIds.length > 0) {
+        const { data, error } = await supabase.rpc('create_route_guide_draft_from_invoices', {
+          p_company_id: companyId,
+          p_guide_data: guideData,
+          p_invoice_bsale_ids: invoiceIds,
+          p_user_id: userData.user.id,
+        });
+        if (error) throw error;
+        if (!data?.success) throw new Error(data?.error || 'Error creando borrador');
+        return {
+          id: data.id as string,
+          guide_number: data.guide_number as string,
+          status: 'DRAFT',
+          warnings: (data.warnings || []) as RouteSaveDuplicateWarning[],
+        };
+      }
     const verification = await syncBsaleDocumentsForRouteGuide({
       company_id: companyId,
-      invoice_numbers: itemsData.map(item => String(item.invoice_number ?? '').trim()).filter(Boolean),
+      invoice_numbers: authoritativeItems.map(item => String(item.invoice_number ?? '').trim()).filter(Boolean),
     });
     if (!verification.success || verification.ready !== verification.requested || verification.documents.some(item => item.status !== 'READY')) {
       throw new Error('No fue posible verificar todas las facturas en Bsale.');
@@ -419,7 +501,7 @@ export async function saveRouteGuideDraft(
     const { data, error } = await supabase.rpc('create_route_guide_draft', {
       p_company_id: companyId,
       p_guide_data: guideData,
-      p_items_data: itemsData,
+      p_items_data: authoritativeItems,
       p_user_id: userData.user.id,
     });
     if (error) throw error;

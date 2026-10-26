@@ -1,20 +1,35 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { getRouteGuides, getRouteGuideCatalogOptions, getRouteGuidesProfitabilitySummaryV1, saveRouteGuideDraft, dispatchRouteGuideAction, deleteRouteGuideDraftAction, RouteSaveDuplicateWarning, RouteDuplicateInvoice, RouteGuideProfitabilitySummaryV1 } from '@/app/actions/logistica/guias-ruta';
+import { useSearchParams } from 'next/navigation';
+import { getRouteGuides, getRouteGuideCatalogOptions, getRouteGuidesProfitabilitySummaryV1, getRouteInvoiceDraftRows, saveRouteGuideDraft, dispatchRouteGuideAction, deleteRouteGuideDraftAction, RouteSaveDuplicateWarning, RouteDuplicateInvoice, RouteGuideProfitabilitySummaryV1 } from '@/app/actions/logistica/guias-ruta';
 import { RouteGuidesTrayTable } from './components/route-guides-tray-table';
 import { RouteGuidesTraySkeleton } from './components/route-guide-skeletons';
 import { RouteGuideForm } from './components/route-guide-form';
 import { RouteGuideDetailPanel } from './components/route-guide-detail-panel';
 import { useRouteGuideDetailCache } from './hooks/use-route-guide-detail-cache';
 import { Plus } from 'lucide-react';
-import { CatalogOptions, RouteGuide } from './types';
+import { CatalogOptions, RouteGuide, RouteGuideItem } from './types';
 import { toast } from 'sonner';
 
 // Shapes passed back to the form via re-throw (success path with warnings)
 export type { RouteSaveDuplicateWarning, RouteDuplicateInvoice };
 
+const ROUTE_OPEN_PERF_STORAGE_KEY = 'mym.route-open-performance';
+
+type RouteOpenPerformance = {
+  startedAt: number;
+  navigationMs: number;
+  phases: Record<string, number>;
+  formReadyMs?: number;
+};
+
 export function RouteGuidesPanel() {
+  const searchParams = useSearchParams();
+  const requestedInvoiceIds = searchParams.getAll('invoice_bsale_id')
+    .map(Number)
+    .filter(Number.isSafeInteger);
+  const hasInvoiceHandoff = requestedInvoiceIds.length > 0;
   const [guides, setGuides] = useState<any[]>([]);
   const [catalogs, setCatalogs] = useState<CatalogOptions | null>(null);
   const [isCatalogsLoading, setIsCatalogsLoading] = useState(false);
@@ -26,24 +41,87 @@ export function RouteGuidesPanel() {
   const [selectedGuideId, setSelectedGuideId] = useState<string | null>(null);
   const [formSessionId, setFormSessionId] = useState<string>('');
   const [profitabilityByGuide, setProfitabilityByGuide] = useState<Record<string, RouteGuideProfitabilitySummaryV1 | null>>({});
+  const [selectedInvoiceItems, setSelectedInvoiceItems] = useState<RouteGuideItem[] | undefined>();
+  const routeInvoiceHandoffStartedRef = useRef(false);
 
   // Operations State
   const [isSaving, setIsSaving] = useState(false);
   const [isDispatching, setIsDispatching] = useState(false);
 
   const { cache, loadingIds, error, fetchDetail, invalidateCache } = useRouteGuideDetailCache();
+  const routeOpenPerformanceRef = useRef<RouteOpenPerformance | null>(null);
+
+  const printRouteOpenSummary = useCallback(() => {
+    const measurement = routeOpenPerformanceRef.current;
+    if (measurement?.formReadyMs == null) return;
+    console.table({
+      navigation: `${measurement.navigationMs} ms`,
+      invoiceRead: measurement.phases.invoiceRead == null ? 'pending' : `${measurement.phases.invoiceRead} ms`,
+      catalogs: measurement.phases.catalogs == null ? 'pending' : `${measurement.phases.catalogs} ms`,
+      existingGuides: measurement.phases.existingGuides == null ? 'pending' : `${measurement.phases.existingGuides} ms`,
+      profitability: measurement.phases.profitability == null ? 'pending' : `${measurement.phases.profitability} ms`,
+      paymentCatalog: measurement.phases.paymentCatalog == null ? 'pending' : `${measurement.phases.paymentCatalog} ms`,
+      totalToFormReady: `${measurement.formReadyMs} ms`,
+    });
+  }, []);
+
+  const reportRouteOpenPhase = useCallback((phase: string, durationMs: number) => {
+    const measurement = routeOpenPerformanceRef.current;
+    if (!measurement) return;
+    measurement.phases[phase] = Math.max(0, Math.round(durationMs));
+    console.debug(`[route-open] ${phase} ${measurement.phases[phase]}ms`);
+    if (measurement.formReadyMs != null) printRouteOpenSummary();
+  }, [printRouteOpenSummary]);
+
+  const reportRouteFormReady = useCallback(() => {
+    const measurement = routeOpenPerformanceRef.current;
+    if (!measurement || measurement.formReadyMs != null) return;
+    measurement.formReadyMs = Math.max(0, Date.now() - measurement.startedAt);
+    console.debug(`[route-open] form-ready ${measurement.formReadyMs}ms`);
+    printRouteOpenSummary();
+    try {
+      sessionStorage.removeItem(ROUTE_OPEN_PERF_STORAGE_KEY);
+    } catch {
+      // Storage may be unavailable in privacy-restricted browser contexts.
+    }
+  }, [printRouteOpenSummary]);
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== 'development') return;
+    try {
+      const raw = sessionStorage.getItem(ROUTE_OPEN_PERF_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { startedAt?: unknown };
+      if (typeof parsed.startedAt !== 'number' || Date.now() - parsed.startedAt > 300_000) {
+        sessionStorage.removeItem(ROUTE_OPEN_PERF_STORAGE_KEY);
+        return;
+      }
+      routeOpenPerformanceRef.current = {
+        startedAt: parsed.startedAt,
+        navigationMs: Math.max(0, Date.now() - parsed.startedAt),
+        phases: {},
+      };
+      console.debug(`[route-open] navigation ${routeOpenPerformanceRef.current.navigationMs}ms`);
+    } catch {
+      routeOpenPerformanceRef.current = null;
+    }
+  }, []);
 
   const loadTray = useCallback(async () => {
     const start = performance.now();
     try {
+      const guidesStart = performance.now();
       const data = await getRouteGuides({ status: filterStatus });
+      reportRouteOpenPhase('existingGuides', performance.now() - guidesStart);
       setGuides(data || []);
       const visibleGuides = data || [];
       if (visibleGuides.length === 0) {
         setProfitabilityByGuide({});
+        reportRouteOpenPhase('profitability', 0);
         return;
       }
 
+      const profitabilityStart = performance.now();
       try {
         const summaries = await getRouteGuidesProfitabilitySummaryV1(visibleGuides.map(guide => guide.id));
         const summariesByGuide = new Map(summaries.map(summary => [summary.route_guide_id, summary]));
@@ -53,6 +131,8 @@ export function RouteGuidesPanel() {
       } catch (error) {
         console.warn('No se pudo cargar el resumen de rentabilidad V1:', error);
         setProfitabilityByGuide(Object.fromEntries(visibleGuides.map(guide => [guide.id, null])));
+      } finally {
+        reportRouteOpenPhase('profitability', performance.now() - profitabilityStart);
       }
     } catch (e: any) {
       toast.error('Error cargando guías de ruta: ' + e.message);
@@ -61,13 +141,17 @@ export function RouteGuidesPanel() {
         console.log('loadRouteGuides', Math.round(performance.now() - start), 'ms');
       }
     }
-  }, [filterStatus]);
+  }, [filterStatus, reportRouteOpenPhase]);
 
   const ensureCatalogs = useCallback(() => {
-    if (catalogs) return Promise.resolve(catalogs);
+    if (catalogs) {
+      reportRouteOpenPhase('catalogs', 0);
+      return Promise.resolve(catalogs);
+    }
     if (catalogsPromiseRef.current) return catalogsPromiseRef.current;
 
     setIsCatalogsLoading(true);
+    const catalogsStart = performance.now();
     const promise = getRouteGuideCatalogOptions()
       .then(data => {
         setCatalogs(data);
@@ -78,12 +162,13 @@ export function RouteGuidesPanel() {
         return null;
       })
       .finally(() => {
+        reportRouteOpenPhase('catalogs', performance.now() - catalogsStart);
         catalogsPromiseRef.current = null;
         setIsCatalogsLoading(false);
       });
     catalogsPromiseRef.current = promise;
     return promise;
-  }, [catalogs]);
+  }, [catalogs, reportRouteOpenPhase]);
 
   useEffect(() => {
     loadTray().finally(() => setIsLoading(false));
@@ -95,6 +180,28 @@ export function RouteGuidesPanel() {
     setFormSessionId(`new-${Date.now()}`);
     void ensureCatalogs();
   };
+
+  useEffect(() => {
+    const rawIds = searchParams.getAll('invoice_bsale_id');
+    if (rawIds.length === 0) return;
+    const ids = [...new Set(rawIds.map(Number).filter(Number.isSafeInteger))];
+    if (ids.length === 0) return;
+    if (routeInvoiceHandoffStartedRef.current) return;
+    routeInvoiceHandoffStartedRef.current = true;
+    // Read the form dependencies in parallel; the tray remains a background concern.
+    void ensureCatalogs();
+    const invoiceReadStart = performance.now();
+    void getRouteInvoiceDraftRows(ids).then(items => {
+      if (items.length !== ids.length) {
+        throw new Error('Una o más facturas seleccionadas ya no están disponibles para crear la guía. Revisa si fueron incorporadas a otra guía.');
+      }
+      setSelectedInvoiceItems(items);
+      handleOpenNew();
+    }).catch(error => toast.error(error instanceof Error ? error.message : 'No se pudieron cargar las facturas.'))
+      .finally(() => reportRouteOpenPhase('invoiceRead', performance.now() - invoiceReadStart));
+  // The query string is the handoff contract from Preparación de Pedidos.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ensureCatalogs, searchParams, reportRouteOpenPhase]);
 
   const handleOpenDetail = async (id: string) => {
     setActiveView('DETAIL');
@@ -223,7 +330,8 @@ export function RouteGuidesPanel() {
     }
   };
 
-  if (isLoading) {
+  // The preparation handoff only needs invoice rows and catalogs; the tray keeps loading in background.
+  if (isLoading && !hasInvoiceHandoff) {
     return (
       <div className="p-6">
         <RouteGuidesTraySkeleton />
@@ -255,7 +363,7 @@ export function RouteGuidesPanel() {
               <option value="DISPATCHED">Solo Despachadas</option>
             </select>
             <button
-              onClick={handleOpenNew}
+              onClick={() => { setSelectedInvoiceItems(undefined); handleOpenNew(); }}
               className="flex items-center gap-2 bg-theme-accent hover:bg-theme-accent-hover text-white px-4 py-2 rounded-xl text-xs font-bold shadow-lg shadow-theme-accent/20 transition-all"
             >
               <Plus className="w-5 h-5" />
@@ -290,11 +398,14 @@ export function RouteGuidesPanel() {
               key={formSessionId}
               initialData={activeView === 'EDIT' && selectedGuideId && cache[selectedGuideId] ? cache[selectedGuideId] : undefined}
               catalogOptions={catalogs}
+              initialItems={selectedInvoiceItems}
               onSaveDraft={handleSaveDraft}
               onDispatch={handleDispatch}
               onCancel={handleCloseDetail}
               isSaving={isSaving}
               isDispatching={isDispatching}
+              onRouteOpenPhase={reportRouteOpenPhase}
+              onFormReady={reportRouteFormReady}
             />
           ) : (
             <div className="flex min-h-32 items-center justify-center p-6 text-xs font-semibold text-theme-text-muted">

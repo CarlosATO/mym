@@ -39,6 +39,7 @@ export interface RouteGuideItem {
   route_guide_id?: string;
   line_number: number;
   invoice_number: string;
+  invoice_bsale_id?: number | null;
   customer_name: string;
   customer_address: string;
   commune: string;

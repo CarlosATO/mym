@@ -1,19 +1,19 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
 import React, { useState, useEffect, useRef } from 'react';
-import { CatalogOptions, RouteGuide } from '../types';
-import { RouteGuideGrid, type SaleConditionOption } from './route-guide-grid';
+import { CatalogOptions, RouteGuide, RouteGuideItem } from '../types';
+import { RouteGuideGrid, type RoutePaymentTypeOption } from './route-guide-grid';
 import { useRouteGuideGrid } from '../hooks/use-route-guide-grid';
 import { RouteGuideCombobox } from './route-guide-combobox';
-import { Save, Send, AlertTriangle, XCircle } from 'lucide-react';
-import { createDeliveryRouteInline, createRouteVehicleInline, createRoutePersonInline, getRouteDriverUserOptions, linkRouteDriverUser, type RouteDriverUserOption } from '@/app/actions/logistica/guias-ruta';
+import { Save, Send, AlertTriangle, XCircle, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { createDeliveryRouteInline, createRouteVehicleInline, createRoutePersonInline, getRouteDriverUserOptions, getRouteGuideById, getRouteGuidePaymentTypes, linkRouteDriverUser, type RouteDriverUserOption } from '@/app/actions/logistica/guias-ruta';
 import { getActiveCompanyId } from '@/app/actions/companies';
 import type { RouteSaveDuplicateWarning, RouteDuplicateInvoice, SaveRouteGuideDraftResult } from '@/app/actions/logistica/guias-ruta';
 import { syncBsaleDocumentsForRouteGuide } from '@/app/actions/integraciones/bsale-sync';
 import type { DirectedBsaleSyncResult } from '@/lib/integraciones/bsale-sync-types';
 import { generateRouteGuidePdfBlob, downloadRouteGuidePdf, type RouteGuidePdfOrientation } from '@/lib/pdf/generate-route-guide-pdf';
 import { parseChileanMoney, isEmptyRouteGuideRow } from '../utils/route-guide-validation';
+import { formatCurrency } from '../utils/route-guide-formatters';
 import { dedupOptions, injectCurrentOption } from '../utils/route-guide-catalogs';
-import { getSaleConditions } from '@/app/actions/integraciones/sale-conditions';
 import { todayInSantiago } from '@/lib/datetime';
 
 function formatStatus(status: string) {
@@ -33,22 +33,28 @@ function formatBsaleVerificationStatus(status: string) {
 
 interface RouteGuideFormProps {
   initialData?: RouteGuide;
+  initialItems?: RouteGuideItem[];
   catalogOptions: CatalogOptions;
   onSaveDraft: (guideData: any, itemsData: any[]) => Promise<SaveRouteGuideDraftResult>;
   onDispatch: (guideId: string) => Promise<void>;
   onCancel: () => void;
   isSaving: boolean;
   isDispatching: boolean;
+  onRouteOpenPhase?: (phase: string, durationMs: number) => void;
+  onFormReady?: () => void;
 }
 
 export function RouteGuideForm({
   initialData,
+  initialItems,
   catalogOptions: initialCatalog,
   onSaveDraft,
   onDispatch,
   onCancel,
   isSaving,
-  isDispatching
+  isDispatching,
+  onRouteOpenPhase,
+  onFormReady,
 }: RouteGuideFormProps) {
   const [catalogs, setCatalogs] = useState(initialCatalog);
   const [guideDate, setGuideDate] = useState(initialData?.guide_date || todayInSantiago());
@@ -77,21 +83,36 @@ export function RouteGuideForm({
   const actionInProgress = useRef(false);
   const [pdfOrientation, setPdfOrientation] = useState<RouteGuidePdfOrientation>('landscape');
   const previewGuideRef = useRef<RouteGuide | null>(null);
+  const [showInvoiceConfirmation, setShowInvoiceConfirmation] = useState(false);
+  const [identityRecoveryBlocked, setIdentityRecoveryBlocked] = useState(false);
 
-  const grid = useRouteGuideGrid(initialData?.items || []);
+  const grid = useRouteGuideGrid(initialData?.items || initialItems || []);
   const readOnly = status === 'DISPATCHED' || status === 'CANCELLED';
+  const isInvoiceSelection = !initialData && Boolean(initialItems?.some(item => Number.isSafeInteger(Number(item.invoice_bsale_id))));
   const invoiceNumbers = React.useMemo(() => [...new Set(
     grid.items
       .filter(item => !isEmptyRouteGuideRow(item))
       .map(item => String(item.invoice_number || '').trim())
       .filter(Boolean)
   )], [grid.items]);
+  const invoiceSelectionItems = React.useMemo(
+    () => (initialItems ?? []).filter(selected => grid.items.some(item => item.invoice_bsale_id === selected.invoice_bsale_id)),
+    [grid.items, initialItems],
+  );
   const invoiceSetKey = invoiceNumbers.join('|');
 
-  const [saleConditions, setSaleConditions] = useState<SaleConditionOption[]>([]);
+  const [paymentTypes, setPaymentTypes] = useState<RoutePaymentTypeOption[]>([]);
   useEffect(() => {
-    getSaleConditions().then(setSaleConditions).catch(() => {});
-  }, []);
+    const measureRouteOpen = process.env.NODE_ENV === 'development';
+    const startedAt = performance.now();
+    getRouteGuidePaymentTypes().then(setPaymentTypes).catch(() => setPaymentTypes([])).finally(() => {
+      if (measureRouteOpen) onRouteOpenPhase?.('paymentCatalog', performance.now() - startedAt);
+    });
+  }, [onRouteOpenPhase]);
+
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'development') onFormReady?.();
+  }, [onFormReady]);
 
   useEffect(() => {
     if (!driverId || readOnly) return;
@@ -242,7 +263,7 @@ export function RouteGuideForm({
   };
 
   useEffect(() => {
-    if (guideId || readOnly) return;
+    if (guideId || readOnly || isInvoiceSelection) return;
     verificationSequence.current += 1;
     verificationRef.current = null;
     const timer = window.setTimeout(() => {
@@ -256,12 +277,20 @@ export function RouteGuideForm({
       void startBsaleVerification(numbers);
     }, !invoiceSetKey ? 0 : 500);
     return () => window.clearTimeout(timer);
-  }, [guideId, readOnly, invoiceSetKey]);
+  }, [guideId, readOnly, invoiceSetKey, isInvoiceSelection]);
 
-  const handleSaveDraft = async () => {
+  const handleSaveDraft = async (confirmedInvoiceSelection = false) => {
     if (isSaving || isDispatching || actionInProgress.current) return;
+    if (identityRecoveryBlocked) {
+      setErrorMsg('La guía se guardó, pero no se pudieron sincronizar los IDs de sus líneas. Recarga la guía para continuar.');
+      return;
+    }
     if (!guideDate || !routeId || !vehicleId) {
       setErrorMsg('Por favor completa al menos los campos básicos (Fecha, Ruta, Vehículo) para el borrador.');
+      return;
+    }
+    if (!guideId && isInvoiceSelection && !confirmedInvoiceSelection) {
+      setShowInvoiceConfirmation(true);
       return;
     }
 
@@ -288,19 +317,23 @@ export function RouteGuideForm({
     };
 
     // Filtramos las filas que están completamente vacías y parseamos el monto
-    const validItems = grid.items
-      .filter(i => !isEmptyRouteGuideRow(i))
+      const validItems = grid.items
+        .filter(i => !isEmptyRouteGuideRow(i))
       .map(i => ({
         ...i,
         amount: parseChileanMoney(i.amount)
       }));
+      if (!guideId && isInvoiceSelection && validItems.length === 0) {
+        throw new Error('Mantén al menos una factura seleccionada para crear la guía.');
+      }
 
     actionInProgress.current = true;
+    let savedGuideId: string | null = null;
     try {
       setErrorMsg('');
       setDraftWarnings([]);
       setDispatchDuplicates([]);
-      if (!guideId) {
+      if (!guideId && !isInvoiceSelection) {
         if (validItems.length === 0) throw new Error('Agrega al menos una factura antes de crear la guía.');
         const verification = await startBsaleVerification(invoiceNumbers);
         if (!verification.success || verification.ready !== verification.requested || verification.documents.some(document => document.status !== 'READY')) {
@@ -308,17 +341,34 @@ export function RouteGuideForm({
         }
       }
       const res = await onSaveDraft(guideData, validItems);
+      savedGuideId = res.id;
       
       // Update local state to reflect the successfully saved state
       setGuideId(res.id);
       setGuideNumber(res.guide_number || '');
       setStatus(res.status || 'DRAFT');
 
+      const savedItemsRevision = grid.itemsRevisionRef.current;
+      const persistedGuide = await getRouteGuideById(res.id);
+      if (!persistedGuide) {
+        throw new Error('No se pudo recuperar la guía guardada.');
+      }
+      if (grid.itemsRevisionRef.current !== savedItemsRevision) {
+        throw new Error('La grilla cambió mientras se recuperaban los IDs persistidos.');
+      }
+      grid.replacePersistedItems(persistedGuide.items || []);
+      setIdentityRecoveryBlocked(false);
+
       if (res.warnings && res.warnings.length > 0) {
         setDraftWarnings(res.warnings);
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Ocurrió un error al guardar');
+      if (savedGuideId) {
+        setIdentityRecoveryBlocked(true);
+        setErrorMsg(`La guía se guardó, pero no se pudieron sincronizar los IDs de sus líneas: ${err.message || 'error desconocido'}. Recarga la guía para continuar.`);
+      } else {
+        setErrorMsg(err.message || 'Ocurrió un error al guardar');
+      }
     } finally {
       setIsVerifyingBsale(false);
       actionInProgress.current = false;
@@ -327,6 +377,7 @@ export function RouteGuideForm({
 
   const verifyBeforeDispatch = async () => {
     if (invoiceNumbers.length === 0) throw new Error('La guía no contiene facturas para verificar.');
+    if (isInvoiceSelection) return true;
     const verification = await startBsaleVerification(invoiceNumbers);
     if (!verification.success || verification.ready !== verification.requested || verification.documents.some(document => document.status !== 'READY')) return false;
     return true;
@@ -452,7 +503,7 @@ export function RouteGuideForm({
               </label>
               <button
                 type="button"
-                onClick={handleSaveDraft}
+                onClick={() => void handleSaveDraft()}
                 disabled={isSaving || isDispatching}
                 className="flex items-center gap-2 bg-theme-accent hover:bg-theme-accent-hover disabled:bg-theme-accent/50 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-lg shadow-theme-accent/20"
               >
@@ -473,6 +524,50 @@ export function RouteGuideForm({
         </div>
       </div>
 
+      {isInvoiceSelection && !guideId && (
+        <section className="rounded-2xl border border-theme-accent/25 bg-theme-accent/[0.04] p-5" aria-labelledby="invoice-selection-title">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4 text-theme-accent" aria-hidden="true" />
+                <h3 id="invoice-selection-title" className="text-sm font-bold text-theme-text">Facturas seleccionadas desde Preparación</h3>
+              </div>
+              <p className="mt-1 text-xs text-theme-text-muted">El motor validará nuevamente su elegibilidad al crear el borrador.</p>
+            </div>
+            <div className="text-left text-xs font-semibold text-theme-text-muted sm:text-right">
+              <div>{invoiceSelectionItems.length} factura{invoiceSelectionItems.length === 1 ? '' : 's'}</div>
+              <div className="text-theme-text">{formatCurrency(invoiceSelectionItems.reduce((sum, item) => sum + Number(item.amount || 0), 0))}</div>
+            </div>
+          </div>
+          <div className="mt-4 overflow-x-auto rounded-xl border border-theme-border bg-theme-surface">
+            <table className="w-full min-w-[560px] text-left text-xs">
+              <thead className="border-b border-theme-border bg-theme-text/[0.03] text-[10px] uppercase tracking-wider text-theme-text-muted">
+                <tr>
+                  <th className="px-3 py-2 font-bold">Factura</th>
+                  <th className="px-3 py-2 font-bold">Cliente</th>
+                  <th className="px-3 py-2 text-right font-bold">Importe</th>
+                  <th className="px-3 py-2 text-right font-bold">Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoiceSelectionItems.map(item => (
+                  <tr key={item.invoice_bsale_id ?? item.invoice_number} className="border-b border-theme-border last:border-0">
+                    <td className="px-3 py-2 font-mono font-semibold text-theme-accent">#{item.invoice_number}</td>
+                    <td className="px-3 py-2 font-medium text-theme-text">{item.customer_name || 'Cliente sin nombre'}</td>
+                    <td className="px-3 py-2 text-right font-semibold tabular-nums text-theme-text">{formatCurrency(item.amount)}</td>
+                    <td className="px-3 py-2 text-right">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-[10px] font-bold text-emerald-700">
+                        <CheckCircle2 className="h-3 w-3" aria-hidden="true" /> {item.validation_status === 'VALID' ? 'Elegible' : item.validation_status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
       {bsaleVerification && (
         <div className={`p-4 rounded-xl border text-xs font-medium ${bsaleVerification.ready === bsaleVerification.requested && bsaleVerification.success ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400' : 'border-orange-500/30 bg-orange-500/5 text-orange-700 dark:text-orange-300'}`}>
           <div className="flex items-start justify-between gap-3">
@@ -481,7 +576,7 @@ export function RouteGuideForm({
               {bsaleVerification.ready !== bsaleVerification.requested && <div className="mt-1">No fue posible verificar todas las facturas en Bsale.</div>}
             </div>
             {bsaleVerification.ready !== bsaleVerification.requested && !isVerifyingBsale && (
-              <button type="button" onClick={guideId ? handleDispatch : handleSaveDraft} className="shrink-0 rounded-lg border border-current px-3 py-1.5 text-[11px] font-bold hover:bg-current/10">
+              <button type="button" onClick={guideId ? handleDispatch : () => void handleSaveDraft()} className="shrink-0 rounded-lg border border-current px-3 py-1.5 text-[11px] font-bold hover:bg-current/10">
                 Reintentar verificación
               </button>
             )}
@@ -681,10 +776,29 @@ export function RouteGuideForm({
           onRemoveRow={grid.removeRow}
           onClearGrid={grid.clearGrid}
           readOnly={readOnly}
-          saleConditions={saleConditions}
+          paymentTypes={paymentTypes}
         />
 
       </div>
+
+      {showInvoiceConfirmation && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 px-4" role="dialog" aria-modal="true" aria-labelledby="invoice-confirmation-title">
+          <div className="w-full max-w-md rounded-2xl border border-theme-border bg-theme-surface p-6 shadow-2xl">
+            <h2 id="invoice-confirmation-title" className="text-base font-bold text-theme-text">Crear borrador de Guía de Ruta</h2>
+            <p className="mt-2 text-sm text-theme-text-muted">
+              Se crearán {invoiceSelectionItems.length} factura{invoiceSelectionItems.length === 1 ? '' : 's'} como un borrador. La selección será validada nuevamente y una factura que deje de estar disponible rechazará toda la operación.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => setShowInvoiceConfirmation(false)} className="rounded-xl border border-theme-border px-4 py-2 text-xs font-semibold text-theme-text" disabled={isSaving}>
+                Cancelar
+              </button>
+              <button type="button" onClick={() => { setShowInvoiceConfirmation(false); void handleSaveDraft(true); }} className="rounded-xl bg-theme-accent px-4 py-2 text-xs font-bold text-white" disabled={isSaving}>
+                Confirmar creación
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showPrintView && previewUrl && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center" onClick={() => { setShowPrintView(false); URL.revokeObjectURL(previewUrl); setPreviewUrl(null); }}>
