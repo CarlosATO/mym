@@ -8,6 +8,25 @@ export type PurchaseReceiptPayload = {
 
 export type PurchaseReceiptSnapshot = PurchaseReceiptPayload
 
+const INVALID_PURCHASE_RECEIPT_PAYLOAD = 'La recepción no tiene un payload BSale válido; corrija los datos antes de sincronizar.'
+
+export function purchaseReceiptPayloadError(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return INVALID_PURCHASE_RECEIPT_PAYLOAD
+  const payload = value as Partial<PurchaseReceiptPayload>
+  if (payload.document !== 'FACTURA' && payload.document !== 'GUÍA') return INVALID_PURCHASE_RECEIPT_PAYLOAD
+  if (!Number.isSafeInteger(payload.officeId) || Number(payload.officeId) <= 0) return INVALID_PURCHASE_RECEIPT_PAYLOAD
+  if (!Number.isSafeInteger(payload.documentNumber) || Number(payload.documentNumber) <= 0) return INVALID_PURCHASE_RECEIPT_PAYLOAD
+  if (typeof payload.note !== 'string' || !payload.note) return INVALID_PURCHASE_RECEIPT_PAYLOAD
+  if (!Array.isArray(payload.details) || payload.details.length === 0) return INVALID_PURCHASE_RECEIPT_PAYLOAD
+  if (payload.details.some(line =>
+    !line ||
+    !Number.isSafeInteger(line.variantId) || line.variantId <= 0 ||
+    !Number.isFinite(line.quantity) || line.quantity <= 0 ||
+    !Number.isFinite(line.cost) || line.cost <= 0
+  )) return INVALID_PURCHASE_RECEIPT_PAYLOAD
+  return null
+}
+
 export function autoSyncIsAllowed(settings: { enabled: boolean; autoSyncEnabled: boolean }) {
   return settings.enabled && settings.autoSyncEnabled
 }
@@ -84,9 +103,9 @@ export function documentForBsale(document: string) {
 }
 
 export function numericDocumentNumber(value: string | number | null | undefined) {
-  const normalized = String(value ?? '').trim()
-  if (!/^\d+$/.test(normalized)) throw new Error('El número de documento debe ser numérico para BSale.')
-  const parsed = Number(normalized)
+  const raw = String(value ?? '')
+  if (!/^[0-9]+$/.test(raw)) throw new Error('Ingrese un solo número de documento, sin puntos, guiones ni espacios.')
+  const parsed = Number(raw)
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error('El número de documento no es válido para BSale.')
   return parsed
 }
@@ -122,6 +141,8 @@ function failureStatus(error: unknown) {
 }
 
 export async function sendPurchaseReceipt(snapshot: PurchaseReceiptSnapshot, remote: PurchaseReceiptRemoteDependencies) {
+  const payloadError = purchaseReceiptPayloadError(snapshot)
+  if (payloadError) return { status: 'FAILED' as const, receptionId: null, error: payloadError }
   let created: { id?: number | string | null }
   try { created = await remote.createReception(snapshot) } catch (error) {
     return { status: failureStatus(error), receptionId: null, error: error instanceof Error ? error.message : 'No se pudo crear la recepción BSale.' } as const

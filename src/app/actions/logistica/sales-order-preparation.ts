@@ -580,7 +580,7 @@ export async function getInvoiceDocumentPreviews(
     ? await supabase
       .schema('integraciones')
       .from('bsale_clients')
-       .select('bsale_client_id, business_name, code, payment_type_name')
+        .select('bsale_client_id, business_name, code, payment_type_name')
       .eq('company_id', companyId)
       .in('bsale_client_id', clientIds)
     : { data: [], error: null }
@@ -618,16 +618,16 @@ export async function getInvoiceDocumentPreviews(
         const officialUrl = readRawDocumentUrl(rawJson, 'urlPublicView', 'urlPublicViewOriginal') ?? pdfUrl
         return {
           invoice_bsale_id: invoiceId,
-           invoice_folio: String(document.number ?? invoiceId),
-           payment_method_name: client?.payment_type_name ?? null,
+          invoice_folio: String(document.number ?? invoiceId),
+          payment_method_name: client?.payment_type_name ?? null,
           invoice_date: document.emission_date ?? null,
           client_name: client?.business_name ?? request.client_name,
           client_rut: client?.code ?? null,
           net_amount: document.net_amount == null ? null : Number(document.net_amount),
           tax_amount: document.tax_amount == null ? null : Number(document.tax_amount),
           total_amount: document.total_amount == null ? null : Number(document.total_amount),
-           document_status: documentStatus,
            status: documentStatus === 'CANCELLED' ? 'CANCELLED' : 'CONFIRMED',
+           document_status: documentStatus,
           sales_order_folio: request.sales_order_folio,
           official_url: officialUrl,
           pdf_url: pdfUrl,

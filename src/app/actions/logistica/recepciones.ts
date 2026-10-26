@@ -48,6 +48,11 @@ export interface PurchaseOrderPending {
   latest_receipt_doc: string | null
 }
 
+export interface ReceiptWarehouseOption {
+  id: string
+  name: string
+}
+
 const PO_OPERATIONAL_FIELDS = 'id, company_id, correlative, issue_date, required_date, supplier_id, source_type, warehouse_id, po_type, requested_by, notes, status, receipt_status, invoice_status, cancel_reason, created_at, updated_at'
 const PO_ECONOMIC_FIELDS = 'net_total, discount_total, tax_total, exempt_total, grand_total'
 const PO_ITEM_OPERATIONAL_FIELDS = 'id, po_id, line_number, item_type, product_id, product_description, unit, quantity, warehouse_id, required_date, notes, quantity_received, lot_number, expiration_date'
@@ -70,6 +75,18 @@ async function authorizeReception(): Promise<{ authorization: WmsAuthorization; 
   const authorization = await requireWmsPermission('logistica.receptions.create')
   const canViewEconomics = await hasWmsPermission(authorization.user.id, 'adquisiciones.po.view')
   return { authorization, canViewEconomics }
+}
+
+export async function getActiveReceiptWarehouses(): Promise<ReceiptWarehouseOption[]> {
+  const { authorization } = await authorizeReception()
+  const { data, error } = await adqDb()
+    .from('warehouses')
+    .select('id, name')
+    .eq('company_id', authorization.companyId)
+    .eq('is_active', true)
+    .order('name')
+  if (error) throw new Error('No se pudieron cargar las bodegas activas.')
+  return (data ?? []) as ReceiptWarehouseOption[]
 }
 
 function redactBsaleStatus<T extends { payload?: unknown }>(status: T, canViewEconomics: boolean) {
@@ -501,6 +518,35 @@ export async function createPurchaseReceipt(data: {
   const canViewEconomics = await hasWmsPermission(user.id, 'adquisiciones.po.view')
   const supabase = await createClient()
 
+  if (typeof data.document_number !== 'string' || !/^[0-9]+$/.test(data.document_number)) {
+    return { error: 'Ingrese un solo número de documento, sin puntos, guiones ni espacios.' }
+  }
+
+  const { data: purchaseOrder, error: purchaseOrderError } = await adqDb()
+    .from('purchase_orders')
+    .select('warehouse_id')
+    .eq('id', data.purchase_order_id)
+    .eq('company_id', companyId)
+    .single()
+  if (purchaseOrderError || !purchaseOrder) return { error: 'Orden de Compra no encontrada.' }
+
+  const effectiveWarehouseId = data.receiving_type === 'WAREHOUSE'
+    ? data.warehouse_id || purchaseOrder.warehouse_id
+    : null
+  if (data.receiving_type === 'WAREHOUSE' && !effectiveWarehouseId) {
+    return { error: 'Debe seleccionar una bodega de recepción.' }
+  }
+  if (effectiveWarehouseId) {
+    const { data: warehouse, error: warehouseError } = await adqDb()
+      .from('warehouses')
+      .select('id')
+      .eq('id', effectiveWarehouseId)
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .maybeSingle()
+    if (warehouseError || !warehouse) return { error: 'La bodega seleccionada no existe, está inactiva o no pertenece a la empresa.' }
+  }
+
   const { data: { session } } = await supabase.auth.getSession()
 
   const db = createSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
@@ -522,7 +568,7 @@ export async function createPurchaseReceipt(data: {
     p_company_id: companyId,
     p_purchase_order_id: data.purchase_order_id,
     p_receiving_type: data.receiving_type,
-    p_warehouse_id: data.warehouse_id || null,
+     p_warehouse_id: effectiveWarehouseId,
     p_notes: data.notes || null,
     p_document_type: headerDocType || null,
     p_document_number: data.document_number || null,

@@ -55,6 +55,14 @@ export type ComisionesV2SellerProfile = {
   seller_type: string;
 };
 
+export type ComisionesV2SellerProfileState = Pick<
+  ComisionesV2SellerProfile,
+  "seller_bsale_id" | "seller_name" | "is_commissionable" | "active" | "seller_type"
+> & {
+  updated_at: string;
+  updated_by: string | null;
+};
+
 export type ComisionesV2CustomerCommissionability = {
   bsale_client_id: number;
   name: string;
@@ -697,6 +705,73 @@ export async function listComisionesV2SellerProfiles(): Promise<{
       permissionCodes.includes("comisiones.v2.issue") ||
       permissionCodes.includes("system.admin"),
   };
+}
+
+export async function updateComisionesV2SellerProfileState(input: {
+  sellerBsaleId: number;
+  active: boolean;
+  isCommissionable: boolean;
+}): Promise<{ data: ComisionesV2SellerProfileState | null; error?: string }> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { data: null, error: "No autorizado" };
+  const companyId = await getActiveCompanyId(user);
+  if (!companyId) return { data: null, error: "Selecciona una compañía activa." };
+  if (!Number.isSafeInteger(input.sellerBsaleId) || input.sellerBsaleId <= 0) {
+    return { data: null, error: "Vendedor inválido." };
+  }
+
+  const { data, error } = await supabase.schema("comisiones").rpc(
+    "update_seller_profile_state",
+    {
+      p_company_id: companyId,
+      p_seller_bsale_id: input.sellerBsaleId,
+      p_active: input.active,
+      p_is_commissionable: input.isCommissionable,
+    },
+  );
+  if (error) {
+    logSupabaseError("Comisiones V2 seller profile update error", error);
+    const message = error.message.toUpperCase();
+    const code = (error.code ?? "").toUpperCase();
+    if (message.includes("PERMISSION_DENIED"))
+      return { data: null, error: "No tienes permiso para administrar vendedores V2." };
+    if (message.includes("COMPANY_ACCESS_DENIED"))
+      return { data: null, error: "No tienes acceso a la compañía activa." };
+    if (message.includes("SELLER_PROFILE_NOT_FOUND"))
+      return { data: null, error: "El vendedor no existe en la compañía activa." };
+    if (
+      code === "PGRST202" ||
+      message.includes("UPDATE_SELLER_PROFILE_STATE") ||
+      message.includes("COULD NOT FIND THE FUNCTION")
+    )
+      return {
+        data: null,
+        error:
+          "La función de actualización de vendedores V2 no está disponible en Supabase. Debe aplicarse la migración pendiente.",
+      };
+    if (
+      message.includes("FETCH") ||
+      message.includes("NETWORK") ||
+      message.includes("TIMEOUT") ||
+      code.includes("ECONN")
+    )
+      return {
+        data: null,
+        error: "No se pudo comunicar con el servidor. Intenta nuevamente.",
+      };
+    return { data: null, error: "No se pudo guardar el estado del vendedor." };
+  }
+  const saved = ((data ?? [])[0] as ComisionesV2SellerProfileState) ?? null;
+  if (!saved) {
+    return {
+      data: null,
+      error: "El servidor no confirmó la actualización del vendedor.",
+    };
+  }
+  return { data: saved };
 }
 
 export async function listComisionesV2PaymentEligibility(
@@ -2546,3 +2621,5 @@ export async function listComisionesV2SettlementIssued(): Promise<{
   }
   return { data: (data ?? []) as ComisionesV2SettlementIssuedListItem[] };
 }
+
+// Deployment retrigger (2026-10-23): Railway build was interrupted during dependency installation; no functional changes.

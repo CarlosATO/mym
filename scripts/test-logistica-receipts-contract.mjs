@@ -5,6 +5,7 @@ import { calculateReceiptEconomics } from '../src/lib/logistica/receipt-economic
 
 const migration = await readFile(new URL('../supabase/migrations/20261006090000_logistica_purchase_receipts_service_quantity_fix.sql', import.meta.url), 'utf8')
 const hardeningMigration = await readFile(new URL('../supabase/migrations/20261005180000_logistica_purchase_receipts_hardening.sql', import.meta.url), 'utf8')
+const hotfixMigration = await readFile(new URL('../supabase/migrations/20261023200000_logistica_receipt_hotfix.sql', import.meta.url), 'utf8')
 const action = await readFile(new URL('../src/app/actions/logistica/recepciones.ts', import.meta.url), 'utf8')
 const worksheet = await readFile(new URL('../src/modules/logistica/recepciones/receipt-worksheet.tsx', import.meta.url), 'utf8')
 const panel = await readFile(new URL('../src/modules/logistica/recepciones/recepciones-panel.tsx', import.meta.url), 'utf8')
@@ -92,6 +93,31 @@ test('idempotency lookup and conflict retry remain intact', () => {
   assert.match(migration, /WHERE company_id = p_company_id AND idempotency_key = p_idempotency_key/)
   assert.match(migration, /EXCEPTION WHEN unique_violation/)
   assert.match(hardeningMigration, /purchase_receipts_company_idempotency_uq/)
+})
+
+test('receipts without a PO warehouse require an active company warehouse', () => {
+  assert.match(action, /getActiveReceiptWarehouses/)
+  assert.match(action, /\.eq\('is_active', true\)/)
+  assert.match(action, /Debe seleccionar una bodega de recepción/)
+  assert.match(hotfixMigration, /coalesce\(p_warehouse_id, v_po\.warehouse_id\)/)
+  assert.match(hotfixMigration, /w\.company_id = p_company_id/)
+  assert.match(hotfixMigration, /w\.is_active = true/)
+  assert.match(hotfixMigration, /create_purchase_receipt_db_pre_hotfix/)
+  assert.match(worksheet, /Seleccionar bodega\.\.\./)
+})
+
+test('document numbers are strict at every receipt boundary', () => {
+  assert.match(action, /!\/\^\[0-9\]\+\$\/.test\(data\.document_number\)/)
+  assert.match(worksheet, /!\/\^\[0-9\]\+\$\/.test\(documentNumber\)/)
+  assert.match(hotfixMigration, /p_document_number !~ '\^\[0-9\]\+\$'/)
+  assert.match(hotfixMigration, /Ingrese un solo número de documento, sin puntos, guiones ni espacios/)
+})
+
+test('FAILED BSale operations cannot auto-retry or send invalid snapshots', () => {
+  assert.doesNotMatch(action, /retry_failed_bsale_purchase_receipt_operation/)
+  assert.match(hotfixMigration, /purchase_receipt_payload_is_valid/)
+  assert.match(hotfixMigration, /IF NOT integraciones\.purchase_receipt_payload_is_valid\(o\.payload_snapshot\)/)
+  assert.match(hotfixMigration, /status', 'FAILED'/)
 })
 
 test('legacy ten-argument RPC remains executable only for authenticated and service role', () => {
