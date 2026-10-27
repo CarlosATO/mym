@@ -86,7 +86,6 @@ export function openConfirmedInvoicePdf(
   const url = validateBsalePdfUrl(pdfUrl)
   if (!url) return { opened: false, printable: false, reason: 'INVALID_URL' }
   if (!target || target.closed) return { opened: false, printable: false, reason: 'POPUP_BLOCKED' }
-
   try {
     target.location.href = url
     globalThis.setTimeout(() => {

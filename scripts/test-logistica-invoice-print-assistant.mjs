@@ -46,16 +46,14 @@ test('confirmed PDF navigation does not create another window or emit', () => {
   assert.equal(printed, 0)
 })
 
-test('native print failures are observable without changing PDF navigation', () => {
+test('native print failures are observable without changing PDF navigation', async () => {
   const target = { closed: false, location: { href: '' }, focus() {}, print() { throw new Error('blocked-by-browser') } }
   const errors = []
   const result = openConfirmedInvoicePdf(target, officialPdf, targetWindow => targetWindow.print(), message => errors.push(message))
   assert.deepEqual(result, { opened: true, printable: true })
+  await new Promise(resolve => setTimeout(resolve, 850))
   assert.equal(target.location.href, officialPdf)
-  return new Promise(resolve => setTimeout(() => {
-    assert.deepEqual(errors, ['blocked-by-browser'])
-    resolve()
-  }, 850))
+  assert.deepEqual(errors, ['blocked-by-browser'])
 })
 
 test('blocked or invalid targets never navigate', () => {
