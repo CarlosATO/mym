@@ -1,7 +1,8 @@
 'use client'
 
-import { X, MapPin, Package, User, FileText, Printer, Building2, Hash, AlertTriangle, LockKeyhole } from 'lucide-react'
+import { X, MapPin, Package, User, FileText, Printer, Building2, Hash, AlertTriangle, LockKeyhole, CheckCircle2, Loader2 } from 'lucide-react'
 import { SalesOrderPreparationCardInfo, SalesOrderPreparationItem, SalesOrderPreparationLine, confirmSalesOrderPreparationLine, getSalesOrderClientData, SalesOrderClientData, getSalesOrderPreparationLines, getSalesOrderPreparationMovements, SalesOrderPreparationMovement } from '@/app/actions/logistica/sales-order-preparation'
+import { acceptSalesOrderPreparationCommercialChanges, type CommercialAcceptanceResult } from '@/app/actions/logistica/sales-order-preparation-commercial-acceptance'
 import { generatePreparationOrdersPdf, openPreparationOrdersPdf } from '@/lib/pdf/generate-preparation-orders-pdf'
 import { Fragment, useState, useEffect } from 'react'
 import { MOVEMENT_RULES } from './movement-rules'
@@ -9,6 +10,8 @@ import { parseDateOnly } from './preparation-board-utils'
 import { PREPARATION_INCIDENT_REASONS } from './preparation-incidents'
 import { getPreparationLineValidation } from './preparation-line-validation'
 import { canClaimPreparation as canClaimPreparationView, canTakeoverPreparation as canTakeoverPreparationView, isPreparationLockError, isPreparationReadOnly } from './preparation-lock-policy'
+import { PreparationCommercialChangeAlert, PreparationCommercialPreparationNote } from './preparation-commercial-change-alert'
+import type { PreparationCommercialAlert } from '@/app/actions/logistica/sales-order-preparation-commercial'
 
 interface SalesOrderDrawerProps {
   card: SalesOrderPreparationCardInfo | null
@@ -27,6 +30,8 @@ interface SalesOrderDrawerProps {
   onOwnershipConflict: () => void | Promise<void>
   onClose: () => void
   onTransition: (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string) => Promise<{ ok: boolean; error?: string }>
+  commercialAlert?: PreparationCommercialAlert | null
+  onCommercialAcceptanceSuccess?: (cardId: string) => void
 }
 
 const statusLabel = (status: string) => status === 'PENDING_ROUTE_PREP' ? 'Pendiente' : status === 'IN_PREPARATION' ? 'En preparación' : status === 'IN_AUDIT' ? 'En auditoría' : status === 'AUDITED' ? 'Auditada' : 'Estado operativo'
@@ -104,6 +109,8 @@ export function SalesOrderDrawer({
   onOwnershipConflict,
   onClose,
   onTransition,
+  commercialAlert = null,
+  onCommercialAcceptanceSuccess,
 }: SalesOrderDrawerProps) {
   const [fallbackClientData, setFallbackClientData] = useState<SalesOrderClientData | null>(null)
   const clientData = clientDataProp !== undefined ? clientDataProp : fallbackClientData
@@ -126,9 +133,11 @@ export function SalesOrderDrawer({
   const [savingLineId, setSavingLineId] = useState<string | null>(null)
   const [isTakingPreparation, setIsTakingPreparation] = useState(false)
   const [auditSummaryOpen, setAuditSummaryOpen] = useState(false)
+  const [isAcceptingCommercialChanges, setIsAcceptingCommercialChanges] = useState(false)
+  const [commercialAcceptanceError, setCommercialAcceptanceError] = useState<string | null>(null)
 
   // Solo consulta cliente si el padre no lo entregó ya precargado.
-  /* eslint-disable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     let cancelled = false
     if (clientDataProp !== undefined) return
@@ -166,8 +175,10 @@ export function SalesOrderDrawer({
     setIncidentLine(null)
     setIsTakingPreparation(false)
     setAuditSummaryOpen(false)
+    setIsAcceptingCommercialChanges(false)
+    setCommercialAcceptanceError(null)
   }, [card?.card_id])
-  /* eslint-enable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const handleMovementsToggle = (e: React.SyntheticEvent<HTMLDetailsElement>) => {
     const isOpen = e.currentTarget.open
@@ -202,6 +213,54 @@ export function SalesOrderDrawer({
       await onTakePreparation(card)
     } finally {
       setIsTakingPreparation(false)
+    }
+  }
+
+  const commercialAcceptanceMessage = (result: CommercialAcceptanceResult): string => {
+    if (result.status === 'VERSION_CHANGED') return 'La Nota de Venta cambió mientras la revisabas. Vuelve a revisar las diferencias.'
+    if (result.status === 'REQUIRES_RESOLUTION') return result.detail || 'Hay un conflicto operativo que debe resolverse antes de aceptar.'
+    if (result.status === 'AMBIGUOUS') return result.detail || 'No se pudo confirmar con seguridad la identidad comercial.'
+    if (result.status === 'UNAVAILABLE') return result.detail || 'Bsale no está disponible. La alerta se conservará.'
+    if (result.status === 'INVALID_STATUS') return 'La tarjeta ya no está En preparación.'
+    return result.detail || 'No se pudieron aceptar los cambios comerciales.'
+  }
+
+  const handleCommercialAcceptance = async () => {
+    if (
+      isAcceptingCommercialChanges
+      || commercialAlert?.status !== 'CHANGED'
+      || !commercialAlert.currentFingerprint
+      || isReadOnly
+    ) return
+
+    setIsAcceptingCommercialChanges(true)
+    setCommercialAcceptanceError(null)
+    try {
+      const result = await acceptSalesOrderPreparationCommercialChanges({
+        cardId: card.card_id,
+        expectedCommercialFingerprint: commercialAlert.currentFingerprint,
+      })
+      if (result.status !== 'ACCEPTED' && result.status !== 'ALREADY_ACCEPTED') {
+        setCommercialAcceptanceError(commercialAcceptanceMessage(result))
+        if (/COMMERCIAL_ACCEPTANCE_LOCK|COMMERCIAL_ACCEPTANCE_ACTOR_MISMATCH/i.test(result.detail ?? '')) {
+          void onOwnershipConflict()
+        } else {
+          reportLockConflict(result.detail)
+        }
+        return
+      }
+
+      const lines = await getSalesOrderPreparationLines(card.company_id, card.card_id)
+      if (lines.error) {
+        setCommercialAcceptanceError(`Cambios aceptados, pero no se pudo actualizar la preparación: ${lines.error}`)
+        return
+      }
+      onPreparationLinesChange(lines.data)
+      onCommercialAcceptanceSuccess?.(card.card_id)
+    } catch (error) {
+      setCommercialAcceptanceError(error instanceof Error ? error.message : 'No se pudieron aceptar los cambios comerciales.')
+    } finally {
+      setIsAcceptingCommercialChanges(false)
     }
   }
 
@@ -472,6 +531,7 @@ export function SalesOrderDrawer({
         </header>
 
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-4 lg:p-5">
+          {commercialAlert && <div className="mb-3"><PreparationCommercialChangeAlert alert={commercialAlert} /></div>}
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_340px] 2xl:grid-cols-[minmax(0,1fr)_360px]">
             <section className="min-w-0 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -481,6 +541,8 @@ export function SalesOrderDrawer({
                 </h3>
                 <span className="text-[11px] font-semibold text-theme-text-muted">Neto: <strong className="text-theme-text">{netLabel}</strong></span>
               </div>
+
+              <PreparationCommercialPreparationNote alert={commercialAlert} />
 
               <div className="overflow-x-auto rounded-lg border border-[#DDD4CA] bg-white shadow-xs">
                 <table className={`w-full border-collapse text-left ${isPreparation ? 'min-w-[860px]' : 'min-w-[620px]'}`}>
@@ -667,6 +729,25 @@ export function SalesOrderDrawer({
                         {isTakingPreparation ? 'Tomando…' : 'Tomar preparación'}
                       </button>
                     )}
+                  </div>
+                )}
+
+                {isPreparation && commercialAlert?.status === 'CHANGED' && (
+                  <div className="rounded-md border border-red-200 bg-red-50 px-2.5 py-2">
+                    <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-red-950">
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" /> Revisión comercial pendiente
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void handleCommercialAcceptance()}
+                      disabled={isAcceptingCommercialChanges || isReadOnly || !commercialAlert.currentFingerprint}
+                      className="mt-2 flex w-full items-center justify-center gap-1.5 rounded bg-[#72383D] px-2.5 py-2 text-[11px] font-bold text-white transition-colors hover:bg-[#612F34] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {isAcceptingCommercialChanges ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                      {isAcceptingCommercialChanges ? 'Aceptando cambios…' : 'Aceptar cambios'}
+                    </button>
+                    {isReadOnly && <p className="mt-1 text-[10px] text-red-900/70">Debes tener el bloqueo de la preparación para aceptar.</p>}
+                    {commercialAcceptanceError && <p role="alert" className="mt-2 text-[10px] font-medium text-red-900">{commercialAcceptanceError}</p>}
                   </div>
                 )}
 
