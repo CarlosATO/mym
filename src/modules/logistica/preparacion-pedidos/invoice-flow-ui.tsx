@@ -249,12 +249,20 @@ export function InvoiceReviewModal({
   )
 }
 
-export function InvoiceConfirmationModal({ open, snapshot, onOpenChange, onEmissionBlocked, onConfirm, resetAfterMs }: { open: boolean; snapshot: InvoiceReviewSnapshot | null; onOpenChange: (open: boolean) => void; onEmissionBlocked: () => void; onConfirm?: () => Promise<InvoiceEmissionUiResult>; resetAfterMs?: number }) {
+type InvoiceCommercialDiagnosticResult = {
+  data: { readErrors?: { client: { code: string | null; isRls: boolean }; syncedClient: { code: string | null; isRls: boolean } }; validation: { requiredFields: Array<{ name: string; actual: unknown; result: boolean }>; commercialPredicates: Array<{ name: string; actual: unknown; result: boolean }>; commercialBlockTriggered: boolean } } | null
+  error: string | null
+}
+
+export function InvoiceConfirmationModal({ open, snapshot, onOpenChange, onEmissionBlocked, onConfirm, onDiagnose, diagnosticEnabled = false, diagnosticUnavailableReason, resetAfterMs }: { open: boolean; snapshot: InvoiceReviewSnapshot | null; onOpenChange: (open: boolean) => void; onEmissionBlocked: () => void; onConfirm?: () => Promise<InvoiceEmissionUiResult>; onDiagnose?: () => Promise<InvoiceCommercialDiagnosticResult>; diagnosticEnabled?: boolean; diagnosticUnavailableReason?: string; resetAfterMs?: number }) {
   const [submitting, setSubmitting] = useState(false)
   const [blocked, setBlocked] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [diagnostic, setDiagnostic] = useState<InvoiceCommercialDiagnosticResult['data']>(null)
+  const [diagnosticError, setDiagnosticError] = useState<string | null>(null)
+  const [diagnosing, setDiagnosing] = useState(false)
   const submittingRef = useRef(false)
-  useEffect(() => { submittingRef.current = false; setSubmitting(false); setBlocked(false); setErrorMessage(null) }, [snapshot?.card_id])
+  useEffect(() => { submittingRef.current = false; setSubmitting(false); setBlocked(false); setErrorMessage(null); setDiagnostic(null); setDiagnosticError(null); setDiagnosing(false) }, [snapshot?.card_id])
   if (!snapshot) return null
   const handleSubmit = async () => {
     if (submittingRef.current || blocked) return
@@ -282,11 +290,27 @@ export function InvoiceConfirmationModal({ open, snapshot, onOpenChange, onEmiss
       }
     }
   }
+  const handleDiagnostic = async () => {
+    if (!onDiagnose || diagnosing) return
+    setDiagnosing(true)
+    setDiagnostic(null)
+    setDiagnosticError(null)
+    try {
+      const result = await onDiagnose()
+      setDiagnostic(result.data)
+      setDiagnosticError(result.error)
+    } catch (error) {
+      setDiagnosticError(error instanceof Error ? error.message : 'No fue posible ejecutar el diagnóstico.')
+    } finally {
+      setDiagnosing(false)
+    }
+  }
   return <Dialog open={open} onOpenChange={next => { if (!submitting && !blocked) onOpenChange(next) }}>
     <DialogContent className="w-[calc(100vw-2rem)] max-w-lg border-[#DDD4CA] bg-[#FCFAF7] text-[#322D29]">
       <DialogHeader><DialogTitle>Confirmar facturación real</DialogTitle><DialogDescription>Está a punto de realizar una facturación real para el cliente {snapshot.client_name} por un monto de {formatInvoiceClp(snapshot.total_amount)} correspondiente a la NV #{snapshot.folio}. ¿Está seguro de continuar?</DialogDescription></DialogHeader>
        <div className="rounded-md border border-[#E5DDD5] bg-white px-3 py-2 text-xs"><p><strong>NV:</strong> #{snapshot.folio}</p><p><strong>Cliente:</strong> {snapshot.client_name}</p><p><strong>Monto:</strong> {formatInvoiceClp(snapshot.total_amount)}</p></div>
-        {snapshot.commercial_selection && <div className="rounded-md border border-[#E5DDD5] bg-white px-3 py-2 text-xs"><p><strong>Forma de pago:</strong> {snapshot.payment_type_options.find(option => option.bsale_id === snapshot.commercial_selection?.payment_type_id)?.name ?? 'No seleccionada'}</p><p><strong>Condición:</strong> {snapshot.sale_condition_options.find(option => option.bsale_id === snapshot.commercial_selection?.sale_condition_id)?.name ?? 'No seleccionada'}</p><p><strong>Vencimiento:</strong> {formatInvoiceDate(snapshot.commercial_selection.expiration_date)}</p></div>}
+         {snapshot.commercial_selection && <div className="rounded-md border border-[#E5DDD5] bg-white px-3 py-2 text-xs"><p><strong>Forma de pago:</strong> {snapshot.payment_type_options.find(option => option.bsale_id === snapshot.commercial_selection?.payment_type_id)?.name ?? 'No seleccionada'}</p><p><strong>Condición:</strong> {snapshot.sale_condition_options.find(option => option.bsale_id === snapshot.commercial_selection?.sale_condition_id)?.name ?? 'No seleccionada'}</p><p><strong>Vencimiento:</strong> {formatInvoiceDate(snapshot.commercial_selection.expiration_date)}</p></div>}
+         {diagnosticUnavailableReason && <div className="rounded-md border border-sky-200 bg-sky-50/60 px-3 py-2 text-xs"><Button type="button" variant="outline" size="sm" disabled={!diagnosticEnabled || diagnosing || submitting || blocked} onClick={handleDiagnostic} className="border-sky-300 text-sky-900">{diagnosing ? 'Diagnosticando…' : 'Diagnosticar sin emitir'}</Button>{!diagnosticEnabled && <p className="mt-2 text-sky-900">{diagnosticUnavailableReason}</p>}{diagnosticError && <p className="mt-2 text-rose-800">Error diagnóstico: {diagnosticError}</p>}{diagnostic && <div className="mt-2 space-y-1 font-mono text-[10px] text-sky-950"><p><strong>clientError:</strong> {diagnostic.readErrors?.client.code ?? 'none'} · RLS={String(diagnostic.readErrors?.client.isRls ?? false)}</p><p><strong>syncedClientError:</strong> {diagnostic.readErrors?.syncedClient.code ?? 'none'} · RLS={String(diagnostic.readErrors?.syncedClient.isRls ?? false)}</p><p><strong>commercialBlockTriggered:</strong> {String(diagnostic.validation.commercialBlockTriggered)}</p>{[...diagnostic.validation.requiredFields, ...diagnostic.validation.commercialPredicates].map(predicate => <p key={predicate.name}><strong>{predicate.name}:</strong> {String(predicate.result)} · {JSON.stringify(predicate.actual)}</p>)}</div>}</div>}
         {errorMessage && <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-950"><p>{errorMessage}</p>{blocked && <p className="mt-1 font-semibold">La emisión queda bloqueada hasta reconciliar el intento existente.</p>}</div>}
        <DialogFooter><Button variant="outline" disabled={submitting || blocked} onClick={() => onOpenChange(false)}>Cancelar</Button><Button disabled={submitting || blocked} onClick={handleSubmit} className="bg-[#72383D] text-white hover:bg-[#612F34]">{submitting ? 'Emitiendo factura…' : blocked ? 'Reconciliación requerida' : 'Emitir factura'}</Button></DialogFooter>
     </DialogContent>

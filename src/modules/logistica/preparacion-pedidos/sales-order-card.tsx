@@ -8,6 +8,8 @@ import { useDraggable } from '@dnd-kit/core'
 import { formatPreparationClp, getPreparationCardAmount, getPreparationComuna, parseDateOnly } from './preparation-board-utils'
 import { getPreparationLockLabel } from './preparation-lock-policy'
 import { getPreparationReadinessLabel, type PreparationReadinessLoadState, type PreparationRouteReadiness } from './preparation-route-readiness'
+import { PreparationCommercialChangeAlert } from './preparation-commercial-change-alert'
+import type { PreparationCommercialAlert } from '@/app/actions/logistica/sales-order-preparation-commercial'
 
 export type SalesOrderCardAuditLock = {
   locked_by_user_id: string | null
@@ -36,6 +38,7 @@ interface SalesOrderCardProps {
   onInvoice?: () => void
   invoiceDocuments?: InvoiceDocumentPreview[]
   onViewInvoice?: () => void
+  commercialAlert?: PreparationCommercialAlert | null
 }
 
 function formatShortDate(value: string | null): string | null {
@@ -75,6 +78,7 @@ export function SalesOrderCard({
   onInvoice,
   invoiceDocuments = [],
   onViewInvoice,
+  commercialAlert = null,
 }: SalesOrderCardProps) {
   const routeDate = formatShortDate(card.route_date)
   const routeFullDate = formatFullDate(card.route_date)
@@ -125,6 +129,7 @@ export function SalesOrderCard({
       ? 'text-[#5B4A78]'
       : 'text-[#806238]'
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null)
+  const hasCommercialChange = commercialAlert?.status === 'CHANGED'
 
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: card.card_id,
@@ -156,12 +161,14 @@ export function SalesOrderCard({
     wrapperClasses += "pointer-events-none shadow-xl ring-2 ring-[#72383D] rotate-1 scale-[1.02] "
   } else if (isDragging) {
     wrapperClasses += "cursor-grabbing opacity-40 shadow-sm border-[#D1C7BD] "
-  } else if (selected) {
+  } else if (selected && !hasCommercialChange) {
     wrapperClasses += "cursor-pointer border-[#72383D] bg-[#FCF8F5] ring-1 ring-[#72383D]/40 shadow-xs "
   } else {
     wrapperClasses += `${isPending ? 'cursor-wait opacity-60 ' : 'cursor-pointer '}`
     wrapperClasses += isFinalized
       ? 'border-emerald-200 bg-[#F7FBF7] shadow-xs hover:border-emerald-300 hover:shadow-sm '
+      : hasCommercialChange
+        ? 'border-red-500 bg-red-50/90 shadow-sm ring-2 ring-red-400/60 hover:border-red-600 animate-pulse motion-reduce:animate-none '
       : 'border-[#D8CFC5] shadow-xs hover:border-[#72383D]/70 hover:shadow-sm '
   }
 
@@ -230,6 +237,8 @@ export function SalesOrderCard({
       >
         {card.client_name}
       </p>
+
+      {!isOverlay && <div className="mt-1.5"><PreparationCommercialChangeAlert alert={commercialAlert} compact /></div>}
 
       <div className="mt-1 flex items-center justify-between gap-2">
         <span className="min-w-0 truncate text-[10px] font-medium text-[#322D29]/55" title={`${comuna} · ${primaryDate.title}`}>

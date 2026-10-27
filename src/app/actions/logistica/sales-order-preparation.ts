@@ -8,6 +8,7 @@ import { decidePreparationSync } from '@/modules/logistica/preparacion-pedidos/p
 import type { InvoicePaymentTypeOption, InvoiceSaleConditionOption } from '@/modules/logistica/preparacion-pedidos/invoice-commercial'
 import { chileToday } from '@/lib/integraciones/invoice-emission-contract'
 import { extractBsaleRelationIdFromHref } from '@/lib/integraciones/bsale-client-commercial-normalization'
+import { getSafeHttpsHostname, validateBsalePdfResponseUrl, validateBsalePdfUrl, validateBsaleRedirectUrl } from '@/lib/integraciones/invoice-print-assistant'
 
 function logPreparationDiagnostics(label: string, detail: Record<string, unknown>) {
   if (process.env.NODE_ENV !== 'production') {
@@ -518,6 +519,116 @@ export type InvoiceDocumentPreviewReadModel = {
   related_detail_ids: number[]
 }
 
+export type DevelopmentInvoicePrintDocument = {
+  invoice_bsale_id: number
+  invoice_folio: string
+  pdf_url: string | null
+  official_url: string | null
+  status: 'CONFIRMED' | 'CANCELLED' | 'UNKNOWN'
+}
+
+export type DevelopmentInvoicePrintPdf = DevelopmentInvoicePrintDocument & {
+  pdf_base64: string
+  byte_length: number
+}
+
+/** Development-only read path for manually testing the print assistant. It never creates an attempt. */
+export async function getDevelopmentInvoicePrintDocument(invoiceFolio: string): Promise<{ data: DevelopmentInvoicePrintDocument | null; error: string | null }> {
+  if (process.env.NODE_ENV !== 'development') return { data: null, error: 'Esta lectura sólo está disponible en desarrollo local.' }
+
+  const normalizedFolio = invoiceFolio.trim()
+  if (!/^\d+$/.test(normalizedFolio)) return { data: null, error: 'Ingresa un folio de factura válido.' }
+
+  const { supabase, error: permissionError } = await requireLogisticaView()
+  if (permissionError) return { data: null, error: permissionError }
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { data: null, error: 'No se pudo determinar la empresa activa.' }
+
+  const { data: document, error } = await supabase
+    .schema('integraciones')
+    .from('bsale_documents')
+    .select('bsale_id, number, state, document_type_id, url_pdf, raw_json')
+    .eq('company_id', companyId)
+    .eq('document_type_id', 5)
+    .eq('number', normalizedFolio)
+    .maybeSingle()
+  if (error) return { data: null, error: error.message }
+  if (!document) return { data: null, error: `No se encontró la factura N.º ${normalizedFolio}.` }
+
+  const raw = document.raw_json && typeof document.raw_json === 'object'
+    ? document.raw_json as Record<string, unknown>
+    : {}
+  const readUrl = (...keys: string[]) => keys
+    .map(key => raw[key])
+    .find(value => typeof value === 'string' && value.trim()) as string | undefined
+  const status = Number(document.state) === 0 ? 'CONFIRMED' : Number(document.state) === 1 ? 'CANCELLED' : 'UNKNOWN'
+  return {
+    data: {
+      invoice_bsale_id: Number(document.bsale_id),
+      invoice_folio: String(document.number ?? normalizedFolio),
+      pdf_url: readUrl('urlPdf', 'urlPdfOriginal') ?? document.url_pdf ?? null,
+      official_url: readUrl('urlPublicView', 'urlPublicViewOriginal') ?? null,
+      status,
+    },
+    error: null,
+  }
+}
+
+/** Development-only authenticated PDF read. It never accepts arbitrary URLs or writes data. */
+export async function getDevelopmentInvoicePrintPdf(invoiceFolio: string): Promise<{ data: DevelopmentInvoicePrintPdf | null; error: string | null }> {
+  if (process.env.NODE_ENV !== 'development') return { data: null, error: 'Esta lectura sólo está disponible en desarrollo local.' }
+
+  const documentResult = await getDevelopmentInvoicePrintDocument(invoiceFolio)
+  if (documentResult.error || !documentResult.data) return { data: null, error: documentResult.error ?? 'No se encontró el documento.' }
+  if (documentResult.data.status !== 'CONFIRMED') return { data: null, error: 'El documento no está confirmado.' }
+  const pdfUrl = validateBsalePdfUrl(documentResult.data.pdf_url)
+  if (!pdfUrl) return { data: null, error: 'El documento no contiene una URL PDF HTTPS oficial de Bsale.' }
+
+  const maxRedirects = 3
+  let currentUrl = pdfUrl
+  let response: Response | null = null
+  for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
+    response = await fetch(currentUrl, { redirect: 'manual', cache: 'no-store' })
+    if (response.status < 300 || response.status >= 400) break
+    const location = response.headers.get('location')
+    let redirectUrl: string | null = null
+    try {
+      redirectUrl = location ? new URL(location, currentUrl).href : null
+    } catch {
+      redirectUrl = null
+    }
+    const validatedRedirect = redirectUrl ? validateBsaleRedirectUrl(redirectUrl) : null
+    if (!validatedRedirect) {
+      const hostname = redirectUrl ? new URL(redirectUrl).hostname.toLowerCase() : 'ausente'
+      if (process.env.NODE_ENV === 'development') console.debug('[invoice-print][redirect-rejected]', { status: response.status, hostname })
+      return { data: null, error: `Bsale redirigió a un destino no autorizado (HTTP ${response.status}, host ${hostname}).` }
+    }
+    if (process.env.NODE_ENV === 'development') console.debug('[invoice-print][redirect]', { status: response.status, hostname: getSafeHttpsHostname(validatedRedirect) })
+    if (redirectCount === maxRedirects) {
+      return { data: null, error: `Bsale superó el máximo de redirecciones permitidas (último host ${getSafeHttpsHostname(validatedRedirect) ?? 'no autorizado'}).` }
+    }
+    currentUrl = validatedRedirect
+  }
+  if (!response) return { data: null, error: 'No se recibió respuesta al descargar el PDF.' }
+  if (!response.ok) return { data: null, error: `Bsale respondió HTTP ${response.status}.` }
+  if (response.status !== 200) return { data: null, error: `Bsale respondió HTTP ${response.status} en el destino final.` }
+  if (!validateBsalePdfResponseUrl(pdfUrl, response.url)) return { data: null, error: `Bsale respondió desde un destino no autorizado (HTTP ${response.status}, host ${getSafeHttpsHostname(response.url) ?? 'no autorizado'}).` }
+  const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
+  const declaredLength = Number(response.headers.get('content-length') ?? 0)
+  const maxBytes = 12 * 1024 * 1024
+  if (declaredLength > maxBytes) return { data: null, error: 'El PDF supera el tamaño máximo permitido para esta prueba.' }
+  if (contentType && !contentType.includes('application/pdf')) return { data: null, error: 'Bsale no devolvió un PDF.' }
+
+  const bytes = new Uint8Array(await response.arrayBuffer())
+  if (bytes.byteLength === 0 || bytes.byteLength > maxBytes) return { data: null, error: 'El PDF está vacío o supera el tamaño máximo permitido.' }
+  const signature = new TextDecoder().decode(bytes.slice(0, 5))
+  if (signature !== '%PDF-') return { data: null, error: 'La respuesta no tiene firma PDF válida.' }
+  return {
+    data: { ...documentResult.data, pdf_base64: Buffer.from(bytes).toString('base64'), byte_length: bytes.byteLength },
+    error: null,
+  }
+}
+
 function readRawDocumentUrl(rawJson: unknown, ...keys: string[]): string | null {
   if (!rawJson || typeof rawJson !== 'object') return null
   const raw = rawJson as Record<string, unknown>
@@ -796,6 +907,7 @@ export async function getSalesOrderPreparationLines(
     .select('*')
     .eq('company_id', companyId)
     .eq('card_id', cardId)
+    .is('retired_at', null)
     .order('bsale_detail_id', { ascending: true })
   const readMs = performance.now() - readStartedAt
 

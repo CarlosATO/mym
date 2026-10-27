@@ -79,6 +79,23 @@ import { createInvoiceDocumentCache, getInvoiceDocumentCacheKey, invalidateInvoi
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { getActiveCompanyId } from '@/app/actions/companies'
 import { emitSalesOrderInvoice } from '@/app/actions/logistica/sales-order-invoice-attempts'
+import { diagnoseSalesOrderInvoiceCommercial } from '@/app/actions/logistica/sales-order-invoice-diagnostics'
+
+const LOCAL_INVOICE_DIAGNOSTIC_CARD_ID = '0cfe3c69-baa7-44ec-95d8-649658343f95'
+
+function isLocalInvoiceDiagnosticTarget(snapshot: InvoiceReviewSnapshot | null): boolean {
+  return process.env.NODE_ENV === 'development'
+    && String(snapshot?.folio ?? '').trim() === '5061'
+    && String(snapshot?.card_id ?? '').trim().toLowerCase() === LOCAL_INVOICE_DIAGNOSTIC_CARD_ID
+}
+
+function getLocalInvoiceDiagnosticState(snapshot: InvoiceReviewSnapshot | null): { enabled: boolean; reason: string } {
+  if (process.env.NODE_ENV !== 'development') return { enabled: false, reason: 'Sólo disponible en desarrollo local.' }
+  if (!snapshot) return { enabled: false, reason: 'No hay una NV activa.' }
+  if (String(snapshot.folio ?? '').trim() !== '5061') return { enabled: false, reason: `Disponible sólo para la NV 5061 (NV actual: ${String(snapshot.folio ?? 'sin folio')}).` }
+  if (String(snapshot.card_id).trim().toLowerCase() !== LOCAL_INVOICE_DIAGNOSTIC_CARD_ID) return { enabled: false, reason: 'La card activa no corresponde a la NV 5061 autorizada para este diagnóstico.' }
+  return { enabled: true, reason: 'Diagnóstico de sólo lectura para la NV 5061.' }
+}
 import { getSalesOrderAuditBoardLocks, type AuditBoardLock, type SalesOrderAuditFinalizeResult } from '@/app/actions/logistica/sales-order-audit'
 import { getSalesOrderPreparationMissingCostLinesV1, getSalesOrderPreparationProfitabilitySummaryV1 } from '@/app/actions/logistica/sales-order-preparation-profitability'
 import {
@@ -103,6 +120,8 @@ import { PreparationCommercialIncidentsDialog } from './preparation-commercial-i
 import { getPreparationColumnId, type PreparationReadinessLoadState } from './preparation-route-readiness'
 import { buildInvoiceDraftPayload, type InvoiceCommercialSelection } from './invoice-commercial'
 import { getPreparationLineValidation } from './preparation-line-validation'
+import { usePreparationCommercialAlerts } from './use-preparation-commercial-alerts'
+import type { PreparationCommercialAlert } from '@/app/actions/logistica/sales-order-preparation-commercial'
 
 type KanbanColumn = {
   id: string
@@ -243,6 +262,7 @@ function DroppableColumn({
   onViewInvoice,
   getInvoiceDocuments,
   columnAmount,
+  commercialAlerts,
 }: {
   col: KanbanColumn
   colCards: SalesOrderPreparationCardInfo[]
@@ -262,6 +282,7 @@ function DroppableColumn({
   onViewInvoice: (card: SalesOrderPreparationCardInfo) => void
   getInvoiceDocuments: (card: SalesOrderPreparationCardInfo) => InvoiceDocumentPreview[]
   columnAmount: number
+  commercialAlerts: Record<string, PreparationCommercialAlert>
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: col.id,
@@ -326,8 +347,9 @@ function DroppableColumn({
                 openCommercialIncidentCount={readinessByCardId[card.card_id]?.open_commercial_incident_count ?? 0}
                 onOpenCommercialIncidents={() => onOpenCommercialIncidents(card)}
                 onInvoice={() => onInvoice(card)}
-                invoiceDocuments={getInvoiceDocuments(card)}
-                onViewInvoice={() => onViewInvoice(card)}
+                 invoiceDocuments={getInvoiceDocuments(card)}
+                 onViewInvoice={() => onViewInvoice(card)}
+                 commercialAlert={commercialAlerts[card.card_id] ?? null}
                 dragDisabled={card.status === 'AUDITED' || card.status === 'INVOICED_READY_FOR_ROUTE' || isPreparationReadOnly({
                   status: card.status,
                   currentUserId,
@@ -362,6 +384,7 @@ export function SalesOrderPreparationPanel({
 
   const [companyId, setCompanyId] = useState<string | null>(null)
   const [cards, setCards] = useState<SalesOrderPreparationCardInfo[]>([])
+  const { alerts: commercialAlerts, clearCard: clearCommercialAlert } = usePreparationCommercialAlerts(cards)
   const [readinessByCardId, setReadinessByCardId] = useState<Record<string, SalesOrderRouteReadiness>>({})
   const [readinessState, setReadinessState] = useState<PreparationReadinessLoadState>('loading')
   const [readinessVersion, setReadinessVersion] = useState(0)
@@ -1241,6 +1264,7 @@ export function SalesOrderPreparationPanel({
     const snapshot = invoiceReviewSnapshot
     if (!snapshot) return { status: 'PREVALIDATION_FAILED', error: 'No hay una revisión de facturación activa.' }
 
+    // Se prepara en el gesto del operador; la URL sólo se asigna después de CONFIRMED.
     const printWindow = prepareInvoicePrintWindow(url => window.open(url, '_blank'))
     setInvoicePrintWindowStatus(printWindow, 'Esperando confirmación de la factura', 'La ventana permanecerá abierta hasta que Bsale y el registro interno confirmen el documento.')
     let result
@@ -1248,7 +1272,7 @@ export function SalesOrderPreparationPanel({
       result = await emitSalesOrderInvoice(snapshot.card_id, snapshot.commercial_selection)
     } catch (error) {
       setInvoicePrintWindowStatus(printWindow, 'No se pudo confirmar la factura', error instanceof Error ? error.message : 'La emisión terminó con un error inesperado.')
-      try { if (printWindow && !printWindow.closed) printWindow.close() } catch { /* ventana ya cerrada */ }
+      closePrintWindow(printWindow)
       throw error
     }
     if (result.status === 'CONFIRMED') {
@@ -1261,21 +1285,48 @@ export function SalesOrderPreparationPanel({
         toast.info(`Chrome no abrió automáticamente el diálogo de impresión: ${message}`)
       })
       const validatedPdfUrl = validateBsalePdfUrl(urls?.pdf)
-      if (!validatedPdfUrl) {
-        try { if (printWindow && !printWindow.closed) printWindow.close() } catch { /* ventana ya cerrada */ }
-      }
+      if (!validatedPdfUrl) closePrintWindow(printWindow)
       if (!printResult.opened || !validatedPdfUrl) {
         toast.info(validatedPdfUrl
           ? 'Factura confirmada. El navegador bloqueó la ventana del PDF.'
           : 'Factura confirmada, pero Bsale no entregó una URL PDF HTTPS válida.')
+        if (validatedPdfUrl) {
+          toast.info('Puedes abrir e imprimir el PDF oficial desde esta misma vista.', {
+            action: {
+              label: 'Imprimir factura',
+              onClick: () => {
+                const manualWindow = window.open(validatedPdfUrl, '_blank')
+                if (manualWindow) openConfirmedInvoicePdf(manualWindow, validatedPdfUrl)
+              },
+            },
+          })
+        }
+      } else {
+        toast.info('PDF oficial abierto. Chrome puede requerir confirmar la impresión.', {
+          action: {
+            label: 'Imprimir factura',
+            onClick: () => openConfirmedInvoicePdf(printWindow, validatedPdfUrl),
+          },
+        })
       }
       await loadBoard({ showSpinner: false })
     } else {
       setInvoicePrintWindowStatus(printWindow, 'No se inició la impresión', result.error ?? `La emisión terminó con estado ${result.status}.`)
-      try { if (printWindow && !printWindow.closed) printWindow.close() } catch { /* ventana ya cerrada */ }
+      closePrintWindow(printWindow)
     }
     return result
   }
+
+  const diagnoseInvoiceCommercial = async () => {
+    const snapshot = invoiceReviewSnapshot
+    if (!snapshot || !isLocalInvoiceDiagnosticTarget(snapshot)) {
+      return { data: null, error: 'El diagnóstico sólo está disponible para la NV 5061 vigente.' }
+    }
+    const result = await diagnoseSalesOrderInvoiceCommercial(snapshot.card_id, snapshot.commercial_selection ?? null)
+    return { data: result.data, error: result.error }
+  }
+
+  const localInvoiceDiagnosticState = getLocalInvoiceDiagnosticState(invoiceReviewSnapshot)
 
   const openCommercialIncidents = async (card: SalesOrderPreparationCardInfo) => {
     if (!companyId || card.status !== 'AUDITED') return
@@ -1384,6 +1435,10 @@ export function SalesOrderPreparationPanel({
   const handlePreparationLineChange = (line: SalesOrderPreparationLine) => {
     setSelectedPreparationLines(current => current.map(existing => existing.id === line.id ? line : existing))
     patchPreparationLine(preparationLinesCacheRef.current, line)
+  }
+
+  const handleCommercialAcceptanceSuccess = (cardId: string) => {
+    clearCommercialAlert(cardId)
   }
 
   const transitionCard = async (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string): Promise<{ ok: boolean; error?: string }> => {
@@ -2296,7 +2351,8 @@ export function SalesOrderPreparationPanel({
                            onOpenCommercialIncidents={openCommercialIncidents}
                            onInvoice={openInvoiceReview}
                            onViewInvoice={openInvoiceDocuments}
-                           getInvoiceDocuments={card => invoiceDocumentCacheRef.current.get(getInvoiceDocumentCacheKey(card.card_id, card.nv_bsale_id))?.documents ?? []}
+                         getInvoiceDocuments={card => invoiceDocumentCacheRef.current.get(getInvoiceDocumentCacheKey(card.card_id, card.nv_bsale_id))?.documents ?? []}
+                         commercialAlerts={commercialAlerts}
                         />
                      )
                   })}
@@ -2312,7 +2368,8 @@ export function SalesOrderPreparationPanel({
                       auditLock={auditLocks[activeCard.card_id] ?? null}
                       routeReadiness={readinessByCardId[activeCard.card_id]?.route_readiness ?? null}
                       readinessState={readinessState}
-                      openCommercialIncidentCount={readinessByCardId[activeCard.card_id]?.open_commercial_incident_count ?? 0}
+                       openCommercialIncidentCount={readinessByCardId[activeCard.card_id]?.open_commercial_incident_count ?? 0}
+                       commercialAlert={commercialAlerts[activeCard.card_id] ?? null}
                     />
                 ) : null}
               </DragOverlay>
@@ -2350,8 +2407,10 @@ export function SalesOrderPreparationPanel({
           onTakePreparation={handleTakePreparation}
           onOwnershipConflict={handleOwnershipConflict}
           onClose={() => setSelectedCard(null)}
-          onTransition={transitionCard}
-        />
+           onTransition={transitionCard}
+           commercialAlert={selectedCard ? commercialAlerts[selectedCard.card_id] ?? null : null}
+           onCommercialAcceptanceSuccess={handleCommercialAcceptanceSuccess}
+          />
       )}
       
       <PreparationMissingCostDialog
@@ -2424,16 +2483,19 @@ export function SalesOrderPreparationPanel({
              })
            }
            setInvoiceReviewOpen(false)
-           setInvoiceConfirmationOpen(true)
-         }}
-         onConfigureClient={() => toast.info('Configure la forma de pago predeterminada desde Cliente 360.')}
+            setInvoiceConfirmationOpen(true)
+          }}
+           onConfigureClient={() => toast.info('Configure la forma de pago predeterminada desde Cliente 360.')}
       />
-       <InvoiceConfirmationModal
+        <InvoiceConfirmationModal
          open={invoiceConfirmationOpen}
          snapshot={invoiceReviewSnapshot}
-         onOpenChange={setInvoiceConfirmationOpen}
-         onConfirm={confirmInvoiceEmission}
-         onEmissionBlocked={() => toast.error('La emisión real está deshabilitada: contrato Bsale aún no habilitado.')}
+          onOpenChange={setInvoiceConfirmationOpen}
+          onConfirm={confirmInvoiceEmission}
+           diagnosticEnabled={localInvoiceDiagnosticState.enabled}
+           diagnosticUnavailableReason={process.env.NODE_ENV === 'development' ? localInvoiceDiagnosticState.reason : undefined}
+           onDiagnose={isLocalInvoiceDiagnosticTarget(invoiceReviewSnapshot) ? diagnoseInvoiceCommercial : undefined}
+          onEmissionBlocked={() => toast.error('La emisión real está deshabilitada: contrato Bsale aún no habilitado.')}
        />
       {invoiceDocuments.length > 0 && (
         <Dialog open onOpenChange={open => { if (!open) setInvoiceDocuments([]) }}>
