@@ -43,6 +43,7 @@
     "test:logistica-invoice-commercial": "node --experimental-strip-types --test scripts/test-logistica-invoice-commercial.mjs",
     "test:logistica-invoice-prefetch": "node --experimental-strip-types --test scripts/test-logistica-invoice-prefetch.mjs",
     "test:logistica-invoice-emission-mock": "node --experimental-strip-types --test scripts/test-logistica-invoice-emission-mock.mjs",
+    "test:logistica-invoice-print-assistant": "node --experimental-strip-types --test scripts/test-logistica-invoice-print-assistant.mjs",
     "test:logistica-route-invoice-read-model": "node --test scripts/test-logistica-route-invoice-read-model.mjs",
     "test:logistica-auditoria-base": "node --experimental-strip-types --test scripts/test-logistica-auditoria-base.mjs",
     "test:logistica-auditoria-ux": "node --experimental-strip-types --test scripts/test-logistica-auditoria-ux.mjs",

@@ -6,6 +6,14 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { calculateInvoiceExpirationDate, type InvoiceCommercialSelection, type InvoiceDraftPayload, type InvoicePaymentTypeOption, type InvoiceSaleConditionOption } from './invoice-commercial'
 
+export type InvoiceEmissionUiResult = {
+  status: string
+  error?: string | null
+  urls?: { pdf?: string | null; publicView?: string | null; xml?: string | null }
+  invoice_id?: number
+  folio?: string | number
+}
+
 export type InvoiceReviewLine = {
   detail_id: number
   sku: string | null
@@ -241,7 +249,7 @@ export function InvoiceReviewModal({
   )
 }
 
-export function InvoiceConfirmationModal({ open, snapshot, onOpenChange, onEmissionBlocked, onConfirm, resetAfterMs }: { open: boolean; snapshot: InvoiceReviewSnapshot | null; onOpenChange: (open: boolean) => void; onEmissionBlocked: () => void; onConfirm?: () => Promise<{ status: string; error?: string | null }>; resetAfterMs?: number }) {
+export function InvoiceConfirmationModal({ open, snapshot, onOpenChange, onEmissionBlocked, onConfirm, resetAfterMs }: { open: boolean; snapshot: InvoiceReviewSnapshot | null; onOpenChange: (open: boolean) => void; onEmissionBlocked: () => void; onConfirm?: () => Promise<InvoiceEmissionUiResult>; resetAfterMs?: number }) {
   const [submitting, setSubmitting] = useState(false)
   const [blocked, setBlocked] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)

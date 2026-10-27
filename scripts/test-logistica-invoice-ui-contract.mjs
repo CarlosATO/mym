@@ -7,6 +7,7 @@ const ui = fs.readFileSync(new URL('src/modules/logistica/preparacion-pedidos/in
 const panel = fs.readFileSync(new URL('src/modules/logistica/preparacion-pedidos/sales-order-preparation-panel.tsx', root), 'utf8')
 const previewPage = fs.readFileSync(new URL('src/app/dev/logistica/invoice-flow-preview/page.tsx', root), 'utf8')
 const preview = fs.readFileSync(new URL('src/modules/logistica/preparacion-pedidos/invoice-flow-preview.tsx', root), 'utf8')
+const printAssistant = fs.readFileSync(new URL('src/lib/integraciones/invoice-print-assistant.ts', root), 'utf8')
 const card = fs.readFileSync(new URL('src/modules/logistica/preparacion-pedidos/sales-order-card.tsx', root), 'utf8')
 const middleware = fs.readFileSync(new URL('src/middleware.ts', root), 'utf8')
 
@@ -88,4 +89,17 @@ test('preview is development-only, fixture-only and has no productive action imp
   assert.match(preview, /DEMO-NC-5032-A/)
   assert.match(preview, /documents\.length > 1/)
   assert.match(middleware, /invoice-flow-preview/)
+})
+
+test('production emission opens native printing only after confirmation', () => {
+  const emissionFlow = panel.slice(panel.indexOf('const confirmInvoiceEmission'), panel.indexOf('const openCommercialIncidents'))
+  assert.match(emissionFlow, /prepareInvoicePrintWindow/)
+  assert.match(emissionFlow, /Esperando confirmación de la factura/)
+  assert.match(emissionFlow, /emitSalesOrderInvoice\(snapshot\.card_id, snapshot\.commercial_selection\)/)
+  assert.match(emissionFlow, /if \(result\.status === 'CONFIRMED'\)/)
+  assert.match(emissionFlow, /openConfirmedInvoicePdf\(printWindow, urls\?\.pdf/)
+  assert.match(emissionFlow, /await loadBoard\(\{ showSpinner: false \}\)/)
+  assert.match(emissionFlow, /setInvoicePrintWindowStatus\(printWindow, 'No se inició la impresión'/)
+  assert.match(printAssistant, /validateBsalePdfUrl/)
+  assert.match(printAssistant, /windowTarget\.print\(\)/)
 })

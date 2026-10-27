@@ -72,7 +72,8 @@ import { getMovementRule } from './movement-rules'
 import { MovementObservationDialog } from './movement-observation-dialog'
 import { moveSalesOrderPreparationCard } from '@/app/actions/logistica/sales-order-preparation'
 import { toast } from 'sonner'
-import { CreditNoteConfirmationModal, InvoiceConfirmationModal, InvoiceDocumentsDetail, InvoiceReviewModal, type InvoiceDocumentPreview, type InvoiceReviewSnapshot } from './invoice-flow-ui'
+import { CreditNoteConfirmationModal, InvoiceConfirmationModal, InvoiceDocumentsDetail, InvoiceReviewModal, type InvoiceDocumentPreview, type InvoiceEmissionUiResult, type InvoiceReviewSnapshot } from './invoice-flow-ui'
+import { openConfirmedInvoicePdf, prepareInvoicePrintWindow, setInvoicePrintWindowStatus, validateBsalePdfUrl } from '@/lib/integraciones/invoice-print-assistant'
 import { createInvoicePreviewCache, getInvoicePreviewCacheKey, invalidateInvoicePreview, isInvoicePreviewFresh, type InvoicePreviewCache } from './invoice-preview-cache'
 import { createInvoiceDocumentCache, getInvoiceDocumentCacheKey, invalidateInvoiceDocuments, isInvoiceDocumentFresh, type InvoiceDocumentCache } from './invoice-document-cache'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -1236,19 +1237,44 @@ export function SalesOrderPreparationPanel({
     recordPreparationDuration('invoicePreviewOpen', performance.now() - startedAt)
   }
 
-  const confirmInvoiceEmission = async () => {
+  const confirmInvoiceEmission = async (): Promise<InvoiceEmissionUiResult> => {
     const snapshot = invoiceReviewSnapshot
     if (!snapshot) return { status: 'PREVALIDATION_FAILED', error: 'No hay una revisión de facturación activa.' }
 
-    const result = await emitSalesOrderInvoice(snapshot.card_id, snapshot.commercial_selection)
+    const printWindow = prepareInvoicePrintWindow(url => window.open(url, '_blank'))
+    setInvoicePrintWindowStatus(printWindow, 'Esperando confirmación de la factura', 'La ventana permanecerá abierta hasta que Bsale y el registro interno confirmen el documento.')
+    let result
+    try {
+      result = await emitSalesOrderInvoice(snapshot.card_id, snapshot.commercial_selection)
+    } catch (error) {
+      setInvoicePrintWindowStatus(printWindow, 'No se pudo confirmar la factura', error instanceof Error ? error.message : 'La emisión terminó con un error inesperado.')
+      try { if (printWindow && !printWindow.closed) printWindow.close() } catch { /* ventana ya cerrada */ }
+      throw error
+    }
     if (result.status === 'CONFIRMED') {
+      const urls = 'urls' in result ? result.urls : undefined
       invalidateInvoicePreview(invoicePreviewCacheRef.current, snapshot.card_id, snapshot.current_bsale_nv_id)
       invalidateInvoiceDocuments(invoiceDocumentCacheRef.current, snapshot.card_id, snapshot.current_bsale_nv_id)
       setInvoiceReviewSnapshot(null)
       toast.success(`Factura emitida para NV #${snapshot.folio}.`)
+      const printResult = openConfirmedInvoicePdf(printWindow, urls?.pdf, undefined, message => {
+        toast.info(`Chrome no abrió automáticamente el diálogo de impresión: ${message}`)
+      })
+      const validatedPdfUrl = validateBsalePdfUrl(urls?.pdf)
+      if (!validatedPdfUrl) {
+        try { if (printWindow && !printWindow.closed) printWindow.close() } catch { /* ventana ya cerrada */ }
+      }
+      if (!printResult.opened || !validatedPdfUrl) {
+        toast.info(validatedPdfUrl
+          ? 'Factura confirmada. El navegador bloqueó la ventana del PDF.'
+          : 'Factura confirmada, pero Bsale no entregó una URL PDF HTTPS válida.')
+      }
       await loadBoard({ showSpinner: false })
+    } else {
+      setInvoicePrintWindowStatus(printWindow, 'No se inició la impresión', result.error ?? `La emisión terminó con estado ${result.status}.`)
+      try { if (printWindow && !printWindow.closed) printWindow.close() } catch { /* ventana ya cerrada */ }
     }
-    return { status: result.status, error: result.error ?? null }
+    return result
   }
 
   const openCommercialIncidents = async (card: SalesOrderPreparationCardInfo) => {
