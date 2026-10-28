@@ -159,13 +159,69 @@ export function validateInvoiceDocument(document: any, expected: {
   if (document?.salesId !== expected.salesId) return { ok: false, reason: 'SALES_ID_MISMATCH' }
   const details = Array.isArray(document?.details?.items) ? document.details.items : []
   if (details.length !== expected.details.length) return { ok: false, reason: 'DETAIL_COUNT_MISMATCH' }
-  const expectedDetails = new Map(expected.details.map(detail => [detail.detailId, detail.quantity]))
+
+  const expectedDetails = new Map(expected.details.map(line => [line.detailId, line]))
+  if (expectedDetails.size !== expected.details.length) return { ok: false, reason: 'RELATED_DETAIL_ID_NOT_PROVABLE' }
+  const seen = new Set<number>()
+  const roundingFields = ['netAmount', 'taxAmount', 'totalAmount'] as const
+  const roundingLimit = { netAmount: 2, taxAmount: 1, totalAmount: 1 } as const
+  const roundingDelta = { netAmount: 0, taxAmount: 0, totalAmount: 0 }
+  let roundingDetected = false
+
   for (const detail of details) {
-    const related = Number(detail.relatedDetailId)
-    if (!expectedDetails.has(related) || Number(detail.quantity) !== expectedDetails.get(related)) return { ok: false, reason: 'RELATED_DETAIL_ID_NOT_PROVABLE' }
-    const expectedDetail = expected.details.find(item => item.detailId === related)
-    for (const field of ['netUnitValue', 'totalUnitValue', 'netAmount', 'taxAmount', 'totalAmount', 'netDiscount'] as const) {
-      if (expectedDetail?.[field] != null && Number(detail[field]) !== expectedDetail[field]) return { ok: false, reason: `DETAIL_${field.toUpperCase()}_MISMATCH` }
+    const related = Number(detail?.relatedDetailId)
+    const expectedLine = expectedDetails.get(related)
+    if (!Number.isSafeInteger(related) || !expectedLine || seen.has(related) ||
+        Number(detail.quantity) !== expectedLine.quantity) {
+      return { ok: false, reason: 'RELATED_DETAIL_ID_NOT_PROVABLE' }
+    }
+    seen.add(related)
+
+    // Prices, discounts, quantities and related-detail identity NEVER receive tolerance.
+    for (const field of ['netUnitValue', 'totalUnitValue', 'netDiscount'] as const) {
+      if (expectedLine[field] != null && Number(detail[field]) !== expectedLine[field]) {
+        return { ok: false, reason: `DETAIL_${field.toUpperCase()}_MISMATCH` }
+      }
+    }
+
+    for (const field of roundingFields) {
+      const amount = expectedLine[field]
+      if (amount == null) continue
+      const invoiced = Number(detail[field])
+      if (invoiced === amount) continue
+      const difference = invoiced - amount
+      // CLP rounding is integer-only, capped for EACH line, and must balance below.
+      // A free/zero-valued line may never become paid through a tolerance.
+      if (!Number.isSafeInteger(amount) || !Number.isSafeInteger(invoiced) ||
+          amount < 0 || invoiced < 0 ||
+          Math.abs(difference) > roundingLimit[field] ||
+          expectedLine.totalAmount === 0 || Number(detail.totalAmount) <= 0) {
+        return { ok: false, reason: `DETAIL_${field.toUpperCase()}_MISMATCH` }
+      }
+      roundingDetected = true
+      roundingDelta[field] += difference
+    }
+  }
+
+  if (roundingDetected) {
+    // No partial snapshots: all three monetary components are needed to prove
+    // that Bsale merely redistributed pesos across existing lines.
+    if (!roundingFields.every(field => expected.details.every(line => {
+      const amount = line[field]
+      return typeof amount === 'number' && Number.isSafeInteger(amount) && amount >= 0
+    }))) return { ok: false, reason: 'DETAIL_ROUNDING_NOT_PROVABLE' }
+
+    const totalsByField = { netAmount: 'net', taxAmount: 'tax', totalAmount: 'total' } as const
+    for (const field of roundingFields) {
+      const expectedSum = expected.details.reduce((sum, line) => sum + (line[field] ?? 0), 0)
+      const invoiceSum = details.reduce((sum: number, line: any) => sum + Number(line[field]), 0)
+      const grandTotal = expected.totals[totalsByField[field]]
+      if (roundingDelta[field] !== 0 ||
+          !Number.isSafeInteger(grandTotal) ||
+          !Number.isSafeInteger(invoiceSum) ||
+          expectedSum !== grandTotal || invoiceSum !== grandTotal) {
+        return { ok: false, reason: 'DETAIL_ROUNDING_NOT_BALANCED' }
+      }
     }
   }
   return { ok: true }
