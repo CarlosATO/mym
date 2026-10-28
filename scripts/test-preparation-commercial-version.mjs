@@ -132,3 +132,21 @@ test('identidad canónica distinta no se compara como la misma NV', () => {
   assert.equal(result.sameIdentity, false)
   assert.equal(result.conflicts[0].reason, 'IDENTITY_MISMATCH')
 })
+
+test('primera preparación: lineNumber ausente frente a lineNumber 0 no produce alerta comercial', () => {
+  const original = version(92674, [
+    { variantId: 5873, sku: 'SKU-A', productName: 'Producto A', quantity: 24, unitNetValue: 1134, lineNetAmount: 27227, lineTaxAmount: 5173, lineGrossAmount: 32400 },
+    { variantId: 6246, sku: 'SKU-B', productName: 'Producto B', quantity: 18, unitNetValue: 2882, lineNetAmount: 51882, lineTaxAmount: 9858, lineGrossAmount: 61740 },
+  ], 94140, { netAmount: 79109, taxAmount: 15031 })
+  const current = version(92674, original.lines.map(item => ({ ...item, lineNumber: 0 })), 94140, { netAmount: 79109, taxAmount: 15031 })
+  const result = compareCommercialVersions(original, current)
+  assert.equal(result.contentEquivalent, true)
+  assert.deepEqual(result.differences, [])
+
+  const actualChange = version(92674, current.lines.map((item, index) =>
+    index === 0 ? { ...item, quantity: 25 } : item
+  ), 94140, { netAmount: 79109, taxAmount: 15031 })
+  const changed = compareCommercialVersions(original, actualChange)
+  assert.equal(changed.contentEquivalent, false)
+  assert.equal(changed.differences.some(item => item.kind === 'QUANTITY_INCREASED'), true)
+})
