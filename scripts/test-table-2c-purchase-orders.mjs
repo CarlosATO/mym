@@ -19,12 +19,18 @@ const [panel, action, page, warehouseCache, analysis, migration, replenishmentIm
   readFile(importPath, 'utf8'),
 ])
 
-test('Órdenes de Compra usa Operational Table con key y columnas independientes', () => {
+test('Órdenes de Compra usa Operational Table con key compacta y nueve columnas independientes', () => {
   assert.match(panel, /useOperationalTableWidths\(PURCHASE_ORDERS_TABLE_KEY, PURCHASE_ORDER_COLUMNS\)/)
-  assert.match(panel, /mym:table:adquisiciones:ordenes-compra/)
-  assert.equal((panel.match(/id: '/g) ?? []).filter(match => match).length >= 12, true)
-  assert.match(panel, /id: 'supplier', defaultWidth: 250/)
-  assert.match(panel, /id: 'actions', defaultWidth: 115[\s\S]*sticky: 'right'/)
+  assert.match(panel, /mym:table:adquisiciones:ordenes-compra:compact-v3a/)
+  for (const id of ['correlative', 'issueDate', 'supplier', 'requester', 'status', 'total', 'receipt', 'invoice', 'actions']) {
+    assert.match(panel, new RegExp(`id: '${id}'`))
+  }
+  assert.equal((panel.match(/id: '/g) ?? []).filter(match => match).length >= 9, true)
+  assert.doesNotMatch(panel, /id: 'type'/)
+  assert.doesNotMatch(panel, /id: 'warehouse'/)
+  assert.doesNotMatch(panel, /id: 'authorized'/)
+  assert.match(panel, /id: 'supplier', defaultWidth: 245/)
+  assert.match(panel, /id: 'actions', defaultWidth: 110[\s\S]*sticky: 'right'/)
 })
 
 test('resize, persistencia, reset, separadores y scroll interno están configurados', () => {
@@ -32,9 +38,38 @@ test('resize, persistencia, reset, separadores y scroll interno están configura
   assert.match(panel, /onResizeEnd=\{persist\}/)
   assert.match(panel, /resetWidths/)
   assert.match(panel, /Restablecer anchos/)
-  assert.match(panel, /border-r border-theme-border\/30/)
-  assert.match(panel, /min-w-\[1650px\].*table-fixed whitespace-nowrap/)
+  assert.match(panel, /border-r border-\[#E5DDD4\]/)
+  assert.match(panel, /min-w-\[1080px\].*table-fixed whitespace-nowrap/)
   assert.match(panel, /overflow-x-auto overflow-y-auto/)
+})
+
+test('el informe compacto usa un encabezado único y conserva todos los estados de seguimiento', () => {
+  const tableStart = panel.indexOf('<table className="min-w-[1080px]')
+  const tableEnd = panel.indexOf('</table>', tableStart)
+  assert.ok(tableStart >= 0 && tableEnd > tableStart)
+  const reportTable = panel.slice(tableStart, tableEnd)
+  assert.doesNotMatch(reportTable, /colSpan=\{/)
+  for (const header of [
+    /N° OC\{resizeHandle\('correlative'\)\}/,
+    /Fecha\{resizeHandle\('issueDate'\)\}/,
+    /Proveedor\{resizeHandle\('supplier'\)\}/,
+    /Solicitante\{resizeHandle\('requester'\)\}/,
+    /Estado\{resizeHandle\('status'\)\}/,
+    /Total\{resizeHandle\('total'\)\}/,
+    /Recepción\{resizeHandle\('receipt'\)\}/,
+    /Factura\{resizeHandle\('invoice'\)\}/,
+    />Acciones<\/th>/,
+  ]) assert.match(reportTable, header)
+  assert.doesNotMatch(reportTable, />Tipo\{resizeHandle/)
+  assert.doesNotMatch(reportTable, />Bodega\{resizeHandle/)
+  assert.doesNotMatch(reportTable, />Autoriza\{resizeHandle/)
+})
+
+test('el correlativo se abrevia solo en la celda y conserva el original como tooltip', () => {
+  assert.match(panel, /function shortCorrelative\(correlative: string\)/)
+  assert.match(panel, /return correlative\.match\(\/\\d\+\$\/\)\?\.\[0\] \|\| correlative/)
+  assert.match(panel, /title=\{po\.correlative\}>\{shortCorrelative\(po\.correlative\)\}/)
+  assert.match(panel, /getPurchaseOrders\(requestFilters\)/)
 })
 
 test('no ofrece sorting falso sobre el contrato paginado server-side', () => {

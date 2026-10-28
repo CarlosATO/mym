@@ -14,6 +14,18 @@ function adqAdmin() {
   })
 }
 
+function erpAdmin() {
+  return createSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  })
+}
+
+function logisticaAdmin() {
+  return createSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey, {
+    db: { schema: 'logistica' }, auth: { autoRefreshToken: false, persistSession: false },
+  })
+}
+
 export interface PurchaseOrder {
   id: string
   correlative: string
@@ -49,6 +61,36 @@ export interface PurchaseOrder {
   closed_by: string | null
   created_at: string
   updated_at: string
+}
+
+export interface PurchaseOrderInvoiceDocument {
+  id: string
+  document_number: string | null
+  file_name: string | null
+  mime_type: string | null
+  has_file: boolean
+}
+
+export type PurchaseOrderInvoiceSummaries = Record<string, PurchaseOrderInvoiceDocument[]>
+
+type PurchaseOrderReadAuthorization = { userId: string; companyId: string }
+
+async function authorizePurchaseOrderRead(): Promise<PurchaseOrderReadAuthorization | null> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return null
+
+  const companyId = await getActiveCompanyId(user)
+  if (!companyId) return null
+
+  const admin = erpAdmin()
+  const [{ data: profile, error: profileError }, { data: company, error: companyError }, permission] = await Promise.all([
+    admin.schema('portal').from('users').select('id, is_active, deleted_at').eq('id', user.id).maybeSingle(),
+    admin.schema('core').from('companies').select('id, is_active').eq('id', companyId).maybeSingle(),
+    supabase.rpc('user_has_permission', { p_user_id: user.id, p_permission_code: 'adquisiciones.po.view' }),
+  ])
+  if (profileError || companyError || !profile?.is_active || profile.deleted_at || !company?.is_active || permission.error || permission.data !== true) return null
+  return { userId: user.id, companyId }
 }
 
 export interface PurchaseOrderItem {
@@ -148,6 +190,7 @@ export interface PurchaseOrderDocumentDetail extends PurchaseOrderDetail {
 }
 
 export interface PurchaseOrderFilters {
+  operational_view?: PurchaseOrderOperationalView
   search?: string
   status?: string
   supplier_id?: string
@@ -156,6 +199,16 @@ export interface PurchaseOrderFilters {
   date_to?: string
   page?: number
   pageSize?: number
+}
+
+export type PurchaseOrderOperationalView = 'PENDING' | 'RECEIVED' | 'CLOSED' | 'CANCELLED' | 'ALL'
+
+export interface PurchaseOrderIndicators {
+  pending_count: number
+  pending_amount: number
+  received_order_count: number
+  received_amount: number
+  received_since: string
 }
 
 export interface AuthorizedPersonnel {
@@ -182,6 +235,7 @@ export async function getPurchaseOrders(filters: PurchaseOrderFilters = {}) {
   const db = adqAdmin()
   const { data, error } = await db.rpc('get_purchase_orders', {
     p_filters: {
+      operational_view: filters.operational_view || 'PENDING',
       search: filters.search || null,
       status: filters.status || null,
       supplier_id: filters.supplier_id || null,
@@ -201,6 +255,159 @@ export async function getPurchaseOrders(filters: PurchaseOrderFilters = {}) {
   const result = data as { data: PurchaseOrder[]; total: number; page: number; page_size: number } | null
   if (!result) return { data: [], total: 0 }
   return { data: result.data ?? [], total: result.total ?? 0 }
+}
+
+export async function getPurchaseOrderIndicators(): Promise<PurchaseOrderIndicators | null> {
+  const authorization = await authorizePurchaseOrderRead()
+  if (!authorization) return null
+
+  const { data, error } = await adqAdmin().rpc('get_purchase_order_indicators', {
+    p_user_id: authorization.userId,
+    p_company_id: authorization.companyId,
+  })
+  if (error || !data || typeof data !== 'object') {
+    if (error) console.error('get_purchase_order_indicators error:', error)
+    return null
+  }
+  return data as PurchaseOrderIndicators
+}
+
+export async function getPurchaseOrderInvoiceSummaries(poIds: string[]): Promise<PurchaseOrderInvoiceSummaries> {
+  const authorization = await authorizePurchaseOrderRead()
+  if (!authorization || !Array.isArray(poIds) || poIds.length === 0) return {}
+
+  const ids = Array.from(new Set(poIds.filter(id => typeof id === 'string' && id.length > 0))).slice(0, 100)
+  if (ids.length === 0) return {}
+
+  const adq = adqAdmin()
+  const { data: purchaseOrders, error: purchaseOrdersError } = await adq
+    .from('purchase_orders')
+    .select('id')
+    .eq('company_id', authorization.companyId)
+    .eq('is_active', true)
+    .in('id', ids)
+  if (purchaseOrdersError) {
+    console.error('getPurchaseOrderInvoiceSummaries purchase orders error:', purchaseOrdersError)
+    return {}
+  }
+
+  const authorizedPoIds = (purchaseOrders ?? []).map(order => order.id)
+  if (authorizedPoIds.length === 0) return {}
+
+  const logistica = logisticaAdmin()
+  const { data: receipts, error: receiptsError } = await logistica
+    .from('purchase_receipts')
+    .select('purchase_order_id, status, receipt_documents(id, company_id, document_type, document_number, file_name, mime_type, storage_path)')
+    .eq('company_id', authorization.companyId)
+    .in('purchase_order_id', authorizedPoIds)
+    .neq('status', 'CANCELLED')
+  if (receiptsError) {
+    console.error('getPurchaseOrderInvoiceSummaries receipts error:', receiptsError)
+    return {}
+  }
+
+  const result: PurchaseOrderInvoiceSummaries = Object.fromEntries(authorizedPoIds.map(id => [id, []]))
+  const seenByOrder = new Map<string, Set<string>>()
+  for (const receipt of receipts ?? []) {
+    const documents = Array.isArray(receipt.receipt_documents) ? receipt.receipt_documents : []
+    const seen = seenByOrder.get(receipt.purchase_order_id) ?? new Set<string>()
+    seenByOrder.set(receipt.purchase_order_id, seen)
+    for (const document of documents) {
+      if (document.company_id !== authorization.companyId || document.document_type !== 'FA' || seen.has(document.id)) continue
+      seen.add(document.id)
+      result[receipt.purchase_order_id] ??= []
+      result[receipt.purchase_order_id].push({
+        id: document.id,
+        document_number: document.document_number,
+        file_name: document.file_name,
+        mime_type: document.mime_type,
+        has_file: Boolean(document.storage_path),
+      })
+    }
+  }
+  return result
+}
+
+const PURCHASE_ORDER_INVOICE_BUCKET = 'recepciones'
+const PURCHASE_ORDER_INVOICE_MIME_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp'])
+
+function inferPurchaseOrderInvoiceMimeType(fileName: string | null, storagePath: string): string | null {
+  const value = (fileName || storagePath).toLowerCase()
+  if (value.endsWith('.pdf')) return 'application/pdf'
+  if (value.endsWith('.jpg') || value.endsWith('.jpeg')) return 'image/jpeg'
+  if (value.endsWith('.png')) return 'image/png'
+  if (value.endsWith('.webp')) return 'image/webp'
+  return null
+}
+
+export async function getPurchaseOrderInvoiceSignedUrl(documentId: string) {
+  const authorization = await authorizePurchaseOrderRead()
+  if (!authorization) return { error: 'No autorizado para consultar facturas de órdenes de compra' }
+  if (!documentId || typeof documentId !== 'string') return { error: 'Identificador de documento inválido' }
+
+  const logistica = logisticaAdmin()
+  const { data: document, error: documentError } = await logistica
+    .from('receipt_documents')
+    .select('id, company_id, receipt_id, document_type, document_number, storage_bucket, storage_path, file_name, mime_type')
+    .eq('id', documentId)
+    .maybeSingle()
+  if (documentError) {
+    console.error('getPurchaseOrderInvoiceSignedUrl document error:', documentError)
+    return { error: 'Error al validar la factura' }
+  }
+  if (!document || document.company_id !== authorization.companyId) return { error: 'Factura no encontrada o sin acceso' }
+  if (document.document_type !== 'FA') return { error: 'El documento no es una factura' }
+  if (!document.storage_path) return { error: 'Esta factura no tiene un archivo adjunto disponible' }
+  if (document.storage_bucket !== PURCHASE_ORDER_INVOICE_BUCKET) return { error: 'El documento no pertenece al bucket autorizado' }
+
+  const mimeType = document.mime_type || inferPurchaseOrderInvoiceMimeType(document.file_name, document.storage_path)
+  if (!mimeType || !PURCHASE_ORDER_INVOICE_MIME_TYPES.has(mimeType)) return { error: 'Tipo de archivo no permitido para previsualización' }
+  const expectedPrefix = `${authorization.companyId}/`
+  if (!document.storage_path.startsWith(expectedPrefix) || document.storage_path.includes('..') || document.storage_path.includes('//')) {
+    return { error: 'Ruta de almacenamiento inválida' }
+  }
+
+  const { data: receipt, error: receiptError } = await logistica
+    .from('purchase_receipts')
+    .select('id, company_id, purchase_order_id, status')
+    .eq('id', document.receipt_id)
+    .maybeSingle()
+  if (receiptError) {
+    console.error('getPurchaseOrderInvoiceSignedUrl receipt error:', receiptError)
+    return { error: 'Error al validar la recepción de la factura' }
+  }
+  if (!receipt || receipt.company_id !== authorization.companyId || receipt.status === 'CANCELLED') return { error: 'La recepción de la factura no está disponible' }
+
+  const { data: purchaseOrder, error: purchaseOrderError } = await adqAdmin()
+    .from('purchase_orders')
+    .select('id, company_id')
+    .eq('id', receipt.purchase_order_id)
+    .eq('company_id', authorization.companyId)
+    .eq('is_active', true)
+    .maybeSingle()
+  if (purchaseOrderError) {
+    console.error('getPurchaseOrderInvoiceSignedUrl purchase order error:', purchaseOrderError)
+    return { error: 'Error al validar la orden de compra' }
+  }
+  if (!purchaseOrder) return { error: 'La factura no pertenece a una orden de compra autorizada' }
+
+  const storage = logistica.storage.from(PURCHASE_ORDER_INVOICE_BUCKET)
+  const expiresIn = 300
+  const [{ data: signedData, error: signedError }, { data: downloadData, error: downloadError }] = await Promise.all([
+    storage.createSignedUrl(document.storage_path, expiresIn),
+    storage.createSignedUrl(document.storage_path, expiresIn, { download: document.file_name || true }),
+  ])
+  if (signedError || downloadError || !signedData?.signedUrl || !downloadData?.signedUrl) {
+    console.error('getPurchaseOrderInvoiceSignedUrl storage error:', signedError || downloadError)
+    return { error: 'No se pudo generar el enlace temporal de la factura' }
+  }
+  return {
+    signedUrl: signedData.signedUrl,
+    downloadUrl: downloadData.signedUrl,
+    fileName: document.file_name || `factura-${document.id}`,
+    mimeType,
+    expiresIn,
+  }
 }
 
 export async function getPurchaseOrderDetail(poId: string) {
@@ -722,6 +929,28 @@ export async function updatePurchaseOrderStatus(poId: string, newStatus: string,
   if (error) return { error: error.message }
   const r = data as { success: boolean; error?: string }
   if (!r.success) return { error: r.error || 'Error al actualizar estado' }
+  return { success: true }
+}
+
+export async function cancelPurchaseOrder(poId: string, reason: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado' }
+
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
+  const trimmedReason = reason.trim()
+  if (!trimmedReason) return { error: 'El motivo de anulación es obligatorio' }
+
+  const { data, error } = await supabase.schema('adquisiciones').rpc('cancel_purchase_order', {
+    p_po_id: poId,
+    p_reason: trimmedReason,
+    p_user_id: user.id,
+    p_company_id: companyId,
+  })
+  if (error) return { error: error.message }
+  const result = data as { success?: boolean; error?: string }
+  if (result?.success !== true) return { error: result?.error || 'No se pudo anular la orden de compra' }
   return { success: true }
 }
 

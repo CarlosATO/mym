@@ -4,10 +4,10 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, FileSpreadsheet, Ban, PackageOpen, XCircle, CheckCircle2, BarChart3, RefreshCw, Loader2, ClipboardCheck, Send, Lock } from 'lucide-react'
 import { AuthorizedPersonnelCombobox } from '@/components/ui/authorized-personnel-combobox'
 import {
-  getPurchaseOrders, getPurchaseOrderDetail, createPurchaseOrder, updateDraftPurchaseOrder,
-  updatePurchaseOrderStatus, closePurchaseOrderWithPending, getAuthorizedPersonnel, createAuthorizedPersonnel,
-  getNextCorrelative, getPurchaseOrderDocumentDetail,
-  type PurchaseOrder, type PurchaseOrderDetail, type PurchaseOrderFilters,
+  getPurchaseOrders, getPurchaseOrderIndicators, getPurchaseOrderDetail, createPurchaseOrder, updateDraftPurchaseOrder,
+  updatePurchaseOrderStatus, cancelPurchaseOrder, closePurchaseOrderWithPending, getAuthorizedPersonnel, createAuthorizedPersonnel,
+  getNextCorrelative, getPurchaseOrderDocumentDetail, getPurchaseOrderInvoiceSummaries,
+  type PurchaseOrder, type PurchaseOrderDetail, type PurchaseOrderFilters, type PurchaseOrderOperationalView, type PurchaseOrderInvoiceDocument, type PurchaseOrderInvoiceSummaries, type PurchaseOrderIndicators,
   type AuthorizedPersonnel
 } from '@/app/actions/adquisiciones/purchase-orders'
 import { getSuppliers, type Supplier } from '@/app/actions/adquisiciones/suppliers'
@@ -25,6 +25,7 @@ import { ReplenishmentAnalysisPanel } from './replenishment-analysis-panel'
 import { buildReplenishmentExcelPreparation, parseReplenishmentExcel, type ReplenishmentExcelImportPreview } from './replenishment-excel-import'
 import { ReplenishmentExcelImportDialog } from './replenishment-excel-import-dialog'
 import { PurchaseOrderSupplierReview } from './purchase-order-supplier-review'
+import { PurchaseOrderInvoiceViewerModal } from './purchase-order-invoice-viewer-modal'
 import { createClient as createBrowserClient } from '@/lib/supabase/client'
 import { formatCivilDate } from '@/lib/datetime'
 import { calculatePurchaseOrderLineTotals, calculatePurchaseOrderTotals } from '@/lib/adquisiciones/purchase-order-totals'
@@ -37,7 +38,7 @@ const STATUS_BADGES: Record<string, { bg: string; text: string; border: string }
   APROBADA: { bg: 'bg-emerald-500/10', text: 'text-emerald-500', border: 'border-emerald-500/20' },
   ENVIADA_PROVEEDOR: { bg: 'bg-blue-500/10', text: 'text-blue-500', border: 'border-blue-500/20' },
   CONFIRMADA: { bg: 'bg-emerald-500/10', text: 'text-emerald-500', border: 'border-emerald-500/20' },
-  RECEPCION_PARCIAL: { bg: 'bg-cyan-500/10', text: 'text-cyan-500', border: 'border-cyan-500/20' },
+  RECEPCION_PARCIAL: { bg: 'bg-amber-500/10', text: 'text-amber-600', border: 'border-amber-500/25' },
   RECEPCION_TOTAL: { bg: 'bg-emerald-500/10', text: 'text-emerald-500', border: 'border-emerald-500/20' },
   FACTURADA_PARCIAL: { bg: 'bg-purple-500/10', text: 'text-purple-500', border: 'border-purple-500/20' },
   FACTURADA_TOTAL: { bg: 'bg-emerald-500/10', text: 'text-emerald-500', border: 'border-emerald-500/20' },
@@ -48,33 +49,32 @@ const STATUS_BADGES: Record<string, { bg: string; text: string; border: string }
 
 const RECEIPT_BADGES: Record<string, { bg: string; text: string; border: string }> = {
   PENDIENTE: { bg: 'bg-amber-500/10', text: 'text-amber-500', border: 'border-amber-500/20' },
-  RECEPCION_PARCIAL: { bg: 'bg-blue-500/10', text: 'text-blue-500', border: 'border-blue-500/20' },
+  RECEPCION_PARCIAL: { bg: 'bg-amber-500/10', text: 'text-amber-600', border: 'border-amber-500/25' },
   RECEPCION_TOTAL: { bg: 'bg-emerald-500/10', text: 'text-emerald-500', border: 'border-emerald-500/20' },
 }
 
-const INVOICE_BADGES: Record<string, { bg: string; text: string; border: string }> = {
-  PENDIENTE: { bg: 'bg-amber-500/10', text: 'text-amber-500', border: 'border-amber-500/20' },
-  FACTURADA_PARCIAL: { bg: 'bg-purple-500/10', text: 'text-purple-500', border: 'border-purple-500/20' },
-  FACTURADA_TOTAL: { bg: 'bg-emerald-500/10', text: 'text-emerald-500', border: 'border-emerald-500/20' },
-  PAGADA: { bg: 'bg-emerald-500/10', text: 'text-emerald-500', border: 'border-emerald-500/20' },
-}
-
-const PURCHASE_ORDERS_TABLE_KEY = 'mym:table:adquisiciones:ordenes-compra'
+const PURCHASE_ORDERS_TABLE_KEY = 'mym:table:adquisiciones:ordenes-compra:compact-v3a'
 const REPLENISHMENT_PO_PREPARATION_KEY = 'mym:adquisiciones:replenishment-po-preparation'
 const PURCHASE_ORDER_PRODUCT_PAGE_SIZE = 40
+const PURCHASE_ORDER_LIST_CACHE_TTL = 30_000
+const PURCHASE_ORDER_INDICATORS_CACHE_TTL = 30_000
+const PURCHASE_ORDER_OPERATIONAL_VIEWS: Array<{ value: PurchaseOrderOperationalView; label: string }> = [
+  { value: 'PENDING', label: 'Pendientes' },
+  { value: 'RECEIVED', label: 'Recibidas' },
+  { value: 'CLOSED', label: 'Cerradas' },
+  { value: 'CANCELLED', label: 'Anuladas' },
+  { value: 'ALL', label: 'Todas' },
+]
 const PURCHASE_ORDER_COLUMNS: OperationalTableColumn[] = [
-  { id: 'correlative', defaultWidth: 120, minWidth: 100, maxWidth: 190 },
-  { id: 'issueDate', defaultWidth: 105, minWidth: 95, maxWidth: 150 },
-  { id: 'supplier', defaultWidth: 250, minWidth: 190, maxWidth: 420 },
-  { id: 'type', defaultWidth: 95, minWidth: 85, maxWidth: 170 },
-  { id: 'warehouse', defaultWidth: 165, minWidth: 130, maxWidth: 300 },
-  { id: 'requester', defaultWidth: 150, minWidth: 120, maxWidth: 260 },
-  { id: 'authorized', defaultWidth: 150, minWidth: 120, maxWidth: 260 },
-  { id: 'status', defaultWidth: 125, minWidth: 110, maxWidth: 210 },
-  { id: 'total', defaultWidth: 125, minWidth: 110, maxWidth: 190 },
-  { id: 'receipt', defaultWidth: 125, minWidth: 110, maxWidth: 210 },
-  { id: 'invoice', defaultWidth: 125, minWidth: 110, maxWidth: 210 },
-  { id: 'actions', defaultWidth: 115, minWidth: 105, maxWidth: 170, sticky: 'right', resizable: false },
+  { id: 'correlative', defaultWidth: 100, minWidth: 88, maxWidth: 150 },
+  { id: 'issueDate', defaultWidth: 95, minWidth: 88, maxWidth: 135 },
+  { id: 'supplier', defaultWidth: 245, minWidth: 180, maxWidth: 430 },
+  { id: 'requester', defaultWidth: 150, minWidth: 125, maxWidth: 280 },
+  { id: 'status', defaultWidth: 130, minWidth: 115, maxWidth: 230 },
+  { id: 'total', defaultWidth: 120, minWidth: 110, maxWidth: 175 },
+  { id: 'receipt', defaultWidth: 125, minWidth: 115, maxWidth: 205 },
+  { id: 'invoice', defaultWidth: 125, minWidth: 115, maxWidth: 205 },
+  { id: 'actions', defaultWidth: 110, minWidth: 96, maxWidth: 155, sticky: 'right', resizable: false },
 ]
 
 function formatCurrency(amount: number, currency = 'CLP') {
@@ -84,6 +84,10 @@ function formatCurrency(amount: number, currency = 'CLP') {
 function formatDate(dateStr: string | null | undefined) {
   if (!dateStr) return '—'
   return formatCivilDate(dateStr) || '—'
+}
+
+function shortCorrelative(correlative: string) {
+  return correlative.match(/\d+$/)?.[0] || correlative
 }
 
 function statusLabel(s: string) {
@@ -103,11 +107,43 @@ function purchaseOrderStatusLabel(po: Pick<PurchaseOrder, 'status' | 'closed_wit
   return po.status === 'CERRADA' && po.closed_with_pending ? CLOSED_WITH_PENDING_LABEL : undefined
 }
 
+type CachedPurchaseOrderList = { data: PurchaseOrder[]; total: number; updatedAt: number }
+
+function purchaseOrderListCacheKey(scope: string, filters: PurchaseOrderFilters) {
+  return JSON.stringify({
+    scope,
+    operational_view: filters.operational_view ?? 'PENDING',
+    search: filters.search ?? '',
+    status: filters.status ?? '',
+    supplier_id: filters.supplier_id ?? '',
+    po_type: filters.po_type ?? '',
+    date_from: filters.date_from ?? '',
+    date_to: filters.date_to ?? '',
+    page: filters.page ?? 1,
+    pageSize: filters.pageSize ?? 50,
+  })
+}
+
+function purchaseOrderInvoiceCacheKey(scope: string, poIds: string[]) {
+  return `${scope}:${Array.from(new Set(poIds)).sort().join(',')}`
+}
+
 function Badge({ value, map, label }: { value: string | null; map: Record<string, { bg: string; text: string; border: string }>; label?: string }) {
   if (!value) return <span className="text-[11px] text-theme-text-muted/40">—</span>
   const s = map[value]
   if (!s) return <span className="text-[11px] text-theme-text-muted/40">{value}</span>
   return <span className={`inline-flex whitespace-nowrap text-[11px] font-semibold px-2 py-0.5 rounded border ${s.bg} ${s.text} ${s.border}`}>{label ?? statusLabel(value)}</span>
+}
+
+function PurchaseOrderInvoiceCell({ documents, loading, onView }: { documents?: PurchaseOrderInvoiceDocument[]; loading: boolean; onView: () => void }) {
+  if (!documents) return <span className="text-[11px] text-theme-text-muted/50">{loading ? 'Cargando...' : 'Pendiente'}</span>
+  if (documents.length === 0) return <span className="inline-flex whitespace-nowrap rounded border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-500">Pendiente</span>
+  const label = documents.length === 1 ? documents[0].document_number || 'Factura' : `${documents.length} facturas`
+  return (
+    <button type="button" onClick={event => { event.stopPropagation(); onView() }} className="inline-flex max-w-full items-center gap-1.5 text-left text-[11px] font-semibold text-theme-accent hover:text-theme-accent-hover hover:underline" title={documents.length === 1 ? documents[0].document_number || 'Ver factura' : 'Ver facturas'}>
+      <span className="truncate">{label}</span><span className="shrink-0">Ver</span>
+    </button>
+  )
 }
 
 const inputClass = "w-full h-8 rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15 focus:border-[#72383D]"
@@ -122,10 +158,16 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const [editId, setEditId] = useState<string | null>(null)
   const [data, setData] = useState<PurchaseOrder[]>([])
   const [total, setTotal] = useState(0)
+  const [invoiceSummaries, setInvoiceSummaries] = useState<PurchaseOrderInvoiceSummaries>({})
+  const [invoiceSummariesLoading, setInvoiceSummariesLoading] = useState(false)
+  const [indicators, setIndicators] = useState<PurchaseOrderIndicators | null>(null)
+  const [indicatorsLoading, setIndicatorsLoading] = useState(false)
+  const [invoiceViewerPo, setInvoiceViewerPo] = useState<PurchaseOrder | null>(null)
   const [initialLoading, setInitialLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [message, setMessage] = useState('')
-  const [filters, setFilters] = useState<PurchaseOrderFilters>({ page: 1, pageSize: 50 })
+  const [filters, setFilters] = useState<PurchaseOrderFilters>({ operational_view: 'PENDING', page: 1, pageSize: 50 })
+  const [searchInput, setSearchInput] = useState('')
   const [detail, setDetail] = useState<PurchaseOrderDetail | null>(null)
   const [supplierReviewPoId, setSupplierReviewPoId] = useState<string | null>(null)
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
@@ -160,6 +202,10 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const [closeReason, setCloseReason] = useState('')
   const [closeError, setCloseError] = useState('')
   const [closingPending, setClosingPending] = useState(false)
+  const [cancelPendingPo, setCancelPendingPo] = useState<PurchaseOrder | null>(null)
+  const [cancelReason, setCancelReason] = useState('')
+  const [cancelError, setCancelError] = useState('')
+  const [cancelling, setCancelling] = useState(false)
   const [downloadingPdf, setDownloadingPdf] = useState(false)
   const [downloadingExcel, setDownloadingExcel] = useState(false)
   const [excelImportPreview, setExcelImportPreview] = useState<ReplenishmentExcelImportPreview | null>(null)
@@ -189,6 +235,14 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const warehouseRef = useRef<HTMLDivElement>(null)
   const requestSequence = useRef(0)
   const loaded = useRef(false)
+  const purchaseOrderListCacheRef = useRef(new Map<string, CachedPurchaseOrderList>())
+  const purchaseOrderListRequestsRef = useRef(new Map<string, Promise<CachedPurchaseOrderList>>())
+  const purchaseOrderCacheScopeRef = useRef<string | null>(null)
+  const purchaseOrderCacheGenerationRef = useRef(0)
+  const purchaseOrderInvoiceCacheRef = useRef(new Map<string, PurchaseOrderInvoiceSummaries>())
+  const purchaseOrderInvoiceRequestsRef = useRef(new Map<string, Promise<PurchaseOrderInvoiceSummaries>>())
+  const purchaseOrderIndicatorsCacheRef = useRef(new Map<string, { data: PurchaseOrderIndicators; updatedAt: number }>())
+  const purchaseOrderIndicatorsRequestsRef = useRef(new Map<string, Promise<PurchaseOrderIndicators | null>>())
   const { widths, setColumnWidth, persist, reset: resetWidths } = useOperationalTableWidths(PURCHASE_ORDERS_TABLE_KEY, PURCHASE_ORDER_COLUMNS)
 
   const [form, setForm] = useState({
@@ -331,16 +385,146 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
 
   const totalPages = Math.ceil(total / (filters.pageSize ?? 50))
 
-  const load = useCallback(async () => {
+  const purchaseOrderCacheScope = `${currentUserId ?? 'anonymous'}:${activeCompany?.id ?? 'unknown'}`
+
+  const fetchCachedPurchaseOrderIndicators = useCallback(async (force = false) => {
+    const key = purchaseOrderCacheScope
+    const cached = purchaseOrderIndicatorsCacheRef.current.get(key)
+    if (!force && cached && Date.now() - cached.updatedAt < PURCHASE_ORDER_INDICATORS_CACHE_TTL) return cached.data
+    if (!force) {
+      const pending = purchaseOrderIndicatorsRequestsRef.current.get(key)
+      if (pending) return pending
+    }
+    const request = getPurchaseOrderIndicators().then(result => {
+      if (result) purchaseOrderIndicatorsCacheRef.current.set(key, { data: result, updatedAt: Date.now() })
+      return result
+    })
+    const trackedRequest = request.finally(() => {
+      if (purchaseOrderIndicatorsRequestsRef.current.get(key) === trackedRequest) purchaseOrderIndicatorsRequestsRef.current.delete(key)
+    })
+    purchaseOrderIndicatorsRequestsRef.current.set(key, trackedRequest)
+    return trackedRequest
+  }, [purchaseOrderCacheScope])
+
+  const fetchCachedPurchaseOrders = useCallback(async (requestFilters: PurchaseOrderFilters, force = false) => {
+    const key = purchaseOrderListCacheKey(purchaseOrderCacheScope, requestFilters)
+    const generation = purchaseOrderCacheGenerationRef.current
+    const cached = purchaseOrderListCacheRef.current.get(key)
+    if (!force && cached && Date.now() - cached.updatedAt < PURCHASE_ORDER_LIST_CACHE_TTL) return cached
+    if (!force) {
+      const pending = purchaseOrderListRequestsRef.current.get(key)
+      if (pending) return pending
+    }
+
+    const request = getPurchaseOrders(requestFilters)
+      .then(result => {
+        const next = { data: result.data, total: result.total, updatedAt: Date.now() }
+        if (generation === purchaseOrderCacheGenerationRef.current) {
+          purchaseOrderListCacheRef.current.set(key, next)
+        }
+        return next
+      })
+    const trackedRequest = request.finally(() => {
+      if (purchaseOrderListRequestsRef.current.get(key) === trackedRequest) {
+        purchaseOrderListRequestsRef.current.delete(key)
+      }
+    })
+    purchaseOrderListRequestsRef.current.set(key, trackedRequest)
+    return trackedRequest
+  }, [purchaseOrderCacheScope])
+
+  const fetchCachedPurchaseOrderInvoices = useCallback(async (poIds: string[], force = false) => {
+    if (poIds.length === 0) return {}
+    const key = purchaseOrderInvoiceCacheKey(purchaseOrderCacheScope, poIds)
+    const generation = purchaseOrderCacheGenerationRef.current
+    const cached = purchaseOrderInvoiceCacheRef.current.get(key)
+    if (!force && cached) return cached
+    if (!force) {
+      const pending = purchaseOrderInvoiceRequestsRef.current.get(key)
+      if (pending) return pending
+    }
+    const request = getPurchaseOrderInvoiceSummaries(poIds)
+    const trackedRequest = request.finally(() => {
+      if (purchaseOrderInvoiceRequestsRef.current.get(key) === trackedRequest) {
+        purchaseOrderInvoiceRequestsRef.current.delete(key)
+      }
+    })
+    trackedRequest.then(result => {
+      if (generation === purchaseOrderCacheGenerationRef.current) {
+        purchaseOrderInvoiceCacheRef.current.set(key, result)
+      }
+    }).catch(() => undefined)
+    purchaseOrderInvoiceRequestsRef.current.set(key, trackedRequest)
+    return trackedRequest
+  }, [purchaseOrderCacheScope])
+
+  const loadVisiblePurchaseOrderInvoices = useCallback((orders: PurchaseOrder[], requestId: number) => {
+    const poIds = orders.map(order => order.id)
+    if (poIds.length === 0) return
+    setInvoiceSummariesLoading(true)
+    void fetchCachedPurchaseOrderInvoices(poIds).then(result => {
+      if (requestId !== requestSequence.current) return
+      setInvoiceSummaries(previous => ({ ...previous, ...result }))
+    }).catch(() => {
+      if (requestId === requestSequence.current) setInvoiceSummaries(previous => ({ ...previous }))
+    }).finally(() => {
+      if (requestId === requestSequence.current) setInvoiceSummariesLoading(false)
+    })
+  }, [fetchCachedPurchaseOrderInvoices])
+
+  const prefetchPurchaseOrderViews = useCallback((baseFilters: PurchaseOrderFilters) => {
+    const secondaryViews = PURCHASE_ORDER_OPERATIONAL_VIEWS.filter(view => view.value !== baseFilters.operational_view)
+    void Promise.all(secondaryViews.map(async view => {
+      const result = await fetchCachedPurchaseOrders({ ...baseFilters, operational_view: view.value })
+      await fetchCachedPurchaseOrderInvoices(result.data.map(order => order.id))
+    })).catch(() => undefined)
+  }, [fetchCachedPurchaseOrderInvoices, fetchCachedPurchaseOrders])
+
+  const invalidatePurchaseOrderListCache = useCallback(() => {
+    purchaseOrderCacheGenerationRef.current += 1
+    purchaseOrderListCacheRef.current.clear()
+    purchaseOrderListRequestsRef.current.clear()
+    purchaseOrderInvoiceCacheRef.current.clear()
+    purchaseOrderInvoiceRequestsRef.current.clear()
+    purchaseOrderIndicatorsCacheRef.current.clear()
+    purchaseOrderIndicatorsRequestsRef.current.clear()
+    setInvoiceSummaries({})
+    setIndicators(null)
+    if (activeCompany?.id) {
+      setIndicatorsLoading(true)
+      void fetchCachedPurchaseOrderIndicators(true).then(result => setIndicators(result)).finally(() => setIndicatorsLoading(false))
+    }
+  }, [activeCompany?.id, fetchCachedPurchaseOrderIndicators])
+
+  const load = useCallback(async ({ force = false } = {}) => {
     const requestId = ++requestSequence.current
-    if (loaded.current) setRefreshing(true)
+    const key = purchaseOrderListCacheKey(purchaseOrderCacheScope, filters)
+    const cached = !force ? purchaseOrderListCacheRef.current.get(key) : undefined
+    const hasFreshCache = Boolean(cached && Date.now() - cached.updatedAt < PURCHASE_ORDER_LIST_CACHE_TTL)
+    if (cached) {
+      setData(cached.data)
+      setTotal(cached.total)
+      setInitialLoading(false)
+      loaded.current = true
+      loadVisiblePurchaseOrderInvoices(cached.data, requestId)
+    } else if (loaded.current) setRefreshing(true)
     else setInitialLoading(true)
+
+    if (cached && hasFreshCache && !force) {
+      setRefreshing(false)
+      prefetchPurchaseOrderViews(filters)
+      return
+    }
+
+    if (cached && !force) setRefreshing(true)
     try {
-      const res = await getPurchaseOrders(filters)
+      const res = await fetchCachedPurchaseOrders(filters, force)
       if (requestId !== requestSequence.current) return
       setData(res.data)
       setTotal(res.total)
       loaded.current = true
+      loadVisiblePurchaseOrderInvoices(res.data, requestId)
+      prefetchPurchaseOrderViews(filters)
     } catch {
       if (requestId === requestSequence.current) msg('No se pudieron actualizar las órdenes de compra.')
     } finally {
@@ -349,9 +533,35 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         setRefreshing(false)
       }
     }
-  }, [filters])
+  }, [fetchCachedPurchaseOrders, filters, loadVisiblePurchaseOrderInvoices, prefetchPurchaseOrderViews, purchaseOrderCacheScope])
+
+  useEffect(() => {
+    const previousScope = purchaseOrderCacheScopeRef.current
+    if (previousScope && previousScope !== purchaseOrderCacheScope) {
+      invalidatePurchaseOrderListCache()
+      requestSequence.current += 1
+      loaded.current = false
+      setData([])
+      setTotal(0)
+    }
+    purchaseOrderCacheScopeRef.current = purchaseOrderCacheScope
+  }, [invalidatePurchaseOrderListCache, purchaseOrderCacheScope])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    if (!activeCompany?.id) return
+    setIndicatorsLoading(true)
+    void fetchCachedPurchaseOrderIndicators().then(result => setIndicators(result)).finally(() => setIndicatorsLoading(false))
+  }, [activeCompany?.id, fetchCachedPurchaseOrderIndicators])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const search = searchInput.trim() || undefined
+      setFilters(previous => previous.search === search ? previous : { ...previous, search, page: 1 })
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [searchInput])
 
   function poColumn(id: string) { return PURCHASE_ORDER_COLUMNS.find(column => column.id === id)! }
   function resizeHandle(id: string) {
@@ -851,7 +1061,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         try { localStorage.removeItem(draftStorageKey) } catch {}
       }
        msg(editId ? 'Orden de compra actualizada' : 'Orden de compra creada')
-      setView('list'); resetForm(); load()
+       invalidatePurchaseOrderListCache(); setView('list'); resetForm(); load()
     } catch (error) {
       submittingRef.current = false
       setIsSubmitting(false)
@@ -859,15 +1069,74 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     }
   }
 
-  async function handleStatusUpdate(poId: string, newStatus: string, reason?: string) {
-    if (newStatus === 'CANCELADA' && !confirm('¿Cancelar esta orden de compra?')) return
-    const res = await updatePurchaseOrderStatus(poId, newStatus, reason)
-    if ('error' in res && res.error) { msg(res.error); return }
-    msg(`Estado actualizado a ${statusLabel(newStatus)}`)
-    const d = await getPurchaseOrderDetail(poId)
-    if (d) setDetail(d)
-    load()
+  function requestCancellation(po: PurchaseOrder) {
+    setCancelPendingPo(po)
+    setCancelReason('')
+    setCancelError('')
   }
+
+  async function handleCancellation() {
+    if (!cancelPendingPo || cancelling) return
+    const reason = cancelReason.trim()
+    if (!reason) {
+      setCancelError('El motivo de anulación es obligatorio')
+      return
+    }
+    const poId = cancelPendingPo.id
+    setCancelling(true)
+    setCancelError('')
+    try {
+      const res = await cancelPurchaseOrder(poId, reason)
+      if ('error' in res && res.error) {
+        setCancelError(res.error)
+        return
+      }
+      delete detailCacheRef.current[poId]
+      delete pendingRequestsRef.current[poId]
+      setCancelPendingPo(null)
+      setCancelReason('')
+      msg('Orden de compra anulada correctamente')
+      invalidatePurchaseOrderListCache()
+      await load()
+      const updatedDetail = await getPurchaseOrderDetail(poId)
+      if (updatedDetail) {
+        detailCacheRef.current[poId] = updatedDetail
+        setDetail(updatedDetail)
+        if (selectedPo?.id === poId) setSelectedPo(updatedDetail.po as PurchaseOrder)
+      }
+    } catch (error) {
+      setCancelError(error instanceof Error ? error.message : 'No se pudo anular la orden de compra')
+    } finally {
+      setCancelling(false)
+    }
+  }
+
+  const cancellationModal = cancelPendingPo ? (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/35 px-4" role="dialog" aria-modal="true" aria-labelledby="cancel-po-title">
+      <div className="w-full max-w-md rounded-2xl border border-[#D1C7BD] bg-[#F7F4F0] p-5 shadow-2xl">
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <div>
+            <h2 id="cancel-po-title" className="text-base font-bold text-[#322D29]">Anular orden de compra</h2>
+            <p className="mt-1 text-xs text-[#6D625B]">Esta operación conserva los datos y deja trazabilidad.</p>
+          </div>
+          <button type="button" onClick={() => setCancelPendingPo(null)} disabled={cancelling} className="rounded-lg p-1 text-[#6D625B] hover:bg-[#D1C7BD]/40 disabled:opacity-50" aria-label="Cerrar"><X className="h-4 w-4" /></button>
+        </div>
+        <div className="mb-4 rounded-xl border border-[#D1C7BD] bg-white px-3 py-2 text-xs text-[#322D29]">
+          <p><span className="font-semibold">OC:</span> {cancelPendingPo.correlative}</p>
+          <p className="mt-1"><span className="font-semibold">Proveedor:</span> {cancelPendingPo.supplier_name}</p>
+        </div>
+        <label htmlFor="cancel-reason" className="mb-1.5 block text-xs font-semibold text-[#322D29]">Motivo de anulación <span className="text-red-500">*</span></label>
+        <textarea id="cancel-reason" value={cancelReason} onChange={event => { setCancelReason(event.target.value); setCancelError('') }} disabled={cancelling} autoFocus rows={3} maxLength={500} placeholder="Ingrese el motivo de anulación" className={textareaClass} />
+        {cancelError && <p className="mt-2 text-xs text-red-600" role="alert">{cancelError}</p>}
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={() => setCancelPendingPo(null)} disabled={cancelling} className="rounded-xl border border-[#D1C7BD] px-3.5 py-2 text-xs font-semibold text-[#6D625B] hover:bg-[#D1C7BD]/30 disabled:opacity-50">Volver</button>
+          <button type="button" onClick={() => void handleCancellation()} disabled={cancelling} className="inline-flex items-center gap-1.5 rounded-xl bg-red-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50">
+            {cancelling && <Loader2 className="h-3.5 w-3.5 animate-spin" />} {cancelling ? 'Procesando...' : 'Confirmar anulación'}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null
 
   function requestCloseWithPending(po: PurchaseOrder) {
     setCloseError('')
@@ -899,6 +1168,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     setClosePendingPo(null)
     setCloseReason('')
     msg(res.already_closed ? 'La orden de compra ya estaba cerrada' : 'Orden de compra cerrada con saldo pendiente')
+    invalidatePurchaseOrderListCache()
     await load()
     const d = await getPurchaseOrderDetail(poId)
     if (d) {
@@ -933,6 +1203,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
 
       delete detailCacheRef.current[poId]
       delete pendingRequestsRef.current[poId]
+      invalidatePurchaseOrderListCache()
       await load()
       const updatedDetail = await getPurchaseOrderDetail(poId)
       if (updatedDetail) {
@@ -950,12 +1221,14 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   async function handleSupplierReviewSaved(poId: string) {
     delete detailCacheRef.current[poId]
     delete pendingRequestsRef.current[poId]
+    invalidatePurchaseOrderListCache()
     await load()
   }
 
   async function handleSupplierReviewConfirmed(poId: string) {
     delete detailCacheRef.current[poId]
     delete pendingRequestsRef.current[poId]
+    invalidatePurchaseOrderListCache()
     await load()
     setSupplierReviewPoId(null)
     setView('list')
@@ -1968,8 +2241,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
               <button onClick={() => void handleDownloadExcel()} disabled={downloadingExcel} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50">
                 <FileSpreadsheet className="w-3.5 h-3.5" /> {downloadingExcel ? 'Excel...' : 'Excel'}
               </button>
-              {['EMITIDA', 'BORRADOR', 'PENDIENTE_APROBACION', 'APROBADA'].includes(detail.po.status) && (
-                <button onClick={() => handleStatusUpdate(detail.po.id, 'CANCELADA')} className="px-4 py-2 rounded-xl border border-red-500/30 text-red-500 hover:bg-red-500/10 text-xs font-semibold transition-colors flex items-center gap-1.5">
+               {['BORRADOR', 'EMITIDA', 'PENDIENTE_APROBACION', 'APROBADA', 'ENVIADA_PROVEEDOR', 'CONFIRMADA'].includes(detail.po.status) && (
+                 <button onClick={() => requestCancellation(detail.po as PurchaseOrder)} className="px-4 py-2 rounded-xl border border-red-500/30 text-red-500 hover:bg-red-500/10 text-xs font-semibold transition-colors flex items-center gap-1.5">
                   <Ban className="w-3.5 h-3.5" /> Cancelar
                 </button>
               )}
@@ -2081,8 +2354,9 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
             </div>
           </div>
          </div>
-       </div>
-     )
+         {cancellationModal}
+         </div>
+       )
    }
 
    if (view === 'analysis') {
@@ -2099,11 +2373,32 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         <div className={`flex flex-col h-full overflow-hidden transition-all duration-300 ${selectedPo ? "w-full md:w-1/3 lg:w-1/4 border-r border-theme-border" : "w-full"}`}>
       {message && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
 
-      <div className="shrink-0 flex flex-col gap-2 border-b border-[#D1C7BD] bg-[#EFE9E1] px-3 py-2">
-        <div className="flex flex-col md:flex-row items-center gap-2 w-full">
+       <div className="shrink-0 flex flex-col gap-2 border-b border-[#D1C7BD] bg-[#EFE9E1] px-3 py-2">
+          <div className="flex items-center gap-1 overflow-x-auto rounded-md border border-[#D1C7BD] bg-white p-1" aria-label="Vista operativa de órdenes de compra">
+            {PURCHASE_ORDER_OPERATIONAL_VIEWS.map(option => (
+             <button
+               key={option.value}
+               type="button"
+               aria-pressed={(filters.operational_view ?? 'PENDING') === option.value}
+               onClick={() => setFilters(previous => ({ ...previous, operational_view: option.value, page: 1 }))}
+               className={`whitespace-nowrap rounded px-3 py-1.5 text-xs font-semibold transition-colors ${(filters.operational_view ?? 'PENDING') === option.value ? 'bg-[#72383D] text-white' : 'text-[#6D625B] hover:bg-[#F3EFE9] hover:text-[#322D29]'}`}
+             >
+               {option.label}
+             </button>
+            ))}
+            <div className="ml-auto flex shrink-0 items-center gap-1 border-l border-[#D1C7BD] pl-2 text-[10px] text-[#6D625B]" aria-label="Indicadores de órdenes de compra">
+              {indicatorsLoading && !indicators ? <Loader2 className="h-3 w-3 animate-spin" /> : indicators ? <>
+                <span className="whitespace-nowrap" title="Órdenes pendientes según la vista Pendientes">Pend. <strong className="text-[#322D29]">{indicators.pending_count}</strong></span>
+                <span className="whitespace-nowrap" title="Monto pendiente proporcional por líneas">Saldo <strong className="text-[#322D29]">{formatCurrency(indicators.pending_amount)}</strong></span>
+                <span className="whitespace-nowrap" title="Órdenes con recepción completada en los últimos 30 días">30d OC <strong className="text-[#322D29]">{indicators.received_order_count}</strong></span>
+                <span className="whitespace-nowrap" title="Monto bruto recibido en los últimos 30 días">30d $ <strong className="text-[#322D29]">{formatCurrency(indicators.received_amount)}</strong></span>
+              </> : <span className="whitespace-nowrap text-[#AC9C8D]">Indicadores no disponibles</span>}
+            </div>
+          </div>
+         <div className="flex flex-col md:flex-row items-center gap-2 w-full">
           <div className="relative flex-1 w-full">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#AC9C8D]" />
-            <input type="text" value={filters.search ?? ''} onChange={e => setFilters(p => ({ ...p, search: e.target.value || undefined, page: 1 }))}
+             <input type="text" value={searchInput} onChange={e => setSearchInput(e.target.value)}
               placeholder="Buscar por N° OC, proveedor..."
               className="h-8 w-full rounded-md border border-[#D1C7BD] bg-white pl-8 pr-3 text-xs text-[#322D29] placeholder:text-[#AC9C8D] transition-all focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
           </div>
@@ -2113,7 +2408,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
               <Filter className="h-3.5 w-3.5" />
               <span>Filtros</span>
             </button>
-            <button type="button" onClick={load} className="flex h-8 items-center gap-1.5 rounded-md border border-[#D1C7BD] bg-[#EFE9E1] px-2.5 text-xs font-semibold text-[#6D625B] transition-all hover:bg-[#D1C7BD]/40 hover:text-[#322D29]" title="Actualizar listado">
+             <button type="button" onClick={() => { invalidatePurchaseOrderListCache(); void load({ force: true }) }} className="flex h-8 items-center gap-1.5 rounded-md border border-[#D1C7BD] bg-[#EFE9E1] px-2.5 text-xs font-semibold text-[#6D625B] transition-all hover:bg-[#D1C7BD]/40 hover:text-[#322D29]" title="Actualizar listado">
               <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
               <span className="hidden sm:inline">Actualizar</span>
             </button>
@@ -2140,7 +2435,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
            <div className="border-t border-[#D1C7BD] pt-2 animate-in slide-in-from-top-2 duration-200">
             <div className="flex items-center justify-between mb-4">
                  <h4 className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#AC9C8D]">Filtros avanzados</h4>
-              <button onClick={() => { setFilters({ page: 1, pageSize: 50 }); setShowFilters(false) }} className="text-xs font-semibold text-theme-text-accent hover:text-theme-text flex items-center gap-1 transition-colors">
+               <button onClick={() => { setSearchInput(''); setFilters({ operational_view: 'PENDING', page: 1, pageSize: 50 }); setShowFilters(false) }} className="text-xs font-semibold text-theme-text-accent hover:text-theme-text flex items-center gap-1 transition-colors">
                 <X className="w-3 h-3" /> Limpiar filtros
               </button>
             </div>
@@ -2196,48 +2491,33 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         </div>
       ) : (
          <div className="min-w-0 flex-1 overflow-x-auto overflow-y-auto overscroll-x-contain bg-white">
-           <table className="min-w-[1650px] w-full table-fixed whitespace-nowrap border-collapse text-sm">
-             <colgroup>{PURCHASE_ORDER_COLUMNS.map(column => <col key={column.id} style={{ width: widths[column.id] ?? column.defaultWidth }} />)}</colgroup>
-             <thead className="sticky top-0 z-10">
-               <tr className="bg-[#322D29] text-[9px] font-bold uppercase tracking-[0.12em] text-[#EFE9E1]">
-                 <th colSpan={3} className="border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left">Identificación</th>
-                 <th colSpan={2} className="border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left">Clasificación</th>
-                 <th colSpan={2} className="border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left">Responsables</th>
-                 <th className="border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left">Estado</th>
-                 <th className="border-r border-[#AC9C8D]/35 px-3 py-1.5 text-right">Importe</th>
-                 <th colSpan={2} className="border-r border-[#AC9C8D]/35 px-3 py-1.5 text-left">Seguimiento</th>
-                 <th className={`sticky right-0 z-20 bg-[#322D29] px-3 py-1.5 text-right ${selectedPo ? "hidden" : ""}`}>Acciones</th>
-               </tr>
-               <tr className="border-b border-[#D1C7BD] bg-[#F7F4F0] text-[9px] font-semibold uppercase tracking-[0.08em] text-[#322D29]">
-                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">N° OC{resizeHandle('correlative')}</th>
-                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">Fecha{resizeHandle('issueDate')}</th>
-                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">Proveedor{resizeHandle('supplier')}</th>
-                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">Tipo{resizeHandle('type')}</th>
-                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">Bodega{resizeHandle('warehouse')}</th>
-                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">Solicitante{resizeHandle('requester')}</th>
-                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">Autoriza{resizeHandle('authorized')}</th>
-                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">Estado{resizeHandle('status')}</th>
-                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-right">Total{resizeHandle('total')}</th>
-                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">Recepción{resizeHandle('receipt')}</th>
-                 <th className="relative border-r border-theme-border/30 border-[#E5DDD4] px-3 py-1.5 text-left">Factura{resizeHandle('invoice')}</th>
-                 <th className={`sticky right-0 z-20 border-l border-[#D1C7BD] bg-[#F7F4F0] px-3 py-1.5 text-right text-[#322D29] ${selectedPo ? "hidden" : ""}`}>Acciones</th>
-               </tr>
+            <table className="min-w-[1080px] w-full table-fixed whitespace-nowrap border-collapse text-sm">
+              <colgroup>{PURCHASE_ORDER_COLUMNS.map(column => <col key={column.id} style={{ width: widths[column.id] ?? column.defaultWidth }} />)}</colgroup>
+              <thead className="sticky top-0 z-10">
+                <tr className="border-b border-[#D1C7BD] bg-[#322D29] text-[9px] font-bold uppercase tracking-[0.08em] text-[#EFE9E1]">
+                  <th className="relative border-r border-[#AC9C8D]/35 px-2.5 py-2 text-left">N° OC{resizeHandle('correlative')}</th>
+                  <th className="relative border-r border-[#AC9C8D]/35 px-2.5 py-2 text-left">Fecha{resizeHandle('issueDate')}</th>
+                  <th className="relative border-r border-[#AC9C8D]/35 px-2.5 py-2 text-left">Proveedor{resizeHandle('supplier')}</th>
+                  <th className="relative border-r border-[#AC9C8D]/35 px-2.5 py-2 text-left">Solicitante{resizeHandle('requester')}</th>
+                  <th className="relative border-r border-[#AC9C8D]/35 px-2.5 py-2 text-left">Estado{resizeHandle('status')}</th>
+                  <th className="relative border-r border-[#AC9C8D]/35 px-2.5 py-2 text-right">Total{resizeHandle('total')}</th>
+                  <th className="relative border-r border-[#AC9C8D]/35 px-2.5 py-2 text-left">Recepción{resizeHandle('receipt')}</th>
+                  <th className="relative border-r border-[#AC9C8D]/35 px-2.5 py-2 text-left">Factura{resizeHandle('invoice')}</th>
+                  <th className="sticky right-0 z-20 border-l border-[#AC9C8D]/35 bg-[#322D29] px-2.5 py-2 text-right">Acciones</th>
+                </tr>
              </thead>
              <tbody>
                {data.map(po => (
                  <tr key={po.id} className={`cursor-pointer border-b border-[#E5DDD4] transition-colors hover:bg-[#F3EFE9] ${selectedPo?.id === po.id ? "bg-[#F5EDEE] border-l-2 border-l-[#72383D]" : "bg-white"}`} onClick={() => openDetail(po)} onDoubleClick={event => { if (!shouldIgnoreOperationalRowDoubleClick(event.target)) openDetail(po) }} onMouseEnter={() => prefetchDetail(po.id)}>
-                   <td className="truncate px-3 py-1.5 text-xs font-mono font-semibold text-[#72383D]" title={po.correlative}>{po.correlative}</td>
-                   <td className="truncate px-3 py-1.5 text-xs text-[#322D29]" title={formatDate(po.issue_date)}>{formatDate(po.issue_date)}</td>
-                   <td className="truncate px-3 py-1.5 text-xs text-[#322D29]" title={po.supplier_name}>{po.supplier_name}</td>
-                   <td className="truncate px-3 py-1.5 text-xs text-[#6D625B]" title={po.po_type}>{po.po_type}</td>
-                   <td className="truncate px-3 py-1.5 text-xs text-[#6D625B]" title={po.warehouse_name || '—'}>{po.warehouse_name || '—'}</td>
-                   <td className="truncate px-3 py-1.5 text-xs text-[#6D625B]" title={po.requester_name}>{po.requester_name}</td>
-                   <td className="truncate px-3 py-1.5 text-xs text-[#6D625B]" title={po.authorized_name || '—'}>{po.authorized_name || '—'}</td>
-                   <td className="px-4 py-2.5 truncate"><Badge value={po.status} map={STATUS_BADGES} label={purchaseOrderStatusLabel(po)} /></td>
-                   <td className="truncate px-3 py-1.5 text-right text-xs font-medium tabular-nums text-[#322D29]" title={formatCurrency(po.grand_total, po.currency)}>{formatCurrency(po.grand_total, po.currency)}</td>
-                  <td className="px-4 py-2.5 truncate"><Badge value={po.receipt_status} map={RECEIPT_BADGES} /></td>
-                  <td className="px-4 py-2.5 truncate"><Badge value={po.invoice_status} map={INVOICE_BADGES} /></td>
-                   <td className={`sticky right-0 z-[5] whitespace-nowrap border-l border-[#D1C7BD] bg-white px-3 py-1.5 text-right ${selectedPo ? "hidden" : ""}`} onClick={e => e.stopPropagation()}>
+                    <td className="border-r border-[#E5DDD4] truncate px-2.5 py-1.5 text-xs font-mono font-semibold tabular-nums text-[#72383D]" title={po.correlative}>{shortCorrelative(po.correlative)}</td>
+                    <td className="border-r border-[#E5DDD4] truncate px-2.5 py-1.5 text-xs tabular-nums text-[#322D29]" title={formatDate(po.issue_date)}>{formatDate(po.issue_date)}</td>
+                    <td className="border-r border-[#E5DDD4] truncate px-2.5 py-1.5 text-xs text-[#322D29]" title={po.supplier_name}>{po.supplier_name}</td>
+                    <td className="border-r border-[#E5DDD4] truncate px-2.5 py-1.5 text-xs text-[#6D625B]" title={po.requester_name}>{po.requester_name}</td>
+                    <td className="border-r border-[#E5DDD4] truncate px-2.5 py-1.5"><Badge value={po.status} map={STATUS_BADGES} label={purchaseOrderStatusLabel(po)} /></td>
+                    <td className="border-r border-[#E5DDD4] truncate px-2.5 py-1.5 text-right text-xs font-medium tabular-nums text-[#322D29]" title={formatCurrency(po.grand_total, po.currency)}>{formatCurrency(po.grand_total, po.currency)}</td>
+                   <td className="border-r border-[#E5DDD4] truncate px-2.5 py-1.5"><Badge value={po.receipt_status} map={RECEIPT_BADGES} /></td>
+                   <td className="border-r border-[#E5DDD4] truncate px-2.5 py-1.5"><PurchaseOrderInvoiceCell documents={invoiceSummaries[po.id]} loading={invoiceSummariesLoading} onView={() => setInvoiceViewerPo(po)} /></td>
+                    <td className="sticky right-0 z-[5] whitespace-nowrap border-l border-[#D1C7BD] bg-white px-2.5 py-1.5 text-right" onClick={e => e.stopPropagation()}>
                     <button onClick={() => openDetail(po)} className="p-1.5 rounded-lg hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text transition-colors" title="Ver detalle">
                       <Eye className="w-4 h-4" />
                     </button>
@@ -2246,8 +2526,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                         <Edit className="w-4 h-4" />
                       </button>
                     )}
-                    {['EMITIDA', 'BORRADOR', 'PENDIENTE_APROBACION'].includes(po.status) && (
-                      <button onClick={() => handleStatusUpdate(po.id, 'CANCELADA')} className="p-1.5 rounded-lg hover:bg-red-500/10 text-theme-text-muted hover:text-red-500 transition-colors" title="Cancelar">
+                    {['BORRADOR', 'EMITIDA', 'PENDIENTE_APROBACION', 'APROBADA', 'ENVIADA_PROVEEDOR', 'CONFIRMADA'].includes(po.status) && (
+                       <button onClick={() => requestCancellation(po)} className="p-1.5 rounded-lg hover:bg-red-500/10 text-theme-text-muted hover:text-red-500 transition-colors" title="Cancelar">
                         <Ban className="w-4 h-4" />
                       </button>
                     )}
@@ -2261,14 +2541,14 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
               ))}
             </tbody>
           </table>
-        </div>
+      </div>
       )}
 
       {totalPages > 1 && (
         <div className="shrink-0 flex items-center justify-between text-xs p-3 border-t border-theme-border/60 bg-theme-text/[0.01]">
           <div className="flex items-center gap-2">
             <span className="text-theme-text-muted/50">Mostrar</span>
-            <select value={filters.pageSize} onChange={e => setFilters(p => ({ ...p, pageSize: parseInt(e.target.value) as 25 | 50 | 100 }))} className="h-8 rounded-lg border border-theme-border bg-theme-text/5 px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40">
+             <select value={filters.pageSize} onChange={e => setFilters(p => ({ ...p, pageSize: parseInt(e.target.value) as 25 | 50 | 100, page: 1 }))} className="h-8 rounded-lg border border-theme-border bg-theme-text/5 px-2 text-xs text-theme-text focus:outline-none focus:ring-1 focus:ring-theme-border-accent/40">
               <option value={25} className="bg-white dark:bg-emerald-900">25</option>
               <option value={50} className="bg-white dark:bg-emerald-900">50</option>
               <option value={100} className="bg-white dark:bg-emerald-900">100</option>
@@ -2305,8 +2585,9 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                        <button onClick={() => void handleDownloadPDF()} disabled={downloadingPdf} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"><Download className="w-3.5 h-3.5" /> {downloadingPdf ? 'PDF...' : 'PDF'}</button>
                        <button onClick={() => void handleDownloadExcel()} disabled={downloadingExcel} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"><FileSpreadsheet className="w-3.5 h-3.5" /> {downloadingExcel ? 'Excel...' : 'Excel'}</button>
                       {detail.po.status === 'EMITIDA' && <button onClick={() => void handleMarkSentToSupplier(detail.po.id)} disabled={isMarkingSent} className="px-4 py-2 rounded-xl border border-[#72383D]/35 text-[#72383D] hover:bg-[#72383D]/10 text-xs font-semibold transition-colors flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50">{isMarkingSent ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}{isMarkingSent ? 'Marcando...' : 'Marcar enviada al proveedor'}</button>}
-                      {detail.po.status === 'ENVIADA_PROVEEDOR' && <button onClick={() => openSupplierReview(detail.po.id)} className="px-4 py-2 rounded-xl bg-[#72383D] text-[#EFE9E1] hover:bg-[#5D2E32] text-xs font-semibold transition-colors flex items-center gap-1.5"><ClipboardCheck className="w-3.5 h-3.5" /> Revisar confirmación</button>}
-                      {detail.po.status === 'RECEPCION_PARCIAL' && <button onClick={() => requestCloseWithPending(detail.po as PurchaseOrder)} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5"><Lock className="w-3.5 h-3.5" /> Cerrar OC</button>}
+                       {detail.po.status === 'ENVIADA_PROVEEDOR' && <button onClick={() => openSupplierReview(detail.po.id)} className="px-4 py-2 rounded-xl bg-[#72383D] text-[#EFE9E1] hover:bg-[#5D2E32] text-xs font-semibold transition-colors flex items-center gap-1.5"><ClipboardCheck className="w-3.5 h-3.5" /> Revisar confirmación</button>}
+                       {detail.po.status === 'RECEPCION_PARCIAL' && <button onClick={() => requestCloseWithPending(detail.po as PurchaseOrder)} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5"><Lock className="w-3.5 h-3.5" /> Cerrar OC</button>}
+                       {['BORRADOR', 'EMITIDA', 'PENDIENTE_APROBACION', 'APROBADA', 'ENVIADA_PROVEEDOR', 'CONFIRMADA'].includes(detail.po.status) && <button onClick={() => requestCancellation(detail.po as PurchaseOrder)} className="px-4 py-2 rounded-xl border border-red-500/30 text-red-500 hover:bg-red-500/10 text-xs font-semibold transition-colors flex items-center gap-1.5"><Ban className="w-3.5 h-3.5" /> Anular</button>}
                     </div>
                    {detail.po.status === 'CERRADA' && detail.po.closed_with_pending && (
                      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-700 dark:text-amber-200">
@@ -2349,7 +2630,16 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
          )}
        </div>
 
-      {closePendingPo && (
+        {cancellationModal}
+        {invoiceViewerPo && (
+          <PurchaseOrderInvoiceViewerModal
+            correlative={invoiceViewerPo.correlative}
+            supplierName={invoiceViewerPo.supplier_name}
+            documents={invoiceSummaries[invoiceViewerPo.id] ?? []}
+            onClose={() => setInvoiceViewerPo(null)}
+          />
+        )}
+        {closePendingPo && (
         <div className="fixed inset-0 z-[1300] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Cerrar orden de compra con saldo pendiente">
           <div className="w-full max-w-lg rounded-2xl border border-theme-border bg-theme-surface p-5 shadow-xl">
             <div className="flex items-start justify-between gap-4">

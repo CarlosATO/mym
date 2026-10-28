@@ -6,6 +6,7 @@ const root = new URL('..', import.meta.url)
 const migration = await readFile(new URL('supabase/migrations/20261016180000_adquisiciones_purchase_order_access_control.sql', root), 'utf8')
 const detailFix = await readFile(new URL('supabase/migrations/20261016180001_adquisiciones_purchase_order_detail_jsonb_fix.sql', root), 'utf8')
 const action = await readFile(new URL('src/app/actions/adquisiciones/purchase-orders.ts', root), 'utf8')
+const cancellationMigration = await readFile(new URL('supabase/migrations/20261028120000_adquisiciones_authenticated_purchase_order_cancellation.sql', root), 'utf8')
 
 test('read RPCs are recreated with company authorization and least privilege', () => {
   assert.match(migration, /DROP FUNCTION IF EXISTS adquisiciones\.get_purchase_orders\(jsonb, uuid\)/)
@@ -57,4 +58,25 @@ test('server actions scope the read RPCs to the authenticated company', () => {
   assert.match(detailSource, /p_po_id: poId/)
   assert.match(detailSource, /p_user_id: user\.id/)
   assert.match(detailSource, /p_company_id: companyId/)
+})
+
+test('purchase-order cancellation requires the JWT identity and authenticated execution', () => {
+  assert.match(cancellationMigration, /v_actor uuid := auth\.uid\(\)/)
+  assert.match(cancellationMigration, /IF v_actor IS NULL THEN/)
+  assert.match(cancellationMigration, /v_actor IS DISTINCT FROM p_user_id/)
+  assert.match(cancellationMigration, /u\.is_active = true/)
+  assert.match(cancellationMigration, /u\.deleted_at IS NULL/)
+  assert.match(cancellationMigration, /core\.has_company_access\(v_actor, p_company_id\)/)
+  assert.match(cancellationMigration, /core\.has_permission_for_company\(v_actor, p_company_id, 'adquisiciones\.po\.update'\)/)
+  assert.match(cancellationMigration, /REVOKE ALL ON FUNCTION adquisiciones\.cancel_purchase_order\(uuid, text, uuid, uuid\)\s+FROM PUBLIC, anon, authenticated, service_role/)
+  assert.match(cancellationMigration, /GRANT EXECUTE ON FUNCTION adquisiciones\.cancel_purchase_order\(uuid, text, uuid, uuid\)\s+TO authenticated/)
+  assert.doesNotMatch(cancellationMigration, /GRANT EXECUTE ON FUNCTION adquisiciones\.cancel_purchase_order[^\n]*TO service_role/)
+
+  const start = action.indexOf('export async function cancelPurchaseOrder')
+  const end = action.indexOf('export async function closePurchaseOrderWithPending', start)
+  assert.ok(start >= 0 && end > start)
+  const source = action.slice(start, end)
+  assert.match(source, /supabase\.auth\.getUser\(\)/)
+  assert.match(source, /supabase\.schema\('adquisiciones'\)\.rpc\('cancel_purchase_order'/)
+  assert.doesNotMatch(source, /adqAdmin\(\)/)
 })
