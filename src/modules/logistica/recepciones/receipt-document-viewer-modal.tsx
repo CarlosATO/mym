@@ -23,6 +23,25 @@ type DocumentLink = {
   expiresIn: number
 }
 
+type ReceiptDocumentResult = DocumentLink | { error: string }
+
+// Strict Mode and fast reopenings can mount the viewer more than once. Share only
+// the in-flight request; completed URLs are never cached past this component.
+const inFlightRequests = new Map<string, Promise<ReceiptDocumentResult>>()
+
+function loadReceiptDocument(documentId: string): Promise<ReceiptDocumentResult> {
+  const existing = inFlightRequests.get(documentId)
+  if (existing) return existing
+
+  let request!: Promise<ReceiptDocumentResult>
+  request = getReceiptDocumentSignedUrl(documentId)
+    .finally(() => {
+      if (inFlightRequests.get(documentId) === request) inFlightRequests.delete(documentId)
+    })
+  inFlightRequests.set(documentId, request)
+  return request
+}
+
 function documentTitle(documentType?: string | null, documentNumber?: string | null): string {
   return [documentType, documentNumber].filter(Boolean).join(' ') || 'Documento de recepción'
 }
@@ -35,7 +54,12 @@ export function ReceiptDocumentViewerModal({ documentId, documentType, documentN
 
   useEffect(() => {
     let active = true
-    void getReceiptDocumentSignedUrl(documentId).then(result => {
+    setLink(null)
+    setError(null)
+    setPreviewError(false)
+    setLoading(true)
+    const startedAt = performance.now()
+    void loadReceiptDocument(documentId).then(result => {
       if (!active) return
       if ('error' in result) {
         setError(result.error || 'No se pudo obtener el documento.')
@@ -43,10 +67,12 @@ export function ReceiptDocumentViewerModal({ documentId, documentType, documentN
         setLink(result)
       }
       setLoading(false)
+      if (process.env.NODE_ENV === 'development') console.info(`[receipt-document] ${documentId} ready in ${Math.round(performance.now() - startedAt)}ms`)
     }).catch(() => {
       if (!active) return
       setError('No se pudo obtener el enlace temporal del documento.')
       setLoading(false)
+      if (process.env.NODE_ENV === 'development') console.info(`[receipt-document] ${documentId} failed in ${Math.round(performance.now() - startedAt)}ms`)
     })
     return () => { active = false }
   }, [documentId])

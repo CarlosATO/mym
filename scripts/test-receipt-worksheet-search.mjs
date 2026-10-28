@@ -9,7 +9,7 @@ const worksheet = await readFile(new URL('src/modules/logistica/recepciones/rece
 function deriveSource() {
   const start = worksheet.indexOf('const visibleReceiptItems = useMemo(')
   assert.ok(start >= 0, 'visibleReceiptItems derive block not found')
-  return worksheet.slice(start, worksheet.indexOf('}, [poDetail, receiptSearchQuery])', start))
+  return worksheet.slice(start, worksheet.indexOf('}, [poDetail, receiptSearchQuery, receiptLineFilter])', start))
 }
 
 test('A. receipt worksheet exposes a SKU/product search input above the lines table', () => {
@@ -29,7 +29,7 @@ test('B/C/D. search matches SKU and description partially via includes', () => {
 test('E/F. search is case-insensitive, trimmed, and shows every line with no query', () => {
   const source = deriveSource()
   assert.match(source, /const query = receiptSearchQuery\.trim\(\)\.toLocaleLowerCase\('es-CL'\)/)
-  assert.match(source, /if \(!query\) return indexed/)
+  assert.match(source, /if \(!query\) return statusFiltered/)
   assert.match(source, /toLocaleLowerCase\('es-CL'\)\.includes\(query\)/)
 })
 
@@ -44,7 +44,7 @@ test('G. visibleReceiptItems is derived from the canonical poDetail.items withou
 
 test('H. itemInputs stays an independent state and is not recreated while searching', () => {
   assert.match(worksheet, /const \[itemInputs, setItemInputs\] = useState<Record<string, ItemSplit\[\]>>\(\{\}\)/)
-  assert.match(worksheet, /\}, \[poDetail, receiptSearchQuery\]\)/)
+   assert.match(worksheet, /\}, \[poDetail, receiptSearchQuery, receiptLineFilter\]\)/)
   assert.doesNotMatch(deriveSource(), /itemInputs|setItemInputs/)
 })
 
@@ -79,5 +79,20 @@ test('L. original OC line numbering is preserved through the filter', () => {
 test('counter keeps the real OC total and shows X of Y only while searching', () => {
   assert.match(worksheet, /\{poDetail\.items\.length\} ítems en total/)
   assert.match(worksheet, /Mostrando \{visibleReceiptItems\.length\} de \{poDetail\.items\.length\}/)
-  assert.match(worksheet, /receiptSearchQuery\.trim\(\) && \(/)
+  assert.match(worksheet, /Mostrando \{visibleReceiptItems\.length\} de \{poDetail\.items\.length\}/)
+})
+
+test('M. pending-only filter uses quantity_pending without changing canonical items', () => {
+  assert.match(worksheet, /const \[receiptLineFilter, setReceiptLineFilter\] = useState<'ALL' \| 'PENDING'>\('ALL'\)/)
+  assert.match(worksheet, /receiptLineFilter === 'PENDING'[\s\S]*?Number\(item\.quantity_pending \|\| 0\) > 0/)
+  assert.match(worksheet, /Solo pendientes/)
+  assert.match(worksheet, /No hay líneas pendientes por recepcionar\./)
+})
+
+test('N. complete lines do not render split controls or enter the payload', () => {
+  assert.match(worksheet, /const isComplete = Number\(item\.quantity_pending \|\| 0\) <= 0/)
+  assert.match(worksheet, /!isComplete && splits\.map/)
+  assert.match(worksheet, /!isComplete && <tr className=/)
+  assert.match(worksheet, /if \(qtyPending <= 0\) continue/)
+  assert.match(worksheet, /Completa/)
 })

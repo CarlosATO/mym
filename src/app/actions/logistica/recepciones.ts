@@ -46,6 +46,14 @@ export interface PurchaseOrderPending {
   latest_receipt_number: string | null
   latest_receipt_date: string | null
   latest_receipt_doc: string | null
+  receipt_documents: ReceiptDocumentSummary[]
+}
+
+export interface ReceiptDocumentSummary {
+  id: string
+  document_type: string | null
+  document_number: string | null
+  file_name: string | null
 }
 
 export interface ReceiptWarehouseOption {
@@ -57,6 +65,7 @@ const PO_OPERATIONAL_FIELDS = 'id, company_id, correlative, issue_date, required
 const PO_ECONOMIC_FIELDS = 'net_total, discount_total, tax_total, exempt_total, grand_total'
 const PO_ITEM_OPERATIONAL_FIELDS = 'id, po_id, line_number, item_type, product_id, product_description, unit, quantity, warehouse_id, required_date, notes, quantity_received, lot_number, expiration_date'
 const PO_ITEM_ECONOMIC_FIELDS = 'unit_price, discount_percent, discount_amount, tax_rate, tax_amount, line_total'
+const PO_ITEM_RECEIPT_AMOUNT_FIELDS = 'unit_price'
 const RECEIPT_OPERATIONAL_FIELDS = 'id, company_id, purchase_order_id, receipt_number, receiving_type, warehouse_id, status, received_at, received_by, notes, created_by, created_at'
 const RECEIPT_ECONOMIC_FIELDS = 'receipt_total_gross'
 const RECEIPT_DOCUMENT_BUCKET = 'recepciones'
@@ -75,6 +84,12 @@ async function authorizeReception(): Promise<{ authorization: WmsAuthorization; 
   const authorization = await requireWmsPermission('logistica.receptions.create')
   const canViewEconomics = await hasWmsPermission(authorization.user.id, 'adquisiciones.po.view')
   return { authorization, canViewEconomics }
+}
+
+async function authorizeReceiptForm(): Promise<{ authorization: WmsAuthorization; canViewEconomics: boolean; canViewReceiptAmounts: boolean }> {
+  const { authorization, canViewEconomics } = await authorizeReception()
+  const canViewReceiptAmounts = canViewEconomics || await hasWmsPermission(authorization.user.id, 'logistica.receptions.amounts.view')
+  return { authorization, canViewEconomics, canViewReceiptAmounts }
 }
 
 export async function getActiveReceiptWarehouses(): Promise<ReceiptWarehouseOption[]> {
@@ -184,7 +199,19 @@ export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]>
     const qtyPending = Math.max(0, qtyOrdered - qtyReceived)
 
     // Receipts
-     const poReceipts = receiptsData?.filter((r: any) => r.purchase_order_id === po.id) || []
+    const poReceipts = receiptsData?.filter((r: any) => r.purchase_order_id === po.id) || []
+    const receiptDocuments = Array.from(new Map(
+      poReceipts
+        .filter((receipt: any) => !['CANCELADA', 'CANCELLED'].includes(receipt.status))
+        .flatMap((receipt: any) => Array.isArray(receipt.receipt_documents) ? receipt.receipt_documents : [])
+        .filter((document: any) => document.document_type === 'FA')
+        .map((document: any) => [document.id, {
+          id: document.id,
+          document_type: document.document_type,
+          document_number: document.document_number,
+          file_name: document.file_name,
+        } as ReceiptDocumentSummary])
+    ).values())
     const amountReceived = canViewEconomics
        ? poReceipts.reduce((acc: number, r: any) => acc + Number(r.receipt_total_gross || 0), 0)
       : undefined
@@ -219,7 +246,8 @@ export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]>
        ...(canViewEconomics ? { amount_received: amountReceived } : {}),
       latest_receipt_number: latestReceiptNumber,
       latest_receipt_date: latestReceiptDate,
-      latest_receipt_doc: latestReceiptDoc
+      latest_receipt_doc: latestReceiptDoc,
+      receipt_documents: receiptDocuments,
     }
   })
   if (process.env.NODE_ENV === 'development') console.timeEnd('getPendingReceivablePOs')
@@ -227,8 +255,8 @@ export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]>
 }
 
 export async function getPurchaseOrderForReceipt(poId: string) {
-  const { authorization, canViewEconomics } = await authorizeReception()
-  return getPurchaseOrderForReceiptAuthorized(poId, authorization, canViewEconomics)
+  const { authorization, canViewEconomics, canViewReceiptAmounts } = await authorizeReceiptForm()
+  return getPurchaseOrderForReceiptAuthorized(poId, authorization, canViewEconomics, canViewReceiptAmounts)
 }
 
 export interface OperationalPurchaseOrderPdfData {
@@ -305,7 +333,7 @@ export async function getOperationalPurchaseOrderPdfData(poId: string): Promise<
   }
 }
 
-async function getPurchaseOrderForReceiptAuthorized(poId: string, authorization: WmsAuthorization, canViewEconomics: boolean) {
+async function getPurchaseOrderForReceiptAuthorized(poId: string, authorization: WmsAuthorization, canViewEconomics: boolean, canViewReceiptAmounts = canViewEconomics) {
   const supabase = await createClient()
   const companyId = authorization.companyId
 
@@ -328,7 +356,7 @@ async function getPurchaseOrderForReceiptAuthorized(poId: string, authorization:
   // 2. Fetch dependencies in parallel
   const itemsQuery: any = db
     .from('purchase_order_items')
-    .select(`${PO_ITEM_OPERATIONAL_FIELDS}${canViewEconomics ? `, ${PO_ITEM_ECONOMIC_FIELDS}` : ''}`)
+    .select(`${PO_ITEM_OPERATIONAL_FIELDS}${canViewEconomics ? `, ${PO_ITEM_ECONOMIC_FIELDS}` : canViewReceiptAmounts ? `, ${PO_ITEM_RECEIPT_AMOUNT_FIELDS}` : ''}`)
     .eq('po_id', poId)
     .eq('company_id', companyId)
     .order('line_number')
@@ -816,18 +844,26 @@ export async function getStockSummary(): Promise<StockItem[]> {
 }
 
 export async function getReceiptDocumentSignedUrl(documentId: string) {
+  const startedAt = performance.now()
+  const measure = (phase: string, phaseStartedAt: number) => {
+    if (process.env.NODE_ENV === 'development') console.info(`[receipt-document] ${documentId} ${phase} ${Math.round(performance.now() - phaseStartedAt)}ms`)
+  }
+  const authStartedAt = performance.now()
   const authorization = await requireWmsPermission('logistica.receptions.create')
+  measure('authorization', authStartedAt)
   const companyId = authorization.companyId
 
   const logistica = logDb()
 
   if (!documentId || typeof documentId !== 'string') return { error: 'Identificador de documento inválido' }
 
+  const documentQueryStartedAt = performance.now()
   const { data: document, error: documentError } = await logistica
     .from('receipt_documents')
     .select('id, company_id, receipt_id, document_type, document_number, storage_bucket, storage_path, file_name, mime_type')
     .eq('id', documentId)
     .maybeSingle()
+  measure('document-query', documentQueryStartedAt)
 
   if (documentError) {
     console.error('getReceiptDocumentSignedUrl document error:', documentError)
@@ -846,11 +882,13 @@ export async function getReceiptDocumentSignedUrl(documentId: string) {
     return { error: 'Ruta de almacenamiento inválida' }
   }
 
+  const receiptQueryStartedAt = performance.now()
   const { data: receipt, error: receiptError } = await logistica
     .from('purchase_receipts')
     .select('id, company_id, purchase_order_id')
     .eq('id', document.receipt_id)
     .maybeSingle()
+  measure('receipt-query', receiptQueryStartedAt)
 
   if (receiptError) {
     console.error('getReceiptDocumentSignedUrl receipt error:', receiptError)
@@ -861,11 +899,13 @@ export async function getReceiptDocumentSignedUrl(documentId: string) {
   if (receipt.company_id !== companyId) return { error: 'Acceso denegado a la recepción' }
 
   const adquisiciones = adqDb()
+  const purchaseOrderQueryStartedAt = performance.now()
   const { data: purchaseOrder, error: poError } = await adquisiciones
     .from('purchase_orders')
     .select('id, company_id')
     .eq('id', receipt.purchase_order_id)
     .maybeSingle()
+  measure('purchase-order-query', purchaseOrderQueryStartedAt)
 
   if (poError) {
     console.error('getReceiptDocumentSignedUrl purchase order error:', poError)
@@ -878,16 +918,19 @@ export async function getReceiptDocumentSignedUrl(documentId: string) {
 
   const expiresIn = 300
   const storage = logistica.storage.from(RECEIPT_DOCUMENT_BUCKET)
+  const signedUrlsStartedAt = performance.now()
   const [{ data: signedData, error: signedError }, { data: downloadData, error: downloadError }] = await Promise.all([
     storage.createSignedUrl(document.storage_path, expiresIn),
     storage.createSignedUrl(document.storage_path, expiresIn, { download: document.file_name || true }),
   ])
+  measure('signed-urls', signedUrlsStartedAt)
 
   if (signedError || downloadError || !signedData?.signedUrl || !downloadData?.signedUrl) {
     console.error('getReceiptDocumentSignedUrl storage error:', signedError || downloadError)
     return { error: 'No se pudo generar el enlace temporal del documento' }
   }
 
+  if (process.env.NODE_ENV === 'development') console.info(`[receipt-document] ${documentId} total ${Math.round(performance.now() - startedAt)}ms`)
   return {
     signedUrl: signedData.signedUrl,
     downloadUrl: downloadData.signedUrl,

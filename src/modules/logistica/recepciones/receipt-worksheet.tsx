@@ -19,6 +19,7 @@ interface ReceiptWorksheetProps {
   poId: string
   profile: { nombre: string; apellido: string; email: string; roles: { name: string } }
   canViewEconomics: boolean
+  canViewReceiptAmounts: boolean
 }
 
 interface ItemSplit {
@@ -37,7 +38,7 @@ function countsAsReceived(condition: ItemSplit['condition']) {
   return acceptedConditions.has(condition)
 }
 
-export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWorksheetProps) {
+export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewReceiptAmounts }: ReceiptWorksheetProps) {
   const router = useRouter()
   const [poDetail, setPoDetail] = useState<any | null>(null)
   const [loading, setLoading] = useState(true)
@@ -72,19 +73,21 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
   // itemInputs state maps itemId -> Array of ItemSplit
   const [itemInputs, setItemInputs] = useState<Record<string, ItemSplit[]>>({})
   const [receiptSearchQuery, setReceiptSearchQuery] = useState('')
+  const [receiptLineFilter, setReceiptLineFilter] = useState<'ALL' | 'PENDING'>('ALL')
 
-  // Client-side search over the canonical poDetail.items array. It never mutates
-  // the canonical state; it only selects which rows are visible, keeping each
-  // item's original index so the '#' column keeps the OC line numbering.
+  // Client-side line filters never mutate canonical state or itemInputs.
   const visibleReceiptItems = useMemo(() => {
     const items: any[] = poDetail?.items ?? []
     const query = receiptSearchQuery.trim().toLocaleLowerCase('es-CL')
     const indexed = items.map((item, originalIndex) => ({ item, originalIndex }))
-    if (!query) return indexed
-    return indexed.filter(({ item }) =>
+    const statusFiltered = receiptLineFilter === 'PENDING'
+      ? indexed.filter(({ item }) => Number(item.quantity_pending || 0) > 0)
+      : indexed
+    if (!query) return statusFiltered
+    return statusFiltered.filter(({ item }) =>
       [receiptItemSku(item), item.product_description].some(value => (value ?? '').toLocaleLowerCase('es-CL').includes(query))
     )
-  }, [poDetail, receiptSearchQuery])
+  }, [poDetail, receiptSearchQuery, receiptLineFilter])
 
   useEffect(() => {
     async function loadData() {
@@ -157,8 +160,9 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
 
   // Split control handlers
   function addSplit(itemId: string) {
-    const poWarehouse = poDetail?.po.warehouse_id || ''
     const item = poDetail?.items.find((it: any) => it.id === itemId)
+    if (Number(item?.quantity_pending || 0) <= 0) return
+    const poWarehouse = poDetail?.po.warehouse_id || ''
     const itemWh = item?.warehouse_id || poWarehouse
     const whLocs = locations.filter(l => l.warehouse_id === itemWh)
     const defaultLocId = whLocs.length > 0 ? whLocs[0].id : ''
@@ -180,6 +184,8 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
   }
 
   function removeSplit(itemId: string, splitId: string) {
+    const item = poDetail?.items.find((it: any) => it.id === itemId)
+    if (Number(item?.quantity_pending || 0) <= 0) return
     setItemInputs(prev => {
       const current = prev[itemId] || []
       if (current.length <= 1) return prev // Keep at least one
@@ -191,6 +197,8 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
   }
 
   function updateSplitField(itemId: string, splitId: string, field: keyof ItemSplit, value: any) {
+    const item = poDetail?.items.find((it: any) => it.id === itemId)
+    if (Number(item?.quantity_pending || 0) <= 0) return
     setItemInputs(prev => {
       const current = prev[itemId] || []
       const updated = current.map(s => {
@@ -275,10 +283,11 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
 
   // Financial calculations are only available to users authorized for purchase-order economics.
   let netTotal = 0
-  if (canViewEconomics && poDetail) {
+  if (canViewReceiptAmounts && poDetail) {
     Object.entries(itemInputs).forEach(([itemId, splits]) => {
       const poItem = poDetail.items.find((it: any) => it.id === itemId)
       if (!poItem) return
+      if (Number(poItem.quantity_pending || 0) <= 0) return
       const price = Number(poItem.unit_price || 0)
       splits.forEach(split => {
         if (countsAsReceived(split.condition)) {
@@ -332,6 +341,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
       })
 
       const qtyPending = Number(item.quantity_pending || 0)
+      if (qtyPending <= 0) continue
       if (sumQty > qtyPending) {
         toast.error(`La suma total de cantidades ingresadas para el producto "${item.product_description}" (${sumQty}) supera la cantidad pendiente (${qtyPending}).`)
         return
@@ -449,7 +459,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
     : isMixed
       ? 'Productos: recepción física. Servicios: conformidad administrativa.'
       : 'Conforme: se recibe e ingresa a stock. Dañado: se recibe e ingresa a stock y posteriormente puede procesarse mediante Mermas. Rechazado o faltante: no se considera recibido.'
-  const totalsHelp = !canViewEconomics
+   const totalsHelp = !canViewReceiptAmounts
     ? 'Resumen operativo de cantidades recibidas, faltantes y rechazadas.'
     : isServiceOnly
       ? 'Totales calculados según los servicios conformados en esta recepción.'
@@ -513,52 +523,52 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
       </div>
 
       {/* Metadata layout grid: Supplier and documents */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]">
         
         {/* Left side: Supplier / PO info */}
-        <div className="lg:col-span-1 p-3 rounded-xl border border-theme-border bg-theme-surface/50 space-y-2.5 text-xs">
+        <div className="h-fit rounded-xl border border-theme-border bg-theme-surface/50 p-3 text-xs">
             <h3 className="font-bold text-theme-text uppercase tracking-wider text-[10px] border-b border-theme-border/60 pb-1.5 flex items-center gap-1.5">
             <LucideIcons.FileText className="w-3.5 h-3.5 text-theme-accent" />
             Información del Proveedor
           </h3>
           
-          <div className="space-y-2">
+          <div className="space-y-1.5 pt-2">
             <div>
               <span className="text-theme-text-muted uppercase tracking-wider text-[9px] font-semibold">Proveedor</span>
-              <p className="font-bold text-sm text-theme-text mt-0.5">{poDetail.po.supplier_name}</p>
-              {poDetail.po.supplier_rut && <p className="text-[10px] text-theme-text-muted mt-0.5">{poDetail.po.supplier_rut}</p>}
+              <p className="mt-0.5 break-words text-sm font-bold text-theme-text" title={poDetail.po.supplier_name}>{poDetail.po.supplier_name}</p>
+              {poDetail.po.supplier_rut && <p className="mt-0.5 text-[10px] text-theme-text-muted" title={poDetail.po.supplier_rut}>RUT {poDetail.po.supplier_rut}</p>}
             </div>
             
             {poDetail.po.supplier_address && !isServiceOnly && (
-              <div>
+              <div className="border-t border-theme-border/40 pt-1.5">
                 <span className="text-theme-text-muted uppercase tracking-wider text-[9px] font-semibold">Dirección</span>
-                <p className="font-medium text-theme-text mt-0.5">{poDetail.po.supplier_address}</p>
+                <p className="mt-0.5 break-words font-medium text-theme-text" title={poDetail.po.supplier_address}>{poDetail.po.supplier_address}</p>
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-2 pt-1">
+            <div className="grid grid-cols-1 gap-x-3 gap-y-1.5 border-t border-theme-border/40 pt-1.5 sm:grid-cols-2">
               <div>
                 <span className="text-theme-text-muted uppercase tracking-wider text-[9px] font-semibold">Contacto</span>
-                <p className="font-medium text-theme-text mt-0.5">{poDetail.po.supplier_contact || 'No registra'}</p>
+                <p className="mt-0.5 break-words font-medium text-theme-text" title={poDetail.po.supplier_contact || undefined}>{poDetail.po.supplier_contact || 'No registra'}</p>
               </div>
               <div>
                 <span className="text-theme-text-muted uppercase tracking-wider text-[9px] font-semibold">Teléfono</span>
-                <p className="font-medium text-theme-text mt-0.5">{poDetail.po.supplier_phone || 'No registra'}</p>
+                <p className="mt-0.5 break-words font-medium text-theme-text" title={poDetail.po.supplier_phone || undefined}>{poDetail.po.supplier_phone || 'No registra'}</p>
               </div>
             </div>
 
-            {!isServiceOnly && <div className="pt-2 border-t border-theme-border/40">
+            {!isServiceOnly && <div className="border-t border-theme-border/40 pt-1.5">
               <span className="text-theme-text-muted uppercase tracking-wider text-[9px] font-semibold">Bodega Destino Original</span>
-              <p className="font-semibold text-theme-text mt-0.5">{poDetail.po.warehouse_name || 'Sin bodega predeterminada'}</p>
+              <p className="mt-0.5 break-words font-semibold text-theme-text" title={poDetail.po.warehouse_name || undefined}>{poDetail.po.warehouse_name || 'Sin bodega predeterminada'}</p>
             </div>}
 
-            <div className={cn('grid gap-2 pt-2 border-t border-theme-border/40', isServiceOnly ? 'grid-cols-1' : 'grid-cols-2')}>
+            <div className={cn('grid gap-2 border-t border-theme-border/40 pt-1.5', isServiceOnly ? 'grid-cols-1' : 'grid-cols-2')}>
               <div className="flex flex-col justify-end">
                 <div className="flex items-end justify-between mb-1 gap-1">
                   <span className="text-theme-text-muted uppercase tracking-wider text-[9px] font-semibold leading-tight">Tipo Recepción</span>
                   <span className="text-[8px] text-theme-text-muted/60 uppercase whitespace-nowrap hidden sm:inline-block">Definido en OC</span>
                 </div>
-                <div className="flex items-center h-8 rounded-lg border border-theme-border/50 bg-theme-text/[0.02] px-2.5 text-xs font-semibold text-theme-text shadow-sm cursor-default">
+                <div className="flex h-7 items-center rounded-lg border border-theme-border/50 bg-theme-text/[0.02] px-2.5 text-xs font-semibold text-theme-text shadow-sm cursor-default">
                   {receivingType === 'WAREHOUSE' ? 'Física (Bodega)' : 'Administrativa (Oficina)'}
                 </div>
               </div>
@@ -569,7 +579,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
                   <span className="text-[8px] text-theme-text-muted/60 uppercase whitespace-nowrap hidden sm:inline-block">Dato de origen</span>
                 </div>
                  {poDetail.po.warehouse_id ? (
-                   <div className="flex items-center h-8 rounded-lg border border-theme-border/50 bg-theme-text/[0.02] px-2.5 text-[11px] font-semibold text-theme-text shadow-sm cursor-default truncate">
+                    <div className="flex h-7 items-center truncate rounded-lg border border-theme-border/50 bg-theme-text/[0.02] px-2.5 text-[11px] font-semibold text-theme-text shadow-sm cursor-default" title={poDetail.po.warehouse_name || undefined}>
                      {receivingType === 'OFFICE' ? '—' : poDetail.po.warehouse_name}
                    </div>
                  ) : (
@@ -577,7 +587,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
                      value={receivingType === 'OFFICE' ? '' : mainWarehouseId}
                      onChange={e => handleMainWarehouseChange(e.target.value)}
                      disabled={receivingType === 'OFFICE'}
-                     className={cn(erpSelectClass, 'w-full h-8 px-2 text-xs')}
+                      className={cn(erpSelectClass, 'h-7 w-full px-2 text-xs')}
                    >
                      <option value="">Seleccionar bodega...</option>
                      {warehouses.map(warehouse => (
@@ -591,13 +601,13 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
         </div>
 
         {/* Center/Right side: Documents and evidence */}
-        <div className="lg:col-span-2 p-3 rounded-xl border border-theme-border bg-theme-surface/50 space-y-3 text-xs">
+        <div className="h-fit rounded-xl border border-theme-border bg-theme-surface/50 p-3 text-xs">
           <h3 className="font-bold text-theme-text uppercase tracking-wider text-[10px] border-b border-theme-border/60 pb-1.5 flex items-center gap-1.5">
             <LucideIcons.UploadCloud className="w-3.5 h-3.5 text-theme-accent" />
             Documento de Respaldo y Evidencia
           </h3>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+          <div className="grid grid-cols-1 gap-2 pt-2 md:grid-cols-3">
             <div>
               <label className="block text-[10px] font-bold text-theme-text-muted uppercase mb-1">Tipo Documento</label>
               <select
@@ -632,7 +642,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-1">
+          <div className="grid grid-cols-1 gap-2 pt-1.5 md:grid-cols-2">
             <div>
               <label className="block text-[10px] font-bold text-theme-text-muted uppercase mb-1">Archivo Adjunto (PDF / Imagen)</label>
               
@@ -643,16 +653,19 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
                     <span className="truncate text-xs font-semibold" title={attachment.file_name}>{attachment.file_name}</span>
                     <span className="text-[10px] text-theme-text-muted/70 shrink-0">({(attachment.file_size / 1024).toFixed(1)} KB)</span>
                   </div>
-                  <button 
-                    onClick={() => setAttachment(null)}
-                    className="p-1 rounded-md text-red-500 hover:bg-red-500/10 transition-colors"
+                   <button
+                     type="button"
+                     onClick={() => setAttachment(null)}
+                     className="p-1 rounded-md text-red-500 hover:bg-red-500/10 transition-colors"
+                     aria-label="Quitar archivo adjunto"
+                     title="Quitar archivo adjunto"
                   >
                     <LucideIcons.X className="w-3.5 h-3.5" />
                   </button>
                 </div>
               ) : (
                 <label className={cn(
-                  "flex flex-col items-center justify-center p-2.5 rounded-lg border border-dashed border-theme-border bg-theme-surface hover:bg-theme-text/5 cursor-pointer transition-all",
+                   "flex min-h-12 flex-col items-center justify-center rounded-lg border border-dashed border-theme-border bg-theme-surface p-2 hover:bg-theme-text/5 cursor-pointer transition-all",
                   uploadingFile && "opacity-60 pointer-events-none"
                 )}>
                   {uploadingFile ? (
@@ -723,7 +736,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
           </span>
         </div>
 
-        {/* Client-side search over the receipt lines */}
+        {/* Client-side search and visual line filter */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative w-full max-w-xs">
             <LucideIcons.Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-theme-text-muted pointer-events-none" />
@@ -746,11 +759,25 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
               </button>
             )}
           </div>
-          {receiptSearchQuery.trim() && (
-            <span className="text-[10px] text-theme-text-muted font-semibold">
-              Mostrando {visibleReceiptItems.length} de {poDetail.items.length}
-            </span>
-          )}
+          <div className="flex items-center gap-1 rounded-lg border border-theme-border/60 bg-theme-text/[0.02] p-0.5" role="group" aria-label="Filtro de líneas">
+            <button
+              type="button"
+              onClick={() => setReceiptLineFilter('ALL')}
+              className={cn('rounded-md px-2 py-1 text-[10px] font-semibold transition-colors', receiptLineFilter === 'ALL' ? 'bg-theme-accent text-white' : 'text-theme-text-muted hover:bg-theme-text/5')}
+            >
+              Todas
+            </button>
+            <button
+              type="button"
+              onClick={() => setReceiptLineFilter('PENDING')}
+              className={cn('rounded-md px-2 py-1 text-[10px] font-semibold transition-colors', receiptLineFilter === 'PENDING' ? 'bg-theme-accent text-white' : 'text-theme-text-muted hover:bg-theme-text/5')}
+            >
+              Solo pendientes
+            </button>
+          </div>
+          <span className="text-[10px] text-theme-text-muted font-semibold">
+            Mostrando {visibleReceiptItems.length} de {poDetail.items.length}
+          </span>
         </div>
 
         {/* Unified Table Container */}
@@ -784,9 +811,10 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
                     }
                   })
 
-                  const price = canViewEconomics ? Number(item.unit_price || 0) : 0
-                  const actualMonto = canViewEconomics ? sumActualRec * price : 0
-                  const exceedsPending = sumQty > Number(item.quantity_pending)
+                   const price = canViewEconomics ? Number(item.unit_price || 0) : 0
+                   const actualMonto = canViewEconomics ? sumActualRec * price : 0
+                   const exceedsPending = sumQty > Number(item.quantity_pending)
+                   const isComplete = Number(item.quantity_pending || 0) <= 0
 
                   const itemWh = item.warehouse_id || mainWarehouseId
                   const whLocs = locations.filter(l => l.warehouse_id === itemWh)
@@ -795,14 +823,18 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
                     const split = splits[0]
                     return (
                       <tr key={item.id} className={cn(
-                        'border-b border-theme-border bg-theme-text/[0.02] hover:bg-theme-text/[0.04] transition-colors',
+                        'border-b border-theme-border transition-colors',
+                        isComplete ? 'bg-emerald-500/[0.06]' : 'bg-theme-text/[0.02] hover:bg-theme-text/[0.04]',
                         exceedsPending && 'bg-red-500/[0.02]'
                       )}>
                         <td className="py-1.5 px-2 text-center font-bold text-theme-text">{originalIndex + 1}</td>
                         <td className="py-1.5 px-2 text-theme-text-muted">—</td>
                         <td className="py-1.5 px-2 min-w-[240px]">
-                          <p className="font-semibold text-theme-text text-xs leading-tight">{item.product_description}</p>
-                          <div className="flex items-center gap-2 mt-1">
+                          <div className="flex items-center gap-2">
+                            <p className="font-semibold text-theme-text text-xs leading-tight">{item.product_description}</p>
+                            {isComplete && <span className="shrink-0 rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-700 dark:text-emerald-400">Completa</span>}
+                          </div>
+                          {!isComplete && <div className="flex items-center gap-2 mt-1">
                             <select
                               value={split?.condition || 'CONFORME'}
                               onChange={e => split && updateSplitField(item.id, split.id, 'condition', e.target.value)}
@@ -820,22 +852,22 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
                               placeholder="Observación"
                               className={cn(erpInputClass, 'h-6 min-w-0 flex-1 rounded px-2 text-[10px]')}
                             />
-                          </div>
+                          </div>}
                         </td>
                         <td className="py-1.5 px-2 text-right text-theme-text font-semibold">{item.quantity}</td>
                         <td className="py-1.5 px-2 text-right text-emerald-600 dark:text-emerald-400 font-semibold">{item.quantity_received}</td>
                         <td className="py-1.5 px-2 text-right text-theme-text-accent font-semibold">{item.quantity_pending}</td>
-                        <td className="py-1.5 px-2 text-right">
-                          <input
-                            type="number"
-                            min="0"
-                            max={item.quantity_pending}
-                            step="0.001"
-                            value={split?.quantity || 0}
-                            onChange={e => split && updateSplitField(item.id, split.id, 'quantity', Math.max(0, parseFloat(e.target.value) || 0))}
-                            className={cn(erpInputClass, 'w-16 h-6 rounded px-1.5 text-right font-bold text-[10px]')}
-                          />
-                        </td>
+                         <td className="py-1.5 px-2 text-right">
+                           {isComplete ? <span className="font-bold text-theme-text-muted">0</span> : <input
+                             type="number"
+                             min="0"
+                             max={item.quantity_pending}
+                             step="0.001"
+                             value={split?.quantity || 0}
+                             onChange={e => split && updateSplitField(item.id, split.id, 'quantity', Math.max(0, parseFloat(e.target.value) || 0))}
+                             className={cn(erpInputClass, 'w-16 h-6 rounded px-1.5 text-right font-bold text-[10px]')}
+                           />}
+                         </td>
                         {canViewEconomics && <td className="py-1.5 px-2 text-right font-semibold text-theme-text">${price.toLocaleString('es-CL')}</td>}
                         {canViewEconomics && <td className="py-1.5 px-2 text-right font-bold text-theme-text">${actualMonto.toLocaleString('es-CL')}</td>}
                       </tr>
@@ -846,13 +878,17 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
                     <Fragment key={item.id}>
                       {/* Product Main Row */}
                       <tr className={cn(
-                        "border-b border-theme-border bg-theme-text/[0.02] hover:bg-theme-text/[0.04] transition-colors font-medium",
+                        'border-b border-theme-border transition-colors font-medium',
+                        isComplete ? 'bg-emerald-500/[0.06]' : 'bg-theme-text/[0.02] hover:bg-theme-text/[0.04]',
                         exceedsPending && "bg-red-500/[0.02]"
                       )}>
                         <td className="py-2.5 px-4 text-center font-bold text-theme-text">{originalIndex + 1}</td>
                         <td className="py-2.5 px-4 text-theme-text font-mono">{receiptItemSku(item)}</td>
                         <td className="py-2.5 px-4">
-                          <p className="font-semibold text-theme-text text-xs leading-normal">{item.product_description}</p>
+                           <div className="flex items-center gap-2">
+                             <p className="font-semibold text-theme-text text-xs leading-normal">{item.product_description}</p>
+                             {isComplete && <span className="shrink-0 rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-700 dark:text-emerald-400">Completa</span>}
+                           </div>
                           {exceedsPending && (
                             <p className="text-[10px] text-red-500 font-bold mt-0.5 flex items-center gap-1">
                               <LucideIcons.AlertTriangle className="w-3 h-3 shrink-0" />
@@ -869,7 +905,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
                       </tr>
 
                       {/* Sub-rows for Splits (Lotes / Partidas) */}
-                      {splits.map((split, sIdx) => {
+                      {!isComplete && splits.map((split, sIdx) => {
                          const requiresLocation = receivingType === 'WAREHOUSE' && item.item_type === 'PRODUCT'
                            && (split.condition === 'CONFORME' || split.condition === 'DANADO')
 
@@ -903,7 +939,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
 
                              {/* Splits details inputs aligned on rest of columns */}
                              <td colSpan={canViewEconomics ? 5 : 3} className="py-1.5 px-4">
-                               <div className="flex items-center gap-3">
+                               <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                                  <select
                                    value={split.condition}
                                    onChange={e => updateSplitField(item.id, split.id, 'condition', e.target.value)}
@@ -956,8 +992,9 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
                                 )}
 
                                 {/* Observations Notes */}
-                                <div className="flex-1">
-                                  <input
+                                 <div className="basis-full flex min-w-0 items-center gap-1 sm:min-w-[220px] sm:flex-1">
+                                   <span className="shrink-0 text-[10px] font-bold text-theme-text-muted">Obs.:</span>
+                                   <input
                                     type="text"
                                     value={split.notes}
                                     onChange={e => updateSplitField(item.id, split.id, 'notes', e.target.value)}
@@ -983,7 +1020,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
                       })}
 
                       {/* Plus Split Action Row */}
-                      <tr className="border-b border-theme-border last:border-none bg-theme-text/[0.005]">
+                       {!isComplete && <tr className="border-b border-theme-border last:border-none bg-theme-text/[0.005]">
                         <td className="py-1 px-4 text-center"></td>
                         <td colSpan={canViewEconomics ? 8 : 6} className="py-1 px-4">
                           <button
@@ -994,18 +1031,25 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics }: ReceiptWor
                             <span>+ Agregar partida</span>
                           </button>
                         </td>
-                      </tr>
+                       </tr>}
                     </Fragment>
                   )
-                })}
-              </tbody>
+                 })}
+                {visibleReceiptItems.length === 0 && (
+                  <tr>
+                    <td colSpan={canViewEconomics ? 9 : 7} className="px-4 py-8 text-center text-xs text-theme-text-muted">
+                      {receiptLineFilter === 'PENDING' ? 'No hay líneas pendientes por recepcionar.' : 'No hay líneas que coincidan con la búsqueda.'}
+                    </td>
+                  </tr>
+                )}
+               </tbody>
             </table>
           </div>
         </div>
       </div>
 
       {/* Dynamic financial totals block */}
-      {canViewEconomics && <div className="flex flex-col md:flex-row items-stretch justify-between gap-3 p-3 rounded-xl border border-theme-border bg-theme-surface/50 shadow-sm text-xs">
+      {canViewReceiptAmounts && <div className="flex flex-col md:flex-row items-stretch justify-between gap-3 p-3 rounded-xl border border-theme-border bg-theme-surface/50 shadow-sm text-xs">
         <div className="max-w-md space-y-1.5 flex flex-col justify-center">
           <h4 className="font-bold text-theme-text text-sm">Resumen de Recepción</h4>
           <p className="text-theme-text-muted leading-relaxed">{totalsHelp}</p>

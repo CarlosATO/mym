@@ -20,6 +20,7 @@ export default async function Page({ params }: PageProps) {
     return <AccessDenied />
   }
   const canViewEconomics = await hasWmsPermission(user.id, 'adquisiciones.po.view')
+  const canViewReceiptAmounts = canViewEconomics || await hasWmsPermission(user.id, 'logistica.receptions.amounts.view')
 
   const { data: profile } = await supabase
     .from('users')
@@ -41,5 +42,5 @@ export default async function Page({ params }: PageProps) {
     ? { ...profile, roles: { name: roleName } }
     : { nombre: '', apellido: '', email: '', roles: { name: '' } }
 
-  return <ReceiptWorksheet poId={poId} profile={profileWithRole} canViewEconomics={canViewEconomics} />
+  return <ReceiptWorksheet poId={poId} profile={profileWithRole} canViewEconomics={canViewEconomics} canViewReceiptAmounts={canViewReceiptAmounts} />
 }

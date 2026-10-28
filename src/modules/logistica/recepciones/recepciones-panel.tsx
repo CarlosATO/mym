@@ -10,7 +10,8 @@ import {
   getPurchaseOrderReceiptDetails,
   syncPurchaseReceiptBsale,
   reconcilePurchaseReceiptBsale,
-  type PurchaseOrderPending
+  type PurchaseOrderPending,
+  type ReceiptDocumentSummary
 } from '@/app/actions/logistica/recepciones'
 import {
   Search, CheckCircle2, Clock, AlertCircle, Package,
@@ -21,15 +22,69 @@ import { erpInputClass } from '@/lib/form-styles'
 import { cn } from '@/lib/utils'
 import { formatCivilDate } from '@/lib/datetime'
 import { receiptItemSku } from '@/lib/logistica/receipt-display'
+import { OperationalTableResizeHandle, useOperationalTableWidths, type OperationalTableColumn } from '@/components/ui/operational-table'
 import { OperationalPoPdfModal } from './operational-po-pdf-modal'
 import { ReceiptDocumentViewerModal } from './receipt-document-viewer-modal'
 
 type FilterTab = 'ALL' | 'PENDING' | 'PARTIAL' | 'RECEIVED'
+type ReceptionCategory = Exclude<FilterTab, 'ALL'> | null
+
+const [PENDING_STATUS, PARTIAL_STATUS] = ['CONFIRMADA', 'RECEPCION_PARCIAL'] as const
+
+function classifyReceptionStatus(status: string): ReceptionCategory {
+  if (status === PENDING_STATUS) return 'PENDING'
+  if (status === PARTIAL_STATUS) return 'PARTIAL'
+  if (status === 'RECEPCION_TOTAL') return 'RECEIVED'
+  return null
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function fmt(n: number) {
   return n.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 })
+}
+
+const RECEPCIONES_TABLE_KEY = 'mym:table:logistica:recepciones:compact-v1'
+const RECEPCIONES_COLUMNS: OperationalTableColumn[] = [
+  { id: 'correlative', defaultWidth: 88, minWidth: 76, maxWidth: 125 },
+  { id: 'supplier', defaultWidth: 250, minWidth: 180, maxWidth: 440 },
+  { id: 'issueDate', defaultWidth: 92, minWidth: 82, maxWidth: 125 },
+  { id: 'warehouse', defaultWidth: 125, minWidth: 95, maxWidth: 220 },
+  { id: 'status', defaultWidth: 126, minWidth: 108, maxWidth: 190 },
+  { id: 'qtyOrdered', defaultWidth: 86, minWidth: 74, maxWidth: 120 },
+  { id: 'qtyReceived', defaultWidth: 86, minWidth: 74, maxWidth: 120 },
+  { id: 'qtyPending', defaultWidth: 86, minWidth: 74, maxWidth: 120 },
+  { id: 'total', defaultWidth: 120, minWidth: 105, maxWidth: 170 },
+  { id: 'amountReceived', defaultWidth: 120, minWidth: 105, maxWidth: 170 },
+  { id: 'latestReceipt', defaultWidth: 112, minWidth: 95, maxWidth: 170 },
+  { id: 'documents', defaultWidth: 135, minWidth: 116, maxWidth: 230 },
+  { id: 'actions', defaultWidth: 112, minWidth: 100, maxWidth: 155, sticky: 'right', resizable: false },
+]
+
+function shortCorrelative(correlative: string) {
+  return correlative.match(/\d+$/)?.[0] || correlative
+}
+
+function ReceiptDocumentsCell({ documents, menuId, menuOpen, onToggleMenu, onOpen, onOpenOrder }: { documents: ReceiptDocumentSummary[]; menuId: string; menuOpen: boolean; onToggleMenu: () => void; onOpen: (document: ReceiptDocumentSummary) => void; onOpenOrder: () => void }) {
+  const count = documents.length
+  return (
+    <div className="flex items-center gap-1 whitespace-nowrap" onClick={event => event.stopPropagation()}>
+      <button type="button" onClick={onOpenOrder} className="text-[10px] font-semibold text-theme-accent hover:underline" title="Ver PDF de la orden de compra">OC</button>
+      <span className="text-theme-text-muted/50">·</span>
+      {count === 0 ? <span className="text-[10px] text-theme-text-muted/60">—</span> : count === 1 ? (
+        <button type="button" onClick={() => onOpen(documents[0])} className="text-[10px] font-semibold text-theme-accent hover:underline" title="Abrir factura">1 factura</button>
+      ) : (
+        <div className="relative" data-receipt-menu={menuId}>
+          <button type="button" aria-expanded={menuOpen} onClick={onToggleMenu} className="cursor-pointer text-[10px] font-semibold text-theme-accent hover:underline">{count} facturas</button>
+          {menuOpen && (
+          <div className="absolute right-0 z-30 mt-1 w-52 rounded-md border border-theme-border bg-theme-surface p-1 shadow-lg">
+            {documents.map(document => <button key={document.id} type="button" onClick={() => onOpen(document)} className="block w-full truncate rounded px-2 py-1 text-left text-[10px] text-theme-text hover:bg-theme-text/5" title={document.file_name || undefined}>{document.document_number || document.file_name || 'Factura'}</button>)}
+          </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -437,6 +492,31 @@ function TrayTable({
   onOpenOperationalPdf: (id: string) => void
   canViewEconomics: boolean
 }) {
+  const [documentToView, setDocumentToView] = useState<ReceiptDocumentSummary | null>(null)
+  const [openDocumentMenu, setOpenDocumentMenu] = useState<string | null>(null)
+  const { widths, setColumnWidth, persist } = useOperationalTableWidths(RECEPCIONES_TABLE_KEY, RECEPCIONES_COLUMNS)
+  const resizeHandle = (id: string) => {
+    const column = RECEPCIONES_COLUMNS.find(item => item.id === id)!
+    return <OperationalTableResizeHandle column={column} width={widths[id] ?? column.defaultWidth} onResize={width => setColumnWidth(column, width)} onResizeEnd={persist} />
+  }
+  const cellClass = 'border-r border-theme-border/30 px-2.5 py-1.5'
+
+  useEffect(() => {
+    if (!openDocumentMenu) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpenDocumentMenu(null)
+    }
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      const target = event.target
+      if (!(target instanceof Element) || !target.closest('[data-receipt-menu]')) setOpenDocumentMenu(null)
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    document.addEventListener('mousedown', closeOnOutsideClick)
+    return () => {
+      document.removeEventListener('keydown', closeOnEscape)
+      document.removeEventListener('mousedown', closeOnOutsideClick)
+    }
+  }, [openDocumentMenu])
 
   const tabBtn = (id: FilterTab, label: string, activeColor: string) => (
     <button
@@ -486,21 +566,25 @@ function TrayTable({
             <p className="text-sm text-theme-text-muted">{search ? 'Sin resultados para la búsqueda' : 'No hay órdenes en este filtro'}</p>
           </div>
         ) : (
-          <table className="w-full text-xs border-collapse">
+          <table className="w-full min-w-[1360px] table-fixed text-xs border-collapse">
+            <colgroup>
+              {RECEPCIONES_COLUMNS.filter(column => canViewEconomics || !['total', 'amountReceived'].includes(column.id)).map(column => <col key={column.id} style={{ width: widths[column.id] ?? column.defaultWidth }} />)}
+            </colgroup>
             <thead className="sticky top-0 z-10">
               <tr className="bg-theme-surface border-b border-theme-border text-[10px] font-semibold uppercase tracking-wider text-theme-text-muted">
-                <th className="text-left px-4 py-3">N° OC</th>
-                <th className="text-left px-4 py-3">Proveedor</th>
-                <th className="text-left px-4 py-3">Fecha</th>
-                <th className="text-left px-4 py-3">Bodega</th>
-                <th className="text-center px-4 py-3">Estado</th>
-                <th className="text-right px-4 py-3">Solicitada</th>
-                <th className="text-right px-4 py-3">Recibida</th>
-                <th className="text-right px-4 py-3">Pendiente</th>
-                {canViewEconomics && <th className="text-right px-4 py-3">Total OC</th>}
-                {canViewEconomics && <th className="text-right px-4 py-3">Monto Rec.</th>}
-                <th className="text-left px-4 py-3">Últ. Recepción</th>
-                <th className="text-right px-4 py-3">Acción</th>
+                <th className={`${cellClass} relative text-left whitespace-nowrap`}>N° OC{resizeHandle('correlative')}</th>
+                <th className={`${cellClass} relative text-left whitespace-nowrap`}>Proveedor{resizeHandle('supplier')}</th>
+                <th className={`${cellClass} relative text-left whitespace-nowrap`}>Fecha{resizeHandle('issueDate')}</th>
+                <th className={`${cellClass} relative text-left whitespace-nowrap`}>Bodega{resizeHandle('warehouse')}</th>
+                <th className={`${cellClass} relative text-center whitespace-nowrap`}>Estado{resizeHandle('status')}</th>
+                <th className={`${cellClass} relative text-right whitespace-nowrap`}>Solicitada{resizeHandle('qtyOrdered')}</th>
+                <th className={`${cellClass} relative text-right whitespace-nowrap`}>Recibida{resizeHandle('qtyReceived')}</th>
+                <th className={`${cellClass} relative text-right whitespace-nowrap`}>Pendiente{resizeHandle('qtyPending')}</th>
+                {canViewEconomics && <th className={`${cellClass} relative text-right whitespace-nowrap`}>Total OC{resizeHandle('total')}</th>}
+                {canViewEconomics && <th className={`${cellClass} relative text-right whitespace-nowrap`}>Monto Rec.{resizeHandle('amountReceived')}</th>}
+                <th className={`${cellClass} relative text-left whitespace-nowrap`}>Últ. recepción{resizeHandle('latestReceipt')}</th>
+                <th className={`${cellClass} relative text-left whitespace-nowrap`}>Documentos{resizeHandle('documents')}</th>
+                <th className="sticky right-0 z-20 bg-theme-surface px-2.5 py-1.5 text-left whitespace-nowrap">Acción</th>
               </tr>
             </thead>
             <tbody>
@@ -517,36 +601,49 @@ function TrayTable({
                     onMouseEnter={() => onPrefetch(po.id)}
                     className="border-b border-theme-border/40 hover:bg-theme-accent/[0.03] transition-colors cursor-pointer group"
                   >
-                    <td className="px-4 py-2.5">
-                      <span className="font-mono font-bold text-theme-accent text-[11px]">{po.correlative}</span>
+                    <td className={cellClass}>
+                      <span className="font-mono font-bold text-theme-accent text-[11px]" title={po.correlative}>{shortCorrelative(po.correlative)}</span>
                     </td>
-                    <td className="px-4 py-2.5 max-w-[180px]">
+                    <td className={cellClass}>
                       <p className="truncate font-medium text-theme-text" title={po.supplier_name}>{po.supplier_name}</p>
                     </td>
-                    <td className="px-4 py-2.5 text-theme-text-muted whitespace-nowrap">
+                    <td className={`${cellClass} text-theme-text-muted whitespace-nowrap`}>
                       {formatCivilDate(po.issue_date)}
                     </td>
-                    <td className="px-4 py-2.5 text-theme-text-muted max-w-[120px]">
+                    <td className={`${cellClass} text-theme-text-muted`}>
                       <p className="truncate">{po.warehouse_name || '—'}</p>
                     </td>
-                    <td className="px-4 py-2.5 text-center">
+                    <td className={`${cellClass} text-center`}>
                       <StatusBadge status={po.status} />
                     </td>
-                    <td className="px-4 py-2.5 text-right text-theme-text">{po.qty_ordered}</td>
-                    <td className="px-4 py-2.5 text-right font-semibold text-emerald-600 dark:text-emerald-400">{po.qty_received}</td>
-                    <td className={cn('px-4 py-2.5 text-right font-bold', po.qty_pending > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-theme-text-muted/40')}>
+                    <td className={`${cellClass} text-right text-theme-text`}>{po.qty_ordered}</td>
+                    <td className={`${cellClass} text-right font-semibold text-emerald-600 dark:text-emerald-400`}>{po.qty_received}</td>
+                    <td className={cn(cellClass, 'text-right font-bold', po.qty_pending > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-theme-text-muted/40')}>
                       {po.qty_pending}
                     </td>
-                    {canViewEconomics && <td className="px-4 py-2.5 text-right text-theme-text-muted">{fmt(po.grand_total)}</td>}
-                    {canViewEconomics && <td className="px-4 py-2.5 text-right text-emerald-600 dark:text-emerald-400 font-medium">
+                    {canViewEconomics && <td className={`${cellClass} text-right text-theme-text-muted`}>{fmt(po.grand_total)}</td>}
+                    {canViewEconomics && <td className={`${cellClass} text-right text-emerald-600 dark:text-emerald-400 font-medium`}>
                       {po.amount_received > 0 ? fmt(po.amount_received) : '—'}
                     </td>}
-                    <td className="px-4 py-2.5 text-theme-text-muted">
+                    <td className={`${cellClass} text-theme-text-muted`}>
                       {po.latest_receipt_number ? (
                         <span className="font-mono text-[10px] text-theme-accent">{po.latest_receipt_number}</span>
                       ) : '—'}
                     </td>
-                    <td className="px-4 py-2.5 text-right">
+                    <td className={cellClass}>
+                      <ReceiptDocumentsCell
+                        documents={po.receipt_documents}
+                        menuId={po.id}
+                        menuOpen={openDocumentMenu === po.id}
+                        onToggleMenu={() => setOpenDocumentMenu(current => current === po.id ? null : po.id)}
+                        onOpen={document => {
+                          setOpenDocumentMenu(null)
+                          setDocumentToView(document)
+                        }}
+                        onOpenOrder={() => onOpenOperationalPdf(po.id)}
+                      />
+                    </td>
+                    <td className="sticky right-0 z-10 bg-theme-surface px-2.5 py-1.5 text-left">
                       <div className="flex items-center justify-end gap-1.5">
                       {isTotal ? (
                         <button
@@ -574,14 +671,7 @@ function TrayTable({
                           {receivingId === po.id ? 'Cargando...' : 'Recibir'}
                         </button>
                       )}
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); onOpenOperationalPdf(po.id) }}
-                        className="px-2.5 py-1 rounded-lg border border-theme-border hover:bg-theme-text/10 text-theme-text-muted text-[10px] font-semibold transition-all flex items-center gap-1"
-                      >
-                        <FileText className="w-3 h-3" /> PDF OC
-                      </button>
-                      </div>
+                       </div>
                     </td>
                   </tr>
                 )
@@ -589,6 +679,7 @@ function TrayTable({
             </tbody>
           </table>
         )}
+        {documentToView && <ReceiptDocumentViewerModal documentId={documentToView.id} documentType={documentToView.document_type} documentNumber={documentToView.document_number} fileName={documentToView.file_name} onClose={() => setDocumentToView(null)} />}
       </div>
     </div>
   )
@@ -710,9 +801,7 @@ export function RecepcionesPanel({ canViewEconomics }: { canViewEconomics: boole
   useEffect(() => { loadPOs() }, [loadPOs])
 
   const filteredPOs = pos.filter(po => {
-    if (filterTab === 'PENDING' && !['CONFIRMADA', 'RECEPCION_PARCIAL'].includes(po.status)) return false
-    if (filterTab === 'PARTIAL' && po.status !== 'RECEPCION_PARCIAL') return false
-    if (filterTab === 'RECEIVED' && po.status !== 'RECEPCION_TOTAL') return false
+    if (filterTab !== 'ALL' && classifyReceptionStatus(po.status) !== filterTab) return false
     const s = search.toLowerCase()
     return (
       po.correlative.toLowerCase().includes(s) ||
@@ -731,9 +820,9 @@ export function RecepcionesPanel({ canViewEconomics }: { canViewEconomics: boole
 
   const counts = {
     all: pos.length,
-    pending: pos.filter(p => ['CONFIRMADA', 'RECEPCION_PARCIAL'].includes(p.status)).length,
-    partial: pos.filter(p => p.status === 'RECEPCION_PARCIAL').length,
-    received: pos.filter(p => p.status === 'RECEPCION_TOTAL').length,
+    pending: pos.filter(p => classifyReceptionStatus(p.status) === 'PENDING').length,
+    partial: pos.filter(p => classifyReceptionStatus(p.status) === 'PARTIAL').length,
+    received: pos.filter(p => classifyReceptionStatus(p.status) === 'RECEIVED').length,
   }
 
   const detailSummary = detailPoId ? (filteredPOs.find(p => p.id === detailPoId) ?? null) : null
