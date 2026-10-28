@@ -134,7 +134,6 @@ function lineContent(line: PreparationCommercialLine, includeQuantity = true): R
     lineNetAmount: line.lineNetAmount,
     lineTaxAmount: line.lineTaxAmount,
     lineGrossAmount: line.lineGrossAmount,
-    lineNumber: line.lineNumber,
     special: line.special,
   }
 }
