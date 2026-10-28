@@ -210,3 +210,17 @@ test('el proveedor usa el nombre normalizado completo del producto y conserva la
     ['PW12401', 'PAWISE 3 EN 1 CAMA/MANTA/COJIN AZUL'],
   ])
 })
+
+test('primera preparación sin edición Bsale: diferencia técnica lineNumber devuelve UNCHANGED', async () => {
+  clearPreparationCommercialDetectorCache()
+  const original = version(92674, [
+    { variantId: 5873, sku: 'SKU-A', productName: 'Producto A', quantity: 24, unitNetValue: 1134, lineNetAmount: 27227, lineTaxAmount: 5173, lineGrossAmount: 32400 },
+  ], 32400)
+  const current = version(92674, original.lines.map(item => ({ ...item, lineNumber: 0 })), 32400)
+  const result = await detectPreparationCommercialChange(
+    { card: identity('company-a', 'token-5129', 92674), knownVersion: original },
+    { provider: providerFor(current).provider, authorize, useCache: false },
+  )
+  assert.equal(result.status, 'UNCHANGED')
+  assert.deepEqual(result.comparison?.differences, [])
+})
