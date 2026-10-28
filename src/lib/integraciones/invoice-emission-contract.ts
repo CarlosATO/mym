@@ -193,8 +193,9 @@ export function validateInvoiceDocument(document: any, expected: {
       // CLP rounding is integer-only, capped for EACH line, and must balance below.
       // A free/zero-valued line may never become paid through a tolerance.
       if (!Number.isSafeInteger(amount) || !Number.isSafeInteger(invoiced) ||
+          amount < 0 || invoiced < 0 ||
           Math.abs(difference) > roundingLimit[field] ||
-          expectedLine.totalAmount === 0) {
+          expectedLine.totalAmount === 0 || Number(detail.totalAmount) <= 0) {
         return { ok: false, reason: `DETAIL_${field.toUpperCase()}_MISMATCH` }
       }
       roundingDetected = true
@@ -205,10 +206,10 @@ export function validateInvoiceDocument(document: any, expected: {
   if (roundingDetected) {
     // No partial snapshots: all three monetary components are needed to prove
     // that Bsale merely redistributed pesos across existing lines.
-    if (!roundingFields.every(field => expected.details.every(line =>
-      Number.isSafeInteger(line[field]) &&
-      line[field]! >= 0
-    ))) return { ok: false, reason: 'DETAIL_ROUNDING_NOT_PROVABLE' }
+    if (!roundingFields.every(field => expected.details.every(line => {
+      const amount = line[field]
+      return typeof amount === 'number' && Number.isSafeInteger(amount) && amount >= 0
+    }))) return { ok: false, reason: 'DETAIL_ROUNDING_NOT_PROVABLE' }
 
     const totalsByField = { netAmount: 'net', taxAmount: 'tax', totalAmount: 'total' } as const
     for (const field of roundingFields) {
