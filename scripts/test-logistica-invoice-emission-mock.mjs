@@ -251,12 +251,12 @@ function mockRoundingInvoice(expectedLines, changes, totals, salesId) {
 
 test('BSale rounding: 5144 accepts +/-$1 IVA distribution with exact invoice totals', () => {
   const data = mockRoundingInvoice([
-    { detailId: 336191, quantity: 12, netUnitValue: 2882, totalUnitValue: 3430, netAmount: 34588, taxAmount: 6571, totalAmount: 41159, netDiscount: 0 },
-    { detailId: 336192, quantity: 12, netUnitValue: 2882, totalUnitValue: 3430, netAmount: 34588, taxAmount: 6572, totalAmount: 41160, netDiscount: 0 },
-    { detailId: 336193, quantity: 12, netUnitValue: 2882, totalUnitValue: 3430, netAmount: 34588, taxAmount: 6572, totalAmount: 41160, netDiscount: 0 },
-    { detailId: 336194, quantity: 6, netUnitValue: 1882, totalUnitValue: 2240, netAmount: 11294, taxAmount: 2146, totalAmount: 13440, netDiscount: 0 },
-    { detailId: 336195, quantity: 6, netUnitValue: 1882, totalUnitValue: 2240, netAmount: 11294, taxAmount: 2146, totalAmount: 13440, netDiscount: 0 },
-    { detailId: 336196, quantity: 20, netUnitValue: 0, totalUnitValue: 0, netAmount: 0, taxAmount: 0, totalAmount: 0, netDiscount: 16235 },
+    { detailId: 101, quantity: 12, netUnitValue: 2882, totalUnitValue: 3430, netAmount: 34588, taxAmount: 6571, totalAmount: 41159, netDiscount: 0 },
+    { detailId: 102, quantity: 12, netUnitValue: 2882, totalUnitValue: 3430, netAmount: 34588, taxAmount: 6572, totalAmount: 41160, netDiscount: 0 },
+    { detailId: 103, quantity: 12, netUnitValue: 2882, totalUnitValue: 3430, netAmount: 34588, taxAmount: 6572, totalAmount: 41160, netDiscount: 0 },
+    { detailId: 104, quantity: 6, netUnitValue: 1882, totalUnitValue: 2240, netAmount: 11294, taxAmount: 2146, totalAmount: 13440, netDiscount: 0 },
+    { detailId: 105, quantity: 6, netUnitValue: 1882, totalUnitValue: 2240, netAmount: 11294, taxAmount: 2146, totalAmount: 13440, netDiscount: 0 },
+    { detailId: 106, quantity: 20, netUnitValue: 0, totalUnitValue: 0, netAmount: 0, taxAmount: 0, totalAmount: 0, netDiscount: 16235 },
   ], [
     { tax: 1, gross: 1 }, {}, { tax: -1, gross: -1 }, {}, {}, {},
   ], { net: 126352, tax: 24007, total: 150359 }, 'PETGROUP:FACTURA:qa-5144')
@@ -290,11 +290,11 @@ test('BSale rounding: 5144 accepts +/-$1 IVA distribution with exact invoice tot
 
 test('BSale rounding: 5139 accepts balanced -$2,+$1,+$1 net distribution', () => {
   const data = mockRoundingInvoice([
-    { detailId: 335967, quantity: 6, netUnitValue: 3235, totalUnitValue: 3850, netAmount: 19412, taxAmount: 3688, totalAmount: 23100, netDiscount: 0 },
-    { detailId: 335968, quantity: 12, netUnitValue: 3235, totalUnitValue: 3850, netAmount: 38823, taxAmount: 7377, totalAmount: 46198, netDiscount: 0 },
-    { detailId: 335969, quantity: 12, netUnitValue: 3235, totalUnitValue: 3850, netAmount: 38823, taxAmount: 7376, totalAmount: 46200, netDiscount: 0 },
-    { detailId: 335970, quantity: 12, netUnitValue: 3235, totalUnitValue: 3850, netAmount: 38823, taxAmount: 7376, totalAmount: 46200, netDiscount: 0 },
-    { detailId: 335971, quantity: 6, netUnitValue: 3529, totalUnitValue: 4200, netAmount: 21176, taxAmount: 4024, totalAmount: 25200, netDiscount: 0 },
+    { detailId: 201, quantity: 6, netUnitValue: 3235, totalUnitValue: 3850, netAmount: 19412, taxAmount: 3688, totalAmount: 23100, netDiscount: 0 },
+    { detailId: 202, quantity: 12, netUnitValue: 3235, totalUnitValue: 3850, netAmount: 38823, taxAmount: 7377, totalAmount: 46198, netDiscount: 0 },
+    { detailId: 203, quantity: 12, netUnitValue: 3235, totalUnitValue: 3850, netAmount: 38823, taxAmount: 7376, totalAmount: 46200, netDiscount: 0 },
+    { detailId: 204, quantity: 12, netUnitValue: 3235, totalUnitValue: 3850, netAmount: 38823, taxAmount: 7376, totalAmount: 46200, netDiscount: 0 },
+    { detailId: 205, quantity: 6, netUnitValue: 3529, totalUnitValue: 4200, netAmount: 21176, taxAmount: 4024, totalAmount: 25200, netDiscount: 0 },
   ], [
     {}, { net: -2 }, { net: 1 }, { net: 1 }, {},
   ], { net: 157057, tax: 29841, total: 186898 }, 'PETGROUP:FACTURA:qa-5139')
