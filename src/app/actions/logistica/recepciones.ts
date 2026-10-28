@@ -56,6 +56,15 @@ export interface ReceiptDocumentSummary {
   file_name: string | null
 }
 
+export interface ReceiptInvoiceSummary {
+  id: string
+  document_type: 'FA'
+  document_number: string | null
+  file_name: string | null
+  has_file: boolean
+  received_at: string | null
+}
+
 export interface ReceiptWarehouseOption {
   id: string
   name: string
@@ -257,6 +266,56 @@ export async function getPendingReceivablePOs(): Promise<PurchaseOrderPending[]>
 export async function getPurchaseOrderForReceipt(poId: string) {
   const { authorization, canViewEconomics, canViewReceiptAmounts } = await authorizeReceiptForm()
   return getPurchaseOrderForReceiptAuthorized(poId, authorization, canViewEconomics, canViewReceiptAmounts)
+}
+
+/** Returns only safe invoice metadata for the current receipt form. */
+export async function getPurchaseOrderReceiptInvoices(poId: string): Promise<ReceiptInvoiceSummary[]> {
+  const { authorization } = await authorizeReception()
+  const companyId = authorization.companyId
+
+  const { data: purchaseOrder, error: purchaseOrderError } = await adqDb()
+    .from('purchase_orders')
+    .select('id, company_id')
+    .eq('id', poId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+
+  if (purchaseOrderError) {
+    console.error('getPurchaseOrderReceiptInvoices PO error:', purchaseOrderError)
+    throw new Error('No se pudo validar la Orden de Compra.')
+  }
+  if (!purchaseOrder) throw new Error('Orden de Compra no encontrada o no autorizada.')
+
+  const { data: receipts, error: receiptsError } = await logDb()
+    .from('purchase_receipts')
+    .select('id, company_id, purchase_order_id, received_at, status, receipt_documents(id, document_type, document_number, file_name, storage_path)')
+    .eq('company_id', companyId)
+    .eq('purchase_order_id', purchaseOrder.id)
+    .order('received_at', { ascending: false })
+
+  if (receiptsError) {
+    console.error('getPurchaseOrderReceiptInvoices receipts error:', receiptsError)
+    throw new Error('No se pudieron cargar las facturas anteriores.')
+  }
+
+  const documents = new Map<string, ReceiptInvoiceSummary>()
+  for (const receipt of receipts ?? []) {
+    if (['CANCELADA', 'CANCELLED'].includes(receipt.status)) continue
+    const receiptDocuments = Array.isArray(receipt.receipt_documents) ? receipt.receipt_documents : []
+    for (const document of receiptDocuments) {
+      if (document.document_type !== 'FA' || documents.has(document.id)) continue
+      documents.set(document.id, {
+        id: document.id,
+        document_type: 'FA',
+        document_number: document.document_number,
+        file_name: document.file_name,
+        has_file: Boolean(document.storage_path),
+        received_at: receipt.received_at,
+      })
+    }
+  }
+
+  return [...documents.values()]
 }
 
 export interface OperationalPurchaseOrderPdfData {

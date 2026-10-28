@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useMemo, Fragment } from 'react'
 import { useRouter } from 'next/navigation'
-import { getActiveReceiptWarehouses, getPurchaseOrderForReceipt, createPurchaseReceipt, type ReceiptWarehouseOption } from '@/app/actions/logistica/recepciones'
+import { getActiveReceiptWarehouses, getPurchaseOrderForReceipt, getPurchaseOrderReceiptInvoices, createPurchaseReceipt, type ReceiptInvoiceSummary, type ReceiptWarehouseOption } from '@/app/actions/logistica/recepciones'
 import { getLocations, type Location } from '@/app/actions/logistica/locations'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
@@ -14,6 +14,7 @@ import { erpInputClass, erpSelectClass } from '@/lib/form-styles'
 import { cn } from '@/lib/utils'
 import { receiptItemSku } from '@/lib/logistica/receipt-display'
 import { OperationalPoPdfModal } from './operational-po-pdf-modal'
+import { ReceiptDocumentViewerModal } from './receipt-document-viewer-modal'
 
 interface ReceiptWorksheetProps {
   poId: string
@@ -69,6 +70,10 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
 
   const [saving, setSaving] = useState(false)
   const [showOperationalPdf, setShowOperationalPdf] = useState(false)
+  const [registeredInvoices, setRegisteredInvoices] = useState<ReceiptInvoiceSummary[]>([])
+  const [registeredInvoicesLoading, setRegisteredInvoicesLoading] = useState(true)
+  const [registeredInvoicesError, setRegisteredInvoicesError] = useState<string | null>(null)
+  const [invoiceToView, setInvoiceToView] = useState<ReceiptInvoiceSummary | null>(null)
 
   // itemInputs state maps itemId -> Array of ItemSplit
   const [itemInputs, setItemInputs] = useState<Record<string, ItemSplit[]>>({})
@@ -144,6 +149,23 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
     }
     loadData()
   }, [poId, router])
+
+  useEffect(() => {
+    let active = true
+    setRegisteredInvoices([])
+    setRegisteredInvoicesError(null)
+    setRegisteredInvoicesLoading(true)
+    void getPurchaseOrderReceiptInvoices(poId).then(invoices => {
+      if (!active) return
+      setRegisteredInvoices(invoices)
+      setRegisteredInvoicesLoading(false)
+    }).catch(error => {
+      if (!active) return
+      setRegisteredInvoicesError(error instanceof Error ? error.message : 'No se pudieron cargar las facturas anteriores.')
+      setRegisteredInvoicesLoading(false)
+    })
+    return () => { active = false }
+  }, [poId])
 
   function handleMainWarehouseChange(warehouseId: string) {
     setMainWarehouseId(warehouseId)
@@ -523,10 +545,10 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
       </div>
 
       {/* Metadata layout grid: Supplier and documents */}
-      <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]">
+      <div className="grid grid-cols-1 items-start gap-3 lg:items-stretch lg:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]">
         
         {/* Left side: Supplier / PO info */}
-        <div className="h-fit rounded-xl border border-theme-border bg-theme-surface/50 p-3 text-xs">
+        <div className="rounded-xl border border-theme-border bg-theme-surface/50 p-3 text-xs">
             <h3 className="font-bold text-theme-text uppercase tracking-wider text-[10px] border-b border-theme-border/60 pb-1.5 flex items-center gap-1.5">
             <LucideIcons.FileText className="w-3.5 h-3.5 text-theme-accent" />
             Información del Proveedor
@@ -600,6 +622,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
           </div>
         </div>
 
+        <div className="min-w-0 space-y-3">
         {/* Center/Right side: Documents and evidence */}
         <div className="h-fit rounded-xl border border-theme-border bg-theme-surface/50 p-3 text-xs">
           <h3 className="font-bold text-theme-text uppercase tracking-wider text-[10px] border-b border-theme-border/60 pb-1.5 flex items-center gap-1.5">
@@ -706,6 +729,58 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
             </div>
           </div>
 
+        </div>
+
+        {registeredInvoices.length > 0 && (
+          <section className="h-fit min-w-0 overflow-hidden rounded-xl border border-theme-border bg-theme-surface/50 px-3 py-2 text-xs">
+            <div className="flex items-center justify-between gap-2 border-b border-theme-border/60 pb-1">
+              <h3 className="flex min-w-0 items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-theme-text">
+                <LucideIcons.Receipt className="h-3.5 w-3.5 shrink-0 text-theme-accent" />
+                <span>Facturas ya registradas</span>
+              </h3>
+              <span className="shrink-0 text-[10px] font-bold text-theme-text-muted">
+                {registeredInvoices.length}
+              </span>
+            </div>
+            <div className="mt-1 overflow-x-auto overscroll-x-contain">
+              <div className="flex min-w-max flex-nowrap items-start gap-3 py-0.5">
+                {registeredInvoices.map(invoice => (
+                  <button
+                    key={invoice.id}
+                    type="button"
+                    disabled={!invoice.has_file}
+                    onClick={() => setInvoiceToView(invoice)}
+                    aria-label={invoice.has_file
+                      ? `Abrir factura ${invoice.document_number || 'sin número'}`
+                      : `Factura ${invoice.document_number || 'sin número'} sin archivo adjunto`}
+                    className={cn(
+                      'group flex w-12 shrink-0 flex-col items-center gap-0.5 rounded-md px-1 py-0.5 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-accent/70',
+                      invoice.has_file
+                        ? 'cursor-pointer text-theme-accent hover:bg-theme-accent/10'
+                        : 'cursor-not-allowed text-theme-text-muted/40 opacity-60',
+                    )}
+                  >
+                    <span className="relative flex h-8 w-7 items-center justify-center">
+                      <LucideIcons.FileText className="h-8 w-7" strokeWidth={1.6} />
+                      <span className="absolute bottom-0.5 rounded-[2px] bg-current px-0.5 text-[6px] font-black leading-[8px] text-theme-surface">
+                        PDF
+                      </span>
+                    </span>
+                    <span className="w-full truncate text-[10px] font-semibold leading-3" title={invoice.document_number || undefined}>
+                      {invoice.document_number || '—'}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {registeredInvoicesError && !registeredInvoicesLoading && (
+          <p className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[10px] text-amber-700 dark:text-amber-300">
+            {registeredInvoicesError}
+          </p>
+        )}
         </div>
       </div>
 
@@ -1074,6 +1149,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
       <div className="h-1" aria-hidden="true" />
 
       {showOperationalPdf && <OperationalPoPdfModal poId={poId} onClose={() => setShowOperationalPdf(false)} />}
+      {invoiceToView && <ReceiptDocumentViewerModal documentId={invoiceToView.id} documentType={invoiceToView.document_type} documentNumber={invoiceToView.document_number} fileName={invoiceToView.file_name} onClose={() => setInvoiceToView(null)} />}
 
     </div>
   )
