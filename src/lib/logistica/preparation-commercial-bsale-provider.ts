@@ -81,7 +81,7 @@ function extractDetails(value: unknown): { items: BsaleRawDetail[]; complete: bo
   return { items: page.items as BsaleRawDetail[], complete: count == null || page.items.length >= count }
 }
 
-async function resolveNormalizedProductNames(companyId: string, variantIds: number[], signal: AbortSignal): Promise<NormalizedProductNames> {
+async function resolveNormalizedProductNames(companyId: string, nvBsaleId: number, variantIds: number[], signal: AbortSignal): Promise<NormalizedProductNames> {
   if (variantIds.length === 0) return {}
   if (signal.aborted) throw providerError('UNAVAILABLE', 'Se canceló la resolución de nombres normalizados.')
   const { createAdminClient } = await import('../supabase/admin')
@@ -90,6 +90,7 @@ async function resolveNormalizedProductNames(companyId: string, variantIds: numb
     .from('vw_bsale_sales_order_items_for_preparation')
     .select('variant_id, product_name')
     .eq('company_id', companyId)
+    .eq('nv_bsale_id', nvBsaleId)
     .in('variant_id', variantIds)
   if (error) throw providerError('INCOMPLETE', `No se pudo resolver el nombre normalizado de los productos: ${error.message}`)
   const names = Object.fromEntries(
@@ -160,7 +161,6 @@ async function fetchAllDocumentCandidates(
 export function createBsalePreparationCommercialProvider(providerOptions: BsalePreparationCommercialProviderOptions = {}): PreparationCommercialProvider {
   const fetchPage = providerOptions.fetchPage ?? defaultFetchPage
   const resolveProductNames = providerOptions.resolveProductNames
-    ?? (providerOptions.fetchPage ? undefined : resolveNormalizedProductNames)
   return {
     async getCurrentVersion(identity, signal) {
       const documents = (await fetchAllDocumentCandidates(fetchPage, identity, signal))
@@ -182,8 +182,10 @@ export function createBsalePreparationCommercialProvider(providerOptions: BsaleP
         .filter((variantId): variantId is number => variantId != null))]
       const productNames = resolveProductNames
         ? await resolveProductNames(identity.companyId, variantIds, signal)
-        : {}
-      if (resolveProductNames) {
+        : providerOptions.fetchPage
+          ? {}
+          : await resolveNormalizedProductNames(identity.companyId, numeric(selected.id) ?? -1, variantIds, signal)
+      if (resolveProductNames || !providerOptions.fetchPage) {
         const missingProductNames = variantIds.filter(variantId => !productNames[variantId])
         if (missingProductNames.length > 0) {
           throw providerError('INCOMPLETE', `Faltan nombres normalizados para las variantes Bsale: ${missingProductNames.join(', ')}.`)
