@@ -10,22 +10,26 @@ interface WmsShellProps {
   pageTitle: string
   breadcrumb: string[]
   permissions: string[]
+  canAccessPreparation: boolean
 }
 
-export function WmsShell({ children, profile, permissions, pageTitle, breadcrumb }: WmsShellProps) {
+export function WmsShell({ children, profile, permissions, pageTitle, breadcrumb, canAccessPreparation }: WmsShellProps) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const isPreparationFullscreen = pathname === '/dashboard/logistica'
     && searchParams.get('tab') === 'preparacion_pedidos'
     && searchParams.get('action') === 'preparacion_pedidos'
   const isMermasContext = pathname.startsWith('/dashboard/logistica/mermas')
+  const navigationPermissions = canAccessPreparation
+    ? [...permissions, 'logistica.preparation.access']
+    : permissions
 
   return (
     <ModuleShell
       identity={isMermasContext ? { id: 'mermas', label: 'MERMAS' } : { id: 'logistica', label: 'WMS', subtitle: 'Gestión de Bodega' }}
       navigation={getWmsNavigation(pathname)}
       profile={profile}
-      permissions={permissions}
+      permissions={navigationPermissions}
       pageTitle={pageTitle}
       breadcrumb={breadcrumb}
       surfaceMode="none"
