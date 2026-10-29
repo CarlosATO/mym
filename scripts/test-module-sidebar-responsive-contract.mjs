@@ -95,7 +95,7 @@ test('13. resize limpia los estados incompatibles', () => {
   )
   assert.match(shell, /const navigationKey = `\$\{pathname\}\|\$\{viewport\}`/)
   assert.match(shell, /if \(navigationKey !== lastNavigationKey\) \{[\s\S]*?setTemporaryExpanded\(false\)[\s\S]*?setMobileOpen\(false\)/)
-  assert.match(shell, /const mobileDrawerOpen = viewport === 'mobile' && mobileOpen/)
+  assert.match(shell, /const mobileDrawerOpen = !hideSidebar && viewport === 'mobile' && mobileOpen/)
 })
 
 test('14. aria-expanded refleja el estado real', () => {
@@ -106,7 +106,7 @@ test('14. aria-expanded refleja el estado real', () => {
 
 test('15. el evento mym:sidebar-change sigue soportado', () => {
   assert.match(shell, /new CustomEvent\('mym:sidebar-change'/)
-  assert.match(shell, /collapsed: sidebarState\.reserveCollapsed/)
+  assert.match(shell, /collapsed: hideSidebar \? false : sidebarState\.reserveCollapsed/)
 })
 
 test('16. el contenido no queda comprimido a 1366', () => {
