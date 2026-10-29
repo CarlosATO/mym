@@ -1,4 +1,16 @@
 export type PreparationSort = 'default' | 'nv' | 'date' | 'comuna'
+export type PreparationColumnSort =
+  | 'default'
+  | 'nvAsc'
+  | 'nvDesc'
+  | 'dateAsc'
+  | 'dateDesc'
+  | 'clientAsc'
+  | 'comunaAsc'
+  | 'amountAsc'
+  | 'amountDesc'
+  | 'invoiceAsc'
+  | 'invoiceDesc'
 
 export type PreparationSearchableCard = {
   card_id: string
@@ -257,6 +269,37 @@ export function sortPreparationCards<T extends PreparationSearchableCard>(
   })
 }
 
+export function sortPreparationColumnCards<T extends PreparationSearchableCard>(
+  cards: T[],
+  sort: PreparationColumnSort,
+  invoiceNumberByCardId: ReadonlyMap<string, number | null> = new Map(),
+): T[] {
+  if (sort === 'default') return [...cards]
+
+  const direction = sort.endsWith('Desc') ? -1 : 1
+  const compareText = (a: string | null | undefined, b: string | null | undefined) => normalizeText(a).localeCompare(normalizeText(b), 'es')
+  const compareNumber = (a: number | null | undefined, b: number | null | undefined) => {
+    if (a == null && b == null) return 0
+    if (a == null) return 1
+    if (b == null) return -1
+    return (a - b) * direction
+  }
+
+  return [...cards].sort((a, b) => {
+    let comparison = 0
+    if (sort === 'nvAsc' || sort === 'nvDesc') comparison = compareFolio(a, b) * direction
+    if (sort === 'dateAsc' || sort === 'dateDesc') comparison = compareDate(a, b) * direction
+    if (sort === 'clientAsc') comparison = compareText(a.client_name, b.client_name)
+    if (sort === 'comunaAsc') comparison = compareText(getPreparationComuna(a), getPreparationComuna(b))
+    if (sort === 'amountAsc' || sort === 'amountDesc') comparison = compareNumber(getPreparationCardAmount(a), getPreparationCardAmount(b))
+    if (sort === 'invoiceAsc' || sort === 'invoiceDesc') {
+      comparison = compareNumber(invoiceNumberByCardId.get(a.card_id), invoiceNumberByCardId.get(b.card_id))
+    }
+
+    return comparison !== 0 ? comparison : compareFolio(a, b)
+  })
+}
+
 export function prunePreparationSelection<T extends PreparationSearchableCard>(
   selectedIds: ReadonlySet<string>,
   cards: T[],
@@ -274,6 +317,19 @@ export function prunePreparationSelection<T extends PreparationSearchableCard>(
     if (selectableIds.has(id)) next.add(id)
   }
   return next
+}
+
+export function getPreparationColumnSelectionIds<T extends PreparationSearchableCard>(
+  columnId: string,
+  cards: T[],
+): string[] {
+  const status = columnId === 'PENDING_ROUTE_PREP'
+    ? 'PENDING_ROUTE_PREP'
+    : columnId === 'INVOICED_READY_FOR_ROUTE'
+      ? 'INVOICED_READY_FOR_ROUTE'
+      : null
+  if (!status) return []
+  return cards.filter(card => card.status === status).map(card => card.card_id)
 }
 
 export function summarizePreparationBoard<T extends PreparationSearchableCard>(

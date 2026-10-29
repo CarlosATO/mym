@@ -84,7 +84,7 @@ test('indicador de frescura y error no bloqueante', () => {
   assert.match(panel, /Desactualizado/)
   assert.match(panel, /ERROR/)
   assert.match(panel, /setSyncError/)
-  assert.match(panel, /title=\{syncError \|\| undefined\}/)
+  assert.match(panel, /title=\{\[syncStatusLabel, syncTrigger, syncTime[\s\S]*?syncError\]\.filter\(Boolean\)\.join/)
 })
 
 test('instrumentación mínima de desarrollo/test', () => {

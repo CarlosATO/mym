@@ -1,7 +1,9 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react'
-import { Search, SlidersHorizontal, KanbanSquare, Loader2, RotateCcw, RefreshCw, ShieldCheck, Printer, ArrowUpDown, X } from 'lucide-react'
+import { Search, SlidersHorizontal, Loader2, RotateCcw, RefreshCw, ShieldCheck, Printer, ArrowUpDown, X, ArrowLeft } from 'lucide-react'
+import Link from 'next/link'
+import { PreparationBreadcrumbIndicators } from './preparation-breadcrumb-indicators'
 import { 
   getSalesOrderPreparationBoard, 
   getSalesOrderPreparationLines,
@@ -56,8 +58,11 @@ import {
   prunePreparationFilterKeys,
   prunePreparationSelection,
   sortPreparationCards,
+  sortPreparationColumnCards,
+  getPreparationColumnSelectionIds,
   summarizePreparationBoard,
   summarizePreparationSelection,
+  type PreparationColumnSort,
   type PreparationSort,
 } from './preparation-board-utils'
 import { generatePreparationOrdersPdf, openPreparationOrdersPdf } from '@/lib/pdf/generate-preparation-orders-pdf'
@@ -226,7 +231,7 @@ function SummaryStat({ label, value, sub, title, accent = false, onClick, ariaLa
       {sub && <span className="text-[10px] font-medium text-[#322D29]/45">{sub}</span>}
     </>
   )
-  const className = 'flex min-w-0 items-baseline gap-1 whitespace-nowrap text-left'
+  const className = 'flex shrink-0 items-baseline gap-1 whitespace-nowrap text-left'
   if (onClick) {
     return (
       <button
@@ -253,6 +258,9 @@ function DroppableColumn({
   selectedCardIds,
   onToggleSelection,
   sortBy,
+  columnSort,
+  onColumnSortChange,
+  onSelectAll,
   currentUserId,
   auditLocks,
   readinessByCardId,
@@ -273,6 +281,9 @@ function DroppableColumn({
   selectedCardIds: Set<string>
   onToggleSelection: (c: SalesOrderPreparationCardInfo) => void
   sortBy: PreparationSort
+  columnSort: PreparationColumnSort
+  onColumnSortChange: (sort: PreparationColumnSort) => void
+  onSelectAll: () => void
   currentUserId: string | null
   auditLocks: Record<string, AuditBoardLock>
   readinessByCardId: Record<string, SalesOrderRouteReadiness>
@@ -287,6 +298,29 @@ function DroppableColumn({
   const { setNodeRef, isOver } = useDroppable({
     id: col.id,
   })
+  const [sortMenuOpen, setSortMenuOpen] = useState(false)
+  const selectAllRef = useRef<HTMLInputElement>(null)
+  const sortOptions: Array<{ value: PreparationColumnSort; label: string }> = [
+    { value: 'default', label: 'Orden original' },
+    { value: 'nvAsc', label: 'NV ascendente' },
+    { value: 'nvDesc', label: 'NV descendente' },
+    { value: 'dateAsc', label: 'Fecha ascendente' },
+    { value: 'dateDesc', label: 'Fecha descendente' },
+    { value: 'clientAsc', label: 'Cliente A–Z' },
+    { value: 'comunaAsc', label: 'Comuna A–Z' },
+    { value: 'amountAsc', label: 'Monto ascendente' },
+    { value: 'amountDesc', label: 'Monto descendente' },
+    ...(col.id === 'INVOICED_READY_FOR_ROUTE'
+      ? [{ value: 'invoiceAsc' as const, label: 'Factura ascendente' }, { value: 'invoiceDesc' as const, label: 'Factura descendente' }]
+      : []),
+  ]
+  const selectableCards = getPreparationColumnSelectionIds(col.id, colCards)
+  const selectedCount = selectableCards.filter(cardId => selectedCardIds.has(cardId)).length
+  const allSelected = selectableCards.length > 0 && selectedCount === selectableCards.length
+  const partiallySelected = selectedCount > 0 && !allSelected
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = partiallySelected
+  }, [partiallySelected])
   return (
     <section
       ref={setNodeRef}
@@ -297,15 +331,29 @@ function DroppableColumn({
       }`}
     >
       {/* Column header */}
-      <div className="sticky top-0 z-10 border-b border-[#DDD4CA] bg-white/90 px-2.5 py-1.5 backdrop-blur-xs">
+      <div className="relative sticky top-0 z-10 border-b border-[#DDD4CA] bg-white/90 px-2.5 py-1.5 backdrop-blur-xs">
         <div className="flex items-center justify-between gap-1.5">
           <div className="flex min-w-0 items-center gap-1.5">
             <span className={`h-2 w-2 shrink-0 rounded-full ${col.dot}`} />
             <h3 className="truncate text-[10px] font-bold uppercase tracking-wider text-[#322D29]">{col.title}</h3>
           </div>
-          <span className="flex h-4 min-w-[18px] items-center justify-center rounded-full bg-[#EAE3DA] px-1.5 text-[10px] font-bold tabular-nums text-[#6B625C]">{colCards.length}</span>
+          <div className="flex shrink-0 items-center gap-1">
+            <span className="flex h-4 min-w-[18px] items-center justify-center rounded-full bg-[#EAE3DA] px-1.5 text-[10px] font-bold tabular-nums text-[#6B625C]">{colCards.length}</span>
+            {(col.id === 'PENDING_ROUTE_PREP' || col.id === 'INVOICED_READY_FOR_ROUTE') && <label className="inline-flex shrink-0 items-center gap-1 text-[9px] font-semibold text-[#6B625C]" title={selectableCards.length === 0 ? 'No hay tarjetas elegibles' : 'Seleccionar tarjetas visibles'}>
+              <input ref={selectAllRef} type="checkbox" checked={allSelected} disabled={selectableCards.length === 0} onChange={onSelectAll} aria-checked={partiallySelected ? 'mixed' : allSelected} aria-label={`Seleccionar todas las tarjetas de ${col.title}`} className="h-3 w-3 rounded accent-[#72383D]" />
+              <span>Todos</span>
+            </label>}
+            <button type="button" aria-label={`Ordenar columna ${col.title}`} aria-expanded={sortMenuOpen} title="Ordenar columna" onClick={() => setSortMenuOpen(value => !value)} className={`inline-flex h-5 w-5 items-center justify-center rounded text-[#6B625C] transition-colors hover:bg-[#F5F0EA] hover:text-[#72383D] ${columnSort !== 'default' ? 'bg-[#F5EDE9] text-[#72383D]' : ''}`}>
+              <ArrowUpDown className="h-3 w-3" aria-hidden="true" />
+            </button>
+          </div>
         </div>
         <p className="mt-0.5 pl-3.5 text-[10px] font-semibold tabular-nums text-[#6B625C]">{formatPreparationClp(columnAmount)}</p>
+        {sortMenuOpen && <div role="menu" aria-label={`Orden de ${col.title}`} className="absolute right-2 top-8 z-30 w-44 rounded-md border border-[#D1C7BD] bg-white p-1 shadow-lg">
+          {sortOptions.map(option => <button key={option.value} type="button" role="menuitemradio" aria-checked={columnSort === option.value} onClick={() => { onColumnSortChange(option.value); setSortMenuOpen(false) }} className={`flex w-full items-center rounded px-2 py-1.5 text-left text-[10px] font-medium ${columnSort === option.value ? 'bg-[#F5EDE9] font-semibold text-[#72383D]' : 'text-[#322D29] hover:bg-[#F8F5F1]'}`}>
+            {option.label}
+          </button>)}
+        </div>}
       </div>
 
       {/* Column body */}
@@ -318,7 +366,7 @@ function DroppableColumn({
         {colCards.map((card, index) => {
           const comuna = getPreparationComuna(card)
           const previousComuna = index > 0 ? getPreparationComuna(colCards[index - 1]) : ''
-          const showComunaDivider = sortBy === 'comuna' && comuna !== previousComuna
+          const showComunaDivider = (sortBy === 'comuna' || columnSort === 'comunaAsc') && comuna !== previousComuna
 
           return (
             <Fragment key={card.card_id}>
@@ -416,6 +464,7 @@ export function SalesOrderPreparationPanel({
   const [selectedComunas, setSelectedComunas] = useState<Set<string>>(new Set())
   const [filterSellerKey, setFilterSellerKey] = useState('')
   const [sortBy, setSortBy] = useState<PreparationSort>('default')
+  const [columnSorts, setColumnSorts] = useState<Record<string, PreparationColumnSort>>({})
   const [showAdvanced, setShowAdvanced] = useState(false)
 
   // Selección operacional (identidad por card_id, nunca por índice visual)
@@ -1515,6 +1564,33 @@ export function SalesOrderPreparationPanel({
     })
   }
 
+  const toggleColumnSelection = (columnId: string) => {
+    const visibleIds = getPreparationColumnSelectionIds(columnId, columnData[columnId]?.cards ?? [])
+    if (visibleIds.length === 0) return
+
+    const visibleIdSet = new Set(visibleIds)
+    const hasIncompatibleSelection = [...selectedCardIds].some(cardId => {
+      if (visibleIdSet.has(cardId)) return false
+      const selectedCard = cardsRef.current.find(card => card.card_id === cardId)
+      return selectedCard?.status === 'PENDING_ROUTE_PREP' || selectedCard?.status === 'INVOICED_READY_FOR_ROUTE'
+    })
+    if (hasIncompatibleSelection) {
+      setBulkPrintError('Limpia la selección de la otra etapa antes de seleccionar todas estas tarjetas.')
+      return
+    }
+
+    const allSelected = visibleIds.every(cardId => selectedCardIds.has(cardId))
+    setSelectedCardIds(current => {
+      const next = new Set(current)
+      for (const cardId of visibleIds) {
+        if (allSelected) next.delete(cardId)
+        else next.add(cardId)
+      }
+      return next
+    })
+    setBulkPrintError(null)
+  }
+
   const clearSelection = () => {
     setSelectedCardIds(new Set())
     setBulkPrintError(null)
@@ -1797,6 +1873,20 @@ export function SalesOrderPreparationPanel({
     [searchFilteredCards, sortBy],
   )
 
+  const confirmedInvoiceNumberByCardId = useMemo(() => {
+    const result = new Map<string, number | null>()
+    for (const card of cards) {
+      if (card.status !== 'INVOICED_READY_FOR_ROUTE') continue
+      const documents = invoiceDocumentCacheRef.current.get(getInvoiceDocumentCacheKey(card.card_id, card.nv_bsale_id))?.documents ?? []
+      const confirmedNumbers = documents
+        .filter(document => document.status === 'CONFIRMED')
+        .map(document => Number(document.invoice_folio))
+        .filter(value => Number.isSafeInteger(value) && value > 0)
+      result.set(card.card_id, confirmedNumbers.length > 0 ? Math.min(...confirmedNumbers) : null)
+    }
+    return result
+  }, [cards, invoiceDocumentCacheVersion])
+
   const columnData = useMemo(() => {
     const data: Record<string, { cards: SalesOrderPreparationCardInfo[]; amount: number }> = Object.fromEntries(
       COLUMNS.map(column => [column.id, { cards: [], amount: 0 }]),
@@ -1810,8 +1900,14 @@ export function SalesOrderPreparationPanel({
       column.amount += getPreparationCardAmount(card) ?? 0
     }
 
+    for (const column of COLUMNS) {
+      const target = data[column.id]
+      if (!target) continue
+      target.cards = sortPreparationColumnCards(target.cards, columnSorts[column.id] ?? 'default', confirmedInvoiceNumberByCardId)
+    }
+
     return data
-  }, [filteredCards, readinessByCardId])
+  }, [filteredCards, readinessByCardId, columnSorts, confirmedInvoiceNumberByCardId])
 
   const selectedCards = useMemo(
     () => cards.filter(card => selectedCardIds.has(card.card_id) && (card.status === 'PENDING_ROUTE_PREP' || card.status === 'INVOICED_READY_FOR_ROUTE')),
@@ -1986,62 +2082,64 @@ export function SalesOrderPreparationPanel({
   return (
     <div className="flex flex-col h-[calc(100vh-110px)] w-full overflow-hidden bg-[#EFE9E1] text-[#322D29]">
       {/* ── Header / Toolbar ── */}
-      <div className="flex-none px-3 py-2 border-b border-[#D1C7BD] bg-[#FCFBF9] shadow-xs z-10">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex-none px-2 py-1.5 border-b border-[#D1C7BD] bg-[#FCFBF9] shadow-xs sm:px-3">
+        <div className="flex min-w-0 items-center gap-1 sm:gap-2">
           
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="flex items-center gap-2 shrink-0">
-              <div className="p-1 rounded-md bg-[#72383D]/10 text-[#72383D]">
-                <KanbanSquare className="w-4 h-4" />
-              </div>
-              <h1 className="text-[13px] font-bold tracking-tight text-[#322D29]">Preparación de Pedidos</h1>
-            </div>
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+            <Link href="/dashboard/logistica?tab=inicio&action=resumen" aria-label="Volver a Bodega" title="Volver a Bodega" className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[#D1C7BD]/60 px-1.5 py-1 text-[10px] font-medium text-[#6B625C] hover:bg-[#F5F0EA]">
+              <ArrowLeft className="h-3 w-3" aria-hidden="true" />
+              <span className="hidden whitespace-nowrap sm:inline">Volver a Bodega</span>
+            </Link>
 
             <div
-              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold border ${
+              role="status"
+              aria-label={syncStatusLabel}
+              className={`inline-flex w-[92px] shrink-0 items-center gap-1.5 px-1 py-1 text-[10px] font-medium tabular-nums whitespace-nowrap ${
                 syncIsError
-                  ? 'border-[#8A4B4B]/30 bg-[#8A4B4B]/10 text-[#8A4B4B]'
+                  ? 'text-[#8A4B4B]'
                   : isSyncRunning
-                    ? 'border-amber-500/30 bg-amber-50 text-amber-800'
+                    ? 'text-amber-800'
                     : syncIsFresh
-                      ? 'border-emerald-500/30 bg-emerald-50 text-emerald-800'
-                      : 'border-slate-300 bg-slate-50 text-slate-600'
+                      ? 'text-emerald-800'
+                      : 'text-slate-500'
               }`}
-              title={syncError || undefined}
+              title={[syncStatusLabel, syncTrigger, syncTime ? new Date(syncTime).toLocaleString('es-CL') : 'Sin sincronización registrada', syncError].filter(Boolean).join(' · ')}
             >
-              <span className={`w-1.5 h-1.5 rounded-full ${syncIsError ? 'bg-red-500' : isSyncRunning ? 'bg-amber-500 animate-pulse' : syncIsFresh ? 'bg-emerald-500' : 'bg-slate-400'}`} />
-              <span>{isSyncRunning ? 'Sincronizando…' : `Sync: ${syncStatusLabel}`}</span>
-              {syncRun ? <span className="opacity-75">· {syncTrigger} {syncTime ? new Date(syncTime).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : ''}</span> : null}
+              <span className={`h-2 w-2 shrink-0 rounded-full ${isSyncRunning ? 'animate-spin border border-current border-t-transparent' : syncIsError ? 'bg-red-500' : syncIsFresh ? 'bg-emerald-500' : 'bg-slate-400'}`} aria-hidden="true" />
+              <span>Actu: {syncAge === null ? '—' : Math.max(0, Math.floor(syncAge))} Min.</span>
             </div>
           </div>
           
           {/* Controls */}
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex min-w-0 flex-1 items-center gap-1">
             <button
+              type="button"
+              aria-label="Actualizar Notas de Venta"
+              title="Actualizar Notas de Venta"
               onClick={() => void runSync('manual')}
               disabled={isSyncing}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border shadow-xs transition-colors ${
-                isSyncing
-                   ? 'bg-[#F5F0EA] border-[#D1C7BD] text-[#322D29]/50 opacity-80 cursor-not-allowed'
-                   : 'bg-[#72383D] text-white hover:bg-[#612F34] border-transparent'
-              }`}
+              className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[#D1C7BD]/60 px-1.5 py-1 text-[10px] font-medium text-[#6B625C] hover:bg-[#F5F0EA] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-              <span>{isSyncing ? 'Sincronizando...' : 'Actualizar NV'}</span>
+              <RefreshCw className="h-3 w-3" />
+              <span className="hidden sm:inline">Actualizar</span>
             </button>
 
             <button
+              type="button"
+              aria-label="Exclusiones"
+              title="Exclusiones"
               onClick={() => setExclusionsOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border bg-white border-[#D1C7BD] text-[#322D29]/80 hover:bg-[#F5F0EA] shadow-xs transition-colors"
+              className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[#D1C7BD]/60 px-1.5 py-1 text-[10px] font-medium text-[#6B625C] hover:bg-[#F5F0EA]"
             >
-              <ShieldCheck className="w-3.5 h-3.5 text-[#72383D]" />
-              <span>Exclusiones</span>
+              <ShieldCheck className="h-3 w-3" />
+              <span className="hidden sm:inline">Exclusiones</span>
             </button>
 
-            <div className="relative w-56 sm:w-64">
+            <div className="relative ml-auto w-20 min-w-0 shrink sm:w-32 xl:w-56">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#322D29]/45" />
               <input
                 type="text"
+                aria-label="Buscar NV, cliente, comuna o fecha"
                 placeholder="Buscar NV, cliente, comuna, fecha..."
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
@@ -2055,7 +2153,8 @@ export function SalesOrderPreparationPanel({
                 value={sortBy}
                 onChange={e => setSortBy(e.target.value as PreparationSort)}
                 title="Ordenar tarjetas"
-                className="appearance-none py-1.5 pl-8 pr-7 rounded-lg bg-white border border-[#D1C7BD] text-xs font-medium text-[#322D29] focus:outline-none focus:ring-2 focus:ring-[#72383D]/20 focus:border-[#72383D] shadow-xs transition-all cursor-pointer"
+                aria-label="Ordenar tarjetas"
+                className="w-9 appearance-none py-1.5 pl-7 pr-1 rounded-lg bg-white border border-[#D1C7BD] text-xs font-medium text-[#322D29] focus:outline-none focus:ring-2 focus:ring-[#72383D]/20 focus:border-[#72383D] shadow-xs transition-all cursor-pointer lg:w-auto lg:pl-8 lg:pr-7"
               >
                 <option value="default">Orden normal</option>
                 <option value="comuna">Ordenar por comuna</option>
@@ -2065,20 +2164,23 @@ export function SalesOrderPreparationPanel({
             </div>
 
             <button
+              type="button"
+              aria-label="Filtros"
+              title="Filtros"
               onClick={() => setShowAdvanced(v => !v)}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold shadow-xs transition-colors ${showAdvanced ? 'bg-[#F5EDE9] border-[#72383D]/40 text-[#72383D]' : 'bg-white border-[#D1C7BD] text-[#322D29]/70 hover:bg-[#F5F0EA]'}`}
+              className={`flex shrink-0 items-center gap-1.5 px-1.5 py-1.5 rounded-lg border text-xs font-semibold shadow-xs transition-colors ${showAdvanced ? 'bg-[#F5EDE9] border-[#72383D]/40 text-[#72383D]' : 'bg-white border-[#D1C7BD] text-[#322D29]/70 hover:bg-[#F5F0EA]'}`}
             >
               <SlidersHorizontal className="w-3.5 h-3.5" />
-              <span>Filtros</span>
+              <span className="hidden sm:inline">Filtros</span>
             </button>
           </div>
         </div>
 
         {/* Filters Expansion - Compacto y operacional */}
         {showAdvanced && (
-          <div className="mt-2.5 flex flex-col gap-2 border-t border-[#D1C7BD] pt-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
+          <div aria-label="Opciones de filtros" className="mt-1.5 flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto whitespace-nowrap border-t border-[#D1C7BD] pt-1.5 pb-1">
+            <div className="contents">
+              <div className="order-1 flex shrink-0 items-center gap-2" title="Sin selección se muestran todas las comunas.">
                 <h2 className="text-[10px] font-bold uppercase tracking-wider text-[#6B625C]">Comunas ({comunaOptions.length})</h2>
                 <span className="text-[#D1C7BD]">·</span>
                 <button
@@ -2100,13 +2202,14 @@ export function SalesOrderPreparationPanel({
                 </button>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2.5 ml-auto">
-                <div className="flex items-center gap-1.5">
+              <div className="order-3 ml-auto flex shrink-0 items-center gap-2 border-l border-[#D1C7BD] pl-2">
+                <div className="flex shrink-0 items-center gap-1.5" title="Sólo vendedores presentes en las NV del board.">
                   <h2 className="text-[10px] font-bold uppercase tracking-wider text-[#6B625C]">Vendedor:</h2>
                   <select
+                    aria-label="Filtrar por vendedor"
                     value={effectiveSellerKey}
                     onChange={e => setFilterSellerKey(e.target.value)}
-                    className="rounded-lg border border-[#D1C7BD] bg-white px-2.5 py-1 text-xs font-medium text-[#322D29] focus:ring-2 focus:ring-[#72383D]/20 focus:border-[#72383D] focus:outline-none shadow-xs"
+                    className="w-40 rounded-md border border-[#D1C7BD] bg-white px-2 py-1 text-xs font-medium text-[#322D29] focus:ring-2 focus:ring-[#72383D]/20 focus:border-[#72383D] focus:outline-none shadow-xs"
                   >
                     <option value="">Todos los vendedores</option>
                     {sellerOptions.map(option => (
@@ -2117,18 +2220,20 @@ export function SalesOrderPreparationPanel({
 
                 {hasActiveFilterOrSort && (
                   <button
+                    type="button"
+                    aria-label="Limpiar filtros y orden"
                     onClick={() => { clearFilters(); setSortBy('default') }}
                     title="Limpiar filtros y orden"
-                    className="flex items-center gap-1 rounded-lg border border-[#D1C7BD] bg-white px-2.5 py-1 text-xs font-semibold text-[#322D29]/70 shadow-xs transition-colors hover:bg-[#F5F0EA] hover:text-[#322D29]"
+                    className="flex shrink-0 items-center gap-1 rounded-md border border-[#D1C7BD] bg-white px-2 py-1 text-xs font-semibold text-[#322D29]/70 shadow-xs transition-colors hover:bg-[#F5F0EA] hover:text-[#322D29]"
                   >
-                    <RotateCcw className="w-3 h-3" /> Limpiar filtros y orden
+                     <RotateCcw className="w-3 h-3" /> Limpiar
                   </button>
                 )}
               </div>
             </div>
 
             {/* Chips de Comunas con multiselección */}
-            <div className="flex flex-wrap items-center gap-1.5 max-h-24 overflow-y-auto p-1.5 rounded-lg border border-[#DDD4CA] bg-white/70 shadow-xs">
+            <div className="order-2 flex shrink-0 flex-nowrap items-center gap-1.5">
               {comunaOptions.length === 0 ? (
                 <p className="px-2 py-1 text-xs text-[#322D29]/40 italic">Sin comunas en el board</p>
               ) : (
@@ -2137,7 +2242,7 @@ export function SalesOrderPreparationPanel({
                   return (
                     <label
                       key={option.key}
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs cursor-pointer transition-all select-none ${
+                      className={`inline-flex shrink-0 items-center gap-1.5 px-2 py-1 rounded-md text-xs cursor-pointer transition-all select-none ${
                         checked
                           ? 'bg-[#72383D] text-white shadow-xs font-semibold'
                           : 'bg-white border border-[#DDD4CA] text-[#322D29]/75 hover:bg-[#F5F0EA] font-medium'
@@ -2158,18 +2263,13 @@ export function SalesOrderPreparationPanel({
                 })
               )}
             </div>
-            <div className="flex flex-wrap items-center justify-between text-[10px] font-medium text-[#322D29]/50">
-              <p>Sin selección se muestran todas las comunas.</p>
-              <p>Sólo vendedores presentes en las NV del board.</p>
-            </div>
           </div>
         )}
       </div>
 
-      {/* ── Resumen operacional ── */}
+      {/* Indicadores en la línea existente del breadcrumb. */}
       {!loading && !error && (
-        <div className="flex-none border-b border-[#D1C7BD] bg-[#FCFBF9] px-3 py-1.5">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <PreparationBreadcrumbIndicators>
             <SummaryStat
               label="NV"
               value={boardSummary.nvCount}
@@ -2217,8 +2317,7 @@ export function SalesOrderPreparationPanel({
                 Vista filtrada
               </span>
             )}
-          </div>
-        </div>
+        </PreparationBreadcrumbIndicators>
       )}
 
       {/* ── Barra de acciones de selección ── */}
@@ -2342,9 +2441,12 @@ export function SalesOrderPreparationPanel({
                          canExclude={canManageExclusions}
                          onExclude={setExcludeCard}
                          selectedCardIds={selectedCardIds}
-                         onToggleSelection={toggleSelection}
-                         sortBy={sortBy}
-                         currentUserId={currentUserId}
+                          onToggleSelection={toggleSelection}
+                          sortBy={sortBy}
+                          columnSort={columnSorts[col.id] ?? 'default'}
+                          onColumnSortChange={sort => setColumnSorts(current => ({ ...current, [col.id]: sort }))}
+                          onSelectAll={() => toggleColumnSelection(col.id)}
+                          currentUserId={currentUserId}
                          auditLocks={auditLocks}
                          readinessByCardId={readinessByCardId}
                           readinessState={readinessState}
