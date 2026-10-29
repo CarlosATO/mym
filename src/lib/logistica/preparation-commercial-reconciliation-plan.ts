@@ -113,12 +113,47 @@ export type BuildPreparationCommercialReconciliationPlanInput = {
 
 type LineRef = PreparationCommercialLineInput | null
 
-function lineKey(line: LineRef): string | null {
-  if (!line) return null
-  if (line.detailId != null && Number.isSafeInteger(Number(line.detailId))) return `detail:${Number(line.detailId)}`
-  if (line.variantId != null && Number.isSafeInteger(Number(line.variantId))) return `variant:${Number(line.variantId)}`
-  if (line.sku?.trim()) return `sku:${line.sku.trim().toLocaleUpperCase('es-CL')}`
-  return null
+const COMMERCIAL_VALUE_FIELDS = new Set(['unitNetValue', 'lineNetAmount', 'lineTaxAmount', 'lineGrossAmount'])
+
+function normalizeSku(sku: string | null | undefined): string | null {
+  const normalized = (sku ?? '').trim().replace(/\s+/g, ' ').toLocaleUpperCase('es-CL')
+  return normalized.length > 0 ? normalized : null
+}
+
+function normalizeVariantId(variantId: number | null | undefined): number | null {
+  if (variantId == null) return null
+  const parsed = Number(variantId)
+  return Number.isSafeInteger(parsed) ? parsed : null
+}
+
+function hasCanonicalProductIdentity(line: LineRef): boolean {
+  if (!line || line.special === true) return false
+  return normalizeVariantId(line.variantId) != null || normalizeSku(line.sku) != null
+}
+
+function hasConfirmedCommercialProductIdentity(previous: LineRef, current: LineRef): boolean {
+  if (!hasCanonicalProductIdentity(previous) || !hasCanonicalProductIdentity(current)) return false
+  const previousVariantId = normalizeVariantId(previous?.variantId)
+  const currentVariantId = normalizeVariantId(current?.variantId)
+  const previousSku = normalizeSku(previous?.sku)
+  const currentSku = normalizeSku(current?.sku)
+  return previousVariantId === currentVariantId && previousSku === currentSku
+}
+
+function hasConfirmedPersistedLineIdentity(line: LineRef, persistedLine: PreparationReconciliationLine | null): boolean {
+  if (!hasCanonicalProductIdentity(line) || !persistedLine) return false
+  const lineVariantId = normalizeVariantId(line?.variantId)
+  const persistedVariantId = normalizeVariantId(persistedLine.bsale_variant_id)
+  const lineSku = normalizeSku(line?.sku)
+  const persistedSku = normalizeSku(persistedLine.sku)
+  return lineVariantId === persistedVariantId && lineSku === persistedSku
+}
+
+function isConfirmedCommercialValueDifference(difference: CommercialLineDifference): boolean {
+  if (difference.kind !== 'VALUE_CHANGED' || difference.confidence !== 'CERTAIN') return false
+  if (!hasConfirmedCommercialProductIdentity(difference.previous, difference.current)) return false
+  if (difference.changedFields.some(field => !COMMERCIAL_VALUE_FIELDS.has(field) && field !== 'quantity')) return false
+  return difference.changedFields.some(field => COMMERCIAL_VALUE_FIELDS.has(field))
 }
 
 function persistedCandidates(line: LineRef, preparationLines: PreparationReconciliationLine[]): PreparationReconciliationLine[] {
@@ -207,7 +242,7 @@ function actionForDifference(
     return conflictAction('PREPARATION_LINE_AMBIGUOUS', 'Existen varias líneas operativas posibles para la misma identidad comercial.', difference.previous, difference.current, null, incidents)
   }
   if (difference.kind === 'ADDED') {
-    if (!lineKey(difference.current)) return conflictAction('UNKEYED_COMMERCIAL_LINE', 'La línea nueva no tiene una variante o SKU identificable.', difference.previous, difference.current, null, incidents)
+    if (!hasCanonicalProductIdentity(difference.current)) return conflictAction('UNKEYED_COMMERCIAL_LINE', 'La línea nueva no tiene una variante o SKU identificable.', difference.previous, difference.current, null, incidents)
     return {
       kind: 'ADD', preparationLineId: null, previous: null, current: difference.current,
       previousRequestedQuantity: null, newRequestedQuantity: difference.current?.quantity ?? null,
@@ -219,6 +254,10 @@ function actionForDifference(
   }
   const relatedIncidents = incidentsFor(match.line.id, incidents)
   if (difference.kind === 'REMOVED') {
+    if (!hasCanonicalProductIdentity(difference.previous)) return conflictAction('UNKEYED_COMMERCIAL_LINE', 'La línea eliminada no tiene una variante o SKU identificable.', difference.previous, difference.current, match.line, incidents)
+    if (!hasConfirmedPersistedLineIdentity(difference.previous, match.line)) {
+      return conflictAction('COMMERCIAL_SUBSTITUTION', 'La línea eliminada no coincide con la identidad canónica de la línea operativa.', difference.previous, difference.current, match.line, incidents)
+    }
     if (match.line.excluded_from_dispatch) return conflictAction('PREPARATION_LINE_EXCLUDED', 'La línea está excluida y su referencia operativa debe preservarse.', difference.previous, difference.current, match.line, incidents)
     if (!isUntouched(match.line)) return conflictAction('REMOVAL_WOULD_DISCARD_WORK', 'La línea eliminada ya tiene trabajo operativo o un estado distinto de pendiente.', difference.previous, difference.current, match.line, incidents)
     if (relatedIncidents.length > 0) return conflictAction('OPERATIONAL_INCIDENT_EXISTS', 'La línea eliminada tiene referencias de incidencia que deben preservarse.', difference.previous, difference.current, match.line, incidents)
@@ -227,6 +266,33 @@ function actionForDifference(
       previousRequestedQuantity: match.line.requested_quantity, newRequestedQuantity: 0,
       preparedQuantity: match.line.prepared_quantity, quantityDelta: -(difference.previous?.quantity ?? match.line.requested_quantity), incidentIds: [], conflict: null,
     }
+  }
+  if (difference.kind === 'SUBSTITUTION') {
+    return conflictAction(
+      'COMMERCIAL_SUBSTITUTION',
+      'El cambio comercial no puede aplicarse automáticamente sin una decisión explícita.',
+      difference.previous,
+      difference.current,
+      match.line,
+      incidents,
+    )
+  }
+  if (!hasCanonicalProductIdentity(difference.previous) || !hasCanonicalProductIdentity(difference.current)) {
+    return conflictAction('UNKEYED_COMMERCIAL_LINE', 'La línea comercial no tiene una variante o SKU identificable.', difference.previous, difference.current, match.line, incidents)
+  }
+  if (
+    !hasConfirmedCommercialProductIdentity(difference.previous, difference.current)
+    || !hasConfirmedPersistedLineIdentity(difference.previous, match.line)
+    || !hasConfirmedPersistedLineIdentity(difference.current, match.line)
+  ) {
+    return conflictAction(
+      'COMMERCIAL_SUBSTITUTION',
+      'La identidad canónica del producto cambió o no coincide con la línea operativa.',
+      difference.previous,
+      difference.current,
+      match.line,
+      incidents,
+    )
   }
   if (difference.kind === 'QUANTITY_INCREASED' || difference.kind === 'QUANTITY_DECREASED') {
     if (match.line.excluded_from_dispatch) return conflictAction('PREPARATION_LINE_EXCLUDED', 'La línea está excluida y su referencia operativa debe preservarse.', difference.previous, difference.current, match.line, incidents)
@@ -240,8 +306,27 @@ function actionForDifference(
       preparedQuantity: match.line.prepared_quantity, quantityDelta: difference.quantityDelta, incidentIds: [], conflict: null,
     }
   }
+  if (
+    difference.kind === 'VALUE_CHANGED'
+    && isConfirmedCommercialValueDifference(difference)
+    && difference.previous?.quantity === difference.current?.quantity
+    && match.line.requested_quantity === difference.current?.quantity
+  ) {
+    return {
+      kind: 'KEEP',
+      preparationLineId: match.line.id,
+      previous: difference.previous,
+      current: difference.current,
+      previousRequestedQuantity: match.line.requested_quantity,
+      newRequestedQuantity: match.line.requested_quantity,
+      preparedQuantity: match.line.prepared_quantity,
+      quantityDelta: 0,
+      incidentIds: relatedIncidents.map(incident => incident.id),
+      conflict: null,
+    }
+  }
   return conflictAction(
-    difference.kind === 'SUBSTITUTION' ? 'COMMERCIAL_SUBSTITUTION' : 'COMMERCIAL_VALUE_CHANGED',
+    'COMMERCIAL_VALUE_CHANGED',
     'El cambio comercial no puede aplicarse automáticamente sin una decisión explícita.',
     difference.previous,
     difference.current,
@@ -269,11 +354,14 @@ function keepActions(input: BuildPreparationCommercialReconciliationPlanInput): 
 }
 
 function isQuantityValueCompanion(difference: CommercialLineDifference, differences: CommercialLineDifference[]): boolean {
-  if (difference.kind !== 'VALUE_CHANGED' || !difference.previous || !difference.current) return false
-  if (difference.previous.quantity === difference.current.quantity || difference.previous.unitNetValue !== difference.current.unitNetValue) return false
+  if (!isConfirmedCommercialValueDifference(difference) || !difference.previous || !difference.current) return false
+  if (difference.previous.quantity === difference.current.quantity) return false
   return differences.some(candidate => (
     (candidate.kind === 'QUANTITY_INCREASED' || candidate.kind === 'QUANTITY_DECREASED')
-      && lineKey(candidate.previous) === lineKey(difference.previous)
+      && candidate.confidence === 'CERTAIN'
+      && hasConfirmedCommercialProductIdentity(candidate.previous, candidate.current)
+      && hasConfirmedCommercialProductIdentity(candidate.previous, difference.previous)
+      && hasConfirmedCommercialProductIdentity(candidate.current, difference.current)
   ))
 }
 

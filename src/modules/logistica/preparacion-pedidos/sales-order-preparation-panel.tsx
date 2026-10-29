@@ -8,7 +8,6 @@ import {
   getSalesOrderPreparationBoard, 
   getSalesOrderPreparationLines,
   getSalesOrderPreparationPrintData,
-  getSalesOrderRouteReadiness,
   getSalesOrderPreparationCommercialIncidents,
   getInvoiceReviewPreviews,
   getInvoiceDocumentPreviews,
@@ -431,11 +430,11 @@ export function SalesOrderPreparationPanel({
   const canAuthorizeAuditException = isSystemAdmin || permissions.includes('logistica.audit.authorize_exception')
 
   const [companyId, setCompanyId] = useState<string | null>(null)
+  const [serverIsOperatorBodega, setServerIsOperatorBodega] = useState<boolean | null>(null)
   const [cards, setCards] = useState<SalesOrderPreparationCardInfo[]>([])
   const { alerts: commercialAlerts, clearCard: clearCommercialAlert } = usePreparationCommercialAlerts(cards)
   const [readinessByCardId, setReadinessByCardId] = useState<Record<string, SalesOrderRouteReadiness>>({})
   const [readinessState, setReadinessState] = useState<PreparationReadinessLoadState>('loading')
-  const [readinessVersion, setReadinessVersion] = useState(0)
   const [auditLocks, setAuditLocks] = useState<Record<string, AuditBoardLock>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -492,6 +491,11 @@ export function SalesOrderPreparationPanel({
 
   const [syncError, setSyncError] = useState<string | null>(null)
 
+  const visibleColumns = useMemo(
+    () => (serverIsOperatorBodega ?? roleName === 'OPERADOR_BODEGA' ? COLUMNS.slice(0, 4) : COLUMNS),
+    [roleName, serverIsOperatorBodega],
+  )
+
   // Rentabilidad V1 (batch en background; no bloquea el board)
   const [profitabilityByNv, setProfitabilityByNv] = useState<Record<string, PreparationProfitabilitySummaryV1>>({})
   const [profitabilityLoading, setProfitabilityLoading] = useState(false)
@@ -525,7 +529,6 @@ export function SalesOrderPreparationPanel({
   const profitabilitySeqRef = useRef(0)
   const profitabilityInFlightRef = useRef<Set<number>>(new Set())
   const missingCostSeqRef = useRef(0)
-  const readinessSeqRef = useRef(0)
   const commercialIncidentsSeqRef = useRef(0)
   const lastAutoAttemptAtRef = useRef(0)
   const lastSuccessfulRunIdRef = useRef<string | null>(null)
@@ -729,41 +732,6 @@ export function SalesOrderPreparationPanel({
       })
   }, [companyId, profitabilityNvKey, profitabilityVersion])
 
-  const auditedCardKey = useMemo(
-    () => cards
-      .filter(card => card.status === 'AUDITED')
-      .map(card => card.card_id)
-      .sort()
-      .join(','),
-    [cards],
-  )
-
-  useEffect(() => {
-    if (!companyId || !auditedCardKey) {
-      setReadinessByCardId({})
-      setReadinessState('ready')
-      return
-    }
-
-    const seq = ++readinessSeqRef.current
-    setReadinessByCardId({})
-    setReadinessState('loading')
-
-    getSalesOrderRouteReadiness(companyId).then(result => {
-      if (!mountedRef.current || seq !== readinessSeqRef.current) return
-      if (result.error) {
-        setReadinessState('error')
-        return
-      }
-      const byCardId: Record<string, SalesOrderRouteReadiness> = {}
-      for (const row of result.data) byCardId[row.card_id] = row
-      setReadinessByCardId(byCardId)
-      setReadinessState('ready')
-    }).catch(() => {
-      if (mountedRef.current && seq === readinessSeqRef.current) setReadinessState('error')
-    })
-  }, [companyId, auditedCardKey, readinessVersion])
-
   const readyInvoiceCardKey = useMemo(
     () => cards
       .filter(card => card.status === 'AUDITED' && readinessByCardId[card.card_id]?.route_readiness === 'READY_TO_INVOICE')
@@ -924,6 +892,7 @@ export function SalesOrderPreparationPanel({
 
       setCompanyId(activeCompanyId)
       const res = await getSalesOrderPreparationBoard(activeCompanyId)
+      setServerIsOperatorBodega(res.isOperatorBodega)
       if (seq !== boardRequestSeqRef.current) return
 
       if (res.error) {
@@ -935,10 +904,13 @@ export function SalesOrderPreparationPanel({
         pendingStatuses: pendingStatusByCardRef.current,
         pendingExclusionNvIds: pendingExclusionNvIdsRef.current,
       })
+      const byCardId: Record<string, SalesOrderRouteReadiness> = {}
+      for (const row of res.readiness) byCardId[row.card_id] = row
+      setReadinessByCardId(byCardId)
+      setReadinessState(res.readinessError ? 'error' : 'ready')
 
       cardsRef.current = rows
       setCards(rows)
-      setReadinessVersion(current => current + 1)
       setSelectedCardIds(current => prunePreparationSelection(current, rows))
       const validComunaKeys = buildPreparationComunaOptions(rows)
       const validSellerKeys = new Set(buildPreparationSellerOptions(rows).map(option => option.key))
@@ -1487,7 +1459,12 @@ export function SalesOrderPreparationPanel({
   }
 
   const handleCommercialAcceptanceSuccess = (cardId: string) => {
+    const currentCard = cardsRef.current.find(item => item.card_id === cardId)
+    if (currentCard) {
+      detailCacheRef.current.delete(currentCard.nv_bsale_id)
+    }
     clearCommercialAlert(cardId)
+    void loadBoard({ showSpinner: false })
   }
 
   const transitionCard = async (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string): Promise<{ ok: boolean; error?: string }> => {
@@ -1889,7 +1866,7 @@ export function SalesOrderPreparationPanel({
 
   const columnData = useMemo(() => {
     const data: Record<string, { cards: SalesOrderPreparationCardInfo[]; amount: number }> = Object.fromEntries(
-      COLUMNS.map(column => [column.id, { cards: [], amount: 0 }]),
+      visibleColumns.map(column => [column.id, { cards: [], amount: 0 }]),
     )
 
     for (const card of filteredCards) {
@@ -1900,14 +1877,14 @@ export function SalesOrderPreparationPanel({
       column.amount += getPreparationCardAmount(card) ?? 0
     }
 
-    for (const column of COLUMNS) {
+    for (const column of visibleColumns) {
       const target = data[column.id]
       if (!target) continue
       target.cards = sortPreparationColumnCards(target.cards, columnSorts[column.id] ?? 'default', confirmedInvoiceNumberByCardId)
     }
 
     return data
-  }, [filteredCards, readinessByCardId, columnSorts, confirmedInvoiceNumberByCardId])
+  }, [filteredCards, readinessByCardId, columnSorts, confirmedInvoiceNumberByCardId, visibleColumns])
 
   const selectedCards = useMemo(
     () => cards.filter(card => selectedCardIds.has(card.card_id) && (card.status === 'PENDING_ROUTE_PREP' || card.status === 'INVOICED_READY_FOR_ROUTE')),
@@ -2428,7 +2405,7 @@ export function SalesOrderPreparationPanel({
             >
               <div className="h-full p-3">
                 <div className="flex h-full w-max min-w-full items-stretch gap-3">
-                  {COLUMNS.map(col => {
+                  {visibleColumns.map(col => {
                     const column = columnData[col.id]
                     return (
                       <DroppableColumn

@@ -8,6 +8,35 @@ export type WmsAuthorization = {
   user: { id: string }
   companyId: string
   companyName: string
+  effectiveRole: string | null
+  isOperatorBodega: boolean
+}
+
+async function getEffectiveCompanyRole(userId: string, companyId: string): Promise<string | null> {
+  const { data, error } = await createAdminClient()
+    .schema('core')
+    .from('user_company_access')
+    .select('role')
+    .eq('user_id', userId)
+    .eq('company_id', companyId)
+    .eq('is_active', true)
+    .maybeSingle()
+
+  if (error) throw new Error('No se pudo verificar el rol de la empresa activa')
+  return typeof data?.role === 'string' ? data.role : null
+}
+
+export async function getEffectiveRoleForActiveCompany(): Promise<string | null> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return null
+  const companyId = await getActiveCompanyId(user)
+  if (!companyId) return null
+  try {
+    return await getEffectiveCompanyRole(user.id, companyId)
+  } catch {
+    return null
+  }
 }
 
 export async function hasWmsPermission(userId: string, permissionCode: string): Promise<boolean> {
@@ -70,9 +99,42 @@ export async function requireWmsPermission(permissionCode: string | string[]): P
     }
   }
 
+  const effectiveRole = await getEffectiveCompanyRole(user.id, companyId)
+  if (!effectiveRole) throw new Error('No se pudo verificar el rol de la empresa activa')
+
   return {
     user: { id: user.id },
     companyId,
     companyName: company.trade_name || company.business_name || 'Empresa activa',
+    effectiveRole,
+    isOperatorBodega: effectiveRole === 'OPERADOR_BODEGA',
+  }
+}
+
+export async function requirePreparationCardAccess(
+  auth: WmsAuthorization,
+  cardId: string,
+): Promise<void> {
+  if (!auth.isOperatorBodega) return
+
+  const db = await createClient()
+  const { data: card, error: cardError } = await db
+    .schema('logistica')
+    .from('sales_order_preparation_cards')
+    .select('id, company_id, status')
+    .eq('id', cardId)
+    .eq('company_id', auth.companyId)
+    .maybeSingle()
+
+  if (cardError || !card) throw new Error('Tarjeta no disponible')
+  if (card.status === 'INVOICED_READY_FOR_ROUTE') throw new Error('No autorizado para esta tarjeta')
+  if (card.status !== 'AUDITED') return
+
+  const { data: readiness, error: readinessError } = await db
+    .schema('logistica')
+    .rpc('get_sales_order_route_readiness_v1', { p_company_id: auth.companyId })
+  const row = (readiness ?? []).find((item: { card_id?: string }) => item.card_id === cardId)
+  if (readinessError || !row || !['INCIDENTS', 'BLOCKED'].includes(String((row as { route_readiness?: string }).route_readiness))) {
+    throw new Error('No autorizado para esta tarjeta')
   }
 }
