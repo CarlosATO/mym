@@ -9,6 +9,7 @@ import type { InvoicePaymentTypeOption, InvoiceSaleConditionOption } from '@/mod
 import { chileToday } from '@/lib/integraciones/invoice-emission-contract'
 import { extractBsaleRelationIdFromHref } from '@/lib/integraciones/bsale-client-commercial-normalization'
 import { getSafeHttpsHostname, validateBsalePdfResponseUrl, validateBsalePdfUrl, validateBsaleRedirectUrl } from '@/lib/integraciones/invoice-print-assistant'
+import { requirePreparationCardAccess, requireWmsPermission, type WmsAuthorization } from './authorization'
 
 function logPreparationDiagnostics(label: string, detail: Record<string, unknown>) {
   if (process.env.NODE_ENV !== 'production') {
@@ -38,6 +39,39 @@ async function requireLogisticaManage() {
     supabase,
     error: error || allowed !== true ? 'No tienes permiso para gestionar la preparación de pedidos.' : null,
   }
+}
+
+async function requirePreparationView(): Promise<{
+  supabase: Awaited<ReturnType<typeof createClient>>
+  auth: WmsAuthorization | null
+  error: string | null
+}> {
+  const startedAt = performance.now()
+  try {
+    const auth = await requireWmsPermission('module.logistica.view')
+    logPreparationDiagnostics('authorization', {
+      durationMs: Math.round(performance.now() - startedAt),
+      companyId: auth.companyId,
+      effectiveRole: auth.effectiveRole,
+    })
+    return { supabase: await createClient(), auth, error: null }
+  } catch (error) {
+    logPreparationDiagnostics('authorization.error', { durationMs: Math.round(performance.now() - startedAt) })
+    return { supabase: await createClient(), auth: null, error: error instanceof Error ? error.message : 'No autorizado' }
+  }
+}
+
+export async function getSalesOrderPreparationAccess(): Promise<{ isOperatorBodega: boolean; error: string | null }> {
+  const { auth, error } = await requirePreparationView()
+  return { isOperatorBodega: auth?.isOperatorBodega === true, error }
+}
+
+export type SalesOrderPreparationBoardResult = {
+  data: SalesOrderPreparationCardInfo[]
+  error: string | null
+  isOperatorBodega: boolean
+  readiness: SalesOrderRouteReadiness[]
+  readinessError: string | null
 }
 
 export type SalesOrderClientData = {
@@ -192,7 +226,7 @@ export async function getSalesOrderRouteReadiness(companyId: string): Promise<{
   data: SalesOrderRouteReadiness[]
   error: string | null
 }> {
-  const { supabase, error: permissionError } = await requireLogisticaView()
+  const { supabase, auth, error: permissionError } = await requirePreparationView()
   if (permissionError) return { data: [], error: permissionError }
 
   const activeCompanyId = await getActiveCompanyId()
@@ -209,7 +243,8 @@ export async function getSalesOrderRouteReadiness(companyId: string): Promise<{
     return { data: [], error: error.message }
   }
 
-  return { data: (data ?? []) as SalesOrderRouteReadiness[], error: null }
+  const rows = (data ?? []) as SalesOrderRouteReadiness[]
+  return { data: auth?.isOperatorBodega ? rows.filter(row => row.route_readiness !== 'READY_TO_INVOICE') : rows, error: null }
 }
 
 export async function getSalesOrderPreparationCommercialIncidents(params: {
@@ -219,12 +254,17 @@ export async function getSalesOrderPreparationCommercialIncidents(params: {
   data: SalesOrderPreparationCommercialIncident[]
   error: string | null
 }> {
-  const { supabase, error: permissionError } = await requireLogisticaView()
+  const { supabase, auth, error: permissionError } = await requirePreparationView()
   if (permissionError) return { data: [], error: permissionError }
 
   const activeCompanyId = await getActiveCompanyId()
   if (!activeCompanyId || activeCompanyId !== params.companyId) {
     return { data: [], error: 'Empresa activa inválida.' }
+  }
+  try {
+    await requirePreparationCardAccess(auth!, params.cardId)
+  } catch (error) {
+    return { data: [], error: error instanceof Error ? error.message : 'No autorizado' }
   }
 
   const { data, error } = await supabase
@@ -322,27 +362,195 @@ export type SalesOrderPreparationTrace = {
   completedAt: string | null
 }
 
-export async function getSalesOrderPreparationBoard(companyId: string) {
-  const { supabase, error: permissionError } = await requireLogisticaView()
-  if (permissionError) return { data: [], error: permissionError }
+export async function getSalesOrderPreparationBoard(companyId: string): Promise<SalesOrderPreparationBoardResult> {
+  const loadStartedAt = performance.now()
+  const { supabase, auth, error: permissionError } = await requirePreparationView()
+  if (permissionError) return { data: [], error: permissionError, isOperatorBodega: false, readiness: [], readinessError: null }
 
+  if (!auth || auth.companyId !== companyId) return { data: [], error: 'Empresa activa inválida.', isOperatorBodega: auth?.isOperatorBodega === true, readiness: [], readinessError: null }
+
+  if (auth.isOperatorBodega) {
+    // OPERATOR_RPC: Consulta especializada y optimizada para OPERADOR_BODEGA
+    // Reutiliza route_readiness calculado en la RPC y omite la vista pesada y readiness duplicado
+    const boardStartedAt = performance.now()
+    const result = await supabase
+      .schema('logistica')
+      .rpc('get_operator_preparation_board_v1', {
+        p_company_id: companyId,
+      })
+
+    const durationMs = Math.round(performance.now() - boardStartedAt)
+    logPreparationDiagnostics('OPERATOR_RPC', {
+      durationMs,
+      companyId,
+      cardCount: result.data ? (result.data as unknown[]).length : 0,
+      error: result.error?.code ?? null,
+    })
+    logPreparationDiagnostics('board-query', {
+      mode: 'OPERATOR_RPC',
+      durationMs,
+      error: result.error?.code ?? null,
+    })
+
+    if (result.error) {
+      logPreparationDiagnostics('load-total', {
+        mode: 'OPERATOR_RPC',
+        durationMs: Math.round(performance.now() - loadStartedAt),
+        error: result.error.code,
+      })
+      console.error('getSalesOrderPreparationBoard operator RPC error:', result.error)
+      const isAccessDenied = result.error.code === '42501' || result.error.message?.includes('OPERATOR_PREPARATION_ACCESS_DENIED')
+      const message = isAccessDenied
+        ? 'No autorizado para consultar el tablero operativo.'
+        : 'No se pudo verificar la clasificación comercial de las tarjetas.'
+      return {
+        data: [],
+        error: message,
+        isOperatorBodega: true,
+        readiness: [],
+        readinessError: null,
+      }
+    }
+
+    type OperatorRpcRow = {
+      card_id: string
+      company_id: string
+      status: string
+      priority: number
+      assigned_user_id: string | null
+      route_date: string | null
+      normalized_city: string | null
+      nv_bsale_id: number
+      nv_folio: number | string
+      nv_emission_date: string
+      nv_generation_date: string
+      client_name: string
+      city_raw: string | null
+      municipality_raw: string | null
+      address_raw: string | null
+      seller_bsale_id: number | null
+      seller_name: string | null
+      total_quantity: number | null
+      total_amount: number | null
+      invoice_folio: string | null
+      is_invoiced: boolean
+      created_at: string
+      updated_at: string
+      net_amount: number | null
+      tax_amount: number | null
+      gross_amount: number | null
+      locked_by_user_id: string | null
+      locked_at: string | null
+      route_readiness: string | null
+    }
+
+    const rpcRows = (result.data ?? []) as OperatorRpcRow[]
+
+    // Reutilizar route_readiness entregado por la RPC sin consulta batch adicional
+    const readiness: SalesOrderRouteReadiness[] = rpcRows
+      .filter(row => row.status === 'AUDITED' && row.route_readiness && row.route_readiness !== 'READY_TO_INVOICE')
+      .map(row => ({
+        card_id: row.card_id,
+        company_id: row.company_id,
+        bsale_nv_id: Number(row.nv_bsale_id),
+        bsale_nv_folio: row.nv_folio != null ? String(row.nv_folio) : null,
+        has_open_commercial_incidents: row.route_readiness === 'INCIDENTS',
+        open_commercial_incident_count: row.route_readiness === 'INCIDENTS' ? 1 : 0,
+        route_readiness: (row.route_readiness === 'BLOCKED' ? 'BLOCKED' : 'INCIDENTS') as 'INCIDENTS' | 'BLOCKED',
+        bsale_nv_state: null,
+        bsale_nv_found: true,
+      }))
+
+    // Restricciones de negocio y seguridad PERM-01:
+    // Excluir tarjetas no operacionales o de columnas comerciales restringidas
+    let rows = rpcRows.filter(row =>
+      row.status !== 'INVOICED_READY_FOR_ROUTE' &&
+      (row.status !== 'AUDITED' || (row.route_readiness === 'INCIDENTS' || row.route_readiness === 'BLOCKED'))
+    )
+
+    const userIds = [...new Set(rows.flatMap(row => [row.assigned_user_id, row.locked_by_user_id]).filter((id): id is string => Boolean(id)))]
+    const nameById = new Map<string, string>()
+
+    if (userIds.length > 0) {
+      const { data: users, error: usersError } = await createAdminClient()
+        .from('users')
+        .select('id, nombre, apellido')
+        .in('id', userIds)
+
+      if (usersError) {
+        console.error('getSalesOrderPreparationBoard users error:', usersError)
+      } else {
+        for (const user of users ?? []) {
+          const name = `${user.nombre ?? ''} ${user.apellido ?? ''}`.trim()
+          if (name) nameById.set(String(user.id), name)
+        }
+      }
+    }
+
+    logPreparationDiagnostics('load-total', {
+      mode: 'OPERATOR_RPC',
+      durationMs: Math.round(performance.now() - loadStartedAt),
+      cardCount: rows.length,
+    })
+
+    return {
+      data: rows.map(row => {
+        const { route_readiness: _, ...cardFields } = row
+        return {
+          ...cardFields,
+          nv_folio: String(row.nv_folio ?? ''),
+          total_quantity: Number(row.total_quantity ?? 0),
+          assigned_user_name: row.assigned_user_id ? nameById.get(row.assigned_user_id) ?? null : null,
+          locked_by_user_name: row.locked_by_user_id ? nameById.get(row.locked_by_user_id) ?? null : null,
+        }
+      }),
+      error: null,
+      isOperatorBodega: true,
+      readiness,
+      readinessError: null,
+    }
+  }
+
+  // STANDARD_BOARD: Vista general completa para SUPER_USUARIO y demás roles autorizados
   // Preparation is an operational queue; visibility does not depend on routes.
+  // PERM-01 legacy filter reference: query.in('status', ['PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT', 'AUDITED'])
   const query = supabase
     .schema('logistica')
     .from('vw_sales_order_preparation_board')
     .select('*')
     .eq('company_id', companyId)
 
-  const { data, error } = await query
-    .order('priority', { ascending: false })
-    .order('nv_emission_date', { ascending: true })
+  const boardStartedAt = performance.now()
+  const readinessStartedAt = performance.now()
+  const [boardResult, readinessResult] = await Promise.all([
+    query.order('priority', { ascending: false }).order('nv_emission_date', { ascending: true }).then(result => {
+      const durationMs = Math.round(performance.now() - boardStartedAt)
+      logPreparationDiagnostics('STANDARD_BOARD', { durationMs, error: result.error?.code ?? null })
+      logPreparationDiagnostics('board-query', { durationMs, error: result.error?.code ?? null })
+      return result
+    }),
+    supabase.schema('logistica').rpc('get_sales_order_route_readiness_v1', { p_company_id: companyId }).then(result => {
+      const durationMs = Math.round(performance.now() - readinessStartedAt)
+      logPreparationDiagnostics('readiness-query', { durationMs, error: result.error?.code ?? null })
+      return result
+    }),
+  ])
+  const { data, error } = boardResult
+  const readiness = (readinessResult.data ?? []) as SalesOrderRouteReadiness[]
+  const readinessError = readinessResult.error?.message ?? null
+  const exposedReadiness = readiness
 
   if (error) {
+    logPreparationDiagnostics('load-total', {
+      mode: 'STANDARD_BOARD',
+      durationMs: Math.round(performance.now() - loadStartedAt),
+      error: error.code,
+    })
     console.error('getSalesOrderPreparationBoard error:', error)
-    return { data: [], error: error.message }
+    return { data: [], error: error.message, isOperatorBodega: false, readiness: exposedReadiness, readinessError }
   }
 
-  const rows = (data ?? []) as SalesOrderPreparationCardInfo[]
+  let rows = (data ?? []) as SalesOrderPreparationCardInfo[]
   const userIds = [...new Set(rows.flatMap(row => [row.assigned_user_id, row.locked_by_user_id]).filter((id): id is string => Boolean(id)))]
   const nameById = new Map<string, string>()
 
@@ -362,6 +570,12 @@ export async function getSalesOrderPreparationBoard(companyId: string) {
     }
   }
 
+  logPreparationDiagnostics('load-total', {
+    mode: 'STANDARD_BOARD',
+    durationMs: Math.round(performance.now() - loadStartedAt),
+    cardCount: rows.length,
+  })
+
   return {
     data: rows.map(row => ({
       ...row,
@@ -369,12 +583,19 @@ export async function getSalesOrderPreparationBoard(companyId: string) {
       locked_by_user_name: row.locked_by_user_id ? nameById.get(row.locked_by_user_id) ?? null : null,
     })),
     error: null,
+    isOperatorBodega: false,
+    readiness: exposedReadiness,
+    readinessError,
   }
 }
 
 export async function getSalesOrderPreparationItems(companyId: string, bsaleNvId: number) {
-  const { supabase, error: permissionError } = await requireLogisticaView()
+  const { supabase, auth, error: permissionError } = await requirePreparationView()
   if (permissionError) return { data: [], error: permissionError }
+  if (auth?.isOperatorBodega) {
+    const board = await getSalesOrderPreparationBoard(companyId)
+    if (board.error || !board.data.some(card => Number(card.nv_bsale_id) === bsaleNvId)) return { data: [], error: 'No autorizado para esta tarjeta' }
+  }
 
   const { data, error } = await supabase
     .schema('integraciones')
@@ -644,8 +865,9 @@ export async function getInvoiceDocumentPreviews(
   companyId: string,
   requests: InvoiceDocumentPreviewRequest[],
 ) {
-  const { supabase, error: permissionError } = await requireLogisticaView()
+  const { supabase, auth, error: permissionError } = await requirePreparationView()
   if (permissionError) return { data: {}, error: permissionError }
+  if (auth?.isOperatorBodega) return { data: {}, error: 'No autorizado para consultar documentos de facturación.' }
 
   const unique = [...new Map(
     requests
@@ -765,8 +987,9 @@ export async function getInvoiceReviewPreviews(
   companyId: string,
   requests: InvoiceReviewPreviewRequest[],
 ) {
-  const { supabase, error: permissionError } = await requireLogisticaView()
+  const { supabase, auth, error: permissionError } = await requirePreparationView()
   if (permissionError) return { data: {}, error: permissionError }
+  if (auth?.isOperatorBodega) return { data: {}, error: 'No autorizado para consultar información comercial.' }
 
   const unique = [...new Map(
     requests
@@ -894,9 +1117,14 @@ export async function getSalesOrderPreparationLines(
   cardId: string,
 ): Promise<{ data: SalesOrderPreparationLine[]; error: string | null }> {
   const startedAt = performance.now()
-  const { supabase, error: permissionError } = await requireLogisticaView()
+  const { supabase, auth, error: permissionError } = await requirePreparationView()
   const preflightMs = performance.now() - startedAt
   if (permissionError) return { data: [], error: permissionError }
+  try {
+    await requirePreparationCardAccess(auth!, cardId)
+  } catch (error) {
+    return { data: [], error: error instanceof Error ? error.message : 'No autorizado' }
+  }
 
   // Lectura directa: el snapshot ya se materializa en la transición a preparación.
   // Evita pagar materialize() en cada apertura. El RPC queda sólo como fallback legado.
@@ -956,15 +1184,29 @@ export async function confirmSalesOrderPreparationLine(params: {
   excluded?: boolean
 }): Promise<{ data: SalesOrderPreparationLine | null; error: string | null }> {
   // The manage permission is the only required preflight; the view check was a redundant round-trip.
-  const { supabase, error: permissionError } = await requireLogisticaManage()
-  if (permissionError) return { data: null, error: permissionError }
+  let auth: WmsAuthorization
+  try {
+    auth = await requireWmsPermission('logistica.preparation.manage')
+  } catch (error) {
+    return { data: null, error: error instanceof Error ? error.message : 'No autorizado' }
+  }
+  const supabase = await createClient()
+  if (auth.isOperatorBodega) {
+    const { data: line } = await supabase.schema('logistica').from('sales_order_preparation_lines').select('card_id, company_id').eq('id', params.lineId).eq('company_id', auth.companyId).maybeSingle()
+    if (!line) return { data: null, error: 'Línea no disponible' }
+    try {
+      await requirePreparationCardAccess(auth, line.card_id)
+    } catch (error) {
+      return { data: null, error: error instanceof Error ? error.message : 'No autorizado' }
+    }
+  }
 
   // Una cantidad preparada igual a 0 siempre es exclusión operacional de la línea,
   // venga del input numérico o del botón Excluir.
   const excluded = params.excluded === true || params.preparedQuantity === 0
 
   const { data, error } = await supabase.schema('logistica').rpc('confirm_sales_order_preparation_line', {
-    p_company_id: params.companyId,
+    p_company_id: auth.companyId,
     p_line_id: params.lineId,
     p_prepared_quantity: params.preparedQuantity,
     p_reason_code: params.reasonCode?.trim() || null,
@@ -1034,11 +1276,17 @@ export async function getSalesOrderPreparationPrintData(
   bsaleNvIds: number[],
 ): Promise<{ data: SalesOrderPreparationPrintData | null; error: string | null }> {
   const startedAt = performance.now()
-  const { supabase, error: permissionError } = await requireLogisticaView()
+  const { supabase, auth, error: permissionError } = await requirePreparationView()
   const preflightMs = performance.now() - startedAt
   if (permissionError) return { data: null, error: permissionError }
 
-  const nvIds = [...new Set(bsaleNvIds.filter(id => Number.isFinite(id)))]
+  let nvIds = [...new Set(bsaleNvIds.filter(id => Number.isFinite(id)))]
+  if (auth?.isOperatorBodega) {
+    const board = await getSalesOrderPreparationBoard(auth.companyId)
+    if (board.error) return { data: null, error: board.error }
+    const allowedNvIds = new Set(board.data.map(card => Number(card.nv_bsale_id)))
+    nvIds = nvIds.filter(id => allowedNvIds.has(id))
+  }
   const empty: SalesOrderPreparationPrintData = { itemsByNv: {}, clientByNv: {} }
   if (nvIds.length === 0) return { data: empty, error: null }
 
@@ -1287,8 +1535,12 @@ export async function syncNextRoutePreparationCards(options?: { dryRun?: boolean
 }
 
 export async function getSalesOrderClientData(companyId: string, bsaleNvId: number): Promise<{ data: SalesOrderClientData | null, error: string | null }> {
-  const { supabase, error: permissionError } = await requireLogisticaView()
+  const { supabase, auth, error: permissionError } = await requirePreparationView()
   if (permissionError) return { data: null, error: permissionError }
+  if (auth?.isOperatorBodega) {
+    const board = await getSalesOrderPreparationBoard(companyId)
+    if (board.error || !board.data.some(card => Number(card.nv_bsale_id) === bsaleNvId)) return { data: null, error: 'No autorizado para esta tarjeta' }
+  }
 
   // First get the client_id from the NV document
   const { data: doc, error: docError } = await supabase
@@ -1509,11 +1761,10 @@ export async function moveSalesOrderPreparationCard(params: {
     // 2. Validar permiso funcional con el cliente autenticado.
     //    has_permission incluye el bypass canónico de system.admin.
     // -----------------------------------------------------------------------
-    const { data: allowed, error: permissionError } = await supabase.rpc('has_permission', {
-      p_permission_code: 'logistica.preparation.manage',
-    })
-    if (permissionError || allowed !== true) {
-      return { ok: false, error: 'No tienes permiso para gestionar la preparación de pedidos.' }
+    const auth = await requireWmsPermission('logistica.preparation.manage')
+    await requirePreparationCardAccess(auth, params.cardId)
+    if (auth.isOperatorBodega && !['PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT', 'INCIDENTS'].includes(params.toStatus)) {
+      return { ok: false, error: 'No autorizado para mover a esta etapa.' }
     }
 
     // -----------------------------------------------------------------------
@@ -1540,7 +1791,7 @@ export async function moveSalesOrderPreparationCard(params: {
     // -----------------------------------------------------------------------
     // 4. Obtener companyId en el servidor (nunca desde el frontend)
     // -----------------------------------------------------------------------
-    const companyId = await getActiveCompanyId()
+    const companyId = auth.companyId
 
     // -----------------------------------------------------------------------
     // 5. Invocar la RPC con service_role

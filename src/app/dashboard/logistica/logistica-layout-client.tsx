@@ -94,9 +94,10 @@ interface LogisticaLayoutClientProps {
   children: React.ReactNode
   profile: { id: string; nombre: string; apellido: string; email: string; roles: { name: string } }
   permissions: string[]
+  canAccessPreparation: boolean
 }
 
-export function LogisticaLayoutClient({ children, profile, permissions }: LogisticaLayoutClientProps) {
+export function LogisticaLayoutClient({ children, profile, permissions, canAccessPreparation }: LogisticaLayoutClientProps) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const isReceiptRoute = pathname.startsWith('/dashboard/logistica/recepciones/')
@@ -125,6 +126,7 @@ export function LogisticaLayoutClient({ children, profile, permissions }: Logist
   const canViewAction = !requiredPermission
     || permissions.includes('system.admin')
     || permissions.includes(requiredPermission)
+    || (activeActionId === 'preparacion_pedidos' && canAccessPreparation)
 
   let content = null
 
@@ -191,9 +193,9 @@ export function LogisticaLayoutClient({ children, profile, permissions }: Logist
       <SalesOrderPreparationPanel
         roleName={profile.roles?.name}
         currentUserId={profile.id}
-        currentUserName={`${profile.nombre ?? ''} ${profile.apellido ?? ''}`.trim()}
-        permissions={permissions}
-      />
+         currentUserName={`${profile.nombre ?? ''} ${profile.apellido ?? ''}`.trim()}
+         permissions={permissions}
+       />
     )
   } else if (activeTab === 'consultas') {
     if (activeActionId === 'stock') {
@@ -234,6 +236,7 @@ export function LogisticaLayoutClient({ children, profile, permissions }: Logist
         breadcrumb={isReceiptRoute ? ['WMS', 'Movimientos', 'Recepciones'] : isRouteGuidesRoute ? ['WMS', 'Movimientos', 'Guías de Ruta'] : ['WMS', 'Movimientos', 'Mermas']}
         profile={profile}
         permissions={permissions}
+        canAccessPreparation={canAccessPreparation}
       >
         {children}
       </WmsShell>
@@ -243,7 +246,7 @@ export function LogisticaLayoutClient({ children, profile, permissions }: Logist
   const currentPage = pageHeaders[activeActionId] ?? pageHeaders.resumen
 
   return (
-    <WmsShell pageTitle={currentPage.title} breadcrumb={currentPage.breadcrumb} profile={profile} permissions={permissions}>
+    <WmsShell pageTitle={currentPage.title} breadcrumb={currentPage.breadcrumb} profile={profile} permissions={permissions} canAccessPreparation={canAccessPreparation}>
       {content}
     </WmsShell>
   )

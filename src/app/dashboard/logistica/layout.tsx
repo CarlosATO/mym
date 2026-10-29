@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { AccessDenied } from '@/components/access-denied'
 import { LogisticaLayoutClient } from './logistica-layout-client'
+import { getEffectiveRoleForActiveCompany } from '@/app/actions/logistica/authorization'
 
 export default async function Layout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
@@ -18,6 +19,9 @@ export default async function Layout({ children }: { children: React.ReactNode }
 
   const { data: permissions } = await createAdminClient().rpc('get_user_permissions', { p_user_id: user.id })
   const permissionCodes: string[] = (permissions ?? []).map((permission: { permission_code: string }) => permission.permission_code)
+  const effectiveRole = await getEffectiveRoleForActiveCompany()
+  const canAccessPreparation = permissionCodes.includes('logistica.preparation.manage')
+    || (hasLogisticaAccess === true && effectiveRole === 'OPERADOR_BODEGA')
 
   const { data: profile } = await supabase
     .from('users')
@@ -30,7 +34,7 @@ export default async function Layout({ children }: { children: React.ReactNode }
     : { id: user.id, nombre: '', apellido: '', email: '', roles: { name: '' } }
 
   return (
-    <LogisticaLayoutClient profile={profileWithRole} permissions={permissionCodes}>
+    <LogisticaLayoutClient profile={profileWithRole} permissions={permissionCodes} canAccessPreparation={canAccessPreparation}>
       {children}
     </LogisticaLayoutClient>
   )
