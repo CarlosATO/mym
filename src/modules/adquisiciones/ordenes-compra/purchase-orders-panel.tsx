@@ -30,6 +30,7 @@ import { createClient as createBrowserClient } from '@/lib/supabase/client'
 import { formatCivilDate } from '@/lib/datetime'
 import { calculatePurchaseOrderLineTotals, calculatePurchaseOrderTotals } from '@/lib/adquisiciones/purchase-order-totals'
 import { getPurchaseOrderDiscountDisplayValues, getPurchaseOrderDiscountPayload, resolvePurchaseOrderDiscountMode, type PurchaseOrderDiscountMode } from '@/lib/adquisiciones/purchase-order-discounts'
+import { validatePriceDecimal, parseCurrencyDecimal } from '@/lib/adquisiciones/purchase-order-decimal'
 
 const STATUS_BADGES: Record<string, { bg: string; text: string; border: string }> = {
   BORRADOR: { bg: 'bg-gray-500/10', text: 'text-gray-500', border: 'border-gray-500/20' },
@@ -78,7 +79,12 @@ const PURCHASE_ORDER_COLUMNS: OperationalTableColumn[] = [
 ]
 
 function formatCurrency(amount: number, currency = 'CLP') {
-  return amount.toLocaleString('es-CL', { style: 'currency', currency })
+  return amount.toLocaleString('es-CL', {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
 }
 
 function formatDate(dateStr: string | null | undefined) {
@@ -146,11 +152,15 @@ function PurchaseOrderInvoiceCell({ documents, loading, onView }: { documents?: 
   )
 }
 
-const inputClass = "w-full h-8 rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15 focus:border-[#72383D]"
-const selectClass = "w-full h-8 rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15 focus:border-[#72383D] appearance-none"
-const textareaClass = "w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 py-1.5 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15 focus:border-[#72383D] resize-none"
+const inputClass = "w-full h-8.5 rounded-lg border border-[#D1C7BD] bg-white px-3 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/20 focus:border-[#72383D] shadow-xs transition-colors"
+const selectClass = "w-full h-8.5 rounded-lg border border-[#D1C7BD] bg-white px-3 text-xs text-[#322D29] focus:outline-none focus:ring-2 focus:ring-[#72383D]/20 focus:border-[#72383D] shadow-xs appearance-none transition-colors"
+const textareaClass = "w-full rounded-lg border border-[#D1C7BD] bg-white px-3 py-2 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/20 focus:border-[#72383D] shadow-xs resize-none transition-colors"
 
 export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, prepareReplenishment = false }: { initialOpenPoId?: string | null, onInitialOpenConsumed?: () => void, prepareReplenishment?: boolean }) {
+  const handleSelectInputContent = (e: React.FocusEvent<HTMLInputElement> | React.MouseEvent<HTMLInputElement>) => {
+    e.currentTarget.select()
+  }
+
   const [view, setView] = useState<'list' | 'form' | 'detail' | 'analysis' | 'supplier-review'>('list')
   const [selectedPo, setSelectedPo] = useState<PurchaseOrder | null>(null)
   const detailCacheRef = useRef<Record<string, PurchaseOrderDetail>>({})
@@ -266,9 +276,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     unit: string
     quantity: number
     unit_price: number
+    raw_unit_price?: string
     reference_unit_cost?: number
     discount_percent: number
     discount_unit_amount: number
+    raw_discount_unit_amount?: string
     discount_mode: PurchaseOrderDiscountMode
     tax_rate: number
     warehouse_id: string
@@ -281,14 +293,15 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const [invalidPriceItemIds, setInvalidPriceItemIds] = useState<Set<string>>(new Set())
   const linePriceInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const [pendingProduct, setPendingProduct] = useState<PurchaseOrderCatalogProduct | null>(null)
-  const [pendingQuantity, setPendingQuantity] = useState('1')
+  const [pendingQuantity, setPendingQuantity] = useState('')
   const [pendingUnitPrice, setPendingUnitPrice] = useState('')
   const [pendingDiscountPercent, setPendingDiscountPercent] = useState(0)
   const [pendingDiscountUnitAmount, setPendingDiscountUnitAmount] = useState(0)
+  const [pendingDiscountUnitRaw, setPendingDiscountUnitRaw] = useState<string | null>(null)
   const [pendingDiscountMode, setPendingDiscountMode] = useState<PurchaseOrderDiscountMode>(null)
   const [showServiceForm, setShowServiceForm] = useState(false)
   const [serviceDraft, setServiceDraft] = useState({
-    description: '', quantity: '1', unitPrice: '', discountPercent: '0', taxRate: '19', notes: '',
+    description: '', quantity: '', unitPrice: '', discountPercent: '', taxRate: '19', notes: '',
   })
 
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
@@ -357,8 +370,10 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       unit: i.unit || 'UNIDAD',
       quantity: i.quantity || 0,
       unit_price: i.unit_price || 0,
+      raw_unit_price: i.unit_price !== null && i.unit_price !== undefined ? String(i.unit_price) : '',
       discount_percent: i.discount_percent || 0,
       discount_unit_amount: i.discount_unit_amount ?? 0,
+      raw_discount_unit_amount: i.discount_unit_amount ? String(i.discount_unit_amount) : '',
       discount_mode: resolvePurchaseOrderDiscountMode(i.discount_percent, i.discount_unit_amount),
       tax_rate: i.tax_rate || 19,
       warehouse_id: i.warehouse_id || '',
@@ -677,9 +692,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       unit: item.unit || 'UNIDAD',
       quantity: item.quantity,
        unit_price: item.unit_price,
+       raw_unit_price: item.unit_price !== null && item.unit_price !== undefined ? String(item.unit_price) : '',
        reference_unit_cost: item.reference_unit_cost ?? item.unit_price,
        discount_percent: item.discount_percent ?? 0,
        discount_unit_amount: item.discount_unit_amount ?? 0,
+       raw_discount_unit_amount: item.discount_unit_amount ? String(item.discount_unit_amount) : '',
        discount_mode: resolvePurchaseOrderDiscountMode(item.discount_percent, item.discount_unit_amount),
        tax_rate: item.tax_rate,
       warehouse_id: '',
@@ -923,13 +940,13 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     setProductSearchLoading(false)
     setProductLoadingMore(false)
     setPendingProduct(null)
-    setPendingQuantity('1')
+    setPendingQuantity('')
     setPendingUnitPrice('')
     setPendingDiscountPercent(0)
     setPendingDiscountUnitAmount(0)
     setPendingDiscountMode(null)
     setShowServiceForm(false)
-    setServiceDraft({ description: '', quantity: '1', unitPrice: '', discountPercent: '0', taxRate: '19', notes: '' })
+    setServiceDraft({ description: '', quantity: '', unitPrice: '', discountPercent: '', taxRate: '19', notes: '' })
     productLoadingMoreRef.current = false
     setShowAuthorizerForm(false)
     setReplenishmentSupplierName('')
@@ -1010,11 +1027,32 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     e.preventDefault()
     if (submittingRef.current) return
     if (items.length === 0) { msg('Agrega al menos una línea a la orden'); return }
-    const invalidPriceItems = items.filter(item => item.quantity > 0 && (!Number.isFinite(item.unit_price) || item.unit_price <= 0))
+    const invalidPriceItems = items.filter(item => {
+      const rawVal = item.raw_unit_price !== undefined ? item.raw_unit_price : item.unit_price
+      const val = validatePriceDecimal(rawVal, 2)
+      return item.quantity > 0 && (!val.isValid || val.value === null || val.value <= 0)
+    })
     if (invalidPriceItems.length > 0) {
       setInvalidPriceItemIds(new Set(invalidPriceItems.map(item => item.tempId)))
-      msg('Hay líneas sin precio unitario. Complete el precio antes de emitir la orden.')
+      const firstInvalid = invalidPriceItems[0]
+      const rawVal = firstInvalid.raw_unit_price !== undefined ? firstInvalid.raw_unit_price : firstInvalid.unit_price
+      const val = validatePriceDecimal(rawVal, 2)
+      if (val.error === 'EXCEEDS_MAX_DECIMALS') {
+        msg('Hay líneas con precios que superan los 2 decimales permitidos.')
+      } else {
+        msg('Hay líneas sin precio unitario. Complete el precio antes de emitir la orden.')
+      }
       linePriceInputRefs.current[invalidPriceItems[0].tempId]?.focus()
+      return
+    }
+    const invalidDiscountItems = items.filter(item => {
+      if (item.discount_mode !== 'unit') return false
+      const rawVal = item.raw_discount_unit_amount !== undefined ? item.raw_discount_unit_amount : item.discount_unit_amount
+      const val = validatePriceDecimal(rawVal, 2)
+      return !val.isValid || val.value === null || val.value < 0 || val.value > item.unit_price
+    })
+    if (invalidDiscountItems.length > 0) {
+      msg('Hay líneas con descuento unitario que supera los 2 decimales o es inválido.')
       return
     }
     const invalidLine = items.find(item => !item.description.trim() || item.quantity <= 0 || item.discount_percent < 0 || item.discount_percent > 100 || item.tax_rate < 0 || item.tax_rate > 100 || (item.item_type === 'SERVICE' ? Boolean(item.product_id) : !item.product_id))
@@ -1404,7 +1442,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   function selectProductForAddition(p: PurchaseOrderCatalogProduct) {
     if (items.some(it => it.product_id === p.id)) { msg('Este producto ya está en la orden'); return }
     setPendingProduct(p)
-    setPendingQuantity('1')
+    setPendingQuantity('')
     setPendingUnitPrice(p.last_purchase_unit_cost === null ? '' : String(p.last_purchase_unit_cost))
     setPendingDiscountPercent(0)
     setPendingDiscountUnitAmount(0)
@@ -1413,39 +1451,77 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   }
 
   function updatePendingDiscount(field: 'discount_percent' | 'discount_unit_amount', value: string) {
-    const numeric = Number(value)
-    const nextValue = Number.isFinite(numeric) ? Math.max(numeric, 0) : 0
-    const unitPrice = Math.max(Number(pendingUnitPrice) || 0, 0)
     if (field === 'discount_percent') {
+      const numeric = Number(value)
+      const nextValue = Number.isFinite(numeric) ? Math.max(numeric, 0) : 0
       const percent = Math.min(nextValue, 100)
       setPendingDiscountPercent(percent)
       setPendingDiscountUnitAmount(0)
+      setPendingDiscountUnitRaw(null)
       setPendingDiscountMode(percent > 0 ? 'percent' : null)
       return
     }
-    const unitAmount = Math.min(nextValue, unitPrice)
-    setPendingDiscountUnitAmount(unitAmount)
-    setPendingDiscountPercent(0)
-    setPendingDiscountMode(unitAmount > 0 ? 'unit' : null)
+    const parsed = validatePriceDecimal(value, 2)
+    const unitPriceValidation = validatePriceDecimal(pendingUnitPrice, 2)
+    const unitPrice = unitPriceValidation.isValid && unitPriceValidation.value !== null ? unitPriceValidation.value : 0
+    if (parsed.isValid && parsed.value !== null) {
+      const unitAmount = Math.min(parsed.value, unitPrice)
+      setPendingDiscountUnitAmount(unitAmount)
+      setPendingDiscountPercent(0)
+      setPendingDiscountMode(unitAmount > 0 ? 'unit' : null)
+    } else if (parsed.isEmpty) {
+      setPendingDiscountUnitAmount(0)
+      setPendingDiscountPercent(0)
+      setPendingDiscountMode(null)
+    }
   }
 
   function updatePendingUnitPrice(value: string) {
-    const unitPrice = Math.max(Number(value) || 0, 0)
     setPendingUnitPrice(value)
-    if (pendingDiscountMode === 'unit') setPendingDiscountUnitAmount(current => Math.min(current, unitPrice))
+    const parsed = validatePriceDecimal(value, 2)
+    if (parsed.isValid && parsed.value !== null) {
+      const unitPrice = parsed.value
+      if (pendingDiscountMode === 'unit') {
+        setPendingDiscountUnitAmount(current => Math.min(current, unitPrice))
+      }
+    }
   }
 
   function addProductToItems() {
     if (!pendingProduct) return
     if (items.some(it => it.product_id === pendingProduct.id)) { msg('Este producto ya está en la orden'); setPendingProduct(null); return }
     const quantity = Number(pendingQuantity)
-    const unitPrice = Number(pendingUnitPrice)
     if (!Number.isFinite(quantity) || quantity <= 0) { msg('Ingresa una cantidad mayor a 0.'); return }
-    if (!Number.isFinite(unitPrice) || unitPrice < 0) { msg('Ingresa un precio unitario válido.'); return }
+
+    const priceVal = validatePriceDecimal(pendingUnitPrice, 2)
+    if (!priceVal.isValid || priceVal.value === null) {
+      if (priceVal.error === 'EXCEEDS_MAX_DECIMALS') {
+        msg('El precio unitario no puede tener más de 2 decimales.')
+      } else {
+        msg('Ingresa un precio unitario válido.')
+      }
+      return
+    }
+    const unitPrice = priceVal.value
+
+    let discountUnitAmount = pendingDiscountUnitAmount
+    if (pendingDiscountMode === 'unit' && pendingDiscountUnitRaw !== null) {
+      const discVal = validatePriceDecimal(pendingDiscountUnitRaw, 2)
+      if (!discVal.isValid || discVal.value === null) {
+        if (discVal.error === 'EXCEEDS_MAX_DECIMALS') {
+          msg('El descuento unitario no puede tener más de 2 decimales.')
+        } else {
+          msg('Ingresa un descuento unitario válido.')
+        }
+        return
+      }
+      discountUnitAmount = Math.min(discVal.value, unitPrice)
+    }
+
     const discountPayload = getPurchaseOrderDiscountPayload({
       unit_price: unitPrice,
       discount_percent: pendingDiscountPercent,
-      discount_unit_amount: pendingDiscountUnitAmount,
+      discount_unit_amount: discountUnitAmount,
       discount_mode: pendingDiscountMode,
     })
     setItems(prev => [...prev, {
@@ -1456,16 +1532,19 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       description: pendingProduct.description,
       unit: pendingProduct.unit_of_measure || 'UNIDAD',
       quantity,
-       unit_price: unitPrice,
-        ...discountPayload,
-        discount_mode: resolvePurchaseOrderDiscountMode(discountPayload.discount_percent, discountPayload.discount_unit_amount),
-       tax_rate: pendingProduct.tax_rate || 19,
+      unit_price: unitPrice,
+      raw_unit_price: pendingUnitPrice,
+      ...discountPayload,
+      raw_discount_unit_amount: pendingDiscountMode === 'unit' && pendingDiscountUnitRaw ? pendingDiscountUnitRaw : (discountPayload.discount_unit_amount ? String(discountPayload.discount_unit_amount) : ''),
+      discount_mode: resolvePurchaseOrderDiscountMode(discountPayload.discount_percent, discountPayload.discount_unit_amount),
+      tax_rate: pendingProduct.tax_rate || 19,
       warehouse_id: form.warehouse_id,
       notes: '',
     }])
     setPendingProduct(null)
-    setPendingQuantity('1')
+    setPendingQuantity('')
     setPendingUnitPrice('')
+    setPendingDiscountUnitRaw(null)
     setPendingDiscountPercent(0)
     setPendingDiscountUnitAmount(0)
     setPendingDiscountMode(null)
@@ -1482,18 +1561,26 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   function addServiceToItems() {
     const description = serviceDraft.description.trim()
     const quantity = Number(serviceDraft.quantity)
-    const unitPrice = Number(serviceDraft.unitPrice)
+    const priceVal = validatePriceDecimal(serviceDraft.unitPrice, 2)
     const discountPercent = Number(serviceDraft.discountPercent)
     const taxRate = Number(serviceDraft.taxRate)
     if (!description) { msg('La descripción del servicio es obligatoria.'); return }
     if (!Number.isFinite(quantity) || quantity <= 0) { msg('Ingresa una cantidad mayor a 0.'); return }
-    if (!Number.isFinite(unitPrice) || unitPrice < 0) { msg('Ingresa un precio unitario válido.'); return }
+    if (!priceVal.isValid || priceVal.value === null) {
+      if (priceVal.error === 'EXCEEDS_MAX_DECIMALS') {
+        msg('El precio del servicio no puede tener más de 2 decimales.')
+      } else {
+        msg('Ingresa un precio unitario válido.')
+      }
+      return
+    }
+    const unitPrice = priceVal.value
     if (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100) { msg('El descuento debe estar entre 0 y 100.'); return }
     if (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100) { msg('El IVA debe estar entre 0 y 100.'); return }
     setItems(prev => [...prev, {
       tempId: newTempId(), item_type: 'SERVICE', product_id: '', sku: '', description,
-       unit: '', quantity, unit_price: unitPrice, discount_percent: discountPercent, discount_unit_amount: 0,
-       discount_mode: discountPercent > 0 ? 'percent' : null, tax_rate: taxRate,
+      unit: '', quantity, unit_price: unitPrice, raw_unit_price: serviceDraft.unitPrice, discount_percent: discountPercent, discount_unit_amount: 0,
+      discount_mode: discountPercent > 0 ? 'percent' : null, tax_rate: taxRate,
       warehouse_id: '', notes: serviceDraft.notes.trim(),
     }])
     setServiceDraft({ description: '', quantity: '1', unitPrice: '', discountPercent: '0', taxRate: '19', notes: '' })
@@ -1514,16 +1601,26 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       if (it.tempId !== tempId) return it
       if (field === 'discount_percent') {
         const percent = Math.min(Math.max(Number(value) || 0, 0), 100)
-        return { ...it, discount_percent: percent, discount_unit_amount: 0, discount_mode: percent > 0 ? 'percent' : null }
+        return { ...it, discount_percent: percent, discount_unit_amount: 0, raw_discount_unit_amount: '', discount_mode: percent > 0 ? 'percent' : null }
       }
       if (field === 'discount_unit_amount') {
-        const unitAmount = Math.min(Math.max(Number(value) || 0, 0), Math.max(it.unit_price, 0))
-        return { ...it, discount_percent: 0, discount_unit_amount: unitAmount, discount_mode: unitAmount > 0 ? 'unit' : null }
+        const rawValue = String(value)
+        const parsed = validatePriceDecimal(rawValue, 2)
+        if (parsed.isValid && parsed.value !== null) {
+          const unitAmount = Math.min(parsed.value, Math.max(it.unit_price, 0))
+          return { ...it, raw_discount_unit_amount: rawValue, discount_percent: 0, discount_unit_amount: unitAmount, discount_mode: unitAmount > 0 ? 'unit' : null }
+        }
+        return { ...it, raw_discount_unit_amount: rawValue }
       }
       if (field === 'unit_price') {
-        const unitPrice = Math.max(Number(value) || 0, 0)
-        const unitAmount = Math.min(it.discount_unit_amount, unitPrice)
-        return { ...it, unit_price: unitPrice, discount_unit_amount: unitAmount, discount_mode: unitAmount > 0 ? 'unit' : null }
+        const rawValue = String(value)
+        const parsed = validatePriceDecimal(rawValue, 2)
+        if (parsed.isValid && parsed.value !== null) {
+          const unitPrice = parsed.value
+          const unitAmount = Math.min(it.discount_unit_amount, unitPrice)
+          return { ...it, raw_unit_price: rawValue, unit_price: unitPrice, discount_unit_amount: unitAmount, discount_mode: unitAmount > 0 ? 'unit' : null }
+        }
+        return { ...it, raw_unit_price: rawValue }
       }
       return { ...it, [field]: value }
     }))
@@ -1551,7 +1648,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     grand_total: grandTotal,
   } = orderTotals
   const pendingDiscountDisplay = getPurchaseOrderDiscountDisplayValues({
-    unit_price: Number(pendingUnitPrice) || 0,
+    unit_price: (validatePriceDecimal(pendingUnitPrice, 2).value ?? Number(pendingUnitPrice)) || 0,
     discount_percent: pendingDiscountPercent,
     discount_unit_amount: pendingDiscountUnitAmount,
     discount_mode: pendingDiscountMode,
@@ -1753,7 +1850,16 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                  </div>
               </div>
             </div>
-             <div className="flex w-full flex-wrap gap-1.5 sm:w-auto">
+             <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+               {items.length > 0 && (
+                 <div className="hidden md:flex items-center gap-2 rounded-lg border border-[#AC9C8D]/40 bg-black/25 px-2.5 py-1 text-xs text-[#EFE9E1]">
+                   <span className="text-[11px] text-[#D1C7BD]"><strong className="font-mono text-white">{items.length}</strong> {items.length === 1 ? 'producto' : 'productos'}</span>
+                   <span className="text-[#AC9C8D]/40">·</span>
+                   <span className="text-[11px] text-[#D1C7BD]">Neto <strong className="font-mono text-white">{formatCurrency(netTotal, form.currency)}</strong></span>
+                   <span className="text-[#AC9C8D]/40">·</span>
+                   <span className="text-[11px] font-semibold text-[#D1C7BD]">Total <strong className="font-mono text-xs sm:text-sm font-bold text-[#F6C38A]">{formatCurrency(grandTotal, form.currency)}</strong></span>
+                 </div>
+               )}
                <button type="button" onClick={() => { setView('list'); resetForm() }} className="flex-1 rounded-md px-3 py-1.5 text-xs font-semibold text-[#D1C7BD] transition-colors hover:bg-white/10 hover:text-[#EFE9E1] sm:flex-none">
                 Cancelar
               </button>
@@ -1806,8 +1912,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
               <div className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-2.5 md:grid-cols-2 xl:grid-cols-4">
                 <div className="order-2 space-y-1 xl:order-2">
                   <label className="text-[10px] font-semibold text-[#6D625B]">Fecha emisión</label>
-                  <div className="flex h-8 items-center justify-between rounded-md border border-[#D1C7BD] bg-[#EFE9E1] px-2.5 text-xs text-[#6D625B]">
-                   <span>{new Date().toLocaleDateString('es-CL')}</span><span className="text-[10px] text-[#AC9C8D]">automática</span>
+                  <div className="flex h-8.5 items-center justify-between rounded-lg border border-[#D1C7BD] bg-[#EFE9E1]/80 px-3 text-xs font-medium text-[#6D625B]">
+                   <span>{new Date().toLocaleDateString('es-CL')}</span><span className="rounded bg-black/5 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-[#AC9C8D]">automática</span>
                  </div>
                </div>
                <div className="order-3 space-y-1 xl:order-3">
@@ -1828,7 +1934,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                    placeholder="Buscar proveedor..."
                    required
                    readOnly={isReplenishmentPreparation}
-                     className="w-full h-8 rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15"
+                     className="w-full h-8.5 rounded-lg border border-[#D1C7BD] bg-white px-3 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/20 shadow-xs transition-colors"
                  />
                  {isReplenishmentPreparation && <p className="mt-1 text-[10px] text-theme-text-muted">Proveedor definido por los productos seleccionados en Reposición.</p>}
                  {!isReplenishmentPreparation && supplierOpen && (
@@ -1881,7 +1987,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                       onChange={e => { setWarehouseSearch(e.target.value); setWarehouseOpen(true); if (form.warehouse_id) setForm(p => ({ ...p, warehouse_id: '' })) }}
                       onFocus={() => setWarehouseOpen(true)}
                       placeholder="Buscar bodega..."
-                       className="w-full h-8 rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2.5 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15"
+                       className="w-full h-8.5 rounded-lg border border-[#D1C7BD] bg-white px-3 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/20 shadow-xs transition-colors"
                     />
                     {warehouseOpen && (
                       <>
@@ -1990,10 +2096,17 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                {showServiceForm && <div className="mb-3 border border-[#D1C7BD] bg-[#F7F4F0] p-3">
                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(180px,1.5fr)_90px_120px_90px_90px] sm:items-end">
                    <label className="text-[10px] font-semibold text-[#6D625B]">Descripción del servicio *<input value={serviceDraft.description} onChange={event => setServiceDraft(prev => ({ ...prev, description: event.target.value }))} className="mt-1 h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-xs" /></label>
-                   <label className="text-[10px] font-semibold text-[#6D625B]">Cantidad<input type="number" min="0.001" step="0.001" value={serviceDraft.quantity} onChange={event => setServiceDraft(prev => ({ ...prev, quantity: event.target.value }))} className="mt-1 h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs" /></label>
-                   <label className="text-[10px] font-semibold text-[#6D625B]">Precio unitario<input type="number" min="0" step="0.01" value={serviceDraft.unitPrice} onChange={event => setServiceDraft(prev => ({ ...prev, unitPrice: event.target.value }))} className="mt-1 h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs" /></label>
-                   <label className="text-[10px] font-semibold text-[#6D625B]">Descuento %<input type="number" min="0" max="100" step="0.01" value={serviceDraft.discountPercent} onChange={event => setServiceDraft(prev => ({ ...prev, discountPercent: event.target.value }))} className="mt-1 h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs" /></label>
-                   <label className="text-[10px] font-semibold text-[#6D625B]">IVA %<input type="number" min="0" max="100" step="0.01" value={serviceDraft.taxRate} onChange={event => setServiceDraft(prev => ({ ...prev, taxRate: event.target.value }))} className="mt-1 h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs" /></label>
+                   <label className="text-[10px] font-semibold text-[#6D625B]">Cantidad<input type="number" min="0.001" step="0.001" value={serviceDraft.quantity} onChange={event => setServiceDraft(prev => ({ ...prev, quantity: event.target.value }))} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} placeholder="0" className="mt-1 h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs" /></label>
+                   {(() => {
+                     const servicePriceVal = validatePriceDecimal(serviceDraft.unitPrice, 2)
+                     return (
+                       <label className="text-[10px] font-semibold text-[#6D625B]">Precio unitario<input type="text" inputMode="decimal" step="0.01" value={serviceDraft.unitPrice} onChange={event => setServiceDraft(prev => ({ ...prev, unitPrice: event.target.value }))} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} placeholder="0,00" className={`mt-1 h-8 w-full rounded-md border bg-white px-2 text-right text-xs ${servicePriceVal.error === 'EXCEEDS_MAX_DECIMALS' ? 'border-amber-500 focus:ring-amber-300' : !servicePriceVal.isValid && !servicePriceVal.isEmpty ? 'border-red-500 focus:ring-red-300' : 'border-[#D1C7BD] focus:border-[#72383D] focus:ring-[#72383D]/15'}`} />
+                       {servicePriceVal.error === 'EXCEEDS_MAX_DECIMALS' && <span className="block mt-0.5 text-[10px] font-semibold text-amber-600">Máx. 2 decimales</span>}
+                       </label>
+                     )
+                   })()}
+                   <label className="text-[10px] font-semibold text-[#6D625B]">Descuento %<input type="number" min="0" max="100" step="0.01" value={serviceDraft.discountPercent} onChange={event => setServiceDraft(prev => ({ ...prev, discountPercent: event.target.value }))} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} placeholder="0" className="mt-1 h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs" /></label>
+                   <label className="text-[10px] font-semibold text-[#6D625B]">IVA %<input type="number" min="0" max="100" step="0.01" value={serviceDraft.taxRate} onChange={event => setServiceDraft(prev => ({ ...prev, taxRate: event.target.value }))} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} className="mt-1 h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs" /></label>
                  </div>
                  <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end"><label className="flex-1 text-[10px] font-semibold text-[#6D625B]">Observaciones<textarea value={serviceDraft.notes} onChange={event => setServiceDraft(prev => ({ ...prev, notes: event.target.value }))} rows={2} className="mt-1 w-full rounded-md border border-[#D1C7BD] bg-white px-2 py-1 text-xs" /></label><button type="button" onClick={addServiceToItems} className="h-8 rounded-md bg-[#72383D] px-3 text-xs font-bold text-white">Agregar servicio</button></div>
                </div>}
@@ -2004,7 +2117,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                      onFocus={openProductDropdown}
                      disabled={!form.supplier_id}
                      placeholder={form.supplier_id ? "Buscar por SKU, descripción o código de barra..." : "Selecciona primero un proveedor"}
-                       className="h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] pl-8 pr-3 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:border-[#72383D] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#72383D]/15 disabled:cursor-not-allowed disabled:bg-[#D1C7BD]/30 disabled:opacity-65" />
+                       className="h-8.5 w-full rounded-lg border border-[#D1C7BD] bg-white pl-8 pr-3 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/20 shadow-xs transition-colors disabled:cursor-not-allowed disabled:bg-[#D1C7BD]/20 disabled:opacity-65" />
                   {!form.supplier_id && <p className="mt-1.5 text-[10px] text-[#AC9C8D]">Debe seleccionar primero el proveedor para buscar productos.</p>}
                   {form.supplier_id && productDropdownOpen && (
                      <div onScroll={handleProductDropdownScroll} className="absolute left-0 right-0 top-full z-20 mt-1 max-h-80 overflow-y-auto border border-[#D1C7BD] bg-white shadow-lg">
@@ -2025,34 +2138,43 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                </div>
 
                {pendingProduct && (() => {
+                  const pendingPriceVal = validatePriceDecimal(pendingUnitPrice, 2)
+                  const pendingDiscountUnitVal = pendingDiscountUnitRaw !== null ? validatePriceDecimal(pendingDiscountUnitRaw, 2) : { isValid: true, value: null, raw: '', decimals: 0, isEmpty: true }
                   const pendingLineTotals = calculatePurchaseOrderLineTotals({
                     quantity: Number(pendingQuantity) || 0,
-                    unit_price: Number(pendingUnitPrice) || 0,
+                    unit_price: (pendingPriceVal.value ?? Number(pendingUnitPrice)) || 0,
                     discount_percent: Number(pendingDiscountDisplay.discount_percent) || 0,
                     discount_unit_amount: Number(pendingDiscountDisplay.discount_unit_amount) || 0,
                     tax_rate: Number(pendingProduct.tax_rate) || 19,
                   })
                   return (
-                    <div className="mb-2 min-w-0 rounded-md border border-[#D1C7BD] bg-[#F7F4F0] p-2.5">
+                    <div className="mb-3 min-w-0 rounded-xl border border-[#72383D]/30 bg-white p-3.5 shadow-sm border-l-4 border-l-[#72383D]">
                       <div className={`grid min-w-0 grid-cols-1 gap-2 sm:items-end ${showDiscountColumns ? 'sm:grid-cols-[minmax(0,1.25fr)_minmax(82px,.55fr)_minmax(108px,.7fr)_minmax(82px,.55fr)_minmax(108px,.7fr)_minmax(60px,.45fr)_minmax(96px,.65fr)_auto]' : 'sm:grid-cols-[minmax(0,1.5fr)_minmax(95px,.65fr)_minmax(120px,.8fr)_minmax(64px,.45fr)_minmax(104px,.7fr)_auto]'}`}>
                         <div className="min-w-0">
-                          <p className="text-[10px] font-semibold uppercase tracking-wide text-[#72383D]">Producto</p>
-                          <p className="truncate text-xs font-semibold text-[#322D29]" title={pendingProduct.description}>{pendingProduct.description}</p>
-                          <p className="mt-0.5 font-mono text-[10px] text-[#AC9C8D]">SKU {pendingProduct.sku}</p>
-                          <p className="mt-1 text-[10px] text-[#AC9C8D]">Último costo de compra Bsale (CLP): {pendingProduct.last_purchase_unit_cost === null ? 'Sin precio disponible' : formatCurrency(pendingProduct.last_purchase_unit_cost, 'CLP')}</p>
+                          <div className="flex items-center gap-1.5">
+                            <span className="rounded bg-[#72383D]/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[#72383D]">Producto</span>
+                            <span className="font-mono text-[10px] font-semibold text-[#72383D]">SKU {pendingProduct.sku}</span>
+                          </div>
+                          <p className="mt-1 line-clamp-2 text-xs font-bold text-[#322D29]" title={pendingProduct.description}>{pendingProduct.description}</p>
+                          <p className="mt-0.5 text-[10px] text-[#6D625B]">Último costo Bsale: <span className="font-mono font-medium text-[#322D29]">{pendingProduct.last_purchase_unit_cost === null ? 'Sin precio disponible' : formatCurrency(pendingProduct.last_purchase_unit_cost, 'CLP')}</span></p>
                         </div>
-                        <label className="text-[10px] font-semibold text-[#6D625B]">Cantidad<input type="number" min="0.001" step="0.001" value={pendingQuantity} onChange={event => setPendingQuantity(event.target.value)} className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" /></label>
-                        <label className="text-[10px] font-semibold text-[#6D625B]">Precio unitario<input type="number" min="0" step="1" value={pendingUnitPrice} onChange={event => updatePendingUnitPrice(event.target.value)} placeholder="Ingresar manualmente" className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" /></label>
+                        <label className="text-[10px] font-semibold text-[#6D625B]">Cantidad<input type="number" min="0.001" step="0.001" value={pendingQuantity} onChange={event => setPendingQuantity(event.target.value)} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} placeholder="0" className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs font-mono text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" /></label>
+                        <label className="text-[10px] font-semibold text-[#6D625B]">Precio unitario<input type="text" inputMode="decimal" step="0.01" value={pendingUnitPrice} onChange={event => updatePendingUnitPrice(event.target.value)} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} placeholder="0,00" className={`mt-1 block h-8 w-full rounded-md border bg-white px-2 text-right text-xs font-mono text-[#322D29] focus:outline-none focus:ring-2 ${pendingPriceVal.error === 'EXCEEDS_MAX_DECIMALS' ? 'border-amber-500 focus:ring-amber-300' : !pendingPriceVal.isValid && !pendingPriceVal.isEmpty ? 'border-red-500 focus:ring-red-300' : 'border-[#D1C7BD] focus:border-[#72383D] focus:ring-[#72383D]/15'}`} />
+                        {pendingPriceVal.error === 'EXCEEDS_MAX_DECIMALS' && <span className="block mt-0.5 text-[10px] font-semibold text-amber-600">Máx. 2 decimales</span>}
+                        {!pendingPriceVal.isValid && !pendingPriceVal.isEmpty && pendingPriceVal.error !== 'EXCEEDS_MAX_DECIMALS' && <span className="block mt-0.5 text-[10px] font-semibold text-red-600">Precio inválido</span>}
+                        </label>
                         {showDiscountColumns && <>
-                          <label className="text-[10px] font-semibold text-[#6D625B]">Dcto %<input type="number" min="0" max="100" step="0.01" value={pendingDiscountDisplay.discount_percent} onChange={event => updatePendingDiscount('discount_percent', event.target.value)} className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" /></label>
-                          <label className="text-[10px] font-semibold text-[#6D625B]">Dcto por unidad<input type="number" min="0" max={Math.max(Number(pendingUnitPrice) || 0, 0)} step="0.01" value={pendingDiscountDisplay.discount_unit_amount} onChange={event => updatePendingDiscount('discount_unit_amount', event.target.value)} className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" /></label>
+                          <label className="text-[10px] font-semibold text-[#6D625B]">Dcto %<input type="number" min="0" max="100" step="0.01" value={pendingDiscountDisplay.discount_percent > 0 ? pendingDiscountDisplay.discount_percent : ''} onChange={event => updatePendingDiscount('discount_percent', event.target.value)} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} placeholder="0" className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs font-mono text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" /></label>
+                          <label className="text-[10px] font-semibold text-[#6D625B]">Dcto por unidad<input type="text" inputMode="decimal" step="0.01" value={pendingDiscountUnitRaw !== null ? pendingDiscountUnitRaw : (pendingDiscountDisplay.discount_unit_amount > 0 ? String(pendingDiscountDisplay.discount_unit_amount) : '')} onChange={event => { setPendingDiscountUnitRaw(event.target.value); updatePendingDiscount('discount_unit_amount', event.target.value) }} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} placeholder="0,00" className={`mt-1 block h-8 w-full rounded-md border bg-white px-2 text-right text-xs font-mono text-[#322D29] focus:outline-none focus:ring-2 ${pendingDiscountUnitVal.error === 'EXCEEDS_MAX_DECIMALS' ? 'border-amber-500 focus:ring-amber-300' : 'border-[#D1C7BD] focus:border-[#72383D] focus:ring-[#72383D]/15'}`} />
+                          {pendingDiscountUnitVal.error === 'EXCEEDS_MAX_DECIMALS' && <span className="block mt-0.5 text-[10px] font-semibold text-amber-600">Máx. 2 decimales</span>}
+                          </label>
                         </>}
                         <div className="text-[10px] font-semibold text-[#6D625B]">IVA
-                          <div className="mt-1 flex h-8 items-center justify-end rounded-md border border-[#D1C7BD] bg-[#EFE9E1] px-2 text-xs text-[#6D625B]">{pendingProduct.tax_rate || 19}%</div>
+                          <div className="mt-1 flex h-8 items-center justify-end rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2 text-xs font-mono text-[#6D625B]">{pendingProduct.tax_rate || 19}%</div>
                         </div>
                         <div className="text-[10px] font-semibold text-[#6D625B]">Neto
-                          <div className="mt-1 flex h-8 items-center justify-end rounded-md border border-[#D1C7BD] bg-[#EFE9E1] px-2 font-mono text-xs font-semibold text-[#322D29]">
-                            {pendingLineTotals.net_amount.toLocaleString('es-CL', { style: 'currency', currency: form.currency, minimumFractionDigits: 0 })}
+                          <div className="mt-1 flex h-8 items-center justify-end rounded-md border border-[#72383D]/25 bg-[#FAF7F4] px-2 font-mono text-xs font-bold text-[#72383D]">
+                            {pendingLineTotals.net_amount.toLocaleString('es-CL', { style: 'currency', currency: form.currency, minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </div>
                         </div>
                         <button type="button" onClick={addProductToItems} className="h-8 whitespace-nowrap rounded-md border border-[#72383D]/40 bg-[#EFE9E1] px-2.5 text-[11px] font-bold text-[#72383D] hover:bg-[#F5EDEE]">Agregar producto</button>
@@ -2096,7 +2218,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                            {editingItem === it.tempId ? (
                                <input type="text" value={it.description} onChange={e => updateItem(it.tempId, 'description', e.target.value)} className="h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                            ) : (
-                             <span className="block truncate" title={it.description}>{it.description || <span className="text-theme-text-muted/40">—</span>}</span>
+                             <span className="block line-clamp-2 leading-tight text-xs font-medium" title={it.description}>{it.description || <span className="text-theme-text-muted/40">—</span>}</span>
                            )}
                            <div className="mt-0.5 truncate text-[10px] text-[#AC9C8D]">
                              {it.sku && <span className="font-mono">SKU {it.sku}</span>}
@@ -2106,35 +2228,53 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                            </div>
                          </td>
                            <td className="px-2 py-1.5 text-center">
-                             <input type="number" min="0" step="0.001" value={it.quantity} onChange={e => updateItem(it.tempId, 'quantity', parseFloat(e.target.value) || 0)} className="mx-auto block h-8 w-[4.5rem] rounded-md border border-[#D1C7BD] bg-white px-1.5 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
+                             <input type="number" min="0" step="0.001" value={it.quantity} onChange={e => updateItem(it.tempId, 'quantity', parseFloat(e.target.value) || 0)} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} className="mx-auto block h-8 w-[4.5rem] rounded-md border border-[#D1C7BD] bg-white px-1.5 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                          </td>
                            <td className="px-2 py-1.5 text-center">
-                               <input ref={input => { linePriceInputRefs.current[it.tempId] = input }} aria-invalid={invalidPriceItemIds.has(it.tempId)} type="number" min="0" step="1" value={it.unit_price} onChange={e => updateItem(it.tempId, 'unit_price', parseFloat(e.target.value) || 0)} className={`mx-auto block h-8 w-[6.5rem] rounded-md border bg-white px-1.5 text-right text-xs text-[#322D29] focus:outline-none focus:ring-2 ${invalidPriceItemIds.has(it.tempId) ? 'border-red-500 focus:ring-red-300' : 'border-[#D1C7BD] focus:border-[#72383D] focus:ring-[#72383D]/15'}`} />
-                             {invalidPriceItemIds.has(it.tempId) && <span className="block mt-0.5 text-[10px] font-semibold text-red-600">Complete el precio</span>}
-                             {it.reference_unit_cost !== undefined && <span className="mt-0.5 block text-[10px] text-[#AC9C8D]">Ref. Bsale {formatCurrency(it.reference_unit_cost, 'CLP')}</span>}
+                             {(() => {
+                               const rawVal = it.raw_unit_price !== undefined ? it.raw_unit_price : String(it.unit_price)
+                               const val = validatePriceDecimal(rawVal, 2)
+                               const isExceeded = val.error === 'EXCEEDS_MAX_DECIMALS'
+                               const isInvalid = !val.isValid && !isExceeded
+                               const hasError = isExceeded || isInvalid || invalidPriceItemIds.has(it.tempId)
+                               return (
+                                 <>
+                                   <input ref={input => { linePriceInputRefs.current[it.tempId] = input }} aria-invalid={hasError} type="text" inputMode="decimal" step="0.01" value={rawVal} onChange={e => updateItem(it.tempId, 'unit_price', e.target.value)} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} className={`mx-auto block h-8 w-[6.5rem] rounded-md border bg-white px-1.5 text-right text-xs text-[#322D29] focus:outline-none focus:ring-2 ${hasError ? (isExceeded ? 'border-amber-500 focus:ring-amber-300' : 'border-red-500 focus:ring-red-300') : 'border-[#D1C7BD] focus:border-[#72383D] focus:ring-[#72383D]/15'}`} />
+                                   {isExceeded && <span className="block mt-0.5 text-[10px] font-semibold text-amber-600">Máx. 2 decimales</span>}
+                                   {isInvalid && val.isEmpty && <span className="block mt-0.5 text-[10px] font-semibold text-red-600">Complete el precio</span>}
+                                   {isInvalid && !val.isEmpty && <span className="block mt-0.5 text-[10px] font-semibold text-red-600">Precio inválido</span>}
+                                   {!hasError && invalidPriceItemIds.has(it.tempId) && <span className="block mt-0.5 text-[10px] font-semibold text-red-600">Complete el precio</span>}
+                                   {it.reference_unit_cost !== undefined && <span className="mt-0.5 block text-[10px] text-[#AC9C8D]">Ref. Bsale {formatCurrency(it.reference_unit_cost, 'CLP')}</span>}
+                                 </>
+                               )
+                             })()}
                         </td>
                            {showDiscountColumns && (() => {
                              const discountDisplay = getPurchaseOrderDiscountDisplayValues(it)
+                             const rawDiscVal = it.raw_discount_unit_amount !== undefined ? it.raw_discount_unit_amount : (discountDisplay.discount_unit_amount > 0 ? String(discountDisplay.discount_unit_amount) : '')
+                             const discVal = it.discount_mode === 'unit' && rawDiscVal ? validatePriceDecimal(rawDiscVal, 2) : { isValid: true, value: null, raw: '', decimals: 0, isEmpty: true }
+                             const isDiscExceeded = discVal.error === 'EXCEEDS_MAX_DECIMALS'
                              return <>
                               <td className="px-2 py-1.5 text-center">
-                                <input type="number" min="0" max="100" step="0.01" value={discountDisplay.discount_percent} onChange={e => updateItem(it.tempId, 'discount_percent', e.target.value)} className="mx-auto block h-8 w-[4.5rem] rounded-md border border-[#D1C7BD] bg-white px-1.5 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
+                                <input type="number" min="0" max="100" step="0.01" value={discountDisplay.discount_percent} onChange={e => updateItem(it.tempId, 'discount_percent', e.target.value)} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} className="mx-auto block h-8 w-[4.5rem] rounded-md border border-[#D1C7BD] bg-white px-1.5 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                               </td>
                               <td className="px-2 py-1.5 text-center">
-                                <input type="number" min="0" max={it.unit_price} step="0.01" value={discountDisplay.discount_unit_amount} onChange={e => updateItem(it.tempId, 'discount_unit_amount', e.target.value)} className="mx-auto block h-8 w-[5.5rem] rounded-md border border-[#D1C7BD] bg-white px-1.5 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
+                                <input type="text" inputMode="decimal" step="0.01" value={rawDiscVal} onChange={e => updateItem(it.tempId, 'discount_unit_amount', e.target.value)} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} className={`mx-auto block h-8 w-[5.5rem] rounded-md border bg-white px-1.5 text-right text-xs text-[#322D29] focus:outline-none focus:ring-2 ${isDiscExceeded ? 'border-amber-500 focus:ring-amber-300' : 'border-[#D1C7BD] focus:border-[#72383D] focus:ring-[#72383D]/15'}`} />
+                                {isDiscExceeded && <span className="block mt-0.5 text-[10px] font-semibold text-amber-600">Máx. 2 decimales</span>}
                               </td>
                              </>
                            })()}
                            <td className="px-2 py-1.5 text-center">
-                             <input type="number" min="0" max="100" step="0.01" value={it.tax_rate} onChange={e => updateItem(it.tempId, 'tax_rate', parseFloat(e.target.value) || 0)} className="mx-auto block h-8 w-[4rem] rounded-md border border-[#D1C7BD] bg-white px-1.5 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
+                             <input type="number" min="0" max="100" step="0.01" value={it.tax_rate} onChange={e => updateItem(it.tempId, 'tax_rate', parseFloat(e.target.value) || 0)} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} className="mx-auto block h-8 w-[4rem] rounded-md border border-[#D1C7BD] bg-white px-1.5 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                         </td>
                           {(() => {
                             const lineTotals = calculatePurchaseOrderLineTotals(it)
                             return <>
-                              <td className="px-2 py-1.5 text-right text-xs text-[#6D625B]">
-                                {lineTotals.net_amount.toLocaleString('es-CL', { style: 'currency', currency: form.currency, minimumFractionDigits: 0 })}
+                              <td className="px-2 py-1.5 text-right text-xs font-mono text-[#6D625B]">
+                                {lineTotals.net_amount.toLocaleString('es-CL', { style: 'currency', currency: form.currency, minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </td>
-                              <td className="px-2 py-1.5 text-right text-xs font-semibold text-[#322D29]">
-                                {lineTotals.line_total.toLocaleString('es-CL', { style: 'currency', currency: form.currency, minimumFractionDigits: 0 })}
+                              <td className="px-2 py-1.5 text-right text-xs font-mono font-semibold text-[#322D29]">
+                                {lineTotals.line_total.toLocaleString('es-CL', { style: 'currency', currency: form.currency, minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </td>
                             </>
                           })()}
@@ -2150,32 +2290,32 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
               </div>
 
                 <div className="mt-3 grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1.8fr)_minmax(280px,.9fr)]">
-                  <div className="min-w-0 rounded-xl border border-[#D1C7BD] bg-[#F7F4F0] p-3.5">
+                  <div className="min-w-0 rounded-xl border border-[#D1C7BD] bg-white p-4 shadow-sm">
                     <h3 className="mb-2 text-sm font-bold text-[#322D29]">Notas de la orden</h3>
                     <textarea value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} rows={4} placeholder="Agregar notas adicionales..." className={`${textareaClass} min-h-[112px] bg-white`} />
                   </div>
-                  <div className="min-w-0 rounded-xl border border-[#D1C7BD] bg-[#F7F4F0] p-3.5">
+                  <div className="min-w-0 rounded-xl border border-[#D1C7BD] bg-white p-4 shadow-sm">
                    <h3 className="mb-2 text-sm font-bold text-[#322D29]">Resumen de la orden</h3>
                    <div className="space-y-1 text-xs">
-                     <div className="flex justify-between py-0.5">
-                       <span className="text-[#AC9C8D]">Subtotal bruto</span>
-                       <span className="font-medium text-[#322D29]">{formatCurrency(grossTotal, form.currency)}</span>
+                     <div className="flex justify-between py-1">
+                       <span className="text-[#6D625B]">Subtotal bruto</span>
+                       <span className="font-mono font-medium text-[#322D29]">{formatCurrency(grossTotal, form.currency)}</span>
                    </div>
-                     <div className="flex justify-between py-0.5">
-                       <span className="text-[#AC9C8D]">Descuentos</span>
-                       <span className="text-red-500">-{formatCurrency(discountTotal, form.currency)}</span>
+                     <div className="flex justify-between py-1">
+                       <span className="text-[#6D625B]">Descuentos</span>
+                       <span className="font-mono font-semibold text-red-600">-{formatCurrency(discountTotal, form.currency)}</span>
                      </div>
-                   <div className="flex justify-between py-0.5">
-                     <span className="text-[#AC9C8D]">Neto final</span>
-                     <span className="font-medium text-[#322D29]">{formatCurrency(netTotal, form.currency)}</span>
+                   <div className="flex justify-between py-1">
+                     <span className="text-[#6D625B]">Neto final</span>
+                     <span className="font-mono font-medium text-[#322D29]">{formatCurrency(netTotal, form.currency)}</span>
                    </div>
-                   <div className="flex justify-between py-0.5">
-                        <span className="text-[#AC9C8D]">IVA</span>
-                        <span className="font-medium text-[#322D29]">{formatCurrency(taxTotal, form.currency)}</span>
+                   <div className="flex justify-between py-1">
+                        <span className="text-[#6D625B]">IVA</span>
+                        <span className="font-mono font-medium text-[#322D29]">{formatCurrency(taxTotal, form.currency)}</span>
                    </div>
-                    <div className="mt-1 flex justify-between border-t border-[#D1C7BD] py-1.5">
+                    <div className="mt-2 flex items-center justify-between rounded-lg border border-[#72383D]/25 bg-[#FAF7F4] px-3 py-2">
                        <span className="font-bold text-[#322D29]">Total OC</span>
-                      <span className="text-base font-bold text-[#72383D]">{formatCurrency(grandTotal, form.currency)}</span>
+                      <span className="text-base font-bold font-mono text-[#72383D]">{formatCurrency(grandTotal, form.currency)}</span>
                   </div>
                  </div>
                </div>
