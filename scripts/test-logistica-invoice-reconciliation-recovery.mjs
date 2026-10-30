@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
-const migration = await readFile(new URL('../supabase/migrations/20261029150000_logistica_invoice_reconciliation_strict.sql', import.meta.url), 'utf8')
+const migration = await readFile(new URL('../supabase/migrations/20261030120743_logistica_invoice_reconciliation_strict.sql', import.meta.url), 'utf8')
 const historical = await readFile(new URL('../supabase/migrations/20261021140000_logistica_invoice_attempts_readonly.sql', import.meta.url), 'utf8')
 
 test('MEJ-03B reemplaza ambas RPC en una migración forward-only sin escribir Bsale', () => {
