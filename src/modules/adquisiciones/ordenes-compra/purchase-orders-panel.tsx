@@ -113,6 +113,12 @@ function purchaseOrderStatusLabel(po: Pick<PurchaseOrder, 'status' | 'closed_wit
   return po.status === 'CERRADA' && po.closed_with_pending ? CLOSED_WITH_PENDING_LABEL : undefined
 }
 
+function canEditPurchaseOrder(po: Pick<PurchaseOrder, 'status' | 'receipt_status'>) {
+  if (po.status === 'BORRADOR') return true
+  if (po.status === 'EMITIDA' && (po.receipt_status === 'PENDIENTE' || !po.receipt_status)) return true
+  return false
+}
+
 type CachedPurchaseOrderList = { data: PurchaseOrder[]; total: number; updatedAt: number }
 
 function purchaseOrderListCacheKey(scope: string, filters: PurchaseOrderFilters) {
@@ -303,6 +309,14 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const [serviceDraft, setServiceDraft] = useState({
     description: '', quantity: '', unitPrice: '', discountPercent: '', taxRate: '19', notes: '',
   })
+  const [confirmSubmitOpen, setConfirmSubmitOpen] = useState(false)
+  const [editingPoCorrelative, setEditingPoCorrelative] = useState<string | null>(null)
+  const pendingQuantityInputRef = useRef<HTMLInputElement | null>(null)
+  const pendingUnitPriceInputRef = useRef<HTMLInputElement | null>(null)
+  const pendingDiscountPercentInputRef = useRef<HTMLInputElement | null>(null)
+  const pendingDiscountUnitInputRef = useRef<HTMLInputElement | null>(null)
+  const serviceQuantityInputRef = useRef<HTMLInputElement | null>(null)
+  const serviceUnitPriceInputRef = useRef<HTMLInputElement | null>(null)
 
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null)
@@ -932,6 +946,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     setInvalidPriceItemIds(new Set())
     linePriceInputRefs.current = {}
     setEditId(null)
+    setEditingPoCorrelative(null)
+    setConfirmSubmitOpen(false)
     setProductSearch('')
     setProductResults([])
     setProductDropdownOpen(false)
@@ -972,6 +988,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       notes: po.notes || '',
     })
     setEditId(po.id)
+    setEditingPoCorrelative(po.correlative)
     setView('form')
     loadDetailItems(po.id)
   }
@@ -979,6 +996,23 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   async function loadDetailItems(poId: string) {
     const d = await getPurchaseOrderDetail(poId)
     if (d) {
+      if (d.po) {
+        setForm(prev => ({
+          ...prev,
+          issue_date: d.po.issue_date?.slice(0, 10) || prev.issue_date,
+          required_date: d.po.required_date?.slice(0, 10) || prev.required_date,
+          supplier_id: d.po.supplier_id || prev.supplier_id,
+          warehouse_id: d.po.warehouse_id || prev.warehouse_id,
+          po_type: d.po.po_type || prev.po_type,
+          currency: d.po.currency || prev.currency,
+          payment_terms: d.po.payment_terms || prev.payment_terms,
+          authorized_by: d.po.authorized_by || prev.authorized_by,
+          notes: d.po.notes || prev.notes,
+        }))
+        if (d.po.correlative) {
+          setEditingPoCorrelative(d.po.correlative)
+        }
+      }
       setItems(await buildLineItems(d.items))
     }
   }
@@ -1023,10 +1057,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   }
 
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
+  function handlePromptSubmit() {
     if (submittingRef.current) return
     if (items.length === 0) { msg('Agrega al menos una línea a la orden'); return }
+    if (!form.supplier_id) { msg('Selecciona un proveedor'); return }
+    if (!form.warehouse_id) { msg('Selecciona una bodega de destino'); return }
     const invalidPriceItems = items.filter(item => {
       const rawVal = item.raw_unit_price !== undefined ? item.raw_unit_price : item.unit_price
       const val = validatePriceDecimal(rawVal, 2)
@@ -1060,6 +1095,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       msg('Revisa descripción, cantidad, descuento, IVA y tipo de línea antes de emitir la orden.')
       return
     }
+    setConfirmSubmitOpen(true)
+  }
+
+  async function executeSubmit() {
+    if (submittingRef.current) return
     submittingRef.current = true
     setIsSubmitting(true)
     try {
@@ -1092,19 +1132,27 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         msg(res.error)
         submittingRef.current = false
         setIsSubmitting(false)
+        setConfirmSubmitOpen(false)
         return
       }
       justEmittedRef.current = true
       if (draftStorageKey) {
         try { localStorage.removeItem(draftStorageKey) } catch {}
       }
-       msg(editId ? 'Orden de compra actualizada' : 'Orden de compra creada')
-       invalidatePurchaseOrderListCache(); setView('list'); resetForm(); load()
+      setConfirmSubmitOpen(false)
+      msg(editId ? 'Orden de compra actualizada' : 'Orden de compra creada')
+      invalidatePurchaseOrderListCache(); setView('list'); resetForm(); load()
     } catch (error) {
       submittingRef.current = false
       setIsSubmitting(false)
-      msg(error instanceof Error ? error.message : 'Error al crear la orden de compra')
+      setConfirmSubmitOpen(false)
+      msg(error instanceof Error ? error.message : 'Error al guardar la orden de compra')
     }
+  }
+
+  async function handleSubmit(e?: React.FormEvent) {
+    if (e) e.preventDefault()
+    handlePromptSubmit()
   }
 
   function requestCancellation(po: PurchaseOrder) {
@@ -1446,8 +1494,12 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     setPendingUnitPrice(p.last_purchase_unit_cost === null ? '' : String(p.last_purchase_unit_cost))
     setPendingDiscountPercent(0)
     setPendingDiscountUnitAmount(0)
+    setPendingDiscountUnitRaw(null)
     setPendingDiscountMode(null)
     setProductDropdownOpen(false)
+    setTimeout(() => {
+      pendingQuantityInputRef.current?.focus()
+    }, 50)
   }
 
   function updatePendingDiscount(field: 'discount_percent' | 'discount_unit_amount', value: string) {
@@ -1554,6 +1606,9 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     setProductPage(0)
     setProductHasMore(false)
     setProductSearchLoading(false)
+    setTimeout(() => {
+      productInputRef.current?.focus()
+    }, 50)
     if (productSearchTimerRef.current !== null) window.clearTimeout(productSearchTimerRef.current)
     productSearchRequestSequence.current += 1
   }
@@ -1653,6 +1708,93 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     discount_unit_amount: pendingDiscountUnitAmount,
     discount_mode: pendingDiscountMode,
   })
+
+  const confirmSubmitModal = confirmSubmitOpen ? (() => {
+    const selectedSupplier = suppliers.find(s => s.id === form.supplier_id)
+    const supplierDisplayName = selectedSupplier?.fantasy_name || selectedSupplier?.business_name || form.supplier_id
+    const selectedWarehouse = warehouses.find(w => w.id === form.warehouse_id)
+    const warehouseDisplayName = selectedWarehouse?.name || form.warehouse_id
+
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-4 backdrop-blur-xs animate-in fade-in duration-150" role="dialog" aria-modal="true" aria-labelledby="confirm-submit-title">
+        <div className="w-full max-w-md rounded-2xl border border-[#D1C7BD] bg-[#F7F4F0] p-5 shadow-2xl">
+          <div className="mb-4 flex items-start justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#72383D]/10 text-[#72383D]">
+                <CheckCircle2 className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 id="confirm-submit-title" className="text-base font-bold text-[#322D29]">
+                  {editId ? 'Confirmar actualización' : 'Confirmar emisión de OC'}
+                </h2>
+                <p className="mt-0.5 text-xs text-[#6D625B]">
+                  {editId ? 'Verifique los datos antes de guardar.' : 'Verifique los datos antes de emitir la orden formalmente.'}
+                </p>
+              </div>
+            </div>
+            <button type="button" onClick={() => setConfirmSubmitOpen(false)} disabled={isSubmitting} className="rounded-lg p-1 text-[#6D625B] hover:bg-[#D1C7BD]/40 disabled:opacity-50" aria-label="Cerrar">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="mb-4 rounded-xl border border-[#D1C7BD] bg-white p-3.5 text-xs text-[#322D29] space-y-2">
+            {editingPoCorrelative && (
+              <div className="flex justify-between border-b border-[#E5DDD4] pb-1.5">
+                <span className="font-semibold text-[#6D625B]">Orden de Compra:</span>
+                <span className="font-mono font-bold text-[#72383D]">{editingPoCorrelative}</span>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <span className="text-[#6D625B]">Proveedor:</span>
+              <span className="font-semibold text-right truncate max-w-[230px] text-[#322D29]">
+                {supplierDisplayName}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-[#6D625B]">Bodega destino:</span>
+              <span className="font-semibold text-right text-[#322D29]">
+                {warehouseDisplayName}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-[#6D625B]">Cantidad de líneas:</span>
+              <span className="font-mono font-semibold text-[#322D29]">{items.length} {items.length === 1 ? 'línea' : 'líneas'}</span>
+            </div>
+            <div className="flex justify-between border-t border-[#E5DDD4] pt-2">
+              <span className="font-bold text-[#322D29]">Total Orden de Compra:</span>
+              <span className="font-mono font-bold text-sm text-[#72383D]">{formatCurrency(grandTotal, form.currency)}</span>
+            </div>
+          </div>
+
+          <p className="mb-4 text-[11px] text-[#6D625B]">
+            {editId
+              ? 'Al confirmar, se actualizarán los productos, cantidades y precios de la orden de compra.'
+              : 'Al emitir la orden de compra, quedará registrada formalmente en el sistema.'}
+          </p>
+
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setConfirmSubmitOpen(false)}
+              disabled={isSubmitting}
+              className="rounded-xl border border-[#D1C7BD] bg-white px-3.5 py-2 text-xs font-semibold text-[#6D625B] hover:bg-[#F3EFE9] disabled:opacity-50"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={() => void executeSubmit()}
+              disabled={isSubmitting}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[#72383D] px-4 py-2 text-xs font-bold text-[#EFE9E1] hover:bg-[#5D2E32] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {isSubmitting ? (editId ? 'Guardando...' : 'Emitiendo...') : (editId ? 'Confirmar y guardar' : 'Confirmar y emitir')}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  })() : null
 
 
   async function handleCreateAuthorizer(e: React.MouseEvent) {
@@ -1832,7 +1974,15 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     return (
        <div className="flex h-full flex-col overflow-hidden bg-[#EFE9E1] animate-in fade-in zoom-in-95 duration-200">
         {message && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
-        <form onSubmit={handleSubmit} className="flex-1 overflow-auto">
+        <form
+          onSubmit={handleSubmit}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') {
+              e.preventDefault()
+            }
+          }}
+          className="flex-1 overflow-auto"
+        >
            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-[#AC9C8D]/35 bg-[#322D29] px-4 py-2 sm:px-6">
             <div className="flex items-center gap-3 min-w-0">
                <button type="button" onClick={() => { setView('list'); resetForm() }} className="rounded-md p-1.5 text-[#D1C7BD] transition-colors hover:bg-white/10 hover:text-[#EFE9E1]">
@@ -1841,7 +1991,9 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
              <div className="min-w-0">
                  <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-[#AC9C8D]">Adquisiciones</p>
                  <div className="flex flex-wrap items-center gap-2 min-w-0">
-                    <h2 className="truncate text-base font-bold uppercase tracking-wide text-[#EFE9E1]">{editId ? 'Editar orden de compra' : 'Nueva orden de compra'}</h2>
+                    <h2 className="truncate text-base font-bold uppercase tracking-wide text-[#EFE9E1]">
+                      {editId ? (editingPoCorrelative ? `Editar orden de compra · ${editingPoCorrelative}` : 'Editar orden de compra') : 'Nueva orden de compra'}
+                    </h2>
                    {!editId && lastSavedAt && (
                      <span className="text-[11px] font-normal text-[#AC9C8D] flex items-center gap-1 shrink-0">
                        • Guardado automáticamente · {lastSavedAt}
@@ -1866,9 +2018,18 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                <button type="button" onClick={handlePreviewPDF} className="flex-1 rounded-md border border-[#AC9C8D]/55 px-3 py-1.5 text-xs font-semibold text-[#EFE9E1] transition-colors hover:border-[#D1C7BD] hover:bg-white/10 sm:flex-none">
                 Vista previa PDF
               </button>
-                <button type="submit" disabled={isSubmitting} className="flex-1 rounded-md bg-[#72383D] px-4 py-1.5 text-xs font-bold text-[#EFE9E1] transition-colors hover:bg-[#5D2E32] disabled:cursor-not-allowed disabled:opacity-60 sm:flex-none">
-                 {isSubmitting ? <><Loader2 className="mr-1 inline-block h-3 w-3 animate-spin" />Emitiendo...</> : 'Emitir OC'}
-               </button>
+                <button
+                  type="button"
+                  onClick={handlePromptSubmit}
+                  disabled={isSubmitting}
+                  className="flex-1 rounded-md bg-[#72383D] px-4 py-1.5 text-xs font-bold text-[#EFE9E1] transition-colors hover:bg-[#5D2E32] disabled:cursor-not-allowed disabled:opacity-60 sm:flex-none"
+                >
+                  {isSubmitting ? (
+                    <><Loader2 className="mr-1 inline-block h-3 w-3 animate-spin" />{editId ? 'Guardando...' : 'Emitiendo...'}</>
+                  ) : (
+                    editId ? 'Guardar cambios' : 'Emitir OC'
+                  )}
+                </button>
             </div>
           </div>
             <div className="min-w-0 space-y-4 px-4 py-4 sm:px-6 sm:py-5">
@@ -2113,11 +2274,24 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
 
                 <div ref={productRef} className="relative mb-2 min-w-0">
                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#AC9C8D]" />
-                    <input ref={productInputRef} type="text" value={productSearch} onChange={e => handleProductSearch(e.target.value)}
-                     onFocus={openProductDropdown}
-                     disabled={!form.supplier_id}
-                     placeholder={form.supplier_id ? "Buscar por SKU, descripción o código de barra..." : "Selecciona primero un proveedor"}
-                       className="h-8.5 w-full rounded-lg border border-[#D1C7BD] bg-white pl-8 pr-3 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/20 shadow-xs transition-colors disabled:cursor-not-allowed disabled:bg-[#D1C7BD]/20 disabled:opacity-65" />
+                    <input
+                      ref={productInputRef}
+                      type="text"
+                      value={productSearch}
+                      onChange={e => handleProductSearch(e.target.value)}
+                      onFocus={openProductDropdown}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          if (productResults.length > 0) {
+                            selectProductForAddition(productResults[0])
+                          }
+                        }
+                      }}
+                      disabled={!form.supplier_id}
+                      placeholder={form.supplier_id ? "Buscar por SKU, descripción o código de barra..." : "Selecciona primero un proveedor"}
+                      className="h-8.5 w-full rounded-lg border border-[#D1C7BD] bg-white pl-8 pr-3 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/20 shadow-xs transition-colors disabled:cursor-not-allowed disabled:bg-[#D1C7BD]/20 disabled:opacity-65"
+                    />
                   {!form.supplier_id && <p className="mt-1.5 text-[10px] text-[#AC9C8D]">Debe seleccionar primero el proveedor para buscar productos.</p>}
                   {form.supplier_id && productDropdownOpen && (
                      <div onScroll={handleProductDropdownScroll} className="absolute left-0 right-0 top-full z-20 mt-1 max-h-80 overflow-y-auto border border-[#D1C7BD] bg-white shadow-lg">
@@ -2158,15 +2332,97 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                           <p className="mt-1 line-clamp-2 text-xs font-bold text-[#322D29]" title={pendingProduct.description}>{pendingProduct.description}</p>
                           <p className="mt-0.5 text-[10px] text-[#6D625B]">Último costo Bsale: <span className="font-mono font-medium text-[#322D29]">{pendingProduct.last_purchase_unit_cost === null ? 'Sin precio disponible' : formatCurrency(pendingProduct.last_purchase_unit_cost, 'CLP')}</span></p>
                         </div>
-                        <label className="text-[10px] font-semibold text-[#6D625B]">Cantidad<input type="number" min="0.001" step="0.001" value={pendingQuantity} onChange={event => setPendingQuantity(event.target.value)} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} placeholder="0" className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs font-mono text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" /></label>
-                        <label className="text-[10px] font-semibold text-[#6D625B]">Precio unitario<input type="text" inputMode="decimal" step="0.01" value={pendingUnitPrice} onChange={event => updatePendingUnitPrice(event.target.value)} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} placeholder="0,00" className={`mt-1 block h-8 w-full rounded-md border bg-white px-2 text-right text-xs font-mono text-[#322D29] focus:outline-none focus:ring-2 ${pendingPriceVal.error === 'EXCEEDS_MAX_DECIMALS' ? 'border-amber-500 focus:ring-amber-300' : !pendingPriceVal.isValid && !pendingPriceVal.isEmpty ? 'border-red-500 focus:ring-red-300' : 'border-[#D1C7BD] focus:border-[#72383D] focus:ring-[#72383D]/15'}`} />
-                        {pendingPriceVal.error === 'EXCEEDS_MAX_DECIMALS' && <span className="block mt-0.5 text-[10px] font-semibold text-amber-600">Máx. 2 decimales</span>}
-                        {!pendingPriceVal.isValid && !pendingPriceVal.isEmpty && pendingPriceVal.error !== 'EXCEEDS_MAX_DECIMALS' && <span className="block mt-0.5 text-[10px] font-semibold text-red-600">Precio inválido</span>}
+                        <label className="text-[10px] font-semibold text-[#6D625B]">Cantidad
+                          <input
+                            ref={pendingQuantityInputRef}
+                            type="number"
+                            min="0.001"
+                            step="0.001"
+                            value={pendingQuantity}
+                            onChange={event => setPendingQuantity(event.target.value)}
+                            onFocus={handleSelectInputContent}
+                            onClick={handleSelectInputContent}
+                            onKeyDown={event => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault()
+                                pendingUnitPriceInputRef.current?.focus()
+                                pendingUnitPriceInputRef.current?.select()
+                              }
+                            }}
+                            placeholder="0"
+                            className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs font-mono text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15"
+                          />
+                        </label>
+                        <label className="text-[10px] font-semibold text-[#6D625B]">Precio unitario
+                          <input
+                            ref={pendingUnitPriceInputRef}
+                            type="text"
+                            inputMode="decimal"
+                            step="0.01"
+                            value={pendingUnitPrice}
+                            onChange={event => updatePendingUnitPrice(event.target.value)}
+                            onFocus={handleSelectInputContent}
+                            onClick={handleSelectInputContent}
+                            onKeyDown={event => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault()
+                                if (showDiscountColumns) {
+                                  const targetRef = pendingDiscountMode === 'unit' ? pendingDiscountUnitInputRef : pendingDiscountPercentInputRef
+                                  targetRef.current?.focus()
+                                  targetRef.current?.select()
+                                } else {
+                                  addProductToItems()
+                                }
+                              }
+                            }}
+                            placeholder="0,00"
+                            className={`mt-1 block h-8 w-full rounded-md border bg-white px-2 text-right text-xs font-mono text-[#322D29] focus:outline-none focus:ring-2 ${pendingPriceVal.error === 'EXCEEDS_MAX_DECIMALS' ? 'border-amber-500 focus:ring-amber-300' : !pendingPriceVal.isValid && !pendingPriceVal.isEmpty ? 'border-red-500 focus:ring-red-300' : 'border-[#D1C7BD] focus:border-[#72383D] focus:ring-[#72383D]/15'}`}
+                          />
+                          {pendingPriceVal.error === 'EXCEEDS_MAX_DECIMALS' && <span className="block mt-0.5 text-[10px] font-semibold text-amber-600">Máx. 2 decimales</span>}
+                          {!pendingPriceVal.isValid && !pendingPriceVal.isEmpty && pendingPriceVal.error !== 'EXCEEDS_MAX_DECIMALS' && <span className="block mt-0.5 text-[10px] font-semibold text-red-600">Precio inválido</span>}
                         </label>
                         {showDiscountColumns && <>
-                          <label className="text-[10px] font-semibold text-[#6D625B]">Dcto %<input type="number" min="0" max="100" step="0.01" value={pendingDiscountDisplay.discount_percent > 0 ? pendingDiscountDisplay.discount_percent : ''} onChange={event => updatePendingDiscount('discount_percent', event.target.value)} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} placeholder="0" className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs font-mono text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" /></label>
-                          <label className="text-[10px] font-semibold text-[#6D625B]">Dcto por unidad<input type="text" inputMode="decimal" step="0.01" value={pendingDiscountUnitRaw !== null ? pendingDiscountUnitRaw : (pendingDiscountDisplay.discount_unit_amount > 0 ? String(pendingDiscountDisplay.discount_unit_amount) : '')} onChange={event => { setPendingDiscountUnitRaw(event.target.value); updatePendingDiscount('discount_unit_amount', event.target.value) }} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} placeholder="0,00" className={`mt-1 block h-8 w-full rounded-md border bg-white px-2 text-right text-xs font-mono text-[#322D29] focus:outline-none focus:ring-2 ${pendingDiscountUnitVal.error === 'EXCEEDS_MAX_DECIMALS' ? 'border-amber-500 focus:ring-amber-300' : 'border-[#D1C7BD] focus:border-[#72383D] focus:ring-[#72383D]/15'}`} />
-                          {pendingDiscountUnitVal.error === 'EXCEEDS_MAX_DECIMALS' && <span className="block mt-0.5 text-[10px] font-semibold text-amber-600">Máx. 2 decimales</span>}
+                          <label className="text-[10px] font-semibold text-[#6D625B]">Dcto %
+                            <input
+                              ref={pendingDiscountPercentInputRef}
+                              type="number"
+                              min="0"
+                              max="100"
+                              step="0.01"
+                              value={pendingDiscountDisplay.discount_percent > 0 ? pendingDiscountDisplay.discount_percent : ''}
+                              onChange={event => updatePendingDiscount('discount_percent', event.target.value)}
+                              onFocus={handleSelectInputContent}
+                              onClick={handleSelectInputContent}
+                              onKeyDown={event => {
+                                if (event.key === 'Enter') {
+                                  event.preventDefault()
+                                  addProductToItems()
+                                }
+                              }}
+                              placeholder="0"
+                              className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs font-mono text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15"
+                            />
+                          </label>
+                          <label className="text-[10px] font-semibold text-[#6D625B]">Dcto por unidad
+                            <input
+                              ref={pendingDiscountUnitInputRef}
+                              type="text"
+                              inputMode="decimal"
+                              step="0.01"
+                              value={pendingDiscountUnitRaw !== null ? pendingDiscountUnitRaw : (pendingDiscountDisplay.discount_unit_amount > 0 ? String(pendingDiscountDisplay.discount_unit_amount) : '')}
+                              onChange={event => { setPendingDiscountUnitRaw(event.target.value); updatePendingDiscount('discount_unit_amount', event.target.value) }}
+                              onFocus={handleSelectInputContent}
+                              onClick={handleSelectInputContent}
+                              onKeyDown={event => {
+                                if (event.key === 'Enter') {
+                                  event.preventDefault()
+                                  addProductToItems()
+                                }
+                              }}
+                              placeholder="0,00"
+                              className={`mt-1 block h-8 w-full rounded-md border bg-white px-2 text-right text-xs font-mono text-[#322D29] focus:outline-none focus:ring-2 ${pendingDiscountUnitVal.error === 'EXCEEDS_MAX_DECIMALS' ? 'border-amber-500 focus:ring-amber-300' : 'border-[#D1C7BD] focus:border-[#72383D] focus:ring-[#72383D]/15'}`}
+                            />
+                            {pendingDiscountUnitVal.error === 'EXCEEDS_MAX_DECIMALS' && <span className="block mt-0.5 text-[10px] font-semibold text-amber-600">Máx. 2 decimales</span>}
                           </label>
                         </>}
                         <div className="text-[10px] font-semibold text-[#6D625B]">IVA
@@ -2323,6 +2579,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                </section>
              </div>
          </form>
+         {confirmSubmitModal}
        </div>
     )
   }
@@ -2354,9 +2611,9 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
               </div>
             </div>
             <div className="flex gap-2">
-              {(detail.po.status === 'BORRADOR') && (
-                <button onClick={() => { editPO(detail.po) }} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5">
-                  <Edit className="w-3.5 h-3.5" /> Editar
+              {(detail.po.status === 'BORRADOR' || canEditPurchaseOrder(detail.po)) && (
+                <button onClick={() => { editPO(detail.po) }} className="px-4 py-2 rounded-xl border border-[#72383D]/35 text-[#72383D] hover:bg-[#72383D]/10 text-xs font-semibold transition-colors flex items-center gap-1.5" title="Editar">
+                  <Edit className="w-3.5 h-3.5" /> Editar OC
                 </button>
               )}
               {detail.po.status === 'EMITIDA' && (
@@ -2661,7 +2918,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                     <button onClick={() => openDetail(po)} className="p-1.5 rounded-lg hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text transition-colors" title="Ver detalle">
                       <Eye className="w-4 h-4" />
                     </button>
-                    {po.status === 'BORRADOR' && (
+                    {(po.status === 'BORRADOR' || canEditPurchaseOrder(po)) && (
                       <button onClick={() => editPO(po)} className="p-1.5 rounded-lg hover:bg-theme-text/5 text-theme-text-muted hover:text-theme-text transition-colors" title="Editar">
                         <Edit className="w-4 h-4" />
                       </button>
@@ -2724,6 +2981,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                     <div className="flex gap-2">
                        <button onClick={() => void handleDownloadPDF()} disabled={downloadingPdf} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"><Download className="w-3.5 h-3.5" /> {downloadingPdf ? 'PDF...' : 'PDF'}</button>
                        <button onClick={() => void handleDownloadExcel()} disabled={downloadingExcel} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"><FileSpreadsheet className="w-3.5 h-3.5" /> {downloadingExcel ? 'Excel...' : 'Excel'}</button>
+                       {canEditPurchaseOrder(detail.po as PurchaseOrder) && (
+                         <button onClick={() => editPO(detail.po as PurchaseOrder)} className="px-4 py-2 rounded-xl border border-[#72383D]/35 text-[#72383D] hover:bg-[#72383D]/10 text-xs font-semibold transition-colors flex items-center gap-1.5">
+                           <Edit className="w-3.5 h-3.5" /> Editar OC
+                         </button>
+                       )}
                       {detail.po.status === 'EMITIDA' && <button onClick={() => void handleMarkSentToSupplier(detail.po.id)} disabled={isMarkingSent} className="px-4 py-2 rounded-xl border border-[#72383D]/35 text-[#72383D] hover:bg-[#72383D]/10 text-xs font-semibold transition-colors flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50">{isMarkingSent ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}{isMarkingSent ? 'Marcando...' : 'Marcar enviada al proveedor'}</button>}
                        {detail.po.status === 'ENVIADA_PROVEEDOR' && <button onClick={() => openSupplierReview(detail.po.id)} className="px-4 py-2 rounded-xl bg-[#72383D] text-[#EFE9E1] hover:bg-[#5D2E32] text-xs font-semibold transition-colors flex items-center gap-1.5"><ClipboardCheck className="w-3.5 h-3.5" /> Revisar confirmación</button>}
                        {detail.po.status === 'RECEPCION_PARCIAL' && <button onClick={() => requestCloseWithPending(detail.po as PurchaseOrder)} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5"><Lock className="w-3.5 h-3.5" /> Cerrar OC</button>}

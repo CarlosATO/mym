@@ -661,8 +661,31 @@ export async function updateDraftPurchaseOrder(poId: string, data: CreatePOData)
     .eq('id', poId)
     .eq('company_id', companyId)
     .single()
-  if (existingError || !existing) return { error: 'La OC borrador no existe o no pertenece a la empresa' }
-  if (existing.status !== 'BORRADOR') return { error: 'Solo se pueden editar OCs en estado borrador' }
+  if (existingError || !existing) return { error: 'La OC no existe o no pertenece a la empresa' }
+  if (existing.status !== 'BORRADOR' && existing.status !== 'EMITIDA') {
+    return { error: 'Solo se pueden editar órdenes de compra en estado borrador o emitida sin recepciones' }
+  }
+
+  if (existing.status === 'EMITIDA') {
+    const logistica = logisticaAdmin()
+    const { data: receipts, error: receiptsError } = await logistica
+      .from('purchase_receipts')
+      .select('id')
+      .eq('purchase_order_id', poId)
+      .eq('company_id', companyId)
+      .neq('status', 'CANCELLED')
+      .limit(1)
+
+    if (receiptsError) {
+      console.error('updateDraftPurchaseOrder receipts check error:', receiptsError)
+      return { error: 'Error al verificar las recepciones asociadas a la orden de compra' }
+    }
+    if (receipts && receipts.length > 0) {
+      return { error: 'No se puede editar una orden de compra que ya cuenta con recepciones registradas' }
+    }
+  }
+
+  const nextStatus = existing.status === 'BORRADOR' ? (data.status || 'EMITIDA') : existing.status
 
   const { error: headerError } = await db.from('purchase_orders').update({
     issue_date: data.issue_date,
@@ -675,7 +698,7 @@ export async function updateDraftPurchaseOrder(poId: string, data: CreatePOData)
     notes: data.notes || null,
     currency: data.currency || 'CLP',
     po_type: hasProduct && hasService ? 'MIXTA' : hasService ? 'SERVICIOS' : 'PRODUCTOS',
-    status: data.status || 'EMITIDA',
+    status: nextStatus,
     net_total: totals.net_total,
     discount_total: totals.discount_total,
     tax_total: totals.tax_total,
