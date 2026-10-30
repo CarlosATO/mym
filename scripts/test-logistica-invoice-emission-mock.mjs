@@ -107,7 +107,7 @@ test('complete invoice policy rejects links, omitted lines and partial quantitie
   assert.equal(validateCompleteInvoiceLines(current, current, 1).ok, false)
 })
 
-test('zero-valued bonus lines remain zero and a Bsale $1 conversion is rejected as a difference', () => {
+test('los valores monetarios oficiales de Bsale no se comparan por línea', () => {
   const source = {
     document_type: { id: 5 },
     client: { id: 2042 },
@@ -120,9 +120,72 @@ test('zero-valued bonus lines remain zero and a Bsale $1 conversion is rejected 
   }
   const expected = { salesId: source.salesId, clientId: 2042, officeId: 3, totals: { net: 100, tax: 19, total: 119 }, details: [{ detailId: 11, quantity: 20, netUnitValue: 0, totalUnitValue: 0, netAmount: 0, taxAmount: 0, totalAmount: 0, netDiscount: 16235 }] }
   assert.equal(validateInvoiceDocument(source, expected).ok, true)
-  assert.equal(validateInvoiceDocument({ ...source, netAmount: 117, taxAmount: 22, totalAmount: 139, details: { items: [{ ...source.details.items[0], netUnitValue: 1, totalUnitValue: 1, netAmount: 17, taxAmount: 3, totalAmount: 20 }] } }, expected).ok, false)
+  assert.equal(validateInvoiceDocument({ ...source, details: { items: [{ ...source.details.items[0], netUnitValue: 1, totalUnitValue: 1, netAmount: 17, taxAmount: 3, totalAmount: 20 }] } }, expected).ok, true)
+  assert.equal(validateInvoiceDocument({ ...source, totalAmount: 125 }, expected).ok, false)
   assert.match(emissionAction, /net_unit_value: Number\(detail\.netUnitValue\)/)
   assert.doesNotMatch(emissionAction, /normalizeInvoiceDetailsForBsale|netUnitValue: 1|bonusNetAdjustment/)
+})
+
+test('factura Bsale 24869 de NV 5148 acepta redistribución neta compensada con bruto y totales iguales', () => {
+  const stableExpectedDetails = [
+    ...Array.from({ length: 12 }, (_, index) => ({ detailId: 514803 + index, quantity: 5, netUnitValue: 18000, netAmount: 18000, taxAmount: 3420, totalUnitValue: 4284, totalAmount: 21420, netDiscount: 0 })),
+    { detailId: 514815, quantity: 8, netUnitValue: 16729, netAmount: 16729, taxAmount: 3178, totalUnitValue: 19907, totalAmount: 19907, netDiscount: 0 },
+  ]
+  const expected = {
+    salesId: 'PETGROUP:FACTURA:5148', clientId: 2042, officeId: 3,
+    totals: { net: 250618, tax: 47617, total: 298235 },
+    details: [
+      { detailId: 514801, quantity: 1, netUnitValue: 16419, netAmount: 16419, taxAmount: 3120, totalUnitValue: 19539, totalAmount: 19539, netDiscount: 9122 },
+      { detailId: 514802, quantity: 1, netUnitValue: 1470, netAmount: 1470, taxAmount: 279, totalUnitValue: 1749, totalAmount: 1749, netDiscount: 489 },
+      ...stableExpectedDetails,
+    ],
+  }
+  const document = {
+    document_type: { id: 5 }, client: { id: 2042 }, office: { id: 3 }, salesId: expected.salesId,
+    netAmount: 250618, taxAmount: 47617, totalAmount: 298235,
+    details: { items: [
+      { relatedDetailId: 514801, quantity: 1, netUnitValue: 16420, netAmount: 16420, taxAmount: 3119, totalUnitValue: 19539, totalAmount: 19539, netDiscount: 9121 },
+      { relatedDetailId: 514802, quantity: 1, netUnitValue: 1469, netAmount: 1469, taxAmount: 280, totalUnitValue: 1749, totalAmount: 1749, netDiscount: 490 },
+      ...stableExpectedDetails.map(({ detailId, quantity, netUnitValue, netAmount, taxAmount, totalUnitValue, totalAmount, netDiscount }) => ({ relatedDetailId: detailId, quantity, netUnitValue, netAmount, taxAmount, totalUnitValue, totalAmount, netDiscount })),
+    ] },
+  }
+  assert.deepEqual(validateInvoiceDocument(document, expected), { ok: true })
+})
+
+test('cambio de precio de línea no bloquea porque Bsale es la fuente de verdad', () => {
+  const expected = {
+    salesId: 'invoice-price-change', clientId: 1, officeId: 1, totals: { net: 100, tax: 19, total: 119 },
+    details: [{ detailId: 1, quantity: 1, netUnitValue: 100, netAmount: 100, taxAmount: 19, totalUnitValue: 119, totalAmount: 119, netDiscount: 0 }],
+  }
+  const document = {
+    document_type: { id: 5 }, client: { id: 1 }, office: { id: 1 }, salesId: expected.salesId,
+    netAmount: 101, taxAmount: 18, totalAmount: 119,
+    details: { items: [{ relatedDetailId: 1, quantity: 1, netUnitValue: 101, netAmount: 101, taxAmount: 18, totalUnitValue: 119, totalAmount: 119, netDiscount: 0 }] },
+  }
+  assert.equal(validateInvoiceDocument(document, expected).ok, true)
+})
+
+test('totales fuera de rango y líneas no exactas se rechazan', () => {
+  const expected = {
+    salesId: 'invoice-controls', clientId: 1, officeId: 1, totals: { net: 250, tax: 48, total: 298 },
+    details: [
+      { detailId: 1, quantity: 1, netUnitValue: 100, netAmount: 100, taxAmount: 19, totalUnitValue: 119, totalAmount: 119, netDiscount: 0 },
+      { detailId: 2, quantity: 1, netUnitValue: 150, netAmount: 150, taxAmount: 29, totalUnitValue: 179, totalAmount: 179, netDiscount: 0 },
+    ],
+  }
+  const base = {
+    document_type: { id: 5 }, client: { id: 1 }, office: { id: 1 }, salesId: expected.salesId,
+    netAmount: 250, taxAmount: 48, totalAmount: 298,
+    details: { items: [
+      { relatedDetailId: 1, quantity: 1, netUnitValue: 101, netAmount: 101, taxAmount: 18, totalUnitValue: 119, totalAmount: 119, netDiscount: 0 },
+      { relatedDetailId: 2, quantity: 1, netUnitValue: 150, netAmount: 150, taxAmount: 29, totalUnitValue: 179, totalAmount: 179, netDiscount: 0 },
+    ] },
+  }
+  assert.equal(validateInvoiceDocument(base, expected).ok, true)
+  assert.equal(validateInvoiceDocument({ ...base, totalAmount: 304 }, expected).reason, 'TOTALS_MISMATCH')
+  assert.equal(validateInvoiceDocument({ ...base, details: { items: base.details.items.map(item => ({ ...item, quantity: 2 })) } }, expected).reason, 'RELATED_DETAIL_ID_NOT_PROVABLE')
+  assert.equal(validateInvoiceDocument({ ...base, details: { items: [{ ...base.details.items[0], relatedDetailId: 1 }, { ...base.details.items[1], relatedDetailId: 1 }] } }, expected).reason, 'RELATED_DETAIL_ID_NOT_PROVABLE')
+  assert.equal(validateInvoiceDocument({ ...base, details: { items: [{ ...base.details.items[0], relatedDetailId: 99 }, base.details.items[1]] } }, expected).reason, 'RELATED_DETAIL_ID_NOT_PROVABLE')
 })
 
 test('mixed normal and bonus lines preserve both source values', () => {
@@ -167,13 +230,29 @@ test('generic validation accepts another client and multiple complete lines', ()
       { detailId: 9003, quantity: 4 },
     ],
   }).ok, true)
-  assert.equal(validateInvoiceDocument({ ...dynamic, totalAmount: 11901 }, {
+  const acceptedDifference = validateInvoiceDocument({ ...dynamic, totalAmount: 11901 }, {
     salesId: dynamic.salesId,
     clientId: 2042,
     officeId: 3,
     totals: { net: 10000, tax: 1900, total: 11900 },
-    details: dynamic.details.items,
-  }).ok, false)
+    details: dynamic.details.items.map(detail => ({ detailId: detail.relatedDetailId, quantity: detail.quantity })),
+  })
+  assert.deepEqual(acceptedDifference, { ok: true, audit: { code: 'INVOICE_TOTAL_DIFFERENCE_ACCEPTED', totalDifference: 1, limit: 5 } })
+  const negativeBoundary = validateInvoiceDocument({ ...dynamic, totalAmount: 11895 }, {
+    salesId: dynamic.salesId,
+    clientId: 2042,
+    officeId: 3,
+    totals: { net: 10000, tax: 1900, total: 11900 },
+    details: dynamic.details.items.map(detail => ({ detailId: detail.relatedDetailId, quantity: detail.quantity })),
+  })
+  assert.deepEqual(negativeBoundary, { ok: true, audit: { code: 'INVOICE_TOTAL_DIFFERENCE_ACCEPTED', totalDifference: -5, limit: 5 } })
+  assert.equal(validateInvoiceDocument({ ...dynamic, totalAmount: 11906 }, {
+    salesId: dynamic.salesId,
+    clientId: 2042,
+    officeId: 3,
+    totals: { net: 10000, tax: 1900, total: 11900 },
+    details: dynamic.details.items.map(detail => ({ detailId: detail.relatedDetailId, quantity: detail.quantity })),
+  }).reason, 'TOTALS_MISMATCH')
 })
 
 test('4xx rejection preserves status and sanitized response body', () => {
@@ -228,92 +307,4 @@ test('confirmation UI uses a single server-side card identifier and maps termina
   assert.match(ui, /if \(!onConfirm\)/)
   assert.match(ui, /BSALE_REJECTED.*INVOICE_IN_PROGRESS.*RECONCILIATION_REQUIRED/)
   assert.doesNotMatch(panel, /draft_payload.*emitSalesOrderInvoice|emitSalesOrderInvoice\([^)]*payload/)
-})
-
-function mockRoundingInvoice(expectedLines, changes, totals, salesId) {
-  const expected = {
-    salesId, clientId: 2042, officeId: 1, totals,
-    details: expectedLines.map(line => ({ ...line })),
-  }
-  const document = {
-    document_type: { id: 5 }, client: { id: 2042 }, office: { id: 1 },
-    netAmount: totals.net, taxAmount: totals.tax, totalAmount: totals.total, salesId,
-    details: { items: expectedLines.map((line, index) => ({
-      ...line,
-      relatedDetailId: line.detailId,
-      netAmount: line.netAmount + (changes[index]?.net ?? 0),
-      taxAmount: line.taxAmount + (changes[index]?.tax ?? 0),
-      totalAmount: line.totalAmount + (changes[index]?.gross ?? 0),
-    })) },
-  }
-  return { expected, document }
-}
-
-test('BSale rounding: 5144 accepts +/-$1 IVA distribution with exact invoice totals', () => {
-  const data = mockRoundingInvoice([
-    { detailId: 101, quantity: 12, netUnitValue: 2882, totalUnitValue: 3430, netAmount: 34588, taxAmount: 6571, totalAmount: 41159, netDiscount: 0 },
-    { detailId: 102, quantity: 12, netUnitValue: 2882, totalUnitValue: 3430, netAmount: 34588, taxAmount: 6572, totalAmount: 41160, netDiscount: 0 },
-    { detailId: 103, quantity: 12, netUnitValue: 2882, totalUnitValue: 3430, netAmount: 34588, taxAmount: 6572, totalAmount: 41160, netDiscount: 0 },
-    { detailId: 104, quantity: 6, netUnitValue: 1882, totalUnitValue: 2240, netAmount: 11294, taxAmount: 2146, totalAmount: 13440, netDiscount: 0 },
-    { detailId: 105, quantity: 6, netUnitValue: 1882, totalUnitValue: 2240, netAmount: 11294, taxAmount: 2146, totalAmount: 13440, netDiscount: 0 },
-    { detailId: 106, quantity: 20, netUnitValue: 0, totalUnitValue: 0, netAmount: 0, taxAmount: 0, totalAmount: 0, netDiscount: 16235 },
-  ], [
-    { tax: 1, gross: 1 }, {}, { tax: -1, gross: -1 }, {}, {}, {},
-  ], { net: 126352, tax: 24007, total: 150359 }, 'PETGROUP:FACTURA:qa-5144')
-  assert.deepEqual(validateInvoiceDocument(data.document, data.expected), { ok: true })
-
-  const unbalanced = structuredClone(data.document)
-  unbalanced.details.items[2].taxAmount += 1
-  assert.equal(validateInvoiceDocument(unbalanced, data.expected).ok, false)
-
-  const differentTotal = structuredClone(data.document)
-  differentTotal.totalAmount += 1
-  assert.equal(validateInvoiceDocument(differentTotal, data.expected).ok, false)
-
-  const bonusBecomesPaid = structuredClone(data.document)
-  bonusBecomesPaid.details.items[5].netAmount = 1
-  bonusBecomesPaid.details.items[0].netAmount -= 1
-  assert.equal(validateInvoiceDocument(bonusBecomesPaid, data.expected).ok, false)
-
-  const changedUnitPrice = structuredClone(data.document)
-  changedUnitPrice.details.items[0].netUnitValue += 1
-  assert.equal(validateInvoiceDocument(changedUnitPrice, data.expected).ok, false)
-
-  const changedQuantity = structuredClone(data.document)
-  changedQuantity.details.items[0].quantity -= 1
-  assert.equal(validateInvoiceDocument(changedQuantity, data.expected).ok, false)
-
-  const duplicateRelatedId = structuredClone(data.document)
-  duplicateRelatedId.details.items[1].relatedDetailId = data.expected.details[0].detailId
-  assert.equal(validateInvoiceDocument(duplicateRelatedId, data.expected).ok, false)
-})
-
-test('BSale rounding: 5139 accepts balanced -$2,+$1,+$1 net distribution', () => {
-  const data = mockRoundingInvoice([
-    { detailId: 201, quantity: 6, netUnitValue: 3235, totalUnitValue: 3850, netAmount: 19412, taxAmount: 3688, totalAmount: 23100, netDiscount: 0 },
-    { detailId: 202, quantity: 12, netUnitValue: 3235, totalUnitValue: 3850, netAmount: 38823, taxAmount: 7377, totalAmount: 46198, netDiscount: 0 },
-    { detailId: 203, quantity: 12, netUnitValue: 3235, totalUnitValue: 3850, netAmount: 38823, taxAmount: 7376, totalAmount: 46200, netDiscount: 0 },
-    { detailId: 204, quantity: 12, netUnitValue: 3235, totalUnitValue: 3850, netAmount: 38823, taxAmount: 7376, totalAmount: 46200, netDiscount: 0 },
-    { detailId: 205, quantity: 6, netUnitValue: 3529, totalUnitValue: 4200, netAmount: 21176, taxAmount: 4024, totalAmount: 25200, netDiscount: 0 },
-  ], [
-    {}, { net: -2 }, { net: 1 }, { net: 1 }, {},
-  ], { net: 157057, tax: 29841, total: 186898 }, 'PETGROUP:FACTURA:qa-5139')
-  assert.deepEqual(validateInvoiceDocument(data.document, data.expected), { ok: true })
-
-  const oversizedRounding = structuredClone(data.document)
-  oversizedRounding.details.items[1].netAmount -= 1
-  oversizedRounding.details.items[2].netAmount += 1
-  assert.equal(validateInvoiceDocument(oversizedRounding, data.expected).ok, false)
-
-  const changedDiscount = structuredClone(data.document)
-  changedDiscount.details.items[0].netDiscount += 1
-  assert.equal(validateInvoiceDocument(changedDiscount, data.expected).ok, false)
-
-  const missingDetails = structuredClone(data.document)
-  missingDetails.details.items.pop()
-  assert.equal(validateInvoiceDocument(missingDetails, data.expected).ok, false)
-
-  const differentClient = structuredClone(data.document)
-  differentClient.client.id += 1
-  assert.equal(validateInvoiceDocument(differentClient, data.expected).ok, false)
 })

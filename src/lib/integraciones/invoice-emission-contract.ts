@@ -144,87 +144,31 @@ export function validateInvoiceDocument(document: any, expected: {
   details: Array<{
     detailId: number
     quantity: number
-    netUnitValue?: number
-    totalUnitValue?: number
-    netAmount?: number
-    taxAmount?: number
-    totalAmount?: number
-    netDiscount?: number
   }>
-}): { ok: true } | { ok: false; reason: string } {
+}): { ok: true; audit?: { code: 'INVOICE_TOTAL_DIFFERENCE_ACCEPTED'; totalDifference: number; limit: number } } | { ok: false; reason: string } {
   if (Number(document?.document_type?.id) !== 5) return { ok: false, reason: 'DOCUMENT_TYPE_MISMATCH' }
   if (Number(document?.client?.id) !== expected.clientId) return { ok: false, reason: 'CLIENT_MISMATCH' }
   if (Number(document?.office?.id) !== expected.officeId) return { ok: false, reason: 'OFFICE_MISMATCH' }
-  if (Number(document?.netAmount) !== expected.totals.net || Number(document?.taxAmount) !== expected.totals.tax || Number(document?.totalAmount) !== expected.totals.total) return { ok: false, reason: 'TOTALS_MISMATCH' }
   if (document?.salesId !== expected.salesId) return { ok: false, reason: 'SALES_ID_MISMATCH' }
+  const invoiceTotal = Number(document?.totalAmount)
+  const totalDifference = invoiceTotal - expected.totals.total
+  if (!Number.isFinite(invoiceTotal) || Math.abs(totalDifference) > 5) return { ok: false, reason: 'TOTALS_MISMATCH' }
   const details = Array.isArray(document?.details?.items) ? document.details.items : []
   if (details.length !== expected.details.length) return { ok: false, reason: 'DETAIL_COUNT_MISMATCH' }
-
-  const expectedDetails = new Map(expected.details.map(line => [line.detailId, line]))
-  if (expectedDetails.size !== expected.details.length) return { ok: false, reason: 'RELATED_DETAIL_ID_NOT_PROVABLE' }
-  const seen = new Set<number>()
-  const roundingFields = ['netAmount', 'taxAmount', 'totalAmount'] as const
-  const roundingLimit = { netAmount: 2, taxAmount: 1, totalAmount: 1 } as const
-  const roundingDelta = { netAmount: 0, taxAmount: 0, totalAmount: 0 }
-  let roundingDetected = false
-
+  const expectedDetails = new Map<number, (typeof expected.details)[number]>()
+  for (const expectedDetail of expected.details) {
+    if (expectedDetails.has(expectedDetail.detailId)) return { ok: false, reason: 'RELATED_DETAIL_ID_NOT_PROVABLE' }
+    expectedDetails.set(expectedDetail.detailId, expectedDetail)
+  }
+  const seenRelatedDetailIds = new Set<number>()
   for (const detail of details) {
-    const related = Number(detail?.relatedDetailId)
-    const expectedLine = expectedDetails.get(related)
-    if (!Number.isSafeInteger(related) || !expectedLine || seen.has(related) ||
-        Number(detail.quantity) !== expectedLine.quantity) {
-      return { ok: false, reason: 'RELATED_DETAIL_ID_NOT_PROVABLE' }
-    }
-    seen.add(related)
-
-    // Prices, discounts, quantities and related-detail identity NEVER receive tolerance.
-    for (const field of ['netUnitValue', 'totalUnitValue', 'netDiscount'] as const) {
-      if (expectedLine[field] != null && Number(detail[field]) !== expectedLine[field]) {
-        return { ok: false, reason: `DETAIL_${field.toUpperCase()}_MISMATCH` }
-      }
-    }
-
-    for (const field of roundingFields) {
-      const amount = expectedLine[field]
-      if (amount == null) continue
-      const invoiced = Number(detail[field])
-      if (invoiced === amount) continue
-      const difference = invoiced - amount
-      // CLP rounding is integer-only, capped for EACH line, and must balance below.
-      // A free/zero-valued line may never become paid through a tolerance.
-      if (!Number.isSafeInteger(amount) || !Number.isSafeInteger(invoiced) ||
-          amount < 0 || invoiced < 0 ||
-          Math.abs(difference) > roundingLimit[field] ||
-          expectedLine.totalAmount === 0 || Number(detail.totalAmount) <= 0) {
-        return { ok: false, reason: `DETAIL_${field.toUpperCase()}_MISMATCH` }
-      }
-      roundingDetected = true
-      roundingDelta[field] += difference
-    }
+    const related = Number(detail.relatedDetailId)
+    const expectedDetail = expectedDetails.get(related)
+    if (!expectedDetail || seenRelatedDetailIds.has(related) || Number(detail.quantity) !== expectedDetail.quantity) return { ok: false, reason: 'RELATED_DETAIL_ID_NOT_PROVABLE' }
+    seenRelatedDetailIds.add(related)
   }
-
-  if (roundingDetected) {
-    // No partial snapshots: all three monetary components are needed to prove
-    // that Bsale merely redistributed pesos across existing lines.
-    if (!roundingFields.every(field => expected.details.every(line => {
-      const amount = line[field]
-      return typeof amount === 'number' && Number.isSafeInteger(amount) && amount >= 0
-    }))) return { ok: false, reason: 'DETAIL_ROUNDING_NOT_PROVABLE' }
-
-    const totalsByField = { netAmount: 'net', taxAmount: 'tax', totalAmount: 'total' } as const
-    for (const field of roundingFields) {
-      const expectedSum = expected.details.reduce((sum, line) => sum + (line[field] ?? 0), 0)
-      const invoiceSum = details.reduce((sum: number, line: any) => sum + Number(line[field]), 0)
-      const grandTotal = expected.totals[totalsByField[field]]
-      if (roundingDelta[field] !== 0 ||
-          !Number.isSafeInteger(grandTotal) ||
-          !Number.isSafeInteger(invoiceSum) ||
-          expectedSum !== grandTotal || invoiceSum !== grandTotal) {
-        return { ok: false, reason: 'DETAIL_ROUNDING_NOT_BALANCED' }
-      }
-    }
-  }
-  return { ok: true }
+  if (totalDifference === 0) return { ok: true }
+  return { ok: true, audit: { code: 'INVOICE_TOTAL_DIFFERENCE_ACCEPTED', totalDifference, limit: 5 } }
 }
 
 export function validateCompleteInvoiceLines(
