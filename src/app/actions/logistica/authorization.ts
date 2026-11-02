@@ -142,6 +142,7 @@ export async function requirePreparationCardAccess(
 export async function requirePreparationCardMoveAuthorization(
   cardId: string,
   toStatus: string,
+  observation?: string,
 ): Promise<WmsAuthorization> {
   const auth = await requireWmsPermission('module.logistica.view')
 
@@ -155,7 +156,7 @@ export async function requirePreparationCardMoveAuthorization(
     throw new Error('No autorizado para esta operación')
   }
 
-  if (toStatus !== 'IN_PREPARATION') {
+  if (toStatus !== 'IN_PREPARATION' && toStatus !== 'IN_AUDIT' && toStatus !== 'PENDING_ROUTE_PREP') {
     throw new Error('No autorizado para mover a esta etapa.')
   }
 
@@ -163,7 +164,7 @@ export async function requirePreparationCardMoveAuthorization(
   const { data: card, error: cardError } = await db
     .schema('logistica')
     .from('sales_order_preparation_cards')
-    .select('id, company_id, status')
+    .select('id, company_id, status, locked_by_user_id')
     .eq('id', cardId)
     .eq('company_id', auth.companyId)
     .maybeSingle()
@@ -172,11 +173,97 @@ export async function requirePreparationCardMoveAuthorization(
     throw new Error('Tarjeta no disponible')
   }
 
-  if (card.status !== 'PENDING_ROUTE_PREP') {
-    throw new Error('No autorizado para mover tarjetas fuera de Pendientes.')
+  if (toStatus === 'IN_PREPARATION') {
+    if (card.status !== 'PENDING_ROUTE_PREP') {
+      throw new Error('No autorizado para mover tarjetas fuera de Pendientes.')
+    }
+  } else if (toStatus === 'IN_AUDIT') {
+    if (card.status !== 'IN_PREPARATION') {
+      throw new Error('No autorizado para mover tarjetas fuera de En preparación.')
+    }
+    if (!card.locked_by_user_id) {
+      throw new Error('Esta preparación aún no tiene responsable. Tómala antes de moverla.')
+    }
+    if (card.locked_by_user_id !== auth.user.id) {
+      throw new Error('Esta preparación está asignada a otro usuario.')
+    }
+  } else if (toStatus === 'PENDING_ROUTE_PREP') {
+    if (card.status !== 'IN_PREPARATION') {
+      throw new Error('No autorizado para mover tarjetas fuera de En preparación.')
+    }
+    if (!card.locked_by_user_id) {
+      throw new Error('Esta preparación aún no tiene responsable. Tómala antes de moverla.')
+    }
+    if (card.locked_by_user_id !== auth.user.id) {
+      throw new Error('Esta preparación está asignada a otro usuario.')
+    }
+    if (!observation || !observation.trim()) {
+      throw new Error('Se requiere observación para retroceder.')
+    }
   }
 
   await requirePreparationCardAccess(auth, cardId)
+
+  return auth
+}
+
+export async function requirePreparationLineConfirmationAuthorization(
+  lineId: string,
+  companyId?: string,
+): Promise<WmsAuthorization> {
+  const auth = await requireWmsPermission('module.logistica.view')
+
+  if (companyId && companyId !== auth.companyId) {
+    throw new Error('Empresa no autorizada')
+  }
+
+  const hasManagePermission = await hasWmsPermission(auth.user.id, 'logistica.preparation.manage')
+  if (hasManagePermission) {
+    return auth
+  }
+
+  if (!auth.isOperatorBodega) {
+    throw new Error('No autorizado para esta operación')
+  }
+
+  const db = await createClient()
+  const { data: line, error: lineError } = await db
+    .schema('logistica')
+    .from('sales_order_preparation_lines')
+    .select('id, card_id, company_id')
+    .eq('id', lineId)
+    .eq('company_id', auth.companyId)
+    .maybeSingle()
+
+  if (lineError || !line) {
+    throw new Error('Línea no disponible')
+  }
+
+  const { data: card, error: cardError } = await db
+    .schema('logistica')
+    .from('sales_order_preparation_cards')
+    .select('id, company_id, status, locked_by_user_id')
+    .eq('id', line.card_id)
+    .eq('company_id', auth.companyId)
+    .maybeSingle()
+
+  if (cardError || !card) {
+    throw new Error('Tarjeta no disponible')
+  }
+
+  if (card.status !== 'IN_PREPARATION') {
+    throw new Error('La tarjeta debe estar En preparación.')
+  }
+
+  if (!card.locked_by_user_id) {
+    throw new Error('Esta preparación aún no tiene responsable. Tómala antes de continuar.')
+  }
+
+  if (card.locked_by_user_id !== auth.user.id) {
+    throw new Error('Esta preparación está asignada a otro usuario.')
+  }
+
+  await requirePreparationCardAccess(auth, card.id)
 
   return auth
 }

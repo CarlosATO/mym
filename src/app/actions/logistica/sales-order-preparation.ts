@@ -9,7 +9,7 @@ import type { InvoicePaymentTypeOption, InvoiceSaleConditionOption } from '@/mod
 import { chileToday } from '@/lib/integraciones/invoice-emission-contract'
 import { extractBsaleRelationIdFromHref } from '@/lib/integraciones/bsale-client-commercial-normalization'
 import { getSafeHttpsHostname, validateBsalePdfResponseUrl, validateBsalePdfUrl, validateBsaleRedirectUrl } from '@/lib/integraciones/invoice-print-assistant'
-import { requirePreparationCardAccess, requirePreparationCardMoveAuthorization, requireWmsPermission, type WmsAuthorization } from './authorization'
+import { requirePreparationCardAccess, requirePreparationCardMoveAuthorization, requirePreparationLineConfirmationAuthorization, requireWmsPermission, type WmsAuthorization } from './authorization'
 
 function logPreparationDiagnostics(label: string, detail: Record<string, unknown>) {
   if (process.env.NODE_ENV !== 'production') {
@@ -1183,23 +1183,13 @@ export async function confirmSalesOrderPreparationLine(params: {
   observation?: string | null
   excluded?: boolean
 }): Promise<{ data: SalesOrderPreparationLine | null; error: string | null }> {
-  // The manage permission is the only required preflight; the view check was a redundant round-trip.
   let auth: WmsAuthorization
   try {
-    auth = await requireWmsPermission('logistica.preparation.manage')
+    auth = await requirePreparationLineConfirmationAuthorization(params.lineId, params.companyId)
   } catch (error) {
     return { data: null, error: error instanceof Error ? error.message : 'No autorizado' }
   }
   const supabase = await createClient()
-  if (auth.isOperatorBodega) {
-    const { data: line } = await supabase.schema('logistica').from('sales_order_preparation_lines').select('card_id, company_id').eq('id', params.lineId).eq('company_id', auth.companyId).maybeSingle()
-    if (!line) return { data: null, error: 'Línea no disponible' }
-    try {
-      await requirePreparationCardAccess(auth, line.card_id)
-    } catch (error) {
-      return { data: null, error: error instanceof Error ? error.message : 'No autorizado' }
-    }
-  }
 
   // Una cantidad preparada igual a 0 siempre es exclusión operacional de la línea,
   // venga del input numérico o del botón Excluir.
@@ -1760,7 +1750,10 @@ export async function moveSalesOrderPreparationCard(params: {
     // -----------------------------------------------------------------------
     // 2. Validar permiso funcional y reglas específicas de movimiento
     // -----------------------------------------------------------------------
-    const auth = await requirePreparationCardMoveAuthorization(params.cardId, params.toStatus)
+    const auth = await requirePreparationCardMoveAuthorization(params.cardId, params.toStatus, params.observation)
+    if (params.toStatus === 'PENDING_ROUTE_PREP' && (!params.observation || !params.observation.trim())) {
+      return { ok: false, error: 'Se requiere observación para retroceder.' }
+    }
     if (auth.isOperatorBodega && !['PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT', 'INCIDENTS'].includes(params.toStatus)) {
       return { ok: false, error: 'No autorizado para mover a esta etapa.' }
     }

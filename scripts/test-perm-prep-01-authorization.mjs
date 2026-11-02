@@ -22,12 +22,14 @@ test('PERM-PREP-01 contract: authorization.ts exports requirePreparationCardMove
 test('PERM-PREP-01 contract: sales-order-preparation.ts invokes requirePreparationCardMoveAuthorization', async () => {
   const source = await read('src/app/actions/logistica/sales-order-preparation.ts')
   assert.match(source, /import \{[^}]*requirePreparationCardMoveAuthorization[^}]*\} from '\.\/authorization'/)
-  assert.match(source, /requirePreparationCardMoveAuthorization\(params\.cardId,\s*params\.toStatus\)/)
+  assert.match(source, /requirePreparationCardMoveAuthorization\(params\.cardId,\s*params\.toStatus/)
 })
 
-test('PERM-PREP-01 movement rules: isOperatorMovementAllowed permits ONLY PENDING_ROUTE_PREP -> IN_PREPARATION', () => {
-  // Caso autorizado
+test('PERM-PREP-01/02 movement rules: isOperatorMovementAllowed permits operational flow', () => {
+  // Casos autorizados
   assert.equal(isOperatorMovementAllowed('PENDING_ROUTE_PREP', 'IN_PREPARATION'), true)
+  assert.equal(isOperatorMovementAllowed('IN_PREPARATION', 'PENDING_ROUTE_PREP'), true)
+  assert.equal(isOperatorMovementAllowed('IN_PREPARATION', 'IN_AUDIT'), true)
 
   // Casos rechazados: destinos no permitidos
   assert.equal(isOperatorMovementAllowed('PENDING_ROUTE_PREP', 'IN_AUDIT'), false)
@@ -36,10 +38,8 @@ test('PERM-PREP-01 movement rules: isOperatorMovementAllowed permits ONLY PENDIN
   assert.equal(isOperatorMovementAllowed('PENDING_ROUTE_PREP', 'CANCELLED'), false)
   assert.equal(isOperatorMovementAllowed('PENDING_ROUTE_PREP', 'INVOICED_READY_FOR_ROUTE'), false)
 
-  // Casos rechazados: orígenes no permitidos
+  // Casos rechazados: orígenes o transiciones no permitidas
   assert.equal(isOperatorMovementAllowed('IN_PREPARATION', 'IN_PREPARATION'), false)
-  assert.equal(isOperatorMovementAllowed('IN_PREPARATION', 'IN_AUDIT'), false)
-  assert.equal(isOperatorMovementAllowed('IN_PREPARATION', 'PENDING_ROUTE_PREP'), false)
   assert.equal(isOperatorMovementAllowed('IN_AUDIT', 'IN_PREPARATION'), false)
   assert.equal(isOperatorMovementAllowed('IN_AUDIT', 'PENDING_ROUTE_PREP'), false)
   assert.equal(isOperatorMovementAllowed('AUDITED', 'IN_PREPARATION'), false)
