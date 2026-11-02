@@ -138,3 +138,45 @@ export async function requirePreparationCardAccess(
     throw new Error('No autorizado para esta tarjeta')
   }
 }
+
+export async function requirePreparationCardMoveAuthorization(
+  cardId: string,
+  toStatus: string,
+): Promise<WmsAuthorization> {
+  const auth = await requireWmsPermission('module.logistica.view')
+
+  const hasManagePermission = await hasWmsPermission(auth.user.id, 'logistica.preparation.manage')
+  if (hasManagePermission) {
+    await requirePreparationCardAccess(auth, cardId)
+    return auth
+  }
+
+  if (!auth.isOperatorBodega) {
+    throw new Error('No autorizado para esta operación')
+  }
+
+  if (toStatus !== 'IN_PREPARATION') {
+    throw new Error('No autorizado para mover a esta etapa.')
+  }
+
+  const db = await createClient()
+  const { data: card, error: cardError } = await db
+    .schema('logistica')
+    .from('sales_order_preparation_cards')
+    .select('id, company_id, status')
+    .eq('id', cardId)
+    .eq('company_id', auth.companyId)
+    .maybeSingle()
+
+  if (cardError || !card) {
+    throw new Error('Tarjeta no disponible')
+  }
+
+  if (card.status !== 'PENDING_ROUTE_PREP') {
+    throw new Error('No autorizado para mover tarjetas fuera de Pendientes.')
+  }
+
+  await requirePreparationCardAccess(auth, cardId)
+
+  return auth
+}

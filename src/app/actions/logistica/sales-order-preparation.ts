@@ -9,7 +9,7 @@ import type { InvoicePaymentTypeOption, InvoiceSaleConditionOption } from '@/mod
 import { chileToday } from '@/lib/integraciones/invoice-emission-contract'
 import { extractBsaleRelationIdFromHref } from '@/lib/integraciones/bsale-client-commercial-normalization'
 import { getSafeHttpsHostname, validateBsalePdfResponseUrl, validateBsalePdfUrl, validateBsaleRedirectUrl } from '@/lib/integraciones/invoice-print-assistant'
-import { requirePreparationCardAccess, requireWmsPermission, type WmsAuthorization } from './authorization'
+import { requirePreparationCardAccess, requirePreparationCardMoveAuthorization, requireWmsPermission, type WmsAuthorization } from './authorization'
 
 function logPreparationDiagnostics(label: string, detail: Record<string, unknown>) {
   if (process.env.NODE_ENV !== 'production') {
@@ -1758,11 +1758,9 @@ export async function moveSalesOrderPreparationCard(params: {
     }
 
     // -----------------------------------------------------------------------
-    // 2. Validar permiso funcional con el cliente autenticado.
-    //    has_permission incluye el bypass canónico de system.admin.
+    // 2. Validar permiso funcional y reglas específicas de movimiento
     // -----------------------------------------------------------------------
-    const auth = await requireWmsPermission('logistica.preparation.manage')
-    await requirePreparationCardAccess(auth, params.cardId)
+    const auth = await requirePreparationCardMoveAuthorization(params.cardId, params.toStatus)
     if (auth.isOperatorBodega && !['PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT', 'INCIDENTS'].includes(params.toStatus)) {
       return { ok: false, error: 'No autorizado para mover a esta etapa.' }
     }

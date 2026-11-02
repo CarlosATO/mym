@@ -36,3 +36,7 @@ export function getMovementRule(fromStatus: string, toStatus: string) {
 
   return { rule };
 }
+
+export function isOperatorMovementAllowed(fromStatus: string, toStatus: string): boolean {
+  return fromStatus === 'PENDING_ROUTE_PREP' && toStatus === 'IN_PREPARATION';
+}

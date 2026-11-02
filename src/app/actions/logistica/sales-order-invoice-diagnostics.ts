@@ -21,6 +21,7 @@ export async function diagnoseSalesOrderInvoiceCommercial(cardId: string, select
   if (process.env.NODE_ENV === 'production') return { data: null, error: 'LOCAL_ONLY_DIAGNOSTIC' as const }
 
   const auth = await requireWmsPermission(PREPARE_PERMISSION)
+  if (auth.isOperatorBodega) return { data: null, error: 'No autorizado para información comercial.' }
   const db = await createClient()
   const { data: prevalidation, error: prevalidationError } = await db.schema('logistica').rpc('invoice_attempt_prevalidate', { p_company_id: auth.companyId, p_card_id: cardId })
   const { data: card, error: cardError } = await db.schema('logistica').from('sales_order_preparation_cards')
