@@ -204,6 +204,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const [editId, setEditId] = useState<string | null>(null)
   const [data, setData] = useState<PurchaseOrder[]>([])
   const [total, setTotal] = useState(0)
+  const [dataKey, setDataKey] = useState('')
   const [invoiceSummaries, setInvoiceSummaries] = useState<PurchaseOrderInvoiceSummaries>({})
   const [invoiceSummariesLoading, setInvoiceSummariesLoading] = useState(false)
   const [indicators, setIndicators] = useState<PurchaseOrderIndicators | null>(null)
@@ -281,6 +282,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const [warehouseOpen, setWarehouseOpen] = useState(false)
   const warehouseRef = useRef<HTMLDivElement>(null)
   const requestSequence = useRef(0)
+  const tabPrefetchTimersRef = useRef(new Map<PurchaseOrderOperationalView, number>())
   const loaded = useRef(false)
   const purchaseOrderListCacheRef = useRef(new Map<string, CachedPurchaseOrderList>())
   const purchaseOrderListRequestsRef = useRef(new Map<string, Promise<CachedPurchaseOrderList>>())
@@ -480,6 +482,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       const pending = purchaseOrderListRequestsRef.current.get(key)
       if (pending) return pending
     }
+    const pending = purchaseOrderListRequestsRef.current.get(key)
+    if (pending) return pending
 
     const request = getPurchaseOrders(requestFilters)
       .then(result => {
@@ -565,11 +569,17 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     if (cached) {
       setData(cached.data)
       setTotal(cached.total)
+      setDataKey(key)
       setInitialLoading(false)
       loaded.current = true
       loadVisiblePurchaseOrderInvoices(cached.data, requestId)
-    } else if (loaded.current) setRefreshing(true)
-    else setInitialLoading(true)
+    } else {
+      setData([])
+      setTotal(0)
+      setDataKey(key)
+      setInitialLoading(true)
+      setRefreshing(false)
+    }
 
     if (cached && hasFreshCache && !force) {
       setRefreshing(false)
@@ -592,6 +602,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       if (requestId !== requestSequence.current) return
       setData(res.data)
       setTotal(res.total)
+      setDataKey(key)
       loaded.current = true
       loadVisiblePurchaseOrderInvoices(res.data, requestId)
       if (process.env.NODE_ENV === 'development') {
@@ -613,6 +624,69 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       }
     }
   }, [fetchCachedPurchaseOrders, filters, loadVisiblePurchaseOrderInvoices, purchaseOrderCacheScope])
+
+  const prefetchOperationalView = useCallback((operationalView: PurchaseOrderOperationalView) => {
+    if (!currentUserId || !activeCompany?.id) return
+    const requestFilters = { ...filters, operational_view: operationalView, page: 1 }
+    const key = purchaseOrderListCacheKey(purchaseOrderCacheScope, requestFilters)
+    const cached = purchaseOrderListCacheRef.current.get(key)
+    if (cached && Date.now() - cached.updatedAt < PURCHASE_ORDER_LIST_CACHE_TTL) return
+    const startedAt = performance.now()
+    void fetchCachedPurchaseOrders(requestFilters).then(result => {
+      if (process.env.NODE_ENV === 'development') {
+        console.debug('[purchase-orders-load]', {
+          phase: 'intent-prefetch',
+          source: 'network',
+          view: operationalView,
+          rows: result.data.length,
+          elapsed_ms: Math.round(performance.now() - startedAt),
+          client_requests: 1,
+        })
+      }
+    }).catch(() => undefined)
+  }, [activeCompany?.id, currentUserId, fetchCachedPurchaseOrders, filters, purchaseOrderCacheScope])
+
+  function cancelOperationalViewPrefetch(operationalView: PurchaseOrderOperationalView) {
+    const timer = tabPrefetchTimersRef.current.get(operationalView)
+    if (timer !== undefined) {
+      window.clearTimeout(timer)
+      tabPrefetchTimersRef.current.delete(operationalView)
+    }
+  }
+
+  function scheduleOperationalViewPrefetch(operationalView: PurchaseOrderOperationalView) {
+    cancelOperationalViewPrefetch(operationalView)
+    const timer = window.setTimeout(() => {
+      tabPrefetchTimersRef.current.delete(operationalView)
+      prefetchOperationalView(operationalView)
+    }, 200)
+    tabPrefetchTimersRef.current.set(operationalView, timer)
+  }
+
+  function selectOperationalView(operationalView: PurchaseOrderOperationalView) {
+    const nextFilters = { ...filters, operational_view: operationalView, page: 1 }
+    const nextKey = purchaseOrderListCacheKey(purchaseOrderCacheScope, nextFilters)
+    const cached = purchaseOrderListCacheRef.current.get(nextKey)
+    requestSequence.current += 1
+    setSelectedPo(null)
+    setDetail(null)
+    if (cached) {
+      setData(cached.data)
+      setTotal(cached.total)
+      setDataKey(nextKey)
+      setInitialLoading(false)
+    } else {
+      setData([])
+      setTotal(0)
+      setDataKey(nextKey)
+      setInitialLoading(true)
+    }
+  }
+
+  useEffect(() => () => {
+    tabPrefetchTimersRef.current.forEach(timer => window.clearTimeout(timer))
+    tabPrefetchTimersRef.current.clear()
+  }, [])
 
   useEffect(() => {
     const previousScope = purchaseOrderCacheScopeRef.current
@@ -2874,7 +2948,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                key={option.value}
                type="button"
                aria-pressed={(filters.operational_view ?? 'PENDING') === option.value}
-               onClick={() => setFilters(previous => ({ ...previous, operational_view: option.value, page: 1 }))}
+               onClick={() => { cancelOperationalViewPrefetch(option.value); selectOperationalView(option.value); setFilters(previous => ({ ...previous, operational_view: option.value, page: 1 })) }}
+               onMouseEnter={() => scheduleOperationalViewPrefetch(option.value)}
+               onMouseLeave={() => cancelOperationalViewPrefetch(option.value)}
+               onFocus={() => scheduleOperationalViewPrefetch(option.value)}
+               onBlur={() => cancelOperationalViewPrefetch(option.value)}
                className={`whitespace-nowrap rounded px-3 py-1.5 text-xs font-semibold transition-colors ${(filters.operational_view ?? 'PENDING') === option.value ? 'bg-[#72383D] text-white' : 'text-[#6D625B] hover:bg-[#F3EFE9] hover:text-[#322D29]'}`}
              >
                {option.label}
@@ -2981,7 +3059,9 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
 
        {initialLoading && data.length === 0 ? (
          <PurchaseOrderTableSkeleton widths={widths} />
-      ) : data.length === 0 ? (
+       ) : dataKey !== purchaseOrderListCacheKey(purchaseOrderCacheScope, filters) ? (
+         <PurchaseOrderTableSkeleton widths={widths} />
+       ) : data.length === 0 ? (
          <div className="p-10 text-center">
           <p className="text-theme-text-muted/50 text-sm">No hay órdenes de compra.</p>
         </div>
