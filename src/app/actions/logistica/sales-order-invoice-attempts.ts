@@ -7,12 +7,16 @@ import { BsaleApiError, bsaleFetchForCompany, bsaleFetchResourceForCompany } fro
 import { bsaleWriteForCompany } from '@/lib/bsale/write-client'
 import { buildInvoiceEmissionIdentity, buildInvoiceEmissionPayload, chileDateToBsaleEpoch, chileToday, formatBsaleRejection, invoiceEmissionEnabled, validateCompleteInvoiceLines, validateInvoiceDocument } from '@/lib/integraciones/invoice-emission-contract'
 import { evaluateInvoiceCommercialValidation } from '@/lib/integraciones/invoice-commercial-validation'
+import { verifyInvoiceStockDispatch, buildInvoiceStockEvidencePayload, type InvoiceStockVerificationResult } from '@/lib/integraciones/invoice-stock-verification'
 import type { InvoiceCommercialSelection } from '@/modules/logistica/preparacion-pedidos/invoice-commercial'
 
 const PREPARE_PERMISSION = 'logistica.preparation.manage'
+const STOCK_VERIFICATION_MAX_READS = 2
+const STOCK_VERIFICATION_RETRY_DELAY_MS = 250
 
 export async function prevalidateSalesOrderInvoiceAttempt(cardId: string) {
   const auth = await requireWmsPermission(PREPARE_PERMISSION)
+  if (auth.isOperatorBodega) throw new Error('No autorizado para facturación')
   const db = await createClient()
   const { data, error } = await db.schema('logistica').rpc('invoice_attempt_prevalidate', { p_company_id: auth.companyId, p_card_id: cardId })
   return { data, error: error?.message ?? null }
@@ -20,23 +24,18 @@ export async function prevalidateSalesOrderInvoiceAttempt(cardId: string) {
 
 export async function prepareSalesOrderInvoiceAttempt(cardId: string) {
   const auth = await requireWmsPermission(PREPARE_PERMISSION)
+  if (auth.isOperatorBodega) throw new Error('No autorizado para facturación')
   const db = await createClient()
   const { data, error } = await db.schema('logistica').rpc('prepare_sales_order_invoice_attempt', { p_company_id: auth.companyId, p_card_id: cardId })
   return { data, error: error?.message ?? null }
 }
 
 export async function getSalesOrderInvoiceAttempt(attemptId: string) {
-  await requireWmsPermission('module.logistica.view')
+  const auth = await requireWmsPermission('module.logistica.view')
+  if (auth.isOperatorBodega) throw new Error('No autorizado para facturación')
   const db = await createClient()
   const { data, error } = await db.schema('logistica').rpc('get_sales_order_invoice_attempt', { p_attempt_id: attemptId })
   return { data: data?.[0] ?? null, error: error?.message ?? null }
-}
-
-export async function reconcileSalesOrderInvoiceAttempt(attemptId: string) {
-  await requireWmsPermission('module.logistica.view')
-  const db = await createClient()
-  const { data, error } = await db.schema('logistica').rpc('reconcile_sales_order_invoice_attempt', { p_attempt_id: attemptId })
-  return { data, error: error?.message ?? null }
 }
 
 function dateFromBsaleEpoch(value: unknown): string | null {
@@ -47,6 +46,15 @@ function dateFromBsaleEpoch(value: unknown): string | null {
 
 async function markAttempt(db: Awaited<ReturnType<typeof createClient>>, name: 'mark_sales_order_invoice_unknown' | 'mark_sales_order_invoice_reconciliation_required', attemptId: string, error: string) {
   return db.schema('logistica').rpc(name, { p_attempt_id: attemptId, p_error: error })
+}
+
+async function verifyStockWithBoundedReads(input: Parameters<typeof verifyInvoiceStockDispatch>[0]): Promise<InvoiceStockVerificationResult> {
+  let result: InvoiceStockVerificationResult = await verifyInvoiceStockDispatch(input)
+  for (let read = 1; read < STOCK_VERIFICATION_MAX_READS && result.status !== 'VERIFIED'; read += 1) {
+    await new Promise(resolve => setTimeout(resolve, STOCK_VERIFICATION_RETRY_DELAY_MS))
+    result = await verifyInvoiceStockDispatch(input)
+  }
+  return result
 }
 
 function describeBsaleRejection(error: unknown): string {
@@ -111,7 +119,8 @@ async function mirrorConfirmedInvoice(companyId: string, document: Record<string
 /** Real emission path. Every document value comes from the current NV or the confirmed selection. */
 export async function emitSalesOrderInvoice(cardId: string, selection?: InvoiceCommercialSelection | null) {
   const auth = await requireWmsPermission(PREPARE_PERMISSION)
-  if (!invoiceEmissionEnabled()) return { status: 'EMISSION_DISABLED' as const, error: null }
+  if (auth.isOperatorBodega) return { status: 'PREVALIDATION_FAILED' as const, error: 'No autorizado para facturación.' }
+  if (!invoiceEmissionEnabled()) return { status: 'EMISSION_DISABLED' as const, error: 'La emisión de facturas está temporalmente suspendida.' }
 
   const db = await createClient()
   const { data: prevalidation, error: prevalidationError } = await db.schema('logistica').rpc('invoice_attempt_prevalidate', { p_company_id: auth.companyId, p_card_id: cardId })
@@ -309,12 +318,69 @@ export async function emitSalesOrderInvoice(cardId: string, selection?: InvoiceC
     await markAttempt(db, 'mark_sales_order_invoice_reconciliation_required', attemptId, validation.reason)
     return { status: 'RECONCILIATION_REQUIRED' as const, attempt_id: attemptId, error: validation.reason }
   }
+  const stockVerification = await verifyStockWithBoundedReads({
+    companyId: auth.companyId,
+    invoiceId,
+    invoiceNumber: invoice.number,
+    salesId: attemptSalesId,
+    officeId,
+    details: snapshotDetails.map((detail: Record<string, any>) => ({
+      variantId: Number(detail.variant_id),
+      sku: detail.sku ?? undefined,
+      quantity: Number(detail.quantity),
+    })),
+  })
   try {
     await mirrorConfirmedInvoice(auth.companyId, invoice)
   } catch (error) {
     await markAttempt(db, 'mark_sales_order_invoice_reconciliation_required', attemptId, error instanceof Error ? error.message : 'MIRROR_FAILED')
     return { status: 'RECONCILIATION_REQUIRED' as const, attempt_id: attemptId, error: 'No se pudo actualizar el mirror.' }
   }
+  if (stockVerification.status !== 'VERIFIED') {
+    const reason = `STOCK_${stockVerification.status}:${stockVerification.reasons.join(',')}`
+    await markAttempt(db, 'mark_sales_order_invoice_reconciliation_required', attemptId, reason)
+    return {
+      status: 'RECONCILIATION_REQUIRED' as const,
+      attempt_id: attemptId,
+      invoice_id: invoice.id,
+      folio: invoice.number,
+      error: stockVerification.status === 'PENDING'
+        ? 'La factura fue emitida, pero falta comprobar el despacho de inventario.'
+        : 'La factura fue emitida, pero el despacho de inventario requiere conciliación.',
+    }
+  }
+
+  const admin = createAdminClient()
+  const evidencePayload = buildInvoiceStockEvidencePayload({
+    companyId: auth.companyId,
+    attemptId,
+    invoiceBsaleId: invoiceId,
+    salesId: attemptSalesId,
+    attemptFingerprint,
+    officeId,
+    verification: stockVerification,
+    rawEvidence: {
+      source: 'BSALE_GET',
+      reasons: stockVerification.reasons,
+      costsAvailable: stockVerification.evidence?.costsAvailable ?? false,
+    },
+  })
+  const { data: evidenceResult, error: evidenceError } = await admin.schema('logistica').rpc(
+    'record_sales_order_invoice_stock_evidence',
+    evidencePayload,
+  )
+  if (evidenceError || evidenceResult?.status !== 'VERIFIED') {
+    const errorDetail = evidenceError?.message ?? 'EVIDENCE_RECORD_FAILED'
+    await markAttempt(db, 'mark_sales_order_invoice_reconciliation_required', attemptId, `STOCK_EVIDENCE_FAILED:${errorDetail}`)
+    return {
+      status: 'RECONCILIATION_REQUIRED' as const,
+      attempt_id: attemptId,
+      invoice_id: invoice.id,
+      folio: invoice.number,
+      error: 'La factura fue emitida y verificada, pero ocurrió un error al registrar la evidencia de inventario.',
+    }
+  }
+
   const { data: confirmed, error: confirmError } = await db.schema('logistica').rpc('confirm_sales_order_invoice_attempt', {
     p_attempt_id: attemptId,
     p_invoice_id: Number(invoice.id),
@@ -322,4 +388,278 @@ export async function emitSalesOrderInvoice(cardId: string, selection?: InvoiceC
   })
   if (confirmError) return { status: 'RECONCILIATION_REQUIRED' as const, attempt_id: attemptId, error: confirmError.message }
   return { status: confirmed?.status ?? 'RECONCILIATION_REQUIRED', attempt_id: attemptId, invoice_id: invoice.id, folio: invoice.number, informedSii: invoice.informedSii ?? null, responseMsgSii: invoice.responseMsgSii ?? null, urls: { publicView: invoice.urlPublicView ?? null, pdf: invoice.urlPdf ?? null, xml: invoice.urlXml ?? null } }
+}
+
+type CandidateInvoiceResult =
+  | { ok: true; invoiceId: number }
+  | { ok: false; reason: string }
+
+async function findUniqueCandidateInvoice(
+  companyId: string,
+  salesId: string,
+  bsaleInvoiceId: number | null,
+  db: Awaited<ReturnType<typeof createClient>>,
+): Promise<CandidateInvoiceResult> {
+  // 1. Si se dispone de bsale_invoice_id, priorizar su consulta dirigida en Bsale y validar su identidad
+  if (bsaleInvoiceId != null && bsaleInvoiceId > 0) {
+    try {
+      const direct = await bsaleFetchResourceForCompany<Record<string, any>>({
+        companyId,
+        path: `/documents/${bsaleInvoiceId}.json`,
+        params: { expand: 'details,payments' },
+      })
+      const docTypeId = Number(direct?.document_type?.id ?? direct?.documentTypeId)
+      const state = Number(direct?.state)
+      const cancellation = direct?.cancellationStatus != null ? String(direct?.cancellationStatus) : '0'
+      const directSalesId = String(direct?.salesId ?? '')
+
+      if (docTypeId !== 5) {
+        return { ok: false, reason: 'DOCUMENT_TYPE_MISMATCH' }
+      }
+      if (state !== 0 || cancellation !== '0') {
+        return { ok: false, reason: 'INVOICE_CANCELLED' }
+      }
+      if (directSalesId !== salesId) {
+        return { ok: false, reason: 'INVOICE_ID_MISMATCH' }
+      }
+
+      return { ok: true, invoiceId: bsaleInvoiceId }
+    } catch (error) {
+      if (error instanceof BsaleApiError && error.status === 404) {
+        // ID no encontrado directamente en Bsale, continuar al mirror por si fue registrado con otro ID
+      } else {
+        return { ok: false, reason: `BSALE_GET_FAILED:${describeBsaleRejection(error)}` }
+      }
+    }
+  }
+
+  // 2. Fallback de mirror en PostgreSQL/PostgREST: filtrar company_id, tipo 5, activo y raw_json->>salesId
+  // directamente en el motor de base de datos sin límite de paginación en memoria
+  const { data: mirrorDocs, error: mirrorError } = await db.schema('integraciones').from('bsale_documents')
+    .select('bsale_id, state, raw_json')
+    .eq('company_id', companyId)
+    .eq('document_type_id', 5)
+    .eq('state', 0)
+    .eq('raw_json->>salesId', salesId)
+
+  if (mirrorError) {
+    return { ok: false, reason: `MIRROR_QUERY_FAILED:${mirrorError.message}` }
+  }
+
+  const activeMirrorMatches = (mirrorDocs ?? []).filter(d => {
+    const cancelStatus = d.raw_json?.cancellationStatus != null ? String(d.raw_json?.cancellationStatus) : '0'
+    return cancelStatus === '0'
+  })
+
+  if (activeMirrorMatches.length > 1) {
+    return { ok: false, reason: 'AMBIGUOUS_SALES_ID_MATCH' }
+  }
+
+  if (activeMirrorMatches.length === 1) {
+    const mirrorId = Number(activeMirrorMatches[0].bsale_id)
+    if (bsaleInvoiceId != null && bsaleInvoiceId > 0 && bsaleInvoiceId !== mirrorId) {
+      return { ok: false, reason: 'INVOICE_ID_MISMATCH' }
+    }
+
+    // Validar estado vivo en Bsale mediante consulta dirigida
+    try {
+      const direct = await bsaleFetchResourceForCompany<Record<string, any>>({
+        companyId,
+        path: `/documents/${mirrorId}.json`,
+        params: { expand: 'details,payments' },
+      })
+      const docTypeId = Number(direct?.document_type?.id ?? direct?.documentTypeId)
+      const state = Number(direct?.state)
+      const cancellation = direct?.cancellationStatus != null ? String(direct?.cancellationStatus) : '0'
+      const directSalesId = String(direct?.salesId ?? '')
+
+      if (docTypeId !== 5) {
+        return { ok: false, reason: 'DOCUMENT_TYPE_MISMATCH' }
+      }
+      if (state !== 0 || cancellation !== '0') {
+        return { ok: false, reason: 'INVOICE_CANCELLED' }
+      }
+      if (directSalesId !== salesId) {
+        return { ok: false, reason: 'INVOICE_ID_MISMATCH' }
+      }
+
+      return { ok: true, invoiceId: mirrorId }
+    } catch (error) {
+      return { ok: false, reason: `BSALE_GET_FAILED:${describeBsaleRejection(error)}` }
+    }
+  }
+
+  return { ok: false, reason: 'NO_VALID_INVOICE' }
+}
+
+export async function reconcileSalesOrderInvoiceAttempt(attemptId: string) {
+  const auth = await requireWmsPermission('module.logistica.view')
+  if (auth.isOperatorBodega) throw new Error('No autorizado para facturación')
+  const db = await createClient()
+
+  const { data: attempt, error: attemptError } = await db.schema('logistica').from('sales_order_invoice_attempts')
+    .select('id,company_id,card_id,status,sales_id,fingerprint,bsale_invoice_id,bsale_invoice_number,current_bsale_nv_id,canonical_bsale_token,nv_snapshot,detail_snapshots,created_at')
+    .eq('id', attemptId)
+    .eq('company_id', auth.companyId)
+    .maybeSingle()
+
+  if (attemptError || !attempt) {
+    return { data: null, error: attemptError?.message ?? 'ATTEMPT_NOT_FOUND' }
+  }
+
+  if (attempt.status === 'CONFIRMED') {
+    const { data, error } = await db.schema('logistica').rpc('reconcile_sales_order_invoice_attempt', { p_attempt_id: attemptId })
+    return { data, error: error?.message ?? null }
+  }
+
+  if (!['UNKNOWN', 'RECONCILIATION_REQUIRED'].includes(attempt.status)) {
+    return {
+      data: { status: attempt.status, attempt_id: attempt.id, invoice_id: attempt.bsale_invoice_id },
+      error: null,
+    }
+  }
+
+  if (!attempt.sales_id || !attempt.nv_snapshot || !Array.isArray(attempt.detail_snapshots) || attempt.detail_snapshots.length === 0) {
+    await markAttempt(db, 'mark_sales_order_invoice_reconciliation_required', attemptId, 'SNAPSHOT_MISSING')
+    return {
+      data: { status: 'RECONCILIATION_REQUIRED', reason: 'SNAPSHOT_MISSING', attempt_id: attemptId },
+      error: 'El intento no contiene los snapshots requeridos para conciliar.',
+    }
+  }
+
+  const clientId = Number(attempt.nv_snapshot?.client_id)
+  const officeId = Number(attempt.nv_snapshot?.office_id)
+  const totals = attempt.nv_snapshot?.totals
+  const detailSnapshots = attempt.detail_snapshots as Array<Record<string, any>>
+
+  const candidate = await findUniqueCandidateInvoice(
+    auth.companyId,
+    attempt.sales_id,
+    attempt.bsale_invoice_id ? Number(attempt.bsale_invoice_id) : null,
+    db,
+  )
+
+  if (!candidate.ok) {
+    await markAttempt(db, 'mark_sales_order_invoice_reconciliation_required', attemptId, candidate.reason)
+    return {
+      data: { status: 'RECONCILIATION_REQUIRED', reason: candidate.reason, attempt_id: attemptId },
+      error: candidate.reason,
+    }
+  }
+
+  const invoiceId = candidate.invoiceId
+
+  let invoice: Record<string, any>
+  try {
+    invoice = await bsaleFetchResourceForCompany<Record<string, any>>({
+      companyId: auth.companyId,
+      path: `/documents/${invoiceId}.json`,
+      params: { expand: 'details,payments' },
+    })
+  } catch (error) {
+    const message = describeBsaleRejection(error)
+    await markAttempt(db, 'mark_sales_order_invoice_reconciliation_required', attemptId, `BSALE_GET_FAILED:${message}`)
+    return {
+      data: { status: 'RECONCILIATION_REQUIRED', reason: `BSALE_GET_FAILED:${message}`, attempt_id: attemptId },
+      error: `Error al consultar Bsale: ${message}`,
+    }
+  }
+
+  const validation = validateInvoiceDocument(invoice, {
+    salesId: attempt.sales_id,
+    clientId,
+    officeId,
+    totals,
+    details: detailSnapshots.map(detail => ({
+      detailId: Number(detail.detail_id),
+      quantity: Number(detail.quantity),
+    })),
+  })
+
+  if (!validation.ok) {
+    await markAttempt(db, 'mark_sales_order_invoice_reconciliation_required', attemptId, validation.reason)
+    return {
+      data: { status: 'RECONCILIATION_REQUIRED', reason: validation.reason, attempt_id: attemptId, invoice_id: invoiceId },
+      error: validation.reason,
+    }
+  }
+
+  try {
+    await mirrorConfirmedInvoice(auth.companyId, invoice)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'MIRROR_FAILED'
+    await markAttempt(db, 'mark_sales_order_invoice_reconciliation_required', attemptId, reason)
+    return {
+      data: { status: 'RECONCILIATION_REQUIRED', reason, attempt_id: attemptId, invoice_id: invoiceId },
+      error: 'No se pudo actualizar el mirror.',
+    }
+  }
+
+  let stockVerification: InvoiceStockVerificationResult
+  try {
+    stockVerification = await verifyStockWithBoundedReads({
+      companyId: auth.companyId,
+      invoiceId,
+      invoiceNumber: invoice.number,
+      salesId: attempt.sales_id,
+      officeId,
+      details: detailSnapshots.map(detail => ({
+        variantId: Number(detail.variant_id),
+        sku: detail.sku ?? undefined,
+        quantity: Number(detail.quantity),
+      })),
+    })
+  } catch (error) {
+    const message = describeBsaleRejection(error)
+    await markAttempt(db, 'mark_sales_order_invoice_reconciliation_required', attemptId, `BSALE_GET_FAILED:${message}`)
+    return {
+      data: { status: 'RECONCILIATION_REQUIRED', reason: `BSALE_GET_FAILED:${message}`, attempt_id: attemptId, invoice_id: invoiceId },
+      error: `Error al consultar despachos en Bsale: ${message}`,
+    }
+  }
+
+  if (stockVerification.status !== 'VERIFIED') {
+    const reason = `STOCK_${stockVerification.status}:${stockVerification.reasons.join(',')}`
+    await markAttempt(db, 'mark_sales_order_invoice_reconciliation_required', attemptId, reason)
+    return {
+      data: { status: 'RECONCILIATION_REQUIRED', reason, attempt_id: attemptId, invoice_id: invoiceId },
+      error: stockVerification.status === 'PENDING'
+        ? 'La factura fue emitida, pero falta comprobar el despacho de inventario.'
+        : 'La factura fue emitida, pero el despacho de inventario requiere conciliación.',
+    }
+  }
+
+  const admin = createAdminClient()
+  const evidencePayload = buildInvoiceStockEvidencePayload({
+    companyId: auth.companyId,
+    attemptId,
+    invoiceBsaleId: invoiceId,
+    salesId: attempt.sales_id,
+    attemptFingerprint: attempt.fingerprint,
+    officeId,
+    verification: stockVerification,
+    rawEvidence: {
+      source: 'BSALE_GET',
+      reasons: stockVerification.reasons,
+      costsAvailable: stockVerification.evidence?.costsAvailable ?? false,
+      reconciliation: true,
+    },
+  })
+
+  const { data: evidenceResult, error: evidenceError } = await admin.schema('logistica').rpc(
+    'record_sales_order_invoice_stock_evidence',
+    evidencePayload,
+  )
+
+  if (evidenceError || evidenceResult?.status !== 'VERIFIED') {
+    const errorDetail = evidenceError?.message ?? 'EVIDENCE_RECORD_FAILED'
+    await markAttempt(db, 'mark_sales_order_invoice_reconciliation_required', attemptId, `STOCK_EVIDENCE_FAILED:${errorDetail}`)
+    return {
+      data: { status: 'RECONCILIATION_REQUIRED', reason: `STOCK_EVIDENCE_FAILED:${errorDetail}`, attempt_id: attemptId, invoice_id: invoiceId },
+      error: 'La factura fue verificada, pero ocurrió un error al registrar la evidencia de inventario.',
+    }
+  }
+
+  const { data, error } = await db.schema('logistica').rpc('reconcile_sales_order_invoice_attempt', { p_attempt_id: attemptId })
+  return { data, error: error?.message ?? null }
 }

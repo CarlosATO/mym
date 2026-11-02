@@ -34,6 +34,7 @@ export const INVOICE_EMISSION_DISABLED = 'EMISSION_DISABLED' as const
 
 export type InvoiceEmissionPayload = {
   documentTypeId: 5
+  dispatch: 1
   officeId: number
   priceListId: number
   saleConditionId: number
@@ -75,6 +76,7 @@ export function buildInvoiceEmissionPayload(input: {
 }): InvoiceEmissionPayload {
   return {
     documentTypeId: 5,
+    dispatch: 1,
     officeId: input.officeId,
     priceListId: input.priceListId,
     saleConditionId: input.saleConditionId,
