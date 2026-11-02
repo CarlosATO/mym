@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, FileSpreadsheet, Ban, PackageOpen, XCircle, CheckCircle2, BarChart3, RefreshCw, Loader2, ClipboardCheck, Send, Lock } from 'lucide-react'
+import { ArrowLeft, Search, Plus, Filter, X, Eye, Edit, Download, FileSpreadsheet, FileDown, Ban, PackageOpen, XCircle, CheckCircle2, BarChart3, RefreshCw, Loader2, ClipboardCheck, Send, Lock } from 'lucide-react'
 import { AuthorizedPersonnelCombobox } from '@/components/ui/authorized-personnel-combobox'
 import {
   getPurchaseOrders, getPurchaseOrderIndicators, getPurchaseOrderDetail, createPurchaseOrder, updateDraftPurchaseOrder,
@@ -17,6 +17,7 @@ import { getPurchaseOrderWarehousesCached } from './warehouse-cache'
 import type { PurchaseOrderCatalogProduct } from '@/app/actions/adquisiciones/products'
 import type { Warehouse } from '@/app/actions/adquisiciones/warehouses'
 import { downloadPOBooklet, generatePdfBlob } from '@/lib/pdf/generate-po-pdf'
+import { downloadPendingPurchaseOrdersReportPdf } from '@/lib/pdf/generate-pending-purchase-orders-pdf'
 import { generatePurchaseOrderExcel } from '@/lib/excel/generate-po-excel'
 import { buildPurchaseOrderFileNameBase } from '@/lib/adquisiciones/purchase-order-file-name'
 import { getActiveCompany, type Company } from '@/app/actions/companies'
@@ -27,10 +28,11 @@ import { ReplenishmentExcelImportDialog } from './replenishment-excel-import-dia
 import { PurchaseOrderSupplierReview } from './purchase-order-supplier-review'
 import { PurchaseOrderInvoiceViewerModal } from './purchase-order-invoice-viewer-modal'
 import { createClient as createBrowserClient } from '@/lib/supabase/client'
-import { formatCivilDate } from '@/lib/datetime'
+import { formatCivilDate, todayInSantiago } from '@/lib/datetime'
 import { calculatePurchaseOrderLineTotals, calculatePurchaseOrderTotals } from '@/lib/adquisiciones/purchase-order-totals'
 import { getPurchaseOrderDiscountDisplayValues, getPurchaseOrderDiscountPayload, resolvePurchaseOrderDiscountMode, type PurchaseOrderDiscountMode } from '@/lib/adquisiciones/purchase-order-discounts'
 import { validatePriceDecimal, parseCurrencyDecimal } from '@/lib/adquisiciones/purchase-order-decimal'
+import { clearPendingPurchaseOrdersReportCache, discardPendingPurchaseOrdersReportRequest, getCachedPendingPurchaseOrdersReport, invalidatePendingPurchaseOrdersReportCache } from '@/lib/adquisiciones/pending-purchase-orders-report-cache'
 
 const STATUS_BADGES: Record<string, { bg: string; text: string; border: string }> = {
   BORRADOR: { bg: 'bg-gray-500/10', text: 'text-gray-500', border: 'border-gray-500/20' },
@@ -158,6 +160,34 @@ function PurchaseOrderInvoiceCell({ documents, loading, onView }: { documents?: 
   )
 }
 
+function PurchaseOrderTableSkeleton({ widths }: { widths: Partial<Record<string, number>> }) {
+  const headers = ['N° OC', 'Fecha', 'Proveedor', 'Solicitante', 'Estado', 'Total', 'Recepción', 'Factura', 'Acciones']
+  const skeletonWidths = ['w-14', 'w-16', 'w-32', 'w-24', 'w-20', 'w-16', 'w-20', 'w-20', 'w-14']
+  return (
+    <div className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden bg-white" aria-busy="true" aria-label="Cargando órdenes de compra">
+      <table className="min-w-[1080px] w-full table-fixed whitespace-nowrap border-collapse text-sm">
+        <colgroup>{PURCHASE_ORDER_COLUMNS.map(column => <col key={column.id} style={{ width: widths[column.id] ?? column.defaultWidth }} />)}</colgroup>
+        <thead>
+          <tr className="border-b border-[#D1C7BD] bg-[#322D29] text-[9px] font-bold uppercase tracking-[0.08em] text-[#EFE9E1]">
+            {headers.map(header => <th key={header} className="border-r border-[#AC9C8D]/35 px-2.5 py-2 text-left last:border-r-0">{header}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {Array.from({ length: 8 }, (_, row) => (
+            <tr key={row} className="h-[45px] border-b border-[#E5DDD4]">
+              {skeletonWidths.map((width, index) => (
+                <td key={index} className={`border-r border-[#E5DDD4] px-2.5 py-1.5 ${index === 8 ? 'border-r-0' : ''}`}>
+                  <span className={`block h-3 animate-pulse rounded bg-[#E5DDD4]/80 ${width}`} />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 const inputClass = "w-full h-8.5 rounded-lg border border-[#D1C7BD] bg-white px-3 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/20 focus:border-[#72383D] shadow-xs transition-colors"
 const selectClass = "w-full h-8.5 rounded-lg border border-[#D1C7BD] bg-white px-3 text-xs text-[#322D29] focus:outline-none focus:ring-2 focus:ring-[#72383D]/20 focus:border-[#72383D] shadow-xs appearance-none transition-colors"
 const textareaClass = "w-full rounded-lg border border-[#D1C7BD] bg-white px-3 py-2 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/20 focus:border-[#72383D] shadow-xs resize-none transition-colors"
@@ -223,6 +253,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const [cancelError, setCancelError] = useState('')
   const [cancelling, setCancelling] = useState(false)
   const [downloadingPdf, setDownloadingPdf] = useState(false)
+  const [downloadingPendingPdf, setDownloadingPendingPdf] = useState(false)
   const [downloadingExcel, setDownloadingExcel] = useState(false)
   const [excelImportPreview, setExcelImportPreview] = useState<ReplenishmentExcelImportPreview | null>(null)
   const [excelImportLoading, setExcelImportLoading] = useState(false)
@@ -416,6 +447,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
 
   const purchaseOrderCacheScope = `${currentUserId ?? 'anonymous'}:${activeCompany?.id ?? 'unknown'}`
 
+  const fetchCachedPendingPurchaseOrdersReport = useCallback((force = false) => {
+    if (!currentUserId || !activeCompany?.id) return Promise.resolve(null)
+    return getCachedPendingPurchaseOrdersReport(currentUserId, activeCompany.id, { force })
+  }, [activeCompany?.id, currentUserId])
+
   const fetchCachedPurchaseOrderIndicators = useCallback(async (force = false) => {
     const key = purchaseOrderCacheScope
     const cached = purchaseOrderIndicatorsCacheRef.current.get(key)
@@ -501,14 +537,6 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     })
   }, [fetchCachedPurchaseOrderInvoices])
 
-  const prefetchPurchaseOrderViews = useCallback((baseFilters: PurchaseOrderFilters) => {
-    const secondaryViews = PURCHASE_ORDER_OPERATIONAL_VIEWS.filter(view => view.value !== baseFilters.operational_view)
-    void Promise.all(secondaryViews.map(async view => {
-      const result = await fetchCachedPurchaseOrders({ ...baseFilters, operational_view: view.value })
-      await fetchCachedPurchaseOrderInvoices(result.data.map(order => order.id))
-    })).catch(() => undefined)
-  }, [fetchCachedPurchaseOrderInvoices, fetchCachedPurchaseOrders])
-
   const invalidatePurchaseOrderListCache = useCallback(() => {
     purchaseOrderCacheGenerationRef.current += 1
     purchaseOrderListCacheRef.current.clear()
@@ -517,16 +545,20 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     purchaseOrderInvoiceRequestsRef.current.clear()
     purchaseOrderIndicatorsCacheRef.current.clear()
     purchaseOrderIndicatorsRequestsRef.current.clear()
+    if (currentUserId && activeCompany?.id) {
+      invalidatePendingPurchaseOrdersReportCache(currentUserId, activeCompany.id)
+    }
     setInvoiceSummaries({})
     setIndicators(null)
     if (activeCompany?.id) {
       setIndicatorsLoading(true)
       void fetchCachedPurchaseOrderIndicators(true).then(result => setIndicators(result)).finally(() => setIndicatorsLoading(false))
     }
-  }, [activeCompany?.id, fetchCachedPurchaseOrderIndicators])
+  }, [activeCompany?.id, currentUserId, fetchCachedPurchaseOrderIndicators])
 
   const load = useCallback(async ({ force = false } = {}) => {
     const requestId = ++requestSequence.current
+    const startedAt = performance.now()
     const key = purchaseOrderListCacheKey(purchaseOrderCacheScope, filters)
     const cached = !force ? purchaseOrderListCacheRef.current.get(key) : undefined
     const hasFreshCache = Boolean(cached && Date.now() - cached.updatedAt < PURCHASE_ORDER_LIST_CACHE_TTL)
@@ -541,7 +573,16 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
 
     if (cached && hasFreshCache && !force) {
       setRefreshing(false)
-      prefetchPurchaseOrderViews(filters)
+      if (process.env.NODE_ENV === 'development') {
+        console.debug('[purchase-orders-load]', {
+          phase: 'list',
+          source: 'cache',
+          view: filters.operational_view ?? 'PENDING',
+          rows: cached.data.length,
+          elapsed_ms: Math.round(performance.now() - startedAt),
+          client_requests: 0,
+        })
+      }
       return
     }
 
@@ -553,7 +594,16 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       setTotal(res.total)
       loaded.current = true
       loadVisiblePurchaseOrderInvoices(res.data, requestId)
-      prefetchPurchaseOrderViews(filters)
+      if (process.env.NODE_ENV === 'development') {
+        console.debug('[purchase-orders-load]', {
+          phase: 'list',
+          source: force ? 'network-refresh' : 'network',
+          view: filters.operational_view ?? 'PENDING',
+          rows: res.data.length,
+          elapsed_ms: Math.round(performance.now() - startedAt),
+          client_requests: 1,
+        })
+      }
     } catch {
       if (requestId === requestSequence.current) msg('No se pudieron actualizar las órdenes de compra.')
     } finally {
@@ -562,11 +612,12 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         setRefreshing(false)
       }
     }
-  }, [fetchCachedPurchaseOrders, filters, loadVisiblePurchaseOrderInvoices, prefetchPurchaseOrderViews, purchaseOrderCacheScope])
+  }, [fetchCachedPurchaseOrders, filters, loadVisiblePurchaseOrderInvoices, purchaseOrderCacheScope])
 
   useEffect(() => {
     const previousScope = purchaseOrderCacheScopeRef.current
     if (previousScope && previousScope !== purchaseOrderCacheScope) {
+      clearPendingPurchaseOrdersReportCache()
       invalidatePurchaseOrderListCache()
       requestSequence.current += 1
       loaded.current = false
@@ -576,13 +627,29 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     purchaseOrderCacheScopeRef.current = purchaseOrderCacheScope
   }, [invalidatePurchaseOrderListCache, purchaseOrderCacheScope])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    if (!currentUserId || !activeCompany?.id) return
+    return () => discardPendingPurchaseOrdersReportRequest(currentUserId, activeCompany.id)
+  }, [activeCompany?.id, currentUserId])
 
   useEffect(() => {
-    if (!activeCompany?.id) return
+    if (!currentUserId || !activeCompany?.id) return
+    void load()
+  }, [activeCompany?.id, currentUserId, load])
+
+  useEffect(() => {
+    if (!activeCompany?.id || initialLoading) return
     setIndicatorsLoading(true)
     void fetchCachedPurchaseOrderIndicators().then(result => setIndicators(result)).finally(() => setIndicatorsLoading(false))
-  }, [activeCompany?.id, fetchCachedPurchaseOrderIndicators])
+  }, [activeCompany?.id, fetchCachedPurchaseOrderIndicators, initialLoading])
+
+  useEffect(() => {
+    if (!currentUserId || !activeCompany?.id || initialLoading) return
+    const timer = window.setTimeout(() => {
+      void fetchCachedPendingPurchaseOrdersReport().catch(() => undefined)
+    }, 1000)
+    return () => window.clearTimeout(timer)
+  }, [activeCompany?.id, currentUserId, fetchCachedPendingPurchaseOrdersReport, initialLoading])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1840,6 +1907,36 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     }
   }
 
+  async function handleDownloadPendingPurchaseOrdersPDF() {
+    if (downloadingPendingPdf) return
+    setDownloadingPendingPdf(true)
+    const startedAt = performance.now()
+    try {
+      const report = await fetchCachedPendingPurchaseOrdersReport()
+      const reportReadyAt = performance.now()
+      if (!report) throw new Error('No se pudo identificar la empresa activa para generar el reporte.')
+      if ('error' in report) throw new Error(report.error)
+      if (report.data.length === 0) {
+        msg('No existen pedidos pendientes de recepción para la empresa activa.')
+        return
+      }
+      await downloadPendingPurchaseOrdersReportPdf(report, `Pedidos_Pendientes_${todayInSantiago()}.pdf`)
+      if (process.env.NODE_ENV === 'development') {
+        console.debug('[pending-po-report]', {
+          report_ms: Math.round(reportReadyAt - startedAt),
+          pdf_ms: Math.round(performance.now() - reportReadyAt),
+          total_ms: Math.round(performance.now() - startedAt),
+          lines: report.data.length,
+        })
+      }
+      msg('Reporte de pedidos pendientes descargado')
+    } catch (error) {
+      msg(error instanceof Error ? error.message : 'No se pudo generar el reporte de pedidos pendientes.')
+    } finally {
+      setDownloadingPendingPdf(false)
+    }
+  }
+
   async function handleDownloadExcel() {
     if (!detail || downloadingExcel) return
     setDownloadingExcel(true)
@@ -2800,11 +2897,15 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
               className="h-8 w-full rounded-md border border-[#D1C7BD] bg-white pl-8 pr-3 text-xs text-[#322D29] placeholder:text-[#AC9C8D] transition-all focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
           </div>
 
-          <div className="flex w-full items-center gap-1.5 md:w-auto">
-            <button onClick={() => setShowFilters(!showFilters)} className={`flex h-8 items-center justify-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold transition-all ${showFilters ? 'border-[#72383D]/40 bg-[#72383D]/10 text-[#72383D]' : 'border-[#D1C7BD] bg-[#EFE9E1] text-[#6D625B] hover:bg-[#D1C7BD]/40 hover:text-[#322D29]'}`}>
-              <Filter className="h-3.5 w-3.5" />
-              <span>Filtros</span>
-            </button>
+           <div className="flex w-full items-center gap-1.5 md:w-auto">
+             <button onClick={() => setShowFilters(!showFilters)} className={`flex h-8 items-center justify-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold transition-all ${showFilters ? 'border-[#72383D]/40 bg-[#72383D]/10 text-[#72383D]' : 'border-[#D1C7BD] bg-[#EFE9E1] text-[#6D625B] hover:bg-[#D1C7BD]/40 hover:text-[#322D29]'}`}>
+               <Filter className="h-3.5 w-3.5" />
+               <span>Filtros</span>
+             </button>
+              <button type="button" onClick={() => void handleDownloadPendingPurchaseOrdersPDF()} disabled={downloadingPendingPdf} className="flex h-8 items-center justify-center gap-1.5 rounded-md border border-[#D1C7BD] bg-[#EFE9E1] px-2.5 text-xs font-semibold text-[#6D625B] transition-all hover:bg-[#D1C7BD]/40 hover:text-[#322D29] disabled:cursor-not-allowed disabled:opacity-50" title="Descargar pendientes">
+                {downloadingPendingPdf ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileDown className="h-3.5 w-3.5" />}
+                <span className="hidden sm:inline">Descargar pendientes</span>
+              </button>
              <button type="button" onClick={() => { invalidatePurchaseOrderListCache(); void load({ force: true }) }} className="flex h-8 items-center gap-1.5 rounded-md border border-[#D1C7BD] bg-[#EFE9E1] px-2.5 text-xs font-semibold text-[#6D625B] transition-all hover:bg-[#D1C7BD]/40 hover:text-[#322D29]" title="Actualizar listado">
               <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
               <span className="hidden sm:inline">Actualizar</span>
@@ -2878,10 +2979,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
 
       {refreshing && <div role="status" aria-live="polite" className="pointer-events-none absolute left-1/2 top-20 z-50 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-theme-border bg-theme-surface/95 px-3 py-1.5 text-[11px] font-semibold text-theme-text-muted shadow-md">Actualizando...</div>}
 
-       {initialLoading ? (
-         <div className="p-10 text-center">
-          <p className="text-theme-text-muted/50 text-sm">Cargando...</p>
-        </div>
+       {initialLoading && data.length === 0 ? (
+         <PurchaseOrderTableSkeleton widths={widths} />
       ) : data.length === 0 ? (
          <div className="p-10 text-center">
           <p className="text-theme-text-muted/50 text-sm">No hay órdenes de compra.</p>

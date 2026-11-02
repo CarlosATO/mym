@@ -211,6 +211,227 @@ export interface PurchaseOrderIndicators {
   received_since: string
 }
 
+export interface PendingPurchaseOrderReportLine {
+  purchase_order_id: string
+  purchase_order_item_id: string
+  correlative: string
+  issue_date: string
+  supplier_id: string
+  supplier_name: string
+  status: string
+  line_number: number
+  sku: string | null
+  description: string
+  unit: string | null
+  quantity_ordered: number
+  quantity_received: number
+  quantity_pending: number
+}
+
+export interface PendingPurchaseOrdersReport {
+  company_id: string
+  company_name: string | null
+  generated_at: string
+  total_orders: number
+  total_lines: number
+  data: PendingPurchaseOrderReportLine[]
+}
+
+const ISSUED_PURCHASE_ORDER_STATUSES = new Set([
+  'EMITIDA',
+  'APROBADA',
+  'ENVIADA_PROVEEDOR',
+  'CONFIRMADA',
+  'FACTURADA_PARCIAL',
+  'FACTURADA_TOTAL',
+])
+
+type PendingPurchaseOrderReportResult = PendingPurchaseOrdersReport | { error: string }
+
+async function fetchAllPurchaseOrderRows<T>(
+  queryFactory: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+): Promise<T[]> {
+  const rows: T[] = []
+  const pageSize = 1000
+  for (let from = 0; ; from += pageSize) {
+    const result = await queryFactory(from, from + pageSize - 1)
+    if (result.error) throw new Error(result.error.message)
+    const page = result.data ?? []
+    rows.push(...page)
+    if (page.length < pageSize) return rows
+  }
+}
+
+function chunkPurchaseOrderReportIds(ids: string[], size = 500): string[][] {
+  const chunks: string[][] = []
+  for (let index = 0; index < ids.length; index += size) chunks.push(ids.slice(index, index + size))
+  return chunks
+}
+
+/** Returns the complete, non-monetary read model used by the pending-receipt report. */
+export async function getPendingPurchaseOrdersReport(): Promise<PendingPurchaseOrderReportResult> {
+  const startedAt = performance.now()
+  const authorization = await authorizePurchaseOrderRead()
+  if (!authorization) return { error: 'No autorizado para consultar órdenes de compra' }
+
+  try {
+    const db = adqAdmin()
+    const dataStartedAt = performance.now()
+    const [companyResult, purchaseOrders] = await Promise.all([
+      erpAdmin().schema('core').from('companies').select('id, business_name').eq('id', authorization.companyId).eq('is_active', true).maybeSingle(),
+      fetchAllPurchaseOrderRows<{
+        id: string
+        correlative: string
+        issue_date: string
+        supplier_id: string
+        status: string
+      }>(from => db
+        .from('purchase_orders')
+        .select('id, correlative, issue_date, supplier_id, status')
+        .eq('company_id', authorization.companyId)
+        .eq('is_active', true)
+        .in('status', Array.from(ISSUED_PURCHASE_ORDER_STATUSES))
+        .order('correlative', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, from + 999)
+        .then(result => ({ data: result.data as {
+          id: string
+          correlative: string
+          issue_date: string
+          supplier_id: string
+          status: string
+        }[] | null, error: result.error }))),
+    ])
+
+    if (companyResult.error || !companyResult.data) return { error: 'No se pudo validar la empresa activa' }
+
+    const orderRows = purchaseOrders
+    if (orderRows.length === 0) {
+      if (process.env.NODE_ENV === 'development') {
+        console.debug('[pending-po-report-source]', {
+          authorization_ms: Math.round(dataStartedAt - startedAt),
+          data_ms: Math.round(performance.now() - dataStartedAt),
+          transform_ms: 0,
+          estimated_supabase_queries: 7,
+          orders: 0,
+          lines: 0,
+        })
+      }
+      return {
+        company_id: authorization.companyId,
+        company_name: companyResult.data.business_name,
+        generated_at: new Date().toISOString(),
+        total_orders: 0,
+        total_lines: 0,
+        data: [],
+      }
+    }
+
+    const supplierIds = Array.from(new Set(orderRows.map(order => order.supplier_id)))
+    const supplierQueries = chunkPurchaseOrderReportIds(supplierIds).map(ids => fetchAllPurchaseOrderRows<{ id: string; business_name: string | null }>(from => db
+      .from('suppliers')
+      .select('id, business_name')
+      .eq('company_id', authorization.companyId)
+      .in('id', ids)
+      .order('id', { ascending: true })
+      .range(from, from + 999)
+      .then(result => ({ data: result.data, error: result.error }))))
+    const supplierRowsPromise = Promise.all(supplierQueries).then(rows => rows.flat())
+    const orderIds = new Set(orderRows.map(order => order.id))
+    const itemQueries = chunkPurchaseOrderReportIds(Array.from(orderIds)).map(ids => fetchAllPurchaseOrderRows<{
+        id: string
+        po_id: string
+        line_number: number
+        product_id: string | null
+        product_description: string
+        unit: string | null
+        quantity: number | string
+        quantity_received: number | string | null
+        quantity_pending: number | string | null
+      }>(from => db
+        .from('purchase_order_items')
+        .select('id, po_id, line_number, product_id, product_description, unit, quantity, quantity_received, quantity_pending')
+        .eq('company_id', authorization.companyId)
+        .eq('is_active', true)
+        .gt('quantity_pending', 0)
+        .in('po_id', ids)
+        .order('po_id', { ascending: true })
+        .order('line_number', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, from + 999)
+        .then(result => ({ data: result.data, error: result.error }))))
+    const itemRowsPromise = Promise.all(itemQueries).then(rows => rows.flat())
+    const [supplierRows, itemRows] = await Promise.all([supplierRowsPromise, itemRowsPromise])
+    const supplierNameById = new Map(supplierRows.map(supplier => [supplier.id, supplier.business_name]))
+
+    const productIds = Array.from(new Set(itemRows.map(item => item.product_id).filter((id): id is string => Boolean(id))))
+    const productRows = (await Promise.all(chunkPurchaseOrderReportIds(productIds).map(ids => fetchAllPurchaseOrderRows<{ id: string; sku: string | null }>(from => db
+      .from('products')
+      .select('id, sku')
+      .eq('company_id', authorization.companyId)
+      .in('id', ids)
+      .order('id', { ascending: true })
+      .range(from, from + 999)
+      .then(result => ({ data: result.data, error: result.error })))))).flat()
+    const rowsLoadedAt = performance.now()
+    const skuByProductId = new Map(productRows.map(product => [product.id, product.sku]))
+    const orderById = new Map(orderRows.map(order => [order.id, order]))
+
+    const data = itemRows
+      .map(item => {
+        const order = orderById.get(item.po_id)
+        if (!order || !ISSUED_PURCHASE_ORDER_STATUSES.has(order.status)) return null
+        const quantityPending = Number(item.quantity_pending ?? 0)
+        if (!Number.isFinite(quantityPending) || quantityPending <= 0) return null
+        return {
+          purchase_order_id: order.id,
+          purchase_order_item_id: item.id,
+          correlative: order.correlative,
+          issue_date: order.issue_date,
+          supplier_id: order.supplier_id,
+          supplier_name: supplierNameById.get(order.supplier_id) ?? 'Proveedor sin nombre',
+          status: order.status,
+          line_number: Number(item.line_number),
+          sku: item.product_id ? skuByProductId.get(item.product_id) ?? null : null,
+          description: item.product_description,
+          unit: item.unit,
+          quantity_ordered: Number(item.quantity),
+          quantity_received: Number(item.quantity_received ?? 0),
+          quantity_pending: quantityPending,
+        } satisfies PendingPurchaseOrderReportLine
+      })
+      .filter((line): line is PendingPurchaseOrderReportLine => line !== null)
+      .sort((left, right) =>
+        left.supplier_name.localeCompare(right.supplier_name, 'es')
+        || left.correlative.localeCompare(right.correlative, 'es', { numeric: true })
+        || left.line_number - right.line_number
+        || left.purchase_order_item_id.localeCompare(right.purchase_order_item_id),
+      )
+
+    if (process.env.NODE_ENV === 'development') {
+      console.debug('[pending-po-report-source]', {
+        authorization_ms: Math.round(dataStartedAt - startedAt),
+        data_ms: Math.round(rowsLoadedAt - dataStartedAt),
+        transform_ms: Math.round(performance.now() - rowsLoadedAt),
+        estimated_supabase_queries: 7 + chunkPurchaseOrderReportIds(supplierIds).length + chunkPurchaseOrderReportIds(Array.from(orderIds)).length + chunkPurchaseOrderReportIds(productIds).length,
+        orders: new Set(data.map(line => line.purchase_order_id)).size,
+        lines: data.length,
+      })
+    }
+    return {
+      company_id: authorization.companyId,
+      company_name: companyResult.data.business_name,
+      generated_at: new Date().toISOString(),
+      total_orders: new Set(data.map(line => line.purchase_order_id)).size,
+      total_lines: data.length,
+      data,
+    }
+  } catch (error) {
+    console.error('getPendingPurchaseOrdersReport error:', error)
+    return { error: 'No se pudo consultar las órdenes pendientes de recepción' }
+  }
+}
+
 export interface AuthorizedPersonnel {
   id: string
   full_name: string
