@@ -254,13 +254,61 @@ BEGIN
       RAISE EXCEPTION 'Snapshot inicial incompleto o distinto de Bsale: requiere revision; no se agregaron lineas.';
     END IF;
 
-    -- No abrir silenciosamente un camino nuevo hacia Auditoria si el
-    -- documento fisico vigente cambió despues de iniciar la preparacion.
-    -- La reconciliacion comercial tiene su propio flujo de aceptacion.
+    -- Un nuevo ID fisico no implica por si mismo cambio comercial. Comparar
+    -- multiconjuntos de productos/cantidades/valores y totales de documentos
+    -- antes de permitir salir de preparacion. Este control es local y no
+    -- sustituye el detector comercial en vivo (P0-02/P0-03).
     IF v_card.status = 'IN_PREPARATION'
        AND v_existing_min_nv_id IS DISTINCT FROM
            COALESCE(v_card.current_bsale_nv_id, v_card.bsale_nv_id) THEN
-      RAISE EXCEPTION 'La NV cambio en Bsale despues de iniciar preparacion; reconciliar el cambio comercial antes de continuar.';
+      IF NOT EXISTS (
+        SELECT 1 FROM integraciones.bsale_documents current_nv
+         WHERE current_nv.company_id = p_company_id
+           AND current_nv.bsale_id = v_card.current_bsale_nv_id
+           AND current_nv.document_type_id = 23
+           AND current_nv.state = 0
+           AND current_nv.number::text = v_card.bsale_nv_folio
+           AND nullif(btrim(current_nv.raw_json->>'token'), '') = v_card.canonical_bsale_token
+      ) THEN
+        RAISE EXCEPTION 'No se pudo validar la version comercial vigente antes de Auditoria.';
+      END IF;
+
+      IF EXISTS (
+        WITH previous_lines AS (
+          SELECT det.variant_id, det.quantity, det.net_unit_value,
+                 det.net_amount, det.tax_amount, det.total_amount
+            FROM integraciones.bsale_document_details det
+           WHERE det.company_id = p_company_id
+             AND det.bsale_document_id = v_existing_min_nv_id
+        ), current_lines AS (
+          SELECT det.variant_id, det.quantity, det.net_unit_value,
+                 det.net_amount, det.tax_amount, det.total_amount
+            FROM integraciones.bsale_document_details det
+           WHERE det.company_id = p_company_id
+             AND det.bsale_document_id = v_card.current_bsale_nv_id
+        ), differences AS (
+          (SELECT * FROM previous_lines EXCEPT ALL SELECT * FROM current_lines)
+          UNION ALL
+          (SELECT * FROM current_lines EXCEPT ALL SELECT * FROM previous_lines)
+        )
+        SELECT 1 FROM differences
+      ) OR EXISTS (
+        SELECT 1
+          FROM integraciones.bsale_documents original
+          JOIN integraciones.bsale_documents current_nv
+            ON current_nv.company_id = original.company_id
+           AND current_nv.bsale_id = v_card.current_bsale_nv_id
+         WHERE original.company_id = p_company_id
+           AND original.bsale_id = v_existing_min_nv_id
+           AND (
+             original.net_amount IS DISTINCT FROM current_nv.net_amount
+             OR original.tax_amount IS DISTINCT FROM current_nv.tax_amount
+             OR original.total_amount IS DISTINCT FROM current_nv.total_amount
+             OR original.exempt_amount IS DISTINCT FROM current_nv.exempt_amount
+           )
+      ) THEN
+        RAISE EXCEPTION 'Cambio comercial pendiente en Bsale: reconciliar antes de Auditoria, sin duplicar productos.';
+      END IF;
     END IF;
 
     RETURN 0;
