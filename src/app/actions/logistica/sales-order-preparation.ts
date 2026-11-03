@@ -511,14 +511,16 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
     }
   }
 
-  // STANDARD_BOARD: Vista general completa para SUPER_USUARIO y demás roles autorizados
-  // Preparation is an operational queue; visibility does not depend on routes.
-  // PERM-01 legacy filter reference: query.in('status', ['PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT', 'AUDITED'])
-  const query = supabase
+  // STANDARD_BOARD: La autorización de usuario, rol y empresa ya fue verificada
+  // por requirePreparationView(). Ejecutar esta consulta costosa con el cliente
+  // servidor reduce la sobrecarga RLS sin ampliar el acceso del usuario: siempre
+  // se filtra por la empresa autorizada. Nunca exponer este cliente al navegador.
+  const boardDb = createAdminClient()
+  const query = boardDb
     .schema('logistica')
     .from('vw_sales_order_preparation_board')
     .select('*')
-    .eq('company_id', companyId)
+    .eq('company_id', auth.companyId)
 
   const boardStartedAt = performance.now()
   const readinessStartedAt = performance.now()
@@ -529,7 +531,7 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
       logPreparationDiagnostics('board-query', { durationMs, error: result.error?.code ?? null })
       return result
     }),
-    supabase.schema('logistica').rpc('get_sales_order_route_readiness_v1', { p_company_id: companyId }).then(result => {
+    boardDb.schema('logistica').rpc('get_sales_order_route_readiness_v1', { p_company_id: auth.companyId }).then(result => {
       const durationMs = Math.round(performance.now() - readinessStartedAt)
       logPreparationDiagnostics('readiness-query', { durationMs, error: result.error?.code ?? null })
       return result
