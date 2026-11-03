@@ -124,6 +124,10 @@ export function evaluateTerritoryMatch(
     if (nvCommune !== candCommune) {
       return { ok: false, reason: `COMMUNE_MISMATCH:${nvCommune}_VS_${candCommune}` }
     }
+    // Regla Finding 2: Si ambas ciudades están informadas y son distintas, no considerar suficiente la comuna
+    if (nvCity && candCity && nvCity !== candCity) {
+      return { ok: false, reason: `CITY_MISMATCH_WITH_MATCHING_COMMUNE:${nvCity}_VS_${candCity}` }
+    }
     return { ok: true }
   }
 
@@ -288,30 +292,51 @@ export function resolveBsaleClientAddress(
 }
 
 /**
- * Verificación posterior (FAC-DIR-02B, Regla 7):
+ * Verificación posterior (FAC-DIR-02B, Regla 7 y Finding 2):
  * Comprueba que el documento devuelto por Bsale contenga dirección, comuna y ciudad
  * coincidentes con la Nota de Venta esperada.
+ *
+ * Trata discrepancias o datos imposibles de verificar mediante conciliación (ok: false).
  */
 export function verifyBsaleInvoiceAddress(
   invoice: { address?: string | null; municipality?: string | null; city?: string | null },
   expectedNv: BsaleAddressInput
 ): { ok: true } | { ok: false; reason: string } {
+  if (!expectedNv?.address || !invoice?.address) {
+    return {
+      ok: false,
+      reason: `INVOICE_ADDRESS_UNVERIFIABLE: missing address data (expected="${expectedNv?.address ?? ''}" got="${invoice?.address ?? ''}")`,
+    }
+  }
+
   const addrMatch = evaluateAddressMatch(expectedNv.address, invoice.address)
   if (!addrMatch.matched) {
     return {
       ok: false,
-      reason: `INVOICE_ADDRESS_MISMATCH: expected="${expectedNv.address ?? ''}" got="${invoice.address ?? ''}"`,
+      reason: `INVOICE_ADDRESS_MISMATCH: expected="${expectedNv.address}" got="${invoice.address}"`,
+    }
+  }
+
+  const nvCommune = expectedNv.municipality || expectedNv.commune
+  const invoiceCommune = invoice.municipality
+  const nvCity = expectedNv.city
+  const invoiceCity = invoice.city
+
+  if ((!nvCommune && !nvCity) || (!invoiceCommune && !invoiceCity)) {
+    return {
+      ok: false,
+      reason: `INVOICE_TERRITORY_UNVERIFIABLE: missing territorial data (expected="${nvCommune ?? ''}/${nvCity ?? ''}" got="${invoiceCommune ?? ''}/${invoiceCity ?? ''}")`,
     }
   }
 
   const territoryMatch = evaluateTerritoryMatch(
-    { commune: expectedNv.municipality || expectedNv.commune, city: expectedNv.city },
-    { commune: invoice.municipality, city: invoice.city }
+    { commune: nvCommune, city: nvCity },
+    { commune: invoiceCommune, city: invoiceCity }
   )
   if (!territoryMatch.ok) {
     return {
       ok: false,
-      reason: `INVOICE_TERRITORY_MISMATCH: expected="${expectedNv.municipality ?? expectedNv.commune ?? ''}/${expectedNv.city ?? ''}" got="${invoice.municipality ?? ''}/${invoice.city ?? ''}"`,
+      reason: `INVOICE_TERRITORY_MISMATCH: ${territoryMatch.reason ?? 'TERRITORY_MISMATCH'} (expected="${nvCommune ?? ''}/${nvCity ?? ''}" got="${invoiceCommune ?? ''}/${invoiceCity ?? ''}")`,
     }
   }
 

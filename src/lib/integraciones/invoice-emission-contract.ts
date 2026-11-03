@@ -247,3 +247,132 @@ export function validateCompleteInvoiceLines(
   }
   return { ok: true }
 }
+
+export type BsaleAddressesFetcher = (options: {
+  companyId: string
+  path: string
+  params?: Record<string, string | number | undefined>
+}) => Promise<{
+  count?: number
+  limit?: number
+  offset?: number
+  items?: Array<{
+    id: number
+    address?: string | null
+    addressName?: string | null
+    municipality?: string | null
+    city?: string | null
+    state?: number | null
+  }>
+}>
+
+/**
+ * Consulta la colección completa de direcciones adicionales del cliente en Bsale con paginación segura (FAC-DIR-02B, Finding 1).
+ *
+ * Verificaciones obligatorias:
+ * - Valida que el count retornado por Bsale sea un número entero finito y consistente.
+ * - Detecta y bloquea ante páginas incompletas, vacías o repetidas (ciclos de offset o IDs duplicados).
+ * - Bloquea con ok: false ante cualquier consulta incompleta o no verificable al 100%.
+ */
+export async function fetchAllBsaleClientAddresses(
+  companyId: string,
+  clientId: number,
+  fetcher: BsaleAddressesFetcher
+): Promise<{ ok: true; addresses: BsaleAdditionalAddressItem[] } | { ok: false; error: string }> {
+  const limit = 50
+  let offset = 0
+  let expectedTotal: number | null = null
+  const allAddresses: BsaleAdditionalAddressItem[] = []
+  const seenIds = new Set<number>()
+  const visitedOffsets = new Set<number>()
+  const MAX_PAGES = 100
+  let pageCount = 0
+
+  while (true) {
+    if (pageCount >= MAX_PAGES) {
+      return { ok: false, error: `Error consultando direcciones del cliente en Bsale: límite máximo de páginas excedido (${MAX_PAGES}).` }
+    }
+    if (visitedOffsets.has(offset)) {
+      return { ok: false, error: `Error consultando direcciones del cliente en Bsale: ciclo de paginación detectado en offset ${offset}.` }
+    }
+    visitedOffsets.add(offset)
+    pageCount++
+
+    let response: Awaited<ReturnType<BsaleAddressesFetcher>>
+    try {
+      response = await fetcher({
+        companyId,
+        path: `/clients/${clientId}/addresses.json`,
+        params: { limit: String(limit), offset: String(offset) },
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'FAILED_TO_FETCH_ADDRESSES'
+      return { ok: false, error: `Error consultando direcciones del cliente en Bsale: ${msg}` }
+    }
+
+    if (!response || typeof response !== 'object') {
+      return { ok: false, error: 'Error consultando direcciones del cliente en Bsale: respuesta inválida o vacía.' }
+    }
+
+    if (typeof response.count !== 'number' || !Number.isFinite(response.count) || response.count < 0) {
+      return { ok: false, error: 'Error consultando direcciones del cliente en Bsale: count numérico no informado o inválido.' }
+    }
+
+    if (expectedTotal === null) {
+      expectedTotal = response.count
+    } else if (response.count !== expectedTotal) {
+      return { ok: false, error: `Error consultando direcciones del cliente en Bsale: count divergente entre páginas (${expectedTotal} vs ${response.count}).` }
+    }
+
+    if (expectedTotal === 0) {
+      if (Array.isArray(response.items) && response.items.length > 0) {
+        return { ok: false, error: 'Error consultando direcciones del cliente en Bsale: count es 0 pero se devolvieron elementos.' }
+      }
+      return { ok: true, addresses: [] }
+    }
+
+    if (!Array.isArray(response.items)) {
+      return { ok: false, error: 'Error consultando direcciones del cliente en Bsale: items no es un array.' }
+    }
+
+    const items = response.items
+
+    if (items.length === 0 && allAddresses.length < expectedTotal) {
+      return { ok: false, error: `Error consultando direcciones del cliente en Bsale: página vacía en offset ${offset} antes de alcanzar el total esperado (${allAddresses.length}/${expectedTotal}).` }
+    }
+
+    for (const item of items) {
+      if (!item || typeof item.id !== 'number' || !Number.isSafeInteger(item.id)) {
+        return { ok: false, error: 'Error consultando direcciones del cliente en Bsale: elemento sin ID numérico válido.' }
+      }
+      if (seenIds.has(item.id)) {
+        return { ok: false, error: `Error consultando direcciones del cliente en Bsale: dirección duplicada detectada (id ${item.id}).` }
+      }
+      seenIds.add(item.id)
+
+      allAddresses.push({
+        id: item.id,
+        addressName: item.addressName ?? null,
+        address: item.address ?? '',
+        municipality: item.municipality ?? null,
+        city: item.city ?? null,
+        state: item.state ?? null,
+      })
+    }
+
+    if (items.length < limit && allAddresses.length < expectedTotal) {
+      return { ok: false, error: `Error consultando direcciones del cliente en Bsale: página incompleta (${items.length} items) sin alcanzar el total reportado (${allAddresses.length}/${expectedTotal}).` }
+    }
+
+    if (allAddresses.length >= expectedTotal || items.length < limit) {
+      break
+    }
+    offset += limit
+  }
+
+  if (expectedTotal !== null && allAddresses.length !== expectedTotal) {
+    return { ok: false, error: `Error consultando direcciones del cliente en Bsale: total recolectado (${allAddresses.length}) no coincide con count informado (${expectedTotal}).` }
+  }
+
+  return { ok: true, addresses: allAddresses }
+}

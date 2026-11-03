@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { BsaleApiError, bsaleFetchForCompany, bsaleFetchResourceForCompany } from '@/lib/bsale/client'
 import { bsaleWriteForCompany } from '@/lib/bsale/write-client'
-import { buildInvoiceEmissionIdentity, buildInvoiceEmissionPayload, chileDateToBsaleEpoch, chileToday, formatBsaleRejection, invoiceEmissionEnabled, invoiceAddressResolutionEnabled, resolveInvoiceEmissionAddress, validateCompleteInvoiceLines, validateInvoiceDocument } from '@/lib/integraciones/invoice-emission-contract'
+import { buildInvoiceEmissionIdentity, buildInvoiceEmissionPayload, chileDateToBsaleEpoch, chileToday, formatBsaleRejection, invoiceEmissionEnabled, invoiceAddressResolutionEnabled, fetchAllBsaleClientAddresses, resolveInvoiceEmissionAddress, validateCompleteInvoiceLines, validateInvoiceDocument } from '@/lib/integraciones/invoice-emission-contract'
 import { verifyBsaleInvoiceAddress, type BsaleAdditionalAddressItem } from '@/lib/integraciones/bsale-address-resolution'
 import { evaluateInvoiceCommercialValidation } from '@/lib/integraciones/invoice-commercial-validation'
 import { verifyInvoiceStockDispatch, buildInvoiceStockEvidencePayload, type InvoiceStockVerificationResult } from '@/lib/integraciones/invoice-stock-verification'
@@ -63,64 +63,6 @@ function describeBsaleRejection(error: unknown): string {
     return formatBsaleRejection({ status: error.status, message: error.message, body: error.body })
   }
   return formatBsaleRejection({ message: error instanceof Error ? error.message : 'UNKNOWN_ERROR' })
-}
-
-/**
- * Consulta la colección completa de direcciones adicionales del cliente en Bsale con paginación defensiva (FAC-DIR-02B, Regla 2).
- */
-async function fetchAllBsaleClientAddresses(
-  companyId: string,
-  clientId: number
-): Promise<{ ok: true; addresses: BsaleAdditionalAddressItem[] } | { ok: false; error: string }> {
-  const limit = 50
-  let offset = 0
-  const allAddresses: BsaleAdditionalAddressItem[] = []
-
-  while (true) {
-    try {
-      const response = await bsaleFetchResourceForCompany<{
-        items?: Array<{
-          id: number
-          address?: string | null
-          addressName?: string | null
-          municipality?: string | null
-          city?: string | null
-          state?: number | null
-        }>
-        count?: number
-        limit?: number
-        offset?: number
-      }>({
-        companyId,
-        path: `/clients/${clientId}/addresses.json`,
-        params: { limit: String(limit), offset: String(offset) },
-      })
-
-      const items = Array.isArray(response?.items) ? response.items : []
-      for (const item of items) {
-        if (typeof item.id === 'number') {
-          allAddresses.push({
-            id: item.id,
-            addressName: item.addressName ?? null,
-            address: item.address ?? '',
-            municipality: item.municipality ?? null,
-            city: item.city ?? null,
-            state: item.state ?? null,
-          })
-        }
-      }
-
-      if (items.length < limit) {
-        break
-      }
-      offset += limit
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'FAILED_TO_FETCH_ADDRESSES'
-      return { ok: false, error: `Error consultando direcciones del cliente en Bsale: ${msg}` }
-    }
-  }
-
-  return { ok: true, addresses: allAddresses }
 }
 
 async function mirrorConfirmedInvoice(companyId: string, document: Record<string, any>) {
@@ -319,7 +261,7 @@ export async function emitSalesOrderInvoice(cardId: string, selection?: InvoiceC
 
   let targetAddressId: number | null = null
   if (invoiceAddressResolutionEnabled()) {
-    const addressesResult = await fetchAllBsaleClientAddresses(auth.companyId, clientId)
+    const addressesResult = await fetchAllBsaleClientAddresses(auth.companyId, clientId, bsaleFetchResourceForCompany)
     if (!addressesResult.ok) {
       return { status: 'PREVALIDATION_FAILED' as const, error: addressesResult.error }
     }

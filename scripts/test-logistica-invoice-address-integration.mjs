@@ -11,10 +11,12 @@ import {
   buildInvoiceEmissionIdentity,
   invoiceAddressResolutionEnabled,
   resolveInvoiceEmissionAddress,
+  fetchAllBsaleClientAddresses,
 } from '../src/lib/integraciones/invoice-emission-contract.ts'
 import {
   verifyBsaleInvoiceAddress,
   resolveBsaleClientAddress,
+  evaluateTerritoryMatch,
 } from '../src/lib/integraciones/bsale-address-resolution.ts'
 
 console.log('--- Iniciando suite de pruebas: FAC-DIR-02B (Integración de Direcciones en Facturación) ---')
@@ -125,7 +127,7 @@ test('2. Caso real NV 5147 -> Factura 24872: Coincide con dirección principal, 
   const nv = {
     address: 'Freire 854',
     municipality: 'Constitución',
-    city: 'Maule',
+    city: 'Constitución',
   }
 
   const result = resolveInvoiceEmissionAddress({
@@ -268,51 +270,102 @@ test('9. Bloqueo por dirección no encontrada: NO_MATCHING_ADDRESS', () => {
   assert.match(result.error, /No se encontró una dirección coincidente/i)
 })
 
-// 10. Paginación y manejo de errores de consulta de direcciones Bsale
-test('10. Paginación y manejo defensivo de consultas Bsale', async () => {
-  // Simulación del algoritmo de paginación de fetchAllBsaleClientAddresses
-  async function simulateFetchAddresses(pages, failOnPage = -1) {
-    const limit = 50
-    let offset = 0
-    let pageIndex = 0
-    const allAddresses = []
+// 10. Paginación segura y manejo defensivo del helper real fetchAllBsaleClientAddresses (Finding 1)
+test('10. Paginación segura: verificación de count, detección de páginas incompletas, duplicados y ciclos', async () => {
+  // A. Paginación exitosa multi-página con count consistente (55 items en 2 páginas)
+  const page1Items = Array.from({ length: 50 }, (_, i) => ({ id: i + 1, address: `Calle ${i + 1}`, municipality: 'Talca', state: 0 }))
+  const page2Items = Array.from({ length: 5 }, (_, i) => ({ id: i + 51, address: `Calle ${i + 51}`, municipality: 'Talca', state: 0 }))
 
-    while (true) {
-      if (pageIndex === failOnPage) {
-        return { ok: false, error: 'Error consultando direcciones del cliente en Bsale: HTTP_500' }
-      }
-      const pageItems = pages[pageIndex] || []
-      for (const item of pageItems) {
-        if (typeof item.id === 'number') {
-          allAddresses.push(item)
-        }
-      }
-      if (pageItems.length < limit) {
-        break
-      }
-      offset += limit
-      pageIndex++
+  const mockValidMultiPage = async ({ params }) => {
+    const offset = Number(params?.offset ?? 0)
+    if (offset === 0) {
+      return { count: 55, limit: 50, offset: 0, items: page1Items }
     }
-    return { ok: true, addresses: allAddresses }
+    return { count: 55, limit: 50, offset: 50, items: page2Items }
   }
 
-  // Página 1: 50 direcciones, Página 2: 5 direcciones (total 55)
-  const page1 = Array.from({ length: 50 }, (_, i) => ({ id: i + 1, address: `Calle ${i + 1}`, municipality: 'Talca', state: 0 }))
-  const page2 = Array.from({ length: 5 }, (_, i) => ({ id: i + 51, address: `Calle ${i + 51}`, municipality: 'Talca', state: 0 }))
-
-  const successResult = await simulateFetchAddresses([page1, page2])
+  const successResult = await fetchAllBsaleClientAddresses('comp-1', 643, mockValidMultiPage)
   assert.equal(successResult.ok, true)
   assert.equal(successResult.addresses.length, 55)
   assert.equal(successResult.addresses[54].id, 55)
 
-  // Error de red/HTTP simula bloqueo antes de POST
-  const errorResult = await simulateFetchAddresses([page1, page2], 1)
-  assert.equal(errorResult.ok, false)
-  assert.match(errorResult.error, /Error consultando direcciones/i)
+  // B. Detección de página incompleta: count reporta 10, pero primera página devuelve solo 5 items (< limit)
+  const mockIncompletePage = async () => ({
+    count: 10,
+    limit: 50,
+    offset: 0,
+    items: Array.from({ length: 5 }, (_, i) => ({ id: i + 1, address: `Calle ${i + 1}`, state: 0 })),
+  })
+  const incompleteResult = await fetchAllBsaleClientAddresses('comp-1', 643, mockIncompletePage)
+  assert.equal(incompleteResult.ok, false)
+  assert.match(incompleteResult.error, /página incompleta/i)
+
+  // C. Detección de count divergente entre páginas
+  const mockDivergentCount = async ({ params }) => {
+    const offset = Number(params?.offset ?? 0)
+    if (offset === 0) return { count: 60, limit: 50, offset: 0, items: page1Items }
+    return { count: 55, limit: 50, offset: 50, items: page2Items }
+  }
+  const divergentResult = await fetchAllBsaleClientAddresses('comp-1', 643, mockDivergentCount)
+  assert.equal(divergentResult.ok, false)
+  assert.match(divergentResult.error, /count divergente/i)
+
+  // D. Detección de direcciones duplicadas entre páginas
+  const mockDuplicateAddress = async ({ params }) => {
+    const offset = Number(params?.offset ?? 0)
+    if (offset === 0) return { count: 55, limit: 50, offset: 0, items: page1Items }
+    // En la página 2 se repite el id 10
+    return { count: 55, limit: 50, offset: 50, items: [{ id: 10, address: 'Repetido', state: 0 }] }
+  }
+  const duplicateResult = await fetchAllBsaleClientAddresses('comp-1', 643, mockDuplicateAddress)
+  assert.equal(duplicateResult.ok, false)
+  assert.match(duplicateResult.error, /dirección duplicada detectada/i)
+
+  // E. Detección de página vacía antes de completar el count
+  const mockEmptyPage = async () => ({
+    count: 20,
+    limit: 50,
+    offset: 0,
+    items: [],
+  })
+  const emptyResult = await fetchAllBsaleClientAddresses('comp-1', 643, mockEmptyPage)
+  assert.equal(emptyResult.ok, false)
+  assert.match(emptyResult.error, /página vacía/i)
+
+  // F. Validación de count numérico ausente o inválido
+  const mockInvalidCount = async () => ({
+    count: null,
+    limit: 50,
+    offset: 0,
+    items: [{ id: 1, address: 'Test', state: 0 }],
+  })
+  const invalidCountResult = await fetchAllBsaleClientAddresses('comp-1', 643, mockInvalidCount)
+  assert.equal(invalidCountResult.ok, false)
+  assert.match(invalidCountResult.error, /count numérico no informado o inválido/i)
+
+  // G. Manejo de count: 0 consistente (sin items)
+  const mockZeroCountOk = async () => ({ count: 0, limit: 50, offset: 0, items: [] })
+  const zeroCountResult = await fetchAllBsaleClientAddresses('comp-1', 643, mockZeroCountOk)
+  assert.equal(zeroCountResult.ok, true)
+  assert.equal(zeroCountResult.addresses.length, 0)
+
+  // H. Manejo de count: 0 inconsistente (con items retornados)
+  const mockZeroCountBad = async () => ({ count: 0, limit: 50, offset: 0, items: [{ id: 1, address: 'Fantasma' }] })
+  const zeroCountBadResult = await fetchAllBsaleClientAddresses('comp-1', 643, mockZeroCountBad)
+  assert.equal(zeroCountBadResult.ok, false)
+  assert.match(zeroCountBadResult.error, /count es 0 pero se devolvieron elementos/i)
+
+  // I. Error de red o excepción en fetcher
+  const mockThrowingFetcher = async () => {
+    throw new Error('ETIMEDOUT: Bsale address endpoint timeout')
+  }
+  const throwResult = await fetchAllBsaleClientAddresses('comp-1', 643, mockThrowingFetcher)
+  assert.equal(throwResult.ok, false)
+  assert.match(throwResult.error, /ETIMEDOUT/i)
 })
 
-// 11. Verificación posterior de dirección en factura devuelta por Bsale (verifyBsaleInvoiceAddress)
-test('11. Verificación posterior de documento devuelto por Bsale: Coincidencia y detección de discrepancia', () => {
+// 11. Verificación posterior de dirección en factura devuelta por Bsale (verifyBsaleInvoiceAddress, Finding 2)
+test('11. Verificación posterior de documento devuelto por Bsale: Comuna y ciudad estrictas, datos no verificables', () => {
   const nv = {
     address: 'MALL GO FLORIDA  LOCAL 1015B',
     municipality: 'TALCA',
@@ -334,13 +387,36 @@ test('11. Verificación posterior de documento devuelto por Bsale: Coincidencia 
   assert.equal(mismatchAddress.ok, false)
   assert.match(mismatchAddress.reason, /^INVOICE_ADDRESS_MISMATCH/)
 
-  // C. Discrepancia en territorio (comuna/ciudad): Falla e identifica error
+  // C. Discrepancia en territorio (comuna no coincide): Falla
   const mismatchTerritory = verifyBsaleInvoiceAddress(
     { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: 'Curicó', city: 'Curicó' },
     nv
   )
   assert.equal(mismatchTerritory.ok, false)
   assert.match(mismatchTerritory.reason, /^INVOICE_TERRITORY_MISMATCH/)
+
+  // D. Finding 2: Comuna coincidente pero ciudades distintas informadas -> Falla e impide false-positive
+  const mismatchCityWithMatchingCommune = verifyBsaleInvoiceAddress(
+    { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: 'TALCA', city: 'LINARES' },
+    nv
+  )
+  assert.equal(mismatchCityWithMatchingCommune.ok, false)
+  assert.match(mismatchCityWithMatchingCommune.reason, /CITY_MISMATCH_WITH_MATCHING_COMMUNE/)
+
+  // E. Finding 2: Datos ausentes o imposibles de verificar -> Falla para requerir conciliación
+  const missingAddress = verifyBsaleInvoiceAddress(
+    { address: null, municipality: 'Talca', city: 'Talca' },
+    nv
+  )
+  assert.equal(missingAddress.ok, false)
+  assert.match(missingAddress.reason, /^INVOICE_ADDRESS_UNVERIFIABLE/)
+
+  const missingTerritory = verifyBsaleInvoiceAddress(
+    { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: null, city: null },
+    nv
+  )
+  assert.equal(missingTerritory.ok, false)
+  assert.match(missingTerritory.reason, /^INVOICE_TERRITORY_UNVERIFIABLE/)
 })
 
 // 12. Feature Flag apagado: Preserva compatibilidad hacia atrás estricta
