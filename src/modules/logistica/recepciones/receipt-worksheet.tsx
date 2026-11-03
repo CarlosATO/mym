@@ -91,12 +91,12 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
     const items: any[] = poDetail?.items ?? []
     const query = receiptSearchQuery.trim().toLocaleLowerCase('es-CL')
     const indexed = items.map((item, originalIndex) => ({ item, originalIndex }))
-    if (selectedInvoice) {
-      return indexed.filter(({ item }) => selectedInvoice.purchase_order_item_ids.includes(item.id))
-    }
-    const statusFiltered = receiptLineFilter === 'PENDING'
-      ? indexed.filter(({ item }) => Number(item.quantity_pending || 0) > 0)
+    const invoiceFiltered = selectedInvoice
+      ? indexed.filter(({ item }) => selectedInvoice.purchase_order_item_ids.includes(item.id))
       : indexed
+    const statusFiltered = receiptLineFilter === 'PENDING'
+      ? invoiceFiltered.filter(({ item }) => Number(item.quantity_pending || 0) > 0)
+      : invoiceFiltered
     if (!query) return statusFiltered
     return statusFiltered.filter(({ item }) =>
       [receiptItemSku(item), item.product_description].some(value => (value ?? '').toLocaleLowerCase('es-CL').includes(query))
@@ -215,8 +215,6 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
 
   function toggleInvoiceFilter(invoiceId: string) {
     setSelectedInvoiceId(current => current === invoiceId ? null : invoiceId)
-    setReceiptSearchQuery('')
-    setReceiptLineFilter('ALL')
   }
 
   function handleShowAllLines() {

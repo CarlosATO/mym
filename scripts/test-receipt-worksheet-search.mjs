@@ -115,3 +115,64 @@ test('O. when filters hide lines with entered quantities, silent save is prevent
   const showAllSource = worksheet.slice(worksheet.indexOf('function handleShowAllLines'), worksheet.indexOf('}', worksheet.indexOf('function handleShowAllLines')) + 1)
   assert.doesNotMatch(showAllSource, /setItemInputs/)
 })
+
+test('P. simultaneous filter combination: invoice, pending-only, and search apply together', () => {
+  const source = deriveSource()
+
+  // Verify the composable pipeline in visibleReceiptItems
+  assert.match(source, /const invoiceFiltered = selectedInvoice[\s\S]*?selectedInvoice\.purchase_order_item_ids\.includes\(item\.id\)/)
+  assert.match(source, /const statusFiltered = receiptLineFilter === 'PENDING'[\s\S]*?invoiceFiltered\.filter[\s\S]*?Number\(item\.quantity_pending \|\| 0\) > 0/)
+  assert.match(source, /if \(!query\) return statusFiltered/)
+  assert.match(source, /statusFiltered\.filter\(\(\{ item \}\) =>/)
+
+  // Verify toggleInvoiceFilter toggles selection without wiping search or line filter
+  const toggleSource = worksheet.slice(worksheet.indexOf('function toggleInvoiceFilter'), worksheet.indexOf('}', worksheet.indexOf('function toggleInvoiceFilter')) + 1)
+  assert.doesNotMatch(toggleSource, /setReceiptSearchQuery/)
+  assert.doesNotMatch(toggleSource, /setReceiptLineFilter/)
+
+  // Simulate simultaneous combination with mock data
+  const mockItems = [
+    { id: 'item-1', product_description: 'Alimento Perro Adulto', sku: 'ALIM-01', quantity_pending: 10 },
+    { id: 'item-2', product_description: 'Alimento Perro Cachorro', sku: 'ALIM-02', quantity_pending: 0 },
+    { id: 'item-3', product_description: 'Snack Dental Perro', sku: 'SNK-01', quantity_pending: 5 },
+    { id: 'item-4', product_description: 'Alimento Gato Adulto', sku: 'ALIM-03', quantity_pending: 8 },
+  ]
+  const mockInvoice = {
+    id: 'inv-1',
+    purchase_order_item_ids: ['item-1', 'item-2', 'item-3'],
+  }
+
+  function evaluateVisibleItems(items, selectedInvoice, receiptLineFilter, receiptSearchQuery) {
+    const query = receiptSearchQuery.trim().toLocaleLowerCase('es-CL')
+    const indexed = items.map((item, originalIndex) => ({ item, originalIndex }))
+    const invoiceFiltered = selectedInvoice
+      ? indexed.filter(({ item }) => selectedInvoice.purchase_order_item_ids.includes(item.id))
+      : indexed
+    const statusFiltered = receiptLineFilter === 'PENDING'
+      ? invoiceFiltered.filter(({ item }) => Number(item.quantity_pending || 0) > 0)
+      : invoiceFiltered
+    if (!query) return statusFiltered
+    return statusFiltered.filter(({ item }) =>
+      [item.sku, item.product_description].some(value => (value ?? '').toLocaleLowerCase('es-CL').includes(query))
+    )
+  }
+
+  // Baseline: all 4 items
+  assert.equal(evaluateVisibleItems(mockItems, null, 'ALL', '').length, 4)
+
+  // 1. Invoice filter only: items 1, 2, 3
+  const invoiceOnly = evaluateVisibleItems(mockItems, mockInvoice, 'ALL', '')
+  assert.deepEqual(invoiceOnly.map(r => r.item.id), ['item-1', 'item-2', 'item-3'])
+
+  // 2. Invoice + Pending: items 1, 3 (item 2 has pending = 0)
+  const invoiceAndPending = evaluateVisibleItems(mockItems, mockInvoice, 'PENDING', '')
+  assert.deepEqual(invoiceAndPending.map(r => r.item.id), ['item-1', 'item-3'])
+
+  // 3. Invoice + Pending + Search "Snack": item 3 only
+  const allThree = evaluateVisibleItems(mockItems, mockInvoice, 'PENDING', 'snack')
+  assert.deepEqual(allThree.map(r => r.item.id), ['item-3'])
+
+  // 4. Invoice + Pending + Search "Gato": empty because Gato is not in mockInvoice
+  const noMatch = evaluateVisibleItems(mockItems, mockInvoice, 'PENDING', 'gato')
+  assert.equal(noMatch.length, 0)
+})
