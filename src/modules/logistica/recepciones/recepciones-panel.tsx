@@ -56,6 +56,7 @@ const RECEPCIONES_COLUMNS: OperationalTableColumn[] = [
   { id: 'qtyPending', defaultWidth: 86, minWidth: 74, maxWidth: 120 },
   { id: 'total', defaultWidth: 120, minWidth: 105, maxWidth: 170 },
   { id: 'amountReceived', defaultWidth: 120, minWidth: 105, maxWidth: 170 },
+  { id: 'amountPending', defaultWidth: 125, minWidth: 110, maxWidth: 180 },
   { id: 'latestReceipt', defaultWidth: 112, minWidth: 95, maxWidth: 170 },
   { id: 'documents', defaultWidth: 135, minWidth: 116, maxWidth: 230 },
   { id: 'actions', defaultWidth: 112, minWidth: 100, maxWidth: 155, sticky: 'right', resizable: false },
@@ -282,16 +283,16 @@ function DetailPanel({
 
         {/* KPI row — from summary data, no loading wait */}
         <div className={cn('grid divide-x divide-theme-border/50 border-t border-theme-border/50', canViewEconomics ? 'grid-cols-5' : 'grid-cols-3')}>
-          {(canViewEconomics ? [
-            { label: 'Total OC', value: fmt(summary.grand_total), color: '' },
-            { label: 'Recibido', value: fmt(summary.amount_received), color: 'text-emerald-600 dark:text-emerald-400' },
-          ] : []).concat([
-            { label: 'Solicitada', value: String(summary.qty_ordered), color: '' },
-            { label: 'Recibida', value: String(summary.qty_received), color: 'text-emerald-600 dark:text-emerald-400' },
-            { label: 'Pendiente', value: String(summary.qty_pending), color: summary.qty_pending > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-theme-text-muted' },
-          ]).map(({ label, value, color }) => (
+           {(canViewEconomics ? [
+             { label: 'Total OC c/IVA', value: fmt(summary.grand_total), color: '', tooltip: 'Importe total de la orden de compra, incluidos descuentos e impuestos' },
+             { label: 'Recibido c/IVA', value: fmt(summary.amount_received), color: 'text-emerald-600 dark:text-emerald-400', tooltip: 'Importe acumulado de las recepciones registradas, valorado según los precios e impuestos de la OC. No representa pagos ni necesariamente el total facturado' },
+           ] : []).concat([
+             { label: 'Solicitada', value: String(summary.qty_ordered), color: '', tooltip: '' },
+             { label: 'Recibida', value: String(summary.qty_received), color: 'text-emerald-600 dark:text-emerald-400', tooltip: '' },
+             { label: 'Pendiente', value: String(summary.qty_pending), color: summary.qty_pending > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-theme-text-muted', tooltip: '' },
+           ]).map(({ label, value, color, tooltip }) => (
             <div key={label} className="px-4 py-2">
-              <p className="text-[9px] font-bold uppercase tracking-wider text-theme-text-muted mb-0.5">{label}</p>
+              <p title={tooltip} className="text-[9px] font-bold uppercase tracking-wider text-theme-text-muted mb-0.5">{label}</p>
               <p className={cn('text-xs font-bold', color || 'text-theme-text')}>{value}</p>
             </div>
           ))}
@@ -568,7 +569,7 @@ function TrayTable({
         ) : (
           <table className="w-full min-w-[1360px] table-fixed text-xs border-collapse">
             <colgroup>
-              {RECEPCIONES_COLUMNS.filter(column => canViewEconomics || !['total', 'amountReceived'].includes(column.id)).map(column => <col key={column.id} style={{ width: widths[column.id] ?? column.defaultWidth }} />)}
+              {RECEPCIONES_COLUMNS.filter(column => canViewEconomics || !['total', 'amountReceived', 'amountPending'].includes(column.id)).map(column => <col key={column.id} style={{ width: widths[column.id] ?? column.defaultWidth }} />)}
             </colgroup>
             <thead className="sticky top-0 z-10">
               <tr className="bg-theme-surface border-b border-theme-border text-[10px] font-semibold uppercase tracking-wider text-theme-text-muted">
@@ -580,8 +581,9 @@ function TrayTable({
                 <th className={`${cellClass} relative text-right whitespace-nowrap`}>Solicitada{resizeHandle('qtyOrdered')}</th>
                 <th className={`${cellClass} relative text-right whitespace-nowrap`}>Recibida{resizeHandle('qtyReceived')}</th>
                 <th className={`${cellClass} relative text-right whitespace-nowrap`}>Pendiente{resizeHandle('qtyPending')}</th>
-                {canViewEconomics && <th className={`${cellClass} relative text-right whitespace-nowrap`}>Total OC{resizeHandle('total')}</th>}
-                {canViewEconomics && <th className={`${cellClass} relative text-right whitespace-nowrap`}>Monto Rec.{resizeHandle('amountReceived')}</th>}
+                {canViewEconomics && <th className={`${cellClass} relative text-right whitespace-nowrap`} title="Importe total de la orden de compra, incluidos descuentos e impuestos">Total OC c/IVA{resizeHandle('total')}</th>}
+                {canViewEconomics && <th className={`${cellClass} relative text-right whitespace-nowrap`} title="Importe acumulado de las recepciones registradas, valorado según los precios e impuestos de la OC. No representa pagos ni necesariamente el total facturado">Recibido c/IVA{resizeHandle('amountReceived')}</th>}
+                {canViewEconomics && <th className={`${cellClass} relative text-right whitespace-nowrap`} title="Diferencia entre el valor total de la OC y el valor acumulado de las recepciones. Incluye IVA y no representa necesariamente el monto exacto de facturas pendientes">Por recibir c/IVA{resizeHandle('amountPending')}</th>}
                 <th className={`${cellClass} relative text-left whitespace-nowrap`}>Últ. recepción{resizeHandle('latestReceipt')}</th>
                 <th className={`${cellClass} relative text-left whitespace-nowrap`}>Documentos{resizeHandle('documents')}</th>
                 <th className="sticky right-0 z-20 bg-theme-surface px-2.5 py-1.5 text-left whitespace-nowrap">Acción</th>
@@ -591,6 +593,8 @@ function TrayTable({
               {filteredPOs.map(po => {
                 const isTotal = po.status === 'RECEPCION_TOTAL'
                 const isPartial = po.status === 'RECEPCION_PARCIAL'
+                const hasEconomicData = Number.isFinite(po.grand_total) && Number.isFinite(po.amount_received)
+                const amountPending = hasEconomicData ? po.grand_total - po.amount_received : null
                 return (
                   <tr
                     key={po.id}
@@ -624,6 +628,19 @@ function TrayTable({
                     {canViewEconomics && <td className={`${cellClass} text-right text-theme-text-muted`}>{fmt(po.grand_total)}</td>}
                     {canViewEconomics && <td className={`${cellClass} text-right text-emerald-600 dark:text-emerald-400 font-medium`}>
                       {po.amount_received > 0 ? fmt(po.amount_received) : '—'}
+                    </td>}
+                    {canViewEconomics && <td className={cn(
+                      cellClass,
+                      'text-right font-medium',
+                      amountPending === null
+                        ? 'text-theme-text-muted'
+                        : amountPending > 0
+                          ? 'text-amber-600 dark:text-amber-400'
+                          : amountPending < 0
+                            ? 'text-red-600 dark:text-red-400'
+                            : 'text-theme-text-muted',
+                    )}>
+                      {amountPending === null ? '—' : fmt(amountPending)}
                     </td>}
                     <td className={`${cellClass} text-theme-text-muted`}>
                       {po.latest_receipt_number ? (

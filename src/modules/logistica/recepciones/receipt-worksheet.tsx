@@ -3,7 +3,7 @@
 /* Existing operational component uses legacy mutable state and Supabase row shapes. */
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars, react-hooks/purity */
 
-import React, { useState, useEffect, useMemo, Fragment } from 'react'
+import React, { useState, useEffect, useMemo, useRef, Fragment } from 'react'
 import { useRouter } from 'next/navigation'
 import { getActiveReceiptWarehouses, getPurchaseOrderForReceipt, getPurchaseOrderReceiptInvoices, createPurchaseReceipt, type ReceiptInvoiceSummary, type ReceiptWarehouseOption } from '@/app/actions/logistica/recepciones'
 import { getLocations, type Location } from '@/app/actions/logistica/locations'
@@ -74,25 +74,70 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
   const [registeredInvoicesLoading, setRegisteredInvoicesLoading] = useState(true)
   const [registeredInvoicesError, setRegisteredInvoicesError] = useState<string | null>(null)
   const [invoiceToView, setInvoiceToView] = useState<ReceiptInvoiceSummary | null>(null)
+  const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null)
 
   // itemInputs state maps itemId -> Array of ItemSplit
   const [itemInputs, setItemInputs] = useState<Record<string, ItemSplit[]>>({})
   const [receiptSearchQuery, setReceiptSearchQuery] = useState('')
   const [receiptLineFilter, setReceiptLineFilter] = useState<'ALL' | 'PENDING'>('ALL')
 
+  const selectedInvoice = useMemo(
+    () => registeredInvoices.find(invoice => invoice.id === selectedInvoiceId) ?? null,
+    [registeredInvoices, selectedInvoiceId],
+  )
+
   // Client-side line filters never mutate canonical state or itemInputs.
   const visibleReceiptItems = useMemo(() => {
     const items: any[] = poDetail?.items ?? []
     const query = receiptSearchQuery.trim().toLocaleLowerCase('es-CL')
     const indexed = items.map((item, originalIndex) => ({ item, originalIndex }))
-    const statusFiltered = receiptLineFilter === 'PENDING'
-      ? indexed.filter(({ item }) => Number(item.quantity_pending || 0) > 0)
+    const invoiceFiltered = selectedInvoice
+      ? indexed.filter(({ item }) => selectedInvoice.purchase_order_item_ids.includes(item.id))
       : indexed
+    const statusFiltered = receiptLineFilter === 'PENDING'
+      ? invoiceFiltered.filter(({ item }) => Number(item.quantity_pending || 0) > 0)
+      : invoiceFiltered
     if (!query) return statusFiltered
     return statusFiltered.filter(({ item }) =>
       [receiptItemSku(item), item.product_description].some(value => (value ?? '').toLocaleLowerCase('es-CL').includes(query))
     )
-  }, [poDetail, receiptSearchQuery, receiptLineFilter])
+  }, [poDetail, receiptSearchQuery, receiptLineFilter, selectedInvoice])
+
+  const hiddenItemsWithQuantities = useMemo(() => {
+    if (!poDetail?.items) return []
+    const visibleIds = new Set(visibleReceiptItems.map(({ item }) => item.id))
+    return poDetail.items.filter((item: any) => {
+      if (visibleIds.has(item.id)) return false
+      const splits = itemInputs[item.id] || []
+      return splits.some((s: ItemSplit) => Number(s.quantity || 0) > 0)
+    })
+  }, [poDetail, visibleReceiptItems, itemInputs])
+
+  const invoiceNumbersByItemId = useMemo(() => {
+    const numbers = new Map<string, string[]>()
+    for (const invoice of registeredInvoices) {
+      if (!invoice.document_number) continue
+      for (const itemId of invoice.purchase_order_item_ids) {
+        const current = numbers.get(itemId) ?? []
+        if (!current.includes(invoice.document_number)) numbers.set(itemId, [...current, invoice.document_number])
+      }
+    }
+    return numbers
+  }, [registeredInvoices])
+
+  const auditAmountsAvailable = Boolean(
+    selectedInvoice
+      && canViewReceiptAmounts
+      && Number.isFinite(selectedInvoice.receipt_total_net)
+      && Number.isFinite(selectedInvoice.receipt_total_tax)
+      && Number.isFinite(selectedInvoice.receipt_total_gross),
+  )
+
+  function formatHistoricalAmount(value: number | null | undefined) {
+    return value == null
+      ? '—'
+      : value.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+  }
 
   useEffect(() => {
     async function loadData() {
@@ -155,6 +200,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
     setRegisteredInvoices([])
     setRegisteredInvoicesError(null)
     setRegisteredInvoicesLoading(true)
+    setSelectedInvoiceId(null)
     void getPurchaseOrderReceiptInvoices(poId).then(invoices => {
       if (!active) return
       setRegisteredInvoices(invoices)
@@ -166,6 +212,16 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
     })
     return () => { active = false }
   }, [poId])
+
+  function toggleInvoiceFilter(invoiceId: string) {
+    setSelectedInvoiceId(current => current === invoiceId ? null : invoiceId)
+  }
+
+  function handleShowAllLines() {
+    setReceiptSearchQuery('')
+    setSelectedInvoiceId(null)
+    setReceiptLineFilter('ALL')
+  }
 
   function handleMainWarehouseChange(warehouseId: string) {
     setMainWarehouseId(warehouseId)
@@ -324,6 +380,21 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
   // Main saving logic
   async function handleSaveReceipt() {
     if (!poDetail || saving) return
+
+    // Prevent saving if active filters hide lines with entered quantities
+    if (hiddenItemsWithQuantities.length > 0) {
+      toast.error(
+        `Hay ${hiddenItemsWithQuantities.length} línea(s) con cantidades ingresadas ocultas por los filtros activos. Revise todas las líneas antes de confirmar para evitar registros no verificados.`,
+        {
+          action: {
+            label: 'Revisar todas las líneas',
+            onClick: handleShowAllLines,
+          },
+          duration: 6000,
+        }
+      )
+      return
+    }
 
     // Prevent double submission if PO is already received
     if (poDetail.po.receipt_status === 'RECEPCION_TOTAL' || poDetail.po.status === 'RECEPCION_TOTAL') {
@@ -745,31 +816,62 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
             <div className="mt-1 overflow-x-auto overscroll-x-contain">
               <div className="flex min-w-max flex-nowrap items-start gap-3 py-0.5">
                 {registeredInvoices.map(invoice => (
-                  <button
+                  <div
                     key={invoice.id}
-                    type="button"
-                    disabled={!invoice.has_file}
-                    onClick={() => setInvoiceToView(invoice)}
-                    aria-label={invoice.has_file
-                      ? `Abrir factura ${invoice.document_number || 'sin número'}`
-                      : `Factura ${invoice.document_number || 'sin número'} sin archivo adjunto`}
                     className={cn(
-                      'group flex w-12 shrink-0 flex-col items-center gap-0.5 rounded-md px-1 py-0.5 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-accent/70',
-                      invoice.has_file
-                        ? 'cursor-pointer text-theme-accent hover:bg-theme-accent/10'
-                        : 'cursor-not-allowed text-theme-text-muted/40 opacity-60',
+                      'group flex w-16 shrink-0 flex-col items-center gap-1 rounded-lg border p-1 text-center transition-colors',
+                      selectedInvoiceId === invoice.id
+                        ? 'border-theme-accent bg-theme-accent/10 shadow-xs'
+                        : 'border-theme-border/60 bg-theme-surface/60 hover:border-theme-border'
                     )}
                   >
-                    <span className="relative flex h-8 w-7 items-center justify-center">
-                      <LucideIcons.FileText className="h-8 w-7" strokeWidth={1.6} />
-                      <span className="absolute bottom-0.5 rounded-[2px] bg-current px-0.5 text-[6px] font-black leading-[8px] text-theme-surface">
-                        PDF
+                    <button
+                      type="button"
+                      disabled={!invoice.has_file}
+                      onClick={() => setInvoiceToView(invoice)}
+                      aria-label={invoice.has_file
+                        ? `Abrir factura ${invoice.document_number || 'sin número'}`
+                        : `Factura ${invoice.document_number || 'sin número'} sin archivo adjunto`}
+                      title={invoice.has_file
+                        ? `Abrir PDF de factura ${invoice.document_number || 'sin número'}`
+                        : 'Factura sin archivo adjunto'}
+                      className={cn(
+                        'flex flex-col items-center gap-0.5 w-full text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-accent/70 rounded',
+                        invoice.has_file
+                          ? 'cursor-pointer text-theme-accent hover:opacity-80'
+                          : 'cursor-not-allowed text-theme-text-muted/40 opacity-60',
+                      )}
+                    >
+                      <span className="relative flex h-8 w-7 items-center justify-center">
+                        <LucideIcons.FileText className="h-8 w-7" strokeWidth={1.6} />
+                        <span className="absolute bottom-0.5 rounded-[2px] bg-current px-0.5 text-[6px] font-black leading-[8px] text-theme-surface">
+                          PDF
+                        </span>
                       </span>
-                    </span>
-                    <span className="w-full truncate text-[10px] font-semibold leading-3" title={invoice.document_number || undefined}>
-                      {invoice.document_number || '—'}
-                    </span>
-                  </button>
+                      <span className="w-full truncate text-[10px] font-semibold leading-3" title={invoice.document_number || undefined}>
+                        {invoice.document_number || '—'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleInvoiceFilter(invoice.id)}
+                      aria-label={selectedInvoiceId === invoice.id
+                        ? `Quitar filtro de factura ${invoice.document_number || 'sin número'}`
+                        : `Filtrar líneas por factura ${invoice.document_number || 'sin número'}`}
+                      title={selectedInvoiceId === invoice.id
+                        ? 'Quitar filtro de factura'
+                        : 'Filtrar líneas por esta factura'}
+                      className={cn(
+                        'flex items-center justify-center gap-1 w-full rounded px-1 py-0.5 text-[9px] font-bold transition-all',
+                        selectedInvoiceId === invoice.id
+                          ? 'bg-theme-accent text-white shadow-xs'
+                          : 'bg-theme-text/5 text-theme-text-muted hover:bg-theme-text/10 hover:text-theme-text'
+                      )}
+                    >
+                      <LucideIcons.Filter className="h-2.5 w-2.5 shrink-0" />
+                      <span>{selectedInvoiceId === invoice.id ? 'Filtrada' : 'Filtrar'}</span>
+                    </button>
+                  </div>
                 ))}
               </div>
             </div>
@@ -811,6 +913,34 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
           </span>
         </div>
 
+        {/* Proactive alert when active filters hide lines with entered quantities */}
+        {hiddenItemsWithQuantities.length > 0 && (
+          <div
+            role="alert"
+            className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-200 text-xs animate-in fade-in duration-150"
+          >
+            <div className="flex items-center gap-2">
+              <LucideIcons.AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+              <div>
+                <p className="font-bold">
+                  {hiddenItemsWithQuantities.length} {hiddenItemsWithQuantities.length === 1 ? 'línea con cantidades ingresadas está oculta' : 'líneas con cantidades ingresadas están ocultas'} por los filtros activos.
+                </p>
+                <p className="text-[11px] text-amber-800/80 dark:text-amber-300/80">
+                  Para evitar un guardado silencioso de cantidades no visibles, revise todas las líneas antes de confirmar la recepción.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleShowAllLines}
+              className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 text-white font-semibold text-[11px] hover:bg-amber-700 transition-colors shrink-0 shadow-xs"
+            >
+              <LucideIcons.Eye className="w-3.5 h-3.5" />
+              Revisar todas las líneas
+            </button>
+          </div>
+        )}
+
         {/* Client-side search and visual line filter */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative w-full max-w-xs">
@@ -850,6 +980,21 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
               Solo pendientes
             </button>
           </div>
+          {selectedInvoice && (
+            <div className="flex items-center gap-1.5 rounded-lg border border-theme-accent/40 bg-theme-accent/10 px-2 py-1 text-[10px] font-semibold text-theme-accent">
+              <LucideIcons.Filter className="h-3 w-3 shrink-0" />
+              <span>Factura {selectedInvoice.document_number || '—'}</span>
+              <button
+                type="button"
+                onClick={() => setSelectedInvoiceId(null)}
+                className="rounded p-0.5 hover:bg-theme-accent/20 transition-colors text-theme-accent"
+                title="Quitar filtro de factura"
+                aria-label="Quitar filtro de factura"
+              >
+                <LucideIcons.X className="h-3 w-3" />
+              </button>
+            </div>
+          )}
           <span className="text-[10px] text-theme-text-muted font-semibold">
             Mostrando {visibleReceiptItems.length} de {poDetail.items.length}
           </span>
@@ -864,12 +1009,22 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                   <th className="py-3 px-4 w-12 text-center">#</th>
                   <th className="py-3 px-4 w-28">SKU</th>
                   <th className="py-3 px-4 min-w-[200px]">Descripción</th>
-                  <th className="py-3 px-4 text-right w-20">Solicitado</th>
-                  <th className="py-3 px-4 text-right w-24">Ya Recibido</th>
-                  <th className="py-3 px-4 text-right w-20">Pendiente</th>
-                  <th className="py-3 px-4 text-right w-28 text-theme-accent">Rec. Actual</th>
-                  {canViewEconomics && <th className="py-3 px-4 text-right w-28">P. Unitario</th>}
-                  {canViewEconomics && <th className="py-3 px-4 text-right w-32 font-bold text-theme-text">Monto Rec.</th>}
+                   <th className="py-3 px-4 text-right w-20">Solicitado Total OC</th>
+                   <th
+                     className="py-3 px-4 text-right w-24"
+                     title={selectedInvoice ? `Cantidad recibida en la recepción asociada a la factura ${selectedInvoice.document_number || 'seleccionada'}` : 'Cantidad acumulada recibida en la OC'}
+                   >
+                      {(selectedInvoice?.receipt_document_count ?? 0) > 1
+                        ? 'Recibido en recepción asociada'
+                        : selectedInvoice
+                        ? `Recibido FA ${selectedInvoice.document_number || 'seleccionada'}`
+                        : 'Ya recibido (acumulado)'}
+                    </th>
+                   <th className="py-3 px-4 text-right w-20">Pendiente OC</th>
+                   <th className="py-3 px-4 text-right w-28 text-theme-accent">Rec. Actual</th>
+                   {canViewEconomics && <th className="py-3 px-4 text-right w-28">P. Unitario</th>}
+                    {canViewEconomics && <th className="py-3 px-4 text-right w-32 font-bold text-theme-text">{selectedInvoice ? 'Monto FA c/IVA' : 'Monto Rec.'}</th>}
+                   <th className="py-3 px-4 text-right w-32">Facturas</th>
                 </tr>
               </thead>
               <tbody>
@@ -886,10 +1041,17 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                     }
                   })
 
-                   const price = canViewEconomics ? Number(item.unit_price || 0) : 0
-                   const actualMonto = canViewEconomics ? sumActualRec * price : 0
-                   const exceedsPending = sumQty > Number(item.quantity_pending)
-                   const isComplete = Number(item.quantity_pending || 0) <= 0
+                  const price = canViewEconomics ? Number(item.unit_price || 0) : 0
+                  const actualMonto = canViewEconomics ? sumActualRec * price : 0
+                  const exceedsPending = sumQty > Number(item.quantity_pending)
+                  const isComplete = Number(item.quantity_pending || 0) <= 0
+                  const invoiceNumbers = invoiceNumbersByItemId.get(item.id) ?? []
+                  const historicalReceivedQuantity = selectedInvoice
+                    ? selectedInvoice.received_quantities[item.id] ?? 0
+                    : item.quantity_received
+                  const historicalReceivedAmount = selectedInvoice
+                    ? selectedInvoice.received_amounts?.[item.id]
+                    : null
 
                   const itemWh = item.warehouse_id || mainWarehouseId
                   const whLocs = locations.filter(l => l.warehouse_id === itemWh)
@@ -930,7 +1092,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                           </div>}
                         </td>
                         <td className="py-1.5 px-2 text-right text-theme-text font-semibold">{item.quantity}</td>
-                        <td className="py-1.5 px-2 text-right text-emerald-600 dark:text-emerald-400 font-semibold">{item.quantity_received}</td>
+                         <td className="py-1.5 px-2 text-right text-emerald-600 dark:text-emerald-400 font-semibold">{historicalReceivedQuantity}</td>
                         <td className="py-1.5 px-2 text-right text-theme-text-accent font-semibold">{item.quantity_pending}</td>
                          <td className="py-1.5 px-2 text-right">
                            {isComplete ? <span className="font-bold text-theme-text-muted">0</span> : <input
@@ -943,8 +1105,9 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                              className={cn(erpInputClass, 'w-16 h-6 rounded px-1.5 text-right font-bold text-[10px]')}
                            />}
                          </td>
-                        {canViewEconomics && <td className="py-1.5 px-2 text-right font-semibold text-theme-text">${price.toLocaleString('es-CL')}</td>}
-                        {canViewEconomics && <td className="py-1.5 px-2 text-right font-bold text-theme-text">${actualMonto.toLocaleString('es-CL')}</td>}
+                         {canViewEconomics && <td className="py-1.5 px-2 text-right font-semibold text-theme-text">${price.toLocaleString('es-CL')}</td>}
+                         {canViewEconomics && <td className="py-1.5 px-2 text-right font-bold text-theme-text">{selectedInvoice ? (historicalReceivedAmount == null ? '—' : `$${formatHistoricalAmount(historicalReceivedAmount)}`) : `$${actualMonto.toLocaleString('es-CL')}`}</td>}
+                         <td className="py-1.5 px-2 text-right font-mono text-[10px] text-theme-accent">{invoiceNumbers.length > 0 ? invoiceNumbers.join(', ') : '—'}</td>
                       </tr>
                     )
                   }
@@ -972,11 +1135,12 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                           )}
                         </td>
                         <td className="py-2.5 px-4 text-right text-theme-text font-semibold">{item.quantity}</td>
-                        <td className="py-2.5 px-4 text-right text-emerald-600 dark:text-emerald-400 font-semibold">{item.quantity_received}</td>
+                         <td className="py-2.5 px-4 text-right text-emerald-600 dark:text-emerald-400 font-semibold">{historicalReceivedQuantity}</td>
                         <td className="py-2.5 px-4 text-right text-theme-text-accent font-semibold">{item.quantity_pending}</td>
                         <td className="py-2.5 px-4 text-right font-bold text-theme-accent bg-theme-accent/[0.02]">{sumActualRec}</td>
-                        {canViewEconomics && <td className="py-2.5 px-4 text-right font-semibold text-theme-text">${price.toLocaleString('es-CL')}</td>}
-                        {canViewEconomics && <td className="py-2.5 px-4 text-right font-bold text-theme-text bg-theme-text/[0.02]">${actualMonto.toLocaleString('es-CL')}</td>}
+                         {canViewEconomics && <td className="py-2.5 px-4 text-right font-semibold text-theme-text">${price.toLocaleString('es-CL')}</td>}
+                         {canViewEconomics && <td className="py-2.5 px-4 text-right font-bold text-theme-text bg-theme-text/[0.02]">{selectedInvoice ? (historicalReceivedAmount == null ? '—' : `$${formatHistoricalAmount(historicalReceivedAmount)}`) : `$${actualMonto.toLocaleString('es-CL')}`}</td>}
+                         <td className="py-2.5 px-4 text-right font-mono text-[10px] text-theme-accent">{invoiceNumbers.length > 0 ? invoiceNumbers.join(', ') : '—'}</td>
                       </tr>
 
                       {/* Sub-rows for Splits (Lotes / Partidas) */}
@@ -1013,7 +1177,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                             </td>
 
                              {/* Splits details inputs aligned on rest of columns */}
-                             <td colSpan={canViewEconomics ? 5 : 3} className="py-1.5 px-4">
+                              <td colSpan={canViewEconomics ? 6 : 4} className="py-1.5 px-4">
                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                                  <select
                                    value={split.condition}
@@ -1097,7 +1261,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                       {/* Plus Split Action Row */}
                        {!isComplete && <tr className="border-b border-theme-border last:border-none bg-theme-text/[0.005]">
                         <td className="py-1 px-4 text-center"></td>
-                        <td colSpan={canViewEconomics ? 8 : 6} className="py-1 px-4">
+                         <td colSpan={canViewEconomics ? 9 : 7} className="py-1 px-4">
                           <button
                             onClick={() => addSplit(item.id)}
                             className="inline-flex items-center gap-1 text-[10px] font-bold text-theme-accent hover:text-theme-accent-hover transition-colors pl-8 py-0.5"
@@ -1112,7 +1276,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                  })}
                 {visibleReceiptItems.length === 0 && (
                   <tr>
-                    <td colSpan={canViewEconomics ? 9 : 7} className="px-4 py-8 text-center text-xs text-theme-text-muted">
+                     <td colSpan={canViewEconomics ? 10 : 8} className="px-4 py-8 text-center text-xs text-theme-text-muted">
                       {receiptLineFilter === 'PENDING' ? 'No hay líneas pendientes por recepcionar.' : 'No hay líneas que coincidan con la búsqueda.'}
                     </td>
                   </tr>
@@ -1123,28 +1287,56 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
         </div>
       </div>
 
-      {/* Dynamic financial totals block */}
-      {canViewReceiptAmounts && <div className="flex flex-col md:flex-row items-stretch justify-between gap-3 p-3 rounded-xl border border-theme-border bg-theme-surface/50 shadow-sm text-xs">
-        <div className="max-w-md space-y-1.5 flex flex-col justify-center">
-          <h4 className="font-bold text-theme-text text-sm">Resumen de Recepción</h4>
-          <p className="text-theme-text-muted leading-relaxed">{totalsHelp}</p>
-        </div>
+      <div className="flex flex-col gap-3 md:flex-row md:items-stretch">
+        {/* Dynamic financial totals block: operational values for the new receipt. */}
+        {canViewReceiptAmounts && <div className="flex min-w-0 flex-1 flex-col md:flex-row items-stretch justify-between gap-3 p-3 rounded-xl border border-theme-border bg-theme-surface/50 shadow-sm text-xs">
+          <div className="max-w-md space-y-1.5 flex flex-col justify-center">
+            <h4 className="font-bold text-theme-text text-sm">Resumen de Recepción</h4>
+            <p className="text-theme-text-muted leading-relaxed">{totalsHelp}</p>
+          </div>
 
-        <div className="w-full md:w-64 space-y-1.5 border-t md:border-t-0 md:border-l border-theme-border/60 pt-2 md:pt-0 md:pl-4 flex flex-col justify-center">
-          <div className="flex justify-between items-center text-theme-text-muted">
-            <span>Subtotal Neto:</span>
-            <span className="font-semibold text-theme-text">${netTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+          <div className="w-full md:w-64 space-y-1.5 border-t md:border-t-0 md:border-l border-theme-border/60 pt-2 md:pt-0 md:pl-4 flex flex-col justify-center">
+            <div className="flex justify-between items-center text-theme-text-muted">
+              <span>Subtotal Neto:</span>
+              <span className="font-semibold text-theme-text">${netTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+            </div>
+            <div className="flex justify-between items-center text-theme-text-muted">
+              <span>IVA (19%):</span>
+              <span className="font-semibold text-theme-text">${taxTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+            </div>
+            <div className="flex justify-between items-center border-t border-theme-border/40 pt-2 text-sm font-bold text-theme-text">
+              <span>Total Recibido:</span>
+              <span className="text-theme-accent">${grossTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+            </div>
           </div>
-          <div className="flex justify-between items-center text-theme-text-muted">
-            <span>IVA (19%):</span>
-            <span className="font-semibold text-theme-text">${taxTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
-          </div>
-          <div className="flex justify-between items-center border-t border-theme-border/40 pt-2 text-sm font-bold text-theme-text">
-            <span>Total Recibido:</span>
-            <span className="text-theme-accent">${grossTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
-          </div>
-        </div>
-      </div>}
+        </div>}
+
+        {auditAmountsAvailable && selectedInvoice && (
+          <aside className="min-w-0 flex-1 rounded-xl border border-theme-accent/25 bg-theme-accent/[0.03] p-3 text-xs shadow-sm" aria-label={`Auditoría de factura ${selectedInvoice.document_number || 'seleccionada'}`}>
+            <div className="flex items-center justify-between gap-2 border-b border-theme-border/50 pb-1.5">
+              <h4 className="font-bold text-theme-text">Auditoría — Factura N° {selectedInvoice.document_number || 'seleccionada'}</h4>
+              {selectedInvoice.receipt_document_count > 1 && <span className="shrink-0 text-[9px] font-semibold text-theme-text-muted">Recepción asociada</span>}
+            </div>
+            {selectedInvoice.receipt_document_count > 1 && (
+              <p className="mt-1 text-[10px] leading-tight text-theme-text-muted">La recepción contiene varias facturas FA; los importes corresponden a la recepción asociada.</p>
+            )}
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-wider text-theme-text-muted">Neto</p>
+                <p className="mt-0.5 font-semibold text-theme-text">${formatHistoricalAmount(selectedInvoice.receipt_total_net)}</p>
+              </div>
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-wider text-theme-text-muted">IVA</p>
+                <p className="mt-0.5 font-semibold text-theme-text">${formatHistoricalAmount(selectedInvoice.receipt_total_tax)}</p>
+              </div>
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-wider text-theme-text-muted">Total</p>
+                <p className="mt-0.5 font-bold text-theme-accent">${formatHistoricalAmount(selectedInvoice.receipt_total_gross)}</p>
+              </div>
+            </div>
+          </aside>
+        )}
+      </div>
 
       <div className="h-1" aria-hidden="true" />
 

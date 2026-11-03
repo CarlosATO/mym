@@ -6,6 +6,7 @@ import { calculateReceiptEconomics } from '../src/lib/logistica/receipt-economic
 const migration = await readFile(new URL('../supabase/migrations/20261006090000_logistica_purchase_receipts_service_quantity_fix.sql', import.meta.url), 'utf8')
 const hardeningMigration = await readFile(new URL('../supabase/migrations/20261005180000_logistica_purchase_receipts_hardening.sql', import.meta.url), 'utf8')
 const hotfixMigration = await readFile(new URL('../supabase/migrations/20261023200000_logistica_receipt_hotfix.sql', import.meta.url), 'utf8')
+const legacyAccessMigration = await readFile(new URL('../supabase/migrations/20261028110000_logistica_revoke_legacy_purchase_receipt_rpc.sql', import.meta.url), 'utf8')
 const action = await readFile(new URL('../src/app/actions/logistica/recepciones.ts', import.meta.url), 'utf8')
 const worksheet = await readFile(new URL('../src/modules/logistica/recepciones/receipt-worksheet.tsx', import.meta.url), 'utf8')
 const panel = await readFile(new URL('../src/modules/logistica/recepciones/recepciones-panel.tsx', import.meta.url), 'utf8')
@@ -120,9 +121,14 @@ test('FAILED BSale operations cannot auto-retry or send invalid snapshots', () =
   assert.match(hotfixMigration, /status', 'FAILED'/)
 })
 
-test('legacy ten-argument RPC remains executable only for authenticated and service role', () => {
+test('legacy ten-argument RPC is unreachable while the current RPC remains available', () => {
   const signature = 'logistica.create_purchase_receipt_db(uuid, uuid, text, uuid, text, text, text, date, jsonb, uuid)'
   assert.ok(hardeningMigration.includes(`REVOKE EXECUTE ON FUNCTION ${signature} FROM PUBLIC, anon`))
   assert.ok(hardeningMigration.includes(`GRANT EXECUTE ON FUNCTION ${signature} TO authenticated, service_role`))
+  assert.match(legacyAccessMigration, /REVOKE ALL ON FUNCTION logistica\.create_purchase_receipt_db\([\s\S]*?\) FROM PUBLIC, anon, authenticated, service_role/)
+  assert.match(legacyAccessMigration, /uuid, uuid, text, uuid, text, text, text, date, jsonb, uuid\s*\) FROM PUBLIC, anon, authenticated, service_role/)
+  assert.match(migration, /CREATE OR REPLACE FUNCTION logistica\.create_purchase_receipt_db\(/)
+  assert.match(migration, /p_idempotency_key uuid/)
+  assert.match(action, /p_idempotency_key: data\.idempotency_key/)
   assert.match(hardeningMigration, /REVOKE EXECUTE ON FUNCTION logistica\.create_purchase_receipt_db\(uuid, uuid, text, uuid, text, jsonb, uuid\) FROM PUBLIC, anon, authenticated/)
 })
