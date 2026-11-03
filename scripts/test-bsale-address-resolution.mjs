@@ -11,6 +11,7 @@ import {
   normalizeBsaleTerritoryString,
   evaluateAddressMatch,
   evaluateTerritoryMatch,
+  verifyBsaleInvoiceAddress,
 } from '../src/lib/integraciones/bsale-address-resolution.ts'
 
 console.log('--- Iniciando suite de pruebas: FAC-DIR-02A ---')
@@ -383,6 +384,107 @@ test('19. Aislamiento y pureza: Múltiples ejecuciones no comparten estado ni mu
   assert.deepEqual(res1, res2)
   assert.equal(res1.status, 'ADDITIONAL_ADDRESS_MATCHED')
   assert.equal(res1.addressId, 11)
+})
+
+test('20. Dirección con state: null (no presumida activa, FAC-DIR-02B): Rechazada', () => {
+  const nullStateAddresses = [
+    { id: 301, address: 'Avenida España 1234', municipality: 'TALCA', state: null },
+  ]
+
+  const res = resolveBsaleClientAddress({
+    salesOrder: { address: 'Avenida España 1234', municipality: 'TALCA' },
+    client: { address: 'Otra Calle 999', commune: 'TALCA' },
+    bsaleAddresses: nullStateAddresses,
+  })
+
+  assert.equal(res.status, 'ADDRESS_NOT_FOUND')
+  assert.equal(res.reason, 'MATCHING_ADDRESS_IS_INACTIVE')
+  assert.deepEqual(res.candidateIds, [301])
+})
+
+test('21. Verificación posterior de factura emitida (verifyBsaleInvoiceAddress): Coincidencia y discrepancia', () => {
+  const expectedNv = {
+    address: 'MALL GO FLORIDA  LOCAL 1015B',
+    municipality: 'TALCA',
+    city: 'TALCA',
+  }
+
+  // Coincidencia normalizada válida
+  const okResult = verifyBsaleInvoiceAddress(
+    { address: 'Mall Go Florida Local 1015B', municipality: 'Talca', city: 'Talca' },
+    expectedNv
+  )
+  assert.equal(okResult.ok, true)
+
+  // Discrepancia en dirección
+  const mismatchAddr = verifyBsaleInvoiceAddress(
+    { address: 'Mall Brisas del Centro Local 4', municipality: 'Talca', city: 'Talca' },
+    expectedNv
+  )
+  assert.equal(mismatchAddr.ok, false)
+  assert.match(mismatchAddr.reason, /^INVOICE_ADDRESS_MISMATCH/)
+
+  // Discrepancia en comuna/ciudad
+  const mismatchTerr = verifyBsaleInvoiceAddress(
+    { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: 'Curicó', city: 'Curicó' },
+    expectedNv
+  )
+  assert.equal(mismatchTerr.ok, false)
+  assert.match(mismatchTerr.reason, /^INVOICE_TERRITORY_MISMATCH/)
+})
+
+test('22. Geografía: Comuna coincidente pero ciudades distintas informadas rechaza coincidencia (Finding 2)', () => {
+  const terrMatch = evaluateTerritoryMatch(
+    { commune: 'Providencia', city: 'Santiago' },
+    { commune: 'Providencia', city: 'Valparaíso' }
+  )
+  assert.equal(terrMatch.ok, false)
+  assert.equal(terrMatch.reason, 'CITY_MISMATCH_WITH_MATCHING_COMMUNE:santiago_VS_valparaiso')
+
+  const postMatch = verifyBsaleInvoiceAddress(
+    { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: 'TALCA', city: 'LINARES' },
+    { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: 'TALCA', city: 'TALCA' }
+  )
+  assert.equal(postMatch.ok, false)
+  assert.match(postMatch.reason, /CITY_MISMATCH_WITH_MATCHING_COMMUNE/)
+})
+
+test('23. Verificación posterior: Datos ausentes o imposibles de verificar son rechazados (Finding 2)', () => {
+  // Dirección ausente en factura
+  const missingInvoiceAddr = verifyBsaleInvoiceAddress(
+    { address: null, municipality: 'Talca', city: 'Talca' },
+    { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: 'Talca', city: 'Talca' }
+  )
+  assert.equal(missingInvoiceAddr.ok, false)
+  assert.match(missingInvoiceAddr.reason, /^INVOICE_ADDRESS_UNVERIFIABLE/)
+
+  // Territorio ausente en factura
+  const missingInvoiceTerr = verifyBsaleInvoiceAddress(
+    { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: null, city: null },
+    { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: 'Talca', city: 'Talca' }
+  )
+  assert.equal(missingInvoiceTerr.ok, false)
+  assert.match(missingInvoiceTerr.reason, /^INVOICE_TERRITORY_UNVERIFIABLE/)
+})
+
+test('24. Verificación posterior: Factura con ciudad ausente cuando la NV la informa es rechazada (Cierre Auditoría #1)', () => {
+  // NV tiene municipality: TALCA y city: TALCA. Factura tiene municipality: TALCA pero city: null
+  const res = verifyBsaleInvoiceAddress(
+    { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: 'TALCA', city: null },
+    { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: 'TALCA', city: 'TALCA' }
+  )
+  assert.equal(res.ok, false)
+  assert.match(res.reason, /^INVOICE_TERRITORY_UNVERIFIABLE: invoice missing city required by sales order/)
+})
+
+test('25. Verificación posterior: Factura con comuna ausente cuando la NV la informa es rechazada (Cierre Auditoría #1)', () => {
+  // NV tiene municipality: TALCA y city: TALCA. Factura tiene municipality: null pero city: TALCA
+  const res = verifyBsaleInvoiceAddress(
+    { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: null, city: 'TALCA' },
+    { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: 'TALCA', city: 'TALCA' }
+  )
+  assert.equal(res.ok, false)
+  assert.match(res.reason, /^INVOICE_TERRITORY_UNVERIFIABLE: invoice missing commune required by sales order/)
 })
 
 console.log(`\n--- ${passedTests} pruebas completadas exitosamente ---`)

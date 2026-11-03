@@ -1,4 +1,10 @@
 import { createHash } from 'node:crypto'
+import {
+  resolveBsaleClientAddress,
+  type BsaleAdditionalAddressItem,
+  type BsaleAddressInput,
+// @ts-expect-error Standalone Node test runner needs explicit TypeScript extensions.
+} from './bsale-address-resolution.ts'
 
 export type FacturableSnapshot = {
   company_id: string
@@ -44,6 +50,7 @@ export type InvoiceEmissionPayload = {
   clientId: number
   sellerId: number
   salesId: string
+  addressId?: number
   details: Array<{ detailId: number; quantity: number }>
   payments: Array<{ paymentTypeId: number; amount: number; recordDate: number }>
 }
@@ -62,6 +69,10 @@ export function invoiceEmissionEnabled(): boolean {
   return process.env.BSALE_INVOICE_EMISSION_ENABLED === 'true'
 }
 
+export function invoiceAddressResolutionEnabled(): boolean {
+  return process.env.BSALE_INVOICE_ADDRESS_RESOLUTION_ENABLED === 'true'
+}
+
 export function buildInvoiceEmissionPayload(input: {
   officeId: number
   priceListId: number
@@ -71,10 +82,11 @@ export function buildInvoiceEmissionPayload(input: {
   clientId: number
   sellerId: number
   salesId: string
+  addressId?: number | null
   details: Array<{ detailId: number; quantity: number }>
   payments: Array<{ paymentTypeId: number; amount: number; recordDate: number }>
 }): InvoiceEmissionPayload {
-  return {
+  const payload: InvoiceEmissionPayload = {
     documentTypeId: 5,
     dispatch: 1,
     officeId: input.officeId,
@@ -89,6 +101,55 @@ export function buildInvoiceEmissionPayload(input: {
     details: input.details,
     payments: input.payments,
   }
+  if (input.addressId != null && Number.isSafeInteger(input.addressId) && input.addressId > 0) {
+    payload.addressId = input.addressId
+  }
+  return payload
+}
+
+/**
+ * Aplica las decisiones de resolución de direcciones para la emisión de facturas (FAC-DIR-02B, Regla 4).
+ * - ADDITIONAL_ADDRESS_MATCHED: retorna ok: true con addressId validado.
+ * - PRIMARY_ADDRESS_MATCHED: retorna ok: true con addressId: null (omisión autorizada al haber coincidencia probada).
+ * - ADDRESS_NOT_FOUND / AMBIGUOUS_MATCH / INSUFFICIENT_DATA: bloquea con ok: false y mensaje explicativo.
+ */
+export function resolveInvoiceEmissionAddress(input: {
+  nv: BsaleAddressInput
+  client: BsaleAddressInput | null | undefined
+  clientAddresses: BsaleAdditionalAddressItem[]
+}): { ok: true; addressId: number | null } | { ok: false; error: string; code: string } {
+  const resolution = resolveBsaleClientAddress({
+    salesOrder: {
+      address: input.nv.address,
+      municipality: input.nv.municipality,
+      commune: input.nv.commune || input.nv.municipality,
+      city: input.nv.city,
+    },
+    client: {
+      address: input.client?.address,
+      commune: input.client?.commune || input.client?.municipality,
+      municipality: input.client?.municipality || input.client?.commune,
+      city: input.client?.city,
+    },
+    bsaleAddresses: input.clientAddresses,
+  })
+
+  if (resolution.status === 'ADDITIONAL_ADDRESS_MATCHED') {
+    return { ok: true, addressId: resolution.addressId }
+  }
+  if (resolution.status === 'PRIMARY_ADDRESS_MATCHED') {
+    return { ok: true, addressId: null }
+  }
+  if (resolution.status === 'ADDRESS_NOT_FOUND') {
+    const detail = resolution.reason === 'MATCHING_ADDRESS_IS_INACTIVE'
+      ? 'La dirección de la Nota de Venta coincide con una dirección inactiva en Bsale.'
+      : 'No se encontró una dirección coincidente para el cliente en Bsale.'
+    return { ok: false, error: `Resolución de dirección fallida: ${detail}`, code: resolution.reason || resolution.status }
+  }
+  if (resolution.status === 'AMBIGUOUS_MATCH') {
+    return { ok: false, error: 'Resolución de dirección fallida: múltiples direcciones activas coinciden con la Nota de Venta.', code: resolution.status }
+  }
+  return { ok: false, error: `Resolución de dirección fallida: datos insuficientes en la Nota de Venta (${resolution.reason ?? ''}).`, code: resolution.status }
 }
 
 export function buildInvoiceEmissionIdentity(snapshot: InvoiceEmissionSnapshot): { fingerprint: string; salesId: string } {
@@ -185,4 +246,133 @@ export function validateCompleteInvoiceLines(
     if (line.quantity <= 0 || mirroredById.get(line.detailId) !== line.quantity) return { ok: false, reason: 'DETAIL_QUANTITY_MISMATCH' }
   }
   return { ok: true }
+}
+
+export type BsaleAddressesFetcher = (options: {
+  companyId: string
+  path: string
+  params?: Record<string, string | number | undefined>
+}) => Promise<{
+  count?: number
+  limit?: number
+  offset?: number
+  items?: Array<{
+    id: number
+    address?: string | null
+    addressName?: string | null
+    municipality?: string | null
+    city?: string | null
+    state?: number | null
+  }>
+}>
+
+/**
+ * Consulta la colección completa de direcciones adicionales del cliente en Bsale con paginación segura (FAC-DIR-02B, Finding 1).
+ *
+ * Verificaciones obligatorias:
+ * - Valida que el count retornado por Bsale sea un número entero finito y consistente.
+ * - Detecta y bloquea ante páginas incompletas, vacías o repetidas (ciclos de offset o IDs duplicados).
+ * - Bloquea con ok: false ante cualquier consulta incompleta o no verificable al 100%.
+ */
+export async function fetchAllBsaleClientAddresses(
+  companyId: string,
+  clientId: number,
+  fetcher: BsaleAddressesFetcher
+): Promise<{ ok: true; addresses: BsaleAdditionalAddressItem[] } | { ok: false; error: string }> {
+  const limit = 50
+  let offset = 0
+  let expectedTotal: number | null = null
+  const allAddresses: BsaleAdditionalAddressItem[] = []
+  const seenIds = new Set<number>()
+  const visitedOffsets = new Set<number>()
+  const MAX_PAGES = 100
+  let pageCount = 0
+
+  while (true) {
+    if (pageCount >= MAX_PAGES) {
+      return { ok: false, error: `Error consultando direcciones del cliente en Bsale: límite máximo de páginas excedido (${MAX_PAGES}).` }
+    }
+    if (visitedOffsets.has(offset)) {
+      return { ok: false, error: `Error consultando direcciones del cliente en Bsale: ciclo de paginación detectado en offset ${offset}.` }
+    }
+    visitedOffsets.add(offset)
+    pageCount++
+
+    let response: Awaited<ReturnType<BsaleAddressesFetcher>>
+    try {
+      response = await fetcher({
+        companyId,
+        path: `/clients/${clientId}/addresses.json`,
+        params: { limit: String(limit), offset: String(offset) },
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'FAILED_TO_FETCH_ADDRESSES'
+      return { ok: false, error: `Error consultando direcciones del cliente en Bsale: ${msg}` }
+    }
+
+    if (!response || typeof response !== 'object') {
+      return { ok: false, error: 'Error consultando direcciones del cliente en Bsale: respuesta inválida o vacía.' }
+    }
+
+    if (typeof response.count !== 'number' || !Number.isFinite(response.count) || response.count < 0) {
+      return { ok: false, error: 'Error consultando direcciones del cliente en Bsale: count numérico no informado o inválido.' }
+    }
+
+    if (expectedTotal === null) {
+      expectedTotal = response.count
+    } else if (response.count !== expectedTotal) {
+      return { ok: false, error: `Error consultando direcciones del cliente en Bsale: count divergente entre páginas (${expectedTotal} vs ${response.count}).` }
+    }
+
+    if (expectedTotal === 0) {
+      if (Array.isArray(response.items) && response.items.length > 0) {
+        return { ok: false, error: 'Error consultando direcciones del cliente en Bsale: count es 0 pero se devolvieron elementos.' }
+      }
+      return { ok: true, addresses: [] }
+    }
+
+    if (!Array.isArray(response.items)) {
+      return { ok: false, error: 'Error consultando direcciones del cliente en Bsale: items no es un array.' }
+    }
+
+    const items = response.items
+
+    if (items.length === 0 && allAddresses.length < expectedTotal) {
+      return { ok: false, error: `Error consultando direcciones del cliente en Bsale: página vacía en offset ${offset} antes de alcanzar el total esperado (${allAddresses.length}/${expectedTotal}).` }
+    }
+
+    for (const item of items) {
+      if (!item || typeof item.id !== 'number' || !Number.isSafeInteger(item.id)) {
+        return { ok: false, error: 'Error consultando direcciones del cliente en Bsale: elemento sin ID numérico válido.' }
+      }
+      if (seenIds.has(item.id)) {
+        return { ok: false, error: `Error consultando direcciones del cliente en Bsale: dirección duplicada detectada (id ${item.id}).` }
+      }
+      seenIds.add(item.id)
+
+      allAddresses.push({
+        id: item.id,
+        addressName: item.addressName ?? null,
+        address: item.address ?? '',
+        municipality: item.municipality ?? null,
+        city: item.city ?? null,
+        state: item.state ?? null,
+      })
+    }
+
+    if (items.length < limit && allAddresses.length < expectedTotal) {
+      return { ok: false, error: `Error consultando direcciones del cliente en Bsale: página incompleta (${items.length} items) sin alcanzar el total reportado (${allAddresses.length}/${expectedTotal}).` }
+    }
+
+    if (allAddresses.length >= expectedTotal || items.length < limit) {
+      break
+    }
+    offset += limit
+  }
+
+  if (expectedTotal !== null && allAddresses.length !== expectedTotal) {
+    return { ok: false, error: `Error consultando direcciones del cliente en Bsale: total recolectado (${allAddresses.length}) no coincide con count informado (${expectedTotal}).` }
+  }
+
+  return { ok: true, addresses: allAddresses }
 }

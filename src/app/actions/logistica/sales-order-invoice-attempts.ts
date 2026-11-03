@@ -5,7 +5,8 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { BsaleApiError, bsaleFetchForCompany, bsaleFetchResourceForCompany } from '@/lib/bsale/client'
 import { bsaleWriteForCompany } from '@/lib/bsale/write-client'
-import { buildInvoiceEmissionIdentity, buildInvoiceEmissionPayload, chileDateToBsaleEpoch, chileToday, formatBsaleRejection, invoiceEmissionEnabled, validateCompleteInvoiceLines, validateInvoiceDocument } from '@/lib/integraciones/invoice-emission-contract'
+import { buildInvoiceEmissionIdentity, buildInvoiceEmissionPayload, chileDateToBsaleEpoch, chileToday, formatBsaleRejection, invoiceEmissionEnabled, invoiceAddressResolutionEnabled, fetchAllBsaleClientAddresses, resolveInvoiceEmissionAddress, validateCompleteInvoiceLines, validateInvoiceDocument } from '@/lib/integraciones/invoice-emission-contract'
+import { verifyBsaleInvoiceAddress, type BsaleAdditionalAddressItem } from '@/lib/integraciones/bsale-address-resolution'
 import { evaluateInvoiceCommercialValidation } from '@/lib/integraciones/invoice-commercial-validation'
 import { verifyInvoiceStockDispatch, buildInvoiceStockEvidencePayload, type InvoiceStockVerificationResult } from '@/lib/integraciones/invoice-stock-verification'
 import type { InvoiceCommercialSelection } from '@/modules/logistica/preparacion-pedidos/invoice-commercial'
@@ -257,6 +258,25 @@ export async function emitSalesOrderInvoice(cardId: string, selection?: InvoiceC
   }
   const attemptSalesId = existingAttempt?.sales_id ?? identity.salesId
   const attemptFingerprint = existingAttempt?.fingerprint ?? identity.fingerprint
+
+  let targetAddressId: number | null = null
+  if (invoiceAddressResolutionEnabled()) {
+    const addressesResult = await fetchAllBsaleClientAddresses(auth.companyId, clientId, bsaleFetchResourceForCompany)
+    if (!addressesResult.ok) {
+      return { status: 'PREVALIDATION_FAILED' as const, error: addressesResult.error }
+    }
+
+    const resolved = resolveInvoiceEmissionAddress({
+      nv,
+      client,
+      clientAddresses: addressesResult.addresses,
+    })
+    if (!resolved.ok) {
+      return { status: 'PREVALIDATION_FAILED' as const, error: resolved.error }
+    }
+    targetAddressId = resolved.addressId
+  }
+
   const payload = buildInvoiceEmissionPayload({
     officeId,
     priceListId,
@@ -266,6 +286,7 @@ export async function emitSalesOrderInvoice(cardId: string, selection?: InvoiceC
     clientId,
     sellerId,
     salesId: attemptSalesId,
+    addressId: targetAddressId,
     details: snapshotDetails.map((detail: Record<string, any>) => ({ detailId: detail.detail_id, quantity: detail.quantity })),
     payments: [{ paymentTypeId: selectedPaymentTypeId, amount: fullTotals.total, recordDate: emissionDateEpoch }],
   })
@@ -317,6 +338,22 @@ export async function emitSalesOrderInvoice(cardId: string, selection?: InvoiceC
   if (!validation.ok) {
     await markAttempt(db, 'mark_sales_order_invoice_reconciliation_required', attemptId, validation.reason)
     return { status: 'RECONCILIATION_REQUIRED' as const, attempt_id: attemptId, error: validation.reason }
+  }
+  if (invoiceAddressResolutionEnabled()) {
+    const addressVerification = verifyBsaleInvoiceAddress(invoice, {
+      address: nv.address,
+      municipality: nv.municipality,
+      city: nv.city,
+    })
+    if (!addressVerification.ok) {
+      try {
+        await mirrorConfirmedInvoice(auth.companyId, invoice)
+      } catch {
+        // No bloquear registro de conciliación si el mirror falla
+      }
+      await markAttempt(db, 'mark_sales_order_invoice_reconciliation_required', attemptId, addressVerification.reason)
+      return { status: 'RECONCILIATION_REQUIRED' as const, attempt_id: attemptId, error: addressVerification.reason }
+    }
   }
   const stockVerification = await verifyStockWithBoundedReads({
     companyId: auth.companyId,
