@@ -9,6 +9,21 @@ function normalizePersonName(value: string) {
 }
 
 export async function getUsers() {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return []
+
+  const { data: canViewUsers, error: viewError } = await supabase.rpc('has_permission', {
+    p_permission_code: 'usuarios.view',
+  })
+  if (viewError) return []
+
+  const { data: isAdmin, error: adminError } = canViewUsers
+    ? { data: true, error: null }
+    : await supabase.rpc('has_permission', { p_permission_code: 'system.admin' })
+
+  if (adminError || (!canViewUsers && !isAdmin)) return []
+
   const admin = createAdminClient()
   const { data } = await admin
     .from('users')
@@ -201,6 +216,9 @@ export async function updateUser(userId: string, formData: FormData) {
 }
 
 export async function getUserCompanyIds(userId: string): Promise<string[]> {
+  const access = await requireUserManagementAccess(userId)
+  if ('error' in access) return []
+
   const coreAdmin = createSupabaseClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
@@ -215,6 +233,9 @@ export async function getUserCompanyIds(userId: string): Promise<string[]> {
 }
 
 export async function getUserCompanyAccess(userId: string) {
+  const access = await requireUserManagementAccess(userId)
+  if ('error' in access) return []
+
   const coreAdmin = createSupabaseClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
