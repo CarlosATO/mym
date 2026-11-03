@@ -1,4 +1,10 @@
 import { createHash } from 'node:crypto'
+import {
+  resolveBsaleClientAddress,
+  type BsaleAdditionalAddressItem,
+  type BsaleAddressInput,
+// @ts-expect-error Standalone Node test runner needs explicit TypeScript extensions.
+} from './bsale-address-resolution.ts'
 
 export type FacturableSnapshot = {
   company_id: string
@@ -44,6 +50,7 @@ export type InvoiceEmissionPayload = {
   clientId: number
   sellerId: number
   salesId: string
+  addressId?: number
   details: Array<{ detailId: number; quantity: number }>
   payments: Array<{ paymentTypeId: number; amount: number; recordDate: number }>
 }
@@ -62,6 +69,10 @@ export function invoiceEmissionEnabled(): boolean {
   return process.env.BSALE_INVOICE_EMISSION_ENABLED === 'true'
 }
 
+export function invoiceAddressResolutionEnabled(): boolean {
+  return process.env.BSALE_INVOICE_ADDRESS_RESOLUTION_ENABLED === 'true'
+}
+
 export function buildInvoiceEmissionPayload(input: {
   officeId: number
   priceListId: number
@@ -71,10 +82,11 @@ export function buildInvoiceEmissionPayload(input: {
   clientId: number
   sellerId: number
   salesId: string
+  addressId?: number | null
   details: Array<{ detailId: number; quantity: number }>
   payments: Array<{ paymentTypeId: number; amount: number; recordDate: number }>
 }): InvoiceEmissionPayload {
-  return {
+  const payload: InvoiceEmissionPayload = {
     documentTypeId: 5,
     dispatch: 1,
     officeId: input.officeId,
@@ -89,6 +101,55 @@ export function buildInvoiceEmissionPayload(input: {
     details: input.details,
     payments: input.payments,
   }
+  if (input.addressId != null && Number.isSafeInteger(input.addressId) && input.addressId > 0) {
+    payload.addressId = input.addressId
+  }
+  return payload
+}
+
+/**
+ * Aplica las decisiones de resolución de direcciones para la emisión de facturas (FAC-DIR-02B, Regla 4).
+ * - ADDITIONAL_ADDRESS_MATCHED: retorna ok: true con addressId validado.
+ * - PRIMARY_ADDRESS_MATCHED: retorna ok: true con addressId: null (omisión autorizada al haber coincidencia probada).
+ * - ADDRESS_NOT_FOUND / AMBIGUOUS_MATCH / INSUFFICIENT_DATA: bloquea con ok: false y mensaje explicativo.
+ */
+export function resolveInvoiceEmissionAddress(input: {
+  nv: BsaleAddressInput
+  client: BsaleAddressInput | null | undefined
+  clientAddresses: BsaleAdditionalAddressItem[]
+}): { ok: true; addressId: number | null } | { ok: false; error: string; code: string } {
+  const resolution = resolveBsaleClientAddress({
+    salesOrder: {
+      address: input.nv.address,
+      municipality: input.nv.municipality,
+      commune: input.nv.commune || input.nv.municipality,
+      city: input.nv.city,
+    },
+    client: {
+      address: input.client?.address,
+      commune: input.client?.commune || input.client?.municipality,
+      municipality: input.client?.municipality || input.client?.commune,
+      city: input.client?.city,
+    },
+    bsaleAddresses: input.clientAddresses,
+  })
+
+  if (resolution.status === 'ADDITIONAL_ADDRESS_MATCHED') {
+    return { ok: true, addressId: resolution.addressId }
+  }
+  if (resolution.status === 'PRIMARY_ADDRESS_MATCHED') {
+    return { ok: true, addressId: null }
+  }
+  if (resolution.status === 'ADDRESS_NOT_FOUND') {
+    const detail = resolution.reason === 'MATCHING_ADDRESS_IS_INACTIVE'
+      ? 'La dirección de la Nota de Venta coincide con una dirección inactiva en Bsale.'
+      : 'No se encontró una dirección coincidente para el cliente en Bsale.'
+    return { ok: false, error: `Resolución de dirección fallida: ${detail}`, code: resolution.reason || resolution.status }
+  }
+  if (resolution.status === 'AMBIGUOUS_MATCH') {
+    return { ok: false, error: 'Resolución de dirección fallida: múltiples direcciones activas coinciden con la Nota de Venta.', code: resolution.status }
+  }
+  return { ok: false, error: `Resolución de dirección fallida: datos insuficientes en la Nota de Venta (${resolution.reason ?? ''}).`, code: resolution.status }
 }
 
 export function buildInvoiceEmissionIdentity(snapshot: InvoiceEmissionSnapshot): { fingerprint: string; salesId: string } {

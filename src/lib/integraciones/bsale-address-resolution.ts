@@ -203,7 +203,9 @@ export function resolveBsaleClientAddress(
     )
     if (!territoryMatch.ok) continue
 
-    const isActive = item.state === 0 || item.state == null
+    // Regla estricta FAC-DIR-02B: únicamente state === 0 se considera activo.
+    // state !== 0, así como null o undefined, no se presumen activos automáticamente.
+    const isActive = item.state === 0
     if (isActive) {
       activeMatches.push({ item, precision: addrMatch.precision })
     } else {
@@ -283,4 +285,35 @@ export function resolveBsaleClientAddress(
     precision: null,
     reason: 'NO_MATCHING_ADDRESS',
   }
+}
+
+/**
+ * Verificación posterior (FAC-DIR-02B, Regla 7):
+ * Comprueba que el documento devuelto por Bsale contenga dirección, comuna y ciudad
+ * coincidentes con la Nota de Venta esperada.
+ */
+export function verifyBsaleInvoiceAddress(
+  invoice: { address?: string | null; municipality?: string | null; city?: string | null },
+  expectedNv: BsaleAddressInput
+): { ok: true } | { ok: false; reason: string } {
+  const addrMatch = evaluateAddressMatch(expectedNv.address, invoice.address)
+  if (!addrMatch.matched) {
+    return {
+      ok: false,
+      reason: `INVOICE_ADDRESS_MISMATCH: expected="${expectedNv.address ?? ''}" got="${invoice.address ?? ''}"`,
+    }
+  }
+
+  const territoryMatch = evaluateTerritoryMatch(
+    { commune: expectedNv.municipality || expectedNv.commune, city: expectedNv.city },
+    { commune: invoice.municipality, city: invoice.city }
+  )
+  if (!territoryMatch.ok) {
+    return {
+      ok: false,
+      reason: `INVOICE_TERRITORY_MISMATCH: expected="${expectedNv.municipality ?? expectedNv.commune ?? ''}/${expectedNv.city ?? ''}" got="${invoice.municipality ?? ''}/${invoice.city ?? ''}"`,
+    }
+  }
+
+  return { ok: true }
 }
