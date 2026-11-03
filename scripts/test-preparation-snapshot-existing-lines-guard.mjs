@@ -14,7 +14,7 @@ const previous = await readFile(
 
 function acceptedBlock(sql) {
   const start = sql.indexOf('  IF FOUND THEN\n    -- La tarjeta puede apuntar')
-  const stop = sql.indexOf('  -- No se reconstruye el snapshot historico', start)
+  const stop = sql.indexOf('  -- No se reconstruye el snapshot', start)
   assert.ok(start >= 0 && stop > start, 'No se pudo aislar el contrato de aceptación')
   return sql.slice(start, stop)
 }
