@@ -9,7 +9,7 @@ const worksheet = await readFile(new URL('src/modules/logistica/recepciones/rece
 function deriveSource() {
   const start = worksheet.indexOf('const visibleReceiptItems = useMemo(')
   assert.ok(start >= 0, 'visibleReceiptItems derive block not found')
-  return worksheet.slice(start, worksheet.indexOf('}, [poDetail, receiptSearchQuery, receiptLineFilter])', start))
+  return worksheet.slice(start, worksheet.indexOf('}, [poDetail, receiptSearchQuery, receiptLineFilter, selectedInvoice])', start))
 }
 
 test('A. receipt worksheet exposes a SKU/product search input above the lines table', () => {
@@ -44,7 +44,7 @@ test('G. visibleReceiptItems is derived from the canonical poDetail.items withou
 
 test('H. itemInputs stays an independent state and is not recreated while searching', () => {
   assert.match(worksheet, /const \[itemInputs, setItemInputs\] = useState<Record<string, ItemSplit\[\]>>\(\{\}\)/)
-   assert.match(worksheet, /\}, \[poDetail, receiptSearchQuery, receiptLineFilter\]\)/)
+   assert.match(worksheet, /\}, \[poDetail, receiptSearchQuery, receiptLineFilter, selectedInvoice\]\)/)
   assert.doesNotMatch(deriveSource(), /itemInputs|setItemInputs/)
 })
 

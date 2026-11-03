@@ -63,6 +63,13 @@ export interface ReceiptInvoiceSummary {
   file_name: string | null
   has_file: boolean
   received_at: string | null
+  purchase_order_item_ids: string[]
+  received_quantities: Record<string, number>
+  received_amounts?: Record<string, number>
+  receipt_document_count: number
+  receipt_total_net?: number | null
+  receipt_total_tax?: number | null
+  receipt_total_gross?: number | null
 }
 
 export interface ReceiptWarehouseOption {
@@ -270,7 +277,7 @@ export async function getPurchaseOrderForReceipt(poId: string) {
 
 /** Returns only safe invoice metadata for the current receipt form. */
 export async function getPurchaseOrderReceiptInvoices(poId: string): Promise<ReceiptInvoiceSummary[]> {
-  const { authorization } = await authorizeReception()
+  const { authorization, canViewEconomics, canViewReceiptAmounts } = await authorizeReceiptForm()
   const companyId = authorization.companyId
 
   const { data: purchaseOrder, error: purchaseOrderError } = await adqDb()
@@ -286,22 +293,62 @@ export async function getPurchaseOrderReceiptInvoices(poId: string): Promise<Rec
   }
   if (!purchaseOrder) throw new Error('Orden de Compra no encontrada o no autorizada.')
 
-  const { data: receipts, error: receiptsError } = await logDb()
-    .from('purchase_receipts')
-    .select('id, company_id, purchase_order_id, received_at, status, receipt_documents(id, document_type, document_number, file_name, storage_path)')
-    .eq('company_id', companyId)
-    .eq('purchase_order_id', purchaseOrder.id)
-    .order('received_at', { ascending: false })
+  const receiptItemFields = canViewEconomics
+    ? 'id, receipt_id, purchase_order_item_id, quantity_received, net_amount, tax_amount, gross_amount'
+    : 'id, receipt_id, purchase_order_item_id, quantity_received'
+  const receiptFields = `id, company_id, purchase_order_id, received_at, status${canViewReceiptAmounts ? ', receipt_total_net, receipt_total_tax, receipt_total_gross' : ''}, receipt_documents(id, document_type, document_number, file_name, storage_path), purchase_receipt_items(${receiptItemFields})`
+  const [poItemsResult, receiptsResult] = await Promise.all([
+    adqDb()
+      .from('purchase_order_items')
+      .select('id')
+      .eq('po_id', purchaseOrder.id),
+    (logDb() as any)
+      .from('purchase_receipts')
+      .select(receiptFields)
+      .eq('company_id', companyId)
+      .eq('purchase_order_id', purchaseOrder.id)
+      .order('received_at', { ascending: false }),
+  ])
 
-  if (receiptsError) {
-    console.error('getPurchaseOrderReceiptInvoices receipts error:', receiptsError)
+  if (poItemsResult.error || receiptsResult.error) {
+    console.error('getPurchaseOrderReceiptInvoices relations error:', poItemsResult.error || receiptsResult.error)
     throw new Error('No se pudieron cargar las facturas anteriores.')
   }
 
+  const purchaseOrderItemIds = new Set((poItemsResult.data ?? []).map(item => item.id))
   const documents = new Map<string, ReceiptInvoiceSummary>()
-  for (const receipt of receipts ?? []) {
-    if (['CANCELADA', 'CANCELLED'].includes(receipt.status)) continue
+  const processedReceiptIds = new Set<string>()
+  for (const receipt of receiptsResult.data ?? []) {
+    if (processedReceiptIds.has(receipt.id)) continue
+    processedReceiptIds.add(receipt.id)
+    if (receipt.status !== 'COMPLETED') continue
     const receiptDocuments = Array.isArray(receipt.receipt_documents) ? receipt.receipt_documents : []
+    const receivedQuantities = new Map<string, number>()
+    const receivedAmounts = canViewEconomics ? new Map<string, number>() : null
+    const processedReceiptItemIds = new Set<string>()
+    for (const item of Array.isArray(receipt.purchase_receipt_items) ? receipt.purchase_receipt_items : []) {
+      if (
+        !item.id
+        || processedReceiptItemIds.has(item.id)
+        || item.receipt_id !== receipt.id
+        || Number(item.quantity_received || 0) <= 0
+        || !purchaseOrderItemIds.has(item.purchase_order_item_id)
+      ) continue
+      processedReceiptItemIds.add(item.id)
+      receivedQuantities.set(
+        item.purchase_order_item_id,
+        (receivedQuantities.get(item.purchase_order_item_id) ?? 0) + Number(item.quantity_received),
+      )
+      receivedAmounts?.set(
+        item.purchase_order_item_id,
+        (receivedAmounts.get(item.purchase_order_item_id) ?? 0) + Number(item.gross_amount || 0),
+      )
+    }
+    if (receivedQuantities.size === 0) continue
+    const receivedItemIds = [...receivedQuantities.keys()]
+    const receiptQuantities = Object.fromEntries(receivedQuantities)
+    const receiptDocumentCount = receiptDocuments.filter((document: any) => document.document_type === 'FA').length
+
     for (const document of receiptDocuments) {
       if (document.document_type !== 'FA' || documents.has(document.id)) continue
       documents.set(document.id, {
@@ -311,6 +358,15 @@ export async function getPurchaseOrderReceiptInvoices(poId: string): Promise<Rec
         file_name: document.file_name,
         has_file: Boolean(document.storage_path),
         received_at: receipt.received_at,
+        purchase_order_item_ids: receivedItemIds,
+        received_quantities: receiptQuantities,
+        ...(receivedAmounts ? { received_amounts: Object.fromEntries(receivedAmounts) } : {}),
+        receipt_document_count: receiptDocumentCount,
+        ...(canViewReceiptAmounts ? {
+          receipt_total_net: receipt.receipt_total_net,
+          receipt_total_tax: receipt.receipt_total_tax,
+          receipt_total_gross: receipt.receipt_total_gross,
+        } : {}),
       })
     }
   }

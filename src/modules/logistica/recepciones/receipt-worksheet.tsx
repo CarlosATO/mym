@@ -3,7 +3,7 @@
 /* Existing operational component uses legacy mutable state and Supabase row shapes. */
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars, react-hooks/purity */
 
-import React, { useState, useEffect, useMemo, Fragment } from 'react'
+import React, { useState, useEffect, useMemo, useRef, Fragment } from 'react'
 import { useRouter } from 'next/navigation'
 import { getActiveReceiptWarehouses, getPurchaseOrderForReceipt, getPurchaseOrderReceiptInvoices, createPurchaseReceipt, type ReceiptInvoiceSummary, type ReceiptWarehouseOption } from '@/app/actions/logistica/recepciones'
 import { getLocations, type Location } from '@/app/actions/logistica/locations'
@@ -74,17 +74,27 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
   const [registeredInvoicesLoading, setRegisteredInvoicesLoading] = useState(true)
   const [registeredInvoicesError, setRegisteredInvoicesError] = useState<string | null>(null)
   const [invoiceToView, setInvoiceToView] = useState<ReceiptInvoiceSummary | null>(null)
+  const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null)
+  const invoiceClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // itemInputs state maps itemId -> Array of ItemSplit
   const [itemInputs, setItemInputs] = useState<Record<string, ItemSplit[]>>({})
   const [receiptSearchQuery, setReceiptSearchQuery] = useState('')
   const [receiptLineFilter, setReceiptLineFilter] = useState<'ALL' | 'PENDING'>('ALL')
 
+  const selectedInvoice = useMemo(
+    () => registeredInvoices.find(invoice => invoice.id === selectedInvoiceId) ?? null,
+    [registeredInvoices, selectedInvoiceId],
+  )
+
   // Client-side line filters never mutate canonical state or itemInputs.
   const visibleReceiptItems = useMemo(() => {
     const items: any[] = poDetail?.items ?? []
     const query = receiptSearchQuery.trim().toLocaleLowerCase('es-CL')
     const indexed = items.map((item, originalIndex) => ({ item, originalIndex }))
+    if (selectedInvoice) {
+      return indexed.filter(({ item }) => selectedInvoice.purchase_order_item_ids.includes(item.id))
+    }
     const statusFiltered = receiptLineFilter === 'PENDING'
       ? indexed.filter(({ item }) => Number(item.quantity_pending || 0) > 0)
       : indexed
@@ -92,7 +102,33 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
     return statusFiltered.filter(({ item }) =>
       [receiptItemSku(item), item.product_description].some(value => (value ?? '').toLocaleLowerCase('es-CL').includes(query))
     )
-  }, [poDetail, receiptSearchQuery, receiptLineFilter])
+  }, [poDetail, receiptSearchQuery, receiptLineFilter, selectedInvoice])
+
+  const invoiceNumbersByItemId = useMemo(() => {
+    const numbers = new Map<string, string[]>()
+    for (const invoice of registeredInvoices) {
+      if (!invoice.document_number) continue
+      for (const itemId of invoice.purchase_order_item_ids) {
+        const current = numbers.get(itemId) ?? []
+        if (!current.includes(invoice.document_number)) numbers.set(itemId, [...current, invoice.document_number])
+      }
+    }
+    return numbers
+  }, [registeredInvoices])
+
+  const auditAmountsAvailable = Boolean(
+    selectedInvoice
+      && canViewReceiptAmounts
+      && Number.isFinite(selectedInvoice.receipt_total_net)
+      && Number.isFinite(selectedInvoice.receipt_total_tax)
+      && Number.isFinite(selectedInvoice.receipt_total_gross),
+  )
+
+  function formatHistoricalAmount(value: number | null | undefined) {
+    return value == null
+      ? '—'
+      : value.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+  }
 
   useEffect(() => {
     async function loadData() {
@@ -155,6 +191,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
     setRegisteredInvoices([])
     setRegisteredInvoicesError(null)
     setRegisteredInvoicesLoading(true)
+    setSelectedInvoiceId(null)
     void getPurchaseOrderReceiptInvoices(poId).then(invoices => {
       if (!active) return
       setRegisteredInvoices(invoices)
@@ -166,6 +203,35 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
     })
     return () => { active = false }
   }, [poId])
+
+  useEffect(() => () => {
+    if (invoiceClickTimer.current) clearTimeout(invoiceClickTimer.current)
+  }, [])
+
+  function handleInvoiceClick(invoice: ReceiptInvoiceSummary) {
+    if (invoiceClickTimer.current) clearTimeout(invoiceClickTimer.current)
+    invoiceClickTimer.current = setTimeout(() => {
+      setSelectedInvoiceId(current => current === invoice.id ? null : invoice.id)
+      setReceiptSearchQuery('')
+      setReceiptLineFilter('ALL')
+      invoiceClickTimer.current = null
+    }, 240)
+  }
+
+  function handleInvoiceDoubleClick(invoice: ReceiptInvoiceSummary) {
+    if (invoiceClickTimer.current) {
+      clearTimeout(invoiceClickTimer.current)
+      invoiceClickTimer.current = null
+    }
+    if (invoice.has_file) setInvoiceToView(invoice)
+  }
+
+  function handleInvoiceKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, invoice: ReceiptInvoiceSummary) {
+    if (event.key === 'Enter' && event.shiftKey && invoice.has_file) {
+      event.preventDefault()
+      handleInvoiceDoubleClick(invoice)
+    }
+  }
 
   function handleMainWarehouseChange(warehouseId: string) {
     setMainWarehouseId(warehouseId)
@@ -748,13 +814,16 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                   <button
                     key={invoice.id}
                     type="button"
-                    disabled={!invoice.has_file}
-                    onClick={() => setInvoiceToView(invoice)}
-                    aria-label={invoice.has_file
-                      ? `Abrir factura ${invoice.document_number || 'sin número'}`
-                      : `Factura ${invoice.document_number || 'sin número'} sin archivo adjunto`}
+                    onClick={() => handleInvoiceClick(invoice)}
+                    onDoubleClick={() => handleInvoiceDoubleClick(invoice)}
+                    onKeyDown={event => handleInvoiceKeyDown(event, invoice)}
+                    aria-disabled={!invoice.has_file}
+                    aria-label={selectedInvoiceId === invoice.id
+                      ? `Factura ${invoice.document_number || 'sin número'} seleccionada. Clic para quitar filtro${invoice.has_file ? ', Shift+Enter para abrir' : ''}`
+                      : `Seleccionar factura ${invoice.document_number || 'sin número'}${invoice.has_file ? '. Doble clic o Shift+Enter para abrir' : ' sin archivo adjunto'}`}
                     className={cn(
                       'group flex w-12 shrink-0 flex-col items-center gap-0.5 rounded-md px-1 py-0.5 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-accent/70',
+                      selectedInvoiceId === invoice.id && 'bg-theme-accent/15 ring-1 ring-theme-accent/60',
                       invoice.has_file
                         ? 'cursor-pointer text-theme-accent hover:bg-theme-accent/10'
                         : 'cursor-not-allowed text-theme-text-muted/40 opacity-60',
@@ -864,12 +933,22 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                   <th className="py-3 px-4 w-12 text-center">#</th>
                   <th className="py-3 px-4 w-28">SKU</th>
                   <th className="py-3 px-4 min-w-[200px]">Descripción</th>
-                  <th className="py-3 px-4 text-right w-20">Solicitado</th>
-                  <th className="py-3 px-4 text-right w-24">Ya Recibido</th>
-                  <th className="py-3 px-4 text-right w-20">Pendiente</th>
-                  <th className="py-3 px-4 text-right w-28 text-theme-accent">Rec. Actual</th>
-                  {canViewEconomics && <th className="py-3 px-4 text-right w-28">P. Unitario</th>}
-                  {canViewEconomics && <th className="py-3 px-4 text-right w-32 font-bold text-theme-text">Monto Rec.</th>}
+                   <th className="py-3 px-4 text-right w-20">Solicitado Total OC</th>
+                   <th
+                     className="py-3 px-4 text-right w-24"
+                     title={selectedInvoice ? `Cantidad recibida en la recepción asociada a la factura ${selectedInvoice.document_number || 'seleccionada'}` : 'Cantidad acumulada recibida en la OC'}
+                   >
+                      {(selectedInvoice?.receipt_document_count ?? 0) > 1
+                        ? 'Recibido en recepción asociada'
+                        : selectedInvoice
+                        ? `Recibido FA ${selectedInvoice.document_number || 'seleccionada'}`
+                        : 'Ya recibido (acumulado)'}
+                    </th>
+                   <th className="py-3 px-4 text-right w-20">Pendiente OC</th>
+                   <th className="py-3 px-4 text-right w-28 text-theme-accent">Rec. Actual</th>
+                   {canViewEconomics && <th className="py-3 px-4 text-right w-28">P. Unitario</th>}
+                    {canViewEconomics && <th className="py-3 px-4 text-right w-32 font-bold text-theme-text">{selectedInvoice ? 'Monto FA c/IVA' : 'Monto Rec.'}</th>}
+                   <th className="py-3 px-4 text-right w-32">Facturas</th>
                 </tr>
               </thead>
               <tbody>
@@ -886,10 +965,17 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                     }
                   })
 
-                   const price = canViewEconomics ? Number(item.unit_price || 0) : 0
-                   const actualMonto = canViewEconomics ? sumActualRec * price : 0
-                   const exceedsPending = sumQty > Number(item.quantity_pending)
-                   const isComplete = Number(item.quantity_pending || 0) <= 0
+                  const price = canViewEconomics ? Number(item.unit_price || 0) : 0
+                  const actualMonto = canViewEconomics ? sumActualRec * price : 0
+                  const exceedsPending = sumQty > Number(item.quantity_pending)
+                  const isComplete = Number(item.quantity_pending || 0) <= 0
+                  const invoiceNumbers = invoiceNumbersByItemId.get(item.id) ?? []
+                  const historicalReceivedQuantity = selectedInvoice
+                    ? selectedInvoice.received_quantities[item.id] ?? 0
+                    : item.quantity_received
+                  const historicalReceivedAmount = selectedInvoice
+                    ? selectedInvoice.received_amounts?.[item.id]
+                    : null
 
                   const itemWh = item.warehouse_id || mainWarehouseId
                   const whLocs = locations.filter(l => l.warehouse_id === itemWh)
@@ -930,7 +1016,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                           </div>}
                         </td>
                         <td className="py-1.5 px-2 text-right text-theme-text font-semibold">{item.quantity}</td>
-                        <td className="py-1.5 px-2 text-right text-emerald-600 dark:text-emerald-400 font-semibold">{item.quantity_received}</td>
+                         <td className="py-1.5 px-2 text-right text-emerald-600 dark:text-emerald-400 font-semibold">{historicalReceivedQuantity}</td>
                         <td className="py-1.5 px-2 text-right text-theme-text-accent font-semibold">{item.quantity_pending}</td>
                          <td className="py-1.5 px-2 text-right">
                            {isComplete ? <span className="font-bold text-theme-text-muted">0</span> : <input
@@ -943,8 +1029,9 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                              className={cn(erpInputClass, 'w-16 h-6 rounded px-1.5 text-right font-bold text-[10px]')}
                            />}
                          </td>
-                        {canViewEconomics && <td className="py-1.5 px-2 text-right font-semibold text-theme-text">${price.toLocaleString('es-CL')}</td>}
-                        {canViewEconomics && <td className="py-1.5 px-2 text-right font-bold text-theme-text">${actualMonto.toLocaleString('es-CL')}</td>}
+                         {canViewEconomics && <td className="py-1.5 px-2 text-right font-semibold text-theme-text">${price.toLocaleString('es-CL')}</td>}
+                         {canViewEconomics && <td className="py-1.5 px-2 text-right font-bold text-theme-text">{selectedInvoice ? (historicalReceivedAmount == null ? '—' : `$${formatHistoricalAmount(historicalReceivedAmount)}`) : `$${actualMonto.toLocaleString('es-CL')}`}</td>}
+                         <td className="py-1.5 px-2 text-right font-mono text-[10px] text-theme-accent">{invoiceNumbers.length > 0 ? invoiceNumbers.join(', ') : '—'}</td>
                       </tr>
                     )
                   }
@@ -972,11 +1059,12 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                           )}
                         </td>
                         <td className="py-2.5 px-4 text-right text-theme-text font-semibold">{item.quantity}</td>
-                        <td className="py-2.5 px-4 text-right text-emerald-600 dark:text-emerald-400 font-semibold">{item.quantity_received}</td>
+                         <td className="py-2.5 px-4 text-right text-emerald-600 dark:text-emerald-400 font-semibold">{historicalReceivedQuantity}</td>
                         <td className="py-2.5 px-4 text-right text-theme-text-accent font-semibold">{item.quantity_pending}</td>
                         <td className="py-2.5 px-4 text-right font-bold text-theme-accent bg-theme-accent/[0.02]">{sumActualRec}</td>
-                        {canViewEconomics && <td className="py-2.5 px-4 text-right font-semibold text-theme-text">${price.toLocaleString('es-CL')}</td>}
-                        {canViewEconomics && <td className="py-2.5 px-4 text-right font-bold text-theme-text bg-theme-text/[0.02]">${actualMonto.toLocaleString('es-CL')}</td>}
+                         {canViewEconomics && <td className="py-2.5 px-4 text-right font-semibold text-theme-text">${price.toLocaleString('es-CL')}</td>}
+                         {canViewEconomics && <td className="py-2.5 px-4 text-right font-bold text-theme-text bg-theme-text/[0.02]">{selectedInvoice ? (historicalReceivedAmount == null ? '—' : `$${formatHistoricalAmount(historicalReceivedAmount)}`) : `$${actualMonto.toLocaleString('es-CL')}`}</td>}
+                         <td className="py-2.5 px-4 text-right font-mono text-[10px] text-theme-accent">{invoiceNumbers.length > 0 ? invoiceNumbers.join(', ') : '—'}</td>
                       </tr>
 
                       {/* Sub-rows for Splits (Lotes / Partidas) */}
@@ -1013,7 +1101,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                             </td>
 
                              {/* Splits details inputs aligned on rest of columns */}
-                             <td colSpan={canViewEconomics ? 5 : 3} className="py-1.5 px-4">
+                              <td colSpan={canViewEconomics ? 6 : 4} className="py-1.5 px-4">
                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                                  <select
                                    value={split.condition}
@@ -1097,7 +1185,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                       {/* Plus Split Action Row */}
                        {!isComplete && <tr className="border-b border-theme-border last:border-none bg-theme-text/[0.005]">
                         <td className="py-1 px-4 text-center"></td>
-                        <td colSpan={canViewEconomics ? 8 : 6} className="py-1 px-4">
+                         <td colSpan={canViewEconomics ? 9 : 7} className="py-1 px-4">
                           <button
                             onClick={() => addSplit(item.id)}
                             className="inline-flex items-center gap-1 text-[10px] font-bold text-theme-accent hover:text-theme-accent-hover transition-colors pl-8 py-0.5"
@@ -1112,7 +1200,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                  })}
                 {visibleReceiptItems.length === 0 && (
                   <tr>
-                    <td colSpan={canViewEconomics ? 9 : 7} className="px-4 py-8 text-center text-xs text-theme-text-muted">
+                     <td colSpan={canViewEconomics ? 10 : 8} className="px-4 py-8 text-center text-xs text-theme-text-muted">
                       {receiptLineFilter === 'PENDING' ? 'No hay líneas pendientes por recepcionar.' : 'No hay líneas que coincidan con la búsqueda.'}
                     </td>
                   </tr>
@@ -1123,28 +1211,56 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
         </div>
       </div>
 
-      {/* Dynamic financial totals block */}
-      {canViewReceiptAmounts && <div className="flex flex-col md:flex-row items-stretch justify-between gap-3 p-3 rounded-xl border border-theme-border bg-theme-surface/50 shadow-sm text-xs">
-        <div className="max-w-md space-y-1.5 flex flex-col justify-center">
-          <h4 className="font-bold text-theme-text text-sm">Resumen de Recepción</h4>
-          <p className="text-theme-text-muted leading-relaxed">{totalsHelp}</p>
-        </div>
+      <div className="flex flex-col gap-3 md:flex-row md:items-stretch">
+        {/* Dynamic financial totals block: operational values for the new receipt. */}
+        {canViewReceiptAmounts && <div className="flex min-w-0 flex-1 flex-col md:flex-row items-stretch justify-between gap-3 p-3 rounded-xl border border-theme-border bg-theme-surface/50 shadow-sm text-xs">
+          <div className="max-w-md space-y-1.5 flex flex-col justify-center">
+            <h4 className="font-bold text-theme-text text-sm">Resumen de Recepción</h4>
+            <p className="text-theme-text-muted leading-relaxed">{totalsHelp}</p>
+          </div>
 
-        <div className="w-full md:w-64 space-y-1.5 border-t md:border-t-0 md:border-l border-theme-border/60 pt-2 md:pt-0 md:pl-4 flex flex-col justify-center">
-          <div className="flex justify-between items-center text-theme-text-muted">
-            <span>Subtotal Neto:</span>
-            <span className="font-semibold text-theme-text">${netTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+          <div className="w-full md:w-64 space-y-1.5 border-t md:border-t-0 md:border-l border-theme-border/60 pt-2 md:pt-0 md:pl-4 flex flex-col justify-center">
+            <div className="flex justify-between items-center text-theme-text-muted">
+              <span>Subtotal Neto:</span>
+              <span className="font-semibold text-theme-text">${netTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+            </div>
+            <div className="flex justify-between items-center text-theme-text-muted">
+              <span>IVA (19%):</span>
+              <span className="font-semibold text-theme-text">${taxTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+            </div>
+            <div className="flex justify-between items-center border-t border-theme-border/40 pt-2 text-sm font-bold text-theme-text">
+              <span>Total Recibido:</span>
+              <span className="text-theme-accent">${grossTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+            </div>
           </div>
-          <div className="flex justify-between items-center text-theme-text-muted">
-            <span>IVA (19%):</span>
-            <span className="font-semibold text-theme-text">${taxTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
-          </div>
-          <div className="flex justify-between items-center border-t border-theme-border/40 pt-2 text-sm font-bold text-theme-text">
-            <span>Total Recibido:</span>
-            <span className="text-theme-accent">${grossTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
-          </div>
-        </div>
-      </div>}
+        </div>}
+
+        {auditAmountsAvailable && selectedInvoice && (
+          <aside className="min-w-0 flex-1 rounded-xl border border-theme-accent/25 bg-theme-accent/[0.03] p-3 text-xs shadow-sm" aria-label={`Auditoría de factura ${selectedInvoice.document_number || 'seleccionada'}`}>
+            <div className="flex items-center justify-between gap-2 border-b border-theme-border/50 pb-1.5">
+              <h4 className="font-bold text-theme-text">Auditoría — Factura N° {selectedInvoice.document_number || 'seleccionada'}</h4>
+              {selectedInvoice.receipt_document_count > 1 && <span className="shrink-0 text-[9px] font-semibold text-theme-text-muted">Recepción asociada</span>}
+            </div>
+            {selectedInvoice.receipt_document_count > 1 && (
+              <p className="mt-1 text-[10px] leading-tight text-theme-text-muted">La recepción contiene varias facturas FA; los importes corresponden a la recepción asociada.</p>
+            )}
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-wider text-theme-text-muted">Neto</p>
+                <p className="mt-0.5 font-semibold text-theme-text">${formatHistoricalAmount(selectedInvoice.receipt_total_net)}</p>
+              </div>
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-wider text-theme-text-muted">IVA</p>
+                <p className="mt-0.5 font-semibold text-theme-text">${formatHistoricalAmount(selectedInvoice.receipt_total_tax)}</p>
+              </div>
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-wider text-theme-text-muted">Total</p>
+                <p className="mt-0.5 font-bold text-theme-accent">${formatHistoricalAmount(selectedInvoice.receipt_total_gross)}</p>
+              </div>
+            </div>
+          </aside>
+        )}
+      </div>
 
       <div className="h-1" aria-hidden="true" />
 
