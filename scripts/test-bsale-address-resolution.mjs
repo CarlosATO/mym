@@ -467,4 +467,24 @@ test('23. Verificación posterior: Datos ausentes o imposibles de verificar son 
   assert.match(missingInvoiceTerr.reason, /^INVOICE_TERRITORY_UNVERIFIABLE/)
 })
 
+test('24. Verificación posterior: Factura con ciudad ausente cuando la NV la informa es rechazada (Cierre Auditoría #1)', () => {
+  // NV tiene municipality: TALCA y city: TALCA. Factura tiene municipality: TALCA pero city: null
+  const res = verifyBsaleInvoiceAddress(
+    { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: 'TALCA', city: null },
+    { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: 'TALCA', city: 'TALCA' }
+  )
+  assert.equal(res.ok, false)
+  assert.match(res.reason, /^INVOICE_TERRITORY_UNVERIFIABLE: invoice missing city required by sales order/)
+})
+
+test('25. Verificación posterior: Factura con comuna ausente cuando la NV la informa es rechazada (Cierre Auditoría #1)', () => {
+  // NV tiene municipality: TALCA y city: TALCA. Factura tiene municipality: null pero city: TALCA
+  const res = verifyBsaleInvoiceAddress(
+    { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: null, city: 'TALCA' },
+    { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: 'TALCA', city: 'TALCA' }
+  )
+  assert.equal(res.ok, false)
+  assert.match(res.reason, /^INVOICE_TERRITORY_UNVERIFIABLE: invoice missing commune required by sales order/)
+})
+
 console.log(`\n--- ${passedTests} pruebas completadas exitosamente ---`)

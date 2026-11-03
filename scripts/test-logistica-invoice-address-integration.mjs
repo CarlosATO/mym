@@ -22,9 +22,9 @@ import {
 console.log('--- Iniciando suite de pruebas: FAC-DIR-02B (Integración de Direcciones en Facturación) ---')
 
 let passedTests = 0
-function test(name, fn) {
+async function test(name, fn) {
   try {
-    fn()
+    await fn()
     console.log(`  ✓ ${name}`)
     passedTests++
   } catch (err) {
@@ -32,6 +32,16 @@ function test(name, fn) {
     console.error(err)
     process.exit(1)
   }
+}
+
+// Subproceso de control negativo: se ejecuta exclusivamente al pasar la bandera
+if (process.argv.includes('--simulate-async-failure')) {
+  console.log('--- Subproceso de control negativo activo ---')
+  await test('Fallo asíncrono intencional post-await', async () => {
+    await new Promise(resolve => setTimeout(resolve, 15))
+    assert.equal('valor_esperado', 'valor_erroneo', 'Asert falló intencionalmente tras await')
+  })
+  process.exit(0)
 }
 
 // ==========================================
@@ -62,6 +72,14 @@ const ADDRESSES_643 = [
     city: 'TALCA',
     state: 0,
   },
+  {
+    id: 13,
+    addressName: 'MIRAFLORES',
+    address: 'SANTIAGO MIRAFLORES 419',
+    municipality: 'SANTIAGO',
+    city: 'SANTIAGO',
+    state: 0,
+  },
 ]
 
 // Cliente 994
@@ -87,7 +105,7 @@ const ADDRESSES_994 = [
 // ==========================================
 
 // 1. Caso real conocido: NV 5140 -> Factura 24873 (Mall Go Florida, id 11)
-test('1. Caso real NV 5140 -> Factura 24873: Resuelve addressId: 11 e incorpora addressId en el payload', () => {
+await test('1. Caso real NV 5140 -> Factura 24873: Resuelve addressId: 11 e incorpora addressId en el payload', () => {
   const nv = {
     address: 'MALL GO FLORIDA  LOCAL 1015B',
     municipality: 'TALCA',
@@ -122,8 +140,44 @@ test('1. Caso real NV 5140 -> Factura 24873: Resuelve addressId: 11 e incorpora 
   assert.equal(payload.salesId, 'PETGROUP:FACTURA:test:123')
 })
 
-// 2. Caso real conocido: NV 5147 -> Factura 24872 (Coincidencia con dirección principal)
-test('2. Caso real NV 5147 -> Factura 24872: Coincide con dirección principal, omite addressId en payload', () => {
+// 2. Caso real conocido: NV 5147 -> Factura 24872 (Mall Brisas del Centro, id 12, Cliente 643)
+await test('2. Caso real NV 5147 -> Factura 24872: Resuelve addressId: 12 (Cliente 643, Mall Brisas del Centro)', () => {
+  const nv = {
+    address: 'MALL BRISAS DEL CENTRO LOCAL 4',
+    municipality: 'TALCA',
+    city: 'TALCA',
+  }
+
+  const result = resolveInvoiceEmissionAddress({
+    nv,
+    client: CLIENT_643,
+    clientAddresses: ADDRESSES_643,
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.addressId, 12)
+
+  const payload = buildInvoiceEmissionPayload({
+    officeId: 1,
+    priceListId: 1,
+    saleConditionId: 1,
+    emissionDate: 1730600000,
+    expirationDate: 1730600000,
+    clientId: 643,
+    sellerId: 10,
+    salesId: 'PETGROUP:FACTURA:test:456',
+    addressId: result.addressId,
+    details: [{ detailId: 201, quantity: 5 }],
+    payments: [{ paymentTypeId: 1, amount: 25000, recordDate: 1730600000 }],
+  })
+
+  assert.equal(payload.addressId, 12)
+  assert.equal(payload.clientId, 643)
+  assert.equal(payload.salesId, 'PETGROUP:FACTURA:test:456')
+})
+
+// 3. Coincidencia con dirección principal: Omite addressId en payload al tener coincidencia probada (Cliente 994)
+await test('3. Coincidencia con dirección principal: Omite addressId en payload (Cliente 994, Freire 854)', () => {
   const nv = {
     address: 'Freire 854',
     municipality: 'Constitución',
@@ -147,10 +201,10 @@ test('2. Caso real NV 5147 -> Factura 24872: Coincide con dirección principal, 
     expirationDate: 1730600000,
     clientId: 994,
     sellerId: 10,
-    salesId: 'PETGROUP:FACTURA:test:456',
+    salesId: 'PETGROUP:FACTURA:test:789',
     addressId: result.addressId,
-    details: [{ detailId: 201, quantity: 5 }],
-    payments: [{ paymentTypeId: 1, amount: 25000, recordDate: 1730600000 }],
+    details: [{ detailId: 301, quantity: 1 }],
+    payments: [{ paymentTypeId: 1, amount: 10000, recordDate: 1730600000 }],
   })
 
   // addressId debe estar ausente cuando es null (PRIMARY_ADDRESS_MATCHED)
@@ -158,8 +212,8 @@ test('2. Caso real NV 5147 -> Factura 24872: Coincide con dirección principal, 
   assert.equal(payload.clientId, 994)
 })
 
-// 3. Coincidencia con dirección adicional normalizada (espacios, mayúsculas, diacríticos)
-test('3. Coincidencia con dirección adicional normalizada: Extrae addressId válido', () => {
+// 4. Coincidencia con dirección adicional normalizada (espacios, mayúsculas, diacríticos)
+await test('4. Coincidencia con dirección adicional normalizada: Extrae addressId válido', () => {
   const nv = {
     address: '  mall  go   florida local 1015b  ',
     municipality: 'Talca',
@@ -176,8 +230,8 @@ test('3. Coincidencia con dirección adicional normalizada: Extrae addressId vá
   assert.equal(result.addressId, 11)
 })
 
-// 4. Direcciones ambiguas o duplicadas activas -> Bloquea emisión antes de POST
-test('4. Direcciones ambiguas o duplicadas activas: Bloquea con AMBIGUOUS_MATCH', () => {
+// 5. Direcciones ambiguas o duplicadas activas -> Bloquea emisión antes de POST
+await test('5. Direcciones ambiguas o duplicadas activas: Bloquea con AMBIGUOUS_MATCH', () => {
   const duplicateAddresses = [
     { id: 11, address: 'Av. Colón 100', municipality: 'TALCA', state: 0 },
     { id: 12, address: 'Av. Colón 100', municipality: 'TALCA', state: 0 },
@@ -194,8 +248,8 @@ test('4. Direcciones ambiguas o duplicadas activas: Bloquea con AMBIGUOUS_MATCH'
   assert.match(result.error, /múltiples direcciones activas coinciden/i)
 })
 
-// 5. Dirección inactiva (state !== 0) -> Bloquea emisión antes de POST
-test('5. Dirección inactiva (state: 1): Bloquea con MATCHING_ADDRESS_IS_INACTIVE', () => {
+// 6. Dirección inactiva (state !== 0) -> Bloquea emisión antes de POST
+await test('6. Dirección inactiva (state: 1): Bloquea con MATCHING_ADDRESS_IS_INACTIVE', () => {
   const inactiveAddresses = [
     { id: 77, address: 'Los Aromos 450', municipality: 'LINARES', state: 1 },
   ]
@@ -211,8 +265,8 @@ test('5. Dirección inactiva (state: 1): Bloquea con MATCHING_ADDRESS_IS_INACTIV
   assert.match(result.error, /dirección inactiva en Bsale/i)
 })
 
-// 6. Dirección con state: null (no presumida activa) -> Bloquea emisión antes de POST
-test('6. Dirección con state: null (no presumida activa, FAC-DIR-02B): Bloquea con MATCHING_ADDRESS_IS_INACTIVE', () => {
+// 7. Dirección con state: null (no presumida activa) -> Bloquea emisión antes de POST
+await test('7. Dirección con state: null (no presumida activa, FAC-DIR-02B): Bloquea con MATCHING_ADDRESS_IS_INACTIVE', () => {
   const nullStateAddresses = [
     { id: 88, address: 'Calle Chacabuco 12', municipality: 'TALCA', state: null },
   ]
@@ -228,8 +282,8 @@ test('6. Dirección con state: null (no presumida activa, FAC-DIR-02B): Bloquea 
   assert.match(result.error, /dirección inactiva en Bsale/i)
 })
 
-// 7. Bloqueo por falta de datos en Nota de Venta (sin dirección o en blanco)
-test('7. Bloqueo por falta de datos: NV con dirección null o en blanco', () => {
+// 8. Bloqueo por falta de datos en Nota de Venta (sin dirección o en blanco)
+await test('8. Bloqueo por falta de datos: NV con dirección null o en blanco', () => {
   const resNull = resolveInvoiceEmissionAddress({
     nv: { address: null, municipality: 'Talca' },
     client: CLIENT_643,
@@ -247,8 +301,8 @@ test('7. Bloqueo por falta de datos: NV con dirección null o en blanco', () => 
   assert.equal(resBlank.code, 'INSUFFICIENT_DATA')
 })
 
-// 8. Bloqueo por falta de datos territoriales en Nota de Venta
-test('8. Bloqueo por falta de datos: NV sin comuna ni ciudad', () => {
+// 9. Bloqueo por falta de datos territoriales en Nota de Venta
+await test('9. Bloqueo por falta de datos: NV sin comuna ni ciudad', () => {
   const result = resolveInvoiceEmissionAddress({
     nv: { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: null, city: null },
     client: CLIENT_643,
@@ -258,8 +312,8 @@ test('8. Bloqueo por falta de datos: NV sin comuna ni ciudad', () => {
   assert.equal(result.code, 'INSUFFICIENT_DATA')
 })
 
-// 9. Bloqueo por dirección no encontrada (sin coincidencia alguna)
-test('9. Bloqueo por dirección no encontrada: NO_MATCHING_ADDRESS', () => {
+// 10. Bloqueo por dirección no encontrada (sin coincidencia alguna)
+await test('10. Bloqueo por dirección no encontrada: NO_MATCHING_ADDRESS', () => {
   const result = resolveInvoiceEmissionAddress({
     nv: { address: 'Dirección Inexistente 9999', municipality: 'Talca' },
     client: CLIENT_643,
@@ -270,8 +324,8 @@ test('9. Bloqueo por dirección no encontrada: NO_MATCHING_ADDRESS', () => {
   assert.match(result.error, /No se encontró una dirección coincidente/i)
 })
 
-// 10. Paginación segura y manejo defensivo del helper real fetchAllBsaleClientAddresses (Finding 1)
-test('10. Paginación segura: verificación de count, detección de páginas incompletas, duplicados y ciclos', async () => {
+// 11. Paginación segura y manejo defensivo del helper real fetchAllBsaleClientAddresses (Finding 1)
+await test('11. Paginación segura: verificación de count, detección de páginas incompletas, duplicados y ciclos', async () => {
   // A. Paginación exitosa multi-página con count consistente (55 items en 2 páginas)
   const page1Items = Array.from({ length: 50 }, (_, i) => ({ id: i + 1, address: `Calle ${i + 1}`, municipality: 'Talca', state: 0 }))
   const page2Items = Array.from({ length: 5 }, (_, i) => ({ id: i + 51, address: `Calle ${i + 51}`, municipality: 'Talca', state: 0 }))
@@ -364,8 +418,8 @@ test('10. Paginación segura: verificación de count, detección de páginas inc
   assert.match(throwResult.error, /ETIMEDOUT/i)
 })
 
-// 11. Verificación posterior de dirección en factura devuelta por Bsale (verifyBsaleInvoiceAddress, Finding 2)
-test('11. Verificación posterior de documento devuelto por Bsale: Comuna y ciudad estrictas, datos no verificables', () => {
+// 12. Verificación posterior de dirección en factura devuelta por Bsale (verifyBsaleInvoiceAddress, Finding 2 y Cierre Auditoría)
+await test('12. Verificación posterior de documento devuelto por Bsale: Comuna y ciudad estrictas, datos no verificables y detección histórica', () => {
   const nv = {
     address: 'MALL GO FLORIDA  LOCAL 1015B',
     municipality: 'TALCA',
@@ -395,7 +449,7 @@ test('11. Verificación posterior de documento devuelto por Bsale: Comuna y ciud
   assert.equal(mismatchTerritory.ok, false)
   assert.match(mismatchTerritory.reason, /^INVOICE_TERRITORY_MISMATCH/)
 
-  // D. Finding 2: Comuna coincidente pero ciudades distintas informadas -> Falla e impide false-positive
+  // D. Comuna coincidente pero ciudades distintas informadas -> Falla e impide false-positive
   const mismatchCityWithMatchingCommune = verifyBsaleInvoiceAddress(
     { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: 'TALCA', city: 'LINARES' },
     nv
@@ -403,7 +457,7 @@ test('11. Verificación posterior de documento devuelto por Bsale: Comuna y ciud
   assert.equal(mismatchCityWithMatchingCommune.ok, false)
   assert.match(mismatchCityWithMatchingCommune.reason, /CITY_MISMATCH_WITH_MATCHING_COMMUNE/)
 
-  // E. Finding 2: Datos ausentes o imposibles de verificar -> Falla para requerir conciliación
+  // E. Datos ausentes o imposibles de verificar -> Falla para requerir conciliación
   const missingAddress = verifyBsaleInvoiceAddress(
     { address: null, municipality: 'Talca', city: 'Talca' },
     nv
@@ -417,10 +471,42 @@ test('11. Verificación posterior de documento devuelto por Bsale: Comuna y ciud
   )
   assert.equal(missingTerritory.ok, false)
   assert.match(missingTerritory.reason, /^INVOICE_TERRITORY_UNVERIFIABLE/)
+
+  // F. Cierre Auditoría: Factura con ciudad ausente cuando la NV la informa -> Rechazada para conciliación
+  const missingInvoiceCity = verifyBsaleInvoiceAddress(
+    { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: 'TALCA', city: null },
+    nv
+  )
+  assert.equal(missingInvoiceCity.ok, false)
+  assert.match(missingInvoiceCity.reason, /^INVOICE_TERRITORY_UNVERIFIABLE: invoice missing city required by sales order/)
+
+  // G. Cierre Auditoría: Factura con comuna ausente cuando la NV la informa -> Rechazada para conciliación
+  const missingInvoiceCommune = verifyBsaleInvoiceAddress(
+    { address: 'MALL GO FLORIDA  LOCAL 1015B', municipality: null, city: 'TALCA' },
+    nv
+  )
+  assert.equal(missingInvoiceCommune.ok, false)
+  assert.match(missingInvoiceCommune.reason, /^INVOICE_TERRITORY_UNVERIFIABLE: invoice missing commune required by sales order/)
+
+  // H. Factura histórica 24873 (dirección 'SANTIAGO') vs NV 5140 ('MALL GO FLORIDA LOCAL 1015B'): Detecta discrepancia real
+  const historical24873 = verifyBsaleInvoiceAddress(
+    { address: 'SANTIAGO', municipality: 'SANTIAGO', city: 'SANTIAGO' },
+    nv
+  )
+  assert.equal(historical24873.ok, false)
+  assert.match(historical24873.reason, /^INVOICE_ADDRESS_MISMATCH/)
+
+  // I. Factura histórica 24872 (dirección 'SANTIAGO') vs NV 5147 ('MALL BRISAS DEL CENTRO LOCAL 4'): Detecta discrepancia real
+  const historical24872 = verifyBsaleInvoiceAddress(
+    { address: 'SANTIAGO', municipality: 'SANTIAGO', city: 'SANTIAGO' },
+    { address: 'MALL BRISAS DEL CENTRO LOCAL 4', municipality: 'TALCA', city: 'TALCA' }
+  )
+  assert.equal(historical24872.ok, false)
+  assert.match(historical24872.reason, /^INVOICE_ADDRESS_MISMATCH/)
 })
 
-// 12. Feature Flag apagado: Preserva compatibilidad hacia atrás estricta
-test('12. Feature flag apagado: Comportamiento por defecto y omisión de addressId', () => {
+// 13. Feature Flag apagado: Preserva compatibilidad hacia atrás estricta
+await test('13. Feature flag apagado: Comportamiento por defecto y omisión de addressId', () => {
   // Asegurar que por defecto el flag está inactivo sin variable de entorno
   delete process.env.BSALE_INVOICE_ADDRESS_RESOLUTION_ENABLED
   assert.equal(invoiceAddressResolutionEnabled(), false)
@@ -447,8 +533,8 @@ test('12. Feature flag apagado: Comportamiento por defecto y omisión de address
   delete process.env.BSALE_INVOICE_ADDRESS_RESOLUTION_ENABLED
 })
 
-// 13. Preservación de idempotencia: Identity snapshot y fingerprint inalterados
-test('13. Preservación de idempotencia: El fingerprint y salesId no dependen de addressId', () => {
+// 14. Preservación de idempotencia: Identity snapshot y fingerprint inalterados
+await test('14. Preservación de idempotencia: El fingerprint y salesId no dependen de addressId', () => {
   const baseSnapshot = {
     company_id: '123e4567-e89b-12d3-a456-426614174000',
     canonical_bsale_token: 'NV-5140-TOKEN',
@@ -474,6 +560,29 @@ test('13. Preservación de idempotencia: El fingerprint y salesId no dependen de
   assert.equal(identity1.fingerprint, identity2.fingerprint)
   assert.equal(identity1.salesId, identity2.salesId)
   assert.match(identity1.salesId, /^PETGROUP:FACTURA:/)
+})
+
+// 15. Control negativo: una aserción asíncrona fallida post-await provoca fallo real de la suite (exit code 1)
+await test('15. Control negativo: verificar que una aserción fallida tras await provoca el fallo real de la suite', async () => {
+  const { execFile } = await import('node:child_process')
+  const { promisify } = await import('node:util')
+  const execFileAsync = promisify(execFile)
+
+  let childError = null
+  try {
+    await execFileAsync(process.execPath, [
+      new URL(import.meta.url).pathname,
+      '--simulate-async-failure',
+    ])
+  } catch (err) {
+    childError = err
+  }
+
+  assert.ok(childError, 'El subproceso con aserción asíncrona fallida debió salir con error')
+  assert.equal(childError.code, 1, 'El código de salida del subproceso fallido debe ser estrictamente 1')
+  const combinedOutput = `${childError.stdout || ''}\n${childError.stderr || ''}`
+  assert.match(combinedOutput, /✗ Fallo asíncrono intencional post-await/, 'El harness debió registrar la falla con ✗')
+  assert.match(combinedOutput, /Asert falló intencionalmente tras await/, 'El error de la aserción debió ser capturado y emitido')
 })
 
 console.log(`\n--- ${passedTests} pruebas de integración completadas exitosamente ---`)

@@ -292,11 +292,17 @@ export function resolveBsaleClientAddress(
 }
 
 /**
- * Verificación posterior (FAC-DIR-02B, Regla 7 y Finding 2):
+ * Verificación posterior (FAC-DIR-02B, Regla 7 y Cierre de Auditoría):
  * Comprueba que el documento devuelto por Bsale contenga dirección, comuna y ciudad
  * coincidentes con la Nota de Venta esperada.
  *
- * Trata discrepancias o datos imposibles de verificar mediante conciliación (ok: false).
+ * Reglas de integridad:
+ * 1. La dirección textual debe estar presente en ambos documentos y coincidir de forma exacta o normalizada.
+ * 2. Si la NV especifica comuna, la factura devuelta debe informarla obligatoriamente (INVOICE_TERRITORY_UNVERIFIABLE).
+ * 3. Si la NV especifica ciudad, la factura devuelta debe informarla obligatoriamente (INVOICE_TERRITORY_UNVERIFIABLE).
+ * 4. Si la NV carece de todo dato territorial o la factura carece de ambos, se rechaza como no verificable.
+ * 5. Si ambas comunas y/o ciudades están informadas, se evalúan con evaluateTerritoryMatch.
+ *    Cualquier discrepancia (incluyendo comuna igual pero ciudad distinta) deriva en ok: false para conciliación.
  */
 export function verifyBsaleInvoiceAddress(
   invoice: { address?: string | null; municipality?: string | null; city?: string | null },
@@ -322,10 +328,40 @@ export function verifyBsaleInvoiceAddress(
   const nvCity = expectedNv.city
   const invoiceCity = invoice.city
 
-  if ((!nvCommune && !nvCity) || (!invoiceCommune && !invoiceCity)) {
+  const normNvCommune = normalizeBsaleTerritoryString(nvCommune)
+  const normNvCity = normalizeBsaleTerritoryString(nvCity)
+  const normInvoiceCommune = normalizeBsaleTerritoryString(invoiceCommune)
+  const normInvoiceCity = normalizeBsaleTerritoryString(invoiceCity)
+
+  // Si la NV carece de todo dato territorial -> INVOICE_TERRITORY_UNVERIFIABLE
+  if (!normNvCommune && !normNvCity) {
     return {
       ok: false,
-      reason: `INVOICE_TERRITORY_UNVERIFIABLE: missing territorial data (expected="${nvCommune ?? ''}/${nvCity ?? ''}" got="${invoiceCommune ?? ''}/${invoiceCity ?? ''}")`,
+      reason: `INVOICE_TERRITORY_UNVERIFIABLE: sales order missing all territorial data (expected="${nvCommune ?? ''}/${nvCity ?? ''}")`,
+    }
+  }
+
+  // Si la factura carece de todo dato territorial -> INVOICE_TERRITORY_UNVERIFIABLE
+  if (!normInvoiceCommune && !normInvoiceCity) {
+    return {
+      ok: false,
+      reason: `INVOICE_TERRITORY_UNVERIFIABLE: invoice missing all territorial data (got="${invoiceCommune ?? ''}/${invoiceCity ?? ''}")`,
+    }
+  }
+
+  // Si la NV especifica comuna, la factura debe informarla obligatoriamente para verificarla
+  if (normNvCommune && !normInvoiceCommune) {
+    return {
+      ok: false,
+      reason: `INVOICE_TERRITORY_UNVERIFIABLE: invoice missing commune required by sales order (expected="${nvCommune}" got null/empty)`,
+    }
+  }
+
+  // Si la NV especifica ciudad, la factura debe informarla obligatoriamente para verificarla
+  if (normNvCity && !normInvoiceCity) {
+    return {
+      ok: false,
+      reason: `INVOICE_TERRITORY_UNVERIFIABLE: invoice missing city required by sales order (expected="${nvCity}" got null/empty)`,
     }
   }
 
