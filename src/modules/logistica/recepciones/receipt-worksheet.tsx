@@ -75,7 +75,6 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
   const [registeredInvoicesError, setRegisteredInvoicesError] = useState<string | null>(null)
   const [invoiceToView, setInvoiceToView] = useState<ReceiptInvoiceSummary | null>(null)
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null)
-  const invoiceClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // itemInputs state maps itemId -> Array of ItemSplit
   const [itemInputs, setItemInputs] = useState<Record<string, ItemSplit[]>>({})
@@ -103,6 +102,16 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
       [receiptItemSku(item), item.product_description].some(value => (value ?? '').toLocaleLowerCase('es-CL').includes(query))
     )
   }, [poDetail, receiptSearchQuery, receiptLineFilter, selectedInvoice])
+
+  const hiddenItemsWithQuantities = useMemo(() => {
+    if (!poDetail?.items) return []
+    const visibleIds = new Set(visibleReceiptItems.map(({ item }) => item.id))
+    return poDetail.items.filter((item: any) => {
+      if (visibleIds.has(item.id)) return false
+      const splits = itemInputs[item.id] || []
+      return splits.some((s: ItemSplit) => Number(s.quantity || 0) > 0)
+    })
+  }, [poDetail, visibleReceiptItems, itemInputs])
 
   const invoiceNumbersByItemId = useMemo(() => {
     const numbers = new Map<string, string[]>()
@@ -204,33 +213,16 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
     return () => { active = false }
   }, [poId])
 
-  useEffect(() => () => {
-    if (invoiceClickTimer.current) clearTimeout(invoiceClickTimer.current)
-  }, [])
-
-  function handleInvoiceClick(invoice: ReceiptInvoiceSummary) {
-    if (invoiceClickTimer.current) clearTimeout(invoiceClickTimer.current)
-    invoiceClickTimer.current = setTimeout(() => {
-      setSelectedInvoiceId(current => current === invoice.id ? null : invoice.id)
-      setReceiptSearchQuery('')
-      setReceiptLineFilter('ALL')
-      invoiceClickTimer.current = null
-    }, 240)
+  function toggleInvoiceFilter(invoiceId: string) {
+    setSelectedInvoiceId(current => current === invoiceId ? null : invoiceId)
+    setReceiptSearchQuery('')
+    setReceiptLineFilter('ALL')
   }
 
-  function handleInvoiceDoubleClick(invoice: ReceiptInvoiceSummary) {
-    if (invoiceClickTimer.current) {
-      clearTimeout(invoiceClickTimer.current)
-      invoiceClickTimer.current = null
-    }
-    if (invoice.has_file) setInvoiceToView(invoice)
-  }
-
-  function handleInvoiceKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, invoice: ReceiptInvoiceSummary) {
-    if (event.key === 'Enter' && event.shiftKey && invoice.has_file) {
-      event.preventDefault()
-      handleInvoiceDoubleClick(invoice)
-    }
+  function handleShowAllLines() {
+    setReceiptSearchQuery('')
+    setSelectedInvoiceId(null)
+    setReceiptLineFilter('ALL')
   }
 
   function handleMainWarehouseChange(warehouseId: string) {
@@ -390,6 +382,21 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
   // Main saving logic
   async function handleSaveReceipt() {
     if (!poDetail || saving) return
+
+    // Prevent saving if active filters hide lines with entered quantities
+    if (hiddenItemsWithQuantities.length > 0) {
+      toast.error(
+        `Hay ${hiddenItemsWithQuantities.length} línea(s) con cantidades ingresadas ocultas por los filtros activos. Revise todas las líneas antes de confirmar para evitar registros no verificados.`,
+        {
+          action: {
+            label: 'Revisar todas las líneas',
+            onClick: handleShowAllLines,
+          },
+          duration: 6000,
+        }
+      )
+      return
+    }
 
     // Prevent double submission if PO is already received
     if (poDetail.po.receipt_status === 'RECEPCION_TOTAL' || poDetail.po.status === 'RECEPCION_TOTAL') {
@@ -811,34 +818,62 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
             <div className="mt-1 overflow-x-auto overscroll-x-contain">
               <div className="flex min-w-max flex-nowrap items-start gap-3 py-0.5">
                 {registeredInvoices.map(invoice => (
-                  <button
+                  <div
                     key={invoice.id}
-                    type="button"
-                    onClick={() => handleInvoiceClick(invoice)}
-                    onDoubleClick={() => handleInvoiceDoubleClick(invoice)}
-                    onKeyDown={event => handleInvoiceKeyDown(event, invoice)}
-                    aria-disabled={!invoice.has_file}
-                    aria-label={selectedInvoiceId === invoice.id
-                      ? `Factura ${invoice.document_number || 'sin número'} seleccionada. Clic para quitar filtro${invoice.has_file ? ', Shift+Enter para abrir' : ''}`
-                      : `Seleccionar factura ${invoice.document_number || 'sin número'}${invoice.has_file ? '. Doble clic o Shift+Enter para abrir' : ' sin archivo adjunto'}`}
                     className={cn(
-                      'group flex w-12 shrink-0 flex-col items-center gap-0.5 rounded-md px-1 py-0.5 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-accent/70',
-                      selectedInvoiceId === invoice.id && 'bg-theme-accent/15 ring-1 ring-theme-accent/60',
-                      invoice.has_file
-                        ? 'cursor-pointer text-theme-accent hover:bg-theme-accent/10'
-                        : 'cursor-not-allowed text-theme-text-muted/40 opacity-60',
+                      'group flex w-16 shrink-0 flex-col items-center gap-1 rounded-lg border p-1 text-center transition-colors',
+                      selectedInvoiceId === invoice.id
+                        ? 'border-theme-accent bg-theme-accent/10 shadow-xs'
+                        : 'border-theme-border/60 bg-theme-surface/60 hover:border-theme-border'
                     )}
                   >
-                    <span className="relative flex h-8 w-7 items-center justify-center">
-                      <LucideIcons.FileText className="h-8 w-7" strokeWidth={1.6} />
-                      <span className="absolute bottom-0.5 rounded-[2px] bg-current px-0.5 text-[6px] font-black leading-[8px] text-theme-surface">
-                        PDF
+                    <button
+                      type="button"
+                      disabled={!invoice.has_file}
+                      onClick={() => setInvoiceToView(invoice)}
+                      aria-label={invoice.has_file
+                        ? `Abrir factura ${invoice.document_number || 'sin número'}`
+                        : `Factura ${invoice.document_number || 'sin número'} sin archivo adjunto`}
+                      title={invoice.has_file
+                        ? `Abrir PDF de factura ${invoice.document_number || 'sin número'}`
+                        : 'Factura sin archivo adjunto'}
+                      className={cn(
+                        'flex flex-col items-center gap-0.5 w-full text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-accent/70 rounded',
+                        invoice.has_file
+                          ? 'cursor-pointer text-theme-accent hover:opacity-80'
+                          : 'cursor-not-allowed text-theme-text-muted/40 opacity-60',
+                      )}
+                    >
+                      <span className="relative flex h-8 w-7 items-center justify-center">
+                        <LucideIcons.FileText className="h-8 w-7" strokeWidth={1.6} />
+                        <span className="absolute bottom-0.5 rounded-[2px] bg-current px-0.5 text-[6px] font-black leading-[8px] text-theme-surface">
+                          PDF
+                        </span>
                       </span>
-                    </span>
-                    <span className="w-full truncate text-[10px] font-semibold leading-3" title={invoice.document_number || undefined}>
-                      {invoice.document_number || '—'}
-                    </span>
-                  </button>
+                      <span className="w-full truncate text-[10px] font-semibold leading-3" title={invoice.document_number || undefined}>
+                        {invoice.document_number || '—'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleInvoiceFilter(invoice.id)}
+                      aria-label={selectedInvoiceId === invoice.id
+                        ? `Quitar filtro de factura ${invoice.document_number || 'sin número'}`
+                        : `Filtrar líneas por factura ${invoice.document_number || 'sin número'}`}
+                      title={selectedInvoiceId === invoice.id
+                        ? 'Quitar filtro de factura'
+                        : 'Filtrar líneas por esta factura'}
+                      className={cn(
+                        'flex items-center justify-center gap-1 w-full rounded px-1 py-0.5 text-[9px] font-bold transition-all',
+                        selectedInvoiceId === invoice.id
+                          ? 'bg-theme-accent text-white shadow-xs'
+                          : 'bg-theme-text/5 text-theme-text-muted hover:bg-theme-text/10 hover:text-theme-text'
+                      )}
+                    >
+                      <LucideIcons.Filter className="h-2.5 w-2.5 shrink-0" />
+                      <span>{selectedInvoiceId === invoice.id ? 'Filtrada' : 'Filtrar'}</span>
+                    </button>
+                  </div>
                 ))}
               </div>
             </div>
@@ -880,6 +915,34 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
           </span>
         </div>
 
+        {/* Proactive alert when active filters hide lines with entered quantities */}
+        {hiddenItemsWithQuantities.length > 0 && (
+          <div
+            role="alert"
+            className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-200 text-xs animate-in fade-in duration-150"
+          >
+            <div className="flex items-center gap-2">
+              <LucideIcons.AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+              <div>
+                <p className="font-bold">
+                  {hiddenItemsWithQuantities.length} {hiddenItemsWithQuantities.length === 1 ? 'línea con cantidades ingresadas está oculta' : 'líneas con cantidades ingresadas están ocultas'} por los filtros activos.
+                </p>
+                <p className="text-[11px] text-amber-800/80 dark:text-amber-300/80">
+                  Para evitar un guardado silencioso de cantidades no visibles, revise todas las líneas antes de confirmar la recepción.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleShowAllLines}
+              className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 text-white font-semibold text-[11px] hover:bg-amber-700 transition-colors shrink-0 shadow-xs"
+            >
+              <LucideIcons.Eye className="w-3.5 h-3.5" />
+              Revisar todas las líneas
+            </button>
+          </div>
+        )}
+
         {/* Client-side search and visual line filter */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative w-full max-w-xs">
@@ -919,6 +982,21 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
               Solo pendientes
             </button>
           </div>
+          {selectedInvoice && (
+            <div className="flex items-center gap-1.5 rounded-lg border border-theme-accent/40 bg-theme-accent/10 px-2 py-1 text-[10px] font-semibold text-theme-accent">
+              <LucideIcons.Filter className="h-3 w-3 shrink-0" />
+              <span>Factura {selectedInvoice.document_number || '—'}</span>
+              <button
+                type="button"
+                onClick={() => setSelectedInvoiceId(null)}
+                className="rounded p-0.5 hover:bg-theme-accent/20 transition-colors text-theme-accent"
+                title="Quitar filtro de factura"
+                aria-label="Quitar filtro de factura"
+              >
+                <LucideIcons.X className="h-3 w-3" />
+              </button>
+            </div>
+          )}
           <span className="text-[10px] text-theme-text-muted font-semibold">
             Mostrando {visibleReceiptItems.length} de {poDetail.items.length}
           </span>

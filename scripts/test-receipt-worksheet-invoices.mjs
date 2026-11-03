@@ -36,3 +36,18 @@ test('worksheet loads invoices independently and reuses the existing viewer', ()
   assert.doesNotMatch(worksheet, /Ver factura/)
   assert.doesNotMatch(worksheet, /invoice\.file_name.*<\/p>/)
 })
+
+test('opening PDF via 1-click is preserved while invoice line filtering operates independently without interfering with the viewer', () => {
+  // 1-click PDF opening preserved
+  assert.match(worksheet, /onClick=\{\(\) => setInvoiceToView\(invoice\)\}/)
+  assert.match(worksheet, /disabled=\{!invoice\.has_file\}/)
+  assert.match(worksheet, /Abrir factura/)
+  assert.doesNotMatch(worksheet, /invoiceClickTimer/)
+  assert.doesNotMatch(worksheet, /handleInvoiceDoubleClick/)
+
+  // Independent invoice line filter action
+  assert.match(worksheet, /function toggleInvoiceFilter\(invoiceId: string\)/)
+  assert.match(worksheet, /onClick=\{\(\) => toggleInvoiceFilter\(invoice\.id\)\}/)
+  assert.match(worksheet, /selectedInvoiceId === invoice\.id \? 'Filtrada' : 'Filtrar'/)
+  assert.match(worksheet, /selectedInvoiceId === invoice\.id[\s\S]*?'Quitar filtro de factura'[\s\S]*?'Filtrar líneas por esta factura'/)
+})

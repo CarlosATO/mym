@@ -96,3 +96,22 @@ test('N. complete lines do not render split controls or enter the payload', () =
   assert.match(worksheet, /if \(qtyPending <= 0\) continue/)
   assert.match(worksheet, /Completa/)
 })
+
+test('O. when filters hide lines with entered quantities, silent save is prevented and review action clears filters without deleting inputs', () => {
+  // Derivation of hidden lines with quantities
+  assert.match(worksheet, /const hiddenItemsWithQuantities = useMemo\(\(\) => \{/)
+  assert.match(worksheet, /const visibleIds = new Set\(visibleReceiptItems\.map\(\(\{ item \}\) => item\.id\)\)/)
+  assert.match(worksheet, /splits\.some\(\(s: ItemSplit\) => Number\(s\.quantity \|\| 0\) > 0\)/)
+
+  // Guard against silent saving in handleSaveReceipt
+  assert.match(worksheet, /if \(hiddenItemsWithQuantities\.length > 0\) \{[\s\S]*?toast\.error\([\s\S]*?línea\(s\) con cantidades ingresadas ocultas[\s\S]*?onClick: handleShowAllLines[\s\S]*?return\n\s*\}/)
+
+  // Proactive banner informing user
+  assert.match(worksheet, /hiddenItemsWithQuantities\.length > 0 && \([\s\S]*?role="alert"/)
+  assert.match(worksheet, /Revisar todas las líneas/)
+
+  // Review action clears filters without mutating or wiping itemInputs
+  assert.match(worksheet, /function handleShowAllLines\(\) \{[\s\S]*?setReceiptSearchQuery\(''\)[\s\S]*?setSelectedInvoiceId\(null\)[\s\S]*?setReceiptLineFilter\('ALL'\)/)
+  const showAllSource = worksheet.slice(worksheet.indexOf('function handleShowAllLines'), worksheet.indexOf('}', worksheet.indexOf('function handleShowAllLines')) + 1)
+  assert.doesNotMatch(showAllSource, /setItemInputs/)
+})
