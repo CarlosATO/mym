@@ -300,6 +300,45 @@ export function sortPreparationColumnCards<T extends PreparationSearchableCard>(
   })
 }
 
+/**
+ * Orden predeterminado para tarjetas de ruta cuando no hay criterio explícito:
+ * 1. Localidad / comuna
+ * 2. Cliente (agrupando sus facturas)
+ * 3. Número de factura como desempate estable (y folio como desempate final)
+ */
+export function compareRoutePreparationCards<T extends PreparationSearchableCard>(
+  a: T,
+  b: T,
+  invoiceNumberByCardId: ReadonlyMap<string, number | null> = new Map(),
+): number {
+  const comunaA = normalizeText(getPreparationComuna(a))
+  const comunaB = normalizeText(getPreparationComuna(b))
+  const comunaComparison = comunaA.localeCompare(comunaB, 'es')
+  if (comunaComparison !== 0) return comunaComparison
+
+  const clientA = normalizeText(a.client_name)
+  const clientB = normalizeText(b.client_name)
+  const clientComparison = clientA.localeCompare(clientB, 'es')
+  if (clientComparison !== 0) return clientComparison
+
+  const invA = invoiceNumberByCardId.get(a.card_id)
+  const invB = invoiceNumberByCardId.get(b.card_id)
+  if (invA != null && invB != null && invA !== invB) {
+    return invA - invB
+  }
+  if (invA != null && invB == null) return -1
+  if (invA == null && invB != null) return 1
+
+  return compareFolio(a, b)
+}
+
+export function sortRoutePreparationCards<T extends PreparationSearchableCard>(
+  cards: T[],
+  invoiceNumberByCardId: ReadonlyMap<string, number | null> = new Map(),
+): T[] {
+  return [...cards].sort((a, b) => compareRoutePreparationCards(a, b, invoiceNumberByCardId))
+}
+
 export function prunePreparationSelection<T extends PreparationSearchableCard>(
   selectedIds: ReadonlySet<string>,
   cards: T[],
