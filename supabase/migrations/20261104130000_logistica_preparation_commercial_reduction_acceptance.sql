@@ -450,8 +450,8 @@ BEGIN
                     OR (i.bsale_observed_snapshot->>'verification_basis') IS DISTINCT FROM 'FULL_CARD_AND_INCIDENT_ACTION_WITH_PHYSICAL_LINE'
                     OR (
                       i.bsale_observed_snapshot ? 'verification_error'
-                      AND jsonb_typeof(i.bsale_observed_snapshot->'verification_error') IS DISTINCT FROM 'null'
-                      AND btrim(i.bsale_observed_snapshot->>'verification_error') <> ''
+                      AND i.bsale_observed_snapshot->'verification_error' IS DISTINCT FROM 'null'::jsonb
+                      AND i.bsale_observed_snapshot->'verification_error' IS DISTINCT FROM '""'::jsonb
                     )
                     OR jsonb_typeof(i.bsale_observed_snapshot->'document_state') IS DISTINCT FROM 'number'
                     OR (i.bsale_observed_snapshot->>'document_state') !~ '^[0-9]+$'

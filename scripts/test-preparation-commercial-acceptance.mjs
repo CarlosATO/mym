@@ -699,6 +699,10 @@ test('MEJ-01 Bloque 1: la migración incremental preserva permisos, locks, guard
   assert.match(reductionMigration, /i\.bsale_observed_quantity IS DISTINCT FROM v_new_quantity/)
   assert.match(reductionMigration, /i\.bsale_observed_snapshot IS NULL/)
   assert.match(reductionMigration, /\(i\.bsale_observed_snapshot->>'verification_basis'\) IS DISTINCT FROM 'FULL_CARD_AND_INCIDENT_ACTION_WITH_PHYSICAL_LINE'/)
+  assert.match(reductionMigration, /i\.bsale_observed_snapshot \? 'verification_error'/)
+  assert.match(reductionMigration, /i\.bsale_observed_snapshot->'verification_error' IS DISTINCT FROM 'null'::jsonb/)
+  assert.match(reductionMigration, /i\.bsale_observed_snapshot->'verification_error' IS DISTINCT FROM '""'::jsonb/)
+  assert.doesNotMatch(reductionMigration, /btrim\(i\.bsale_observed_snapshot->>'verification_error'\)/)
   assert.match(reductionMigration, /\(i\.bsale_observed_snapshot->>'document_state'\)::integer IS DISTINCT FROM 0/)
   assert.match(reductionMigration, /i\.bsale_observed_snapshot->'canonical_identity_matched' IS DISTINCT FROM 'true'::jsonb/)
   assert.match(reductionMigration, /i\.bsale_observed_snapshot->'sync_proven' IS DISTINCT FROM 'true'::jsonb/)
@@ -722,7 +726,7 @@ test('MEJ-01 Bloque 1: la migración incremental preserva permisos, locks, guard
 function isSnapshotValidForSqlSimulation(snapshot, expectedPhysicalId, expectedLineId, expectedPreparedQty, expectedNewQty) {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return false
   if (snapshot.verification_basis !== 'FULL_CARD_AND_INCIDENT_ACTION_WITH_PHYSICAL_LINE') return false
-  if (snapshot.verification_error != null && String(snapshot.verification_error).trim() !== '') return false
+  if (snapshot.verification_error != null && snapshot.verification_error !== '') return false
   if (typeof snapshot.document_state !== 'number' || !Number.isSafeInteger(snapshot.document_state) || snapshot.document_state !== 0) return false
   if (snapshot.canonical_identity_matched !== true) return false
   if (snapshot.sync_proven !== true) return false
@@ -1472,6 +1476,71 @@ test('MEJ-01 Bloque 1 — Escenarios 2, 3, 4, 5, 6, 8, 9 y 12 (Simulación JS de
     )
     assert.equal(db.preparationLines[0].requested_quantity, 5)
   }
+
+  // Paridad exacta de verification_error entre TypeScript (planificador) y PostgreSQL (simulación del contrato RPC):
+  // Solo permite campo ausente, null o "". Rechaza espacios, texto de error, número, booleano y objeto JSON.
+  const baseValidSnapshotForParity = buildCommercialReductionFixture().incident.bsale_observed_snapshot
+  const snapshotWithoutVerificationError = { ...baseValidSnapshotForParity }
+  delete snapshotWithoutVerificationError.verification_error
+
+  const allowedVerificationErrorSnapshots = [
+    { label: 'campo ausente', snapshot: snapshotWithoutVerificationError },
+    { label: 'null', snapshot: { ...baseValidSnapshotForParity, verification_error: null } },
+    { label: 'cadena vacía', snapshot: { ...baseValidSnapshotForParity, verification_error: '' } },
+  ]
+  for (const { label, snapshot } of allowedVerificationErrorSnapshots) {
+    const { db, card, currentLiveVersion } = buildCommercialReductionFixture()
+    db.incidents[0].bsale_observed_snapshot = snapshot
+    const acceptedVersion = runFallbackVersion(card, db.preparationLines)
+    const comparison = compareCommercialVersions(acceptedVersion, currentLiveVersion)
+    const plan = buildPreparationCommercialReconciliationPlan({
+      card: { cardId: card.id, companyId: card.company_id, status: card.status },
+      identity: currentLiveVersion.identity,
+      acceptedVersion,
+      currentVersion: currentLiveVersion,
+      preparationLines: db.preparationLines,
+      incidents: [mapPersistedIncidentToReconciliationIncident(db.incidents[0])],
+      comparison,
+      snapshotComplete: true,
+    })
+    assert.equal(plan.status, 'READY', `TypeScript debe permitir verification_error (${label})`)
+    const rpcResult = simulateAcceptCommercialChangesRpc(db, buildForcedParams(db, currentLiveVersion))
+    assert.equal(rpcResult.status, 'ACCEPTED', `RPC debe permitir verification_error (${label})`)
+    assert.equal(db.preparationLines[0].requested_quantity, 4)
+  }
+
+  const rejectedVerificationErrorSnapshots = [
+    { label: 'espacios', snapshot: { ...baseValidSnapshotForParity, verification_error: '   ' } },
+    { label: 'texto de error', snapshot: { ...baseValidSnapshotForParity, verification_error: 'QUANTITY_MISMATCH' } },
+    { label: 'número (0)', snapshot: { ...baseValidSnapshotForParity, verification_error: 0 } },
+    { label: 'número (123)', snapshot: { ...baseValidSnapshotForParity, verification_error: 123 } },
+    { label: 'booleano (false)', snapshot: { ...baseValidSnapshotForParity, verification_error: false } },
+    { label: 'booleano (true)', snapshot: { ...baseValidSnapshotForParity, verification_error: true } },
+    { label: 'objeto JSON', snapshot: { ...baseValidSnapshotForParity, verification_error: {} } },
+  ]
+  for (const { label, snapshot } of rejectedVerificationErrorSnapshots) {
+    const { db, card, currentLiveVersion } = buildCommercialReductionFixture()
+    db.incidents[0].bsale_observed_snapshot = snapshot
+    const acceptedVersion = runFallbackVersion(card, db.preparationLines)
+    const comparison = compareCommercialVersions(acceptedVersion, currentLiveVersion)
+    const plan = buildPreparationCommercialReconciliationPlan({
+      card: { cardId: card.id, companyId: card.company_id, status: card.status },
+      identity: currentLiveVersion.identity,
+      acceptedVersion,
+      currentVersion: currentLiveVersion,
+      preparationLines: db.preparationLines,
+      incidents: [mapPersistedIncidentToReconciliationIncident(db.incidents[0])],
+      comparison,
+      snapshotComplete: true,
+    })
+    assert.equal(plan.status, 'REQUIRES_RESOLUTION', `TypeScript debe rechazar verification_error (${label})`)
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedParams(db, currentLiveVersion)),
+      /UPDATE_QUANTITY requiere una incidencia QUANTITY_REDUCTION en estado RESOLVED\/MATCHED verificada para la versión vigente/,
+      `RPC debe rechazar verification_error (${label})`,
+    )
+    assert.equal(db.preparationLines[0].requested_quantity, 5)
+  }
 })
 
 test('MEJ-01 PR #22 fix: la Server Action real proyecta las 15 columnas de evidencia desde Supabase hacia el planificador y bloquea evidencias incompletas o incompatibles', async () => {
@@ -1733,12 +1802,29 @@ test('MEJ-01 PR #22 fix: la Server Action real proyecta las 15 columnas de evide
     { ...baseValidSnapshot, document_id: 95001, current_nv_id: 95001 },
     { ...baseValidSnapshot, document_id: 95002, current_nv_id: 95001 },
     { ...baseValidSnapshot, physicalId: 95001 },
+    { ...baseValidSnapshot, verification_error: '   ' },
+    { ...baseValidSnapshot, verification_error: 'QUANTITY_MISMATCH' },
+    { ...baseValidSnapshot, verification_error: 0 },
+    { ...baseValidSnapshot, verification_error: false },
+    { ...baseValidSnapshot, verification_error: {} },
   ]) {
     const { response, mockState: state } = await runActionScenario(({ incident }) => {
       incident.bsale_observed_snapshot = invalidSnapshot
     })
     assert.equal(response.status, 'REQUIRES_RESOLUTION')
     assert.equal(state.rpcCalls.length, 0)
+  }
+
+  for (const validVerificationErrorMutation of [
+    (snap) => { delete snap.verification_error },
+    (snap) => { snap.verification_error = null },
+    (snap) => { snap.verification_error = '' },
+  ]) {
+    const { response, mockState: state } = await runActionScenario(({ incident }) => {
+      validVerificationErrorMutation(incident.bsale_observed_snapshot)
+    })
+    assert.equal(response.status, 'ACCEPTED')
+    assert.equal(state.rpcCalls.length, 1)
   }
 
   // 6. Bloqueo para OPEN, SUPERSEDED sin resolución válida y referencias de producto/línea incorrectas
