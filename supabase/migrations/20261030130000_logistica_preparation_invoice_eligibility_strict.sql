@@ -21,10 +21,9 @@ WITH card_scope AS (
     COALESCE(c.current_bsale_nv_id, c.bsale_nv_id) AS current_nv_id,
     c.canonical_bsale_token,
     GREATEST(
-      c.updated_at,
-      COALESCE((SELECT max(pl.updated_at) FROM logistica.sales_order_preparation_lines pl WHERE pl.company_id = c.company_id AND pl.card_id = c.id AND pl.retired_at IS NULL), c.updated_at),
-      COALESCE((SELECT max(i.created_at) FROM logistica.sales_order_preparation_incidents i WHERE i.company_id = c.company_id AND i.card_id = c.id), c.updated_at),
-      COALESCE((SELECT max(i.last_verified_at) FROM logistica.sales_order_preparation_incidents i WHERE i.company_id = c.company_id AND i.card_id = c.id), c.updated_at)
+      c.created_at,
+      COALESCE((SELECT max(pl.updated_at) FROM logistica.sales_order_preparation_lines pl WHERE pl.company_id = c.company_id AND pl.card_id = c.id), c.created_at),
+      COALESCE((SELECT max(i.created_at) FROM logistica.sales_order_preparation_incidents i WHERE i.company_id = c.company_id AND i.card_id = c.id), c.created_at)
     ) AS relevant_at
   FROM logistica.sales_order_preparation_cards c
   WHERE c.company_id = p_company_id
