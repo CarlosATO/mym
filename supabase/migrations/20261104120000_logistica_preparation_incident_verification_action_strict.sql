@@ -286,116 +286,129 @@ BEGIN
       ) AS full_card_matched
     FROM card_comparison cc
   ),
-  incident_keys AS (
+  incident_lines AS (
     SELECT
       s.*,
+      pl.id AS matched_preparation_line_id,
+      pl.prepared_quantity AS physical_prepared_quantity,
+      pl.requested_quantity AS physical_requested_quantity,
+      pl.sku AS physical_sku,
+      pl.bsale_variant_id AS physical_variant_id,
+      pl.retired_at AS physical_retired_at,
       CASE
-        WHEN NULLIF(btrim(coalesce(s.incident_sku, pl.sku)), '') IS NOT NULL
-          THEN 'SKU:' || upper(btrim(coalesce(s.incident_sku, pl.sku)))
-        WHEN coalesce(s.incident_variant_id, pl.bsale_variant_id) IS NOT NULL
-          THEN 'VARIANT:' || coalesce(s.incident_variant_id, pl.bsale_variant_id)::text
+        WHEN NULLIF(btrim(pl.sku), '') IS NOT NULL
+          THEN 'SKU:' || upper(btrim(pl.sku))
+        WHEN pl.bsale_variant_id IS NOT NULL
+          THEN 'VARIANT:' || pl.bsale_variant_id::text
         ELSE NULL
-      END AS product_key
+      END AS physical_product_key,
+      CASE
+        WHEN NULLIF(btrim(s.incident_sku), '') IS NOT NULL
+          THEN 'SKU:' || upper(btrim(s.incident_sku))
+        WHEN s.incident_variant_id IS NOT NULL
+          THEN 'VARIANT:' || s.incident_variant_id::text
+        ELSE NULL
+      END AS incident_declared_product_key,
+      (
+        pl.id IS NOT NULL
+        AND pl.retired_at IS NULL
+        AND (
+          NULLIF(btrim(pl.sku), '') IS NOT NULL
+          OR pl.bsale_variant_id IS NOT NULL
+        )
+        AND (
+          NULLIF(btrim(s.incident_sku), '') IS NULL
+          OR (pl.sku IS NOT NULL AND upper(btrim(s.incident_sku)) = upper(btrim(pl.sku)))
+        )
+        AND (
+          s.incident_variant_id IS NULL
+          OR (pl.bsale_variant_id IS NOT NULL AND s.incident_variant_id = pl.bsale_variant_id)
+        )
+      ) AS line_link_valid
     FROM scoped s
     LEFT JOIN logistica.sales_order_preparation_lines pl
       ON pl.id = s.preparation_line_id
      AND pl.company_id = s.company_id
+     AND pl.card_id = s.card_id
+     AND pl.retired_at IS NULL
   ),
-  classified AS (
+  incident_eval AS (
     SELECT
-      ik.id,
-      ik.card_id,
-      ik.historical_nv_id,
-      ik.current_nv_id,
-      ik.incident_created_at,
-      ik.required_bsale_action,
-      ik.expected_bsale_quantity,
-      ik.product_key AS incident_product_key,
+      il.*,
       cm.document_id,
       cm.document_state,
       cm.sync_proven,
       cm.canonical_identity_matched,
       cm.full_card_matched,
+      ck.line_count AS bsale_line_count,
+      ck.current_quantity AS bsale_current_quantity,
       CASE
-        WHEN ik.required_bsale_action = 'REMOVE_LINE' AND coalesce(ck.line_count, 0) = 0 THEN 0::numeric
+        WHEN il.required_bsale_action = 'REMOVE_LINE' AND coalesce(ck.line_count, 0) = 0 THEN 0::numeric
         ELSE coalesce(ck.current_quantity, 0)
       END AS bsale_observed_quantity,
-      coalesce(ck.line_count, 0) AS bsale_line_count,
-      coalesce(pk.prepared_quantity, 0) AS physically_prepared_quantity,
       (
-        ik.product_key IS NOT NULL
+        il.line_link_valid
+        AND il.physical_product_key IS NOT NULL
         AND (
           (
-            ik.required_bsale_action = 'SET_QUANTITY'
+            il.required_bsale_action = 'SET_QUANTITY'
             AND coalesce(ck.line_count, 0) = 1
-            AND coalesce(ck.current_quantity, 0) = ik.expected_bsale_quantity
-            AND coalesce(ck.current_quantity, 0) = coalesce(pk.prepared_quantity, 0)
+            AND coalesce(ck.current_quantity, 0) = il.expected_bsale_quantity
+            AND il.physical_prepared_quantity IS NOT NULL
+            AND coalesce(ck.current_quantity, 0) = il.physical_prepared_quantity
           )
           OR (
-            ik.required_bsale_action = 'REMOVE_LINE'
+            il.required_bsale_action = 'REMOVE_LINE'
             AND (
               coalesce(ck.line_count, 0) = 0
               OR (coalesce(ck.line_count, 0) = 1 AND coalesce(ck.current_quantity, 0) <= 0)
             )
-            AND coalesce(pk.prepared_quantity, 0) = 0
-            AND ik.expected_bsale_quantity <= 0
+            AND il.physical_prepared_quantity IS NOT NULL
+            AND il.physical_prepared_quantity = 0
+            AND il.expected_bsale_quantity <= 0
           )
         )
-      ) AS incident_action_matched,
+      ) AS incident_action_matched
+    FROM incident_lines il
+    JOIN card_matched cm ON cm.card_id = il.card_id
+    LEFT JOIN current_keys ck ON ck.card_id = il.card_id AND ck.product_key = il.physical_product_key
+  ),
+  classified AS (
+    SELECT
+      e.*,
       CASE
-        WHEN cm.document_id IS NULL THEN 'NOT_FOUND'
-        WHEN cm.document_state IS DISTINCT FROM 0 THEN 'NV_CANCELLED'
-        WHEN NOT cm.canonical_identity_matched THEN 'MISMATCHED'
-        WHEN NOT cm.sync_proven THEN 'MISMATCHED'
-        WHEN NOT cm.full_card_matched THEN 'MISMATCHED'
-        WHEN NOT (
-          ik.product_key IS NOT NULL
-          AND (
-            (
-              ik.required_bsale_action = 'SET_QUANTITY'
-              AND coalesce(ck.line_count, 0) = 1
-              AND coalesce(ck.current_quantity, 0) = ik.expected_bsale_quantity
-              AND coalesce(ck.current_quantity, 0) = coalesce(pk.prepared_quantity, 0)
-            )
-            OR (
-              ik.required_bsale_action = 'REMOVE_LINE'
-              AND (
-                coalesce(ck.line_count, 0) = 0
-                OR (coalesce(ck.line_count, 0) = 1 AND coalesce(ck.current_quantity, 0) <= 0)
-              )
-              AND coalesce(pk.prepared_quantity, 0) = 0
-              AND ik.expected_bsale_quantity <= 0
-            )
-          )
-        ) THEN 'MISMATCHED'
+        WHEN e.document_id IS NULL THEN 'NOT_FOUND'
+        WHEN e.document_state IS DISTINCT FROM 0 THEN 'NV_CANCELLED'
+        WHEN NOT e.canonical_identity_matched THEN 'MISMATCHED'
+        WHEN NOT e.sync_proven THEN 'MISMATCHED'
+        WHEN NOT e.full_card_matched THEN 'MISMATCHED'
+        WHEN NOT e.incident_action_matched THEN 'MISMATCHED'
         ELSE 'MATCHED'
       END AS verification_status,
       jsonb_build_object(
-        'historical_nv_id', ik.historical_nv_id,
-        'current_nv_id', ik.current_nv_id,
-        'document_id', cm.document_id,
-        'document_state', cm.document_state,
-        'canonical_identity_matched', cm.canonical_identity_matched,
-        'sync_proven', cm.sync_proven,
-        'sync_run_id', cm.bsale_sync_run_id,
-        'sync_status', cm.sync_status,
-        'sync_completed_at', cm.sync_completed_at,
-        'incident_created_at', ik.incident_created_at,
-        'required_bsale_action', ik.required_bsale_action,
-        'expected_bsale_quantity', ik.expected_bsale_quantity,
-        'incident_product_key', ik.product_key,
-        'bsale_observed_quantity', CASE
-          WHEN ik.required_bsale_action = 'REMOVE_LINE' AND coalesce(ck.line_count, 0) = 0 THEN 0::numeric
-          ELSE coalesce(ck.current_quantity, 0)
-        END,
-        'physically_prepared_quantity', coalesce(pk.prepared_quantity, 0),
-        'full_card_matched', cm.full_card_matched,
-        'verification_basis', 'FULL_CARD_AND_INCIDENT_ACTION'
+        'historical_nv_id', e.historical_nv_id,
+        'current_nv_id', e.current_nv_id,
+        'document_id', e.document_id,
+        'document_state', e.document_state,
+        'canonical_identity_matched', e.canonical_identity_matched,
+        'sync_proven', e.sync_proven,
+        'sync_run_id', e.bsale_sync_run_id,
+        'sync_status', e.sync_status,
+        'sync_completed_at', e.sync_completed_at,
+        'incident_created_at', e.incident_created_at,
+        'required_bsale_action', e.required_bsale_action,
+        'expected_bsale_quantity', e.expected_bsale_quantity,
+        'preparation_line_id', e.preparation_line_id,
+        'matched_preparation_line_id', e.matched_preparation_line_id,
+        'line_link_valid', e.line_link_valid,
+        'incident_product_key', e.physical_product_key,
+        'bsale_observed_quantity', e.bsale_observed_quantity,
+        'physically_prepared_quantity', e.physical_prepared_quantity,
+        'full_card_matched', e.full_card_matched,
+        'incident_action_matched', e.incident_action_matched,
+        'verification_basis', 'FULL_CARD_AND_INCIDENT_ACTION_WITH_PHYSICAL_LINE'
       ) AS observed_snapshot
-    FROM incident_keys ik
-    JOIN card_matched cm ON cm.card_id = ik.card_id
-    LEFT JOIN current_keys ck ON ck.card_id = ik.card_id AND ck.product_key = ik.product_key
-    LEFT JOIN prepared_keys pk ON pk.card_id = ik.card_id AND pk.product_key = ik.product_key
+    FROM incident_eval e
   ),
   updated AS (
     UPDATE logistica.sales_order_preparation_incidents i
@@ -437,6 +450,6 @@ GRANT EXECUTE ON FUNCTION logistica.verify_open_preparation_incidents_v1(uuid, b
   TO service_role;
 
 COMMENT ON FUNCTION logistica.verify_open_preparation_incidents_v1(uuid, bigint[]) IS
-  'MEJ-01B Forward-only: resolves incidents only when full card consistency is demonstrated AND Bsale fulfills the specific expected action (SET_QUANTITY or REMOVE_LINE).';
+  'MEJ-01B Forward-only: resolves incidents only when full card consistency is demonstrated, physical line linkage is proven, and Bsale fulfills the specific expected action (SET_QUANTITY or REMOVE_LINE).';
 
 COMMIT;
