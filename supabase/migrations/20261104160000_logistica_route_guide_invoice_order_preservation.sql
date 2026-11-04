@@ -19,68 +19,91 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'error', 'No autorizado');
   END IF;
 
+  -- PostgreSQL no admite funciones de ventana dentro de los argumentos de un
+  -- agregado: line_number se calcula primero en el CTE "numbered" y luego se
+  -- agrega con jsonb_agg(... ORDER BY ord).
   WITH ordered_input AS (
     SELECT u.bsale_id, min(u.ord) AS ord
     FROM unnest(p_invoice_bsale_ids) WITH ORDINALITY AS u(bsale_id, ord)
     GROUP BY u.bsale_id
+  ),
+  eligible AS (
+    SELECT
+      oi.ord,
+      d.bsale_id,
+      d.number,
+      d.total_amount,
+      c.business_name,
+      c.first_name,
+      c.last_name,
+      c.company,
+      c.address,
+      c.commune,
+      c.city,
+      c.payment_type_name
+    FROM ordered_input oi
+    JOIN integraciones.bsale_documents d
+      ON d.company_id = p_company_id
+     AND d.bsale_id = oi.bsale_id
+     AND d.document_type_id = 5
+     AND d.state = 0
+     AND coalesce(d.raw_json->>'cancellationStatus', '0') = '0'
+    LEFT JOIN integraciones.bsale_clients c
+      ON c.company_id = d.company_id AND c.bsale_client_id = d.client_id
+    WHERE EXISTS (
+      SELECT 1
+      FROM logistica.sales_order_invoice_attempts a
+      JOIN logistica.sales_order_preparation_cards pc
+        ON pc.id = a.card_id AND pc.company_id = a.company_id
+      WHERE a.company_id = p_company_id
+        AND a.bsale_invoice_id = d.bsale_id
+        AND a.status = 'CONFIRMED'
+        AND pc.status = 'INVOICED_READY_FOR_ROUTE'
+        AND EXISTS (
+          SELECT 1
+          FROM integraciones.bsale_invoice_sales_order_links l
+          WHERE l.company_id = p_company_id
+            AND l.invoice_bsale_id = d.bsale_id
+            AND l.sales_order_bsale_id = coalesce(pc.current_bsale_nv_id, pc.bsale_nv_id)
+        )
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM logistica.route_guide_items rgi
+      JOIN logistica.route_guides rg ON rg.id = rgi.route_guide_id
+      WHERE rgi.company_id = p_company_id
+        AND rg.company_id = rgi.company_id
+        AND rg.status IN ('DRAFT', 'DISPATCHED')
+        AND (rgi.invoice_bsale_id = d.bsale_id
+          OR (rgi.invoice_bsale_id IS NULL AND rgi.invoice_number = d.number::text))
+    )
+  ),
+  numbered AS (
+    SELECT e.*, row_number() OVER (ORDER BY e.ord)::integer AS line_number
+    FROM eligible e
   )
   SELECT coalesce(jsonb_agg(jsonb_build_object(
-    'invoice_bsale_id', d.bsale_id,
-    'line_number', row_number() OVER (ORDER BY oi.ord)::integer,
-    'invoice_number', d.number::text,
+    'invoice_bsale_id', n.bsale_id,
+    'line_number', n.line_number,
+    'invoice_number', n.number::text,
     'customer_name', coalesce(
-      nullif(c.business_name, ''),
-      nullif(concat_ws(' ', c.first_name, c.last_name), ''),
-      nullif(c.company, ''), 'Cliente sin nombre'
+      nullif(n.business_name, ''),
+      nullif(concat_ws(' ', n.first_name, n.last_name), ''),
+      nullif(n.company, ''), 'Cliente sin nombre'
     ),
-    'customer_address', coalesce(c.address, ''),
-    'commune', coalesce(c.commune, c.city, ''),
-    'amount', coalesce(d.total_amount, 0),
-    'payment_method_original', coalesce(c.payment_type_name, ''),
-    'payment_method_normalized', logistica.normalize_payment_method(c.payment_type_name),
+    'customer_address', coalesce(n.address, ''),
+    'commune', coalesce(n.commune, n.city, ''),
+    'amount', coalesce(n.total_amount, 0),
+    'payment_method_original', coalesce(n.payment_type_name, ''),
+    'payment_method_normalized', logistica.normalize_payment_method(n.payment_type_name),
     'requires_settlement', logistica.payment_requires_settlement(
-      logistica.normalize_payment_method(c.payment_type_name)
+      logistica.normalize_payment_method(n.payment_type_name)
     ),
     'validation_status', 'VALID', 'validation_errors', '[]'::jsonb,
     'notes', '', 'settlement_status', 'NOT_REQUIRED'
-  ) ORDER BY oi.ord), '[]'::jsonb)
+  ) ORDER BY n.ord), '[]'::jsonb)
   INTO v_rows
-  FROM ordered_input oi
-  JOIN integraciones.bsale_documents d
-    ON d.company_id = p_company_id
-   AND d.bsale_id = oi.bsale_id
-   AND d.document_type_id = 5
-   AND d.state = 0
-   AND coalesce(d.raw_json->>'cancellationStatus', '0') = '0'
-  LEFT JOIN integraciones.bsale_clients c
-    ON c.company_id = d.company_id AND c.bsale_client_id = d.client_id
-  WHERE EXISTS (
-    SELECT 1
-    FROM logistica.sales_order_invoice_attempts a
-    JOIN logistica.sales_order_preparation_cards pc
-      ON pc.id = a.card_id AND pc.company_id = a.company_id
-    WHERE a.company_id = p_company_id
-      AND a.bsale_invoice_id = d.bsale_id
-      AND a.status = 'CONFIRMED'
-      AND pc.status = 'INVOICED_READY_FOR_ROUTE'
-      AND EXISTS (
-        SELECT 1
-        FROM integraciones.bsale_invoice_sales_order_links l
-        WHERE l.company_id = p_company_id
-          AND l.invoice_bsale_id = d.bsale_id
-          AND l.sales_order_bsale_id = coalesce(pc.current_bsale_nv_id, pc.bsale_nv_id)
-      )
-  )
-  AND NOT EXISTS (
-    SELECT 1
-    FROM logistica.route_guide_items rgi
-    JOIN logistica.route_guides rg ON rg.id = rgi.route_guide_id
-    WHERE rgi.company_id = p_company_id
-      AND rg.company_id = rgi.company_id
-      AND rg.status IN ('DRAFT', 'DISPATCHED')
-      AND (rgi.invoice_bsale_id = d.bsale_id
-        OR (rgi.invoice_bsale_id IS NULL AND rgi.invoice_number = d.number::text))
-  );
+  FROM numbered n;
 
   RETURN jsonb_build_object('success', true, 'items', v_rows);
 END;
@@ -274,3 +297,4 @@ REVOKE ALL ON FUNCTION logistica.create_route_guide_draft_from_invoices(uuid, js
 GRANT EXECUTE ON FUNCTION logistica.create_route_guide_draft_from_invoices(uuid, jsonb, bigint[], uuid) TO authenticated;
 
 COMMIT;
+

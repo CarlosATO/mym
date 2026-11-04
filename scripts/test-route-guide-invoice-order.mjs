@@ -225,9 +225,21 @@ test('10. Inspección estática de migración forward-only SQL', () => {
   // Verifica uso de WITH ORDINALITY
   assert.match(sql, /WITH ORDINALITY/i, 'Debe usar WITH ORDINALITY para indexar el orden')
 
-  // Verifica que get_route_invoice_draft_rows ordene por ord y asigne line_number
-  assert.match(sql, /row_number\(\)\s+OVER\s+\(ORDER BY oi\.ord\)/i, 'Debe asignar line_number según oi.ord')
-  assert.match(sql, /ORDER BY oi\.ord/i, 'Debe ordenar la agregación JSON según oi.ord')
+  // Verifica que get_route_invoice_draft_rows calcule line_number en un CTE previo
+  // (PostgreSQL no admite funciones de ventana dentro de los argumentos de jsonb_agg)
+  assert.match(sql, /numbered AS \(\s*SELECT e\.\*, row_number\(\)\s+OVER\s+\(ORDER BY e\.ord\)::integer AS line_number/i, 'Debe calcular line_number en el CTE numbered según ord')
+  assert.match(sql, /'line_number', n\.line_number/i, 'Debe exponer el line_number precalculado')
+  assert.match(sql, /ORDER BY n\.ord\), '\[\]'::jsonb\)/i, 'Debe ordenar la agregación JSON según ord')
+  const draftRowsFn = sql.slice(
+    sql.indexOf('FUNCTION logistica.get_route_invoice_draft_rows'),
+    sql.indexOf('FUNCTION logistica.create_route_guide_draft_from_invoices'),
+  )
+  const aggregateBody = draftRowsFn.slice(draftRowsFn.indexOf('SELECT coalesce(jsonb_agg('))
+  assert.doesNotMatch(aggregateBody.slice(0, aggregateBody.indexOf('INTO v_rows')), /OVER\s*\(/i, 'jsonb_agg no debe contener funciones de ventana')
+  // Filtros de elegibilidad y autorización preservados
+  for (const fragment of ["'logistica.route_guides.create'", "a.status = 'CONFIRMED'", "pc.status = 'INVOICED_READY_FOR_ROUTE'", 'bsale_invoice_sales_order_links', "rg.status IN ('DRAFT', 'DISPATCHED')", 'd.document_type_id = 5', 'd.state = 0']) {
+    assert.ok(draftRowsFn.includes(fragment), `Debe preservar el filtro ${fragment}`)
+  }
 
   // Verifica que create_route_guide_draft_from_invoices preserve el orden y no use ORDER BY x para la llamada
   assert.match(sql, /ORDER BY min\(u\.ord\)/i, 'Debe preservar el orden de entrada en la llamada a get_route_invoice_draft_rows')
