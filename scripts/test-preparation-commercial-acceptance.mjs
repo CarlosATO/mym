@@ -11,6 +11,7 @@ import {
 } from '../src/lib/logistica/preparation-commercial-reconciliation-plan.ts'
 
 const migration = await readFile(new URL('../supabase/migrations/20261027120000_logistica_preparation_commercial_acceptance.sql', import.meta.url), 'utf8')
+const reductionMigration = await readFile(new URL('../supabase/migrations/20261104130000_logistica_preparation_commercial_reduction_acceptance.sql', import.meta.url), 'utf8')
 const action = await readFile(new URL('../src/app/actions/logistica/sales-order-preparation-commercial-acceptance.ts', import.meta.url), 'utf8')
 const alertAction = await readFile(new URL('../src/app/actions/logistica/sales-order-preparation-commercial.ts', import.meta.url), 'utf8')
 const versionSource = await readFile(new URL('../src/lib/logistica/preparation-commercial-version.ts', import.meta.url), 'utf8')
@@ -667,4 +668,698 @@ test('COM-02D: aceptación rechazada no limpia alerta ni refresca tablero; carre
   const failedRefresh = await simulateLoadBoardWithSeq(async () => ({ error: 'Error de red al cargar tablero' }))
   assert.equal(failedRefresh, 'error-handled')
   assert.equal(boardError, 'Error de red al cargar tablero')
+})
+
+// ============================================================================
+// MEJ-01 Bloque 1 (P0-01 + MEJ-01): Aceptación comercial segura de reducciones
+// con incidencias resueltas.
+// NOTA: El motor transaccional a continuación es una SIMULACIÓN EN JAVASCRIPT
+// de la RPC PostgreSQL `logistica.accept_sales_order_preparation_commercial_changes`
+// (migración `20261104130000_logistica_preparation_commercial_reduction_acceptance.sql`)
+// y del guard P0-01 `logistica.materialize_sales_order_preparation_snapshot`
+// (`20261103121029_logistica_snapshot_existing_lines_guard.sql`).
+// ============================================================================
+
+test('MEJ-01 Bloque 1: la migración incremental preserva permisos, locks, guard de auditoría y exige contrato completo de reducción resuelta', () => {
+  assert.match(reductionMigration, /CREATE OR REPLACE FUNCTION logistica\.accept_sales_order_preparation_commercial_changes/)
+  assert.match(reductionMigration, /v_card\.locked_by_user_id IS NULL/)
+  assert.match(reductionMigration, /v_card\.locked_by_user_id IS DISTINCT FROM p_actor_id/)
+  assert.match(reductionMigration, /v_card\.status <> 'IN_PREPARATION'/)
+  assert.match(reductionMigration, /sales_order_audit_lines/)
+  assert.match(reductionMigration, /sales_order_audit_incidents/)
+  assert.match(reductionMigration, /sales_order_audits/)
+  assert.match(reductionMigration, /i\.incident_type IS DISTINCT FROM 'QUANTITY_REDUCTION'/)
+  assert.match(reductionMigration, /i\.required_bsale_action IS DISTINCT FROM 'SET_QUANTITY'/)
+  assert.match(reductionMigration, /i\.status = 'RESOLVED'/)
+  assert.match(reductionMigration, /i\.verification_status IS DISTINCT FROM 'MATCHED'/)
+  assert.match(reductionMigration, /i\.expected_bsale_quantity IS DISTINCT FROM v_new_quantity/)
+  assert.match(reductionMigration, /i\.bsale_observed_quantity IS DISTINCT FROM v_new_quantity/)
+  assert.match(reductionMigration, /REVOKE ALL ON FUNCTION logistica\.accept_sales_order_preparation_commercial_changes/)
+  assert.match(reductionMigration, /GRANT EXECUTE ON FUNCTION logistica\.accept_sales_order_preparation_commercial_changes\([^\n]+\) TO service_role/)
+  assert.doesNotMatch(reductionMigration, /UPDATE logistica\.sales_order_preparation_incidents/)
+  assert.doesNotMatch(reductionMigration, /DELETE FROM logistica\.sales_order_preparation_incidents/)
+})
+
+function simulateAcceptCommercialChangesRpc(db, params) {
+  const {
+    p_company_id,
+    p_card_id,
+    p_expected_previous_fingerprint = null,
+    p_new_fingerprint,
+    p_bsale_nv_id,
+    p_bsale_nv_folio,
+    p_canonical_bsale_token,
+    p_version_snapshot,
+    p_comparison,
+    p_plan,
+    p_accepted_by,
+  } = params
+
+  if (!p_company_id || !p_card_id || !p_accepted_by) {
+    throw new Error('company_id, card_id y accepted_by son obligatorios')
+  }
+  if (!p_new_fingerprint || !p_bsale_nv_id || !p_bsale_nv_folio || !p_canonical_bsale_token) {
+    throw new Error('La versión comercial a aceptar es incompleta')
+  }
+  if (!p_version_snapshot || !p_comparison || !p_plan) {
+    throw new Error('El snapshot, comparación y plan de conciliación son obligatorios')
+  }
+  if (p_plan.status !== 'READY' || p_plan.canAcceptCompletely !== true) {
+    throw new Error('El plan comercial no es elegible para aceptación automática segura')
+  }
+  if ((p_plan.conflicts ?? []).length > 0) {
+    throw new Error('No se puede aceptar una versión comercial con conflictos pendientes')
+  }
+
+  const card = db.cards.find(c => c.id === p_card_id && c.company_id === p_company_id)
+  if (!card) {
+    throw new Error('Tarjeta de preparación no encontrada para la empresa')
+  }
+  if (card.status !== 'IN_PREPARATION') {
+    throw new Error('Solo se pueden aceptar cambios comerciales cuando la tarjeta está en preparación')
+  }
+  if (card.canonical_bsale_token && card.canonical_bsale_token !== p_canonical_bsale_token) {
+    throw new Error('La versión comercial no corresponde a la identidad canónica de la tarjeta')
+  }
+
+  const existingVersions = db.commercialVersions
+    .filter(v => v.company_id === p_company_id && v.card_id === p_card_id)
+    .sort((a, b) => b.version_number - a.version_number)
+  const latestVersion = existingVersions[0] ?? null
+
+  if (latestVersion) {
+    if (latestVersion.fingerprint === p_new_fingerprint) {
+      return { status: 'ALREADY_ACCEPTED', version_id: latestVersion.id, version_number: latestVersion.version_number }
+    }
+    if (p_expected_previous_fingerprint !== null && latestVersion.fingerprint !== p_expected_previous_fingerprint) {
+      return { status: 'VERSION_CHANGED', current_accepted_fingerprint: latestVersion.fingerprint }
+    }
+  } else {
+    const activeLines = db.preparationLines.filter(l => l.company_id === p_company_id && l.card_id === p_card_id && l.retired_at === null)
+    if (activeLines.length === 0 || activeLines.some(l => l.source_snapshot == null)) {
+      throw new Error('No se puede aceptar cambios comerciales sin snapshot inicial completo')
+    }
+  }
+
+  if (
+    db.auditLines.some(a => a.company_id === p_company_id && a.card_id === p_card_id) ||
+    db.auditIncidents.some(a => a.company_id === p_company_id && a.card_id === p_card_id) ||
+    db.audits.some(a => a.company_id === p_company_id && a.card_id === p_card_id)
+  ) {
+    throw new Error('No se puede aceptar cambios comerciales cuando existe evidencia de Auditoría en la tarjeta')
+  }
+
+  const actions = p_plan.actions ?? []
+  if (!Array.isArray(actions) || actions.length === 0) {
+    throw new Error('El plan comercial debe contener acciones verificables')
+  }
+
+  // Trabajar sobre copia transaccional para garantizar atomicidad en la simulación JS
+  const workingLines = db.preparationLines.map(l => ({ ...l }))
+  const processedLineIds = new Set()
+
+  for (const action of actions) {
+    const kind = action.kind
+    const lineId = action.preparationLineId ?? null
+    const currentLine = action.current ?? null
+
+    if (kind === 'KEEP' || kind === 'UPDATE_QUANTITY' || kind === 'REMOVE') {
+      if (!lineId) throw new Error('Cada acción sobre línea existente debe referenciar preparationLineId')
+      if (processedLineIds.has(lineId)) {
+        throw new Error('El plan comercial referencia más de una vez la misma línea de preparación')
+      }
+      processedLineIds.add(lineId)
+    }
+
+    if (kind === 'KEEP') {
+      if (!currentLine) throw new Error('KEEP requiere línea comercial vigente')
+      const v_line = workingLines.find(l => l.id === lineId && l.company_id === p_company_id && l.card_id === p_card_id && l.retired_at === null)
+      if (!v_line) throw new Error('Línea de preparación para KEEP no existe o está retirada')
+      if (Number(currentLine.quantity) !== v_line.requested_quantity) {
+        throw new Error('KEEP no puede modificar requested_quantity')
+      }
+      if ((v_line.bsale_variant_id ?? -1) !== (currentLine.variantId ?? -1) || (v_line.sku ?? '') !== (currentLine.sku ?? '')) {
+        throw new Error('KEEP no coincide con la identidad de producto de la línea preparada')
+      }
+      v_line.bsale_nv_id = p_bsale_nv_id
+      v_line.bsale_detail_id = currentLine.detailId ?? v_line.bsale_detail_id
+      v_line.source_snapshot = currentLine
+    } else if (kind === 'UPDATE_QUANTITY') {
+      if (!currentLine) throw new Error('UPDATE_QUANTITY requiere línea comercial vigente')
+      const v_line = workingLines.find(l => l.id === lineId && l.company_id === p_company_id && l.card_id === p_card_id && l.retired_at === null)
+      if (!v_line) throw new Error('Línea de preparación para UPDATE_QUANTITY no existe o está retirada')
+      const v_new_quantity = Number(action.newRequestedQuantity ?? currentLine.quantity ?? 0)
+      if (
+        v_new_quantity <= 0 ||
+        v_line.excluded_from_dispatch ||
+        (v_line.prepared_quantity !== null && v_new_quantity < v_line.prepared_quantity)
+      ) {
+        throw new Error('UPDATE_QUANTITY es incompatible con lo preparado')
+      }
+      if ((v_line.bsale_variant_id ?? -1) !== (currentLine.variantId ?? -1) || (v_line.sku ?? '') !== (currentLine.sku ?? '')) {
+        throw new Error('UPDATE_QUANTITY no coincide con la identidad de producto de la línea preparada')
+      }
+
+      const lineIncidents = db.incidents.filter(i => i.preparation_line_id === v_line.id)
+      if (v_line.line_status === 'INCIDENT' || lineIncidents.length > 0) {
+        if (
+          v_line.line_status !== 'INCIDENT' ||
+          v_line.excluded_from_dispatch ||
+          v_line.prepared_quantity === null ||
+          v_line.prepared_quantity <= 0 ||
+          v_line.requested_quantity <= v_line.prepared_quantity ||
+          v_new_quantity !== v_line.prepared_quantity ||
+          Number(currentLine.quantity ?? 0) !== v_new_quantity
+        ) {
+          throw new Error('UPDATE_QUANTITY no puede modificar líneas con incidencias no conciliadas para reducción exacta')
+        }
+        if (lineIncidents.some(i => i.status === 'OPEN' || !['RESOLVED', 'SUPERSEDED'].includes(i.status))) {
+          throw new Error('UPDATE_QUANTITY no puede modificar líneas con incidencias abiertas')
+        }
+        const validResolved = lineIncidents.filter(i =>
+          i.company_id === p_company_id &&
+          i.card_id === p_card_id &&
+          i.status === 'RESOLVED' &&
+          i.verification_status === 'MATCHED' &&
+          i.incident_type === 'QUANTITY_REDUCTION' &&
+          i.required_bsale_action === 'SET_QUANTITY' &&
+          i.requested_quantity === v_line.requested_quantity &&
+          i.prepared_quantity === v_line.prepared_quantity &&
+          i.expected_bsale_quantity === v_new_quantity &&
+          i.bsale_observed_quantity === v_new_quantity &&
+          (i.bsale_variant_id ?? -1) === (v_line.bsale_variant_id ?? -1) &&
+          (i.sku ?? '') === (v_line.sku ?? '') &&
+          (i.bsale_observed_snapshot?.physicalId == null || Number(i.bsale_observed_snapshot.physicalId) === p_bsale_nv_id)
+        )
+        if (validResolved.length === 0) {
+          throw new Error('UPDATE_QUANTITY requiere una incidencia QUANTITY_REDUCTION en estado RESOLVED/MATCHED verificada para la versión vigente')
+        }
+      }
+
+      if (db.auditLines.some(a => a.preparation_line_id === v_line.id)) {
+        throw new Error('UPDATE_QUANTITY no puede modificar líneas con evidencia de Auditoría')
+      }
+
+      // Actualizar únicamente requested_quantity, bsale_nv_id, bsale_detail_id y source_snapshot.
+      // Preservar intactos prepared_quantity, line_status, excluded_from_dispatch, confirmed_by y confirmed_at.
+      v_line.bsale_nv_id = p_bsale_nv_id
+      v_line.bsale_detail_id = currentLine.detailId ?? v_line.bsale_detail_id
+      v_line.requested_quantity = v_new_quantity
+      v_line.source_snapshot = currentLine
+    } else if (kind === 'REMOVE') {
+      const v_line = workingLines.find(l => l.id === lineId && l.company_id === p_company_id && l.card_id === p_card_id && l.retired_at === null)
+      if (!v_line) throw new Error('Línea de preparación para REMOVE no existe o está retirada')
+      if (
+        v_line.line_status !== 'PENDING' ||
+        v_line.excluded_from_dispatch ||
+        (v_line.prepared_quantity ?? 0) > 0 ||
+        v_line.confirmed_by !== null ||
+        v_line.confirmed_at !== null
+      ) {
+        throw new Error('REMOVE no puede retirar una línea con trabajo físico registrado')
+      }
+      if (db.incidents.some(i => i.preparation_line_id === v_line.id)) {
+        throw new Error('REMOVE no puede retirar una línea con incidencias')
+      }
+      if (db.auditLines.some(a => a.preparation_line_id === v_line.id)) {
+        throw new Error('REMOVE no puede retirar una línea con evidencia de Auditoría')
+      }
+      v_line.retired_at = '2026-11-04T12:00:00Z'
+      v_line.retired_by = p_accepted_by
+      v_line.retired_reason = 'COMMERCIAL_CHANGE_ACCEPTED'
+    } else if (kind === 'ADD') {
+      if (!currentLine) throw new Error('ADD requiere línea comercial vigente')
+      workingLines.push({
+        id: `added-line-${workingLines.length + 1}`,
+        company_id: p_company_id,
+        card_id: p_card_id,
+        bsale_nv_id: p_bsale_nv_id,
+        bsale_detail_id: currentLine.detailId,
+        bsale_variant_id: currentLine.variantId ?? null,
+        sku: currentLine.sku ?? null,
+        product_name: currentLine.productName ?? 'Producto sin nombre',
+        requested_quantity: Number(currentLine.quantity),
+        prepared_quantity: null,
+        line_status: 'PENDING',
+        excluded_from_dispatch: false,
+        confirmed_by: null,
+        confirmed_at: null,
+        retired_at: null,
+        source_snapshot: currentLine,
+      })
+    } else {
+      throw new Error(`Acción comercial no soportada: ${kind}`)
+    }
+  }
+
+  const UncoveredActiveLines = workingLines.filter(
+    l => l.company_id === p_company_id && l.card_id === p_card_id && l.retired_at === null && !processedLineIds.has(l.id) && !l.id.startsWith('added-line-')
+  )
+  if (UncoveredActiveLines.length > 0) {
+    throw new Error('El plan comercial no cubre todas las líneas activas de preparación')
+  }
+
+  // Comprobar invariante CHECK de sales_order_preparation_lines
+  for (const l of workingLines) {
+    if (l.prepared_quantity !== null && (l.prepared_quantity < 0 || l.prepared_quantity > l.requested_quantity)) {
+      throw new Error('Violación CHECK prepared_quantity <= requested_quantity')
+    }
+    if (l.line_status === 'INCIDENT' && (l.prepared_quantity === null || !l.confirmed_by || !l.confirmed_at)) {
+      throw new Error('Violación CHECK sales_order_preparation_lines_status_consistency')
+    }
+  }
+
+  // Persistir cambios en simulación
+  db.preparationLines = workingLines
+  card.current_bsale_nv_id = p_bsale_nv_id
+  card.canonical_bsale_token = card.canonical_bsale_token ?? p_canonical_bsale_token
+
+  const nextVersionNumber = (latestVersion?.version_number ?? 0) + 1
+  const newVersionRecord = {
+    id: `version-${nextVersionNumber}`,
+    company_id: p_company_id,
+    card_id: p_card_id,
+    version_number: nextVersionNumber,
+    bsale_nv_id: p_bsale_nv_id,
+    bsale_nv_folio: p_bsale_nv_folio,
+    canonical_bsale_token: p_canonical_bsale_token,
+    fingerprint: p_new_fingerprint,
+    previous_fingerprint: latestVersion?.fingerprint ?? p_expected_previous_fingerprint,
+    version_snapshot: p_version_snapshot,
+    comparison: p_comparison,
+    applied_actions: actions,
+    accepted_by: p_accepted_by,
+  }
+  db.commercialVersions.push(newVersionRecord)
+
+  return {
+    status: 'ACCEPTED',
+    version_id: newVersionRecord.id,
+    version_number: nextVersionNumber,
+    current_bsale_nv_id: p_bsale_nv_id,
+    fingerprint: p_new_fingerprint,
+  }
+}
+
+// Simulación en JavaScript del guard P0-01 (`20261103121029_logistica_snapshot_existing_lines_guard.sql`)
+function simulateMaterializeSnapshotP001(db, p_company_id, p_card_id) {
+  const card = db.cards.find(c => c.id === p_card_id && c.company_id === p_company_id)
+  if (!card) throw new Error('Tarjeta de preparación no encontrada para la empresa')
+  const latestAcceptedVersion = db.commercialVersions
+    .filter(v => v.company_id === p_company_id && v.card_id === p_card_id)
+    .sort((a, b) => b.version_number - a.version_number)[0]
+
+  const activeLines = db.preparationLines.filter(l => l.company_id === p_company_id && l.card_id === p_card_id && l.retired_at === null)
+
+  if (latestAcceptedVersion) {
+    const versionLines = latestAcceptedVersion.version_snapshot?.lines ?? []
+    if (versionLines.length === 0) {
+      throw new Error('La versión comercial aceptada no contiene líneas válidas para verificar el snapshot de preparación.')
+    }
+    if (activeLines.some(l => l.bsale_detail_id === null || l.source_snapshot == null)) {
+      throw new Error('Existen líneas activas sin snapshot completo para la versión comercial aceptada.')
+    }
+    if (activeLines.length !== versionLines.length) {
+      throw new Error('Las líneas activas de preparación no coinciden con la última versión comercial aceptada.')
+    }
+    const multisetKey = (variantId, sku, qty) => `${variantId ?? -1}::${sku ?? ''}::${Number(qty)}`
+    const countMap = (items) => {
+      const m = new Map()
+      for (const k of items) m.set(k, (m.get(k) ?? 0) + 1)
+      return m
+    }
+    const activeCounts = countMap(activeLines.map(l => multisetKey(l.bsale_variant_id, l.sku, l.requested_quantity)))
+    const expectedCounts = countMap(versionLines.map(l => multisetKey(l.variantId, l.sku, l.quantity)))
+    if (activeCounts.size !== expectedCounts.size || [...activeCounts.entries()].some(([k, v]) => expectedCounts.get(k) !== v)) {
+      throw new Error('Las líneas activas de preparación no coinciden con las líneas de la última versión comercial aceptada.')
+    }
+    return 0
+  }
+
+  if (activeLines.length > 0) {
+    return 0
+  }
+  throw new Error('Rama de materialización inicial no invocada en este escenario')
+}
+
+function buildCommercialReductionFixture() {
+  const companyId = 'd1000000-0000-0000-0000-000000000001'
+  const cardId = 'c2000000-0000-0000-0000-000000000002'
+  const canonicalToken = 'token-nv-7701'
+
+  const initialSnapshotLine = {
+    detail_id: 88001,
+    variant_id: 501,
+    sku: 'SKU-RED-501',
+    product_name: 'ALIMENTO PREMIUM PERRO 15KG',
+    quantity: 5,
+    unit_net_value: 20000,
+    line_net_amount: 100000,
+    line_tax_amount: 19000,
+    line_gross_amount: 119000,
+    nv_bsale_id: 95001,
+    nv_folio: 7701,
+  }
+
+  const card = {
+    id: cardId,
+    company_id: companyId,
+    status: 'IN_PREPARATION',
+    bsale_nv_id: 95001,
+    bsale_nv_folio: '7701',
+    canonical_bsale_token: canonicalToken,
+    current_bsale_nv_id: 95002,
+  }
+
+  const prepLine = {
+    id: 'prep-line-501',
+    company_id: companyId,
+    card_id: cardId,
+    bsale_nv_id: 95001,
+    bsale_detail_id: 88001,
+    bsale_variant_id: 501,
+    sku: 'SKU-RED-501',
+    product_name: 'ALIMENTO PREMIUM PERRO 15KG',
+    requested_quantity: 5,
+    prepared_quantity: 4,
+    line_status: 'INCIDENT',
+    excluded_from_dispatch: false,
+    confirmed_by: 'operator-user-111',
+    confirmed_at: '2026-11-04T09:15:00.000Z',
+    retired_at: null,
+    source_snapshot: initialSnapshotLine,
+  }
+
+  const incident = {
+    id: 'incident-501',
+    company_id: companyId,
+    card_id: cardId,
+    preparation_line_id: 'prep-line-501',
+    bsale_nv_id: 95001,
+    bsale_detail_id: 88001,
+    bsale_variant_id: 501,
+    sku: 'SKU-RED-501',
+    product_name: 'ALIMENTO PREMIUM PERRO 15KG',
+    requested_quantity: 5,
+    prepared_quantity: 4,
+    missing_quantity: 1,
+    incident_type: 'QUANTITY_REDUCTION',
+    reason: 'SHORTAGE_DETECTED',
+    required_bsale_action: 'SET_QUANTITY',
+    expected_bsale_quantity: 4,
+    status: 'RESOLVED',
+    verification_status: 'MATCHED',
+    bsale_observed_quantity: 4,
+    bsale_observed_snapshot: {
+      physicalId: 95002,
+      folio: '7701',
+      canonicalToken,
+      line: {
+        detailId: 88055,
+        variantId: 501,
+        sku: 'SKU-RED-501',
+        quantity: 4,
+      },
+    },
+    created_by: 'operator-user-111',
+    created_at: '2026-11-04T09:15:00.000Z',
+    resolved_by: 'admin-user-222',
+    resolved_at: '2026-11-04T10:00:00.000Z',
+  }
+
+  const currentLiveVersion = {
+    identity: {
+      canonicalToken,
+      historicalBsaleId: 95001,
+      currentBsaleId: 95002,
+      folio: '7701',
+    },
+    physicalId: 95002,
+    generationDate: '2026-11-04',
+    emissionDate: '2026-11-04',
+    lines: [
+      {
+        detailId: 88055,
+        variantId: 501,
+        sku: 'SKU-RED-501',
+        productName: 'ALIMENTO PREMIUM PERRO 15KG',
+        quantity: 4,
+        unitNetValue: 20000,
+        lineNetAmount: 80000,
+        lineTaxAmount: 15200,
+        lineGrossAmount: 95200,
+        lineNumber: 1,
+        special: false,
+      },
+    ],
+    netAmount: 80000,
+    taxAmount: 15200,
+    totalAmount: 95200,
+  }
+
+  const db = {
+    cards: [card],
+    preparationLines: [prepLine],
+    incidents: [incident],
+    commercialVersions: [],
+    audits: [],
+    auditLines: [],
+    auditIncidents: [],
+  }
+
+  return { db, card, prepLine, incident, currentLiveVersion }
+}
+
+test('MEJ-01 Bloque 1 — Escenarios 1, 7, 10 y 11 (Simulación JS de RPC + P0-01): reducción válida (5 -> 4), preservación histórica, compatibilidad P0-01 e idempotencia', () => {
+  const { db, card, currentLiveVersion } = buildCommercialReductionFixture()
+  const acceptedVersion = runFallbackVersion(card, db.preparationLines)
+  const comparison = compareCommercialVersions(acceptedVersion, currentLiveVersion)
+
+  // Servidor proyecta las columnas mínimas hacia el planificador TS
+  const projectedIncidents = db.incidents.map(i => ({
+    id: i.id,
+    preparation_line_id: i.preparation_line_id,
+    status: i.status,
+    incident_type: i.incident_type,
+  }))
+
+  const plan = buildPreparationCommercialReconciliationPlan({
+    card: { cardId: card.id, companyId: card.company_id, status: card.status },
+    identity: currentLiveVersion.identity,
+    acceptedVersion,
+    currentVersion: currentLiveVersion,
+    preparationLines: db.preparationLines,
+    incidents: projectedIncidents,
+    comparison,
+    snapshotComplete: true,
+  })
+
+  assert.equal(plan.status, 'READY')
+  assert.equal(plan.canAcceptCompletely, true)
+  assert.equal(plan.actions.length, 1)
+  assert.equal(plan.actions[0].kind, 'UPDATE_QUANTITY')
+  assert.equal(plan.actions[0].previousRequestedQuantity, 5)
+  assert.equal(plan.actions[0].newRequestedQuantity, 4)
+
+  const rpcParams = {
+    p_company_id: card.company_id,
+    p_card_id: card.id,
+    p_expected_previous_fingerprint: plan.acceptedFingerprint,
+    p_new_fingerprint: plan.currentFingerprint,
+    p_bsale_nv_id: currentLiveVersion.physicalId,
+    p_bsale_nv_folio: currentLiveVersion.identity.folio,
+    p_canonical_bsale_token: currentLiveVersion.identity.canonicalToken,
+    p_version_snapshot: currentLiveVersion,
+    p_comparison: comparison,
+    p_plan: plan,
+    p_accepted_by: 'admin-user-222',
+  }
+
+  // Escenario 1: Aceptación comercial exitosa
+  const result = simulateAcceptCommercialChangesRpc(db, rpcParams)
+  assert.equal(result.status, 'ACCEPTED')
+  assert.equal(result.version_number, 1)
+  assert.equal(result.current_bsale_nv_id, 95002)
+
+  // Escenario 7: Preservación histórica intacta en línea e incidencia
+  assert.equal(db.preparationLines.length, 1)
+  const updatedLine = db.preparationLines[0]
+  assert.equal(updatedLine.requested_quantity, 4)
+  assert.equal(updatedLine.prepared_quantity, 4)
+  assert.equal(updatedLine.line_status, 'INCIDENT')
+  assert.equal(updatedLine.excluded_from_dispatch, false)
+  assert.equal(updatedLine.confirmed_by, 'operator-user-111')
+  assert.equal(updatedLine.confirmed_at, '2026-11-04T09:15:00.000Z')
+  assert.equal(updatedLine.bsale_nv_id, 95002)
+  assert.equal(updatedLine.bsale_detail_id, 88055)
+
+  const storedIncident = db.incidents[0]
+  assert.equal(storedIncident.status, 'RESOLVED')
+  assert.equal(storedIncident.verification_status, 'MATCHED')
+  assert.equal(storedIncident.requested_quantity, 5)
+  assert.equal(storedIncident.prepared_quantity, 4)
+  assert.equal(storedIncident.required_bsale_action, 'SET_QUANTITY')
+  assert.equal(storedIncident.reason, 'SHORTAGE_DETECTED')
+  assert.equal(storedIncident.created_by, 'operator-user-111')
+  assert.equal(storedIncident.created_at, '2026-11-04T09:15:00.000Z')
+  assert.equal(storedIncident.resolved_by, 'admin-user-222')
+  assert.equal(storedIncident.resolved_at, '2026-11-04T10:00:00.000Z')
+  assert.equal(db.cards[0].status, 'IN_PREPARATION')
+
+  // Escenario 10: Compatibilidad con guard P0-01 tras aceptar la reducción
+  const insertedCount = simulateMaterializeSnapshotP001(db, card.company_id, card.id)
+  assert.equal(insertedCount, 0)
+  assert.equal(db.preparationLines.length, 1)
+  assert.equal(db.preparationLines[0].requested_quantity, 4)
+  assert.equal(db.preparationLines[0].prepared_quantity, 4)
+
+  // Escenario 11: Ejecución repetida devuelve ALREADY_ACCEPTED sin crear nueva versión ni duplicar efectos
+  const repeatResult = simulateAcceptCommercialChangesRpc(db, rpcParams)
+  assert.equal(repeatResult.status, 'ALREADY_ACCEPTED')
+  assert.equal(repeatResult.version_number, 1)
+  assert.equal(db.commercialVersions.length, 1)
+  assert.equal(db.preparationLines.length, 1)
+})
+
+test('MEJ-01 Bloque 1 — Escenarios 2, 3, 4, 5, 6, 8, 9 y 12 (Simulación JS de RPC): bloqueos defensivos en base de datos ante cualquier incumplimiento del contrato', () => {
+  const buildForcedParams = (db, currentLiveVersion) => {
+    const card = db.cards[0]
+    const acceptedVersion = runFallbackVersion(card, db.preparationLines)
+    const comparison = compareCommercialVersions(acceptedVersion, currentLiveVersion)
+    const forcedPlan = {
+      status: 'READY',
+      canAcceptCompletely: true,
+      conflicts: [],
+      actions: [
+        {
+          kind: 'UPDATE_QUANTITY',
+          preparationLineId: 'prep-line-501',
+          previousRequestedQuantity: db.preparationLines[0].requested_quantity,
+          newRequestedQuantity: currentLiveVersion.lines[0].quantity,
+          preparedQuantity: db.preparationLines[0].prepared_quantity,
+          quantityDelta: currentLiveVersion.lines[0].quantity - db.preparationLines[0].requested_quantity,
+          current: currentLiveVersion.lines[0],
+        },
+      ],
+    }
+    return {
+      p_company_id: card.company_id,
+      p_card_id: card.id,
+      p_expected_previous_fingerprint: fingerprintCommercialVersion(acceptedVersion).value,
+      p_new_fingerprint: fingerprintCommercialVersion(currentLiveVersion).value,
+      p_bsale_nv_id: currentLiveVersion.physicalId,
+      p_bsale_nv_folio: currentLiveVersion.identity.folio,
+      p_canonical_bsale_token: currentLiveVersion.identity.canonicalToken,
+      p_version_snapshot: currentLiveVersion,
+      p_comparison: comparison,
+      p_plan: forcedPlan,
+      p_accepted_by: 'admin-user-222',
+    }
+  }
+
+  // Escenario 2: Incidencia OPEN bloquea en RPC
+  {
+    const { db, currentLiveVersion } = buildCommercialReductionFixture()
+    db.incidents[0].status = 'OPEN'
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedParams(db, currentLiveVersion)),
+      /UPDATE_QUANTITY no puede modificar líneas con incidencias abiertas/,
+    )
+    assert.equal(db.preparationLines[0].requested_quantity, 5)
+  }
+
+  // Escenario 3: Cantidad inferior a lo preparado (Preparado 4, Bsale 3) bloquea en RPC
+  {
+    const { db, currentLiveVersion } = buildCommercialReductionFixture()
+    currentLiveVersion.lines[0].quantity = 3
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedParams(db, currentLiveVersion)),
+      /UPDATE_QUANTITY es incompatible con lo preparado/,
+    )
+    assert.equal(db.preparationLines[0].requested_quantity, 5)
+  }
+
+  // Escenario 4: Incidencia SUPERSEDED sin incidencia RESOLVED vigente bloquea en RPC
+  {
+    const { db, currentLiveVersion } = buildCommercialReductionFixture()
+    db.incidents[0].status = 'SUPERSEDED'
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedParams(db, currentLiveVersion)),
+      /UPDATE_QUANTITY requiere una incidencia QUANTITY_REDUCTION en estado RESOLVED\/MATCHED verificada para la versión vigente/,
+    )
+    assert.equal(db.preparationLines[0].requested_quantity, 5)
+  }
+
+  // Escenario 5: Versión desactualizada (physicalId verificado en incidencia distinto al de la versión que se intenta aceptar) bloquea en RPC
+  {
+    const { db, currentLiveVersion } = buildCommercialReductionFixture()
+    db.incidents[0].bsale_observed_snapshot = { physicalId: 95001 }
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedParams(db, currentLiveVersion)),
+      /UPDATE_QUANTITY requiere una incidencia QUANTITY_REDUCTION en estado RESOLVED\/MATCHED verificada para la versión vigente/,
+    )
+    assert.equal(db.preparationLines[0].requested_quantity, 5)
+  }
+
+  // Escenario 6: Identidad incorrecta (incidencia de otra línea, otro producto, otra empresa o tarjeta) bloquea en RPC
+  {
+    const { db, currentLiveVersion } = buildCommercialReductionFixture()
+    db.incidents[0].preparation_line_id = 'other-line-id'
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedParams(db, currentLiveVersion)),
+      /UPDATE_QUANTITY requiere una incidencia QUANTITY_REDUCTION en estado RESOLVED\/MATCHED verificada para la versión vigente/,
+    )
+  }
+  {
+    const { db, currentLiveVersion } = buildCommercialReductionFixture()
+    db.incidents[0].bsale_variant_id = 999
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedParams(db, currentLiveVersion)),
+      /UPDATE_QUANTITY requiere una incidencia QUANTITY_REDUCTION en estado RESOLVED\/MATCHED verificada para la versión vigente/,
+    )
+  }
+  {
+    const { db, currentLiveVersion } = buildCommercialReductionFixture()
+    db.incidents[0].card_id = 'other-card-id'
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedParams(db, currentLiveVersion)),
+      /UPDATE_QUANTITY requiere una incidencia QUANTITY_REDUCTION en estado RESOLVED\/MATCHED verificada para la versión vigente/,
+    )
+  }
+
+  // Escenario 8: Estado de tarjeta inválido (IN_AUDIT o AUDITED) bloquea en RPC
+  for (const invalidStatus of ['IN_AUDIT', 'AUDITED']) {
+    const { db, currentLiveVersion } = buildCommercialReductionFixture()
+    db.cards[0].status = invalidStatus
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedParams(db, currentLiveVersion)),
+      /Solo se pueden aceptar cambios comerciales cuando la tarjeta está en preparación/,
+    )
+  }
+
+  // Escenario 9: Evidencia de Auditoría existente bloquea en RPC incluso si la tarjeta sigue en IN_PREPARATION
+  {
+    const { db, currentLiveVersion } = buildCommercialReductionFixture()
+    db.auditLines.push({
+      id: 'audit-line-1',
+      company_id: db.cards[0].company_id,
+      card_id: db.cards[0].id,
+      preparation_line_id: 'prep-line-501',
+    })
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedParams(db, currentLiveVersion)),
+      /No se puede aceptar cambios comerciales cuando existe evidencia de Auditoría en la tarjeta/,
+    )
+  }
+
+  // Escenario 12: Producto excluido (prepared_quantity = 0 y excluded_from_dispatch = true) permanece bloqueado en RPC
+  {
+    const { db, currentLiveVersion } = buildCommercialReductionFixture()
+    db.preparationLines[0].prepared_quantity = 0
+    db.preparationLines[0].excluded_from_dispatch = true
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedParams(db, currentLiveVersion)),
+      /UPDATE_QUANTITY es incompatible con lo preparado/,
+    )
+  }
 })

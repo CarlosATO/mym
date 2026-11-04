@@ -10,6 +10,8 @@ import {
 
 export type PreparationReconciliationLine = {
   id: string
+  company_id?: string | null
+  card_id?: string | null
   bsale_detail_id: number
   bsale_variant_id: number | null
   sku: string | null
@@ -25,6 +27,17 @@ export type PreparationReconciliationIncident = {
   preparation_line_id: string
   status: string
   incident_type?: string | null
+  company_id?: string | null
+  card_id?: string | null
+  bsale_variant_id?: number | null
+  sku?: string | null
+  requested_quantity?: number | null
+  prepared_quantity?: number | null
+  required_bsale_action?: string | null
+  expected_bsale_quantity?: number | null
+  verification_status?: string | null
+  bsale_observed_quantity?: number | null
+  bsale_observed_snapshot?: Record<string, unknown> | null
 }
 
 export type PreparationCommercialReconciliationCard = {
@@ -156,14 +169,24 @@ function isConfirmedCommercialValueDifference(difference: CommercialLineDifferen
   return difference.changedFields.some(field => COMMERCIAL_VALUE_FIELDS.has(field))
 }
 
-function persistedCandidates(line: LineRef, preparationLines: PreparationReconciliationLine[]): PreparationReconciliationLine[] {
+function persistedCandidates(
+  line: LineRef,
+  preparationLines: PreparationReconciliationLine[],
+  card?: PreparationCommercialReconciliationCard,
+): PreparationReconciliationLine[] {
   if (!line) return []
-  const byDetail = line.detailId == null ? [] : preparationLines.filter(item => item.bsale_detail_id === Number(line.detailId))
+  const scopedLines = card
+    ? preparationLines.filter(item => (
+      (item.company_id == null || item.company_id === card.companyId)
+      && (item.card_id == null || item.card_id === card.cardId)
+    ))
+    : preparationLines
+  const byDetail = line.detailId == null ? [] : scopedLines.filter(item => item.bsale_detail_id === Number(line.detailId))
   if (byDetail.length > 0) return byDetail
-  const byVariant = line.variantId == null ? [] : preparationLines.filter(item => item.bsale_variant_id === Number(line.variantId))
+  const byVariant = line.variantId == null ? [] : scopedLines.filter(item => item.bsale_variant_id === Number(line.variantId))
   if (byVariant.length > 0) return byVariant
   return line.sku?.trim()
-    ? preparationLines.filter(item => item.sku?.trim().toLocaleUpperCase('es-CL') === line.sku?.trim().toLocaleUpperCase('es-CL'))
+    ? scopedLines.filter(item => item.sku?.trim().toLocaleUpperCase('es-CL') === line.sku?.trim().toLocaleUpperCase('es-CL'))
     : []
 }
 
@@ -175,6 +198,75 @@ function isUntouched(line: PreparationReconciliationLine): boolean {
   return line.line_status === 'PENDING'
     && line.prepared_quantity == null
     && line.excluded_from_dispatch === false
+}
+
+function observedSnapshotPhysicalId(snapshot: Record<string, unknown> | null | undefined): number | null {
+  if (!snapshot || typeof snapshot !== 'object') return null
+  const raw = snapshot.physical_id ?? snapshot.physicalId ?? snapshot.document_id ?? snapshot.documentId ?? snapshot.current_nv_id ?? snapshot.currentNvId ?? snapshot.nv_id ?? snapshot.nvId
+  if (raw == null || raw === '') return null
+  const parsed = Number(raw)
+  return Number.isSafeInteger(parsed) ? parsed : null
+}
+
+function isResolvedQuantityReductionIncident(params: {
+  card: PreparationCommercialReconciliationCard
+  currentVersion: PreparationCommercialVersion
+  difference: CommercialLineDifference
+  persistedLine: PreparationReconciliationLine
+  relatedIncidents: PreparationReconciliationIncident[]
+}): boolean {
+  const { card, currentVersion, difference, persistedLine, relatedIncidents } = params
+  if (difference.kind !== 'QUANTITY_DECREASED' || difference.confidence !== 'CERTAIN') return false
+  if (!difference.previous || !difference.current) return false
+  if (persistedLine.line_status !== 'INCIDENT' || persistedLine.excluded_from_dispatch) return false
+  if (persistedLine.company_id != null && persistedLine.company_id !== card.companyId) return false
+  if (persistedLine.card_id != null && persistedLine.card_id !== card.cardId) return false
+
+  const preparedQuantity = persistedLine.prepared_quantity
+  const requestedQuantity = persistedLine.requested_quantity
+  const newQuantity = difference.current.quantity
+  if (preparedQuantity == null || !Number.isFinite(preparedQuantity) || preparedQuantity <= 0) return false
+  if (!Number.isFinite(requestedQuantity) || requestedQuantity <= preparedQuantity) return false
+  if (difference.previous.quantity !== requestedQuantity) return false
+  if (newQuantity !== preparedQuantity) return false
+
+  if (relatedIncidents.length === 0) return false
+  if (relatedIncidents.some(incident => incident.status !== 'RESOLVED' && incident.status !== 'SUPERSEDED')) {
+    return false
+  }
+  if (relatedIncidents.some(incident => (
+    (incident.company_id != null && incident.company_id !== card.companyId)
+    || (incident.card_id != null && incident.card_id !== card.cardId)
+  ))) {
+    return false
+  }
+
+  const resolvedIncidents = relatedIncidents.filter(incident => incident.status === 'RESOLVED')
+  if (resolvedIncidents.length === 0) return false
+
+  return resolvedIncidents.every(incident => {
+    if (incident.preparation_line_id !== persistedLine.id) return false
+    if (incident.company_id != null && incident.company_id !== card.companyId) return false
+    if (incident.card_id != null && incident.card_id !== card.cardId) return false
+    if ((incident.incident_type ?? 'QUANTITY_REDUCTION') !== 'QUANTITY_REDUCTION') return false
+    if ((incident.required_bsale_action ?? 'SET_QUANTITY') !== 'SET_QUANTITY') return false
+    if ((incident.verification_status ?? 'MATCHED') !== 'MATCHED') return false
+    if (incident.requested_quantity != null && Number(incident.requested_quantity) !== requestedQuantity) return false
+    if (incident.prepared_quantity != null && Number(incident.prepared_quantity) !== preparedQuantity) return false
+    if (incident.expected_bsale_quantity != null && Number(incident.expected_bsale_quantity) !== newQuantity) return false
+    if (incident.bsale_observed_quantity != null && Number(incident.bsale_observed_quantity) !== newQuantity) return false
+    if (incident.bsale_variant_id != null && normalizeVariantId(incident.bsale_variant_id) !== normalizeVariantId(persistedLine.bsale_variant_id)) {
+      return false
+    }
+    if (incident.sku != null && normalizeSku(incident.sku) !== normalizeSku(persistedLine.sku)) {
+      return false
+    }
+    const snapshotPhysicalId = observedSnapshotPhysicalId(incident.bsale_observed_snapshot)
+    if (snapshotPhysicalId != null && snapshotPhysicalId !== currentVersion.physicalId) {
+      return false
+    }
+    return true
+  })
 }
 
 function emptyPlan(input: BuildPreparationCommercialReconciliationPlanInput, status: PreparationCommercialReconciliationPlanStatus, conflicts: PreparationCommercialReconciliationConflict[] = []): PreparationCommercialReconciliationPlan {
@@ -224,8 +316,12 @@ function conflictAction(
   }
 }
 
-function findSinglePersistedLine(line: LineRef, preparationLines: PreparationReconciliationLine[]): { line: PreparationReconciliationLine | null; ambiguous: boolean } {
-  const candidates = persistedCandidates(line, preparationLines)
+function findSinglePersistedLine(
+  line: LineRef,
+  preparationLines: PreparationReconciliationLine[],
+  card: PreparationCommercialReconciliationCard,
+): { line: PreparationReconciliationLine | null; ambiguous: boolean } {
+  const candidates = persistedCandidates(line, preparationLines, card)
   return { line: candidates.length === 1 ? candidates[0] : null, ambiguous: candidates.length > 1 }
 }
 
@@ -233,8 +329,10 @@ function actionForDifference(
   difference: CommercialLineDifference,
   preparationLines: PreparationReconciliationLine[],
   incidents: PreparationReconciliationIncident[],
+  card: PreparationCommercialReconciliationCard,
+  currentVersion: PreparationCommercialVersion,
 ): PreparationCommercialReconciliationAction {
-  const match = findSinglePersistedLine(difference.previous, preparationLines)
+  const match = findSinglePersistedLine(difference.previous, preparationLines, card)
   if (difference.confidence === 'AMBIGUOUS') {
     return conflictAction('COMPARISON_AMBIGUOUS', 'El comparador no pudo emparejar la línea de forma inequívoca.', difference.previous, difference.current, match.line, incidents)
   }
@@ -296,14 +394,26 @@ function actionForDifference(
   }
   if (difference.kind === 'QUANTITY_INCREASED' || difference.kind === 'QUANTITY_DECREASED') {
     if (match.line.excluded_from_dispatch) return conflictAction('PREPARATION_LINE_EXCLUDED', 'La línea está excluida y su referencia operativa debe preservarse.', difference.previous, difference.current, match.line, incidents)
-    if (relatedIncidents.length > 0) return conflictAction('OPERATIONAL_INCIDENT_EXISTS', 'La línea con cantidad modificada tiene una incidencia operativa.', difference.previous, difference.current, match.line, incidents)
     const newQuantity = difference.current?.quantity ?? 0
     const preparedQuantity = match.line.prepared_quantity ?? 0
     if (newQuantity < preparedQuantity) return conflictAction('QUANTITY_BELOW_PREPARED', 'La nueva cantidad solicitada es inferior a la cantidad ya preparada.', difference.previous, difference.current, match.line, incidents)
+    if (
+      (relatedIncidents.length > 0 || match.line.line_status === 'INCIDENT')
+      && !isResolvedQuantityReductionIncident({
+        card,
+        currentVersion,
+        difference,
+        persistedLine: match.line,
+        relatedIncidents,
+      })
+    ) {
+      return conflictAction('OPERATIONAL_INCIDENT_EXISTS', 'La línea con cantidad modificada tiene una incidencia operativa.', difference.previous, difference.current, match.line, incidents)
+    }
     return {
       kind: 'UPDATE_QUANTITY', preparationLineId: match.line.id, previous: difference.previous, current: difference.current,
       previousRequestedQuantity: match.line.requested_quantity, newRequestedQuantity: newQuantity,
-      preparedQuantity: match.line.prepared_quantity, quantityDelta: difference.quantityDelta, incidentIds: [], conflict: null,
+      preparedQuantity: match.line.prepared_quantity, quantityDelta: difference.quantityDelta,
+      incidentIds: relatedIncidents.map(incident => incident.id), conflict: null,
     }
   }
   if (
@@ -338,7 +448,7 @@ function actionForDifference(
 function keepActions(input: BuildPreparationCommercialReconciliationPlanInput): PreparationCommercialReconciliationAction[] {
   const planningDifferences = input.comparison?.differences ?? []
   return input.preparationLines
-    .filter(line => !planningDifferences.some(difference => difference.previous && persistedCandidates(difference.previous, [line]).length > 0))
+    .filter(line => !planningDifferences.some(difference => difference.previous && persistedCandidates(difference.previous, [line], input.card).length > 0))
     .map(line => ({
       kind: 'KEEP' as const,
       preparationLineId: line.id,
@@ -394,9 +504,10 @@ export function buildPreparationCommercialReconciliationPlan(input: BuildPrepara
     })))
   }
 
+  const currentVersion = input.currentVersion
   const planningDifferences = input.comparison.differences.filter(difference => !isQuantityValueCompanion(difference, input.comparison?.differences ?? []))
   const planningInput = { ...input, comparison: { ...input.comparison, differences: planningDifferences } }
-  const actions = [...keepActions(planningInput), ...planningDifferences.map(difference => actionForDifference(difference, input.preparationLines, input.incidents))]
+  const actions = [...keepActions(planningInput), ...planningDifferences.map(difference => actionForDifference(difference, input.preparationLines, input.incidents, input.card, currentVersion))]
   const conflicts = actions.flatMap(action => action.conflict ? [action.conflict] : [])
   const hasCommercialDifference = input.comparison.differences.length > 0
   return {
