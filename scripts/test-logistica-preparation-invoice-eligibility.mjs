@@ -69,3 +69,10 @@ test('MEJ-01C no recalcula valores monetarios ni implementa sincronización Bsal
   assert.doesNotMatch(migration, /net_amount|tax_amount|net_discount|total_amount/)
   assert.doesNotMatch(migration, /fetch\(|bsaleWrite|\/documents\.json|sync_sales_order/)
 })
+
+test('las consultas a bsale_clients utilizan bsale_client_id y no bsale_id', () => {
+  assert.match(migration, /FROM integraciones\.bsale_clients x WHERE x\.company_id = p_company_id AND x\.bsale_client_id = doc_row\.client_id/)
+  assert.match(migration, /FROM integraciones\.bsale_clients client_row[\s\S]*?WHERE client_row\.company_id = p_company_id\s+AND client_row\.bsale_client_id = doc_row\.client_id/)
+  assert.doesNotMatch(migration, /integraciones\.bsale_clients\b[^\n;]*\bbsale_id\b/)
+  assert.doesNotMatch(migration, /client_row\.bsale_id\b/)
+})
