@@ -440,34 +440,57 @@ BEGIN
                     OR i.requested_quantity IS DISTINCT FROM v_line.requested_quantity
                     OR i.prepared_quantity IS DISTINCT FROM v_line.prepared_quantity
                     OR i.expected_bsale_quantity IS DISTINCT FROM v_new_quantity
-                    OR (i.bsale_observed_quantity IS NOT NULL AND i.bsale_observed_quantity IS DISTINCT FROM v_new_quantity)
-                    OR (i.bsale_variant_id IS NOT NULL AND i.bsale_variant_id IS DISTINCT FROM v_line.bsale_variant_id)
-                    OR (NULLIF(btrim(i.sku), '') IS NOT NULL AND NULLIF(upper(btrim(i.sku)), '') IS DISTINCT FROM NULLIF(upper(btrim(v_line.sku)), ''))
+                    OR i.bsale_observed_quantity IS DISTINCT FROM v_new_quantity
+                    OR (i.bsale_variant_id IS NULL AND NULLIF(btrim(i.sku), '') IS NULL)
+                    OR i.bsale_variant_id IS DISTINCT FROM v_line.bsale_variant_id
+                    OR NULLIF(upper(btrim(i.sku)), '') IS DISTINCT FROM NULLIF(upper(btrim(v_line.sku)), '')
+                    OR i.bsale_observed_snapshot IS NULL
+                    OR jsonb_typeof(i.bsale_observed_snapshot) IS DISTINCT FROM 'object'
+                    OR jsonb_typeof(i.bsale_observed_snapshot->'verification_basis') IS DISTINCT FROM 'string'
+                    OR (i.bsale_observed_snapshot->>'verification_basis') IS DISTINCT FROM 'FULL_CARD_AND_INCIDENT_ACTION_WITH_PHYSICAL_LINE'
                     OR (
-                      i.bsale_observed_snapshot IS NOT NULL
-                      AND COALESCE(
-                        NULLIF(i.bsale_observed_snapshot->>'physical_id', ''),
-                        NULLIF(i.bsale_observed_snapshot->>'physicalId', ''),
-                        NULLIF(i.bsale_observed_snapshot->>'document_id', ''),
-                        NULLIF(i.bsale_observed_snapshot->>'current_nv_id', ''),
-                        NULLIF(i.bsale_observed_snapshot->>'nv_id', '')
-                      ) IS NOT NULL
-                      AND (
-                        COALESCE(
-                          NULLIF(i.bsale_observed_snapshot->>'physical_id', ''),
-                          NULLIF(i.bsale_observed_snapshot->>'physicalId', ''),
-                          NULLIF(i.bsale_observed_snapshot->>'document_id', ''),
-                          NULLIF(i.bsale_observed_snapshot->>'current_nv_id', ''),
-                          NULLIF(i.bsale_observed_snapshot->>'nv_id', '')
-                        ) !~ '^[0-9]+$'
-                        OR COALESCE(
-                          NULLIF(i.bsale_observed_snapshot->>'physical_id', ''),
-                          NULLIF(i.bsale_observed_snapshot->>'physicalId', ''),
-                          NULLIF(i.bsale_observed_snapshot->>'document_id', ''),
-                          NULLIF(i.bsale_observed_snapshot->>'current_nv_id', ''),
-                          NULLIF(i.bsale_observed_snapshot->>'nv_id', '')
-                        )::bigint IS DISTINCT FROM (v_request.version_snapshot->>'physicalId')::bigint
-                      )
+                      i.bsale_observed_snapshot ? 'verification_error'
+                      AND jsonb_typeof(i.bsale_observed_snapshot->'verification_error') IS DISTINCT FROM 'null'
+                      AND btrim(i.bsale_observed_snapshot->>'verification_error') <> ''
+                    )
+                    OR jsonb_typeof(i.bsale_observed_snapshot->'document_state') IS DISTINCT FROM 'number'
+                    OR (i.bsale_observed_snapshot->>'document_state') !~ '^[0-9]+$'
+                    OR (i.bsale_observed_snapshot->>'document_state')::integer IS DISTINCT FROM 0
+                    OR i.bsale_observed_snapshot->'canonical_identity_matched' IS DISTINCT FROM 'true'::jsonb
+                    OR i.bsale_observed_snapshot->'sync_proven' IS DISTINCT FROM 'true'::jsonb
+                    OR i.bsale_observed_snapshot->'line_link_valid' IS DISTINCT FROM 'true'::jsonb
+                    OR i.bsale_observed_snapshot->'full_card_matched' IS DISTINCT FROM 'true'::jsonb
+                    OR i.bsale_observed_snapshot->'incident_action_matched' IS DISTINCT FROM 'true'::jsonb
+                    OR jsonb_typeof(i.bsale_observed_snapshot->'required_bsale_action') IS DISTINCT FROM 'string'
+                    OR (i.bsale_observed_snapshot->>'required_bsale_action') IS DISTINCT FROM 'SET_QUANTITY'
+                    OR jsonb_typeof(i.bsale_observed_snapshot->'preparation_line_id') IS DISTINCT FROM 'string'
+                    OR (i.bsale_observed_snapshot->>'preparation_line_id') IS DISTINCT FROM v_line.id::text
+                    OR jsonb_typeof(i.bsale_observed_snapshot->'matched_preparation_line_id') IS DISTINCT FROM 'string'
+                    OR (i.bsale_observed_snapshot->>'matched_preparation_line_id') IS DISTINCT FROM v_line.id::text
+                    OR jsonb_typeof(i.bsale_observed_snapshot->'expected_bsale_quantity') IS DISTINCT FROM 'number'
+                    OR (i.bsale_observed_snapshot->>'expected_bsale_quantity')::numeric IS DISTINCT FROM v_new_quantity
+                    OR jsonb_typeof(i.bsale_observed_snapshot->'bsale_observed_quantity') IS DISTINCT FROM 'number'
+                    OR (i.bsale_observed_snapshot->>'bsale_observed_quantity')::numeric IS DISTINCT FROM v_new_quantity
+                    OR jsonb_typeof(i.bsale_observed_snapshot->'physically_prepared_quantity') IS DISTINCT FROM 'number'
+                    OR (i.bsale_observed_snapshot->>'physically_prepared_quantity')::numeric IS DISTINCT FROM v_line.prepared_quantity
+                    OR jsonb_typeof(i.bsale_observed_snapshot->'document_id') IS DISTINCT FROM 'number'
+                    OR (i.bsale_observed_snapshot->>'document_id') !~ '^[0-9]+$'
+                    OR (i.bsale_observed_snapshot->>'document_id')::bigint <= 0
+                    OR (i.bsale_observed_snapshot->>'document_id')::bigint IS DISTINCT FROM (v_request.version_snapshot->>'physicalId')::bigint
+                    OR jsonb_typeof(i.bsale_observed_snapshot->'current_nv_id') IS DISTINCT FROM 'number'
+                    OR (i.bsale_observed_snapshot->>'current_nv_id') !~ '^[0-9]+$'
+                    OR (i.bsale_observed_snapshot->>'current_nv_id')::bigint <= 0
+                    OR (i.bsale_observed_snapshot->>'current_nv_id')::bigint IS DISTINCT FROM (v_request.version_snapshot->>'physicalId')::bigint
+                    OR EXISTS (
+                      SELECT 1
+                        FROM unnest(ARRAY['physical_id', 'physicalId', 'documentId', 'currentNvId', 'nv_id', 'nvId']) AS extra_key(k)
+                       WHERE i.bsale_observed_snapshot ? extra_key.k
+                         AND (
+                           jsonb_typeof(i.bsale_observed_snapshot->extra_key.k) IS DISTINCT FROM 'number'
+                           OR (i.bsale_observed_snapshot->>extra_key.k) !~ '^[0-9]+$'
+                           OR (i.bsale_observed_snapshot->>extra_key.k)::bigint <= 0
+                           OR (i.bsale_observed_snapshot->>extra_key.k)::bigint IS DISTINCT FROM (v_request.version_snapshot->>'physicalId')::bigint
+                         )
                     )
                   )
              ) THEN

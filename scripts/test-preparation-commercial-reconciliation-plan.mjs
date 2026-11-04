@@ -412,6 +412,28 @@ test('línea sin variante ni SKU identificable con cambio de valor bloquea', () 
   assert.equal(result.conflicts[0].reason, 'UNKEYED_COMMERCIAL_LINE')
 })
 
+function buildValidMej01bSnapshot(overrides = {}) {
+  return {
+    historical_nv_id: 92706,
+    current_nv_id: 92714,
+    document_id: 92714,
+    document_state: 0,
+    canonical_identity_matched: true,
+    sync_proven: true,
+    line_link_valid: true,
+    full_card_matched: true,
+    incident_action_matched: true,
+    required_bsale_action: 'SET_QUANTITY',
+    expected_bsale_quantity: 4,
+    bsale_observed_quantity: 4,
+    physically_prepared_quantity: 4,
+    preparation_line_id: 'line-red',
+    matched_preparation_line_id: 'line-red',
+    verification_basis: 'FULL_CARD_AND_INCIDENT_ACTION_WITH_PHYSICAL_LINE',
+    ...overrides,
+  }
+}
+
 test('MEJ-01 Bloque 1 — Escenario 1: reducción válida (Original 5, Preparado 4, Bsale 4, incidencia RESOLVED/MATCHED) produce UPDATE_QUANTITY', () => {
   const oldItem = line(501, 'SKU-RED', 5, { detailId: 4001 })
   const newItem = line(501, 'SKU-RED', 4, { detailId: 4002 })
@@ -435,7 +457,7 @@ test('MEJ-01 Bloque 1 — Escenario 1: reducción válida (Original 5, Preparado
         bsale_observed_quantity: 4,
         status: 'RESOLVED',
         verification_status: 'MATCHED',
-        bsale_observed_snapshot: { physicalId: 92714, line: { variantId: 501, sku: 'SKU-RED', quantity: 4 } },
+        bsale_observed_snapshot: buildValidMej01bSnapshot(),
       },
     ],
   })
@@ -699,23 +721,7 @@ test('MEJ-01 PR #22 fix: ausencia de cualquier campo de evidencia o proyección 
     bsale_observed_quantity: 4,
     bsale_variant_id: 501,
     sku: 'SKU-RED',
-    bsale_observed_snapshot: {
-      historical_nv_id: 92706,
-      current_nv_id: 92714,
-      document_id: 92714,
-      document_state: 0,
-      canonical_identity_matched: true,
-      sync_proven: true,
-      line_link_valid: true,
-      full_card_matched: true,
-      incident_action_matched: true,
-      required_bsale_action: 'SET_QUANTITY',
-      expected_bsale_quantity: 4,
-      bsale_observed_quantity: 4,
-      physically_prepared_quantity: 4,
-      preparation_line_id: 'line-red',
-      matched_preparation_line_id: 'line-red',
-    },
+    bsale_observed_snapshot: buildValidMej01bSnapshot(),
   }
 
   // Proyección real con PREPARATION_RECONCILIATION_INCIDENT_SELECT produce READY
@@ -781,4 +787,110 @@ test('MEJ-01 PR #22 fix: ausencia de cualquier campo de evidencia o proyección 
     assert.equal(blockedPlan.canAcceptCompletely, false)
     assert.equal(blockedPlan.conflicts[0].reason, 'OPERATIONAL_INCIDENT_EXISTS')
   }
+})
+
+test('MEJ-01 Protección contra evidencias históricas insuficientes: rechaza snapshots sin contrato completo de MEJ-01B', () => {
+  const oldItem = line(501, 'SKU-RED', 5, { detailId: 4001 })
+  const newItem = line(501, 'SKU-RED', 4, { detailId: 4002 })
+  const buildIncidentWithSnapshot = (snapshot) => ({
+    id: 'inc-resolved-1',
+    preparation_line_id: 'line-red',
+    company_id: card.companyId,
+    card_id: card.cardId,
+    bsale_variant_id: 501,
+    sku: 'SKU-RED',
+    requested_quantity: 5,
+    prepared_quantity: 4,
+    incident_type: 'QUANTITY_REDUCTION',
+    required_bsale_action: 'SET_QUANTITY',
+    expected_bsale_quantity: 4,
+    bsale_observed_quantity: 4,
+    status: 'RESOLVED',
+    verification_status: 'MATCHED',
+    bsale_observed_snapshot: snapshot,
+  })
+  const assertSnapshotBlocked = (snapshot, description) => {
+    const result = plan({
+      oldLines: [oldItem],
+      newLines: [newItem],
+      preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT', false)],
+      incidents: [buildIncidentWithSnapshot(snapshot)],
+    })
+    assert.equal(result.status, 'REQUIRES_RESOLUTION', description)
+    assert.equal(result.canAcceptCompletely, false, description)
+    assert.equal(result.conflicts[0].reason, 'OPERATIONAL_INCIDENT_EXISTS', description)
+  }
+
+  // 1. Snapshot con solo document_id -> bloqueado
+  assertSnapshotBlocked({ document_id: 92714 }, 'Snapshot con solo document_id debe bloquearse')
+
+  // 2. verification_basis histórico, incorrecto o ausente -> bloqueado
+  for (const invalidBasis of [undefined, null, '', 'LEGACY_V1', 'FULL_CARD_ONLY']) {
+    const snap = buildValidMej01bSnapshot({ verification_basis: invalidBasis })
+    if (invalidBasis === undefined) delete snap.verification_basis
+    assertSnapshotBlocked(snap, `verification_basis=${String(invalidBasis)} debe bloquearse`)
+  }
+
+  // 3. Cualquiera de los indicadores obligatorios ausente, null o false -> bloqueado
+  const requiredBooleanFlags = [
+    'canonical_identity_matched',
+    'sync_proven',
+    'line_link_valid',
+    'full_card_matched',
+    'incident_action_matched',
+  ]
+  for (const flag of requiredBooleanFlags) {
+    for (const badVal of [undefined, null, false, 'true', 1]) {
+      const snap = buildValidMej01bSnapshot({ [flag]: badVal })
+      if (badVal === undefined) delete snap[flag]
+      assertSnapshotBlocked(snap, `Indicador ${flag}=${String(badVal)} debe bloquearse`)
+    }
+  }
+
+  for (const badDocState of [undefined, null, 1, '0', false]) {
+    const snap = buildValidMej01bSnapshot({ document_state: badDocState })
+    if (badDocState === undefined) delete snap.document_state
+    assertSnapshotBlocked(snap, `document_state=${String(badDocState)} debe bloquearse`)
+  }
+
+  for (const badAction of [undefined, null, '', 'REMOVE_LINE']) {
+    const snap = buildValidMej01bSnapshot({ required_bsale_action: badAction })
+    if (badAction === undefined) delete snap.required_bsale_action
+    assertSnapshotBlocked(snap, `required_bsale_action=${String(badAction)} debe bloquearse`)
+  }
+
+  // 4. Identidad de línea física incorrecta o ausente en snapshot -> bloqueado
+  for (const lineField of ['preparation_line_id', 'matched_preparation_line_id']) {
+    for (const badLineId of [undefined, null, '', 'other-line-id']) {
+      const snap = buildValidMej01bSnapshot({ [lineField]: badLineId })
+      if (badLineId === undefined) delete snap[lineField]
+      assertSnapshotBlocked(snap, `${lineField}=${String(badLineId)} debe bloquearse`)
+    }
+  }
+
+  // 5. Cantidades de snapshot ausentes, nulas o diferentes a las observadas/preparadas -> bloqueado
+  for (const qtyField of ['expected_bsale_quantity', 'bsale_observed_quantity', 'physically_prepared_quantity']) {
+    for (const badQty of [undefined, null, 3, 5, '4']) {
+      const snap = buildValidMej01bSnapshot({ [qtyField]: badQty })
+      if (badQty === undefined) delete snap[qtyField]
+      assertSnapshotBlocked(snap, `${qtyField}=${String(badQty)} debe bloquearse`)
+    }
+  }
+
+  // 6. Identificadores físicos ausentes o contradictorios -> bloqueado
+  for (const idField of ['document_id', 'current_nv_id']) {
+    for (const badId of [undefined, null, 92706, '92714', 0, -1]) {
+      const snap = buildValidMej01bSnapshot({ [idField]: badId })
+      if (badId === undefined) delete snap[idField]
+      assertSnapshotBlocked(snap, `${idField}=${String(badId)} debe bloquearse`)
+    }
+  }
+  assertSnapshotBlocked(
+    buildValidMej01bSnapshot({ physicalId: 92706 }),
+    'physicalId contradictorio con document_id/current_nv_id debe bloquearse',
+  )
+  assertSnapshotBlocked(
+    buildValidMej01bSnapshot({ nv_id: null }),
+    'nv_id explícitamente null debe bloquearse',
+  )
 })
