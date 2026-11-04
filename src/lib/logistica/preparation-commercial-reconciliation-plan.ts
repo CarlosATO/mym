@@ -22,22 +22,25 @@ export type PreparationReconciliationLine = {
   excluded_from_dispatch: boolean
 }
 
+export const PREPARATION_RECONCILIATION_INCIDENT_SELECT =
+  'id, company_id, card_id, preparation_line_id, status, incident_type, required_bsale_action, requested_quantity, prepared_quantity, expected_bsale_quantity, verification_status, bsale_observed_quantity, bsale_variant_id, sku, bsale_observed_snapshot' as const
+
 export type PreparationReconciliationIncident = {
   id: string
+  company_id: string | null
+  card_id: string | null
   preparation_line_id: string
-  status: string
-  incident_type?: string | null
-  company_id?: string | null
-  card_id?: string | null
-  bsale_variant_id?: number | null
-  sku?: string | null
-  requested_quantity?: number | null
-  prepared_quantity?: number | null
-  required_bsale_action?: string | null
-  expected_bsale_quantity?: number | null
-  verification_status?: string | null
-  bsale_observed_quantity?: number | null
-  bsale_observed_snapshot?: Record<string, unknown> | null
+  status: 'OPEN' | 'RESOLVED' | 'SUPERSEDED' | string
+  incident_type: 'QUANTITY_REDUCTION' | 'LINE_EXCLUDED' | string | null
+  required_bsale_action: 'SET_QUANTITY' | 'REMOVE_LINE' | string | null
+  requested_quantity: number | string | null
+  prepared_quantity: number | string | null
+  expected_bsale_quantity: number | string | null
+  verification_status: 'MATCHED' | 'MISMATCHED' | 'NOT_FOUND' | 'NV_CANCELLED' | 'ERROR' | string | null
+  bsale_observed_quantity: number | string | null
+  bsale_variant_id: number | string | null
+  sku: string | null
+  bsale_observed_snapshot: Record<string, unknown> | null
 }
 
 export type PreparationCommercialReconciliationCard = {
@@ -133,10 +136,54 @@ function normalizeSku(sku: string | null | undefined): string | null {
   return normalized.length > 0 ? normalized : null
 }
 
-function normalizeVariantId(variantId: number | null | undefined): number | null {
-  if (variantId == null) return null
+function normalizeVariantId(variantId: number | string | null | undefined): number | null {
+  if (variantId == null || variantId === '') return null
   const parsed = Number(variantId)
   return Number.isSafeInteger(parsed) ? parsed : null
+}
+
+function parseOptionalNumber(value: unknown): number | null {
+  if (value == null || value === '' || typeof value === 'boolean') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function parseOptionalSafeInt(value: unknown): number | null {
+  if (value == null || value === '' || typeof value === 'boolean') return null
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) ? parsed : null
+}
+
+function parseOptionalString(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+export function mapPersistedIncidentToReconciliationIncident(
+  row: Record<string, unknown>,
+): PreparationReconciliationIncident {
+  const rawSnapshot = row.bsale_observed_snapshot
+  const snapshot = rawSnapshot != null && typeof rawSnapshot === 'object' && !Array.isArray(rawSnapshot)
+    ? (rawSnapshot as Record<string, unknown>)
+    : null
+  return {
+    id: parseOptionalString(row.id) ?? '',
+    company_id: parseOptionalString(row.company_id),
+    card_id: parseOptionalString(row.card_id),
+    preparation_line_id: parseOptionalString(row.preparation_line_id) ?? '',
+    status: parseOptionalString(row.status) ?? '',
+    incident_type: parseOptionalString(row.incident_type),
+    required_bsale_action: parseOptionalString(row.required_bsale_action),
+    requested_quantity: parseOptionalNumber(row.requested_quantity),
+    prepared_quantity: parseOptionalNumber(row.prepared_quantity),
+    expected_bsale_quantity: parseOptionalNumber(row.expected_bsale_quantity),
+    verification_status: parseOptionalString(row.verification_status),
+    bsale_observed_quantity: parseOptionalNumber(row.bsale_observed_quantity),
+    bsale_variant_id: parseOptionalSafeInt(row.bsale_variant_id),
+    sku: parseOptionalString(row.sku),
+    bsale_observed_snapshot: snapshot,
+  }
 }
 
 function hasCanonicalProductIdentity(line: LineRef): boolean {
@@ -200,12 +247,44 @@ function isUntouched(line: PreparationReconciliationLine): boolean {
     && line.excluded_from_dispatch === false
 }
 
-function observedSnapshotPhysicalId(snapshot: Record<string, unknown> | null | undefined): number | null {
-  if (!snapshot || typeof snapshot !== 'object') return null
-  const raw = snapshot.physical_id ?? snapshot.physicalId ?? snapshot.document_id ?? snapshot.documentId ?? snapshot.current_nv_id ?? snapshot.currentNvId ?? snapshot.nv_id ?? snapshot.nvId
-  if (raw == null || raw === '') return null
-  const parsed = Number(raw)
-  return Number.isSafeInteger(parsed) ? parsed : null
+function hasCompatibleObservedSnapshot(params: {
+  snapshot: Record<string, unknown> | null | undefined
+  currentPhysicalId: number
+  persistedLineId: string
+  preparedQuantity: number
+  expectedBsaleQuantity: number
+}): boolean {
+  const { snapshot, currentPhysicalId, persistedLineId, preparedQuantity, expectedBsaleQuantity } = params
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return false
+  if (!Number.isSafeInteger(currentPhysicalId) || currentPhysicalId <= 0) return false
+
+  const physicalIdKeys = ['physical_id', 'physicalId', 'document_id', 'documentId', 'current_nv_id', 'currentNvId', 'nv_id', 'nvId'] as const
+  const observedPhysicalIds: number[] = []
+  for (const key of physicalIdKeys) {
+    const raw = snapshot[key]
+    if (raw == null || raw === '') continue
+    const parsed = parseOptionalSafeInt(raw)
+    if (parsed == null || parsed <= 0) return false
+    observedPhysicalIds.push(parsed)
+  }
+  if (observedPhysicalIds.length === 0) return false
+  if (observedPhysicalIds.some(id => id !== currentPhysicalId)) return false
+
+  if (snapshot.verification_error != null && snapshot.verification_error !== '') return false
+  if (snapshot.document_state != null && parseOptionalSafeInt(snapshot.document_state) !== 0) return false
+  if (snapshot.canonical_identity_matched != null && snapshot.canonical_identity_matched !== true) return false
+  if (snapshot.sync_proven != null && snapshot.sync_proven !== true) return false
+  if (snapshot.line_link_valid != null && snapshot.line_link_valid !== true) return false
+  if (snapshot.full_card_matched != null && snapshot.full_card_matched !== true) return false
+  if (snapshot.incident_action_matched != null && snapshot.incident_action_matched !== true) return false
+  if (snapshot.required_bsale_action != null && snapshot.required_bsale_action !== 'SET_QUANTITY') return false
+  if (snapshot.preparation_line_id != null && snapshot.preparation_line_id !== persistedLineId) return false
+  if (snapshot.matched_preparation_line_id != null && snapshot.matched_preparation_line_id !== persistedLineId) return false
+  if (snapshot.expected_bsale_quantity != null && parseOptionalNumber(snapshot.expected_bsale_quantity) !== expectedBsaleQuantity) return false
+  if (snapshot.bsale_observed_quantity != null && parseOptionalNumber(snapshot.bsale_observed_quantity) !== expectedBsaleQuantity) return false
+  if (snapshot.physically_prepared_quantity != null && parseOptionalNumber(snapshot.physically_prepared_quantity) !== preparedQuantity) return false
+
+  return true
 }
 
 function isResolvedQuantityReductionIncident(params: {
@@ -230,13 +309,19 @@ function isResolvedQuantityReductionIncident(params: {
   if (difference.previous.quantity !== requestedQuantity) return false
   if (newQuantity !== preparedQuantity) return false
 
+  const persistedVariantId = normalizeVariantId(persistedLine.bsale_variant_id)
+  const persistedSku = normalizeSku(persistedLine.sku)
+  if (persistedVariantId == null && persistedSku == null) return false
+
   if (relatedIncidents.length === 0) return false
-  if (relatedIncidents.some(incident => incident.status !== 'RESOLVED' && incident.status !== 'SUPERSEDED')) {
-    return false
-  }
   if (relatedIncidents.some(incident => (
-    (incident.company_id != null && incident.company_id !== card.companyId)
-    || (incident.card_id != null && incident.card_id !== card.cardId)
+    !incident.id
+    || incident.preparation_line_id !== persistedLine.id
+    || !incident.company_id
+    || incident.company_id !== card.companyId
+    || !incident.card_id
+    || incident.card_id !== card.cardId
+    || (incident.status !== 'RESOLVED' && incident.status !== 'SUPERSEDED')
   ))) {
     return false
   }
@@ -246,25 +331,37 @@ function isResolvedQuantityReductionIncident(params: {
 
   return resolvedIncidents.every(incident => {
     if (incident.preparation_line_id !== persistedLine.id) return false
-    if (incident.company_id != null && incident.company_id !== card.companyId) return false
-    if (incident.card_id != null && incident.card_id !== card.cardId) return false
-    if ((incident.incident_type ?? 'QUANTITY_REDUCTION') !== 'QUANTITY_REDUCTION') return false
-    if ((incident.required_bsale_action ?? 'SET_QUANTITY') !== 'SET_QUANTITY') return false
-    if ((incident.verification_status ?? 'MATCHED') !== 'MATCHED') return false
-    if (incident.requested_quantity != null && Number(incident.requested_quantity) !== requestedQuantity) return false
-    if (incident.prepared_quantity != null && Number(incident.prepared_quantity) !== preparedQuantity) return false
-    if (incident.expected_bsale_quantity != null && Number(incident.expected_bsale_quantity) !== newQuantity) return false
-    if (incident.bsale_observed_quantity != null && Number(incident.bsale_observed_quantity) !== newQuantity) return false
-    if (incident.bsale_variant_id != null && normalizeVariantId(incident.bsale_variant_id) !== normalizeVariantId(persistedLine.bsale_variant_id)) {
+    if (!incident.company_id || incident.company_id !== card.companyId) return false
+    if (!incident.card_id || incident.card_id !== card.cardId) return false
+    if (incident.status !== 'RESOLVED') return false
+    if (incident.verification_status !== 'MATCHED') return false
+    if (incident.incident_type !== 'QUANTITY_REDUCTION') return false
+    if (incident.required_bsale_action !== 'SET_QUANTITY') return false
+
+    const incidentRequestedQuantity = parseOptionalNumber(incident.requested_quantity)
+    const incidentPreparedQuantity = parseOptionalNumber(incident.prepared_quantity)
+    const expectedBsaleQuantity = parseOptionalNumber(incident.expected_bsale_quantity)
+    const observedBsaleQuantity = parseOptionalNumber(incident.bsale_observed_quantity)
+    if (incidentRequestedQuantity == null || incidentRequestedQuantity !== requestedQuantity) return false
+    if (incidentPreparedQuantity == null || incidentPreparedQuantity !== preparedQuantity) return false
+    if (expectedBsaleQuantity == null || expectedBsaleQuantity !== newQuantity) return false
+    if (observedBsaleQuantity == null || observedBsaleQuantity !== newQuantity) return false
+
+    const incidentVariantId = normalizeVariantId(incident.bsale_variant_id)
+    const incidentSku = normalizeSku(incident.sku)
+    if (incidentVariantId == null && incidentSku == null) return false
+    if (incidentVariantId !== persistedVariantId || incidentSku !== persistedSku) return false
+
+    if (!hasCompatibleObservedSnapshot({
+      snapshot: incident.bsale_observed_snapshot,
+      currentPhysicalId: currentVersion.physicalId,
+      persistedLineId: persistedLine.id,
+      preparedQuantity,
+      expectedBsaleQuantity: newQuantity,
+    })) {
       return false
     }
-    if (incident.sku != null && normalizeSku(incident.sku) !== normalizeSku(persistedLine.sku)) {
-      return false
-    }
-    const snapshotPhysicalId = observedSnapshotPhysicalId(incident.bsale_observed_snapshot)
-    if (snapshotPhysicalId != null && snapshotPhysicalId !== currentVersion.physicalId) {
-      return false
-    }
+
     return true
   })
 }

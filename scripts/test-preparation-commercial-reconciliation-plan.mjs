@@ -1,7 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  PREPARATION_RECONCILIATION_INCIDENT_SELECT,
   buildPreparationCommercialReconciliationPlan,
+  mapPersistedIncidentToReconciliationIncident,
 } from '../src/lib/logistica/preparation-commercial-reconciliation-plan.ts'
 import { compareCommercialVersions } from '../src/lib/logistica/preparation-commercial-version.ts'
 
@@ -677,4 +679,106 @@ test('MEJ-01 Bloque 1 — Escenario 12: producto excluido (prepared_quantity = 0
   assert.equal(removedPlan.status, 'REQUIRES_RESOLUTION')
   assert.equal(removedPlan.canAcceptCompletely, false)
   assert.equal(removedPlan.conflicts[0].reason, 'PREPARATION_LINE_EXCLUDED')
+})
+
+test('MEJ-01 PR #22 fix: ausencia de cualquier campo de evidencia o proyección parcial bloquea sin asumir valores por defecto', () => {
+  const oldItem = line(501, 'SKU-RED', 5, { detailId: 4001 })
+  const newItem = line(501, 'SKU-RED', 4, { detailId: 4002 })
+  const fullPersistedIncidentRow = {
+    id: 'inc-resolved-full',
+    company_id: card.companyId,
+    card_id: card.cardId,
+    preparation_line_id: 'line-red',
+    status: 'RESOLVED',
+    incident_type: 'QUANTITY_REDUCTION',
+    required_bsale_action: 'SET_QUANTITY',
+    requested_quantity: 5,
+    prepared_quantity: 4,
+    expected_bsale_quantity: 4,
+    verification_status: 'MATCHED',
+    bsale_observed_quantity: 4,
+    bsale_variant_id: 501,
+    sku: 'SKU-RED',
+    bsale_observed_snapshot: {
+      historical_nv_id: 92706,
+      current_nv_id: 92714,
+      document_id: 92714,
+      document_state: 0,
+      canonical_identity_matched: true,
+      sync_proven: true,
+      line_link_valid: true,
+      full_card_matched: true,
+      incident_action_matched: true,
+      required_bsale_action: 'SET_QUANTITY',
+      expected_bsale_quantity: 4,
+      bsale_observed_quantity: 4,
+      physically_prepared_quantity: 4,
+      preparation_line_id: 'line-red',
+      matched_preparation_line_id: 'line-red',
+    },
+  }
+
+  // Proyección real con PREPARATION_RECONCILIATION_INCIDENT_SELECT produce READY
+  const selectedColumns = PREPARATION_RECONCILIATION_INCIDENT_SELECT.split(',').map(col => col.trim())
+  const selectFromRow = (row, cols) => Object.fromEntries(cols.map(col => [col, row[col]]))
+  const validMappedIncident = mapPersistedIncidentToReconciliationIncident(
+    selectFromRow(fullPersistedIncidentRow, selectedColumns),
+  )
+  const validPlan = plan({
+    oldLines: [oldItem],
+    newLines: [newItem],
+    preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT', false)],
+    incidents: [validMappedIncident],
+  })
+  assert.equal(validPlan.status, 'READY')
+  assert.equal(validPlan.canAcceptCompletely, true)
+
+  // La proyección truncada antigua ('id, preparation_line_id, status, incident_type') debe bloquearse
+  const legacyTruncatedIncident = mapPersistedIncidentToReconciliationIncident(
+    selectFromRow(fullPersistedIncidentRow, ['id', 'preparation_line_id', 'status', 'incident_type']),
+  )
+  const truncatedPlan = plan({
+    oldLines: [oldItem],
+    newLines: [newItem],
+    preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT', false)],
+    incidents: [legacyTruncatedIncident],
+  })
+  assert.equal(truncatedPlan.status, 'REQUIRES_RESOLUTION')
+  assert.equal(truncatedPlan.canAcceptCompletely, false)
+  assert.equal(truncatedPlan.conflicts[0].reason, 'OPERATIONAL_INCIDENT_EXISTS')
+
+  // Cada campo obligatorio de evidencia ausente o nulo debe bloquear individualmente (sin fallbacks implícitos)
+  const mandatoryEvidenceFields = [
+    'company_id',
+    'card_id',
+    'incident_type',
+    'required_bsale_action',
+    'requested_quantity',
+    'prepared_quantity',
+    'expected_bsale_quantity',
+    'verification_status',
+    'bsale_observed_quantity',
+    'bsale_variant_id',
+    'sku',
+    'bsale_observed_snapshot',
+  ]
+  for (const missingField of mandatoryEvidenceFields) {
+    const incompleteRow = { ...fullPersistedIncidentRow, [missingField]: null }
+    const mapped = mapPersistedIncidentToReconciliationIncident(
+      selectFromRow(incompleteRow, selectedColumns),
+    )
+    const blockedPlan = plan({
+      oldLines: [oldItem],
+      newLines: [newItem],
+      preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT', false)],
+      incidents: [mapped],
+    })
+    assert.equal(
+      blockedPlan.status,
+      'REQUIRES_RESOLUTION',
+      `El campo ausente "${missingField}" debió bloquear el plan comercial`,
+    )
+    assert.equal(blockedPlan.canAcceptCompletely, false)
+    assert.equal(blockedPlan.conflicts[0].reason, 'OPERATIONAL_INCIDENT_EXISTS')
+  }
 })

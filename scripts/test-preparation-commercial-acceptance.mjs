@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import module from 'node:module'
 import test from 'node:test'
 import {
   compareCommercialVersions,
@@ -7,7 +8,9 @@ import {
   preparationCommercialLineFromSnapshot,
 } from '../src/lib/logistica/preparation-commercial-version.ts'
 import {
+  PREPARATION_RECONCILIATION_INCIDENT_SELECT,
   buildPreparationCommercialReconciliationPlan,
+  mapPersistedIncidentToReconciliationIncident,
 } from '../src/lib/logistica/preparation-commercial-reconciliation-plan.ts'
 
 const migration = await readFile(new URL('../supabase/migrations/20261027120000_logistica_preparation_commercial_acceptance.sql', import.meta.url), 'utf8')
@@ -1135,13 +1138,34 @@ test('MEJ-01 Bloque 1 — Escenarios 1, 7, 10 y 11 (Simulación JS de RPC + P0-0
   const acceptedVersion = runFallbackVersion(card, db.preparationLines)
   const comparison = compareCommercialVersions(acceptedVersion, currentLiveVersion)
 
-  // Servidor proyecta las columnas mínimas hacia el planificador TS
-  const projectedIncidents = db.incidents.map(i => ({
+  // Verificar que una proyección truncada ('id, preparation_line_id, status, incident_type') queda bloqueada
+  const truncatedIncidents = db.incidents.map(i => mapPersistedIncidentToReconciliationIncident({
     id: i.id,
     preparation_line_id: i.preparation_line_id,
     status: i.status,
     incident_type: i.incident_type,
   }))
+  const truncatedPlan = buildPreparationCommercialReconciliationPlan({
+    card: { cardId: card.id, companyId: card.company_id, status: card.status },
+    identity: currentLiveVersion.identity,
+    acceptedVersion,
+    currentVersion: currentLiveVersion,
+    preparationLines: db.preparationLines,
+    incidents: truncatedIncidents,
+    comparison,
+    snapshotComplete: true,
+  })
+  assert.equal(truncatedPlan.status, 'REQUIRES_RESOLUTION')
+  assert.equal(truncatedPlan.canAcceptCompletely, false)
+  assert.equal(truncatedPlan.conflicts[0].reason, 'OPERATIONAL_INCIDENT_EXISTS')
+
+  // Servidor proyecta las columnas reales definidas en PREPARATION_RECONCILIATION_INCIDENT_SELECT
+  const selectedColumns = PREPARATION_RECONCILIATION_INCIDENT_SELECT.split(',').map(col => col.trim())
+  const projectedIncidents = db.incidents.map(row =>
+    mapPersistedIncidentToReconciliationIncident(
+      Object.fromEntries(selectedColumns.map(col => [col, row[col]])),
+    ),
+  )
 
   const plan = buildPreparationCommercialReconciliationPlan({
     card: { cardId: card.id, companyId: card.company_id, status: card.status },
@@ -1362,4 +1386,281 @@ test('MEJ-01 Bloque 1 — Escenarios 2, 3, 4, 5, 6, 8, 9 y 12 (Simulación JS de
       /UPDATE_QUANTITY es incompatible con lo preparado/,
     )
   }
+})
+
+test('MEJ-01 PR #22 fix: la Server Action real proyecta las 15 columnas de evidencia desde Supabase hacia el planificador y bloquea evidencias incompletas o incompatibles', async () => {
+  assert.match(action, /select\(PREPARATION_RECONCILIATION_INCIDENT_SELECT\)/)
+  assert.match(action, /mapPersistedIncidentToReconciliationIncident/)
+  assert.doesNotMatch(action, /select\(['"]id,\s*preparation_line_id,\s*status,\s*incident_type['"]\)/)
+
+  let mockState = null
+
+  const projectSelectedColumns = (row, selectClause) => {
+    if (!row) return row
+    if (!selectClause || selectClause.trim() === '*') return structuredClone(row)
+    const cols = selectClause.split(',').map(c => c.trim()).filter(Boolean)
+    return Object.fromEntries(cols.map(col => [col, structuredClone(row[col])]))
+  }
+
+  module.registerHooks({
+    resolve(specifier, context, nextResolve) {
+      if (specifier === './authorization') {
+        return { url: 'mock://authorization', shortCircuit: true }
+      }
+      if (specifier === '@/lib/supabase/admin') {
+        return { url: 'mock://supabase-admin', shortCircuit: true }
+      }
+      if (specifier === '@/lib/logistica/preparation-commercial-bsale-provider') {
+        return { url: 'mock://bsale-provider', shortCircuit: true }
+      }
+      if (specifier === '@/lib/logistica/preparation-commercial-version') {
+        return nextResolve(new URL('../src/lib/logistica/preparation-commercial-version.ts', import.meta.url).href, context)
+      }
+      if (specifier === '@/lib/logistica/preparation-commercial-reconciliation-plan') {
+        return nextResolve(new URL('../src/lib/logistica/preparation-commercial-reconciliation-plan.ts', import.meta.url).href, context)
+      }
+      return nextResolve(specifier, context)
+    },
+    load(url, context, nextLoad) {
+      if (url === 'mock://authorization') {
+        return {
+          format: 'module',
+          shortCircuit: true,
+          source: `
+            export async function requireWmsPermission() {
+              return globalThis.__COMMERCIAL_ACCEPTANCE_TEST_STATE__.auth
+            }
+            export async function requirePreparationCardAccess() {
+              return undefined
+            }
+          `,
+        }
+      }
+      if (url === 'mock://supabase-admin') {
+        return {
+          format: 'module',
+          shortCircuit: true,
+          source: `
+            export function createAdminClient() {
+              return globalThis.__COMMERCIAL_ACCEPTANCE_TEST_STATE__.createAdminClient()
+            }
+          `,
+        }
+      }
+      if (url === 'mock://bsale-provider') {
+        return {
+          format: 'module',
+          shortCircuit: true,
+          source: `
+            export function createBsalePreparationCommercialProvider() {
+              return {
+                async getCurrentVersion() {
+                  return globalThis.__COMMERCIAL_ACCEPTANCE_TEST_STATE__.currentLiveVersion
+                }
+              }
+            }
+          `,
+        }
+      }
+      return nextLoad(url, context)
+    },
+  })
+
+  const buildMockAdminClient = (db, state) => ({
+    schema(schemaName) {
+      assert.equal(schemaName, 'logistica')
+      return {
+        from(tableName) {
+          let selectedClause = '*'
+          const filters = []
+          const applyFilters = (rows) => rows.filter(row => filters.every(fn => fn(row)))
+          const builder = {
+            select(clause = '*') {
+              selectedClause = clause
+              if (tableName === 'sales_order_preparation_incidents') {
+                state.incidentSelectClauses.push(clause)
+              }
+              return builder
+            },
+            eq(col, val) {
+              filters.push(row => row[col] === val)
+              return builder
+            },
+            is(col, val) {
+              filters.push(row => (row[col] ?? null) === val)
+              return builder
+            },
+            order() {
+              return builder
+            },
+            limit() {
+              return builder
+            },
+            async maybeSingle() {
+              const sourceRows =
+                tableName === 'sales_order_preparation_cards' ? db.cards :
+                tableName === 'sales_order_preparation_commercial_versions' ? db.commercialVersions :
+                []
+              const matched = applyFilters(sourceRows)[0] ?? null
+              return { data: projectSelectedColumns(matched, selectedClause), error: null }
+            },
+            upsert(payload) {
+              state.upsertedRequests.push(payload)
+              return {
+                select(clause = '*') {
+                  return {
+                    async single() {
+                      const record = { id: 'req-1001', ...payload }
+                      return { data: projectSelectedColumns(record, clause), error: null }
+                    },
+                  }
+                },
+              }
+            },
+            then(onFulfilled, onRejected) {
+              const sourceRows =
+                tableName === 'sales_order_preparation_lines' ? db.preparationLines :
+                tableName === 'sales_order_preparation_incidents' ? db.incidents :
+                []
+              const matched = applyFilters(sourceRows).map(row => projectSelectedColumns(row, selectedClause))
+              return Promise.resolve({ data: matched, error: null }).then(onFulfilled, onRejected)
+            },
+          }
+          return builder
+        },
+        async rpc(fnName, rpcArgs) {
+          state.rpcCalls.push({ fnName, rpcArgs })
+          return {
+            data: {
+              status: 'ACCEPTED',
+              versionId: 'version-1001',
+              fingerprint: rpcArgs.p_expected_fingerprint,
+            },
+            error: null,
+          }
+        },
+      }
+    },
+  })
+
+  const { acceptSalesOrderPreparationCommercialChanges } = await import(
+    '../src/app/actions/logistica/sales-order-preparation-commercial-acceptance.ts'
+  )
+
+  const runActionScenario = async (mutateFixture) => {
+    const fixture = buildCommercialReductionFixture()
+    if (mutateFixture) mutateFixture(fixture)
+    const expectedFingerprint = fingerprintCommercialVersion(fixture.currentLiveVersion).value
+    mockState = {
+      auth: {
+        companyId: fixture.card.company_id,
+        user: { id: 'admin-user-222' },
+      },
+      currentLiveVersion: fixture.currentLiveVersion,
+      incidentSelectClauses: [],
+      upsertedRequests: [],
+      rpcCalls: [],
+      createAdminClient: () => buildMockAdminClient(fixture.db, mockState),
+    }
+    globalThis.__COMMERCIAL_ACCEPTANCE_TEST_STATE__ = mockState
+    const response = await acceptSalesOrderPreparationCommercialChanges({
+      cardId: fixture.card.id,
+      expectedCommercialFingerprint: expectedFingerprint,
+    })
+    return { response, mockState, fixture }
+  }
+
+  // 1. Flujo real exitoso cuando la fila en sales_order_preparation_incidents tiene evidencia completa RESOLVED/MATCHED
+  {
+    const { response, mockState: state } = await runActionScenario(({ incident }) => {
+      incident.bsale_observed_snapshot = {
+        historical_nv_id: 95001,
+        current_nv_id: 95002,
+        document_id: 95002,
+        document_state: 0,
+        canonical_identity_matched: true,
+        sync_proven: true,
+        line_link_valid: true,
+        full_card_matched: true,
+        incident_action_matched: true,
+        required_bsale_action: 'SET_QUANTITY',
+        expected_bsale_quantity: 4,
+        bsale_observed_quantity: 4,
+        physically_prepared_quantity: 4,
+        preparation_line_id: 'prep-line-501',
+        matched_preparation_line_id: 'prep-line-501',
+      }
+    })
+    assert.equal(response.status, 'ACCEPTED')
+    assert.deepEqual(state.incidentSelectClauses, [PREPARATION_RECONCILIATION_INCIDENT_SELECT])
+    assert.equal(state.upsertedRequests.length, 1)
+    assert.equal(state.upsertedRequests[0].plan_snapshot.status, 'READY')
+    assert.equal(state.upsertedRequests[0].plan_snapshot.actions[0].kind, 'UPDATE_QUANTITY')
+    assert.equal(state.upsertedRequests[0].plan_snapshot.actions[0].newRequestedQuantity, 4)
+    assert.equal(state.rpcCalls.length, 1)
+  }
+
+  // 2. Bloqueo cuando verification_status está ausente o es distinto de MATCHED (no se asume MATCHED por defecto)
+  for (const invalidVerification of [null, 'MISMATCHED', 'NOT_FOUND', 'ERROR']) {
+    const { response, mockState: state } = await runActionScenario(({ incident }) => {
+      incident.verification_status = invalidVerification
+    })
+    assert.equal(response.status, 'REQUIRES_RESOLUTION')
+    assert.equal(state.rpcCalls.length, 0)
+  }
+
+  // 3. Bloqueo cuando required_bsale_action está ausente o es REMOVE_LINE (no se asume SET_QUANTITY por defecto)
+  for (const invalidAction of [null, 'REMOVE_LINE']) {
+    const { response, mockState: state } = await runActionScenario(({ incident }) => {
+      incident.required_bsale_action = invalidAction
+    })
+    assert.equal(response.status, 'REQUIRES_RESOLUTION')
+    assert.equal(state.rpcCalls.length, 0)
+  }
+
+  // 4. Bloqueo cuando cantidades esperadas, observadas, solicitadas o preparadas están ausentes o no coinciden
+  for (const mutateQty of [
+    (inc) => { inc.requested_quantity = null },
+    (inc) => { inc.requested_quantity = 6 },
+    (inc) => { inc.prepared_quantity = null },
+    (inc) => { inc.prepared_quantity = 3 },
+    (inc) => { inc.expected_bsale_quantity = null },
+    (inc) => { inc.expected_bsale_quantity = 3 },
+    (inc) => { inc.bsale_observed_quantity = null },
+    (inc) => { inc.bsale_observed_quantity = 5 },
+  ]) {
+    const { response, mockState: state } = await runActionScenario(({ incident }) => mutateQty(incident))
+    assert.equal(response.status, 'REQUIRES_RESOLUTION')
+    assert.equal(state.rpcCalls.length, 0)
+  }
+
+  // 5. Bloqueo cuando bsale_observed_snapshot está ausente, no incluye ID físico o apunta a otra versión comercial
+  for (const invalidSnapshot of [
+    null,
+    {},
+    { document_id: 95001, current_nv_id: 95001 },
+    { document_id: 95002, current_nv_id: 95001 },
+    { document_id: 95002, incident_action_matched: false },
+  ]) {
+    const { response, mockState: state } = await runActionScenario(({ incident }) => {
+      incident.bsale_observed_snapshot = invalidSnapshot
+    })
+    assert.equal(response.status, 'REQUIRES_RESOLUTION')
+    assert.equal(state.rpcCalls.length, 0)
+  }
+
+  // 6. Bloqueo para OPEN, SUPERSEDED sin resolución válida y referencias de producto/línea incorrectas
+  for (const mutateInvalid of [
+    (inc) => { inc.status = 'OPEN' },
+    (inc) => { inc.status = 'SUPERSEDED' },
+    (inc) => { inc.bsale_variant_id = 999 },
+    (inc) => { inc.sku = 'OTRO-SKU' },
+    (inc) => { inc.preparation_line_id = 'other-line-id' },
+  ]) {
+    const { response, mockState: state } = await runActionScenario(({ incident }) => mutateInvalid(incident))
+    assert.equal(response.status, 'REQUIRES_RESOLUTION')
+    assert.equal(state.rpcCalls.length, 0)
+  }
+
+  delete globalThis.__COMMERCIAL_ACCEPTANCE_TEST_STATE__
 })
