@@ -142,6 +142,7 @@ export async function hydrateBsaleDocumentsById(
   documentIds: number[],
   runId: string | null = null,
   fetchJson: BsaleJsonFetcher = defaultFetchBsaleJson,
+  persist = true,
 ): Promise<BsaleDocumentHydrationResult[]> {
   const uniqueIds = [...new Set(documentIds)]
   const { baseUrl, accessToken } = getBsaleConfigForCompany(companyId)
@@ -153,13 +154,20 @@ export async function hydrateBsaleDocumentsById(
     if (Number(document.id) !== documentId) throw new Error(`Bsale document identity mismatch for ${documentId}`)
     const details: BsaleDocumentDetailPayload[] = []
     for (let offset = 0; ; offset += 50) {
-      const detailsPayload = await fetchJson<{ items?: BsaleDocumentDetailPayload[] }>(baseUrl, headers, `/documents/${documentId}/details.json?limit=50&offset=${offset}`)
+      const detailsPayload = await fetchJson<{ items?: BsaleDocumentDetailPayload[]; count?: number | string | null }>(baseUrl, headers, `/documents/${documentId}/details.json?limit=50&offset=${offset}`)
       const page = detailsPayload.items || []
       details.push(...page)
-      if (page.length < 50) break
+      const expectedCount = numberOrNull(detailsPayload.count)
+      if (expectedCount !== null && details.length >= expectedCount) break
+      if (page.length < 50) {
+        if (expectedCount !== null && details.length < expectedCount) throw new Error(`Respuesta incompleta de detalles Bsale para ${documentId}: recibidos ${details.length} de ${expectedCount}`)
+        break
+      }
     }
-    await upsertBsaleDocument(client, companyId, runId, document)
-    await upsertBsaleDocumentDetails(client, companyId, runId, documentId, details)
+    if (persist) {
+      await upsertBsaleDocument(client, companyId, runId, document)
+      await upsertBsaleDocumentDetails(client, companyId, runId, documentId, details)
+    }
     results.push({ document, details })
   }
 

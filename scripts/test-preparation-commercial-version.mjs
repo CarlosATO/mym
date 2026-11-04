@@ -41,6 +41,15 @@ test('IDs físicos distintos con contenido idéntico no producen alerta comercia
   assert.deepEqual(result.differences, [])
 })
 
+test('lineNumber técnico ausente en snapshot inicial no altera la equivalencia comercial', () => {
+  const previous = version(92706, [{ variantId: 1, sku: 'A', productName: 'A', quantity: 2, unitNetValue: 1000, lineNetAmount: 2000 }], 2000)
+  const current = version(92714, [line(1, 'A', 2, 0)], 2000)
+  const result = compareCommercialVersions(previous, current)
+  assert.equal(fingerprintCommercialVersion(previous).value, fingerprintCommercialVersion(current).value)
+  assert.equal(result.contentEquivalent, true)
+  assert.deepEqual(result.differences, [])
+})
+
 test('detecta agregado, eliminado, aumento, disminución y precio', () => {
   const previous = version(1, [line(1, 'A', 1, 1), line(2, 'B', 4, 2), line(3, 'C', 2, 3)], 0)
   const current = version(2, [line(1, 'A', 3, 1, { unitNetValue: 2000, lineNetAmount: 6000 }), line(2, 'B', 1, 2), line(4, 'D', 1, 4)], 0)
@@ -131,22 +140,4 @@ test('identidad canónica distinta no se compara como la misma NV', () => {
   const result = compareCommercialVersions(version(1, [line(1, 'A', 1, 1)], 0), current)
   assert.equal(result.sameIdentity, false)
   assert.equal(result.conflicts[0].reason, 'IDENTITY_MISMATCH')
-})
-
-test('primera preparación: lineNumber ausente frente a lineNumber 0 no produce alerta comercial', () => {
-  const original = version(92674, [
-    { variantId: 5873, sku: 'SKU-A', productName: 'Producto A', quantity: 24, unitNetValue: 1134, lineNetAmount: 27227, lineTaxAmount: 5173, lineGrossAmount: 32400 },
-    { variantId: 6246, sku: 'SKU-B', productName: 'Producto B', quantity: 18, unitNetValue: 2882, lineNetAmount: 51882, lineTaxAmount: 9858, lineGrossAmount: 61740 },
-  ], 94140, { netAmount: 79109, taxAmount: 15031 })
-  const current = version(92674, original.lines.map(item => ({ ...item, lineNumber: 0 })), 94140, { netAmount: 79109, taxAmount: 15031 })
-  const result = compareCommercialVersions(original, current)
-  assert.equal(result.contentEquivalent, true)
-  assert.deepEqual(result.differences, [])
-
-  const actualChange = version(92674, current.lines.map((item, index) =>
-    index === 0 ? { ...item, quantity: 25 } : item
-  ), 94140, { netAmount: 79109, taxAmount: 15031 })
-  const changed = compareCommercialVersions(original, actualChange)
-  assert.equal(changed.contentEquivalent, false)
-  assert.equal(changed.differences.some(item => item.kind === 'QUANTITY_INCREASED'), true)
 })
