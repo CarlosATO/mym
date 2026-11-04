@@ -18,8 +18,9 @@ WITH card_scope AS (
     c.id AS card_id,
     c.company_id,
     c.status AS card_status,
-    COALESCE(c.current_bsale_nv_id, c.bsale_nv_id) AS current_nv_id,
+    c.bsale_nv_folio,
     c.canonical_bsale_token,
+    COALESCE(c.current_bsale_nv_id, c.bsale_nv_id) AS current_nv_id,
     GREATEST(
       c.created_at,
       COALESCE((SELECT max(pl.updated_at) FROM logistica.sales_order_preparation_lines pl WHERE pl.company_id = c.company_id AND pl.card_id = c.id), c.created_at),
@@ -43,6 +44,10 @@ WITH card_scope AS (
   SELECT
     cs.*,
     d.bsale_id AS document_id,
+    d.number AS document_number,
+    NULLIF(btrim(d.raw_json ->> 'token'), '') AS document_canonical_token,
+    canon.current_bsale_id AS canonical_version_nv_id,
+    canon.folio AS canonical_folio,
     d.state AS document_state,
     d.synced_at AS document_synced_at,
     d.bsale_sync_run_id,
@@ -53,6 +58,9 @@ WITH card_scope AS (
     ON d.company_id = cs.company_id
    AND d.bsale_id = cs.current_nv_id
    AND d.document_type_id = 23
+  LEFT JOIN integraciones.vw_bsale_sales_order_documents_canonical canon
+    ON canon.company_id = cs.company_id
+   AND canon.canonical_bsale_token = cs.canonical_bsale_token
   LEFT JOIN integraciones.bsale_sync_runs sr
     ON sr.id = d.bsale_sync_run_id
    AND sr.company_id = d.company_id
@@ -133,6 +141,16 @@ WITH card_scope AS (
           AND stale_detail.bsale_sync_run_id IS DISTINCT FROM cd.bsale_sync_run_id
       )
     ) AS sync_proven,
+    (
+      NULLIF(btrim(cd.canonical_bsale_token), '') IS NOT NULL
+      AND cd.document_canonical_token IS NOT NULL
+      AND cd.document_canonical_token = NULLIF(btrim(cd.canonical_bsale_token), '')
+      AND NULLIF(btrim(cd.bsale_nv_folio), '') IS NOT NULL
+      AND cd.document_number IS NOT NULL
+      AND cd.document_number::text = btrim(cd.bsale_nv_folio)
+      AND cd.canonical_version_nv_id IS NOT NULL
+      AND cd.current_nv_id = cd.canonical_version_nv_id
+    ) AS canonical_identity_matched,
     EXISTS (SELECT 1 FROM prepared_keys p WHERE p.card_id = cd.card_id AND p.line_count > 1) AS duplicate_prepared_key,
     EXISTS (SELECT 1 FROM prepared_keys p WHERE p.card_id = cd.card_id AND (p.product_key IS NULL OR p.null_quantity_count > 0)) AS invalid_prepared_key,
     EXISTS (SELECT 1 FROM current_keys c WHERE c.card_id = cd.card_id AND c.line_count > 1) AS duplicate_current_key,
@@ -153,6 +171,7 @@ WITH card_scope AS (
       WHEN c.document_id IS NULL THEN 'NOT_FOUND'
       WHEN c.document_state IS DISTINCT FROM 0 THEN 'NV_CANCELLED'
       WHEN c.card_status IS DISTINCT FROM 'AUDITED' THEN 'NOT_AUDITED'
+      WHEN NOT c.canonical_identity_matched THEN 'MISMATCHED'
       WHEN NOT c.sync_proven THEN 'MISMATCHED'
       WHEN c.duplicate_prepared_key OR c.invalid_prepared_key OR c.duplicate_current_key OR c.invalid_current_key THEN 'MISMATCHED'
       WHEN c.prepared_line_count = 0 THEN 'MISMATCHED'
@@ -174,6 +193,7 @@ SELECT CASE
       'canonical_bsale_token', r.canonical_bsale_token,
       'document_id', r.document_id,
       'document_state', r.document_state,
+      'canonical_identity_matched', r.canonical_identity_matched,
       'sync_proven', r.sync_proven,
       'sync_run_id', r.bsale_sync_run_id,
       'sync_status', r.sync_status,
@@ -185,6 +205,7 @@ SELECT CASE
         WHEN r.status = 'NOT_FOUND' THEN 'CURRENT_NV_NOT_FOUND'
         WHEN r.status = 'NV_CANCELLED' THEN 'CURRENT_NV_NOT_ACTIVE'
         WHEN r.status = 'NOT_AUDITED' THEN 'PHYSICAL_AUDIT_NOT_CLOSED'
+        WHEN NOT r.canonical_identity_matched THEN 'CANONICAL_IDENTITY_MISMATCH'
         WHEN NOT r.sync_proven THEN 'COMMERCIAL_SYNC_NOT_VERIFIED'
         WHEN r.duplicate_prepared_key OR r.duplicate_current_key THEN 'DUPLICATE_COMMERCIAL_IDENTITY'
         WHEN r.invalid_prepared_key OR r.invalid_current_key THEN 'COMMERCIAL_IDENTITY_INCOMPLETE'
