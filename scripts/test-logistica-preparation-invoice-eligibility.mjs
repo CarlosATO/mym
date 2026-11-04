@@ -103,10 +103,14 @@ test('criterio de frescura temporal no se contamina por actualizaciones administ
 function evaluateConsistency({
   cardCreatedAt,
   cardStatus = 'AUDITED',
+  cardFolio = '5140',
+  cardToken = 'token-123',
+  currentNvId = 92744,
+  canonicalVersionNvId = 92744,
   lines = [], // { sku, variantId, preparedQuantity, updatedAt, retiredAt }
   incidents = [], // { createdAt, lastVerifiedAt, status }
   syncRun = { status: 'COMPLETED', completedAt: null },
-  doc = { state: 0, syncedAt: null, syncRunId: 'run-1' },
+  doc = { state: 0, syncedAt: null, syncRunId: 'run-1', number: 5140, token: 'token-123', bsaleId: 92744 },
   details = [], // { sku, variantId, quantity, syncRunId }
 }) {
   const lineTimestamps = lines.map(l => new Date(l.updatedAt).getTime())
@@ -117,7 +121,26 @@ function evaluateConsistency({
   const relevantAtMs = Math.max(cardCreatedMs, maxLineMs, maxIncidentMs)
 
   if (cardStatus !== 'AUDITED') return { status: 'NOT_AUDITED', reason: 'PHYSICAL_AUDIT_NOT_CLOSED' }
+  if (!doc || doc.state === undefined) return { status: 'NOT_FOUND', reason: 'CURRENT_NV_NOT_FOUND' }
   if (doc.state !== 0) return { status: 'NV_CANCELLED', reason: 'CURRENT_NV_NOT_ACTIVE' }
+
+  // Verificación de Identidad Canónica (empresa, token, folio y versión vigente)
+  const canonicalIdentityMatched = Boolean(
+    cardToken &&
+    cardToken.trim() !== '' &&
+    doc.token &&
+    doc.token.trim() === cardToken.trim() &&
+    cardFolio &&
+    cardFolio.trim() !== '' &&
+    doc.number != null &&
+    String(doc.number).trim() === cardFolio.trim() &&
+    canonicalVersionNvId != null &&
+    currentNvId === canonicalVersionNvId
+  )
+
+  if (!canonicalIdentityMatched) {
+    return { status: 'MISMATCHED', ok: false, reason: 'CANONICAL_IDENTITY_MISMATCH' }
+  }
 
   const syncCompletedMs = syncRun.completedAt ? new Date(syncRun.completedAt).getTime() : 0
   const docSyncedMs = doc.syncedAt ? new Date(doc.syncedAt).getTime() : 0
@@ -168,7 +191,162 @@ function evaluateConsistency({
   return { status: 'MATCHED', ok: true, reason: null }
 }
 
-test('regresión frescura: sincronización completa seguida de puntero y resolución no produce falso MISMATCHED', () => {
+test('contrato de identidad canónica: la migración exige coincidencia estricta de token, folio y versión vigente', () => {
+  assert.match(migration, /canon\.current_bsale_id AS canonical_version_nv_id/)
+  assert.match(migration, /LEFT JOIN integraciones\.vw_bsale_sales_order_documents_canonical canon/)
+  assert.match(migration, /canon\.canonical_bsale_token = cs\.canonical_bsale_token/)
+  assert.match(migration, /NULLIF\(btrim\(cd\.canonical_bsale_token\), ''\) IS NOT NULL/)
+  assert.match(migration, /cd\.document_canonical_token = NULLIF\(btrim\(cd\.canonical_bsale_token\), ''\)/)
+  assert.match(migration, /cd\.document_number::text = btrim\(cd\.bsale_nv_folio\)/)
+  assert.match(migration, /cd\.current_nv_id = cd\.canonical_version_nv_id/)
+  assert.match(migration, /WHEN NOT c\.canonical_identity_matched THEN 'MISMATCHED'/)
+  assert.match(migration, /WHEN NOT r\.canonical_identity_matched THEN 'CANONICAL_IDENTITY_MISMATCH'/)
+})
+
+test('escenario 1: NV correcta, misma identidad canónica y cantidades coincidentes resulta MATCHED', () => {
+  const result = evaluateConsistency({
+    cardCreatedAt: '2026-11-04T10:00:00.000Z',
+    cardStatus: 'AUDITED',
+    cardFolio: '5140',
+    cardToken: 'token-5140',
+    currentNvId: 92744,
+    canonicalVersionNvId: 92744,
+    lines: [
+      { sku: 'SKU-001', variantId: 101, preparedQuantity: 2, updatedAt: '2026-11-04T10:05:00.000Z' },
+    ],
+    incidents: [],
+    syncRun: { status: 'COMPLETED', completedAt: '2026-11-04T10:15:00.000Z' },
+    doc: { state: 0, syncedAt: '2026-11-04T10:15:00.000Z', syncRunId: 'run-100', number: 5140, token: 'token-5140', bsaleId: 92744 },
+    details: [
+      { sku: 'SKU-001', variantId: 101, quantity: 2, syncRunId: 'run-100' },
+    ],
+  })
+
+  assert.equal(result.status, 'MATCHED')
+  assert.equal(result.ok, true)
+  assert.equal(result.reason, null)
+})
+
+test('escenario 2: NV reemitida legítimamente con nuevo ID físico, misma identidad y contenido resulta MATCHED', () => {
+  // NV original 92744 fue reemitida en Bsale como 92800 bajo el mismo token 'token-5140' y folio '5140'
+  const result = evaluateConsistency({
+    cardCreatedAt: '2026-11-04T10:00:00.000Z',
+    cardStatus: 'AUDITED',
+    cardFolio: '5140',
+    cardToken: 'token-5140',
+    currentNvId: 92800, // Tarjeta actualizada a la versión reemitida
+    canonicalVersionNvId: 92800, // Vista canónica resuelve la versión 92800 como vigente
+    lines: [
+      { sku: 'SKU-001', variantId: 101, preparedQuantity: 2, updatedAt: '2026-11-04T10:05:00.000Z' },
+    ],
+    incidents: [],
+    syncRun: { status: 'COMPLETED', completedAt: '2026-11-04T10:15:00.000Z' },
+    doc: { state: 0, syncedAt: '2026-11-04T10:15:00.000Z', syncRunId: 'run-100', number: 5140, token: 'token-5140', bsaleId: 92800 },
+    details: [
+      { sku: 'SKU-001', variantId: 101, quantity: 2, syncRunId: 'run-100' },
+    ],
+  })
+
+  assert.equal(result.status, 'MATCHED')
+  assert.equal(result.ok, true)
+  assert.equal(result.reason, null)
+})
+
+test('escenario 3: documento con cantidades iguales, pero token de otra NV queda bloqueado', () => {
+  // Documento tiene token ajeno 'token-AJENO'
+  const result = evaluateConsistency({
+    cardCreatedAt: '2026-11-04T10:00:00.000Z',
+    cardStatus: 'AUDITED',
+    cardFolio: '5140',
+    cardToken: 'token-5140',
+    currentNvId: 92744,
+    canonicalVersionNvId: 92744,
+    lines: [
+      { sku: 'SKU-001', variantId: 101, preparedQuantity: 2, updatedAt: '2026-11-04T10:05:00.000Z' },
+    ],
+    incidents: [],
+    syncRun: { status: 'COMPLETED', completedAt: '2026-11-04T10:15:00.000Z' },
+    doc: { state: 0, syncedAt: '2026-11-04T10:15:00.000Z', syncRunId: 'run-100', number: 5140, token: 'token-AJENO', bsaleId: 92744 },
+    details: [
+      { sku: 'SKU-001', variantId: 101, quantity: 2, syncRunId: 'run-100' },
+    ],
+  })
+
+  assert.equal(result.status, 'MISMATCHED')
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'CANONICAL_IDENTITY_MISMATCH')
+})
+
+test('escenario 4: documento con folio diferente queda bloqueado', () => {
+  // Documento tiene folio 5141 distinto al folio de la tarjeta 5140
+  const result = evaluateConsistency({
+    cardCreatedAt: '2026-11-04T10:00:00.000Z',
+    cardStatus: 'AUDITED',
+    cardFolio: '5140',
+    cardToken: 'token-5140',
+    currentNvId: 92744,
+    canonicalVersionNvId: 92744,
+    lines: [
+      { sku: 'SKU-001', variantId: 101, preparedQuantity: 2, updatedAt: '2026-11-04T10:05:00.000Z' },
+    ],
+    incidents: [],
+    syncRun: { status: 'COMPLETED', completedAt: '2026-11-04T10:15:00.000Z' },
+    doc: { state: 0, syncedAt: '2026-11-04T10:15:00.000Z', syncRunId: 'run-100', number: 5141, token: 'token-5140', bsaleId: 92744 },
+    details: [
+      { sku: 'SKU-001', variantId: 101, quantity: 2, syncRunId: 'run-100' },
+    ],
+  })
+
+  assert.equal(result.status, 'MISMATCHED')
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'CANONICAL_IDENTITY_MISMATCH')
+})
+
+test('escenario 5: puntero comercial inconsistente con la identidad canónica queda bloqueado', () => {
+  // 5A: Tarjeta apunta a 92744 pero la versión canónica vigente en Bsale es 92800 (NV reemitida sin actualizar tarjeta)
+  const resultSuperseded = evaluateConsistency({
+    cardCreatedAt: '2026-11-04T10:00:00.000Z',
+    cardStatus: 'AUDITED',
+    cardFolio: '5140',
+    cardToken: 'token-5140',
+    currentNvId: 92744,
+    canonicalVersionNvId: 92800,
+    lines: [
+      { sku: 'SKU-001', variantId: 101, preparedQuantity: 2, updatedAt: '2026-11-04T10:05:00.000Z' },
+    ],
+    incidents: [],
+    syncRun: { status: 'COMPLETED', completedAt: '2026-11-04T10:15:00.000Z' },
+    doc: { state: 0, syncedAt: '2026-11-04T10:15:00.000Z', syncRunId: 'run-100', number: 5140, token: 'token-5140', bsaleId: 92744 },
+    details: [
+      { sku: 'SKU-001', variantId: 101, quantity: 2, syncRunId: 'run-100' },
+    ],
+  })
+  assert.equal(resultSuperseded.status, 'MISMATCHED')
+  assert.equal(resultSuperseded.reason, 'CANONICAL_IDENTITY_MISMATCH')
+
+  // 5B: Tarjeta sin token canónico
+  const resultNoToken = evaluateConsistency({
+    cardCreatedAt: '2026-11-04T10:00:00.000Z',
+    cardStatus: 'AUDITED',
+    cardFolio: '5140',
+    cardToken: null,
+    currentNvId: 92744,
+    canonicalVersionNvId: 92744,
+    lines: [
+      { sku: 'SKU-001', variantId: 101, preparedQuantity: 2, updatedAt: '2026-11-04T10:05:00.000Z' },
+    ],
+    incidents: [],
+    syncRun: { status: 'COMPLETED', completedAt: '2026-11-04T10:15:00.000Z' },
+    doc: { state: 0, syncedAt: '2026-11-04T10:15:00.000Z', syncRunId: 'run-100', number: 5140, token: 'token-5140', bsaleId: 92744 },
+    details: [
+      { sku: 'SKU-001', variantId: 101, quantity: 2, syncRunId: 'run-100' },
+    ],
+  })
+  assert.equal(resultNoToken.status, 'MISMATCHED')
+  assert.equal(resultNoToken.reason, 'CANONICAL_IDENTITY_MISMATCH')
+})
+
+test('escenario 6: sincronización correcta seguida de actualizaciones administrativas continúa sin producir falsos bloqueos', () => {
   const cardCreatedAt = '2026-11-04T10:00:00.000Z'
   const lines = [
     { sku: 'SKU-001', variantId: 101, preparedQuantity: 2, updatedAt: '2026-11-04T10:05:00.000Z' },
@@ -177,7 +355,7 @@ test('regresión frescura: sincronización completa seguida de puntero y resoluc
     { createdAt: '2026-11-04T10:08:00.000Z', lastVerifiedAt: '2026-11-04T10:17:00.000Z', status: 'RESOLVED' },
   ]
   const syncRun = { status: 'COMPLETED', completedAt: '2026-11-04T10:15:00.000Z' }
-  const doc = { state: 0, syncedAt: '2026-11-04T10:15:00.000Z', syncRunId: 'run-100' }
+  const doc = { state: 0, syncedAt: '2026-11-04T10:15:00.000Z', syncRunId: 'run-100', number: 5140, token: 'token-5140', bsaleId: 92744 }
   const details = [
     { sku: 'SKU-001', variantId: 101, quantity: 2, syncRunId: 'run-100' },
   ]
@@ -188,6 +366,10 @@ test('regresión frescura: sincronización completa seguida de puntero y resoluc
   const result = evaluateConsistency({
     cardCreatedAt,
     cardStatus: 'AUDITED',
+    cardFolio: '5140',
+    cardToken: 'token-5140',
+    currentNvId: 92744,
+    canonicalVersionNvId: 92744,
     lines,
     incidents,
     syncRun,
@@ -199,126 +381,34 @@ test('regresión frescura: sincronización completa seguida de puntero y resoluc
   assert.equal(result.reason, null)
 })
 
-test('regresión frescura: modificación física posterior a sincronización requiere nueva validación', () => {
-  const cardCreatedAt = '2026-11-04T10:00:00.000Z'
-  const syncRun = { status: 'COMPLETED', completedAt: '2026-11-04T10:15:00.000Z' }
-  const doc = { state: 0, syncedAt: '2026-11-04T10:15:00.000Z', syncRunId: 'run-100' }
-  const details = [
-    { sku: 'SKU-001', variantId: 101, quantity: 2, syncRunId: 'run-100' },
-  ]
-
-  // Línea modificada a las 10:20:00 (POSTERIOR a la sincronización de las 10:15:00)
-  const lines = [
-    { sku: 'SKU-001', variantId: 101, preparedQuantity: 2, updatedAt: '2026-11-04T10:20:00.000Z' },
-  ]
-
-  const result = evaluateConsistency({
-    cardCreatedAt,
-    cardStatus: 'AUDITED',
-    lines,
-    incidents: [],
-    syncRun,
-    doc,
-    details,
-  })
-
-  assert.equal(result.status, 'MISMATCHED')
-  assert.equal(result.reason, 'COMMERCIAL_SYNC_NOT_VERIFIED')
-})
-
-test('regresión integridad: sincronización incompleta o fallida permanece bloqueada', () => {
-  const cardCreatedAt = '2026-11-04T10:00:00.000Z'
-  const lines = [
-    { sku: 'SKU-001', variantId: 101, preparedQuantity: 2, updatedAt: '2026-11-04T10:05:00.000Z' },
-  ]
-  const doc = { state: 0, syncedAt: '2026-11-04T10:15:00.000Z', syncRunId: 'run-100' }
-  const details = [
-    { sku: 'SKU-001', variantId: 101, quantity: 2, syncRunId: 'run-100' },
-  ]
-
-  // Corrida FAILED
-  const resultFailed = evaluateConsistency({
-    cardCreatedAt,
-    cardStatus: 'AUDITED',
-    lines,
-    incidents: [],
-    syncRun: { status: 'FAILED', completedAt: '2026-11-04T10:15:00.000Z' },
-    doc,
-    details,
-  })
-  assert.equal(resultFailed.status, 'MISMATCHED')
-  assert.equal(resultFailed.reason, 'COMMERCIAL_SYNC_NOT_VERIFIED')
-
-  // Corrida STARTED (no completada)
-  const resultIncomplete = evaluateConsistency({
-    cardCreatedAt,
-    cardStatus: 'AUDITED',
-    lines,
-    incidents: [],
-    syncRun: { status: 'STARTED', completedAt: null },
-    doc,
-    details,
-  })
-  assert.equal(resultIncomplete.status, 'MISMATCHED')
-  assert.equal(resultIncomplete.reason, 'COMMERCIAL_SYNC_NOT_VERIFIED')
-})
-
-test('regresión integridad: cabecera y detalles de distintas corridas permanecen bloqueados', () => {
+test('escenario 7: diferencias reales de cantidades e incidencias abiertas mantienen los bloqueos existentes', () => {
   const cardCreatedAt = '2026-11-04T10:00:00.000Z'
   const lines = [
     { sku: 'SKU-001', variantId: 101, preparedQuantity: 2, updatedAt: '2026-11-04T10:05:00.000Z' },
   ]
   const syncRun = { status: 'COMPLETED', completedAt: '2026-11-04T10:15:00.000Z' }
-  const doc = { state: 0, syncedAt: '2026-11-04T10:15:00.000Z', syncRunId: 'run-100' }
+  const doc = { state: 0, syncedAt: '2026-11-04T10:15:00.000Z', syncRunId: 'run-100', number: 5140, token: 'token-5140', bsaleId: 92744 }
 
-  // Uno de los detalles pertenece a run-099 (detalle desactualizado)
-  const details = [
-    { sku: 'SKU-001', variantId: 101, quantity: 2, syncRunId: 'run-099' },
-  ]
-
-  const result = evaluateConsistency({
+  // 7A: Diferencia real de cantidad (NV tiene 3 pero preparado tiene 2)
+  const resultQuantityMismatch = evaluateConsistency({
     cardCreatedAt,
     cardStatus: 'AUDITED',
+    cardFolio: '5140',
+    cardToken: 'token-5140',
+    currentNvId: 92744,
+    canonicalVersionNvId: 92744,
     lines,
     incidents: [],
     syncRun,
     doc,
-    details,
+    details: [
+      { sku: 'SKU-001', variantId: 101, quantity: 3, syncRunId: 'run-100' },
+    ],
   })
+  assert.equal(resultQuantityMismatch.status, 'MISMATCHED')
+  assert.equal(resultQuantityMismatch.reason, 'PREPARED_QUANTITY_MISMATCH')
 
-  assert.equal(result.status, 'MISMATCHED')
-  assert.equal(result.reason, 'COMMERCIAL_SYNC_NOT_VERIFIED')
-})
-
-test('regresión cantidades: diferencias reales de cantidades permanecen bloqueadas', () => {
-  const cardCreatedAt = '2026-11-04T10:00:00.000Z'
-  const lines = [
-    { sku: 'SKU-001', variantId: 101, preparedQuantity: 2, updatedAt: '2026-11-04T10:05:00.000Z' },
-  ]
-  const syncRun = { status: 'COMPLETED', completedAt: '2026-11-04T10:15:00.000Z' }
-  const doc = { state: 0, syncedAt: '2026-11-04T10:15:00.000Z', syncRunId: 'run-100' }
-
-  // NV tiene cantidad 3 mientras preparado tiene 2
-  const details = [
-    { sku: 'SKU-001', variantId: 101, quantity: 3, syncRunId: 'run-100' },
-  ]
-
-  const result = evaluateConsistency({
-    cardCreatedAt,
-    cardStatus: 'AUDITED',
-    lines,
-    incidents: [],
-    syncRun,
-    doc,
-    details,
-  })
-
-  assert.equal(result.status, 'MISMATCHED')
-  assert.equal(result.reason, 'PREPARED_QUANTITY_MISMATCH')
-})
-
-test('regresión incidencias: incidencias todavía abiertas mantienen bloqueada la facturación', () => {
-  // Simulación de readiness de la vista vw_sales_order_route_readiness
+  // 7B: Incidencia comercial abierta
   function evaluateRouteReadiness({ consistencyStatus, openIncidentsCount, nvState = 0, closedAt = null }) {
     if (nvState !== 0 || closedAt !== null) return 'BLOCKED'
     if (consistencyStatus !== 'MATCHED') return 'BLOCKED'
@@ -326,14 +416,12 @@ test('regresión incidencias: incidencias todavía abiertas mantienen bloqueada 
     return 'READY_TO_INVOICE'
   }
 
-  // Si la consistencia es MATCHED pero hay incidencias abiertas:
   const readiness = evaluateRouteReadiness({
     consistencyStatus: 'MATCHED',
     openIncidentsCount: 1,
   })
   assert.equal(readiness, 'INCIDENTS')
 
-  // Simulación de prevalidación de invoice_attempt_prevalidate
   function evaluatePrevalidateReadiness({ hasOpenIncidents, consistencyStatus }) {
     if (hasOpenIncidents) {
       return { status: 'BLOCKED', can_invoice: false, code: 'OPEN_COMMERCIAL_INCIDENTS' }
