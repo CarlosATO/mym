@@ -247,6 +247,19 @@ function isUntouched(line: PreparationReconciliationLine): boolean {
     && line.excluded_from_dispatch === false
 }
 
+const REQUIRED_INCIDENT_VERIFICATION_BASIS = 'FULL_CARD_AND_INCIDENT_ACTION_WITH_PHYSICAL_LINE'
+const EXTRA_SNAPSHOT_PHYSICAL_ID_KEYS = ['physical_id', 'physicalId', 'documentId', 'currentNvId', 'nv_id', 'nvId'] as const
+
+function parseStrictFiniteNumber(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null
+  return value
+}
+
+function parseStrictSafeInt(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) return null
+  return value
+}
+
 function hasCompatibleObservedSnapshot(params: {
   snapshot: Record<string, unknown> | null | undefined
   currentPhysicalId: number
@@ -258,31 +271,35 @@ function hasCompatibleObservedSnapshot(params: {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return false
   if (!Number.isSafeInteger(currentPhysicalId) || currentPhysicalId <= 0) return false
 
-  const physicalIdKeys = ['physical_id', 'physicalId', 'document_id', 'documentId', 'current_nv_id', 'currentNvId', 'nv_id', 'nvId'] as const
-  const observedPhysicalIds: number[] = []
-  for (const key of physicalIdKeys) {
-    const raw = snapshot[key]
-    if (raw == null || raw === '') continue
-    const parsed = parseOptionalSafeInt(raw)
-    if (parsed == null || parsed <= 0) return false
-    observedPhysicalIds.push(parsed)
-  }
-  if (observedPhysicalIds.length === 0) return false
-  if (observedPhysicalIds.some(id => id !== currentPhysicalId)) return false
-
+  if (snapshot.verification_basis !== REQUIRED_INCIDENT_VERIFICATION_BASIS) return false
   if (snapshot.verification_error != null && snapshot.verification_error !== '') return false
-  if (snapshot.document_state != null && parseOptionalSafeInt(snapshot.document_state) !== 0) return false
-  if (snapshot.canonical_identity_matched != null && snapshot.canonical_identity_matched !== true) return false
-  if (snapshot.sync_proven != null && snapshot.sync_proven !== true) return false
-  if (snapshot.line_link_valid != null && snapshot.line_link_valid !== true) return false
-  if (snapshot.full_card_matched != null && snapshot.full_card_matched !== true) return false
-  if (snapshot.incident_action_matched != null && snapshot.incident_action_matched !== true) return false
-  if (snapshot.required_bsale_action != null && snapshot.required_bsale_action !== 'SET_QUANTITY') return false
-  if (snapshot.preparation_line_id != null && snapshot.preparation_line_id !== persistedLineId) return false
-  if (snapshot.matched_preparation_line_id != null && snapshot.matched_preparation_line_id !== persistedLineId) return false
-  if (snapshot.expected_bsale_quantity != null && parseOptionalNumber(snapshot.expected_bsale_quantity) !== expectedBsaleQuantity) return false
-  if (snapshot.bsale_observed_quantity != null && parseOptionalNumber(snapshot.bsale_observed_quantity) !== expectedBsaleQuantity) return false
-  if (snapshot.physically_prepared_quantity != null && parseOptionalNumber(snapshot.physically_prepared_quantity) !== preparedQuantity) return false
+  if (parseStrictSafeInt(snapshot.document_state) !== 0) return false
+  if (snapshot.canonical_identity_matched !== true) return false
+  if (snapshot.sync_proven !== true) return false
+  if (snapshot.line_link_valid !== true) return false
+  if (snapshot.full_card_matched !== true) return false
+  if (snapshot.incident_action_matched !== true) return false
+  if (snapshot.required_bsale_action !== 'SET_QUANTITY') return false
+  if (typeof snapshot.preparation_line_id !== 'string' || snapshot.preparation_line_id !== persistedLineId) return false
+  if (typeof snapshot.matched_preparation_line_id !== 'string' || snapshot.matched_preparation_line_id !== persistedLineId) return false
+
+  const snapshotExpectedQty = parseStrictFiniteNumber(snapshot.expected_bsale_quantity)
+  const snapshotObservedQty = parseStrictFiniteNumber(snapshot.bsale_observed_quantity)
+  const snapshotPreparedQty = parseStrictFiniteNumber(snapshot.physically_prepared_quantity)
+  if (snapshotExpectedQty == null || snapshotExpectedQty !== expectedBsaleQuantity) return false
+  if (snapshotObservedQty == null || snapshotObservedQty !== expectedBsaleQuantity) return false
+  if (snapshotPreparedQty == null || snapshotPreparedQty !== preparedQuantity) return false
+
+  const documentId = parseStrictSafeInt(snapshot.document_id)
+  const currentNvId = parseStrictSafeInt(snapshot.current_nv_id)
+  if (documentId == null || documentId <= 0 || documentId !== currentPhysicalId) return false
+  if (currentNvId == null || currentNvId <= 0 || currentNvId !== currentPhysicalId) return false
+
+  for (const key of EXTRA_SNAPSHOT_PHYSICAL_ID_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(snapshot, key) || snapshot[key] === undefined) continue
+    const extraId = parseStrictSafeInt(snapshot[key])
+    if (extraId == null || extraId <= 0 || extraId !== currentPhysicalId) return false
+  }
 
   return true
 }

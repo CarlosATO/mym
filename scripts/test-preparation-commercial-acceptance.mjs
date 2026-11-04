@@ -683,7 +683,7 @@ test('COM-02D: aceptación rechazada no limpia alerta ni refresca tablero; carre
 // (`20261103121029_logistica_snapshot_existing_lines_guard.sql`).
 // ============================================================================
 
-test('MEJ-01 Bloque 1: la migración incremental preserva permisos, locks, guard de auditoría y exige contrato completo de reducción resuelta', () => {
+test('MEJ-01 Bloque 1: la migración incremental preserva permisos, locks, guard de auditoría y exige contrato completo de reducción resuelta y snapshot MEJ-01B', () => {
   assert.match(reductionMigration, /CREATE OR REPLACE FUNCTION logistica\.accept_sales_order_preparation_commercial_changes/)
   assert.match(reductionMigration, /v_card\.locked_by_user_id IS NULL/)
   assert.match(reductionMigration, /v_card\.locked_by_user_id IS DISTINCT FROM p_actor_id/)
@@ -697,11 +697,55 @@ test('MEJ-01 Bloque 1: la migración incremental preserva permisos, locks, guard
   assert.match(reductionMigration, /i\.verification_status IS DISTINCT FROM 'MATCHED'/)
   assert.match(reductionMigration, /i\.expected_bsale_quantity IS DISTINCT FROM v_new_quantity/)
   assert.match(reductionMigration, /i\.bsale_observed_quantity IS DISTINCT FROM v_new_quantity/)
+  assert.match(reductionMigration, /i\.bsale_observed_snapshot IS NULL/)
+  assert.match(reductionMigration, /\(i\.bsale_observed_snapshot->>'verification_basis'\) IS DISTINCT FROM 'FULL_CARD_AND_INCIDENT_ACTION_WITH_PHYSICAL_LINE'/)
+  assert.match(reductionMigration, /\(i\.bsale_observed_snapshot->>'document_state'\)::integer IS DISTINCT FROM 0/)
+  assert.match(reductionMigration, /i\.bsale_observed_snapshot->'canonical_identity_matched' IS DISTINCT FROM 'true'::jsonb/)
+  assert.match(reductionMigration, /i\.bsale_observed_snapshot->'sync_proven' IS DISTINCT FROM 'true'::jsonb/)
+  assert.match(reductionMigration, /i\.bsale_observed_snapshot->'line_link_valid' IS DISTINCT FROM 'true'::jsonb/)
+  assert.match(reductionMigration, /i\.bsale_observed_snapshot->'full_card_matched' IS DISTINCT FROM 'true'::jsonb/)
+  assert.match(reductionMigration, /i\.bsale_observed_snapshot->'incident_action_matched' IS DISTINCT FROM 'true'::jsonb/)
+  assert.match(reductionMigration, /\(i\.bsale_observed_snapshot->>'required_bsale_action'\) IS DISTINCT FROM 'SET_QUANTITY'/)
+  assert.match(reductionMigration, /\(i\.bsale_observed_snapshot->>'preparation_line_id'\) IS DISTINCT FROM v_line\.id::text/)
+  assert.match(reductionMigration, /\(i\.bsale_observed_snapshot->>'matched_preparation_line_id'\) IS DISTINCT FROM v_line\.id::text/)
+  assert.match(reductionMigration, /\(i\.bsale_observed_snapshot->>'expected_bsale_quantity'\)::numeric IS DISTINCT FROM v_new_quantity/)
+  assert.match(reductionMigration, /\(i\.bsale_observed_snapshot->>'bsale_observed_quantity'\)::numeric IS DISTINCT FROM v_new_quantity/)
+  assert.match(reductionMigration, /\(i\.bsale_observed_snapshot->>'physically_prepared_quantity'\)::numeric IS DISTINCT FROM v_line\.prepared_quantity/)
+  assert.match(reductionMigration, /\(i\.bsale_observed_snapshot->>'document_id'\)::bigint IS DISTINCT FROM \(v_request\.version_snapshot->>'physicalId'\)::bigint/)
+  assert.match(reductionMigration, /\(i\.bsale_observed_snapshot->>'current_nv_id'\)::bigint IS DISTINCT FROM \(v_request\.version_snapshot->>'physicalId'\)::bigint/)
   assert.match(reductionMigration, /REVOKE ALL ON FUNCTION logistica\.accept_sales_order_preparation_commercial_changes/)
   assert.match(reductionMigration, /GRANT EXECUTE ON FUNCTION logistica\.accept_sales_order_preparation_commercial_changes\([^\n]+\) TO service_role/)
   assert.doesNotMatch(reductionMigration, /UPDATE logistica\.sales_order_preparation_incidents/)
   assert.doesNotMatch(reductionMigration, /DELETE FROM logistica\.sales_order_preparation_incidents/)
 })
+
+function isSnapshotValidForSqlSimulation(snapshot, expectedPhysicalId, expectedLineId, expectedPreparedQty, expectedNewQty) {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return false
+  if (snapshot.verification_basis !== 'FULL_CARD_AND_INCIDENT_ACTION_WITH_PHYSICAL_LINE') return false
+  if (snapshot.verification_error != null && String(snapshot.verification_error).trim() !== '') return false
+  if (typeof snapshot.document_state !== 'number' || !Number.isSafeInteger(snapshot.document_state) || snapshot.document_state !== 0) return false
+  if (snapshot.canonical_identity_matched !== true) return false
+  if (snapshot.sync_proven !== true) return false
+  if (snapshot.line_link_valid !== true) return false
+  if (snapshot.full_card_matched !== true) return false
+  if (snapshot.incident_action_matched !== true) return false
+  if (snapshot.required_bsale_action !== 'SET_QUANTITY') return false
+  if (typeof snapshot.preparation_line_id !== 'string' || snapshot.preparation_line_id !== expectedLineId) return false
+  if (typeof snapshot.matched_preparation_line_id !== 'string' || snapshot.matched_preparation_line_id !== expectedLineId) return false
+  if (typeof snapshot.expected_bsale_quantity !== 'number' || snapshot.expected_bsale_quantity !== expectedNewQty) return false
+  if (typeof snapshot.bsale_observed_quantity !== 'number' || snapshot.bsale_observed_quantity !== expectedNewQty) return false
+  if (typeof snapshot.physically_prepared_quantity !== 'number' || snapshot.physically_prepared_quantity !== expectedPreparedQty) return false
+  if (typeof snapshot.document_id !== 'number' || !Number.isSafeInteger(snapshot.document_id) || snapshot.document_id <= 0 || snapshot.document_id !== expectedPhysicalId) return false
+  if (typeof snapshot.current_nv_id !== 'number' || !Number.isSafeInteger(snapshot.current_nv_id) || snapshot.current_nv_id <= 0 || snapshot.current_nv_id !== expectedPhysicalId) return false
+  for (const extraKey of ['physical_id', 'physicalId', 'documentId', 'currentNvId', 'nv_id', 'nvId']) {
+    if (Object.prototype.hasOwnProperty.call(snapshot, extraKey) && snapshot[extraKey] !== undefined) {
+      if (typeof snapshot[extraKey] !== 'number' || !Number.isSafeInteger(snapshot[extraKey]) || snapshot[extraKey] <= 0 || snapshot[extraKey] !== expectedPhysicalId) {
+        return false
+      }
+    }
+  }
+  return true
+}
 
 function simulateAcceptCommercialChangesRpc(db, params) {
   const {
@@ -850,11 +894,12 @@ function simulateAcceptCommercialChangesRpc(db, params) {
           i.prepared_quantity === v_line.prepared_quantity &&
           i.expected_bsale_quantity === v_new_quantity &&
           i.bsale_observed_quantity === v_new_quantity &&
+          (i.bsale_variant_id != null || (i.sku ?? '').trim() !== '') &&
           (i.bsale_variant_id ?? -1) === (v_line.bsale_variant_id ?? -1) &&
           (i.sku ?? '') === (v_line.sku ?? '') &&
-          (i.bsale_observed_snapshot?.physicalId == null || Number(i.bsale_observed_snapshot.physicalId) === p_bsale_nv_id)
+          isSnapshotValidForSqlSimulation(i.bsale_observed_snapshot, p_bsale_nv_id, v_line.id, v_line.prepared_quantity, v_new_quantity)
         )
-        if (validResolved.length === 0) {
+        if (validResolved.length === 0 || validResolved.length !== lineIncidents.filter(i => i.status === 'RESOLVED').length) {
           throw new Error('UPDATE_QUANTITY requiere una incidencia QUANTITY_REDUCTION en estado RESOLVED/MATCHED verificada para la versión vigente')
         }
       }
@@ -1074,15 +1119,22 @@ function buildCommercialReductionFixture() {
     verification_status: 'MATCHED',
     bsale_observed_quantity: 4,
     bsale_observed_snapshot: {
-      physicalId: 95002,
-      folio: '7701',
-      canonicalToken,
-      line: {
-        detailId: 88055,
-        variantId: 501,
-        sku: 'SKU-RED-501',
-        quantity: 4,
-      },
+      historical_nv_id: 95001,
+      current_nv_id: 95002,
+      document_id: 95002,
+      document_state: 0,
+      canonical_identity_matched: true,
+      sync_proven: true,
+      line_link_valid: true,
+      full_card_matched: true,
+      incident_action_matched: true,
+      required_bsale_action: 'SET_QUANTITY',
+      expected_bsale_quantity: 4,
+      bsale_observed_quantity: 4,
+      physically_prepared_quantity: 4,
+      preparation_line_id: 'prep-line-501',
+      matched_preparation_line_id: 'prep-line-501',
+      verification_basis: 'FULL_CARD_AND_INCIDENT_ACTION_WITH_PHYSICAL_LINE',
     },
     created_by: 'operator-user-111',
     created_at: '2026-11-04T09:15:00.000Z',
@@ -1386,6 +1438,40 @@ test('MEJ-01 Bloque 1 — Escenarios 2, 3, 4, 5, 6, 8, 9 y 12 (Simulación JS de
       /UPDATE_QUANTITY es incompatible con lo preparado/,
     )
   }
+
+  // Solicitud fabricada enviada directamente a la RPC con snapshot histórico o incompleto (que TS rechazaría) es bloqueada por el contrato SQL
+  const invalidSnapshotsForFabricatedRpc = [
+    { document_id: 95002 }, // Solo document_id
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, verification_basis: undefined },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, verification_basis: null },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, verification_basis: 'LEGACY_V1' },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, document_state: null },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, document_state: 1 },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, canonical_identity_matched: false },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, canonical_identity_matched: null },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, sync_proven: false },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, line_link_valid: false },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, full_card_matched: false },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, incident_action_matched: false },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, required_bsale_action: 'REMOVE_LINE' },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, preparation_line_id: 'other-line' },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, matched_preparation_line_id: 'other-line' },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, expected_bsale_quantity: 5 },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, bsale_observed_quantity: 5 },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, physically_prepared_quantity: 5 },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, document_id: 95001 },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, current_nv_id: 95001 },
+    { ...buildCommercialReductionFixture().incident.bsale_observed_snapshot, physicalId: 95001 },
+  ]
+  for (const badSnapshot of invalidSnapshotsForFabricatedRpc) {
+    const { db, currentLiveVersion } = buildCommercialReductionFixture()
+    db.incidents[0].bsale_observed_snapshot = badSnapshot
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedParams(db, currentLiveVersion)),
+      /UPDATE_QUANTITY requiere una incidencia QUANTITY_REDUCTION en estado RESOLVED\/MATCHED verificada para la versión vigente/,
+    )
+    assert.equal(db.preparationLines[0].requested_quantity, 5)
+  }
 })
 
 test('MEJ-01 PR #22 fix: la Server Action real proyecta las 15 columnas de evidencia desde Supabase hacia el planificador y bloquea evidencias incompletas o incompatibles', async () => {
@@ -1570,27 +1656,9 @@ test('MEJ-01 PR #22 fix: la Server Action real proyecta las 15 columnas de evide
     return { response, mockState, fixture }
   }
 
-  // 1. Flujo real exitoso cuando la fila en sales_order_preparation_incidents tiene evidencia completa RESOLVED/MATCHED
+  // 1. Flujo real exitoso cuando la fila en sales_order_preparation_incidents tiene evidencia completa RESOLVED/MATCHED generada según PR #21
   {
-    const { response, mockState: state } = await runActionScenario(({ incident }) => {
-      incident.bsale_observed_snapshot = {
-        historical_nv_id: 95001,
-        current_nv_id: 95002,
-        document_id: 95002,
-        document_state: 0,
-        canonical_identity_matched: true,
-        sync_proven: true,
-        line_link_valid: true,
-        full_card_matched: true,
-        incident_action_matched: true,
-        required_bsale_action: 'SET_QUANTITY',
-        expected_bsale_quantity: 4,
-        bsale_observed_quantity: 4,
-        physically_prepared_quantity: 4,
-        preparation_line_id: 'prep-line-501',
-        matched_preparation_line_id: 'prep-line-501',
-      }
-    })
+    const { response, mockState: state } = await runActionScenario()
     assert.equal(response.status, 'ACCEPTED')
     assert.deepEqual(state.incidentSelectClauses, [PREPARATION_RECONCILIATION_INCIDENT_SELECT])
     assert.equal(state.upsertedRequests.length, 1)
@@ -1634,13 +1702,37 @@ test('MEJ-01 PR #22 fix: la Server Action real proyecta las 15 columnas de evide
     assert.equal(state.rpcCalls.length, 0)
   }
 
-  // 5. Bloqueo cuando bsale_observed_snapshot está ausente, no incluye ID físico o apunta a otra versión comercial
+  // 5. Bloqueo cuando bsale_observed_snapshot está ausente, es histórico (sin verification_basis MEJ-01B), solo tiene document_id, carece de indicadores obligatorios o tiene IDs contradictorios
+  const baseValidSnapshot = buildCommercialReductionFixture().incident.bsale_observed_snapshot
   for (const invalidSnapshot of [
     null,
     {},
-    { document_id: 95001, current_nv_id: 95001 },
-    { document_id: 95002, current_nv_id: 95001 },
-    { document_id: 95002, incident_action_matched: false },
+    { document_id: 95002 },
+    { ...baseValidSnapshot, verification_basis: undefined },
+    { ...baseValidSnapshot, verification_basis: null },
+    { ...baseValidSnapshot, verification_basis: 'HISTORICAL_BASIS' },
+    { ...baseValidSnapshot, document_state: null },
+    { ...baseValidSnapshot, document_state: 1 },
+    { ...baseValidSnapshot, canonical_identity_matched: false },
+    { ...baseValidSnapshot, canonical_identity_matched: null },
+    { ...baseValidSnapshot, sync_proven: false },
+    { ...baseValidSnapshot, sync_proven: null },
+    { ...baseValidSnapshot, line_link_valid: false },
+    { ...baseValidSnapshot, line_link_valid: null },
+    { ...baseValidSnapshot, full_card_matched: false },
+    { ...baseValidSnapshot, full_card_matched: null },
+    { ...baseValidSnapshot, incident_action_matched: false },
+    { ...baseValidSnapshot, incident_action_matched: null },
+    { ...baseValidSnapshot, required_bsale_action: 'REMOVE_LINE' },
+    { ...baseValidSnapshot, required_bsale_action: null },
+    { ...baseValidSnapshot, preparation_line_id: 'other-line-id' },
+    { ...baseValidSnapshot, matched_preparation_line_id: 'other-line-id' },
+    { ...baseValidSnapshot, expected_bsale_quantity: 5 },
+    { ...baseValidSnapshot, bsale_observed_quantity: 5 },
+    { ...baseValidSnapshot, physically_prepared_quantity: 5 },
+    { ...baseValidSnapshot, document_id: 95001, current_nv_id: 95001 },
+    { ...baseValidSnapshot, document_id: 95002, current_nv_id: 95001 },
+    { ...baseValidSnapshot, physicalId: 95001 },
   ]) {
     const { response, mockState: state } = await runActionScenario(({ incident }) => {
       incident.bsale_observed_snapshot = invalidSnapshot
