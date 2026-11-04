@@ -64,6 +64,15 @@ test('contenido idéntico con nuevo ID físico devuelve UNCHANGED', async () => 
   assert.equal(result.status, 'UNCHANGED')
 })
 
+test('snapshot inicial sin lineNumber frente a Bsale con lineNumber 0 devuelve UNCHANGED', async () => {
+  clearPreparationCommercialDetectorCache()
+  const known = version(92706, [{ variantId: 1, sku: 'A', productName: 'A', quantity: 1, unitNetValue: 1000, lineNetAmount: 1000 }], 1000)
+  const current = version(92714, [line(1, 'A', 1, 0)], 1000)
+  const result = await detectPreparationCommercialChange({ card: identity(), knownVersion: known }, { provider: providerFor(current).provider, authorize, useCache: false })
+  assert.equal(result.status, 'UNCHANGED')
+  assert.deepEqual(result.comparison?.differences, [])
+})
+
 test('propaga CHANGED para alta, baja y cantidades', async () => {
   clearPreparationCommercialDetectorCache()
   const known = version(1, [line(1, 'A', 1, 1), line(2, 'B', 4, 2)])
@@ -211,16 +220,59 @@ test('el proveedor usa el nombre normalizado completo del producto y conserva la
   ])
 })
 
-test('primera preparación sin edición Bsale: diferencia técnica lineNumber devuelve UNCHANGED', async () => {
-  clearPreparationCommercialDetectorCache()
-  const original = version(92674, [
-    { variantId: 5873, sku: 'SKU-A', productName: 'Producto A', quantity: 24, unitNetValue: 1134, lineNetAmount: 27227, lineTaxAmount: 5173, lineGrossAmount: 32400 },
-  ], 32400)
-  const current = version(92674, original.lines.map(item => ({ ...item, lineNumber: 0 })), 32400)
-  const result = await detectPreparationCommercialChange(
-    { card: identity('company-a', 'token-5129', 92674), knownVersion: original },
-    { provider: providerFor(current).provider, authorize, useCache: false },
+test('la resolución de nombres queda limitada a la NV vigente aunque existan más de 1.000 históricos', async () => {
+  const calls = []
+  const provider = createBsalePreparationCommercialProvider({
+    async fetchPage({ path }) {
+      if (path === '/documents.json') return {
+        count: 1,
+        items: [{
+          id: 92758, number: 5150, documentTypeId: 23, token: 'token-5150', state: 0,
+          details: Array.from({ length: 10 }, (_, index) => ({ id: 400000 + index, variantId: index === 0 ? 1807 : index === 1 ? 7101 : 8000 + index, quantity: 1 })),
+        }],
+      }
+      throw new Error('no debería solicitar detalles expandidos')
+    },
+    async resolveProductNames(companyId, nvBsaleId, variantIds) {
+      calls.push({ companyId, nvBsaleId, variantIds })
+      return Object.fromEntries(variantIds.map(variantId => [variantId, variantId === 1807
+        ? 'CATIT 2.0 CATNIP SPRAY 60ML'
+        : variantId === 7101
+          ? 'PAWISE REPUESTO RASGUÑADOR RAMPA 57x39x41 cm'
+          : `PRODUCTO OFICIAL ${variantId}`]))
+    },
+  })
+
+  const current = await provider.getCurrentVersion({
+    ...identity('company-a', 'token-5150'), folio: '5150', status: 'IN_PREPARATION',
+  }, new AbortController().signal)
+
+  assert.deepEqual(calls, [{ companyId: 'company-a', nvBsaleId: 92758, variantIds: [1807, 7101, 8002, 8003, 8004, 8005, 8006, 8007, 8008, 8009] }])
+  assert.equal(current.lines.length, 10)
+  assert.equal(current.lines[0].productName, 'CATIT 2.0 CATNIP SPRAY 60ML')
+  assert.equal(current.lines[1].productName, 'PAWISE REPUESTO RASGUÑADOR RAMPA 57x39x41 cm')
+})
+
+test('una NV Bsale más nueva aún no sincronizada no reutiliza nombres históricos', async () => {
+  const provider = createBsalePreparationCommercialProvider({
+    async fetchPage({ path }) {
+      if (path === '/documents.json') return {
+        count: 1,
+        items: [{
+          id: 92800, number: 5150, documentTypeId: 23, token: 'token-5150', state: 0,
+          details: [{ id: 500001, variantId: 1807, quantity: 1 }],
+        }],
+      }
+      throw new Error('no debería solicitar detalles expandidos')
+    },
+    async resolveProductNames(_companyId, nvBsaleId) {
+      assert.equal(nvBsaleId, 92800)
+      return {}
+    },
+  })
+
+  await assert.rejects(
+    provider.getCurrentVersion({ ...identity('company-a', 'token-5150'), folio: '5150', status: 'IN_PREPARATION' }, new AbortController().signal),
+    error => error.code === 'INCOMPLETE' && error.message.includes('1807'),
   )
-  assert.equal(result.status, 'UNCHANGED')
-  assert.deepEqual(result.comparison?.differences, [])
 })

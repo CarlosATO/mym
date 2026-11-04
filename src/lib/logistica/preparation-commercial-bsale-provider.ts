@@ -52,7 +52,7 @@ function providerError(code: 'UNAVAILABLE' | 'INCOMPLETE' | 'AMBIGUOUS' | 'NOT_F
 
 export type BsalePreparationCommercialProviderOptions = {
   fetchPage?: <T>(options: { companyId: string; path: string; params: Record<string, string | number>; signal: AbortSignal }) => Promise<BsaleReadPage<T>>
-  resolveProductNames?: (companyId: string, variantIds: number[], signal: AbortSignal) => Promise<NormalizedProductNames>
+  resolveProductNames?: (companyId: string, nvBsaleId: number, variantIds: number[], signal: AbortSignal) => Promise<NormalizedProductNames>
 }
 
 function numeric(value: unknown): number | null {
@@ -161,6 +161,7 @@ async function fetchAllDocumentCandidates(
 export function createBsalePreparationCommercialProvider(providerOptions: BsalePreparationCommercialProviderOptions = {}): PreparationCommercialProvider {
   const fetchPage = providerOptions.fetchPage ?? defaultFetchPage
   const resolveProductNames = providerOptions.resolveProductNames
+    ?? (providerOptions.fetchPage ? undefined : resolveNormalizedProductNames)
   return {
     async getCurrentVersion(identity, signal) {
       const documents = (await fetchAllDocumentCandidates(fetchPage, identity, signal))
@@ -171,6 +172,8 @@ export function createBsalePreparationCommercialProvider(providerOptions: BsaleP
         return generationDifference || (numeric(right.id) ?? 0) - (numeric(left.id) ?? 0)
       })[0]
       if (Number(selected.state) !== 0) throw providerError('INCOMPLETE', 'La versión Bsale encontrada no está operativa.')
+      const selectedId = numeric(selected.id)
+      if (selectedId == null) throw providerError('INCOMPLETE', 'Bsale devolvió un documento sin ID.')
       let detailResult = extractDetails(selected.details)
       if (!detailResult.complete) {
         const detailPage = await fetchPage<BsaleRawDetail>({ companyId: identity.companyId, path: `/documents/${selected.id}/details.json`, params: { limit: 50, offset: 0 }, signal })
@@ -181,11 +184,9 @@ export function createBsalePreparationCommercialProvider(providerOptions: BsaleP
         .map(detail => numeric(detail.variantId ?? detail.variant_id ?? detail.variant?.id))
         .filter((variantId): variantId is number => variantId != null))]
       const productNames = resolveProductNames
-        ? await resolveProductNames(identity.companyId, variantIds, signal)
-        : providerOptions.fetchPage
-          ? {}
-          : await resolveNormalizedProductNames(identity.companyId, numeric(selected.id) ?? -1, variantIds, signal)
-      if (resolveProductNames || !providerOptions.fetchPage) {
+        ? await resolveProductNames(identity.companyId, selectedId, variantIds, signal)
+        : {}
+      if (resolveProductNames) {
         const missingProductNames = variantIds.filter(variantId => !productNames[variantId])
         if (missingProductNames.length > 0) {
           throw providerError('INCOMPLETE', `Faltan nombres normalizados para las variantes Bsale: ${missingProductNames.join(', ')}.`)
