@@ -894,3 +894,255 @@ test('MEJ-01 Protección contra evidencias históricas insuficientes: rechaza sn
     'nv_id explícitamente null debe bloquearse',
   )
 })
+
+function buildValidMej01bExclusionSnapshot(overrides = {}) {
+  return {
+    historical_nv_id: 92706,
+    current_nv_id: 92714,
+    document_id: 92714,
+    document_state: 0,
+    canonical_identity_matched: true,
+    sync_proven: true,
+    line_link_valid: true,
+    full_card_matched: true,
+    incident_action_matched: true,
+    required_bsale_action: 'REMOVE_LINE',
+    expected_bsale_quantity: 0,
+    bsale_observed_quantity: 0,
+    physically_prepared_quantity: 0,
+    preparation_line_id: 'line-excl',
+    matched_preparation_line_id: 'line-excl',
+    verification_basis: 'FULL_CARD_AND_INCIDENT_ACTION_WITH_PHYSICAL_LINE',
+    ...overrides,
+  }
+}
+
+function buildValidResolvedExclusionIncident(overrides = {}) {
+  return {
+    id: 'inc-excl-resolved-1',
+    preparation_line_id: 'line-excl',
+    company_id: card.companyId,
+    card_id: card.cardId,
+    bsale_variant_id: 601,
+    sku: 'SKU-EXCL-601',
+    requested_quantity: 5,
+    prepared_quantity: 0,
+    incident_type: 'LINE_EXCLUDED',
+    required_bsale_action: 'REMOVE_LINE',
+    expected_bsale_quantity: 0,
+    bsale_observed_quantity: 0,
+    status: 'RESOLVED',
+    verification_status: 'MATCHED',
+    bsale_observed_snapshot: buildValidMej01bExclusionSnapshot(),
+    ...overrides,
+  }
+}
+
+test('MEJ-01 Exclusión total (V1, V2): línea físicamente excluida con incidencia LINE_EXCLUDED / REMOVE_LINE en RESOLVED/MATCHED y línea activa restante produce REMOVE en estado READY', () => {
+  const activeOld = line(101, 'SKU-ACTIVO', 3, { detailId: 5001 })
+  const activeNew = line(101, 'SKU-ACTIVO', 3, { detailId: 5011 })
+  const excludedOld = line(601, 'SKU-EXCL-601', 5, { detailId: 5002 })
+
+  const result = plan({
+    oldLines: [activeOld, excludedOld],
+    newLines: [activeNew],
+    preparationLines: [
+      prep('line-active', activeOld, 3, 3, 'CONFIRMED', false),
+      prep('line-excl', excludedOld, 5, 0, 'INCIDENT', true),
+    ],
+    incidents: [buildValidResolvedExclusionIncident()],
+  })
+
+  assert.equal(result.status, 'READY')
+  assert.equal(result.canAcceptCompletely, true)
+  assert.equal(result.conflicts.length, 0)
+  assert.equal(result.impact.removed, 1)
+  assert.equal(result.impact.conflicts, 0)
+
+  const keepAct = result.actions.find(a => a.kind === 'KEEP')
+  assert.ok(keepAct)
+  assert.equal(keepAct.preparationLineId, 'line-active')
+
+  const removeAct = result.actions.find(a => a.kind === 'REMOVE')
+  assert.ok(removeAct)
+  assert.equal(removeAct.preparationLineId, 'line-excl')
+  assert.equal(removeAct.previous?.sku, 'SKU-EXCL-601')
+  assert.equal(removeAct.previous?.variantId, 601)
+  assert.equal(removeAct.previous?.quantity, 5)
+  assert.equal(removeAct.current, null)
+  assert.equal(removeAct.previousRequestedQuantity, 5)
+  assert.equal(removeAct.newRequestedQuantity, 0)
+  assert.equal(removeAct.preparedQuantity, 0)
+  assert.equal(removeAct.quantityDelta, -5)
+  assert.deepEqual(removeAct.incidentIds, ['inc-excl-resolved-1'])
+})
+
+test('MEJ-01 Exclusión total (R1, R2, R3, R4, R5, R6): bloqueos estrictos en el planificador ante incumplimiento de cualquier invariante de REMOVE_LINE', () => {
+  const activeOld = line(101, 'SKU-ACTIVO', 3, { detailId: 5001 })
+  const activeNew = line(101, 'SKU-ACTIVO', 3, { detailId: 5011 })
+  const excludedOld = line(601, 'SKU-EXCL-601', 5, { detailId: 5002 })
+
+  // R1: Incidencia OPEN o SUPERSEDED sin resolución vigente bloquea
+  for (const invalidStatus of ['OPEN', 'SUPERSEDED']) {
+    const res = plan({
+      oldLines: [activeOld, excludedOld],
+      newLines: [activeNew],
+      preparationLines: [
+        prep('line-active', activeOld, 3, 3, 'CONFIRMED', false),
+        prep('line-excl', excludedOld, 5, 0, 'INCIDENT', true),
+      ],
+      incidents: [buildValidResolvedExclusionIncident({ status: invalidStatus })],
+    })
+    assert.equal(res.status, 'REQUIRES_RESOLUTION')
+    assert.equal(res.canAcceptCompletely, false)
+    assert.equal(res.conflicts[0].reason, 'PREPARATION_LINE_EXCLUDED')
+  }
+
+  // R1b: Coexistencia de una incidencia RESOLVED con otra OPEN en la misma línea bloquea
+  {
+    const res = plan({
+      oldLines: [activeOld, excludedOld],
+      newLines: [activeNew],
+      preparationLines: [
+        prep('line-active', activeOld, 3, 3, 'CONFIRMED', false),
+        prep('line-excl', excludedOld, 5, 0, 'INCIDENT', true),
+      ],
+      incidents: [
+        buildValidResolvedExclusionIncident({ id: 'inc-1', status: 'RESOLVED' }),
+        buildValidResolvedExclusionIncident({ id: 'inc-2', status: 'OPEN' }),
+      ],
+    })
+    assert.equal(res.status, 'REQUIRES_RESOLUTION')
+    assert.equal(res.canAcceptCompletely, false)
+    assert.equal(res.conflicts[0].reason, 'PREPARATION_LINE_EXCLUDED')
+  }
+
+  // R2: Incidencia con tipo o acción incorrectos, cantidades no cero, otra identidad o verification_error inválido (PR #25) bloquea
+  for (const badOverride of [
+    { incident_type: 'QUANTITY_REDUCTION' },
+    { required_bsale_action: 'SET_QUANTITY' },
+    { verification_status: 'MISMATCHED' },
+    { requested_quantity: 4 },
+    { prepared_quantity: 1 },
+    { expected_bsale_quantity: 1 },
+    { bsale_observed_quantity: 1 },
+    { bsale_variant_id: 999 },
+    { sku: 'OTRO-SKU' },
+    { company_id: 'otra-empresa' },
+    { card_id: 'otra-card' },
+    { bsale_observed_snapshot: null },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ required_bsale_action: 'SET_QUANTITY' }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ expected_bsale_quantity: 1 }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ bsale_observed_quantity: 1 }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ physically_prepared_quantity: 1 }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ document_id: 92706 }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ current_nv_id: 92706 }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ verification_error: '   ' }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ verification_error: 'ERR' }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ verification_error: 0 }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ verification_error: false }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ verification_error: {} }) },
+  ]) {
+    const res = plan({
+      oldLines: [activeOld, excludedOld],
+      newLines: [activeNew],
+      preparationLines: [
+        prep('line-active', activeOld, 3, 3, 'CONFIRMED', false),
+        prep('line-excl', excludedOld, 5, 0, 'INCIDENT', true),
+      ],
+      incidents: [buildValidResolvedExclusionIncident(badOverride)],
+    })
+    assert.equal(res.status, 'REQUIRES_RESOLUTION')
+    assert.equal(res.canAcceptCompletely, false)
+    assert.equal(res.conflicts[0].reason, 'PREPARATION_LINE_EXCLUDED')
+  }
+
+  // R3: Preparación parcial mayor que cero (prepared_quantity = 1) bloquea aunque exista incidencia RESOLVED
+  {
+    const res = plan({
+      oldLines: [activeOld, excludedOld],
+      newLines: [activeNew],
+      preparationLines: [
+        prep('line-active', activeOld, 3, 3, 'CONFIRMED', false),
+        prep('line-excl', excludedOld, 5, 1, 'INCIDENT', true),
+      ],
+      incidents: [buildValidResolvedExclusionIncident()],
+    })
+    assert.equal(res.status, 'REQUIRES_RESOLUTION')
+    assert.equal(res.canAcceptCompletely, false)
+    assert.equal(res.conflicts[0].reason, 'PREPARATION_LINE_EXCLUDED')
+  }
+
+  // R4: Bsale mantiene la línea con cantidad cero (quantity = 0) en lugar de eliminarla -> bloqueado
+  {
+    const zeroQtyLine = line(601, 'SKU-EXCL-601', 0, { detailId: 5012 })
+    const res = plan({
+      oldLines: [activeOld, excludedOld],
+      newLines: [activeNew, zeroQtyLine],
+      preparationLines: [
+        prep('line-active', activeOld, 3, 3, 'CONFIRMED', false),
+        prep('line-excl', excludedOld, 5, 0, 'INCIDENT', true),
+      ],
+      incidents: [buildValidResolvedExclusionIncident()],
+    })
+    assert.equal(res.status, 'REQUIRES_RESOLUTION')
+    assert.equal(res.canAcceptCompletely, false)
+    assert.equal(res.conflicts[0].reason, 'PREPARATION_LINE_EXCLUDED')
+  }
+
+  // R5: Eliminación de todos los productos del pedido (sin ninguna línea comercial activa restante) -> bloqueado
+  {
+    const res = plan({
+      oldLines: [excludedOld],
+      newLines: [],
+      preparationLines: [prep('line-excl', excludedOld, 5, 0, 'INCIDENT', true)],
+      incidents: [buildValidResolvedExclusionIncident()],
+    })
+    assert.equal(res.status, 'REQUIRES_RESOLUTION')
+    assert.equal(res.canAcceptCompletely, false)
+    assert.equal(res.conflicts.length, 1)
+    assert.equal(res.conflicts[0].reason, 'PREPARATION_LINE_EXCLUDED')
+  }
+
+  // R6 / V4: Nueva incorporación del mismo SKU tras exclusión previa:
+  // - Con detailId nuevo sobre línea ya retirada (retired_at != null): planifica ADD limpio sin reutilizar línea retirada
+  // - Con detailId repetido (colisión con línea retirada): bloquea con PREPARATION_LINE_AMBIGUOUS
+  {
+    const retiredExcludedLine = {
+      ...prep('line-excl', excludedOld, 5, 0, 'INCIDENT', true),
+      bsale_detail_id: 5002,
+      retired_at: '2026-11-04T12:00:00.000Z',
+    }
+    const readdedWithNewDetail = line(601, 'SKU-EXCL-601', 2, { detailId: 6099 })
+    const validReaddPlan = plan({
+      oldLines: [activeNew],
+      newLines: [activeNew, readdedWithNewDetail],
+      preparationLines: [
+        prep('line-active', activeNew, 3, 3, 'CONFIRMED', false),
+        retiredExcludedLine,
+      ],
+      incidents: [buildValidResolvedExclusionIncident()],
+    })
+    assert.equal(validReaddPlan.status, 'READY')
+    assert.equal(validReaddPlan.canAcceptCompletely, true)
+    const addAction = validReaddPlan.actions.find(a => a.kind === 'ADD')
+    assert.ok(addAction)
+    assert.equal(addAction.preparationLineId, null)
+    assert.equal(addAction.current?.detailId, 6099)
+    assert.equal(addAction.newRequestedQuantity, 2)
+
+    const readdedWithCollidingDetail = line(601, 'SKU-EXCL-601', 2, { detailId: 5002 })
+    const collidingReaddPlan = plan({
+      oldLines: [activeNew],
+      newLines: [activeNew, readdedWithCollidingDetail],
+      preparationLines: [
+        prep('line-active', activeNew, 3, 3, 'CONFIRMED', false),
+        retiredExcludedLine,
+      ],
+      incidents: [buildValidResolvedExclusionIncident()],
+    })
+    assert.equal(collidingReaddPlan.status, 'REQUIRES_RESOLUTION')
+    assert.equal(collidingReaddPlan.canAcceptCompletely, false)
+    assert.equal(collidingReaddPlan.conflicts[0].reason, 'PREPARATION_LINE_AMBIGUOUS')
+  }
+})

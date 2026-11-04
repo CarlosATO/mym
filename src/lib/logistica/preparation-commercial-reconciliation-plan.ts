@@ -20,6 +20,7 @@ export type PreparationReconciliationLine = {
   prepared_quantity: number | null
   line_status: 'PENDING' | 'CONFIRMED' | 'INCIDENT' | string
   excluded_from_dispatch: boolean
+  retired_at?: string | null
 }
 
 export const PREPARATION_RECONCILIATION_INCIDENT_SELECT =
@@ -216,18 +217,27 @@ function isConfirmedCommercialValueDifference(difference: CommercialLineDifferen
   return difference.changedFields.some(field => COMMERCIAL_VALUE_FIELDS.has(field))
 }
 
+function scopedPreparationLines(
+  preparationLines: PreparationReconciliationLine[],
+  card?: PreparationCommercialReconciliationCard,
+  includeRetired = false,
+): PreparationReconciliationLine[] {
+  return preparationLines.filter(item => (
+    (includeRetired || (item.retired_at ?? null) == null)
+    && (!card || (
+      (item.company_id == null || item.company_id === card.companyId)
+      && (item.card_id == null || item.card_id === card.cardId)
+    ))
+  ))
+}
+
 function persistedCandidates(
   line: LineRef,
   preparationLines: PreparationReconciliationLine[],
   card?: PreparationCommercialReconciliationCard,
 ): PreparationReconciliationLine[] {
   if (!line) return []
-  const scopedLines = card
-    ? preparationLines.filter(item => (
-      (item.company_id == null || item.company_id === card.companyId)
-      && (item.card_id == null || item.card_id === card.cardId)
-    ))
-    : preparationLines
+  const scopedLines = scopedPreparationLines(preparationLines, card, false)
   const byDetail = line.detailId == null ? [] : scopedLines.filter(item => item.bsale_detail_id === Number(line.detailId))
   if (byDetail.length > 0) return byDetail
   const byVariant = line.variantId == null ? [] : scopedLines.filter(item => item.bsale_variant_id === Number(line.variantId))
@@ -237,12 +247,68 @@ function persistedCandidates(
     : []
 }
 
+function isCommercialLineMatchingPersistedIdentity(
+  commercialLine: PreparationCommercialLineInput,
+  persistedLine: PreparationReconciliationLine,
+): boolean {
+  if (
+    commercialLine.detailId != null
+    && persistedLine.bsale_detail_id != null
+    && Number(commercialLine.detailId) === Number(persistedLine.bsale_detail_id)
+  ) {
+    return true
+  }
+  const commercialVariantId = normalizeVariantId(commercialLine.variantId)
+  const persistedVariantId = normalizeVariantId(persistedLine.bsale_variant_id)
+  if (commercialVariantId != null && persistedVariantId != null && commercialVariantId === persistedVariantId) {
+    return true
+  }
+  const commercialSku = normalizeSku(commercialLine.sku)
+  const persistedSku = normalizeSku(persistedLine.sku)
+  if (commercialSku != null && persistedSku != null && commercialSku === persistedSku) {
+    return true
+  }
+  return false
+}
+
+function hasAddedLineCollision(
+  line: LineRef,
+  preparationLines: PreparationReconciliationLine[],
+  currentVersion: PreparationCommercialVersion,
+  card?: PreparationCommercialReconciliationCard,
+): boolean {
+  if (!line) return true
+  const allScoped = scopedPreparationLines(preparationLines, card, true)
+  const activeScoped = scopedPreparationLines(preparationLines, card, false)
+  const detailId = parseOptionalSafeInt(line.detailId)
+  if (detailId != null && allScoped.some(item => item.bsale_detail_id === detailId)) {
+    return true
+  }
+  if (activeScoped.some(item => isCommercialLineMatchingPersistedIdentity(line, item))) {
+    return true
+  }
+  const lineVariantId = normalizeVariantId(line.variantId)
+  const lineSku = normalizeSku(line.sku)
+  const matchingCurrentLines = (currentVersion.lines ?? []).filter(candidate => {
+    const candidateDetailId = parseOptionalSafeInt(candidate.detailId)
+    const candidateVariantId = normalizeVariantId(candidate.variantId)
+    const candidateSku = normalizeSku(candidate.sku)
+    return (
+      (detailId != null && candidateDetailId != null && detailId === candidateDetailId)
+      || (lineVariantId != null && candidateVariantId != null && lineVariantId === candidateVariantId)
+      || (lineSku != null && candidateSku != null && lineSku === candidateSku)
+    )
+  })
+  return matchingCurrentLines.length > 1
+}
+
 function incidentsFor(lineId: string | null, incidents: PreparationReconciliationIncident[]): PreparationReconciliationIncident[] {
   return lineId == null ? [] : incidents.filter(incident => incident.preparation_line_id === lineId)
 }
 
 function isUntouched(line: PreparationReconciliationLine): boolean {
-  return line.line_status === 'PENDING'
+  return (line.retired_at ?? null) == null
+    && line.line_status === 'PENDING'
     && line.prepared_quantity == null
     && line.excluded_from_dispatch === false
 }
@@ -266,8 +332,16 @@ function hasCompatibleObservedSnapshot(params: {
   persistedLineId: string
   preparedQuantity: number
   expectedBsaleQuantity: number
+  requiredBsaleAction: 'SET_QUANTITY' | 'REMOVE_LINE'
 }): boolean {
-  const { snapshot, currentPhysicalId, persistedLineId, preparedQuantity, expectedBsaleQuantity } = params
+  const {
+    snapshot,
+    currentPhysicalId,
+    persistedLineId,
+    preparedQuantity,
+    expectedBsaleQuantity,
+    requiredBsaleAction,
+  } = params
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return false
   if (!Number.isSafeInteger(currentPhysicalId) || currentPhysicalId <= 0) return false
 
@@ -279,7 +353,7 @@ function hasCompatibleObservedSnapshot(params: {
   if (snapshot.line_link_valid !== true) return false
   if (snapshot.full_card_matched !== true) return false
   if (snapshot.incident_action_matched !== true) return false
-  if (snapshot.required_bsale_action !== 'SET_QUANTITY') return false
+  if (snapshot.required_bsale_action !== requiredBsaleAction) return false
   if (typeof snapshot.preparation_line_id !== 'string' || snapshot.preparation_line_id !== persistedLineId) return false
   if (typeof snapshot.matched_preparation_line_id !== 'string' || snapshot.matched_preparation_line_id !== persistedLineId) return false
 
@@ -314,6 +388,7 @@ function isResolvedQuantityReductionIncident(params: {
   const { card, currentVersion, difference, persistedLine, relatedIncidents } = params
   if (difference.kind !== 'QUANTITY_DECREASED' || difference.confidence !== 'CERTAIN') return false
   if (!difference.previous || !difference.current) return false
+  if ((persistedLine.retired_at ?? null) != null) return false
   if (persistedLine.line_status !== 'INCIDENT' || persistedLine.excluded_from_dispatch) return false
   if (persistedLine.company_id != null && persistedLine.company_id !== card.companyId) return false
   if (persistedLine.card_id != null && persistedLine.card_id !== card.cardId) return false
@@ -375,6 +450,92 @@ function isResolvedQuantityReductionIncident(params: {
       persistedLineId: persistedLine.id,
       preparedQuantity,
       expectedBsaleQuantity: newQuantity,
+      requiredBsaleAction: 'SET_QUANTITY',
+    })) {
+      return false
+    }
+
+    return true
+  })
+}
+
+function isResolvedLineExclusionIncident(params: {
+  card: PreparationCommercialReconciliationCard
+  currentVersion: PreparationCommercialVersion
+  difference: CommercialLineDifference
+  persistedLine: PreparationReconciliationLine
+  relatedIncidents: PreparationReconciliationIncident[]
+}): boolean {
+  const { card, currentVersion, difference, persistedLine, relatedIncidents } = params
+  if (difference.kind !== 'REMOVED' || difference.confidence !== 'CERTAIN') return false
+  if (!difference.previous || difference.current != null) return false
+  if ((persistedLine.retired_at ?? null) != null) return false
+  if (persistedLine.line_status !== 'INCIDENT' || persistedLine.excluded_from_dispatch !== true) return false
+  if (persistedLine.company_id != null && persistedLine.company_id !== card.companyId) return false
+  if (persistedLine.card_id != null && persistedLine.card_id !== card.cardId) return false
+
+  const preparedQuantity = persistedLine.prepared_quantity
+  const requestedQuantity = persistedLine.requested_quantity
+  if (preparedQuantity == null || !Number.isFinite(preparedQuantity) || preparedQuantity !== 0) return false
+  if (!Number.isFinite(requestedQuantity) || requestedQuantity <= 0) return false
+  if (difference.previous.quantity !== requestedQuantity) return false
+  if (!hasConfirmedPersistedLineIdentity(difference.previous, persistedLine)) return false
+
+  const persistedVariantId = normalizeVariantId(persistedLine.bsale_variant_id)
+  const persistedSku = normalizeSku(persistedLine.sku)
+  if (persistedVariantId == null && persistedSku == null) return false
+
+  if (!Array.isArray(currentVersion.lines) || currentVersion.lines.length === 0) return false
+  if (currentVersion.lines.some(line => isCommercialLineMatchingPersistedIdentity(line, persistedLine))) {
+    return false
+  }
+
+  if (relatedIncidents.length === 0) return false
+  if (relatedIncidents.some(incident => (
+    !incident.id
+    || incident.preparation_line_id !== persistedLine.id
+    || !incident.company_id
+    || incident.company_id !== card.companyId
+    || !incident.card_id
+    || incident.card_id !== card.cardId
+    || (incident.status !== 'RESOLVED' && incident.status !== 'SUPERSEDED')
+  ))) {
+    return false
+  }
+
+  const resolvedIncidents = relatedIncidents.filter(incident => incident.status === 'RESOLVED')
+  if (resolvedIncidents.length === 0) return false
+
+  return resolvedIncidents.every(incident => {
+    if (incident.preparation_line_id !== persistedLine.id) return false
+    if (!incident.company_id || incident.company_id !== card.companyId) return false
+    if (!incident.card_id || incident.card_id !== card.cardId) return false
+    if (incident.status !== 'RESOLVED') return false
+    if (incident.verification_status !== 'MATCHED') return false
+    if (incident.incident_type !== 'LINE_EXCLUDED') return false
+    if (incident.required_bsale_action !== 'REMOVE_LINE') return false
+
+    const incidentRequestedQuantity = parseOptionalNumber(incident.requested_quantity)
+    const incidentPreparedQuantity = parseOptionalNumber(incident.prepared_quantity)
+    const expectedBsaleQuantity = parseOptionalNumber(incident.expected_bsale_quantity)
+    const observedBsaleQuantity = parseOptionalNumber(incident.bsale_observed_quantity)
+    if (incidentRequestedQuantity == null || incidentRequestedQuantity !== requestedQuantity) return false
+    if (incidentPreparedQuantity == null || incidentPreparedQuantity !== 0) return false
+    if (expectedBsaleQuantity == null || expectedBsaleQuantity !== 0) return false
+    if (observedBsaleQuantity == null || observedBsaleQuantity !== 0) return false
+
+    const incidentVariantId = normalizeVariantId(incident.bsale_variant_id)
+    const incidentSku = normalizeSku(incident.sku)
+    if (incidentVariantId == null && incidentSku == null) return false
+    if (incidentVariantId !== persistedVariantId || incidentSku !== persistedSku) return false
+
+    if (!hasCompatibleObservedSnapshot({
+      snapshot: incident.bsale_observed_snapshot,
+      currentPhysicalId: currentVersion.physicalId,
+      persistedLineId: persistedLine.id,
+      preparedQuantity: 0,
+      expectedBsaleQuantity: 0,
+      requiredBsaleAction: 'REMOVE_LINE',
     })) {
       return false
     }
@@ -455,6 +616,12 @@ function actionForDifference(
   }
   if (difference.kind === 'ADDED') {
     if (!hasCanonicalProductIdentity(difference.current)) return conflictAction('UNKEYED_COMMERCIAL_LINE', 'La línea nueva no tiene una variante o SKU identificable.', difference.previous, difference.current, null, incidents)
+    if (!difference.current || !Number.isFinite(difference.current.quantity) || difference.current.quantity <= 0) {
+      return conflictAction('QUANTITY_BELOW_PREPARED', 'La línea nueva debe tener una cantidad comercial mayor que cero.', difference.previous, difference.current, null, incidents)
+    }
+    if (hasAddedLineCollision(difference.current, preparationLines, currentVersion, card)) {
+      return conflictAction('PREPARATION_LINE_AMBIGUOUS', 'La línea comercial agregada colisiona con una línea de preparación existente.', difference.previous, difference.current, null, incidents)
+    }
     return {
       kind: 'ADD', preparationLineId: null, previous: null, current: difference.current,
       previousRequestedQuantity: null, newRequestedQuantity: difference.current?.quantity ?? null,
@@ -470,8 +637,32 @@ function actionForDifference(
     if (!hasConfirmedPersistedLineIdentity(difference.previous, match.line)) {
       return conflictAction('COMMERCIAL_SUBSTITUTION', 'La línea eliminada no coincide con la identidad canónica de la línea operativa.', difference.previous, difference.current, match.line, incidents)
     }
-    if (match.line.excluded_from_dispatch) return conflictAction('PREPARATION_LINE_EXCLUDED', 'La línea está excluida y su referencia operativa debe preservarse.', difference.previous, difference.current, match.line, incidents)
-    if (!isUntouched(match.line)) return conflictAction('REMOVAL_WOULD_DISCARD_WORK', 'La línea eliminada ya tiene trabajo operativo o un estado distinto de pendiente.', difference.previous, difference.current, match.line, incidents)
+    if (match.line.excluded_from_dispatch) {
+      if (isResolvedLineExclusionIncident({
+        card,
+        currentVersion,
+        difference,
+        persistedLine: match.line,
+        relatedIncidents,
+      })) {
+        return {
+          kind: 'REMOVE',
+          preparationLineId: match.line.id,
+          previous: difference.previous,
+          current: null,
+          previousRequestedQuantity: match.line.requested_quantity,
+          newRequestedQuantity: 0,
+          preparedQuantity: match.line.prepared_quantity,
+          quantityDelta: -(difference.previous?.quantity ?? match.line.requested_quantity),
+          incidentIds: relatedIncidents.map(incident => incident.id),
+          conflict: null,
+        }
+      }
+      return conflictAction('PREPARATION_LINE_EXCLUDED', 'La línea está excluida y su referencia operativa debe preservarse.', difference.previous, difference.current, match.line, incidents)
+    }
+    if (!isUntouched(match.line) || difference.previous?.quantity !== match.line.requested_quantity) {
+      return conflictAction('REMOVAL_WOULD_DISCARD_WORK', 'La línea eliminada ya tiene trabajo operativo o un estado distinto de pendiente.', difference.previous, difference.current, match.line, incidents)
+    }
     if (relatedIncidents.length > 0) return conflictAction('OPERATIONAL_INCIDENT_EXISTS', 'La línea eliminada tiene referencias de incidencia que deben preservarse.', difference.previous, difference.current, match.line, incidents)
     return {
       kind: 'REMOVE', preparationLineId: match.line.id, previous: difference.previous, current: null,
@@ -510,7 +701,9 @@ function actionForDifference(
     if (match.line.excluded_from_dispatch) return conflictAction('PREPARATION_LINE_EXCLUDED', 'La línea está excluida y su referencia operativa debe preservarse.', difference.previous, difference.current, match.line, incidents)
     const newQuantity = difference.current?.quantity ?? 0
     const preparedQuantity = match.line.prepared_quantity ?? 0
-    if (newQuantity < preparedQuantity) return conflictAction('QUANTITY_BELOW_PREPARED', 'La nueva cantidad solicitada es inferior a la cantidad ya preparada.', difference.previous, difference.current, match.line, incidents)
+    if (!Number.isFinite(newQuantity) || newQuantity <= 0 || newQuantity < preparedQuantity) {
+      return conflictAction('QUANTITY_BELOW_PREPARED', 'La nueva cantidad solicitada es inferior a la cantidad ya preparada.', difference.previous, difference.current, match.line, incidents)
+    }
     if (
       (relatedIncidents.length > 0 || match.line.line_status === 'INCIDENT')
       && !isResolvedQuantityReductionIncident({
@@ -536,6 +729,9 @@ function actionForDifference(
     && difference.previous?.quantity === difference.current?.quantity
     && match.line.requested_quantity === difference.current?.quantity
   ) {
+    if (match.line.excluded_from_dispatch) {
+      return conflictAction('PREPARATION_LINE_EXCLUDED', 'La línea está excluida y su referencia operativa debe preservarse.', difference.previous, difference.current, match.line, incidents)
+    }
     return {
       kind: 'KEEP',
       preparationLineId: match.line.id,
@@ -561,7 +757,7 @@ function actionForDifference(
 
 function keepActions(input: BuildPreparationCommercialReconciliationPlanInput): PreparationCommercialReconciliationAction[] {
   const planningDifferences = input.comparison?.differences ?? []
-  return input.preparationLines
+  return scopedPreparationLines(input.preparationLines, input.card, false)
     .filter(line => !planningDifferences.some(difference => difference.previous && persistedCandidates(difference.previous, [line], input.card).length > 0))
     .map(line => ({
       kind: 'KEEP' as const,
@@ -621,8 +817,46 @@ export function buildPreparationCommercialReconciliationPlan(input: BuildPrepara
   const currentVersion = input.currentVersion
   const planningDifferences = input.comparison.differences.filter(difference => !isQuantityValueCompanion(difference, input.comparison?.differences ?? []))
   const planningInput = { ...input, comparison: { ...input.comparison, differences: planningDifferences } }
-  const actions = [...keepActions(planningInput), ...planningDifferences.map(difference => actionForDifference(difference, input.preparationLines, input.incidents, input.card, currentVersion))]
-  const conflicts = actions.flatMap(action => action.conflict ? [action.conflict] : [])
+  const rawActions = [...keepActions(planningInput), ...planningDifferences.map(difference => actionForDifference(difference, input.preparationLines, input.incidents, input.card, currentVersion))]
+  const hasRemainingActiveLine =
+    Array.isArray(currentVersion.lines)
+    && currentVersion.lines.length > 0
+    && currentVersion.lines.every(line => Number.isFinite(line.quantity) && line.quantity > 0)
+    && rawActions.some(action => (
+      (action.kind === 'KEEP' || action.kind === 'UPDATE_QUANTITY' || action.kind === 'ADD')
+      && (action.newRequestedQuantity ?? 0) > 0
+    ))
+
+  const activePersistedById = new Map(
+    scopedPreparationLines(input.preparationLines, input.card, false).map(line => [line.id, line]),
+  )
+  const actions = !hasRemainingActiveLine && rawActions.every(action => action.conflict == null)
+    ? rawActions.map(action => {
+      if (action.kind !== 'REMOVE') return action
+      const persistedLine = action.preparationLineId ? (activePersistedById.get(action.preparationLineId) ?? null) : null
+      return conflictAction(
+        persistedLine?.excluded_from_dispatch ? 'PREPARATION_LINE_EXCLUDED' : 'REMOVAL_WOULD_DISCARD_WORK',
+        'No se puede aceptar una versión comercial que deje el pedido sin ninguna línea activa válida.',
+        action.previous,
+        action.current,
+        persistedLine,
+        input.incidents,
+      )
+    })
+    : rawActions
+
+  const actionConflicts = actions.flatMap(action => action.conflict ? [action.conflict] : [])
+  const conflicts = !hasRemainingActiveLine && actionConflicts.length === 0
+    ? [{
+      reason: 'REMOVAL_WOULD_DISCARD_WORK' as const,
+      message: 'No se puede aceptar una versión comercial que deje el pedido sin ninguna línea activa válida.',
+      preparationLineId: null,
+      previous: null,
+      current: null,
+      incidentIds: [],
+    }]
+    : actionConflicts
+
   const hasCommercialDifference = input.comparison.differences.length > 0
   return {
     status: conflicts.length > 0 ? 'REQUIRES_RESOLUTION' : 'READY',

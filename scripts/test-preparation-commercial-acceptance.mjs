@@ -15,6 +15,7 @@ import {
 
 const migration = await readFile(new URL('../supabase/migrations/20261027120000_logistica_preparation_commercial_acceptance.sql', import.meta.url), 'utf8')
 const reductionMigration = await readFile(new URL('../supabase/migrations/20261104130000_logistica_preparation_commercial_reduction_acceptance.sql', import.meta.url), 'utf8')
+const exclusionMigration = await readFile(new URL('../supabase/migrations/20261104140000_logistica_preparation_commercial_exclusion_acceptance.sql', import.meta.url), 'utf8')
 const action = await readFile(new URL('../src/app/actions/logistica/sales-order-preparation-commercial-acceptance.ts', import.meta.url), 'utf8')
 const alertAction = await readFile(new URL('../src/app/actions/logistica/sales-order-preparation-commercial.ts', import.meta.url), 'utf8')
 const versionSource = await readFile(new URL('../src/lib/logistica/preparation-commercial-version.ts', import.meta.url), 'utf8')
@@ -723,7 +724,14 @@ test('MEJ-01 Bloque 1: la migración incremental preserva permisos, locks, guard
   assert.doesNotMatch(reductionMigration, /DELETE FROM logistica\.sales_order_preparation_incidents/)
 })
 
-function isSnapshotValidForSqlSimulation(snapshot, expectedPhysicalId, expectedLineId, expectedPreparedQty, expectedNewQty) {
+function isSnapshotValidForSqlSimulation(
+  snapshot,
+  expectedPhysicalId,
+  expectedLineId,
+  expectedPreparedQty,
+  expectedNewQty,
+  expectedRequiredAction = 'SET_QUANTITY',
+) {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return false
   if (snapshot.verification_basis !== 'FULL_CARD_AND_INCIDENT_ACTION_WITH_PHYSICAL_LINE') return false
   if (snapshot.verification_error != null && snapshot.verification_error !== '') return false
@@ -733,7 +741,7 @@ function isSnapshotValidForSqlSimulation(snapshot, expectedPhysicalId, expectedL
   if (snapshot.line_link_valid !== true) return false
   if (snapshot.full_card_matched !== true) return false
   if (snapshot.incident_action_matched !== true) return false
-  if (snapshot.required_bsale_action !== 'SET_QUANTITY') return false
+  if (snapshot.required_bsale_action !== expectedRequiredAction) return false
   if (typeof snapshot.preparation_line_id !== 'string' || snapshot.preparation_line_id !== expectedLineId) return false
   if (typeof snapshot.matched_preparation_line_id !== 'string' || snapshot.matched_preparation_line_id !== expectedLineId) return false
   if (typeof snapshot.expected_bsale_quantity !== 'number' || snapshot.expected_bsale_quantity !== expectedNewQty) return false
@@ -789,8 +797,25 @@ function simulateAcceptCommercialChangesRpc(db, params) {
   if (card.status !== 'IN_PREPARATION') {
     throw new Error('Solo se pueden aceptar cambios comerciales cuando la tarjeta está en preparación')
   }
+  if (Object.prototype.hasOwnProperty.call(card, 'locked_by_user_id')) {
+    if (!card.locked_by_user_id) {
+      throw new Error('COMMERCIAL_ACCEPTANCE_LOCK_REQUIRED')
+    }
+    if (card.locked_by_user_id !== p_accepted_by) {
+      throw new Error('COMMERCIAL_ACCEPTANCE_LOCK_OWNER_REQUIRED')
+    }
+  }
   if (card.canonical_bsale_token && card.canonical_bsale_token !== p_canonical_bsale_token) {
     throw new Error('La versión comercial no corresponde a la identidad canónica de la tarjeta')
+  }
+
+  const versionLines = p_version_snapshot.lines ?? []
+  if (
+    !Array.isArray(versionLines) ||
+    versionLines.length === 0 ||
+    versionLines.some(l => !l || typeof l !== 'object' || typeof l.quantity !== 'number' || !Number.isFinite(l.quantity) || l.quantity <= 0)
+  ) {
+    throw new Error('La versión comercial aceptada debe contener al menos una línea vigente con cantidad positiva')
   }
 
   const existingVersions = db.commercialVersions
@@ -824,6 +849,13 @@ function simulateAcceptCommercialChangesRpc(db, params) {
   if (!Array.isArray(actions) || actions.length === 0) {
     throw new Error('El plan comercial debe contener acciones verificables')
   }
+  const activeActionCount = actions.filter(a => ['KEEP', 'UPDATE_QUANTITY', 'ADD'].includes(a.kind)).length
+  if (activeActionCount === 0) {
+    throw new Error('COMMERCIAL_ACCEPTANCE_REQUIRES_RESOLUTION: la aceptación dejaría el pedido sin líneas activas')
+  }
+
+  const nextVersionNumber = (latestVersion?.version_number ?? 0) + 1
+  const newVersionId = `version-${nextVersionNumber}`
 
   // Trabajar sobre copia transaccional para garantizar atomicidad en la simulación JS
   const workingLines = db.preparationLines.map(l => ({ ...l }))
@@ -843,18 +875,16 @@ function simulateAcceptCommercialChangesRpc(db, params) {
     }
 
     if (kind === 'KEEP') {
-      if (!currentLine) throw new Error('KEEP requiere línea comercial vigente')
       const v_line = workingLines.find(l => l.id === lineId && l.company_id === p_company_id && l.card_id === p_card_id && l.retired_at === null)
       if (!v_line) throw new Error('Línea de preparación para KEEP no existe o está retirada')
-      if (Number(currentLine.quantity) !== v_line.requested_quantity) {
-        throw new Error('KEEP no puede modificar requested_quantity')
+      if (currentLine) {
+        if (Number(currentLine.quantity) !== v_line.requested_quantity) {
+          throw new Error('KEEP no puede modificar requested_quantity')
+        }
+        if ((v_line.bsale_variant_id ?? -1) !== (currentLine.variantId ?? -1) || (v_line.sku ?? '') !== (currentLine.sku ?? '')) {
+          throw new Error('KEEP no coincide con la identidad de producto de la línea preparada')
+        }
       }
-      if ((v_line.bsale_variant_id ?? -1) !== (currentLine.variantId ?? -1) || (v_line.sku ?? '') !== (currentLine.sku ?? '')) {
-        throw new Error('KEEP no coincide con la identidad de producto de la línea preparada')
-      }
-      v_line.bsale_nv_id = p_bsale_nv_id
-      v_line.bsale_detail_id = currentLine.detailId ?? v_line.bsale_detail_id
-      v_line.source_snapshot = currentLine
     } else if (kind === 'UPDATE_QUANTITY') {
       if (!currentLine) throw new Error('UPDATE_QUANTITY requiere línea comercial vigente')
       const v_line = workingLines.find(l => l.id === lineId && l.company_id === p_company_id && l.card_id === p_card_id && l.retired_at === null)
@@ -901,7 +931,7 @@ function simulateAcceptCommercialChangesRpc(db, params) {
           (i.bsale_variant_id != null || (i.sku ?? '').trim() !== '') &&
           (i.bsale_variant_id ?? -1) === (v_line.bsale_variant_id ?? -1) &&
           (i.sku ?? '') === (v_line.sku ?? '') &&
-          isSnapshotValidForSqlSimulation(i.bsale_observed_snapshot, p_bsale_nv_id, v_line.id, v_line.prepared_quantity, v_new_quantity)
+          isSnapshotValidForSqlSimulation(i.bsale_observed_snapshot, p_bsale_nv_id, v_line.id, v_line.prepared_quantity, v_new_quantity, 'SET_QUANTITY')
         )
         if (validResolved.length === 0 || validResolved.length !== lineIncidents.filter(i => i.status === 'RESOLVED').length) {
           throw new Error('UPDATE_QUANTITY requiere una incidencia QUANTITY_REDUCTION en estado RESOLVED/MATCHED verificada para la versión vigente')
@@ -921,26 +951,105 @@ function simulateAcceptCommercialChangesRpc(db, params) {
     } else if (kind === 'REMOVE') {
       const v_line = workingLines.find(l => l.id === lineId && l.company_id === p_company_id && l.card_id === p_card_id && l.retired_at === null)
       if (!v_line) throw new Error('Línea de preparación para REMOVE no existe o está retirada')
-      if (
-        v_line.line_status !== 'PENDING' ||
-        v_line.excluded_from_dispatch ||
-        (v_line.prepared_quantity ?? 0) > 0 ||
-        v_line.confirmed_by !== null ||
-        v_line.confirmed_at !== null
-      ) {
-        throw new Error('REMOVE no puede retirar una línea con trabajo físico registrado')
-      }
-      if (db.incidents.some(i => i.preparation_line_id === v_line.id)) {
-        throw new Error('REMOVE no puede retirar una línea con incidencias')
-      }
       if (db.auditLines.some(a => a.preparation_line_id === v_line.id)) {
         throw new Error('REMOVE no puede retirar una línea con evidencia de Auditoría')
       }
+
+      const previousLine = action.previous ?? null
+      if (
+        !previousLine ||
+        typeof previousLine !== 'object' ||
+        currentLine != null ||
+        (action.newRequestedQuantity != null && Number(action.newRequestedQuantity) !== 0)
+      ) {
+        throw new Error('COMMERCIAL_ACCEPTANCE_INVALID_ACTION: REMOVE requiere previous válido y current nulo')
+      }
+      if (
+        (previousLine.variantId == null && !(previousLine.sku ?? '').trim()) ||
+        (previousLine.variantId ?? null) !== (v_line.bsale_variant_id ?? null) ||
+        (previousLine.sku ?? '').trim().toUpperCase() !== (v_line.sku ?? '').trim().toUpperCase() ||
+        Number(previousLine.quantity) !== v_line.requested_quantity
+      ) {
+        throw new Error('COMMERCIAL_ACCEPTANCE_REQUIRES_RESOLUTION: la identidad canónica del producto eliminado no coincide con la línea operativa')
+      }
+      if (
+        versionLines.some(snapLine =>
+          (snapLine.detailId != null && v_line.bsale_detail_id != null && Number(snapLine.detailId) === Number(v_line.bsale_detail_id)) ||
+          (v_line.bsale_variant_id != null && snapLine.variantId != null && Number(snapLine.variantId) === Number(v_line.bsale_variant_id)) ||
+          ((v_line.sku ?? '').trim() !== '' && (snapLine.sku ?? '').trim() !== '' && (snapLine.sku ?? '').trim().toUpperCase() === (v_line.sku ?? '').trim().toUpperCase())
+        )
+      ) {
+        throw new Error('COMMERCIAL_ACCEPTANCE_REQUIRES_RESOLUTION: el producto eliminado aún figura en la versión comercial')
+      }
+
+      const lineIncidents = db.incidents.filter(i => i.preparation_line_id === v_line.id)
+      if (v_line.line_status === 'INCIDENT' || v_line.excluded_from_dispatch || lineIncidents.length > 0) {
+        if (
+          v_line.line_status !== 'INCIDENT' ||
+          v_line.excluded_from_dispatch !== true ||
+          v_line.prepared_quantity !== 0 ||
+          v_line.requested_quantity <= 0 ||
+          !v_line.confirmed_by ||
+          !v_line.confirmed_at
+        ) {
+          throw new Error('COMMERCIAL_ACCEPTANCE_REQUIRES_RESOLUTION: la línea excluida o con incidencia no cumple el contrato de eliminación comercial')
+        }
+        if (lineIncidents.some(i => i.company_id !== p_company_id || i.card_id !== p_card_id || !['RESOLVED', 'SUPERSEDED'].includes(i.status))) {
+          throw new Error('COMMERCIAL_ACCEPTANCE_REQUIRES_RESOLUTION: la línea excluida tiene incidencias abiertas o inválidas')
+        }
+        const resolvedIncidents = lineIncidents.filter(i => i.status === 'RESOLVED')
+        const validResolved = resolvedIncidents.filter(i =>
+          i.company_id === p_company_id &&
+          i.card_id === p_card_id &&
+          i.status === 'RESOLVED' &&
+          i.verification_status === 'MATCHED' &&
+          i.incident_type === 'LINE_EXCLUDED' &&
+          i.required_bsale_action === 'REMOVE_LINE' &&
+          i.requested_quantity === v_line.requested_quantity &&
+          i.prepared_quantity === 0 &&
+          i.expected_bsale_quantity === 0 &&
+          i.bsale_observed_quantity === 0 &&
+          (i.bsale_variant_id != null || (i.sku ?? '').trim() !== '') &&
+          (i.bsale_variant_id ?? null) === (v_line.bsale_variant_id ?? null) &&
+          (i.sku ?? '').trim().toUpperCase() === (v_line.sku ?? '').trim().toUpperCase() &&
+          isSnapshotValidForSqlSimulation(i.bsale_observed_snapshot, p_bsale_nv_id, v_line.id, 0, 0, 'REMOVE_LINE')
+        )
+        if (validResolved.length === 0 || validResolved.length !== resolvedIncidents.length) {
+          throw new Error('COMMERCIAL_ACCEPTANCE_REQUIRES_RESOLUTION: REMOVE sobre línea excluida requiere incidencia LINE_EXCLUDED / REMOVE_LINE en RESOLVED/MATCHED verificada para la versión vigente')
+        }
+      } else {
+        if (
+          v_line.line_status !== 'PENDING' ||
+          v_line.excluded_from_dispatch ||
+          v_line.prepared_quantity !== null ||
+          v_line.confirmed_by !== null ||
+          v_line.confirmed_at !== null
+        ) {
+          throw new Error('REMOVE no puede retirar una línea con trabajo físico registrado')
+        }
+      }
+
+      // Actualizar únicamente retired_at, retired_by, retirement_acceptance_id y updated_at
       v_line.retired_at = '2026-11-04T12:00:00Z'
       v_line.retired_by = p_accepted_by
-      v_line.retired_reason = 'COMMERCIAL_CHANGE_ACCEPTED'
+      v_line.retirement_acceptance_id = newVersionId
+      v_line.updated_at = '2026-11-04T12:00:00Z'
     } else if (kind === 'ADD') {
-      if (!currentLine) throw new Error('ADD requiere línea comercial vigente')
+      if (!currentLine || currentLine.detailId == null || Number(currentLine.quantity ?? 0) <= 0) {
+        throw new Error('ADD requiere línea comercial vigente con detailId y cantidad positiva')
+      }
+      if (currentLine.variantId == null && !(currentLine.sku ?? '').trim()) {
+        throw new Error('COMMERCIAL_ACCEPTANCE_REQUIRES_RESOLUTION: ADD requiere variante o SKU identificable')
+      }
+      if (
+        workingLines.some(l =>
+          l.company_id === p_company_id &&
+          l.card_id === p_card_id &&
+          Number(l.bsale_detail_id) === Number(currentLine.detailId)
+        )
+      ) {
+        throw new Error('COMMERCIAL_ACCEPTANCE_CONCURRENT_MODIFICATION: la línea ADD ya existe')
+      }
       workingLines.push({
         id: `added-line-${workingLines.length + 1}`,
         company_id: p_company_id,
@@ -949,7 +1058,7 @@ function simulateAcceptCommercialChangesRpc(db, params) {
         bsale_detail_id: currentLine.detailId,
         bsale_variant_id: currentLine.variantId ?? null,
         sku: currentLine.sku ?? null,
-        product_name: currentLine.productName ?? 'Producto sin nombre',
+        product_name: currentLine.productName ?? 'Producto sin descripción',
         requested_quantity: Number(currentLine.quantity),
         prepared_quantity: null,
         line_status: 'PENDING',
@@ -957,6 +1066,8 @@ function simulateAcceptCommercialChangesRpc(db, params) {
         confirmed_by: null,
         confirmed_at: null,
         retired_at: null,
+        retired_by: null,
+        retirement_acceptance_id: null,
         source_snapshot: currentLine,
       })
     } else {
@@ -964,11 +1075,30 @@ function simulateAcceptCommercialChangesRpc(db, params) {
     }
   }
 
+  const remainingActiveLines = workingLines.filter(
+    l => l.company_id === p_company_id && l.card_id === p_card_id && l.retired_at === null,
+  )
+  if (remainingActiveLines.length === 0) {
+    throw new Error('COMMERCIAL_ACCEPTANCE_REQUIRES_RESOLUTION: la aceptación dejaría el pedido sin líneas activas')
+  }
+
   const UncoveredActiveLines = workingLines.filter(
     l => l.company_id === p_company_id && l.card_id === p_card_id && l.retired_at === null && !processedLineIds.has(l.id) && !l.id.startsWith('added-line-')
   )
   if (UncoveredActiveLines.length > 0) {
     throw new Error('El plan comercial no cubre todas las líneas activas de preparación')
+  }
+
+  const multisetKey = (variantId, sku, qty) => `${variantId ?? -1}::${(sku ?? '').trim().toUpperCase()}::${Number(qty)}`
+  const countMap = (items) => {
+    const m = new Map()
+    for (const k of items) m.set(k, (m.get(k) ?? 0) + 1)
+    return m
+  }
+  const activeCounts = countMap(remainingActiveLines.map(l => multisetKey(l.bsale_variant_id, l.sku, l.requested_quantity)))
+  const expectedCounts = countMap(versionLines.map(l => multisetKey(l.variantId, l.sku, l.quantity)))
+  if (activeCounts.size !== expectedCounts.size || [...activeCounts.entries()].some(([k, v]) => expectedCounts.get(k) !== v)) {
+    throw new Error('COMMERCIAL_ACCEPTANCE_REQUIRES_RESOLUTION: las líneas activas no corresponden comercialmente a la versión aceptada')
   }
 
   // Comprobar invariante CHECK de sales_order_preparation_lines
@@ -981,14 +1111,13 @@ function simulateAcceptCommercialChangesRpc(db, params) {
     }
   }
 
-  // Persistir cambios en simulación
+  // Persistir cambios en simulación de forma atómica con la versión comercial aceptada
   db.preparationLines = workingLines
   card.current_bsale_nv_id = p_bsale_nv_id
   card.canonical_bsale_token = card.canonical_bsale_token ?? p_canonical_bsale_token
 
-  const nextVersionNumber = (latestVersion?.version_number ?? 0) + 1
   const newVersionRecord = {
-    id: `version-${nextVersionNumber}`,
+    id: newVersionId,
     company_id: p_company_id,
     card_id: p_card_id,
     version_number: nextVersionNumber,
@@ -1034,7 +1163,7 @@ function simulateMaterializeSnapshotP001(db, p_company_id, p_card_id) {
     if (activeLines.length !== versionLines.length) {
       throw new Error('Las líneas activas de preparación no coinciden con la última versión comercial aceptada.')
     }
-    const multisetKey = (variantId, sku, qty) => `${variantId ?? -1}::${sku ?? ''}::${Number(qty)}`
+    const multisetKey = (variantId, sku, qty) => `${variantId ?? -1}::${(sku ?? '').trim().toUpperCase()}::${Number(qty)}`
     const countMap = (items) => {
       const m = new Map()
       for (const k of items) m.set(k, (m.get(k) ?? 0) + 1)
@@ -1045,6 +1174,41 @@ function simulateMaterializeSnapshotP001(db, p_company_id, p_card_id) {
     if (activeCounts.size !== expectedCounts.size || [...activeCounts.entries()].some(([k, v]) => expectedCounts.get(k) !== v)) {
       throw new Error('Las líneas activas de preparación no coinciden con las líneas de la última versión comercial aceptada.')
     }
+
+    const appliedActions = latestAcceptedVersion.applied_actions ?? []
+    if (Array.isArray(appliedActions) && appliedActions.length > 0) {
+      for (const act of appliedActions) {
+        if (act.kind === 'KEEP' || act.kind === 'UPDATE_QUANTITY') {
+          const line = db.preparationLines.find(l => l.id === act.preparationLineId && l.company_id === p_company_id && l.card_id === p_card_id)
+          if (!line || line.retired_at !== null || Number(line.requested_quantity) !== Number(act.newRequestedQuantity)) {
+            throw new Error('Las acciones aceptadas no corresponden a líneas persistidas válidas.')
+          }
+        } else if (act.kind === 'REMOVE') {
+          const line = db.preparationLines.find(l => l.id === act.preparationLineId && l.company_id === p_company_id && l.card_id === p_card_id)
+          if (!line || line.retired_at === null || line.retirement_acceptance_id !== latestAcceptedVersion.id) {
+            throw new Error('Las acciones aceptadas REMOVE no corresponden a líneas retiradas válidas.')
+          }
+        } else if (act.kind === 'ADD') {
+          if (!act.current || (act.current.variantId == null && !(act.current.sku ?? '').trim()) || act.current.quantity == null) {
+            throw new Error('Las acciones aceptadas ADD no corresponden a líneas persistidas válidas.')
+          }
+        }
+      }
+      const actionLineTuples = appliedActions
+        .filter(act => ['KEEP', 'UPDATE_QUANTITY', 'ADD'].includes(act.kind))
+        .map(act => {
+          if (act.kind === 'ADD') {
+            return multisetKey(act.current.variantId, act.current.sku, act.current.quantity)
+          }
+          const line = db.preparationLines.find(l => l.id === act.preparationLineId && l.company_id === p_company_id && l.card_id === p_card_id)
+          return multisetKey(line?.bsale_variant_id, line?.sku, act.newRequestedQuantity)
+        })
+      const actionCounts = countMap(actionLineTuples)
+      if (actionCounts.size !== expectedCounts.size || [...actionCounts.entries()].some(([k, v]) => expectedCounts.get(k) !== v)) {
+        throw new Error('Las acciones aceptadas no corresponden al snapshot comercial.')
+      }
+    }
+
     return 0
   }
 
@@ -1841,4 +2005,670 @@ test('MEJ-01 PR #22 fix: la Server Action real proyecta las 15 columnas de evide
   }
 
   delete globalThis.__COMMERCIAL_ACCEPTANCE_TEST_STATE__
+})
+
+// ============================================================================
+// MEJ-01 · Exclusión comercial segura de una línea físicamente excluida
+// (LINE_EXCLUDED / REMOVE_LINE) — Escenarios V1–V4 y R1–R9
+// ============================================================================
+
+test('MEJ-01 Exclusión total (Inspección estática SQL): migración 20261104140000 exige contrato estricto de REMOVE_LINE, paridad de verification_error, versión no vacía y preservación física', () => {
+  assert.match(exclusionMigration, /CREATE OR REPLACE FUNCTION logistica\.accept_sales_order_preparation_commercial_changes/)
+  assert.match(exclusionMigration, /v_card\.status <> 'IN_PREPARATION'/)
+  assert.match(exclusionMigration, /v_card\.locked_by_user_id IS NULL/)
+  assert.match(exclusionMigration, /v_card\.locked_by_user_id IS DISTINCT FROM p_actor_id/)
+  assert.match(exclusionMigration, /jsonb_array_length\(v_request\.version_snapshot->'lines'\) = 0/)
+  assert.match(exclusionMigration, /\(snap_line\.value->>'quantity'\)::numeric <= 0/)
+  assert.match(exclusionMigration, /v_active_action_count = 0/)
+  assert.match(exclusionMigration, /i\.incident_type IS DISTINCT FROM 'LINE_EXCLUDED'/)
+  assert.match(exclusionMigration, /i\.required_bsale_action IS DISTINCT FROM 'REMOVE_LINE'/)
+  assert.match(exclusionMigration, /i\.verification_status IS DISTINCT FROM 'MATCHED'/)
+  assert.match(exclusionMigration, /i\.requested_quantity IS DISTINCT FROM v_line\.requested_quantity/)
+  assert.match(exclusionMigration, /i\.prepared_quantity IS DISTINCT FROM 0/)
+  assert.match(exclusionMigration, /i\.expected_bsale_quantity IS DISTINCT FROM 0/)
+  assert.match(exclusionMigration, /i\.bsale_observed_quantity IS DISTINCT FROM 0/)
+  assert.match(exclusionMigration, /\(i\.bsale_observed_snapshot->>'verification_basis'\) IS DISTINCT FROM 'FULL_CARD_AND_INCIDENT_ACTION_WITH_PHYSICAL_LINE'/)
+  assert.match(exclusionMigration, /i\.bsale_observed_snapshot->'verification_error' IS DISTINCT FROM 'null'::jsonb/)
+  assert.match(exclusionMigration, /i\.bsale_observed_snapshot->'verification_error' IS DISTINCT FROM '""'::jsonb/)
+  assert.doesNotMatch(exclusionMigration, /btrim\(i\.bsale_observed_snapshot->>'verification_error'\)/)
+  assert.match(exclusionMigration, /\(i\.bsale_observed_snapshot->>'required_bsale_action'\) IS DISTINCT FROM 'REMOVE_LINE'/)
+  assert.match(exclusionMigration, /\(i\.bsale_observed_snapshot->>'expected_bsale_quantity'\)::numeric IS DISTINCT FROM 0/)
+  assert.match(exclusionMigration, /\(i\.bsale_observed_snapshot->>'bsale_observed_quantity'\)::numeric IS DISTINCT FROM 0/)
+  assert.match(exclusionMigration, /\(i\.bsale_observed_snapshot->>'physically_prepared_quantity'\)::numeric IS DISTINCT FROM 0/)
+  assert.match(exclusionMigration, /SET retired_at = now\(\), retired_by = p_actor_id,\s*retirement_acceptance_id = v_version_id, updated_at = now\(\)/)
+  assert.doesNotMatch(exclusionMigration, /DELETE FROM logistica\.sales_order_preparation_lines/)
+  assert.doesNotMatch(exclusionMigration, /UPDATE logistica\.sales_order_preparation_incidents/)
+  assert.doesNotMatch(exclusionMigration, /DELETE FROM logistica\.sales_order_preparation_incidents/)
+  assert.match(exclusionMigration, /REVOKE ALL ON FUNCTION logistica\.accept_sales_order_preparation_commercial_changes/)
+  assert.match(exclusionMigration, /GRANT EXECUTE ON FUNCTION logistica\.accept_sales_order_preparation_commercial_changes\([^\n]+\) TO service_role/)
+})
+
+function buildCommercialExclusionFixture() {
+  const companyId = 'd1000000-0000-0000-0000-000000000001'
+  const cardId = 'c3000000-0000-0000-0000-000000000003'
+  const canonicalToken = 'token-nv-8801'
+
+  const snapshotActiveOld = {
+    detail_id: 91001,
+    variant_id: 101,
+    sku: 'SKU-ACT-101',
+    product_name: 'COLLAR ANTIPARASITARIO PERRO',
+    quantity: 3,
+    unit_net_value: 10000,
+    line_net_amount: 30000,
+    line_tax_amount: 5700,
+    line_gross_amount: 35700,
+    nv_bsale_id: 96001,
+    nv_folio: 8801,
+  }
+
+  const snapshotExcludedOld = {
+    detail_id: 91002,
+    variant_id: 601,
+    sku: 'SKU-EXCL-601',
+    product_name: 'SNACK DENTAL GATO 60GR',
+    quantity: 5,
+    unit_net_value: 4000,
+    line_net_amount: 20000,
+    line_tax_amount: 3800,
+    line_gross_amount: 23800,
+    nv_bsale_id: 96001,
+    nv_folio: 8801,
+  }
+
+  const card = {
+    id: cardId,
+    company_id: companyId,
+    status: 'IN_PREPARATION',
+    locked_by_user_id: 'admin-user-222',
+    bsale_nv_id: 96001,
+    bsale_nv_folio: '8801',
+    canonical_bsale_token: canonicalToken,
+    current_bsale_nv_id: 96002,
+  }
+
+  const activeLine = {
+    id: 'prep-line-101',
+    company_id: companyId,
+    card_id: cardId,
+    bsale_nv_id: 96001,
+    bsale_detail_id: 91001,
+    bsale_variant_id: 101,
+    sku: 'SKU-ACT-101',
+    product_name: 'COLLAR ANTIPARASITARIO PERRO',
+    requested_quantity: 3,
+    prepared_quantity: 3,
+    line_status: 'CONFIRMED',
+    excluded_from_dispatch: false,
+    confirmed_by: 'operator-user-111',
+    confirmed_at: '2026-11-04T09:10:00.000Z',
+    retired_at: null,
+    retired_by: null,
+    retirement_acceptance_id: null,
+    source_snapshot: snapshotActiveOld,
+  }
+
+  const excludedLine = {
+    id: 'prep-line-601',
+    company_id: companyId,
+    card_id: cardId,
+    bsale_nv_id: 96001,
+    bsale_detail_id: 91002,
+    bsale_variant_id: 601,
+    sku: 'SKU-EXCL-601',
+    product_name: 'SNACK DENTAL GATO 60GR',
+    requested_quantity: 5,
+    prepared_quantity: 0,
+    line_status: 'INCIDENT',
+    excluded_from_dispatch: true,
+    confirmed_by: 'operator-user-111',
+    confirmed_at: '2026-11-04T09:15:00.000Z',
+    retired_at: null,
+    retired_by: null,
+    retirement_acceptance_id: null,
+    source_snapshot: snapshotExcludedOld,
+  }
+
+  const exclusionIncident = {
+    id: 'incident-601',
+    company_id: companyId,
+    card_id: cardId,
+    preparation_line_id: 'prep-line-601',
+    bsale_nv_id: 96001,
+    bsale_detail_id: 91002,
+    bsale_variant_id: 601,
+    sku: 'SKU-EXCL-601',
+    product_name: 'SNACK DENTAL GATO 60GR',
+    requested_quantity: 5,
+    prepared_quantity: 0,
+    missing_quantity: 5,
+    incident_type: 'LINE_EXCLUDED',
+    reason: 'OUT_OF_STOCK',
+    required_bsale_action: 'REMOVE_LINE',
+    expected_bsale_quantity: 0,
+    status: 'RESOLVED',
+    verification_status: 'MATCHED',
+    bsale_observed_quantity: 0,
+    bsale_observed_snapshot: {
+      historical_nv_id: 96001,
+      current_nv_id: 96002,
+      document_id: 96002,
+      document_state: 0,
+      canonical_identity_matched: true,
+      sync_proven: true,
+      line_link_valid: true,
+      full_card_matched: true,
+      incident_action_matched: true,
+      required_bsale_action: 'REMOVE_LINE',
+      expected_bsale_quantity: 0,
+      bsale_observed_quantity: 0,
+      physically_prepared_quantity: 0,
+      preparation_line_id: 'prep-line-601',
+      matched_preparation_line_id: 'prep-line-601',
+      verification_basis: 'FULL_CARD_AND_INCIDENT_ACTION_WITH_PHYSICAL_LINE',
+    },
+    created_by: 'operator-user-111',
+    created_at: '2026-11-04T09:15:00.000Z',
+    resolved_by: 'admin-user-222',
+    resolved_at: '2026-11-04T10:00:00.000Z',
+  }
+
+  const currentLiveVersion = {
+    identity: {
+      canonicalToken,
+      historicalBsaleId: 96001,
+      currentBsaleId: 96002,
+      folio: '8801',
+    },
+    physicalId: 96002,
+    generationDate: '2026-11-04',
+    emissionDate: '2026-11-04',
+    lines: [
+      {
+        detailId: 91055,
+        variantId: 101,
+        sku: 'SKU-ACT-101',
+        productName: 'COLLAR ANTIPARASITARIO PERRO',
+        quantity: 3,
+        unitNetValue: 10000,
+        lineNetAmount: 30000,
+        lineTaxAmount: 5700,
+        lineGrossAmount: 35700,
+        lineNumber: 1,
+        special: false,
+      },
+    ],
+    netAmount: 30000,
+    taxAmount: 5700,
+    totalAmount: 35700,
+  }
+
+  const db = {
+    cards: [card],
+    preparationLines: [activeLine, excludedLine],
+    incidents: [exclusionIncident],
+    commercialVersions: [],
+    audits: [],
+    auditLines: [],
+    auditIncidents: [],
+  }
+
+  return { db, card, activeLine, excludedLine, exclusionIncident, currentLiveVersion }
+}
+
+// Simulación JS de `materialize_sales_order_audit_snapshot` (20261027120000)
+function simulateMaterializeAuditSnapshot(db, p_company_id, p_card_id) {
+  const activeLines = db.preparationLines.filter(
+    l => l.company_id === p_company_id && l.card_id === p_card_id && l.retired_at === null,
+  )
+  if (activeLines.some(l => l.line_status === 'PENDING' || l.prepared_quantity === null)) {
+    throw new Error('Existen líneas activas pendientes de preparación antes de Auditoría')
+  }
+  return activeLines.map(pl => ({
+    preparation_line_id: pl.id,
+    bsale_detail_id: pl.bsale_detail_id,
+    bsale_variant_id: pl.bsale_variant_id,
+    sku: pl.sku,
+    product_name: pl.product_name,
+    requested_quantity_snapshot: pl.requested_quantity,
+    prepared_quantity_snapshot: pl.prepared_quantity,
+    excluded_from_dispatch_snapshot: pl.excluded_from_dispatch,
+  }))
+}
+
+// Simulación JS de MEJ-01C `get_sales_order_preparation_commercial_consistency_v1` (20261030130000)
+function simulateCommercialConsistencyV1(db, p_company_id, p_card_id, bsaleCurrentDetails) {
+  const openIncidents = db.incidents.filter(
+    i => i.company_id === p_company_id && i.card_id === p_card_id && i.status === 'OPEN',
+  )
+  if (openIncidents.length > 0) {
+    return { eligible: false, reason: 'OPEN_PREPARATION_INCIDENTS' }
+  }
+  const activePrepLines = db.preparationLines.filter(
+    l => l.company_id === p_company_id && l.card_id === p_card_id && l.retired_at === null,
+  )
+  if (activePrepLines.length === 0) {
+    return { eligible: false, reason: 'NO_ACTIVE_PREPARATION_LINES' }
+  }
+  const keyOf = (sku, variantId) => ((sku ?? '').trim() ? `SKU:${sku.trim().toUpperCase()}` : `VARIANT:${variantId}`)
+  const prepByKey = new Map()
+  for (const l of activePrepLines) {
+    const k = keyOf(l.sku, l.bsale_variant_id)
+    prepByKey.set(k, (prepByKey.get(k) ?? 0) + Number(l.prepared_quantity ?? 0))
+  }
+  const bsaleByKey = new Map()
+  for (const d of bsaleCurrentDetails) {
+    const k = keyOf(d.sku, d.variantId)
+    bsaleByKey.set(k, (bsaleByKey.get(k) ?? 0) + Number(d.quantity ?? 0))
+  }
+  const allKeys = new Set([...prepByKey.keys(), ...bsaleByKey.keys()])
+  for (const k of allKeys) {
+    const pQty = prepByKey.get(k) ?? 0
+    const bQty = bsaleByKey.get(k) ?? 0
+    if ((pQty > 0 || bQty > 0) && pQty !== bQty) {
+      return { eligible: false, reason: 'PREPARED_QUANTITY_MISMATCH' }
+    }
+  }
+  return { eligible: true, reason: null }
+}
+
+test('MEJ-01 Exclusión total — Escenarios V1, V2, V3 y V4 (Planificador TS + Simulación JS de RPC, P0-01, Auditoría y Facturación MEJ-01C)', () => {
+  const { db, card, currentLiveVersion } = buildCommercialExclusionFixture()
+  const acceptedVersion = runFallbackVersion(card, db.preparationLines.filter(l => l.retired_at === null))
+  const comparison = compareCommercialVersions(acceptedVersion, currentLiveVersion)
+
+  const selectedColumns = PREPARATION_RECONCILIATION_INCIDENT_SELECT.split(',').map(col => col.trim())
+  const projectedIncidents = db.incidents.map(row =>
+    mapPersistedIncidentToReconciliationIncident(
+      Object.fromEntries(selectedColumns.map(col => [col, row[col]])),
+    ),
+  )
+
+  const plan = buildPreparationCommercialReconciliationPlan({
+    card: { cardId: card.id, companyId: card.company_id, status: card.status },
+    identity: currentLiveVersion.identity,
+    acceptedVersion,
+    currentVersion: currentLiveVersion,
+    preparationLines: db.preparationLines,
+    incidents: projectedIncidents,
+    comparison,
+    snapshotComplete: true,
+  })
+
+  // V1: Plan READY con KEEP para línea activa y REMOVE para línea físicamente excluida
+  assert.equal(plan.status, 'READY')
+  assert.equal(plan.canAcceptCompletely, true)
+  assert.equal(plan.conflicts.length, 0)
+  assert.equal(plan.impact.removed, 1)
+  assert.equal(plan.impact.totalDelta, -23800)
+
+  const removeAct = plan.actions.find(a => a.kind === 'REMOVE')
+  assert.ok(removeAct)
+  assert.equal(removeAct.preparationLineId, 'prep-line-601')
+  assert.equal(removeAct.previous?.sku, 'SKU-EXCL-601')
+  assert.equal(removeAct.previous?.variantId, 601)
+  assert.equal(removeAct.previous?.quantity, 5)
+  assert.equal(removeAct.current, null)
+  assert.equal(removeAct.newRequestedQuantity, 0)
+  assert.equal(removeAct.preparedQuantity, 0)
+
+  const rpcParams = {
+    p_company_id: card.company_id,
+    p_card_id: card.id,
+    p_expected_previous_fingerprint: plan.acceptedFingerprint,
+    p_new_fingerprint: plan.currentFingerprint,
+    p_bsale_nv_id: currentLiveVersion.physicalId,
+    p_bsale_nv_folio: currentLiveVersion.identity.folio,
+    p_canonical_bsale_token: currentLiveVersion.identity.canonicalToken,
+    p_version_snapshot: currentLiveVersion,
+    p_comparison: comparison,
+    p_plan: plan,
+    p_accepted_by: 'admin-user-222',
+  }
+
+  const acceptRes = simulateAcceptCommercialChangesRpc(db, rpcParams)
+  assert.equal(acceptRes.status, 'ACCEPTED')
+  assert.equal(acceptRes.version_id, 'version-1')
+  assert.equal(acceptRes.current_bsale_nv_id, 96002)
+
+  // Verificar preservación íntegra del registro físico excluido y atomicidad de retirement_acceptance_id
+  const activePersisted = db.preparationLines.find(l => l.id === 'prep-line-101')
+  const retiredExcluded = db.preparationLines.find(l => l.id === 'prep-line-601')
+  assert.equal(activePersisted.retired_at, null)
+  assert.equal(retiredExcluded.retired_at, '2026-11-04T12:00:00Z')
+  assert.equal(retiredExcluded.retired_by, 'admin-user-222')
+  assert.equal(retiredExcluded.retirement_acceptance_id, acceptRes.version_id)
+  assert.equal(retiredExcluded.requested_quantity, 5)
+  assert.equal(retiredExcluded.prepared_quantity, 0)
+  assert.equal(retiredExcluded.line_status, 'INCIDENT')
+  assert.equal(retiredExcluded.excluded_from_dispatch, true)
+  assert.equal(retiredExcluded.confirmed_by, 'operator-user-111')
+  assert.equal(retiredExcluded.confirmed_at, '2026-11-04T09:15:00.000Z')
+  assert.equal(retiredExcluded.bsale_nv_id, 96001)
+  assert.equal(retiredExcluded.bsale_detail_id, 91002)
+
+  // Historial de incidencia intacto
+  assert.equal(db.incidents.length, 1)
+  assert.equal(db.incidents[0].status, 'RESOLVED')
+  assert.equal(db.incidents[0].verification_status, 'MATCHED')
+  assert.equal(db.incidents[0].incident_type, 'LINE_EXCLUDED')
+  assert.equal(db.incidents[0].required_bsale_action, 'REMOVE_LINE')
+  assert.equal(db.incidents[0].requested_quantity, 5)
+  assert.equal(db.incidents[0].prepared_quantity, 0)
+
+  // Versión comercial aceptada sólo contiene la línea vigente en Bsale
+  assert.equal(db.commercialVersions.length, 1)
+  assert.equal(db.commercialVersions[0].id, acceptRes.version_id)
+  assert.equal(db.commercialVersions[0].version_snapshot.lines.length, 1)
+  assert.equal(db.commercialVersions[0].version_snapshot.lines[0].sku, 'SKU-ACT-101')
+
+  // Guard P0-01 sin errores ni duplicación de líneas (incluyendo validación de applied_actions REMOVE)
+  assert.equal(simulateMaterializeSnapshotP001(db, card.company_id, card.id), 0)
+
+  // Auditoría materializa únicamente la línea comercial vigente (Solicitado = 3, Preparado = 3), sin el producto eliminado
+  const auditSnapshot = simulateMaterializeAuditSnapshot(db, card.company_id, card.id)
+  assert.equal(auditSnapshot.length, 1)
+  assert.equal(auditSnapshot[0].sku, 'SKU-ACT-101')
+  assert.equal(auditSnapshot[0].requested_quantity_snapshot, 3)
+  assert.equal(auditSnapshot[0].prepared_quantity_snapshot, 3)
+
+  // Elegibilidad de facturación MEJ-01C conforme sin facturar el producto eliminado
+  const consistency = simulateCommercialConsistencyV1(db, card.company_id, card.id, currentLiveVersion.lines)
+  assert.deepEqual(consistency, { eligible: true, reason: null })
+
+  // V3: Idempotencia de aceptación
+  const repeatRes = simulateAcceptCommercialChangesRpc(db, rpcParams)
+  assert.equal(repeatRes.status, 'ALREADY_ACCEPTED')
+  assert.equal(repeatRes.version_id, 'version-1')
+  assert.equal(db.commercialVersions.length, 1)
+
+  // V4: Reincorporación posterior del mismo SKU en una versión comercial nueva (96003) con detailId distinto (92099)
+  const readdedVersion = {
+    ...currentLiveVersion,
+    identity: { ...currentLiveVersion.identity, currentBsaleId: 96003 },
+    physicalId: 96003,
+    lines: [
+      ...currentLiveVersion.lines,
+      {
+        detailId: 92099,
+        variantId: 601,
+        sku: 'SKU-EXCL-601',
+        productName: 'SNACK DENTAL GATO 60GR',
+        quantity: 2,
+        unitNetValue: 4000,
+        lineNetAmount: 8000,
+        lineTaxAmount: 1520,
+        lineGrossAmount: 9520,
+        lineNumber: 2,
+        special: false,
+      },
+    ],
+    netAmount: 38000,
+    taxAmount: 7220,
+    totalAmount: 45220,
+  }
+  const secondComparison = compareCommercialVersions(db.commercialVersions[0].version_snapshot, readdedVersion)
+  const secondPlan = buildPreparationCommercialReconciliationPlan({
+    card: { cardId: card.id, companyId: card.company_id, status: card.status },
+    identity: readdedVersion.identity,
+    acceptedVersion: db.commercialVersions[0].version_snapshot,
+    currentVersion: readdedVersion,
+    preparationLines: db.preparationLines.filter(l => l.retired_at === null),
+    incidents: projectedIncidents,
+    comparison: secondComparison,
+    snapshotComplete: true,
+  })
+  assert.equal(secondPlan.status, 'READY')
+  assert.equal(secondPlan.canAcceptCompletely, true)
+  assert.equal(secondPlan.impact.added, 1)
+
+  const secondAccept = simulateAcceptCommercialChangesRpc(db, {
+    p_company_id: card.company_id,
+    p_card_id: card.id,
+    p_expected_previous_fingerprint: secondPlan.acceptedFingerprint,
+    p_new_fingerprint: secondPlan.currentFingerprint,
+    p_bsale_nv_id: readdedVersion.physicalId,
+    p_bsale_nv_folio: readdedVersion.identity.folio,
+    p_canonical_bsale_token: readdedVersion.identity.canonicalToken,
+    p_version_snapshot: readdedVersion,
+    p_comparison: secondComparison,
+    p_plan: secondPlan,
+    p_accepted_by: 'admin-user-222',
+  })
+  assert.equal(secondAccept.status, 'ACCEPTED')
+  assert.equal(secondAccept.version_number, 2)
+  assert.equal(db.preparationLines.length, 3)
+
+  // La línea histórica excluida permanece retirada con su incidencia intacta, y la nueva línea entra como PENDING independiente
+  const stillRetiredLine = db.preparationLines.find(l => l.id === 'prep-line-601')
+  const newlyAddedLine = db.preparationLines.find(l => l.bsale_detail_id === 92099)
+  assert.equal(stillRetiredLine.retired_at, '2026-11-04T12:00:00Z')
+  assert.equal(stillRetiredLine.retirement_acceptance_id, 'version-1')
+  assert.equal(stillRetiredLine.line_status, 'INCIDENT')
+  assert.equal(stillRetiredLine.excluded_from_dispatch, true)
+  assert.ok(newlyAddedLine)
+  assert.equal(newlyAddedLine.retired_at, null)
+  assert.equal(newlyAddedLine.line_status, 'PENDING')
+  assert.equal(newlyAddedLine.prepared_quantity, null)
+  assert.equal(newlyAddedLine.requested_quantity, 2)
+  assert.equal(simulateMaterializeSnapshotP001(db, card.company_id, card.id), 0)
+})
+
+test('MEJ-01 Exclusión total — Escenarios R1 a R9 (Simulación JS de RPC + Server Action): bloqueos defensivos sin modificar datos', async () => {
+  const buildForcedRemovalParams = (db, currentLiveVersion, mutateAction) => {
+    const card = db.cards[0]
+    const acceptedVersion = runFallbackVersion(card, db.preparationLines.filter(l => l.retired_at === null))
+    const comparison = compareCommercialVersions(acceptedVersion, currentLiveVersion)
+    const actions = [
+      {
+        kind: 'KEEP',
+        preparationLineId: 'prep-line-101',
+        previous: null,
+        current: currentLiveVersion.lines[0] ?? null,
+        previousRequestedQuantity: 3,
+        newRequestedQuantity: 3,
+        preparedQuantity: 3,
+        quantityDelta: 0,
+      },
+      {
+        kind: 'REMOVE',
+        preparationLineId: 'prep-line-601',
+        previous: {
+          detailId: 91002,
+          variantId: 601,
+          sku: 'SKU-EXCL-601',
+          productName: 'SNACK DENTAL GATO 60GR',
+          quantity: 5,
+        },
+        current: null,
+        previousRequestedQuantity: 5,
+        newRequestedQuantity: 0,
+        preparedQuantity: 0,
+        quantityDelta: -5,
+      },
+    ]
+    if (mutateAction) mutateAction(actions)
+    return {
+      p_company_id: card.company_id,
+      p_card_id: card.id,
+      p_expected_previous_fingerprint: fingerprintCommercialVersion(acceptedVersion).value,
+      p_new_fingerprint: fingerprintCommercialVersion(currentLiveVersion).value,
+      p_bsale_nv_id: currentLiveVersion.physicalId,
+      p_bsale_nv_folio: currentLiveVersion.identity.folio,
+      p_canonical_bsale_token: currentLiveVersion.identity.canonicalToken,
+      p_version_snapshot: currentLiveVersion,
+      p_comparison: comparison,
+      p_plan: {
+        status: 'READY',
+        canAcceptCompletely: true,
+        conflicts: [],
+        actions,
+      },
+      p_accepted_by: 'admin-user-222',
+    }
+  }
+
+  // R1: Incidencia OPEN o SUPERSEDED sin resolución vigente bloquea en RPC
+  for (const badStatus of ['OPEN', 'SUPERSEDED']) {
+    const { db, currentLiveVersion } = buildCommercialExclusionFixture()
+    db.incidents[0].status = badStatus
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedRemovalParams(db, currentLiveVersion)),
+      /COMMERCIAL_ACCEPTANCE_REQUIRES_RESOLUTION/,
+    )
+    assert.equal(db.preparationLines.find(l => l.id === 'prep-line-601').retired_at, null)
+  }
+
+  // R2: Evidencia histórica insuficiente o verification_error inválido (PR #25) bloquea en RPC
+  const baseExclusionSnapshot = buildCommercialExclusionFixture().exclusionIncident.bsale_observed_snapshot
+  for (const badSnapshot of [
+    null,
+    { document_id: 96002 },
+    { ...baseExclusionSnapshot, verification_basis: 'HISTORICAL' },
+    { ...baseExclusionSnapshot, required_bsale_action: 'SET_QUANTITY' },
+    { ...baseExclusionSnapshot, expected_bsale_quantity: 5 },
+    { ...baseExclusionSnapshot, bsale_observed_quantity: 5 },
+    { ...baseExclusionSnapshot, physically_prepared_quantity: 1 },
+    { ...baseExclusionSnapshot, document_id: 96001 },
+    { ...baseExclusionSnapshot, current_nv_id: 96001 },
+    { ...baseExclusionSnapshot, physicalId: 96001 },
+    { ...baseExclusionSnapshot, verification_error: '   ' },
+    { ...baseExclusionSnapshot, verification_error: 'ERR' },
+    { ...baseExclusionSnapshot, verification_error: 0 },
+    { ...baseExclusionSnapshot, verification_error: false },
+    { ...baseExclusionSnapshot, verification_error: {} },
+  ]) {
+    const { db, currentLiveVersion } = buildCommercialExclusionFixture()
+    db.incidents[0].bsale_observed_snapshot = badSnapshot
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedRemovalParams(db, currentLiveVersion)),
+      /COMMERCIAL_ACCEPTANCE_REQUIRES_RESOLUTION/,
+    )
+    assert.equal(db.preparationLines.find(l => l.id === 'prep-line-601').retired_at, null)
+  }
+
+  // R3: Preparación parcial mayor que cero (prepared_quantity = 1) bloquea en RPC
+  {
+    const { db, currentLiveVersion } = buildCommercialExclusionFixture()
+    db.preparationLines.find(l => l.id === 'prep-line-601').prepared_quantity = 1
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedRemovalParams(db, currentLiveVersion)),
+      /COMMERCIAL_ACCEPTANCE_REQUIRES_RESOLUTION/,
+    )
+    assert.equal(db.preparationLines.find(l => l.id === 'prep-line-601').retired_at, null)
+  }
+
+  // R4: Bsale mantiene una línea con cantidad 0 o mantiene el producto eliminado en version_snapshot -> bloqueado en RPC
+  {
+    const { db, currentLiveVersion } = buildCommercialExclusionFixture()
+    const versionWithZeroLine = {
+      ...currentLiveVersion,
+      lines: [
+        ...currentLiveVersion.lines,
+        { detailId: 91099, variantId: 601, sku: 'SKU-EXCL-601', productName: 'SNACK', quantity: 0 },
+      ],
+    }
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedRemovalParams(db, versionWithZeroLine)),
+      /cantidad positiva/,
+    )
+    const versionStillContainingProduct = {
+      ...currentLiveVersion,
+      lines: [
+        ...currentLiveVersion.lines,
+        { detailId: 91099, variantId: 601, sku: 'SKU-EXCL-601', productName: 'SNACK', quantity: 1 },
+      ],
+    }
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedRemovalParams(db, versionStillContainingProduct)),
+      /el producto eliminado aún figura en la versión comercial/,
+    )
+  }
+
+  // R5: Eliminación de todos los productos del pedido -> bloqueado en RPC
+  {
+    const { db, currentLiveVersion } = buildCommercialExclusionFixture()
+    const emptyVersion = { ...currentLiveVersion, lines: [] }
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedRemovalParams(db, emptyVersion, (actions) => {
+        actions.splice(0, 1)
+      })),
+      /al menos una línea vigente con cantidad positiva/,
+    )
+  }
+
+  // R6: Colisión de detailId al agregar de nuevo el mismo SKU -> bloqueado en RPC sin modificar datos
+  {
+    const { db, currentLiveVersion } = buildCommercialExclusionFixture()
+    const res1 = simulateAcceptCommercialChangesRpc(db, buildForcedRemovalParams(db, currentLiveVersion))
+    assert.equal(res1.status, 'ACCEPTED')
+    const collidingVersion = {
+      ...currentLiveVersion,
+      physicalId: 96003,
+      lines: [
+        ...currentLiveVersion.lines,
+        { detailId: 91002, variantId: 601, sku: 'SKU-EXCL-601', productName: 'SNACK', quantity: 2 },
+      ],
+    }
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, {
+        p_company_id: db.cards[0].company_id,
+        p_card_id: db.cards[0].id,
+        p_expected_previous_fingerprint: res1.fingerprint,
+        p_new_fingerprint: 'fp-colliding-96003',
+        p_bsale_nv_id: 96003,
+        p_bsale_nv_folio: '8801',
+        p_canonical_bsale_token: db.cards[0].canonical_bsale_token,
+        p_version_snapshot: collidingVersion,
+        p_comparison: {},
+        p_plan: {
+          status: 'READY',
+          canAcceptCompletely: true,
+          conflicts: [],
+          actions: [
+            { kind: 'KEEP', preparationLineId: 'prep-line-101', newRequestedQuantity: 3, current: collidingVersion.lines[0] },
+            { kind: 'ADD', preparationLineId: null, newRequestedQuantity: 2, current: collidingVersion.lines[1] },
+          ],
+        },
+        p_accepted_by: 'admin-user-222',
+      }),
+      /COMMERCIAL_ACCEPTANCE_CONCURRENT_MODIFICATION: la línea ADD ya existe/,
+    )
+    assert.equal(db.commercialVersions.length, 1)
+  }
+
+  // R7 y R8: Tarjeta fuera de IN_PREPARATION, sin lock del actor o con evidencia de Auditoría -> bloqueado
+  {
+    const { db, currentLiveVersion } = buildCommercialExclusionFixture()
+    db.cards[0].locked_by_user_id = 'other-user-999'
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedRemovalParams(db, currentLiveVersion)),
+      /COMMERCIAL_ACCEPTANCE_LOCK_OWNER_REQUIRED/,
+    )
+  }
+  {
+    const { db, currentLiveVersion } = buildCommercialExclusionFixture()
+    db.audits.push({ id: 'audit-1', company_id: db.cards[0].company_id, card_id: db.cards[0].id })
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedRemovalParams(db, currentLiveVersion)),
+      /evidencia de Auditoría/,
+    )
+  }
+
+  // R9: Solicitud manipulada contra la RPC (previous nulo, current no nulo, identidad cambiada o cantidad previa falsa) -> bloqueado
+  for (const mutateTampered of [
+    (actions) => { actions[1].previous = null },
+    (actions) => { actions[1].current = { detailId: 91002, quantity: 0 } },
+    (actions) => { actions[1].previous.sku = 'SKU-FALSO' },
+    (actions) => { actions[1].previous.variantId = 999 },
+    (actions) => { actions[1].previous.quantity = 4 },
+    (actions) => { actions[1].newRequestedQuantity = 1 },
+  ]) {
+    const { db, currentLiveVersion } = buildCommercialExclusionFixture()
+    assert.throws(
+      () => simulateAcceptCommercialChangesRpc(db, buildForcedRemovalParams(db, currentLiveVersion, mutateTampered)),
+      /COMMERCIAL_ACCEPTANCE_(INVALID_ACTION|REQUIRES_RESOLUTION)/,
+    )
+    assert.equal(db.preparationLines.find(l => l.id === 'prep-line-601').retired_at, null)
+  }
 })
