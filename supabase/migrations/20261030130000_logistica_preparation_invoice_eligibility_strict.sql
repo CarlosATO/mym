@@ -293,7 +293,7 @@ BEGIN
   ELSE
     IF doc_row.document_type_id IS DISTINCT FROM 23 THEN blockers := blockers || jsonb_build_array('DOCUMENT_TYPE_NOT_SALES_ORDER'); END IF;
     IF doc_row.state IS DISTINCT FROM 0 THEN blockers := blockers || jsonb_build_array('BSALE_STATE_NOT_ACTIVE'); END IF;
-    IF doc_row.client_id IS NULL OR NOT EXISTS (SELECT 1 FROM integraciones.bsale_clients x WHERE x.company_id = p_company_id AND x.bsale_id = doc_row.client_id) THEN blockers := blockers || jsonb_build_array('CLIENT_INVALID'); END IF;
+    IF doc_row.client_id IS NULL OR NOT EXISTS (SELECT 1 FROM integraciones.bsale_clients x WHERE x.company_id = p_company_id AND x.bsale_client_id = doc_row.client_id) THEN blockers := blockers || jsonb_build_array('CLIENT_INVALID'); END IF;
     IF doc_row.office_id IS NULL THEN blockers := blockers || jsonb_build_array('OFFICE_INVALID'); END IF;
 
     document_sale_condition_raw := NULLIF(COALESCE(doc_row.raw_json->'saleCondition'->>'id', doc_row.raw_json->'sale_condition'->>'id'), '');
@@ -317,7 +317,7 @@ BEGIN
        AND condition_row.bsale_id = client_row.sale_condition_id
        AND condition_row.state = 0
       WHERE client_row.company_id = p_company_id
-        AND client_row.bsale_id = doc_row.client_id;
+        AND client_row.bsale_client_id = doc_row.client_id;
       IF client_sale_condition_id IS NULL THEN blockers := blockers || jsonb_build_array('NOT_READY_CONTRACT'); END IF;
     END IF;
   END IF;
