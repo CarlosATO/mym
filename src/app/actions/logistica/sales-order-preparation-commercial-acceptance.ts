@@ -4,7 +4,12 @@ import { requirePreparationCardAccess, requireWmsPermission } from './authorizat
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createBsalePreparationCommercialProvider } from '@/lib/logistica/preparation-commercial-bsale-provider'
 import { compareCommercialVersions, fingerprintCommercialVersion, preparationCommercialLineFromSnapshot, type PreparationCommercialLineInput, type PreparationCommercialVersion } from '@/lib/logistica/preparation-commercial-version'
-import { buildPreparationCommercialReconciliationPlan, type PreparationReconciliationIncident, type PreparationReconciliationLine } from '@/lib/logistica/preparation-commercial-reconciliation-plan'
+import {
+  PREPARATION_RECONCILIATION_INCIDENT_SELECT,
+  buildPreparationCommercialReconciliationPlan,
+  mapPersistedIncidentToReconciliationIncident,
+  type PreparationReconciliationLine,
+} from '@/lib/logistica/preparation-commercial-reconciliation-plan'
 
 export type CommercialAcceptanceStatus =
   | 'ACCEPTED' | 'ALREADY_ACCEPTED' | 'VERSION_CHANGED' | 'REQUIRES_RESOLUTION'
@@ -98,7 +103,7 @@ export async function acceptSalesOrderPreparationCommercialChanges(params: {
 
   const [{ data: lines, error: linesError }, { data: incidents, error: incidentsError }, { data: stored }] = await Promise.all([
     db.schema('logistica').from('sales_order_preparation_lines').select('*').eq('company_id', auth.companyId).eq('card_id', params.cardId).is('retired_at', null).order('bsale_detail_id', { ascending: true }),
-    db.schema('logistica').from('sales_order_preparation_incidents').select('id, preparation_line_id, status, incident_type').eq('company_id', auth.companyId).eq('card_id', params.cardId),
+    db.schema('logistica').from('sales_order_preparation_incidents').select(PREPARATION_RECONCILIATION_INCIDENT_SELECT).eq('company_id', auth.companyId).eq('card_id', params.cardId),
     db.schema('logistica').from('sales_order_preparation_commercial_versions').select('version_snapshot, fingerprint').eq('company_id', auth.companyId).eq('card_id', params.cardId).order('sequence_no', { ascending: false }).limit(1).maybeSingle(),
   ])
   if (linesError || incidentsError) return { status: 'ERROR', detail: linesError?.message ?? incidentsError?.message }
@@ -126,7 +131,7 @@ export async function acceptSalesOrderPreparationCommercialChanges(params: {
     acceptedVersion,
     currentVersion,
     preparationLines: (lines ?? []) as PreparationReconciliationLine[],
-    incidents: (incidents ?? []) as PreparationReconciliationIncident[],
+    incidents: (incidents ?? []).map(row => mapPersistedIncidentToReconciliationIncident(row as Record<string, unknown>)),
     comparison,
     snapshotComplete: true,
   })
