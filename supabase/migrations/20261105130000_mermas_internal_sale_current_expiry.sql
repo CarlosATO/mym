@@ -121,7 +121,7 @@ BEGIN
   IF p_company_id IS NULL OR p_user_id IS NULL OR p_employee_id IS NULL THEN RAISE EXCEPTION 'Venta interna inválida'; END IF;
   IF auth.uid() IS NOT NULL AND auth.uid() <> p_user_id THEN RAISE EXCEPTION 'Usuario inválido'; END IF;
   IF NOT EXISTS (SELECT 1 FROM portal.users u WHERE u.id = p_user_id AND u.is_active AND u.deleted_at IS NULL) THEN RAISE EXCEPTION 'El usuario responsable no está activo'; END IF;
-  IF NOT core.has_company_access(p_user_id, p_company_id) OR NOT core.has_permission_for_company(p_user_id, p_company_id, 'logistica.mermas.create') THEN RAISE EXCEPTION 'No autorizado para crear ventas internas de Mermas'; END IF;
+  IF NOT core.has_company_access(p_user_id, p_company_id) OR NOT core.has_permission_for_company(p_user_id, p_company_id, 'logistica.mermas.internal_sale.create') THEN RAISE EXCEPTION 'No autorizado para crear ventas internas de Mermas'; END IF;
   IF jsonb_typeof(p_items) <> 'array' OR jsonb_array_length(p_items) = 0 THEN RAISE EXCEPTION 'La venta debe contener al menos un producto'; END IF;
 
   SELECT * INTO v_employee FROM rrhh.employees WHERE id = p_employee_id FOR SHARE;
