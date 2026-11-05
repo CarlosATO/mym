@@ -249,7 +249,16 @@ export async function getRouteInvoiceDraftRows(invoiceBsaleIds: number[]) {
   });
   if (error) throw error;
   if (!data?.success) throw new Error(data?.error || 'No se pudieron cargar las facturas seleccionadas.');
-  return (data.items ?? []) as RouteGuideItem[];
+  const items = (data.items ?? []) as RouteGuideItem[];
+  const orderMap = new Map(ids.map((id, index) => [id, index]));
+  return items.sort((a, b) => {
+    const idxA = orderMap.get(Number(a.invoice_bsale_id)) ?? Number.MAX_SAFE_INTEGER;
+    const idxB = orderMap.get(Number(b.invoice_bsale_id)) ?? Number.MAX_SAFE_INTEGER;
+    return idxA - idxB;
+  }).map((item, index) => ({
+    ...item,
+    line_number: index + 1,
+  }));
 }
 
 export async function getRouteGuideProfitabilityV1(id: string): Promise<RouteGuideProfitabilityV1> {
