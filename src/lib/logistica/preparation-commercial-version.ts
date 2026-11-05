@@ -125,7 +125,11 @@ function normalizeLine(line: PreparationCommercialLineInput): PreparationCommerc
   }
 }
 
-function lineContent(line: PreparationCommercialLine, includeQuantity = true): Record<string, unknown> {
+function lineContent(
+  line: PreparationCommercialLine,
+  includeQuantity = true,
+  includeLineNumber = true,
+): Record<string, unknown> {
   return {
     variantId: line.variantId,
     sku: normalizeText(line.sku),
@@ -134,6 +138,7 @@ function lineContent(line: PreparationCommercialLine, includeQuantity = true): R
     lineNetAmount: line.lineNetAmount,
     lineTaxAmount: line.lineTaxAmount,
     lineGrossAmount: line.lineGrossAmount,
+    ...(includeLineNumber ? { lineNumber: line.lineNumber } : {}),
     special: line.special,
   }
 }
@@ -148,13 +153,13 @@ function stableJson(value: unknown): string {
 }
 
 function lineSortKey(line: PreparationCommercialLine): string {
-  return stableJson(lineContent(line))
+  return stableJson(lineContent(line, true, false))
 }
 
 function commercialContent(version: PreparationCommercialVersion): string {
   const lines = version.lines.map(normalizeLine).sort((left, right) => lineSortKey(left).localeCompare(lineSortKey(right)))
   return stableJson({
-    lines: lines.map(line => lineContent(line)),
+    lines: lines.map(line => lineContent(line, true, false)),
     netAmount: normalizeNumber(version.netAmount),
     taxAmount: normalizeNumber(version.taxAmount),
     totalAmount: normalizeNumber(version.totalAmount),

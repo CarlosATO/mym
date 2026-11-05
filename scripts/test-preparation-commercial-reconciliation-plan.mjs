@@ -1,7 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  PREPARATION_RECONCILIATION_INCIDENT_SELECT,
   buildPreparationCommercialReconciliationPlan,
+  mapPersistedIncidentToReconciliationIncident,
 } from '../src/lib/logistica/preparation-commercial-reconciliation-plan.ts'
 import { compareCommercialVersions } from '../src/lib/logistica/preparation-commercial-version.ts'
 
@@ -408,4 +410,739 @@ test('línea sin variante ni SKU identificable con cambio de valor bloquea', () 
   assert.equal(result.canAcceptCompletely, false)
   assert.equal(result.conflicts.length, 1)
   assert.equal(result.conflicts[0].reason, 'UNKEYED_COMMERCIAL_LINE')
+})
+
+function buildValidMej01bSnapshot(overrides = {}) {
+  return {
+    historical_nv_id: 92706,
+    current_nv_id: 92714,
+    document_id: 92714,
+    document_state: 0,
+    canonical_identity_matched: true,
+    sync_proven: true,
+    line_link_valid: true,
+    full_card_matched: true,
+    incident_action_matched: true,
+    required_bsale_action: 'SET_QUANTITY',
+    expected_bsale_quantity: 4,
+    bsale_observed_quantity: 4,
+    physically_prepared_quantity: 4,
+    preparation_line_id: 'line-red',
+    matched_preparation_line_id: 'line-red',
+    verification_basis: 'FULL_CARD_AND_INCIDENT_ACTION_WITH_PHYSICAL_LINE',
+    ...overrides,
+  }
+}
+
+test('MEJ-01 Bloque 1 — Escenario 1: reducción válida (Original 5, Preparado 4, Bsale 4, incidencia RESOLVED/MATCHED) produce UPDATE_QUANTITY', () => {
+  const oldItem = line(501, 'SKU-RED', 5, { detailId: 4001 })
+  const newItem = line(501, 'SKU-RED', 4, { detailId: 4002 })
+  const result = plan({
+    oldLines: [oldItem],
+    newLines: [newItem],
+    preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT', false)],
+    incidents: [
+      {
+        id: 'inc-resolved-1',
+        preparation_line_id: 'line-red',
+        company_id: card.companyId,
+        card_id: card.cardId,
+        bsale_variant_id: 501,
+        sku: 'SKU-RED',
+        requested_quantity: 5,
+        prepared_quantity: 4,
+        incident_type: 'QUANTITY_REDUCTION',
+        required_bsale_action: 'SET_QUANTITY',
+        expected_bsale_quantity: 4,
+        bsale_observed_quantity: 4,
+        status: 'RESOLVED',
+        verification_status: 'MATCHED',
+        bsale_observed_snapshot: buildValidMej01bSnapshot(),
+      },
+    ],
+  })
+  assert.equal(result.status, 'READY')
+  assert.equal(result.canAcceptCompletely, true)
+  assert.equal(result.conflicts.length, 0)
+  assert.equal(result.actions.length, 1)
+  assert.equal(result.actions[0].kind, 'UPDATE_QUANTITY')
+  assert.equal(result.actions[0].preparationLineId, 'line-red')
+  assert.equal(result.actions[0].previousRequestedQuantity, 5)
+  assert.equal(result.actions[0].newRequestedQuantity, 4)
+  assert.equal(result.actions[0].preparedQuantity, 4)
+  assert.equal(result.actions[0].quantityDelta, -1)
+  assert.deepEqual(result.actions[0].incidentIds, ['inc-resolved-1'])
+})
+
+test('MEJ-01 Bloque 1 — Escenario 2: incidencia abierta (Original 5, Preparado 4, Bsale 4, incidencia OPEN) bloquea aceptación', () => {
+  const oldItem = line(501, 'SKU-RED', 5)
+  const newItem = line(501, 'SKU-RED', 4)
+  const result = plan({
+    oldLines: [oldItem],
+    newLines: [newItem],
+    preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT', false)],
+    incidents: [
+      {
+        id: 'inc-open-1',
+        preparation_line_id: 'line-red',
+        incident_type: 'QUANTITY_REDUCTION',
+        required_bsale_action: 'SET_QUANTITY',
+        expected_bsale_quantity: 4,
+        status: 'OPEN',
+        verification_status: 'MATCHED',
+      },
+    ],
+  })
+  assert.equal(result.status, 'REQUIRES_RESOLUTION')
+  assert.equal(result.canAcceptCompletely, false)
+  assert.equal(result.conflicts.length, 1)
+  assert.equal(result.conflicts[0].reason, 'OPERATIONAL_INCIDENT_EXISTS')
+  assert.deepEqual(result.conflicts[0].incidentIds, ['inc-open-1'])
+})
+
+test('MEJ-01 Bloque 1 — Escenario 3: cantidad en Bsale inferior a lo preparado (Preparado 4, Bsale 3) bloquea incluso con incidencia RESOLVED', () => {
+  const oldItem = line(501, 'SKU-RED', 5)
+  const newItem = line(501, 'SKU-RED', 3)
+  const result = plan({
+    oldLines: [oldItem],
+    newLines: [newItem],
+    preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT', false)],
+    incidents: [
+      {
+        id: 'inc-resolved-1',
+        preparation_line_id: 'line-red',
+        incident_type: 'QUANTITY_REDUCTION',
+        required_bsale_action: 'SET_QUANTITY',
+        expected_bsale_quantity: 4,
+        status: 'RESOLVED',
+        verification_status: 'MATCHED',
+      },
+    ],
+  })
+  assert.equal(result.status, 'REQUIRES_RESOLUTION')
+  assert.equal(result.canAcceptCompletely, false)
+  assert.equal(result.conflicts.length, 1)
+  assert.equal(result.conflicts[0].reason, 'QUANTITY_BELOW_PREPARED')
+})
+
+test('MEJ-01 Bloque 1 — Escenario 4: incidencia SUPERSEDED sin prueba vigente RESOLVED bloquea la reducción', () => {
+  const oldItem = line(501, 'SKU-RED', 5)
+  const newItem = line(501, 'SKU-RED', 4)
+  const result = plan({
+    oldLines: [oldItem],
+    newLines: [newItem],
+    preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT', false)],
+    incidents: [
+      {
+        id: 'inc-superseded-1',
+        preparation_line_id: 'line-red',
+        incident_type: 'QUANTITY_REDUCTION',
+        required_bsale_action: 'SET_QUANTITY',
+        expected_bsale_quantity: 4,
+        status: 'SUPERSEDED',
+        verification_status: 'MATCHED',
+      },
+    ],
+  })
+  assert.equal(result.status, 'REQUIRES_RESOLUTION')
+  assert.equal(result.canAcceptCompletely, false)
+  assert.equal(result.conflicts.length, 1)
+  assert.equal(result.conflicts[0].reason, 'OPERATIONAL_INCIDENT_EXISTS')
+  assert.deepEqual(result.conflicts[0].incidentIds, ['inc-superseded-1'])
+})
+
+test('MEJ-01 Bloque 1 — Escenario 5: versión desactualizada frente a la verificada en la incidencia o en la comparación bloquea', () => {
+  const oldItem = line(501, 'SKU-RED', 5)
+  const newItem = line(501, 'SKU-RED', 4)
+  const mismatchSnapshotPlan = plan({
+    oldLines: [oldItem],
+    newLines: [newItem],
+    preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT', false)],
+    incidents: [
+      {
+        id: 'inc-stale-snapshot',
+        preparation_line_id: 'line-red',
+        incident_type: 'QUANTITY_REDUCTION',
+        required_bsale_action: 'SET_QUANTITY',
+        expected_bsale_quantity: 4,
+        status: 'RESOLVED',
+        verification_status: 'MATCHED',
+        bsale_observed_snapshot: { physicalId: 92710 },
+      },
+    ],
+  })
+  assert.equal(mismatchSnapshotPlan.status, 'REQUIRES_RESOLUTION')
+  assert.equal(mismatchSnapshotPlan.conflicts[0].reason, 'OPERATIONAL_INCIDENT_EXISTS')
+})
+
+test('MEJ-01 Bloque 1 — Escenario 6: identidad incorrecta (incidencia de otra línea, otro producto, otra empresa o tarjeta) bloquea', () => {
+  const oldItem = line(501, 'SKU-RED', 5)
+  const newItem = line(501, 'SKU-RED', 4)
+
+  // Caso A: incidencia pertenece a otra línea de preparación
+  const otherLinePlan = plan({
+    oldLines: [oldItem],
+    newLines: [newItem],
+    preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT', false)],
+    incidents: [
+      {
+        id: 'inc-other-line',
+        preparation_line_id: 'other-line-id',
+        incident_type: 'QUANTITY_REDUCTION',
+        status: 'RESOLVED',
+        verification_status: 'MATCHED',
+      },
+    ],
+  })
+  assert.equal(otherLinePlan.status, 'REQUIRES_RESOLUTION')
+  assert.equal(otherLinePlan.conflicts[0].reason, 'OPERATIONAL_INCIDENT_EXISTS')
+
+  // Caso B: incidencia tiene otro producto (variant_id distinto)
+  const otherProductPlan = plan({
+    oldLines: [oldItem],
+    newLines: [newItem],
+    preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT', false)],
+    incidents: [
+      {
+        id: 'inc-other-variant',
+        preparation_line_id: 'line-red',
+        bsale_variant_id: 999,
+        sku: 'SKU-RED',
+        incident_type: 'QUANTITY_REDUCTION',
+        status: 'RESOLVED',
+        verification_status: 'MATCHED',
+      },
+    ],
+  })
+  assert.equal(otherProductPlan.status, 'REQUIRES_RESOLUTION')
+  assert.equal(otherProductPlan.conflicts[0].reason, 'OPERATIONAL_INCIDENT_EXISTS')
+
+  // Caso C: incidencia pertenece a otra empresa o tarjeta
+  const otherTenantPlan = plan({
+    oldLines: [oldItem],
+    newLines: [newItem],
+    preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT', false)],
+    incidents: [
+      {
+        id: 'inc-other-company',
+        preparation_line_id: 'line-red',
+        company_id: 'other-company',
+        card_id: card.cardId,
+        incident_type: 'QUANTITY_REDUCTION',
+        status: 'RESOLVED',
+        verification_status: 'MATCHED',
+      },
+    ],
+  })
+  assert.equal(otherTenantPlan.status, 'REQUIRES_RESOLUTION')
+  assert.equal(otherTenantPlan.conflicts[0].reason, 'OPERATIONAL_INCIDENT_EXISTS')
+})
+
+test('MEJ-01 Bloque 1 — Escenario 8: tarjeta en IN_AUDIT o AUDITED bloquea con NOT_APPLICABLE', () => {
+  const oldItem = line(501, 'SKU-RED', 5)
+  const newItem = line(501, 'SKU-RED', 4)
+  for (const invalidStatus of ['IN_AUDIT', 'AUDITED']) {
+    const result = plan({
+      status: invalidStatus,
+      oldLines: [oldItem],
+      newLines: [newItem],
+      preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT', false)],
+      incidents: [
+        {
+          id: 'inc-resolved-1',
+          preparation_line_id: 'line-red',
+          incident_type: 'QUANTITY_REDUCTION',
+          status: 'RESOLVED',
+          verification_status: 'MATCHED',
+        },
+      ],
+    })
+    assert.equal(result.status, 'NOT_APPLICABLE')
+    assert.equal(result.canAcceptCompletely, false)
+    assert.deepEqual(result.actions, [])
+  }
+})
+
+test('MEJ-01 Bloque 1 — Escenario 12: producto excluido (prepared_quantity = 0 y excluded_from_dispatch = true) permanece bloqueado', () => {
+  const oldItem = line(501, 'SKU-EXCL', 5)
+  const newItemReduced = line(501, 'SKU-EXCL', 4)
+  const reducedPlan = plan({
+    oldLines: [oldItem],
+    newLines: [newItemReduced],
+    preparationLines: [prep('line-excl', oldItem, 5, 0, 'INCIDENT', true)],
+    incidents: [
+      {
+        id: 'inc-excl-1',
+        preparation_line_id: 'line-excl',
+        incident_type: 'LINE_EXCLUDED',
+        status: 'RESOLVED',
+        verification_status: 'MATCHED',
+      },
+    ],
+  })
+  assert.equal(reducedPlan.status, 'REQUIRES_RESOLUTION')
+  assert.equal(reducedPlan.canAcceptCompletely, false)
+  assert.equal(reducedPlan.conflicts[0].reason, 'PREPARATION_LINE_EXCLUDED')
+
+  const removedPlan = plan({
+    oldLines: [oldItem],
+    newLines: [],
+    preparationLines: [prep('line-excl', oldItem, 5, 0, 'INCIDENT', true)],
+    incidents: [
+      {
+        id: 'inc-excl-1',
+        preparation_line_id: 'line-excl',
+        incident_type: 'LINE_EXCLUDED',
+        status: 'RESOLVED',
+        verification_status: 'MATCHED',
+      },
+    ],
+  })
+  assert.equal(removedPlan.status, 'REQUIRES_RESOLUTION')
+  assert.equal(removedPlan.canAcceptCompletely, false)
+  assert.equal(removedPlan.conflicts[0].reason, 'PREPARATION_LINE_EXCLUDED')
+})
+
+test('MEJ-01 PR #22 fix: ausencia de cualquier campo de evidencia o proyección parcial bloquea sin asumir valores por defecto', () => {
+  const oldItem = line(501, 'SKU-RED', 5, { detailId: 4001 })
+  const newItem = line(501, 'SKU-RED', 4, { detailId: 4002 })
+  const fullPersistedIncidentRow = {
+    id: 'inc-resolved-full',
+    company_id: card.companyId,
+    card_id: card.cardId,
+    preparation_line_id: 'line-red',
+    status: 'RESOLVED',
+    incident_type: 'QUANTITY_REDUCTION',
+    required_bsale_action: 'SET_QUANTITY',
+    requested_quantity: 5,
+    prepared_quantity: 4,
+    expected_bsale_quantity: 4,
+    verification_status: 'MATCHED',
+    bsale_observed_quantity: 4,
+    bsale_variant_id: 501,
+    sku: 'SKU-RED',
+    bsale_observed_snapshot: buildValidMej01bSnapshot(),
+  }
+
+  // Proyección real con PREPARATION_RECONCILIATION_INCIDENT_SELECT produce READY
+  const selectedColumns = PREPARATION_RECONCILIATION_INCIDENT_SELECT.split(',').map(col => col.trim())
+  const selectFromRow = (row, cols) => Object.fromEntries(cols.map(col => [col, row[col]]))
+  const validMappedIncident = mapPersistedIncidentToReconciliationIncident(
+    selectFromRow(fullPersistedIncidentRow, selectedColumns),
+  )
+  const validPlan = plan({
+    oldLines: [oldItem],
+    newLines: [newItem],
+    preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT', false)],
+    incidents: [validMappedIncident],
+  })
+  assert.equal(validPlan.status, 'READY')
+  assert.equal(validPlan.canAcceptCompletely, true)
+
+  // La proyección truncada antigua ('id, preparation_line_id, status, incident_type') debe bloquearse
+  const legacyTruncatedIncident = mapPersistedIncidentToReconciliationIncident(
+    selectFromRow(fullPersistedIncidentRow, ['id', 'preparation_line_id', 'status', 'incident_type']),
+  )
+  const truncatedPlan = plan({
+    oldLines: [oldItem],
+    newLines: [newItem],
+    preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT', false)],
+    incidents: [legacyTruncatedIncident],
+  })
+  assert.equal(truncatedPlan.status, 'REQUIRES_RESOLUTION')
+  assert.equal(truncatedPlan.canAcceptCompletely, false)
+  assert.equal(truncatedPlan.conflicts[0].reason, 'OPERATIONAL_INCIDENT_EXISTS')
+
+  // Cada campo obligatorio de evidencia ausente o nulo debe bloquear individualmente (sin fallbacks implícitos)
+  const mandatoryEvidenceFields = [
+    'company_id',
+    'card_id',
+    'incident_type',
+    'required_bsale_action',
+    'requested_quantity',
+    'prepared_quantity',
+    'expected_bsale_quantity',
+    'verification_status',
+    'bsale_observed_quantity',
+    'bsale_variant_id',
+    'sku',
+    'bsale_observed_snapshot',
+  ]
+  for (const missingField of mandatoryEvidenceFields) {
+    const incompleteRow = { ...fullPersistedIncidentRow, [missingField]: null }
+    const mapped = mapPersistedIncidentToReconciliationIncident(
+      selectFromRow(incompleteRow, selectedColumns),
+    )
+    const blockedPlan = plan({
+      oldLines: [oldItem],
+      newLines: [newItem],
+      preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT', false)],
+      incidents: [mapped],
+    })
+    assert.equal(
+      blockedPlan.status,
+      'REQUIRES_RESOLUTION',
+      `El campo ausente "${missingField}" debió bloquear el plan comercial`,
+    )
+    assert.equal(blockedPlan.canAcceptCompletely, false)
+    assert.equal(blockedPlan.conflicts[0].reason, 'OPERATIONAL_INCIDENT_EXISTS')
+  }
+})
+
+test('MEJ-01 Protección contra evidencias históricas insuficientes: rechaza snapshots sin contrato completo de MEJ-01B', () => {
+  const oldItem = line(501, 'SKU-RED', 5, { detailId: 4001 })
+  const newItem = line(501, 'SKU-RED', 4, { detailId: 4002 })
+  const buildIncidentWithSnapshot = (snapshot) => ({
+    id: 'inc-resolved-1',
+    preparation_line_id: 'line-red',
+    company_id: card.companyId,
+    card_id: card.cardId,
+    bsale_variant_id: 501,
+    sku: 'SKU-RED',
+    requested_quantity: 5,
+    prepared_quantity: 4,
+    incident_type: 'QUANTITY_REDUCTION',
+    required_bsale_action: 'SET_QUANTITY',
+    expected_bsale_quantity: 4,
+    bsale_observed_quantity: 4,
+    status: 'RESOLVED',
+    verification_status: 'MATCHED',
+    bsale_observed_snapshot: snapshot,
+  })
+  const assertSnapshotBlocked = (snapshot, description) => {
+    const result = plan({
+      oldLines: [oldItem],
+      newLines: [newItem],
+      preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT', false)],
+      incidents: [buildIncidentWithSnapshot(snapshot)],
+    })
+    assert.equal(result.status, 'REQUIRES_RESOLUTION', description)
+    assert.equal(result.canAcceptCompletely, false, description)
+    assert.equal(result.conflicts[0].reason, 'OPERATIONAL_INCIDENT_EXISTS', description)
+  }
+
+  // 1. Snapshot con solo document_id -> bloqueado
+  assertSnapshotBlocked({ document_id: 92714 }, 'Snapshot con solo document_id debe bloquearse')
+
+  // 2. verification_basis histórico, incorrecto o ausente -> bloqueado
+  for (const invalidBasis of [undefined, null, '', 'LEGACY_V1', 'FULL_CARD_ONLY']) {
+    const snap = buildValidMej01bSnapshot({ verification_basis: invalidBasis })
+    if (invalidBasis === undefined) delete snap.verification_basis
+    assertSnapshotBlocked(snap, `verification_basis=${String(invalidBasis)} debe bloquearse`)
+  }
+
+  // 3. Cualquiera de los indicadores obligatorios ausente, null o false -> bloqueado
+  const requiredBooleanFlags = [
+    'canonical_identity_matched',
+    'sync_proven',
+    'line_link_valid',
+    'full_card_matched',
+    'incident_action_matched',
+  ]
+  for (const flag of requiredBooleanFlags) {
+    for (const badVal of [undefined, null, false, 'true', 1]) {
+      const snap = buildValidMej01bSnapshot({ [flag]: badVal })
+      if (badVal === undefined) delete snap[flag]
+      assertSnapshotBlocked(snap, `Indicador ${flag}=${String(badVal)} debe bloquearse`)
+    }
+  }
+
+  for (const badDocState of [undefined, null, 1, '0', false]) {
+    const snap = buildValidMej01bSnapshot({ document_state: badDocState })
+    if (badDocState === undefined) delete snap.document_state
+    assertSnapshotBlocked(snap, `document_state=${String(badDocState)} debe bloquearse`)
+  }
+
+  for (const badAction of [undefined, null, '', 'REMOVE_LINE']) {
+    const snap = buildValidMej01bSnapshot({ required_bsale_action: badAction })
+    if (badAction === undefined) delete snap.required_bsale_action
+    assertSnapshotBlocked(snap, `required_bsale_action=${String(badAction)} debe bloquearse`)
+  }
+
+  // 4. Identidad de línea física incorrecta o ausente en snapshot -> bloqueado
+  for (const lineField of ['preparation_line_id', 'matched_preparation_line_id']) {
+    for (const badLineId of [undefined, null, '', 'other-line-id']) {
+      const snap = buildValidMej01bSnapshot({ [lineField]: badLineId })
+      if (badLineId === undefined) delete snap[lineField]
+      assertSnapshotBlocked(snap, `${lineField}=${String(badLineId)} debe bloquearse`)
+    }
+  }
+
+  // 5. Cantidades de snapshot ausentes, nulas o diferentes a las observadas/preparadas -> bloqueado
+  for (const qtyField of ['expected_bsale_quantity', 'bsale_observed_quantity', 'physically_prepared_quantity']) {
+    for (const badQty of [undefined, null, 3, 5, '4']) {
+      const snap = buildValidMej01bSnapshot({ [qtyField]: badQty })
+      if (badQty === undefined) delete snap[qtyField]
+      assertSnapshotBlocked(snap, `${qtyField}=${String(badQty)} debe bloquearse`)
+    }
+  }
+
+  // 6. Identificadores físicos ausentes o contradictorios -> bloqueado
+  for (const idField of ['document_id', 'current_nv_id']) {
+    for (const badId of [undefined, null, 92706, '92714', 0, -1]) {
+      const snap = buildValidMej01bSnapshot({ [idField]: badId })
+      if (badId === undefined) delete snap[idField]
+      assertSnapshotBlocked(snap, `${idField}=${String(badId)} debe bloquearse`)
+    }
+  }
+  assertSnapshotBlocked(
+    buildValidMej01bSnapshot({ physicalId: 92706 }),
+    'physicalId contradictorio con document_id/current_nv_id debe bloquearse',
+  )
+  assertSnapshotBlocked(
+    buildValidMej01bSnapshot({ nv_id: null }),
+    'nv_id explícitamente null debe bloquearse',
+  )
+})
+
+function buildValidMej01bExclusionSnapshot(overrides = {}) {
+  return {
+    historical_nv_id: 92706,
+    current_nv_id: 92714,
+    document_id: 92714,
+    document_state: 0,
+    canonical_identity_matched: true,
+    sync_proven: true,
+    line_link_valid: true,
+    full_card_matched: true,
+    incident_action_matched: true,
+    required_bsale_action: 'REMOVE_LINE',
+    expected_bsale_quantity: 0,
+    bsale_observed_quantity: 0,
+    physically_prepared_quantity: 0,
+    preparation_line_id: 'line-excl',
+    matched_preparation_line_id: 'line-excl',
+    verification_basis: 'FULL_CARD_AND_INCIDENT_ACTION_WITH_PHYSICAL_LINE',
+    ...overrides,
+  }
+}
+
+function buildValidResolvedExclusionIncident(overrides = {}) {
+  return {
+    id: 'inc-excl-resolved-1',
+    preparation_line_id: 'line-excl',
+    company_id: card.companyId,
+    card_id: card.cardId,
+    bsale_variant_id: 601,
+    sku: 'SKU-EXCL-601',
+    requested_quantity: 5,
+    prepared_quantity: 0,
+    incident_type: 'LINE_EXCLUDED',
+    required_bsale_action: 'REMOVE_LINE',
+    expected_bsale_quantity: 0,
+    bsale_observed_quantity: 0,
+    status: 'RESOLVED',
+    verification_status: 'MATCHED',
+    bsale_observed_snapshot: buildValidMej01bExclusionSnapshot(),
+    ...overrides,
+  }
+}
+
+test('MEJ-01 Exclusión total (V1, V2): línea físicamente excluida con incidencia LINE_EXCLUDED / REMOVE_LINE en RESOLVED/MATCHED y línea activa restante produce REMOVE en estado READY', () => {
+  const activeOld = line(101, 'SKU-ACTIVO', 3, { detailId: 5001 })
+  const activeNew = line(101, 'SKU-ACTIVO', 3, { detailId: 5011 })
+  const excludedOld = line(601, 'SKU-EXCL-601', 5, { detailId: 5002 })
+
+  const result = plan({
+    oldLines: [activeOld, excludedOld],
+    newLines: [activeNew],
+    preparationLines: [
+      prep('line-active', activeOld, 3, 3, 'CONFIRMED', false),
+      prep('line-excl', excludedOld, 5, 0, 'INCIDENT', true),
+    ],
+    incidents: [buildValidResolvedExclusionIncident()],
+  })
+
+  assert.equal(result.status, 'READY')
+  assert.equal(result.canAcceptCompletely, true)
+  assert.equal(result.conflicts.length, 0)
+  assert.equal(result.impact.removed, 1)
+  assert.equal(result.impact.conflicts, 0)
+
+  const keepAct = result.actions.find(a => a.kind === 'KEEP')
+  assert.ok(keepAct)
+  assert.equal(keepAct.preparationLineId, 'line-active')
+
+  const removeAct = result.actions.find(a => a.kind === 'REMOVE')
+  assert.ok(removeAct)
+  assert.equal(removeAct.preparationLineId, 'line-excl')
+  assert.equal(removeAct.previous?.sku, 'SKU-EXCL-601')
+  assert.equal(removeAct.previous?.variantId, 601)
+  assert.equal(removeAct.previous?.quantity, 5)
+  assert.equal(removeAct.current, null)
+  assert.equal(removeAct.previousRequestedQuantity, 5)
+  assert.equal(removeAct.newRequestedQuantity, 0)
+  assert.equal(removeAct.preparedQuantity, 0)
+  assert.equal(removeAct.quantityDelta, -5)
+  assert.deepEqual(removeAct.incidentIds, ['inc-excl-resolved-1'])
+})
+
+test('MEJ-01 Exclusión total (R1, R2, R3, R4, R5, R6): bloqueos estrictos en el planificador ante incumplimiento de cualquier invariante de REMOVE_LINE', () => {
+  const activeOld = line(101, 'SKU-ACTIVO', 3, { detailId: 5001 })
+  const activeNew = line(101, 'SKU-ACTIVO', 3, { detailId: 5011 })
+  const excludedOld = line(601, 'SKU-EXCL-601', 5, { detailId: 5002 })
+
+  // R1: Incidencia OPEN o SUPERSEDED sin resolución vigente bloquea
+  for (const invalidStatus of ['OPEN', 'SUPERSEDED']) {
+    const res = plan({
+      oldLines: [activeOld, excludedOld],
+      newLines: [activeNew],
+      preparationLines: [
+        prep('line-active', activeOld, 3, 3, 'CONFIRMED', false),
+        prep('line-excl', excludedOld, 5, 0, 'INCIDENT', true),
+      ],
+      incidents: [buildValidResolvedExclusionIncident({ status: invalidStatus })],
+    })
+    assert.equal(res.status, 'REQUIRES_RESOLUTION')
+    assert.equal(res.canAcceptCompletely, false)
+    assert.equal(res.conflicts[0].reason, 'PREPARATION_LINE_EXCLUDED')
+  }
+
+  // R1b: Coexistencia de una incidencia RESOLVED con otra OPEN en la misma línea bloquea
+  {
+    const res = plan({
+      oldLines: [activeOld, excludedOld],
+      newLines: [activeNew],
+      preparationLines: [
+        prep('line-active', activeOld, 3, 3, 'CONFIRMED', false),
+        prep('line-excl', excludedOld, 5, 0, 'INCIDENT', true),
+      ],
+      incidents: [
+        buildValidResolvedExclusionIncident({ id: 'inc-1', status: 'RESOLVED' }),
+        buildValidResolvedExclusionIncident({ id: 'inc-2', status: 'OPEN' }),
+      ],
+    })
+    assert.equal(res.status, 'REQUIRES_RESOLUTION')
+    assert.equal(res.canAcceptCompletely, false)
+    assert.equal(res.conflicts[0].reason, 'PREPARATION_LINE_EXCLUDED')
+  }
+
+  // R2: Incidencia con tipo o acción incorrectos, cantidades no cero, otra identidad o verification_error inválido (PR #25) bloquea
+  for (const badOverride of [
+    { incident_type: 'QUANTITY_REDUCTION' },
+    { required_bsale_action: 'SET_QUANTITY' },
+    { verification_status: 'MISMATCHED' },
+    { requested_quantity: 4 },
+    { prepared_quantity: 1 },
+    { expected_bsale_quantity: 1 },
+    { bsale_observed_quantity: 1 },
+    { bsale_variant_id: 999 },
+    { sku: 'OTRO-SKU' },
+    { company_id: 'otra-empresa' },
+    { card_id: 'otra-card' },
+    { bsale_observed_snapshot: null },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ required_bsale_action: 'SET_QUANTITY' }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ expected_bsale_quantity: 1 }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ bsale_observed_quantity: 1 }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ physically_prepared_quantity: 1 }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ document_id: 92706 }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ current_nv_id: 92706 }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ verification_error: '   ' }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ verification_error: 'ERR' }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ verification_error: 0 }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ verification_error: false }) },
+    { bsale_observed_snapshot: buildValidMej01bExclusionSnapshot({ verification_error: {} }) },
+  ]) {
+    const res = plan({
+      oldLines: [activeOld, excludedOld],
+      newLines: [activeNew],
+      preparationLines: [
+        prep('line-active', activeOld, 3, 3, 'CONFIRMED', false),
+        prep('line-excl', excludedOld, 5, 0, 'INCIDENT', true),
+      ],
+      incidents: [buildValidResolvedExclusionIncident(badOverride)],
+    })
+    assert.equal(res.status, 'REQUIRES_RESOLUTION')
+    assert.equal(res.canAcceptCompletely, false)
+    assert.equal(res.conflicts[0].reason, 'PREPARATION_LINE_EXCLUDED')
+  }
+
+  // R3: Preparación parcial mayor que cero (prepared_quantity = 1) bloquea aunque exista incidencia RESOLVED
+  {
+    const res = plan({
+      oldLines: [activeOld, excludedOld],
+      newLines: [activeNew],
+      preparationLines: [
+        prep('line-active', activeOld, 3, 3, 'CONFIRMED', false),
+        prep('line-excl', excludedOld, 5, 1, 'INCIDENT', true),
+      ],
+      incidents: [buildValidResolvedExclusionIncident()],
+    })
+    assert.equal(res.status, 'REQUIRES_RESOLUTION')
+    assert.equal(res.canAcceptCompletely, false)
+    assert.equal(res.conflicts[0].reason, 'PREPARATION_LINE_EXCLUDED')
+  }
+
+  // R4: Bsale mantiene la línea con cantidad cero (quantity = 0) en lugar de eliminarla -> bloqueado
+  {
+    const zeroQtyLine = line(601, 'SKU-EXCL-601', 0, { detailId: 5012 })
+    const res = plan({
+      oldLines: [activeOld, excludedOld],
+      newLines: [activeNew, zeroQtyLine],
+      preparationLines: [
+        prep('line-active', activeOld, 3, 3, 'CONFIRMED', false),
+        prep('line-excl', excludedOld, 5, 0, 'INCIDENT', true),
+      ],
+      incidents: [buildValidResolvedExclusionIncident()],
+    })
+    assert.equal(res.status, 'REQUIRES_RESOLUTION')
+    assert.equal(res.canAcceptCompletely, false)
+    assert.equal(res.conflicts[0].reason, 'PREPARATION_LINE_EXCLUDED')
+  }
+
+  // R5: Eliminación de todos los productos del pedido (sin ninguna línea comercial activa restante) -> bloqueado
+  {
+    const res = plan({
+      oldLines: [excludedOld],
+      newLines: [],
+      preparationLines: [prep('line-excl', excludedOld, 5, 0, 'INCIDENT', true)],
+      incidents: [buildValidResolvedExclusionIncident()],
+    })
+    assert.equal(res.status, 'REQUIRES_RESOLUTION')
+    assert.equal(res.canAcceptCompletely, false)
+    assert.equal(res.conflicts.length, 1)
+    assert.equal(res.conflicts[0].reason, 'PREPARATION_LINE_EXCLUDED')
+  }
+
+  // R6 / V4: Nueva incorporación del mismo SKU tras exclusión previa:
+  // - Con detailId nuevo sobre línea ya retirada (retired_at != null): planifica ADD limpio sin reutilizar línea retirada
+  // - Con detailId repetido (colisión con línea retirada): bloquea con PREPARATION_LINE_AMBIGUOUS
+  {
+    const retiredExcludedLine = {
+      ...prep('line-excl', excludedOld, 5, 0, 'INCIDENT', true),
+      bsale_detail_id: 5002,
+      retired_at: '2026-11-04T12:00:00.000Z',
+    }
+    const readdedWithNewDetail = line(601, 'SKU-EXCL-601', 2, { detailId: 6099 })
+    const validReaddPlan = plan({
+      oldLines: [activeNew],
+      newLines: [activeNew, readdedWithNewDetail],
+      preparationLines: [
+        prep('line-active', activeNew, 3, 3, 'CONFIRMED', false),
+        retiredExcludedLine,
+      ],
+      incidents: [buildValidResolvedExclusionIncident()],
+    })
+    assert.equal(validReaddPlan.status, 'READY')
+    assert.equal(validReaddPlan.canAcceptCompletely, true)
+    const addAction = validReaddPlan.actions.find(a => a.kind === 'ADD')
+    assert.ok(addAction)
+    assert.equal(addAction.preparationLineId, null)
+    assert.equal(addAction.current?.detailId, 6099)
+    assert.equal(addAction.newRequestedQuantity, 2)
+
+    const readdedWithCollidingDetail = line(601, 'SKU-EXCL-601', 2, { detailId: 5002 })
+    const collidingReaddPlan = plan({
+      oldLines: [activeNew],
+      newLines: [activeNew, readdedWithCollidingDetail],
+      preparationLines: [
+        prep('line-active', activeNew, 3, 3, 'CONFIRMED', false),
+        retiredExcludedLine,
+      ],
+      incidents: [buildValidResolvedExclusionIncident()],
+    })
+    assert.equal(collidingReaddPlan.status, 'REQUIRES_RESOLUTION')
+    assert.equal(collidingReaddPlan.canAcceptCompletely, false)
+    assert.equal(collidingReaddPlan.conflicts[0].reason, 'PREPARATION_LINE_AMBIGUOUS')
+  }
 })
