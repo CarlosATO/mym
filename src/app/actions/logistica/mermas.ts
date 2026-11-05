@@ -505,7 +505,7 @@ export async function getInternalSaleCatalog(): Promise<{
   const { data, error } = await db("mermas").rpc("get_internal_sale_catalog", {
     p_company_id: authorization.companyId,
     p_user_id: authorization.user.id,
-    p_today: today,
+    p_today_plus_five: today,
   });
   if (error) return { data: [], error: "No se pudo cargar el catálogo elegible para venta." };
   return {

@@ -4,7 +4,7 @@
 CREATE OR REPLACE FUNCTION mermas.get_internal_sale_catalog(
   p_company_id uuid,
   p_user_id uuid,
-  p_today date
+  p_today_plus_five date
 ) RETURNS TABLE (
   bsale_variant_id integer,
   sku text,
@@ -28,7 +28,7 @@ BEGIN
      OR NOT core.has_permission_for_company(p_user_id, p_company_id, 'logistica.mermas.internal_sale.create') THEN
     RAISE EXCEPTION 'No autorizado para cargar el catálogo de venta interna';
   END IF;
-  IF p_today IS NULL THEN
+  IF p_today_plus_five IS NULL THEN
     RAISE EXCEPTION 'Fecha de elegibilidad inválida';
   END IF;
 
@@ -62,7 +62,7 @@ BEGIN
   ) cost
   WHERE stock.company_id = p_company_id
     AND (
-      stock.expiration_date >= p_today
+      stock.expiration_date >= p_today_plus_five
       OR (stock.expiration_date IS NULL AND coalesce(product.requires_expiration, false) = false)
     )
     AND stock.available > 0
