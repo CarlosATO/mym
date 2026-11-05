@@ -21,7 +21,7 @@ import {
   type InternalSaleProduct,
   type InternalSaleWorkerContext,
 } from "@/app/actions/logistica/mermas";
-import { formatCivilDate } from "@/lib/datetime";
+import { formatCivilDate, todayInSantiago } from "@/lib/datetime";
 import { useMermasModule } from "./mermas-module-provider";
 import {
   buildInternalSalePrintHtml,
@@ -77,7 +77,14 @@ function isValidUnitPrice(
 }
 
 export function InternalSalePanel() {
-  const { invalidateWarehouse, invalidateWorkerAccounts, pricingSettings } = useMermasModule();
+  const {
+    bootstrap,
+    invalidateWarehouse,
+    invalidateWorkerAccounts,
+    pricingSettings,
+    warehouse,
+    ensureWarehouseLoaded,
+  } = useMermasModule();
   const [employeeSearch, setEmployeeSearch] = useState("");
   const [employeeOptionsOpen, setEmployeeOptionsOpen] = useState(true);
   const [employees, setEmployees] = useState<InternalSaleEmployee[]>([]);
@@ -136,6 +143,13 @@ export function InternalSalePanel() {
     };
   }, [pricingSettings]);
 
+  useEffect(() => {
+    if (!bootstrap.canViewWarehouse) return;
+    void ensureWarehouseLoaded();
+    // The module provider owns the warehouse cache and its request deduplication.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const products = useMemo(() => {
     const normalized = productSearch.trim().toLocaleLowerCase("es-CL");
     return catalog
@@ -147,6 +161,31 @@ export function InternalSalePanel() {
       )
       .slice(0, 50);
   }, [catalog, productSearch]);
+
+  const physicalStockByVariant = useMemo(
+    () => new Map(warehouse.data.map((product) => [product.variant_id, product])),
+    [warehouse.data],
+  );
+
+  const unavailablePhysicalProducts = useMemo(() => {
+    const normalized = productSearch.trim().toLocaleLowerCase("es-CL");
+    const catalogVariants = new Set(catalog.map((product) => product.bsale_variant_id));
+    const today = todayInSantiago();
+    return warehouse.data
+      .filter((product) => product.available > 0 && !catalogVariants.has(product.variant_id))
+      .filter((product) =>
+        !normalized ||
+        `${product.sku} ${product.product_name}`
+          .toLocaleLowerCase("es-CL")
+          .includes(normalized),
+      )
+      .map((product) => ({
+        product,
+        reason: product.next_expiration && product.next_expiration < today
+          ? "No vendible: producto vencido"
+          : "No habilitado para venta interna",
+      }));
+  }, [catalog, productSearch, warehouse.data]);
 
   const total = useMemo(
     () =>
@@ -346,6 +385,7 @@ export function InternalSalePanel() {
           ? getInternalSaleWorkerContext(selectedEmployee.id)
           : Promise.resolve({ data: null }),
       ]);
+      if (bootstrap.canViewWarehouse) await ensureWarehouseLoaded(true);
       setCatalog(catalogResponse.data);
       setCart((current) =>
         current.map((line) => {
@@ -383,6 +423,7 @@ export function InternalSalePanel() {
           ? getInternalSaleWorkerContext(selectedEmployee.id)
           : Promise.resolve({ data: null }),
       ]);
+      if (bootstrap.canViewWarehouse) await ensureWarehouseLoaded(true);
       setCatalog(catalogResponse.data);
       if (contextResponse.data) setWorkerContext(contextResponse.data);
       if (catalogResponse.error) setProductError(catalogResponse.error);
@@ -689,7 +730,9 @@ export function InternalSalePanel() {
                           {product.product_name}
                         </p>
                         <p className="mt-1 text-[11px] text-theme-text-muted">
-                          Stock:{" "}
+                          Físico: {physicalStockByVariant.get(product.bsale_variant_id)?.available ?? product.eligible_stock}
+                          {" · "}
+                          Vendible: {" "}
                           <strong className="text-theme-text">
                             {product.eligible_stock}
                           </strong>{" "}
@@ -714,7 +757,36 @@ export function InternalSalePanel() {
                     </article>
                   );
                 })}
-              {!productLoading && products.length === 0 && (
+              {!productLoading && unavailablePhysicalProducts.length > 0 && (
+                <div className="col-span-full rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
+                  <p className="text-xs font-bold text-amber-800 dark:text-amber-200">
+                    Stock físico no habilitado para venta interna
+                  </p>
+                  <div className="mt-2 space-y-2">
+                    {unavailablePhysicalProducts.map(({ product, reason }) => (
+                      <div
+                        key={product.variant_id}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/20 bg-theme-bg px-3 py-2 text-xs"
+                      >
+                        <span className="min-w-0">
+                          <strong className="font-mono text-theme-text">{product.sku}</strong>
+                          <span className="ml-2 text-theme-text-muted">{product.product_name}</span>
+                        </span>
+                        <span className="text-right text-amber-800 dark:text-amber-200">
+                          <strong>{product.available} físico</strong>
+                          <span className="ml-2">{reason}</span>
+                          {product.next_expiration && (
+                            <span className="ml-2 text-theme-text-muted">
+                              Vence: {formatCivilDate(product.next_expiration)}
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {!productLoading && products.length === 0 && unavailablePhysicalProducts.length === 0 && (
                 <p className="col-span-full px-2 py-8 text-center text-xs text-theme-text-muted">
                   No hay productos elegibles para venta.
                 </p>
