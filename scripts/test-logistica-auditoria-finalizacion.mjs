@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { validateAuditPreClose } from '../src/modules/logistica/auditoria/audit-policy.ts'
 import { getMovementRule } from '../src/modules/logistica/preparacion-pedidos/movement-rules.ts'
+import { getPreparationColumnId } from '../src/modules/logistica/preparacion-pedidos/preparation-route-readiness.ts'
 
 const root = new URL('../', import.meta.url)
 const migration = await readFile(new URL('supabase/migrations/20261020160000_logistica_finalize_sales_order_audit.sql', root), 'utf8')
@@ -217,6 +218,24 @@ test('26. no modifica requested/prepared/audited snapshots', () => {
   assert.doesNotMatch(body, /requested_quantity_snapshot\s*=/)
   assert.doesNotMatch(body, /prepared_quantity_snapshot\s*=/)
   assert.doesNotMatch(body, /audit_quantity\s*=/)
+})
+
+test('26a. el cierre recarga readiness sin sincronizar Bsale', () => {
+  const start = panel.indexOf('const handleAuditFinalized')
+  const end = panel.indexOf('const handlePreparationLinesChange', start)
+  const body = panel.slice(start, end)
+
+  assert.match(body, /setCards\(nextCards\)[\s\S]*?void loadBoard\(\{ showSpinner: false \}\)/)
+  assert.equal((body.match(/loadBoard\(/g) ?? []).length, 1)
+  assert.doesNotMatch(body, /runSync|syncOperationalBsaleSalesOrders/)
+})
+
+test('26b. readiness no disponible conserva la clasificación fallback', () => {
+  assert.equal(getPreparationColumnId('AUDITED', 'READY_TO_INVOICE'), 'READY_TO_INVOICE')
+  assert.equal(getPreparationColumnId('AUDITED', 'INCIDENTS'), 'INCIDENTS')
+  assert.equal(getPreparationColumnId('AUDITED', 'BLOCKED'), 'INCIDENTS')
+  assert.equal(getPreparationColumnId('AUDITED', null), 'INCIDENTS')
+  assert.match(panel, /setReadinessState\(res\.readinessError \? 'error' : 'ready'\)/)
 })
 
 test('27. modal final compacto y con acción Finalizar Auditoría', () => {

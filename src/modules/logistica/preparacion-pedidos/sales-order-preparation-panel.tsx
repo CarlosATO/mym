@@ -1445,6 +1445,7 @@ export function SalesOrderPreparationPanel({
       delete next[result.card_id]
       return next
     })
+    void loadBoard({ showSpinner: false })
   }
 
   const handlePreparationLinesChange = (lines: SalesOrderPreparationLine[]) => {
