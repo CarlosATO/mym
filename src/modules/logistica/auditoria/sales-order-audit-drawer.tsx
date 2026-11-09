@@ -125,7 +125,9 @@ export function SalesOrderAuditDrawer({
   onOwnershipConflict,
   onFinalized,
 }: SalesOrderAuditDrawerProps) {
-  const [detail, setDetail] = useState<SalesOrderAuditDetail | null>(() => getAuditCache(card.card_id))
+  const [detail, setDetail] = useState<SalesOrderAuditDetail | null>(() => (
+    card.status === 'IN_AUDIT' ? null : getAuditCache(card.card_id)
+  ))
   const [loading, setLoading] = useState(!detail)
   const [error, setError] = useState<string | null>(null)
   const [lineDrafts, setLineDrafts] = useState<Record<string, string>>({})
@@ -190,7 +192,9 @@ export function SalesOrderAuditDrawer({
   const loadDetail = useCallback(async () => {
     const seq = ++requestSeqRef.current
     setError(null)
-    const cached = getAuditCache(card.card_id)
+    // Una tarjeta en auditoría puede haber avanzado a un ciclo nuevo. No usar
+    // aquí el snapshot cacheado del ciclo anterior para evitar mutarlo por error.
+    const cached = card.status === 'IN_AUDIT' ? null : getAuditCache(card.card_id)
     if (cached) {
       setDetail(cached)
       setLoading(false)
@@ -238,7 +242,7 @@ export function SalesOrderAuditDrawer({
         setLoading(false)
       }
     }
-  }, [card.card_id])
+  }, [card.card_id, card.status, card.company_id])
 
   useEffect(() => {
     mountedRef.current = true
@@ -768,6 +772,7 @@ export function SalesOrderAuditDrawer({
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 border-t border-[#E8DFD5] bg-[#FCFBF9] px-4 py-2 sm:grid-cols-3 sm:px-5 xl:grid-cols-6">
             <HeaderStat label="Preparó" value={preparerName} />
             <HeaderStat label="Audita" value={auditorName} />
+            <HeaderStat label="Ciclo" value={audit ? String(audit.cycle_no) : '—'} />
             <HeaderStat label="Bultos" value={packageCount == null ? '—' : String(packageCount)} />
             <HeaderStat label="Solicitado" value={String(requestedTotal)} accent />
             <HeaderStat label="Preparado" value={preparedTotal} accent />

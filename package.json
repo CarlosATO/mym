@@ -59,6 +59,8 @@
     "test:logistica-auditoria-base": "node --experimental-strip-types --test scripts/test-logistica-auditoria-base.mjs",
     "test:logistica-auditoria-ux": "node --experimental-strip-types --test scripts/test-logistica-auditoria-ux.mjs",
     "test:logistica-auditoria-finalizacion": "node --experimental-strip-types --test scripts/test-logistica-auditoria-finalizacion.mjs",
+    "test:logistica-auditoria-cycles": "node --test scripts/test-logistica-auditoria-cycles.mjs",
+    "test:logistica-auditoria-active-cycle-ui": "node --test scripts/test-logistica-auditoria-active-cycle-ui.mjs",
     "test:logistica-auditoria-superuser-self-audit": "node --experimental-strip-types --test scripts/test-logistica-auditoria-superuser-self-audit.mjs",
     "test:preparacion-pedidos-fast": "node --experimental-strip-types --test scripts/test-preparacion-pedidos-fast.mjs scripts/test-preparacion-pedidos-fast-contract.mjs",
     "test:perm-01": "node --test scripts/test-perm-01-operador-bodega-preparation.mjs",
