@@ -5,6 +5,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { getActiveCompanyId } from '@/app/actions/companies'
 import { isAuditIncidentType, type AuditIncidentType } from '@/modules/logistica/auditoria/audit-policy'
 import { AUDIT_EVIDENCE_BUCKET, auditEvidenceExtension, resolveAuditEvidenceMime } from '@/modules/logistica/auditoria/audit-ui-utils'
+import { verifySalesOrderAuditCommercial } from './sales-order-audit-commercial'
 
 export type SalesOrderAudit = {
   id: string
@@ -415,6 +416,31 @@ export async function finalizeSalesOrderAudit(params: {
   try {
     const { supabase, companyId, error: authError } = await requireAuditUser(params.companyId)
     if (authError || !companyId) return { data: null, error: authError }
+
+    const commercialVerification = await verifySalesOrderAuditCommercial({
+      auditId: params.auditId,
+      cardId: params.cardId,
+      companyId,
+    })
+    if (commercialVerification.error) {
+      return { data: null, error: `No se pudo validar comercialmente la Auditoría: ${commercialVerification.error}` }
+    }
+    if (!commercialVerification.data) {
+      return { data: null, error: 'No se recibió una verificación comercial válida para finalizar la Auditoría.' }
+    }
+    const verification = commercialVerification.data
+    if (!['READY_TO_INVOICE', 'INCIDENTS', 'BLOCKED'].includes(verification.status)
+      || !Array.isArray(verification.differences)
+      || (verification.status === 'READY_TO_INVOICE' && verification.differences.length > 0)
+      || (verification.status === 'INCIDENTS' && verification.differences.length === 0)) {
+      return { data: null, error: 'No se recibió una verificación comercial consistente para finalizar la Auditoría.' }
+    }
+    if (verification.status !== 'READY_TO_INVOICE') {
+      const message = verification.status === 'INCIDENTS'
+        ? 'No se puede finalizar la Auditoría: existen diferencias comerciales pendientes.'
+        : 'No se puede finalizar la Auditoría: la verificación comercial quedó bloqueada.'
+      return { data: null, error: message }
+    }
 
     const { data, error } = await supabase
       .schema('logistica')

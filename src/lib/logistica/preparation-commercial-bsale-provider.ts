@@ -129,6 +129,8 @@ function normalizeBsaleVersion(document: BsaleRawDocument, details: BsaleRawDeta
     netAmount: numeric(document.netAmount),
     taxAmount: numeric(document.taxAmount),
     totalAmount: numeric(document.totalAmount),
+    sourceDocument: document as unknown as Record<string, unknown>,
+    sourceDetails: details as unknown as Array<Record<string, unknown>>,
   }
 }
 

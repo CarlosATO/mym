@@ -34,6 +34,8 @@ export type PreparationCommercialVersion = {
   taxAmount?: number | null
   totalAmount?: number | null
   currency?: string | null
+  sourceDocument?: Record<string, unknown>
+  sourceDetails?: Array<Record<string, unknown>>
 }
 
 export type CommercialFingerprint = {
