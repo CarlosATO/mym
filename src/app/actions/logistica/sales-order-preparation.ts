@@ -214,7 +214,8 @@ export type SalesOrderPreparationCommercialIncident = {
   nv_folio: string | null
   sku: string | null
   product_name: string
-  required_bsale_action: 'SET_QUANTITY' | 'REMOVE_LINE'
+  required_bsale_action: 'SET_QUANTITY' | 'REMOVE_LINE' | 'VERIFY_CURRENT_NV'
+  requested_quantity: number | null
   bsale_observed_quantity: number | null
   expected_bsale_quantity: number
   observation: string | null
@@ -270,7 +271,7 @@ export async function getSalesOrderPreparationCommercialIncidents(params: {
   const { data, error } = await supabase
     .schema('logistica')
     .from('sales_order_preparation_incidents')
-    .select('id, card_id, bsale_nv_id, nv_folio, sku, product_name, required_bsale_action, bsale_observed_quantity, expected_bsale_quantity, observation, reason_code, created_at')
+    .select('id, card_id, bsale_nv_id, nv_folio, sku, product_name, required_bsale_action, requested_quantity, bsale_observed_quantity, expected_bsale_quantity, observation, reason_code, created_at')
     .eq('company_id', params.companyId)
     .eq('card_id', params.cardId)
     .eq('status', 'OPEN')

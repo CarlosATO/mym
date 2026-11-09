@@ -1,10 +1,16 @@
 'use server'
 
 import { requirePreparationCardAccess, requireWmsPermission } from './authorization'
+import { syncSalesOrderPreparationIncident } from './sales-order-preparation-incident-sync'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createBsalePreparationCommercialProvider } from '@/lib/logistica/preparation-commercial-bsale-provider'
 import { compareCommercialVersions, fingerprintCommercialVersion, preparationCommercialLineFromSnapshot, type PreparationCommercialLineInput, type PreparationCommercialVersion } from '@/lib/logistica/preparation-commercial-version'
-import { buildPreparationCommercialReconciliationPlan, type PreparationReconciliationIncident, type PreparationReconciliationLine } from '@/lib/logistica/preparation-commercial-reconciliation-plan'
+import {
+  PREPARATION_RECONCILIATION_INCIDENT_SELECT,
+  buildPreparationCommercialReconciliationPlan,
+  mapPersistedIncidentToReconciliationIncident,
+  type PreparationReconciliationLine,
+} from '@/lib/logistica/preparation-commercial-reconciliation-plan'
 
 export type CommercialAcceptanceStatus =
   | 'ACCEPTED' | 'ALREADY_ACCEPTED' | 'VERSION_CHANGED' | 'REQUIRES_RESOLUTION'
@@ -71,6 +77,26 @@ function providerStatus(error: unknown): CommercialAcceptanceStatus {
   return code === 'UNAVAILABLE' ? 'UNAVAILABLE' : code === 'AMBIGUOUS' ? 'AMBIGUOUS' : 'ERROR'
 }
 
+async function verifyOpenIncidentsBeforeAcceptance(companyId: string, cardId: string): Promise<string | null> {
+  const db = createAdminClient()
+  const { data: openIncidents, error } = await db.schema('logistica')
+    .from('sales_order_preparation_incidents')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('card_id', cardId)
+    .eq('status', 'OPEN')
+
+  if (error) return error.message
+
+  for (const incident of openIncidents ?? []) {
+    const verification = await syncSalesOrderPreparationIncident(String(incident.id))
+    if (verification.status === 'RESOLVED' || verification.status === 'ALREADY_RESOLVED') continue
+    return verification.message
+  }
+
+  return null
+}
+
 export async function acceptSalesOrderPreparationCommercialChanges(params: {
   cardId: string
   expectedCommercialFingerprint: string
@@ -87,7 +113,7 @@ export async function acceptSalesOrderPreparationCommercialChanges(params: {
     .select('id, company_id, status, bsale_nv_id, bsale_nv_folio, canonical_bsale_token, current_bsale_nv_id')
     .eq('id', params.cardId).eq('company_id', auth.companyId).maybeSingle()
   if (cardError || !card) return { status: 'ERROR', detail: cardError?.message ?? 'Tarjeta no encontrada.' }
-  const persistedCard = card as Card
+  let persistedCard = card as Card
   try {
     await requirePreparationCardAccess(auth, params.cardId)
   } catch (error) {
@@ -96,9 +122,22 @@ export async function acceptSalesOrderPreparationCommercialChanges(params: {
   if (persistedCard.status !== 'IN_PREPARATION') return { status: 'INVALID_STATUS' }
   if (!persistedCard.canonical_bsale_token || !persistedCard.bsale_nv_folio) return { status: 'AMBIGUOUS', detail: 'La identidad canónica está incompleta.' }
 
+  const incidentVerificationError = await verifyOpenIncidentsBeforeAcceptance(auth.companyId, persistedCard.id)
+  if (incidentVerificationError) {
+    return { status: 'REQUIRES_RESOLUTION', detail: `No se pudo verificar la incidencia pendiente: ${incidentVerificationError}` }
+  }
+
+  const { data: refreshedCard, error: refreshedCardError } = await db.schema('logistica').from('sales_order_preparation_cards')
+    .select('id, company_id, status, bsale_nv_id, bsale_nv_folio, canonical_bsale_token, current_bsale_nv_id')
+    .eq('id', params.cardId).eq('company_id', auth.companyId).maybeSingle()
+  if (refreshedCardError || !refreshedCard) return { status: 'ERROR', detail: refreshedCardError?.message ?? 'Tarjeta no encontrada tras verificar incidencias.' }
+  persistedCard = refreshedCard as Card
+  if (persistedCard.status !== 'IN_PREPARATION') return { status: 'INVALID_STATUS' }
+  if (!persistedCard.canonical_bsale_token || !persistedCard.bsale_nv_folio) return { status: 'AMBIGUOUS', detail: 'La identidad canónica está incompleta.' }
+
   const [{ data: lines, error: linesError }, { data: incidents, error: incidentsError }, { data: stored }] = await Promise.all([
     db.schema('logistica').from('sales_order_preparation_lines').select('*').eq('company_id', auth.companyId).eq('card_id', params.cardId).is('retired_at', null).order('bsale_detail_id', { ascending: true }),
-    db.schema('logistica').from('sales_order_preparation_incidents').select('id, preparation_line_id, status, incident_type').eq('company_id', auth.companyId).eq('card_id', params.cardId),
+    db.schema('logistica').from('sales_order_preparation_incidents').select(PREPARATION_RECONCILIATION_INCIDENT_SELECT).eq('company_id', auth.companyId).eq('card_id', params.cardId),
     db.schema('logistica').from('sales_order_preparation_commercial_versions').select('version_snapshot, fingerprint').eq('company_id', auth.companyId).eq('card_id', params.cardId).order('sequence_no', { ascending: false }).limit(1).maybeSingle(),
   ])
   if (linesError || incidentsError) return { status: 'ERROR', detail: linesError?.message ?? incidentsError?.message }
@@ -126,7 +165,7 @@ export async function acceptSalesOrderPreparationCommercialChanges(params: {
     acceptedVersion,
     currentVersion,
     preparationLines: (lines ?? []) as PreparationReconciliationLine[],
-    incidents: (incidents ?? []) as PreparationReconciliationIncident[],
+    incidents: (incidents ?? []).map(row => mapPersistedIncidentToReconciliationIncident(row as Record<string, unknown>)),
     comparison,
     snapshotComplete: true,
   })

@@ -17,6 +17,20 @@ const versionSource = await readFile(new URL('../src/lib/logistica/preparation-c
 const panelSource = await readFile(new URL('../src/modules/logistica/preparacion-pedidos/sales-order-preparation-panel.tsx', import.meta.url), 'utf8')
 const drawerSource = await readFile(new URL('../src/modules/logistica/preparacion-pedidos/sales-order-drawer.tsx', import.meta.url), 'utf8')
 
+test('NV 5172: la aceptación verifica incidencias OPEN antes de continuar', () => {
+  assert.match(action, /sales-order-preparation-incident-sync/)
+  assert.match(action, /\.eq\('status', 'OPEN'\)/)
+  assert.match(action, /syncSalesOrderPreparationIncident\(String\(incident\.id\)\)/)
+  assert.match(action, /verification\.status === 'RESOLVED' \|\| verification\.status === 'ALREADY_RESOLVED'/)
+  assert.ok(action.indexOf('verifyOpenIncidentsBeforeAcceptance') < action.indexOf('const [{ data: lines'))
+})
+
+test('NV 5172: las tareas comerciales muestran requested_quantity como cantidad original', async () => {
+  const dialog = await readFile(new URL('../src/modules/logistica/preparacion-pedidos/preparation-commercial-incidents-dialog.tsx', import.meta.url), 'utf8')
+  assert.match(dialog, /formatQuantity\(incident\.requested_quantity\)/)
+  assert.match(dialog, /formatQuantity\(incident\.expected_bsale_quantity\)/)
+})
+
 test('la aceptación sólo está disponible para service_role y exige estado IN_PREPARATION', () => {
   assert.match(migration, /REVOKE ALL ON FUNCTION logistica\.accept_sales_order_preparation_commercial_changes/)
   assert.match(migration, /GRANT EXECUTE ON FUNCTION logistica\.accept_sales_order_preparation_commercial_changes\([^\n]+\) TO service_role/)

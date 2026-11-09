@@ -8,10 +8,13 @@ function formatQuantity(value: number | null): string {
 }
 
 function actionLabel(incident: SalesOrderPreparationCommercialIncident): string {
+  if (incident.required_bsale_action === 'VERIFY_CURRENT_NV') {
+    return 'Revisar diferencia de la NV vigente en Bsale'
+  }
   if (incident.required_bsale_action === 'REMOVE_LINE') {
     return 'Eliminar producto de la Nota de Venta'
   }
-  return `Cambiar cantidad en Bsale de ${formatQuantity(incident.bsale_observed_quantity)} a ${formatQuantity(incident.expected_bsale_quantity)}`
+  return `Cambiar cantidad en Bsale de ${formatQuantity(incident.requested_quantity)} a ${formatQuantity(incident.expected_bsale_quantity)}`
 }
 
 export function PreparationCommercialIncidentsDialog({
