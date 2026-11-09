@@ -174,6 +174,7 @@ async function requireAuditUser(companyIdOverride?: string | null) {
 export async function getSalesOrderAuditDetail(
   cardId: string,
   companyIdOverride?: string | null,
+  cycleNo?: number | null,
 ): Promise<{ data: SalesOrderAuditDetail | null; error: string | null }> {
   try {
     const { supabase, companyId, error: authError } = await requireAuditUser(companyIdOverride)
@@ -184,7 +185,7 @@ export async function getSalesOrderAuditDetail(
       .rpc('get_sales_order_audit_detail', {
         p_company_id: companyId,
         p_card_id: cardId,
-        p_cycle_no: 1,
+        p_cycle_no: cycleNo ?? null,
       })
 
     if (error) {

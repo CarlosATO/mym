@@ -37,7 +37,7 @@ import {
   type SalesOrderAuditIncident,
   type SalesOrderAuditLine,
 } from '@/app/actions/logistica/sales-order-audit'
-import { getAuditCache, setAuditCache } from './audit-cache'
+import { getAuditCache, invalidateAuditCache, setAuditCache } from './audit-cache'
 import {
   AUDIT_EVIDENCE_ACCEPT,
   AUDIT_INCIDENT_LABELS,
@@ -89,6 +89,17 @@ function formatAuditDate(value: string | null): string {
   return date.toLocaleDateString('es-CL', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
+function selectAuditDetailForCard(
+  cardStatus: SalesOrderPreparationCardInfo['status'],
+  detail: SalesOrderAuditDetail,
+): SalesOrderAuditDetail {
+  // IN_AUDIT never presents a completed cycle as the current operational audit.
+  if (cardStatus === 'IN_AUDIT' && detail.audit?.status !== 'OPEN') {
+    return { audit: null, lines: [], incidents: [], attachments: [] }
+  }
+  return detail
+}
+
 function resultToneClasses(tone: 'pending' | 'ok' | 'incident'): string {
   if (tone === 'ok') return 'border-emerald-300/70 bg-emerald-50 text-emerald-800'
   if (tone === 'incident') return 'border-red-300/70 bg-red-50 text-red-800'
@@ -125,7 +136,9 @@ export function SalesOrderAuditDrawer({
   onOwnershipConflict,
   onFinalized,
 }: SalesOrderAuditDrawerProps) {
-  const [detail, setDetail] = useState<SalesOrderAuditDetail | null>(() => getAuditCache(card.card_id))
+  const [detail, setDetail] = useState<SalesOrderAuditDetail | null>(() => (
+    card.status === 'IN_AUDIT' ? null : getAuditCache(card.card_id)
+  ))
   const [loading, setLoading] = useState(!detail)
   const [error, setError] = useState<string | null>(null)
   const [lineDrafts, setLineDrafts] = useState<Record<string, string>>({})
@@ -182,15 +195,23 @@ export function SalesOrderAuditDrawer({
     setDetail(current => {
       if (!current) return current
       const next = updater(current)
-      setAuditCache(card.card_id, next)
+      if (card.status !== 'IN_AUDIT') setAuditCache(card.card_id, next)
       return next
     })
-  }, [card.card_id])
+  }, [card.card_id, card.status])
 
   const loadDetail = useCallback(async () => {
     const seq = ++requestSeqRef.current
     setError(null)
-    const cached = getAuditCache(card.card_id)
+    if (card.status === 'IN_AUDIT') {
+      // The card may have moved to a new cycle while this drawer was mounted.
+      // Never keep rendering the previous cycle while the fresh read is pending.
+      setDetail(null)
+      invalidateAuditCache(card.card_id)
+    }
+    // Una tarjeta en auditoría puede haber avanzado a un ciclo nuevo. No usar
+    // aquí el snapshot cacheado del ciclo anterior para evitar mutarlo por error.
+    const cached = card.status === 'IN_AUDIT' ? null : getAuditCache(card.card_id)
     if (cached) {
       setDetail(cached)
       setLoading(false)
@@ -210,8 +231,9 @@ export function SalesOrderAuditDrawer({
       if (!mountedRef.current || seq !== requestSeqRef.current) return
 
       if (result.data) {
-        setDetail(result.data)
-        setAuditCache(card.card_id, result.data)
+        const selectedDetail = selectAuditDetailForCard(card.status, result.data)
+        setDetail(selectedDetail)
+        if (card.status !== 'IN_AUDIT') setAuditCache(card.card_id, selectedDetail)
         setError(null)
       } else if (result.error) {
         setError(result.error)
@@ -238,7 +260,7 @@ export function SalesOrderAuditDrawer({
         setLoading(false)
       }
     }
-  }, [card.card_id])
+  }, [card.card_id, card.status, card.company_id])
 
   useEffect(() => {
     mountedRef.current = true
@@ -768,6 +790,7 @@ export function SalesOrderAuditDrawer({
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 border-t border-[#E8DFD5] bg-[#FCFBF9] px-4 py-2 sm:grid-cols-3 sm:px-5 xl:grid-cols-6">
             <HeaderStat label="Preparó" value={preparerName} />
             <HeaderStat label="Audita" value={auditorName} />
+            <HeaderStat label="Ciclo" value={audit ? String(audit.cycle_no) : '—'} />
             <HeaderStat label="Bultos" value={packageCount == null ? '—' : String(packageCount)} />
             <HeaderStat label="Solicitado" value={String(requestedTotal)} accent />
             <HeaderStat label="Preparado" value={preparedTotal} accent />
