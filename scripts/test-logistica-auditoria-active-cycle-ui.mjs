@@ -11,7 +11,16 @@ const actions = await readFile(path.join(root, 'src/app/actions/logistica/sales-
 test('una tarjeta IN_AUDIT no reutiliza el cache de un ciclo anterior', () => {
   assert.match(drawer, /card\.status === 'IN_AUDIT' \? null : getAuditCache\(card\.card_id\)/)
   assert.match(drawer, /const cached = card\.status === 'IN_AUDIT' \? null : getAuditCache\(card\.card_id\)/)
+  assert.match(drawer, /invalidateAuditCache\(card\.card_id\)/)
+  assert.match(drawer, /if \(card\.status !== 'IN_AUDIT'\) setAuditCache\(card\.card_id, next\)/)
   assert.match(drawer, /\[card\.card_id, card\.status, card\.company_id\]/)
+})
+
+test('IN_AUDIT sólo presenta una auditoría OPEN y descarta ciclos históricos', () => {
+  assert.match(drawer, /function selectAuditDetailForCard\(/)
+  assert.match(drawer, /cardStatus === 'IN_AUDIT' && detail\.audit\?\.status !== 'OPEN'/)
+  assert.match(drawer, /return \{ audit: null, lines: \[\], incidents: \[\], attachments: \[\] \}/)
+  assert.match(drawer, /const selectedDetail = selectAuditDetailForCard\(card\.status, result\.data\)/)
 })
 
 test('el drawer identifica discretamente el ciclo recibido del backend', () => {

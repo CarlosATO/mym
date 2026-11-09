@@ -37,7 +37,7 @@ import {
   type SalesOrderAuditIncident,
   type SalesOrderAuditLine,
 } from '@/app/actions/logistica/sales-order-audit'
-import { getAuditCache, setAuditCache } from './audit-cache'
+import { getAuditCache, invalidateAuditCache, setAuditCache } from './audit-cache'
 import {
   AUDIT_EVIDENCE_ACCEPT,
   AUDIT_INCIDENT_LABELS,
@@ -87,6 +87,17 @@ function formatAuditDate(value: string | null): string {
   const date = new Date(value.length <= 10 ? `${value}T12:00:00` : value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleDateString('es-CL', { day: '2-digit', month: 'short', year: 'numeric' })
+}
+
+function selectAuditDetailForCard(
+  cardStatus: SalesOrderPreparationCardInfo['status'],
+  detail: SalesOrderAuditDetail,
+): SalesOrderAuditDetail {
+  // IN_AUDIT never presents a completed cycle as the current operational audit.
+  if (cardStatus === 'IN_AUDIT' && detail.audit?.status !== 'OPEN') {
+    return { audit: null, lines: [], incidents: [], attachments: [] }
+  }
+  return detail
 }
 
 function resultToneClasses(tone: 'pending' | 'ok' | 'incident'): string {
@@ -184,14 +195,20 @@ export function SalesOrderAuditDrawer({
     setDetail(current => {
       if (!current) return current
       const next = updater(current)
-      setAuditCache(card.card_id, next)
+      if (card.status !== 'IN_AUDIT') setAuditCache(card.card_id, next)
       return next
     })
-  }, [card.card_id])
+  }, [card.card_id, card.status])
 
   const loadDetail = useCallback(async () => {
     const seq = ++requestSeqRef.current
     setError(null)
+    if (card.status === 'IN_AUDIT') {
+      // The card may have moved to a new cycle while this drawer was mounted.
+      // Never keep rendering the previous cycle while the fresh read is pending.
+      setDetail(null)
+      invalidateAuditCache(card.card_id)
+    }
     // Una tarjeta en auditoría puede haber avanzado a un ciclo nuevo. No usar
     // aquí el snapshot cacheado del ciclo anterior para evitar mutarlo por error.
     const cached = card.status === 'IN_AUDIT' ? null : getAuditCache(card.card_id)
@@ -214,8 +231,9 @@ export function SalesOrderAuditDrawer({
       if (!mountedRef.current || seq !== requestSeqRef.current) return
 
       if (result.data) {
-        setDetail(result.data)
-        setAuditCache(card.card_id, result.data)
+        const selectedDetail = selectAuditDetailForCard(card.status, result.data)
+        setDetail(selectedDetail)
+        if (card.status !== 'IN_AUDIT') setAuditCache(card.card_id, selectedDetail)
         setError(null)
       } else if (result.error) {
         setError(result.error)
