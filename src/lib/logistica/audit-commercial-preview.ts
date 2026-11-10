@@ -51,6 +51,7 @@ export type AuditCommercialPreviewInput = {
   previousFingerprint: string
   previous: PreparationCommercialVersion
   auditedLines: AuditCommercialLine[]
+  auditContext: { companyId: string; cardId: string; auditId: string; packageCount: number }
 }
 
 /** Read-only preview. reviewedReference is a digest for subsequent revalidation,
@@ -109,6 +110,7 @@ export async function buildAuditCommercialPreview(input: AuditCommercialPreviewI
   const plan = planAuditCommercialAcceptance({ previous, current, auditedLines: input.auditedLines, taxEvidence })
   // The timestamp changes on each read; bind the actual evidence rather than its collection time.
   const { fetchedAt: _fetchedAt, ...stableEvidence } = taxEvidence
-  const reviewedReference = createHash('sha256').update(JSON.stringify({ previousVersionId: input.previousVersionId, previousFingerprint: input.previousFingerprint, current, taxEvidence: stableEvidence })).digest('hex')
+  const auditedLines = [...input.auditedLines].sort((a, b) => (a.bsale_variant_id ?? -1) - (b.bsale_variant_id ?? -1) || a.bsale_detail_id - b.bsale_detail_id)
+  const reviewedReference = createHash('sha256').update(JSON.stringify({ auditContext: input.auditContext, auditedLines, previousVersionId: input.previousVersionId, previousFingerprint: input.previousFingerprint, current, taxEvidence: stableEvidence })).digest('hex')
   return { eligible: plan.eligible, differences: plan.differences, errors: plan.errors, reviewedReference, currentBsaleId: currentId, previousVersionId: input.previousVersionId, historicalTaxRateCertified: false as const }
 }
