@@ -56,7 +56,7 @@ export type AuditCommercialPreviewInput = {
 
 /** Read-only preview. reviewedReference is a digest for subsequent revalidation,
  * not an authorization or the PostgreSQL approval fingerprint. */
-export async function buildAuditCommercialPreview(input: AuditCommercialPreviewInput, fetch: FetchResource) {
+export async function buildAuditCommercialReview(input: AuditCommercialPreviewInput, fetch: FetchResource) {
   const { previous, canonicalToken, folio } = input
   if (!canonicalToken || !folio || previous.identity?.canonicalToken !== canonicalToken || !input.previousVersionId || !input.previousFingerprint) throw new Error('ACCEPTED_VERSION_INVALID')
   const oldId = id(previous.physicalId)
@@ -112,5 +112,9 @@ export async function buildAuditCommercialPreview(input: AuditCommercialPreviewI
   const { fetchedAt: _fetchedAt, ...stableEvidence } = taxEvidence
   const auditedLines = [...input.auditedLines].sort((a, b) => (a.bsale_variant_id ?? -1) - (b.bsale_variant_id ?? -1) || a.bsale_detail_id - b.bsale_detail_id)
   const reviewedReference = createHash('sha256').update(JSON.stringify({ auditContext: input.auditContext, auditedLines, previousVersionId: input.previousVersionId, previousFingerprint: input.previousFingerprint, current, taxEvidence: stableEvidence })).digest('hex')
-  return { eligible: plan.eligible, differences: plan.differences, errors: plan.errors, reviewedReference, currentBsaleId: currentId, previousVersionId: input.previousVersionId, historicalTaxRateCertified: false as const }
+  return { preview: { eligible: plan.eligible, differences: plan.differences, errors: plan.errors, reviewedReference, currentBsaleId: currentId, previousVersionId: input.previousVersionId, historicalTaxRateCertified: false as const }, current, taxEvidence }
+}
+
+export async function buildAuditCommercialPreview(input: AuditCommercialPreviewInput, fetch: FetchResource) {
+  return (await buildAuditCommercialReview(input, fetch)).preview
 }
