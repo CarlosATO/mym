@@ -18,7 +18,7 @@ CREATE TABLE logistica.sales_order_audit_commercial_verifications (
   snapshot jsonb, differences jsonb, is_current boolean DEFAULT true, verified_at timestamptz DEFAULT now()
 );
 CREATE TABLE integraciones.vw_bsale_sales_order_documents_canonical (company_id uuid, canonical_bsale_token text, current_bsale_id bigint);
-\i supabase/migrations/20261110130000_logistica_audit_verification_accepted_version_guard.sql
+\i supabase/migrations/20261110140000_logistica_audit_verification_accepted_version_guard.sql
 SELECT set_config('test.role', 'authenticated', false), set_config('test.actor', '00000000-0000-0000-0000-000000000004', false), set_config('test.allowed', 'yes', false);
 INSERT INTO logistica.sales_order_audits VALUES ('00000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002', 'OPEN');
 INSERT INTO logistica.sales_order_preparation_cards VALUES ('00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000001', 'IN_AUDIT', 'token', 10, now());

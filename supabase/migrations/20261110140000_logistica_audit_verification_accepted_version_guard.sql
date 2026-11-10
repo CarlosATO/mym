@@ -1,4 +1,4 @@
--- Reject verification snapshots calculated against a superseded accepted version.
+-- Reject audit verification snapshots calculated against a superseded accepted version.
 BEGIN;
 
 CREATE OR REPLACE FUNCTION logistica.record_sales_order_audit_commercial_verification_v1(
