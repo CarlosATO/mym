@@ -27,11 +27,12 @@ INSERT INTO logistica.sales_order_audits VALUES ('00000000-0000-0000-0000-000000
 INSERT INTO logistica.sales_order_audit_lines VALUES (gen_random_uuid(),'00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003',1,'CONFIRMED',4,4,false);
 INSERT INTO logistica.sales_order_audit_lines VALUES (gen_random_uuid(),'00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003',2,'CONFIRMED',12,12,false);
 INSERT INTO integraciones.vw_bsale_sales_order_documents_canonical VALUES ('00000000-0000-0000-0000-000000000001','token',10);
-INSERT INTO logistica.sales_order_preparation_commercial_versions(id,company_id,card_id,sequence_no,canonical_bsale_token,historical_bsale_nv_id,current_bsale_nv_id,fingerprint,version_snapshot) VALUES ('00000000-0000-0000-0000-000000000005','00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002',1,'token',10,10,'old','{"lines":[{"detailId":1,"variantId":1,"sku":"A","quantity":5,"unitNetValue":100,"lineNetAmount":500,"lineTaxAmount":95,"lineGrossAmount":595},{"detailId":2,"variantId":2,"sku":"B","quantity":12,"unitNetValue":10,"lineNetAmount":120,"lineTaxAmount":24,"lineGrossAmount":144}],"sourceDetails":[{"id":1,"netDiscount":0},{"id":2,"netDiscount":0}],"netAmount":620,"taxAmount":119,"totalAmount":739}');
+INSERT INTO logistica.sales_order_preparation_commercial_versions(id,company_id,card_id,sequence_no,canonical_bsale_token,historical_bsale_nv_id,current_bsale_nv_id,fingerprint,version_snapshot) VALUES ('00000000-0000-0000-0000-000000000005','00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002',1,'token',93141,10,'old','{"identity":{"canonicalToken":"token","currentBsaleId":93141},"physicalId":93141,"lines":[{"detailId":1,"variantId":1,"sku":"P317","quantity":5,"unitNetValue":730,"lineNetAmount":3650,"lineTaxAmount":694,"lineGrossAmount":4344},{"detailId":2,"variantId":2,"sku":"AUT.","quantity":12,"unitNetValue":3000,"lineNetAmount":36000,"lineTaxAmount":6840,"lineGrossAmount":42840}],"sourceDetails":[{"id":1,"netDiscount":0},{"id":2,"netDiscount":0}],"netAmount":39650,"taxAmount":7534,"totalAmount":47184}');
+UPDATE logistica.sales_order_preparation_commercial_versions SET version_snapshot=jsonb_set(version_snapshot,'{sourceDetails,0}', '{"id":"local-row","raw_json":{"id":1,"netDiscount":0}}');
 INSERT INTO logistica.sales_order_audit_commercial_verifications VALUES ('00000000-0000-0000-0000-000000000007','00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003',true);
 
 CREATE FUNCTION logistica.fixture_request(p_id uuid) RETURNS void LANGUAGE plpgsql AS $$
-DECLARE snapshot jsonb := '{"identity":{"canonicalToken":"token","currentBsaleId":10},"physicalId":10,"lines":[{"detailId":1,"variantId":1,"sku":"A","quantity":4,"unitNetValue":100,"lineNetAmount":400,"lineTaxAmount":76,"lineGrossAmount":476},{"detailId":2,"variantId":2,"sku":"B","quantity":12,"unitNetValue":10,"lineNetAmount":120,"lineTaxAmount":24,"lineGrossAmount":144}],"sourceDetails":[{"id":1,"netDiscount":0},{"id":2,"netDiscount":0}],"netAmount":520,"taxAmount":100,"totalAmount":620}'; fp text;
+DECLARE snapshot jsonb := '{"identity":{"canonicalToken":"token","currentBsaleId":10},"physicalId":10,"lines":[{"detailId":1,"variantId":1,"sku":"P317","quantity":4,"unitNetValue":730,"lineNetAmount":2920,"lineTaxAmount":555,"lineGrossAmount":3475},{"detailId":2,"variantId":2,"sku":"AUT.","quantity":12,"unitNetValue":3000,"lineNetAmount":36000,"lineTaxAmount":6840,"lineGrossAmount":42840}],"sourceDetails":[{"id":1,"netDiscount":0},{"id":2,"netDiscount":0}],"netAmount":38920,"taxAmount":7395,"totalAmount":46315,"taxEvidence":{"canonicalToken":"token","fetchedAt":"2026-11-10T12:00:00Z","tax":{"id":1,"code":"14","percentage":19,"active":true,"source":"/taxes/1.json"},"previousDocument":{"id":93141,"taxIds":[1],"exemptAmount":0,"taxAmount":7534,"source":"/documents/93141/document_taxes.json"},"currentDocument":{"id":10,"taxIds":[1],"exemptAmount":0,"taxAmount":7395,"source":"/documents/10/document_taxes.json"},"products":[{"variantId":1,"productId":101,"taxIds":[1],"source":"/products/101/product_taxes.json"},{"variantId":2,"productId":102,"taxIds":[1],"source":"/products/102/product_taxes.json"}]}}'; fp text;
 BEGIN
  fp := logistica.audit_commercial_snapshot_fingerprint_v1(snapshot);
  INSERT INTO logistica.sales_order_audit_commercial_acceptance_requests(id,company_id,card_id,audit_id,actor_id,previous_version_id,previous_fingerprint,approved_fingerprint,version_fingerprint,version_snapshot,approval_evidence,approved_at,verified_at)
@@ -76,11 +77,42 @@ DO $$ DECLARE result jsonb; BEGIN
  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{lines,0,quantity}','4');
  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_fingerprint='tampered';
  BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'modified canonical fingerprint accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_APPROVAL_INVALID' THEN RAISE; END IF; END;
- UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_fingerprint='canonical-v2';
- UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{lines,0,lineTaxAmount}','77');
+  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_fingerprint='canonical-v2';
+  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{taxEvidence,tax,percentage}','18');
+  BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'modified tax evidence accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_REQUEST_INVALID' THEN RAISE; END IF; END;
+  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{taxEvidence,tax,percentage}','19');
+  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{taxEvidence,tax}','null');
+  PERFORM logistica.fixture_resign('00000000-0000-0000-0000-000000000006');
+  BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'missing tax accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_TAX_EVIDENCE_INVALID' THEN RAISE; END IF; END;
+  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{taxEvidence,tax}','{"id":1,"code":"14","percentage":19,"active":true,"source":"/taxes/1.json"}');
+  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{taxEvidence,tax,percentage}','18');
+  PERFORM logistica.fixture_resign('00000000-0000-0000-0000-000000000006');
+  BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'wrong rate accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_UNEXPLAINED_VALUE_CHANGE' THEN RAISE; END IF; END;
+  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{taxEvidence,tax,percentage}','19');
+  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{taxEvidence,currentDocument,taxIds}','[1,2]');
+  PERFORM logistica.fixture_resign('00000000-0000-0000-0000-000000000006');
+  BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'multiple taxes accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_TAX_EVIDENCE_INVALID' THEN RAISE; END IF; END;
+  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{taxEvidence,currentDocument,taxIds}','[1]');
+  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{taxEvidence,products,0,taxIds}','[2]');
+  PERFORM logistica.fixture_resign('00000000-0000-0000-0000-000000000006');
+  BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'wrong product tax accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_TAX_EVIDENCE_INVALID' THEN RAISE; END IF; END;
+  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{taxEvidence,products,0,taxIds}','[1]');
+  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{taxEvidence,previousDocument,exemptAmount}','1');
+  PERFORM logistica.fixture_resign('00000000-0000-0000-0000-000000000006');
+  BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'exemption accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_TAX_EVIDENCE_INVALID' THEN RAISE; END IF; END;
+  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{taxEvidence,previousDocument,exemptAmount}','0');
+  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{lines,0,variantId}','3');
+  PERFORM logistica.fixture_resign('00000000-0000-0000-0000-000000000006');
+  BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'changed product accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_PRODUCT_IDENTITY_AMBIGUOUS' THEN RAISE; END IF; END;
+  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{lines,0,variantId}','1');
+  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{taxEvidence,tax,source}','"/unverified"');
+  PERFORM logistica.fixture_resign('00000000-0000-0000-0000-000000000006');
+  BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'invalid tax source accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_TAX_EVIDENCE_INVALID' THEN RAISE; END IF; END;
+  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{taxEvidence,tax,source}','"/taxes/1.json"');
+ UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{lines,0,lineTaxAmount}','556');
  PERFORM logistica.fixture_resign('00000000-0000-0000-0000-000000000006');
  BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'rounding mismatch accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_UNEXPLAINED_VALUE_CHANGE' THEN RAISE; END IF; END;
- UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{lines,0,lineTaxAmount}','76');
+ UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{lines,0,lineTaxAmount}','555');
  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=version_snapshot #- '{sourceDetails,0,netDiscount}';
  PERFORM logistica.fixture_resign('00000000-0000-0000-0000-000000000006');
  BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'missing discount accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_DISCOUNT_CHANGED' THEN RAISE; END IF; END;
@@ -90,11 +122,12 @@ DO $$ DECLARE result jsonb; BEGIN
  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(jsonb_set(version_snapshot,'{sourceDetails,0,netDiscount}','0'),'{lines,0,unitNetValue}','120');
  PERFORM logistica.fixture_resign('00000000-0000-0000-0000-000000000006');
  BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'changed price accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_QUANTITY_OR_PRICE_CHANGED' THEN RAISE; END IF; END;
- UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{lines,0,unitNetValue}','100');
+ UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{lines,0,unitNetValue}','730');
  PERFORM logistica.fixture_resign('00000000-0000-0000-0000-000000000006');
  result := logistica.fixture_accept('00000000-0000-0000-0000-000000000006');
  IF result->>'status' <> 'ACCEPTED' THEN RAISE EXCEPTION 'acceptance failed'; END IF;
- IF (SELECT count(*) FROM logistica.sales_order_preparation_commercial_versions) <> 2 OR (SELECT count(*) FROM logistica.sales_order_audit_commercial_verifications WHERE is_current) <> 0 THEN RAISE EXCEPTION 'history or invalidation failure'; END IF;
+  IF (SELECT count(*) FROM logistica.sales_order_preparation_commercial_versions) <> 2 OR (SELECT count(*) FROM logistica.sales_order_audit_commercial_verifications WHERE is_current) <> 0 THEN RAISE EXCEPTION 'history or invalidation failure'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM logistica.sales_order_preparation_commercial_versions WHERE sequence_no=2 AND version_snapshot->'taxEvidence'->'tax'->>'percentage'='19' AND applied_actions->0->'historicalTaxRateCertified'='false'::jsonb) THEN RAISE EXCEPTION 'tax evidence history missing'; END IF;
  IF NOT EXISTS (SELECT 1 FROM logistica.sales_order_preparation_commercial_versions WHERE id='00000000-0000-0000-0000-000000000005' AND fingerprint='old' AND version_snapshot->'lines'->0->>'quantity'='5') OR NOT EXISTS (SELECT 1 FROM logistica.sales_order_audit_lines WHERE audit_quantity=4 AND prepared_quantity_snapshot=4) OR NOT EXISTS (SELECT 1 FROM logistica.sales_order_audits WHERE status='OPEN' AND package_count=8) THEN RAISE EXCEPTION 'physical data or history changed'; END IF;
  INSERT INTO logistica.sales_order_audit_commercial_verifications VALUES ('00000000-0000-0000-0000-000000000010','00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003',true);
  IF logistica.fixture_accept('00000000-0000-0000-0000-000000000006')->>'status' <> 'ALREADY_ACCEPTED' OR NOT EXISTS (SELECT 1 FROM logistica.sales_order_audit_commercial_verifications WHERE id='00000000-0000-0000-0000-000000000010' AND is_current) THEN RAISE EXCEPTION 'idempotence failure'; END IF;

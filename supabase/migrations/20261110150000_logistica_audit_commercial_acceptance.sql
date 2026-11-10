@@ -1,6 +1,9 @@
 -- Requests are written only by the trusted server after explicit user approval.
 -- This function does not fetch Bsale: the server must independently re-read it
 -- and confirm the approved fingerprint immediately before creating a request.
+-- Tax evidence in the snapshot is not proof of provenance: the future server
+-- action MUST independently obtain it through authenticated Bsale queries.
+-- This integration is not secure until that server-side check is implemented.
 BEGIN;
 
 CREATE TABLE logistica.sales_order_audit_commercial_acceptance_requests (
@@ -63,6 +66,12 @@ DECLARE
   v_new_discount numeric;
   v_key text;
   v_count integer;
+  v_evidence jsonb;
+  v_tax jsonb;
+  v_doc jsonb;
+  v_version jsonb;
+  v_product jsonb;
+  v_rate numeric;
 BEGIN
   IF auth.role() IS DISTINCT FROM 'service_role' OR p_actor_id IS NULL
      OR NOT EXISTS (SELECT 1 FROM portal.users WHERE id = p_actor_id AND is_active = true AND deleted_at IS NULL)
@@ -141,6 +150,54 @@ BEGIN
     RAISE EXCEPTION 'AUDIT_ACCEPTANCE_SNAPSHOT_INCOMPLETE';
   END IF;
 
+  -- Included in version_snapshot, hence covered by the approval fingerprint and
+  -- retained in commercial history. Current associations do not certify the
+  -- historical per-line rate.
+  v_evidence := v_request.version_snapshot->'taxEvidence';
+  v_tax := v_evidence->'tax';
+  IF jsonb_typeof(v_evidence) IS DISTINCT FROM 'object'
+     OR v_evidence->>'canonicalToken' IS DISTINCT FROM v_card.canonical_bsale_token
+     OR jsonb_typeof(v_evidence->'fetchedAt') IS DISTINCT FROM 'string'
+     OR COALESCE(v_evidence->>'fetchedAt','') !~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}'
+     OR jsonb_typeof(v_tax) IS DISTINCT FROM 'object'
+     OR jsonb_typeof(v_tax->'id') IS DISTINCT FROM 'number'
+     OR COALESCE(v_tax->>'id','') !~ '^[0-9]+$'
+     OR (v_tax->>'id')::numeric NOT BETWEEN 1 AND 9007199254740991
+     OR jsonb_typeof(v_tax->'code') IS DISTINCT FROM 'string' OR COALESCE(v_tax->>'code','') = ''
+     OR v_tax->'active' IS DISTINCT FROM 'true'::jsonb
+     OR jsonb_typeof(v_tax->'percentage') IS DISTINCT FROM 'number'
+     OR (v_tax->>'percentage')::numeric NOT BETWEEN 0 AND 100
+     OR v_tax->>'source' IS DISTINCT FROM '/taxes/' || (v_tax->>'id') || '.json'
+     OR jsonb_typeof(v_evidence->'products') IS DISTINCT FROM 'array' THEN
+    RAISE EXCEPTION 'AUDIT_ACCEPTANCE_TAX_EVIDENCE_INVALID';
+  END IF;
+  BEGIN
+    PERFORM (v_evidence->>'fetchedAt')::timestamptz;
+  EXCEPTION WHEN OTHERS THEN
+    RAISE EXCEPTION 'AUDIT_ACCEPTANCE_TAX_EVIDENCE_INVALID';
+  END;
+  v_rate := (v_tax->>'percentage')::numeric;
+  FOR v_doc, v_version IN SELECT * FROM (VALUES
+    (v_evidence->'previousDocument', v_previous.version_snapshot),
+    (v_evidence->'currentDocument', v_request.version_snapshot)) AS docs(doc, version)
+  LOOP
+    IF jsonb_typeof(v_doc) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(v_doc->'id') IS DISTINCT FROM 'number'
+       OR COALESCE(v_doc->>'id','') !~ '^[0-9]+$'
+       OR (v_doc->>'id')::numeric NOT BETWEEN 1 AND 9007199254740991
+       OR v_doc->'id' IS DISTINCT FROM v_version->'physicalId'
+       OR v_doc->>'source' IS DISTINCT FROM '/documents/' || (v_doc->>'id') || '/document_taxes.json'
+       OR v_doc->'taxIds' IS DISTINCT FROM jsonb_build_array(v_tax->'id')
+       OR v_doc->'exemptAmount' IS DISTINCT FROM '0'::jsonb
+       OR v_doc->'taxAmount' IS DISTINCT FROM v_version->'taxAmount' THEN
+      RAISE EXCEPTION 'AUDIT_ACCEPTANCE_TAX_EVIDENCE_INVALID';
+    END IF;
+  END LOOP;
+  IF v_previous.version_snapshot->'identity'->>'canonicalToken' IS DISTINCT FROM v_card.canonical_bsale_token
+     OR jsonb_array_length(v_evidence->'products') <> jsonb_array_length(v_request.version_snapshot->'lines') THEN
+    RAISE EXCEPTION 'AUDIT_ACCEPTANCE_TAX_EVIDENCE_INVALID';
+  END IF;
+
   -- Strictly require unique variant identities, unchanged unit prices and
   -- proportional line amounts and source discounts. Missing evidence fails closed.
   FOR v_old IN SELECT value FROM jsonb_array_elements(v_previous.version_snapshot->'lines') LOOP
@@ -151,6 +208,16 @@ BEGIN
     SELECT count(*) INTO v_count FROM jsonb_array_elements(v_request.version_snapshot->'lines') x WHERE x->>'variantId' = v_key;
     IF v_count <> 1 THEN RAISE EXCEPTION 'AUDIT_ACCEPTANCE_PRODUCT_IDENTITY_AMBIGUOUS'; END IF;
     SELECT value INTO v_new FROM jsonb_array_elements(v_request.version_snapshot->'lines') x WHERE x->>'variantId' = v_key;
+    SELECT count(*) INTO v_count FROM jsonb_array_elements(v_evidence->'products') x WHERE x->'variantId' = v_new->'variantId';
+    IF v_count <> 1 THEN RAISE EXCEPTION 'AUDIT_ACCEPTANCE_TAX_EVIDENCE_INVALID'; END IF;
+    SELECT value INTO v_product FROM jsonb_array_elements(v_evidence->'products') x WHERE x->'variantId' = v_new->'variantId';
+    IF jsonb_typeof(v_product->'productId') IS DISTINCT FROM 'number'
+       OR COALESCE(v_product->>'productId','') !~ '^[0-9]+$'
+       OR (v_product->>'productId')::numeric NOT BETWEEN 1 AND 9007199254740991
+       OR v_product->>'source' IS DISTINCT FROM '/products/' || (v_product->>'productId') || '/product_taxes.json'
+       OR v_product->'taxIds' IS DISTINCT FROM jsonb_build_array(v_tax->'id') THEN
+      RAISE EXCEPTION 'AUDIT_ACCEPTANCE_TAX_EVIDENCE_INVALID';
+    END IF;
     IF btrim(COALESCE(v_old->>'sku', '')) IS DISTINCT FROM btrim(COALESCE(v_new->>'sku', '')) THEN
       RAISE EXCEPTION 'AUDIT_ACCEPTANCE_PRODUCT_IDENTITY_CHANGED';
     END IF;
@@ -173,16 +240,28 @@ BEGIN
         RAISE EXCEPTION 'AUDIT_ACCEPTANCE_VALUES_MISSING';
       END IF;
       v_old_amount := (v_old->>v_field)::numeric; v_new_amount := (v_new->>v_field)::numeric;
-      IF v_old_amount * v_new_qty IS DISTINCT FROM v_new_amount * v_old_qty THEN
+      IF v_field = 'lineNetAmount' AND v_old_amount * v_new_qty IS DISTINCT FROM v_new_amount * v_old_qty THEN
         RAISE EXCEPTION 'AUDIT_ACCEPTANCE_UNEXPLAINED_VALUE_CHANGE';
       END IF;
     END LOOP;
-    SELECT count(*), min((x->>'netDiscount')::numeric) INTO v_count, v_old_discount
-    FROM jsonb_array_elements(v_previous.version_snapshot->'sourceDetails') x WHERE x->>'id' = v_old->>'detailId' AND jsonb_typeof(x->'netDiscount') = 'number';
+    FOR v_version IN SELECT * FROM (VALUES (v_old), (v_new)) AS lines(line) LOOP
+      IF (v_version->>'unitNetValue')::numeric < 0
+         OR (v_version->>'lineNetAmount')::numeric <> round((v_version->>'quantity')::numeric * (v_version->>'unitNetValue')::numeric)
+         OR (v_version->>'lineTaxAmount')::numeric <> round((v_version->>'lineNetAmount')::numeric * v_rate / 100)
+         OR (v_version->>'lineGrossAmount')::numeric <> (v_version->>'lineNetAmount')::numeric + (v_version->>'lineTaxAmount')::numeric THEN
+        RAISE EXCEPTION 'AUDIT_ACCEPTANCE_UNEXPLAINED_VALUE_CHANGE';
+      END IF;
+    END LOOP;
+    SELECT count(*), min((source->>'netDiscount')::numeric) INTO v_count, v_old_discount
+    FROM jsonb_array_elements(v_previous.version_snapshot->'sourceDetails') x
+    CROSS JOIN LATERAL (SELECT CASE WHEN jsonb_typeof(x->'raw_json') = 'object' THEN x->'raw_json' ELSE x END AS source) normalized
+    WHERE source->>'id' = v_old->>'detailId' AND jsonb_typeof(source->'netDiscount') = 'number';
     IF v_count <> 1 THEN RAISE EXCEPTION 'AUDIT_ACCEPTANCE_DISCOUNT_EVIDENCE_MISSING'; END IF;
-    SELECT count(*), min((x->>'netDiscount')::numeric) INTO v_count, v_new_discount
-    FROM jsonb_array_elements(v_request.version_snapshot->'sourceDetails') x WHERE x->>'id' = v_new->>'detailId' AND jsonb_typeof(x->'netDiscount') = 'number';
-    IF v_count <> 1 OR v_old_discount * v_new_qty IS DISTINCT FROM v_new_discount * v_old_qty THEN
+    SELECT count(*), min((source->>'netDiscount')::numeric) INTO v_count, v_new_discount
+    FROM jsonb_array_elements(v_request.version_snapshot->'sourceDetails') x
+    CROSS JOIN LATERAL (SELECT CASE WHEN jsonb_typeof(x->'raw_json') = 'object' THEN x->'raw_json' ELSE x END AS source) normalized
+    WHERE source->>'id' = v_new->>'detailId' AND jsonb_typeof(source->'netDiscount') = 'number';
+    IF v_count <> 1 OR v_old_discount <> 0 OR v_new_discount <> 0 THEN
       RAISE EXCEPTION 'AUDIT_ACCEPTANCE_DISCOUNT_CHANGED';
     END IF;
   END LOOP;
@@ -212,7 +291,7 @@ BEGIN
   ) VALUES (
     p_company_id, p_card_id, v_previous.sequence_no + 1, v_card.canonical_bsale_token, v_card.bsale_nv_id, v_current_id,
     v_previous.fingerprint, v_request.version_fingerprint, v_request.version_snapshot,
-    jsonb_build_array(jsonb_build_object('event', 'AUDIT_COMMERCIAL_ACCEPTANCE', 'auditId', p_audit_id, 'requestId', p_request_id, 'approval', v_request.approval_evidence)), p_actor_id
+    jsonb_build_array(jsonb_build_object('event', 'AUDIT_COMMERCIAL_ACCEPTANCE', 'auditId', p_audit_id, 'requestId', p_request_id, 'approval', v_request.approval_evidence, 'historicalTaxRateCertified', false)), p_actor_id
   ) RETURNING id INTO v_version_id;
   UPDATE logistica.sales_order_audit_commercial_verifications SET is_current = false
   WHERE company_id = p_company_id AND card_id = p_card_id AND audit_id = p_audit_id AND is_current;
