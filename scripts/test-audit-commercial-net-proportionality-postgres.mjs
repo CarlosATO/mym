@@ -44,7 +44,7 @@ for (const fixture of cases) test(`SQL y TypeScript: ${fixture.name}`, () => {
     DELETE FROM logistica.sales_order_audit_lines WHERE bsale_variant_id=2;
     UPDATE logistica.sales_order_audit_lines SET audit_quantity=${fixture.newQty}, prepared_quantity_snapshot=${fixture.newQty} WHERE bsale_variant_id=1;
     UPDATE logistica.sales_order_preparation_commercial_versions SET version_snapshot=$fixture$${JSON.stringify(previous)}$fixture$::jsonb WHERE sequence_no=1;
-    UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=$fixture$${JSON.stringify({ ...current, taxEvidence })}$fixture$::jsonb WHERE id='${requestId}';
+    UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=$fixture$${JSON.stringify({ ...current, taxEvidence })}$fixture$::jsonb || jsonb_build_object('auditPhysical', logistica.audit_commercial_physical_snapshot_v1('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003')) WHERE id='${requestId}';
     SELECT logistica.fixture_resign('${requestId}');
     DO $test$ BEGIN
       ${fixture.accepted

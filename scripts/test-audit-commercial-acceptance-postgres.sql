@@ -7,10 +7,10 @@ DO $$ BEGIN CREATE ROLE authenticated; EXCEPTION WHEN duplicate_object THEN NULL
 DO $$ BEGIN CREATE ROLE service_role; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 CREATE TABLE core.companies(id uuid PRIMARY KEY);
 CREATE TABLE portal.users(id uuid PRIMARY KEY, is_active boolean, deleted_at timestamptz);
-CREATE TABLE logistica.sales_order_audits(id uuid PRIMARY KEY, company_id uuid, card_id uuid, status text, package_count integer);
+CREATE TABLE logistica.sales_order_audits(id uuid PRIMARY KEY, company_id uuid, card_id uuid, status text, package_count integer, cycle_no integer NOT NULL DEFAULT 2);
 CREATE TABLE logistica.sales_order_preparation_cards(id uuid PRIMARY KEY, company_id uuid, status text, canonical_bsale_token text, current_bsale_nv_id bigint, bsale_nv_id bigint);
 CREATE TABLE logistica.sales_order_preparation_commercial_versions(id uuid PRIMARY KEY DEFAULT gen_random_uuid(), company_id uuid, card_id uuid, sequence_no int, canonical_bsale_token text, historical_bsale_nv_id bigint, current_bsale_nv_id bigint, previous_fingerprint text, fingerprint text, version_snapshot jsonb, applied_actions jsonb, accepted_by uuid, UNIQUE(company_id,card_id,sequence_no), UNIQUE(company_id,card_id,fingerprint));
-CREATE TABLE logistica.sales_order_audit_lines(id uuid, company_id uuid, card_id uuid, audit_id uuid, bsale_variant_id bigint, line_status text, audit_quantity numeric, prepared_quantity_snapshot numeric, excluded_from_dispatch_snapshot boolean);
+CREATE TABLE logistica.sales_order_audit_lines(id uuid PRIMARY KEY, company_id uuid, card_id uuid, audit_id uuid, bsale_variant_id bigint, line_status text, audit_quantity numeric, prepared_quantity_snapshot numeric, excluded_from_dispatch_snapshot boolean, preparation_line_id uuid DEFAULT gen_random_uuid(), bsale_detail_id bigint, sku text, product_name text, requested_quantity_snapshot numeric);
 CREATE TABLE logistica.sales_order_preparation_incidents(id uuid PRIMARY KEY, company_id uuid, card_id uuid, status text);
 CREATE TABLE logistica.sales_order_audit_incidents(id uuid PRIMARY KEY, company_id uuid, audit_id uuid, status text);
 CREATE TABLE logistica.sales_order_audit_commercial_verifications(id uuid PRIMARY KEY, company_id uuid, card_id uuid, audit_id uuid, is_current boolean);
@@ -23,9 +23,9 @@ CREATE FUNCTION core.has_permission_for_company(uuid,uuid,text) RETURNS boolean 
 INSERT INTO core.companies VALUES ('00000000-0000-0000-0000-000000000001');
 INSERT INTO portal.users VALUES ('00000000-0000-0000-0000-000000000004',true,NULL);
 INSERT INTO logistica.sales_order_preparation_cards VALUES ('00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000001','IN_AUDIT','token',10,10);
-INSERT INTO logistica.sales_order_audits VALUES ('00000000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','OPEN',8);
-INSERT INTO logistica.sales_order_audit_lines VALUES (gen_random_uuid(),'00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003',1,'CONFIRMED',4,4,false);
-INSERT INTO logistica.sales_order_audit_lines VALUES (gen_random_uuid(),'00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003',2,'CONFIRMED',12,12,false);
+INSERT INTO logistica.sales_order_audits(id,company_id,card_id,status,package_count) VALUES ('00000000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','OPEN',8);
+INSERT INTO logistica.sales_order_audit_lines(id,company_id,card_id,audit_id,bsale_variant_id,line_status,audit_quantity,prepared_quantity_snapshot,excluded_from_dispatch_snapshot,bsale_detail_id,sku,product_name,requested_quantity_snapshot) VALUES (gen_random_uuid(),'00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003',1,'CONFIRMED',4,4,false,1,'P317','P317',5);
+INSERT INTO logistica.sales_order_audit_lines(id,company_id,card_id,audit_id,bsale_variant_id,line_status,audit_quantity,prepared_quantity_snapshot,excluded_from_dispatch_snapshot,bsale_detail_id,sku,product_name,requested_quantity_snapshot) VALUES (gen_random_uuid(),'00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003',2,'CONFIRMED',12,12,false,2,'AUT.','AUT.',12);
 INSERT INTO integraciones.vw_bsale_sales_order_documents_canonical VALUES ('00000000-0000-0000-0000-000000000001','token',10);
 INSERT INTO logistica.sales_order_preparation_commercial_versions(id,company_id,card_id,sequence_no,canonical_bsale_token,historical_bsale_nv_id,current_bsale_nv_id,fingerprint,version_snapshot) VALUES ('00000000-0000-0000-0000-000000000005','00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002',1,'token',93141,10,'old','{"identity":{"canonicalToken":"token","currentBsaleId":93141},"physicalId":93141,"lines":[{"detailId":1,"variantId":1,"sku":"P317","quantity":5,"unitNetValue":730,"lineNetAmount":3650,"lineTaxAmount":694,"lineGrossAmount":4344},{"detailId":2,"variantId":2,"sku":"AUT.","quantity":12,"unitNetValue":3000,"lineNetAmount":36000,"lineTaxAmount":6840,"lineGrossAmount":42840}],"sourceDetails":[{"id":1,"netDiscount":0},{"id":2,"netDiscount":0}],"netAmount":39650,"taxAmount":7534,"totalAmount":47184}');
 UPDATE logistica.sales_order_preparation_commercial_versions SET version_snapshot=jsonb_set(version_snapshot,'{sourceDetails,0}', '{"id":"local-row","raw_json":{"id":1,"netDiscount":0}}');
@@ -34,6 +34,7 @@ INSERT INTO logistica.sales_order_audit_commercial_verifications VALUES ('000000
 CREATE FUNCTION logistica.fixture_request(p_id uuid) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE snapshot jsonb := '{"identity":{"canonicalToken":"token","currentBsaleId":10},"physicalId":10,"lines":[{"detailId":1,"variantId":1,"sku":"P317","quantity":4,"unitNetValue":730,"lineNetAmount":2920,"lineTaxAmount":555,"lineGrossAmount":3475},{"detailId":2,"variantId":2,"sku":"AUT.","quantity":12,"unitNetValue":3000,"lineNetAmount":36000,"lineTaxAmount":6840,"lineGrossAmount":42840}],"sourceDetails":[{"id":1,"netDiscount":0},{"id":2,"netDiscount":0}],"netAmount":38920,"taxAmount":7395,"totalAmount":46315,"taxEvidence":{"canonicalToken":"token","fetchedAt":"2026-11-10T12:00:00Z","tax":{"id":1,"code":"14","percentage":19,"active":true,"source":"/taxes/1.json"},"previousDocument":{"id":93141,"taxIds":[1],"exemptAmount":0,"taxAmount":7534,"source":"/documents/93141/document_taxes.json"},"currentDocument":{"id":10,"taxIds":[1],"exemptAmount":0,"taxAmount":7395,"source":"/documents/10/document_taxes.json"},"products":[{"variantId":1,"productId":101,"taxIds":[1],"source":"/products/101/product_taxes.json"},{"variantId":2,"productId":102,"taxIds":[1],"source":"/products/102/product_taxes.json"}]}}'; fp text;
 BEGIN
+ snapshot := jsonb_set(snapshot, '{auditPhysical}', logistica.audit_commercial_physical_snapshot_v1('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003'));
  fp := logistica.audit_commercial_snapshot_fingerprint_v1(snapshot);
  INSERT INTO logistica.sales_order_audit_commercial_acceptance_requests(id,company_id,card_id,audit_id,actor_id,previous_version_id,previous_fingerprint,approved_fingerprint,version_fingerprint,version_snapshot,approval_evidence,approved_at,verified_at)
  VALUES (p_id,'00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000004','00000000-0000-0000-0000-000000000005','old',fp,'canonical-v2',snapshot,jsonb_build_object('actorId','00000000-0000-0000-0000-000000000004','auditId','00000000-0000-0000-0000-000000000003','fingerprint',fp,'versionFingerprint','canonical-v2','approved',true),now()-interval '1 second',now());
@@ -43,9 +44,28 @@ CREATE FUNCTION logistica.fixture_accept(p_id uuid, fp text DEFAULT NULL) RETURN
 CREATE FUNCTION logistica.fixture_resign(p_id uuid) RETURNS void LANGUAGE sql AS $$ UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET approved_fingerprint=logistica.audit_commercial_snapshot_fingerprint_v1(version_snapshot), approval_evidence=jsonb_set(approval_evidence,'{fingerprint}',to_jsonb(logistica.audit_commercial_snapshot_fingerprint_v1(version_snapshot))) WHERE id=p_id $$;
 SELECT logistica.fixture_request('00000000-0000-0000-0000-000000000006');
 
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+DO $$ BEGIN
+ BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'unsafe isolation accepted';
+ EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_ISOLATION_UNSUPPORTED' THEN RAISE; END IF; END;
+END $$;
+ROLLBACK;
+
 DO $$ DECLARE result jsonb; BEGIN
  -- Every failing call is rolled back to its implicit exception savepoint.
  BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006',repeat('0',64)); RAISE EXCEPTION 'bad fingerprint accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_REQUEST_INVALID' THEN RAISE; END IF; END;
+ BEGIN
+   UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=version_snapshot-'auditPhysical';
+   PERFORM logistica.fixture_resign('00000000-0000-0000-0000-000000000006');
+   PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006');
+   RAISE EXCEPTION 'missing physical snapshot accepted';
+ EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_PHYSICAL_SNAPSHOT_CHANGED' THEN RAISE; END IF; END;
+ BEGIN
+   UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{auditPhysical,packageCount}','9');
+   PERFORM logistica.fixture_resign('00000000-0000-0000-0000-000000000006');
+   PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006');
+   RAISE EXCEPTION 'forged physical snapshot accepted';
+ EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_PHYSICAL_SNAPSHOT_CHANGED' THEN RAISE; END IF; END;
  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET previous_fingerprint='stale';
  BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'stale accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_PREVIOUS_VERSION_STALE' THEN RAISE; END IF; END;
  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET previous_fingerprint='old';
@@ -58,6 +78,31 @@ DO $$ DECLARE result jsonb; BEGIN
  UPDATE logistica.sales_order_audits SET status='OPEN', package_count=NULL;
  BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'no packages accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_PACKAGES_REQUIRED' THEN RAISE; END IF; END;
  UPDATE logistica.sales_order_audits SET package_count=8;
+ UPDATE logistica.sales_order_audits SET package_count=9;
+ BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'changed packages accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_PHYSICAL_SNAPSHOT_CHANGED' THEN RAISE; END IF; END;
+ UPDATE logistica.sales_order_audits SET package_count=8, cycle_no=3;
+ BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'changed cycle accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_PHYSICAL_SNAPSHOT_CHANGED' THEN RAISE; END IF; END;
+ UPDATE logistica.sales_order_audits SET cycle_no=2;
+ UPDATE logistica.sales_order_audit_lines SET audit_quantity=3, prepared_quantity_snapshot=3 WHERE bsale_variant_id=1;
+ BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'changed quantity accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_PHYSICAL_SNAPSHOT_CHANGED' THEN RAISE; END IF; END;
+ UPDATE logistica.sales_order_audit_lines SET audit_quantity=4, prepared_quantity_snapshot=4 WHERE bsale_variant_id=1;
+ UPDATE logistica.sales_order_audit_lines SET sku='OTHER' WHERE bsale_variant_id=1;
+ BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'changed identity accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_PHYSICAL_SNAPSHOT_CHANGED' THEN RAISE; END IF; END;
+ UPDATE logistica.sales_order_audit_lines SET sku='P317' WHERE bsale_variant_id=1;
+ BEGIN
+   UPDATE logistica.sales_order_audit_lines SET id='00000000-0000-0000-0000-000000000016' WHERE bsale_variant_id=1;
+   PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006');
+   RAISE EXCEPTION 'substituted line accepted';
+ EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_PHYSICAL_SNAPSHOT_CHANGED' THEN RAISE; END IF; END;
+ INSERT INTO logistica.sales_order_audit_lines(id,company_id,card_id,audit_id,bsale_variant_id,line_status,audit_quantity,prepared_quantity_snapshot,excluded_from_dispatch_snapshot,bsale_detail_id,sku,product_name,requested_quantity_snapshot) VALUES ('00000000-0000-0000-0000-000000000014','00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003',3,'CONFIRMED',1,1,false,3,'C','C',1);
+ BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'added line accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_PHYSICAL_SNAPSHOT_CHANGED' THEN RAISE; END IF; END;
+ DELETE FROM logistica.sales_order_audit_lines WHERE id='00000000-0000-0000-0000-000000000014';
+ BEGIN
+   DELETE FROM logistica.sales_order_audit_lines WHERE bsale_variant_id=1;
+   PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006');
+   RAISE EXCEPTION 'deleted line accepted';
+ EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_PHYSICAL_SNAPSHOT_CHANGED' THEN RAISE; END IF; END;
+ IF NOT EXISTS (SELECT 1 FROM logistica.sales_order_audit_commercial_verifications WHERE id='00000000-0000-0000-0000-000000000007' AND is_current) OR (SELECT count(*) FROM logistica.sales_order_preparation_commercial_versions) <> 1 THEN RAISE EXCEPTION 'rejection modified verification or history'; END IF;
  UPDATE logistica.sales_order_audit_lines SET audit_quantity=3 WHERE bsale_variant_id=1;
  BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'bad physical accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_PHYSICAL_LINES_NOT_CONFORMING' THEN RAISE; END IF; END;
  UPDATE logistica.sales_order_audit_lines SET audit_quantity=4 WHERE bsale_variant_id=1;
@@ -75,6 +120,9 @@ DO $$ DECLARE result jsonb; BEGIN
  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{lines,0,quantity}','3');
  BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'modified request accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_REQUEST_INVALID' THEN RAISE; END IF; END;
  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{lines,0,quantity}','4');
+ UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{auditPhysical,packageCount}','9');
+ BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'modified physical approval accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_REQUEST_INVALID' THEN RAISE; END IF; END;
+ UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_snapshot=jsonb_set(version_snapshot,'{auditPhysical,packageCount}','8');
  UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_fingerprint='tampered';
  BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000006'); RAISE EXCEPTION 'modified canonical fingerprint accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_APPROVAL_INVALID' THEN RAISE; END IF; END;
   UPDATE logistica.sales_order_audit_commercial_acceptance_requests SET version_fingerprint='canonical-v2';
@@ -157,3 +205,29 @@ DO $$ DECLARE attempts integer := 0; BEGIN
  IF (SELECT count(*) FROM logistica.sales_order_preparation_commercial_versions) <> 2 THEN RAISE EXCEPTION 'duplicate concurrent version'; END IF;
 END $$;
 SELECT dblink_disconnect('writer');
+
+-- Writer changes a physical line without locking the audit row. Acceptance must
+-- wait for that transaction and then reject the committed changed snapshot.
+DELETE FROM logistica.sales_order_audit_commercial_acceptance_requests;
+DELETE FROM logistica.sales_order_preparation_commercial_versions WHERE sequence_no=2;
+UPDATE logistica.sales_order_audit_commercial_verifications SET is_current=true WHERE id='00000000-0000-0000-0000-000000000010';
+SELECT logistica.fixture_request('00000000-0000-0000-0000-000000000015');
+SELECT dblink_connect('physical_writer', format('dbname=%s port=%s host=%s', current_database(), current_setting('port'), current_setting('unix_socket_directories')));
+SELECT dblink_send_query('physical_writer', $q$
+ BEGIN;
+ UPDATE logistica.sales_order_audit_lines SET audit_quantity=3, prepared_quantity_snapshot=3 WHERE bsale_variant_id=1;
+ SELECT pg_advisory_xact_lock(813274);
+ SELECT pg_sleep(2);
+ COMMIT;
+$q$);
+DO $$ DECLARE attempts integer := 0; BEGIN
+ LOOP
+   IF NOT pg_try_advisory_lock(813274) THEN EXIT; END IF;
+   PERFORM pg_advisory_unlock(813274); PERFORM pg_sleep(0.02); attempts := attempts + 1;
+   IF attempts > 50 THEN RAISE EXCEPTION 'physical writer did not acquire lock'; END IF;
+ END LOOP;
+ BEGIN PERFORM logistica.fixture_accept('00000000-0000-0000-0000-000000000015'); RAISE EXCEPTION 'concurrent physical change accepted';
+ EXCEPTION WHEN raise_exception THEN IF SQLERRM <> 'AUDIT_ACCEPTANCE_PHYSICAL_SNAPSHOT_CHANGED' THEN RAISE; END IF; END;
+ IF (SELECT count(*) FROM logistica.sales_order_preparation_commercial_versions) <> 1 OR NOT EXISTS (SELECT 1 FROM logistica.sales_order_audit_commercial_verifications WHERE id='00000000-0000-0000-0000-000000000010' AND is_current) THEN RAISE EXCEPTION 'concurrent rejection modified history or verification'; END IF;
+END $$;
+SELECT dblink_disconnect('physical_writer');

@@ -39,6 +39,32 @@ AS $$ SELECT encode(sha256(convert_to(p_snapshot::text, 'UTF8')), 'hex') $$;
 REVOKE ALL ON FUNCTION logistica.audit_commercial_snapshot_fingerprint_v1(jsonb) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION logistica.audit_commercial_snapshot_fingerprint_v1(jsonb) TO service_role;
 
+-- The server must capture this physical snapshot when the user reviews the
+-- change and include it as version_snapshot.auditPhysical before fingerprinting.
+-- Calling this helper alone does not establish that a user reviewed the data.
+CREATE OR REPLACE FUNCTION logistica.audit_commercial_physical_snapshot_v1(p_company_id uuid, p_card_id uuid, p_audit_id uuid)
+RETURNS jsonb LANGUAGE sql STABLE SECURITY INVOKER
+SET search_path = pg_catalog, logistica
+AS $$
+  SELECT jsonb_build_object(
+    'companyId', a.company_id, 'cardId', a.card_id, 'auditId', a.id,
+    'cycleNo', a.cycle_no, 'packageCount', a.package_count,
+    'lines', COALESCE((SELECT jsonb_agg(jsonb_build_object(
+      'id', l.id, 'companyId', l.company_id, 'cardId', l.card_id, 'preparationLineId', l.preparation_line_id,
+      'bsaleDetailId', l.bsale_detail_id, 'bsaleVariantId', l.bsale_variant_id,
+      'sku', l.sku, 'productName', l.product_name,
+      'requestedQuantity', l.requested_quantity_snapshot,
+      'preparedQuantity', l.prepared_quantity_snapshot,
+      'excluded', l.excluded_from_dispatch_snapshot,
+      'auditQuantity', l.audit_quantity, 'lineStatus', l.line_status
+    ) ORDER BY l.id) FROM logistica.sales_order_audit_lines l
+    WHERE l.audit_id = a.id), '[]'::jsonb)
+  ) FROM logistica.sales_order_audits a
+  WHERE a.company_id = p_company_id AND a.card_id = p_card_id AND a.id = p_audit_id
+$$;
+REVOKE ALL ON FUNCTION logistica.audit_commercial_physical_snapshot_v1(uuid, uuid, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION logistica.audit_commercial_physical_snapshot_v1(uuid, uuid, uuid) TO service_role;
+
 CREATE OR REPLACE FUNCTION logistica.accept_sales_order_audit_commercial_changes_v1(
   p_company_id uuid, p_card_id uuid, p_audit_id uuid, p_request_id uuid,
   p_actor_id uuid, p_approved_fingerprint text
@@ -86,6 +112,16 @@ BEGIN
   SELECT * INTO v_card FROM logistica.sales_order_preparation_cards
   WHERE id = p_card_id AND company_id = p_company_id FOR UPDATE;
   IF NOT FOUND OR v_card.status <> 'IN_AUDIT' THEN RAISE EXCEPTION 'AUDIT_ACCEPTANCE_CARD_NOT_IN_AUDIT'; END IF;
+  -- A table lock also protects against phantom INSERTs and DELETEs. In READ
+  -- COMMITTED the subsequent statement sees writers that committed while we
+  -- waited. Other isolation levels cannot safely use that fresh-snapshot rule.
+  IF current_setting('transaction_isolation') <> 'read committed' THEN
+    RAISE EXCEPTION 'AUDIT_ACCEPTANCE_ISOLATION_UNSUPPORTED';
+  END IF;
+  LOCK TABLE logistica.sales_order_audit_lines IN SHARE MODE;
+  PERFORM id FROM logistica.sales_order_audit_lines
+    WHERE audit_id = p_audit_id
+    ORDER BY id FOR UPDATE;
   SELECT * INTO v_request FROM logistica.sales_order_audit_commercial_acceptance_requests
   WHERE id = p_request_id AND company_id = p_company_id AND card_id = p_card_id
     AND audit_id = p_audit_id AND actor_id = p_actor_id FOR UPDATE;
@@ -125,6 +161,10 @@ BEGIN
   IF EXISTS (SELECT 1 FROM logistica.sales_order_preparation_incidents WHERE company_id = p_company_id AND card_id = p_card_id AND status = 'OPEN')
      OR EXISTS (SELECT 1 FROM logistica.sales_order_audit_incidents WHERE company_id = p_company_id AND audit_id = p_audit_id AND status = 'OPEN') THEN
     RAISE EXCEPTION 'AUDIT_ACCEPTANCE_OPEN_INCIDENTS';
+  END IF;
+  IF jsonb_typeof(v_request.version_snapshot->'auditPhysical') IS DISTINCT FROM 'object'
+     OR v_request.version_snapshot->'auditPhysical' IS DISTINCT FROM logistica.audit_commercial_physical_snapshot_v1(p_company_id, p_card_id, p_audit_id) THEN
+    RAISE EXCEPTION 'AUDIT_ACCEPTANCE_PHYSICAL_SNAPSHOT_CHANGED';
   END IF;
   SELECT current_bsale_id INTO v_current_id FROM integraciones.vw_bsale_sales_order_documents_canonical
   WHERE company_id = p_company_id AND canonical_bsale_token = v_card.canonical_bsale_token;
