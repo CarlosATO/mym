@@ -5,6 +5,7 @@ import { evaluateAuditTake } from '../src/modules/logistica/auditoria/audit-poli
 
 const root = new URL('../', import.meta.url)
 const migration = await readFile(new URL('supabase/migrations/20261020200000_logistica_audit_superuser_self_audit.sql', root), 'utf8')
+const commercialClosureMigration = await readFile(new URL('supabase/migrations/20261110120000_logistica_finalize_audit_commercial_guard.sql', root), 'utf8')
 const baseMigration = await readFile(new URL('supabase/migrations/20261020150000_logistica_sales_order_audit_base.sql', root), 'utf8')
 const drawer = await readFile(new URL('src/modules/logistica/auditoria/sales-order-audit-drawer.tsx', root), 'utf8')
 const panel = await readFile(new URL('src/modules/logistica/preparacion-pedidos/sales-order-preparation-panel.tsx', root), 'utf8')
@@ -53,4 +54,11 @@ test('G. frontend y backend usan el mismo rol canónico', () => {
   assert.match(drawer, /const isSelfAuditBlocked = isPreparer && !isSuperUsuario/)
   assert.match(migration, /portal\.is_super_usuario\(v_actor\)/)
   assert.doesNotMatch(migration, /@|email|hardcode/i)
+})
+
+test('H. el cierre comercial conserva la excepción de autoauditoría del superusuario', () => {
+  assert.match(commercialClosureMigration, /v_audit\.prepared_by_user_id_snapshot = v_actor AND NOT portal\.is_super_usuario\(v_actor\)/)
+  assert.match(commercialClosureMigration, /has_permission_for_company\(v_actor, p_company_id, 'logistica\.audit\.manage'\)/)
+  assert.match(commercialClosureMigration, /v_audit\.locked_by_user_id <> v_actor/)
+  assert.match(commercialClosureMigration, /v_verification\.status <> 'READY_TO_INVOICE'/)
 })

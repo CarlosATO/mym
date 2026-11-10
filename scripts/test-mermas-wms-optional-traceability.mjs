@@ -4,7 +4,7 @@ import test from "node:test";
 
 const evidenceForm = await readFile("src/modules/logistica/mermas/new-merma-form-with-evidence.tsx", "utf8");
 const legacyForm = await readFile("src/modules/logistica/mermas/new-merma-form.tsx", "utf8");
-const migration = await readFile("supabase/migrations/20261007140000_mermas_wms_optional_traceability.sql", "utf8");
+const migration = await readFile("supabase/migrations/20261007154339_mermas_wms_optional_traceability.sql", "utf8");
 
 function selectable(product) {
   return !product.is_pack && product.stock_available !== null && product.stock_available > 0;

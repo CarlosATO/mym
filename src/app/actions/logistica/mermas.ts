@@ -501,11 +501,11 @@ export async function getInternalSaleCatalog(): Promise<{
   error?: string;
 }> {
   const authorization = await requireWmsPermission("logistica.mermas.internal_sale.create");
-  const todayPlusFive = addCivilDays(todayInSantiago(), 5);
+  const today = todayInSantiago();
   const { data, error } = await db("mermas").rpc("get_internal_sale_catalog", {
     p_company_id: authorization.companyId,
     p_user_id: authorization.user.id,
-    p_today_plus_five: todayPlusFive,
+    p_today_plus_five: today,
   });
   if (error) return { data: [], error: "No se pudo cargar el catálogo elegible para venta." };
   return {

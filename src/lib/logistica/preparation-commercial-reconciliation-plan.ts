@@ -161,10 +161,12 @@ function parseOptionalString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null
 }
 
-export function mapPersistedIncidentToReconciliationIncident(row: Record<string, unknown>): PreparationReconciliationIncident {
+export function mapPersistedIncidentToReconciliationIncident(
+  row: Record<string, unknown>,
+): PreparationReconciliationIncident {
   const rawSnapshot = row.bsale_observed_snapshot
   const snapshot = rawSnapshot != null && typeof rawSnapshot === 'object' && !Array.isArray(rawSnapshot)
-    ? rawSnapshot as Record<string, unknown>
+    ? (rawSnapshot as Record<string, unknown>)
     : null
   return {
     id: parseOptionalString(row.id) ?? '',
@@ -249,13 +251,24 @@ function isCommercialLineMatchingPersistedIdentity(
   commercialLine: PreparationCommercialLineInput,
   persistedLine: PreparationReconciliationLine,
 ): boolean {
-  if (commercialLine.detailId != null && Number(commercialLine.detailId) === Number(persistedLine.bsale_detail_id)) return true
+  if (
+    commercialLine.detailId != null
+    && persistedLine.bsale_detail_id != null
+    && Number(commercialLine.detailId) === Number(persistedLine.bsale_detail_id)
+  ) {
+    return true
+  }
   const commercialVariantId = normalizeVariantId(commercialLine.variantId)
   const persistedVariantId = normalizeVariantId(persistedLine.bsale_variant_id)
-  if (commercialVariantId != null && persistedVariantId != null && commercialVariantId === persistedVariantId) return true
+  if (commercialVariantId != null && persistedVariantId != null && commercialVariantId === persistedVariantId) {
+    return true
+  }
   const commercialSku = normalizeSku(commercialLine.sku)
   const persistedSku = normalizeSku(persistedLine.sku)
-  return commercialSku != null && persistedSku != null && commercialSku === persistedSku
+  if (commercialSku != null && persistedSku != null && commercialSku === persistedSku) {
+    return true
+  }
+  return false
 }
 
 function hasAddedLineCollision(
@@ -268,15 +281,24 @@ function hasAddedLineCollision(
   const allScoped = scopedPreparationLines(preparationLines, card, true)
   const activeScoped = scopedPreparationLines(preparationLines, card, false)
   const detailId = parseOptionalSafeInt(line.detailId)
-  if (detailId != null && allScoped.some(item => item.bsale_detail_id === detailId)) return true
-  if (activeScoped.some(item => isCommercialLineMatchingPersistedIdentity(line, item))) return true
+  if (detailId != null && allScoped.some(item => item.bsale_detail_id === detailId)) {
+    return true
+  }
+  if (activeScoped.some(item => isCommercialLineMatchingPersistedIdentity(line, item))) {
+    return true
+  }
   const lineVariantId = normalizeVariantId(line.variantId)
   const lineSku = normalizeSku(line.sku)
-  const matchingCurrentLines = (currentVersion.lines ?? []).filter(candidate => (
-    (detailId != null && parseOptionalSafeInt(candidate.detailId) === detailId)
-    || (lineVariantId != null && normalizeVariantId(candidate.variantId) === lineVariantId)
-    || (lineSku != null && normalizeSku(candidate.sku) === lineSku)
-  ))
+  const matchingCurrentLines = (currentVersion.lines ?? []).filter(candidate => {
+    const candidateDetailId = parseOptionalSafeInt(candidate.detailId)
+    const candidateVariantId = normalizeVariantId(candidate.variantId)
+    const candidateSku = normalizeSku(candidate.sku)
+    return (
+      (detailId != null && candidateDetailId != null && detailId === candidateDetailId)
+      || (lineVariantId != null && candidateVariantId != null && lineVariantId === candidateVariantId)
+      || (lineSku != null && candidateSku != null && lineSku === candidateSku)
+    )
+  })
   return matchingCurrentLines.length > 1
 }
 
@@ -295,11 +317,13 @@ const REQUIRED_INCIDENT_VERIFICATION_BASIS = 'FULL_CARD_AND_INCIDENT_ACTION_WITH
 const EXTRA_SNAPSHOT_PHYSICAL_ID_KEYS = ['physical_id', 'physicalId', 'documentId', 'currentNvId', 'nv_id', 'nvId'] as const
 
 function parseStrictFiniteNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null
+  return value
 }
 
 function parseStrictSafeInt(value: unknown): number | null {
-  return typeof value === 'number' && Number.isSafeInteger(value) ? value : null
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) return null
+  return value
 }
 
 function hasCompatibleObservedSnapshot(params: {
@@ -310,23 +334,47 @@ function hasCompatibleObservedSnapshot(params: {
   expectedBsaleQuantity: number
   requiredBsaleAction: 'SET_QUANTITY' | 'REMOVE_LINE'
 }): boolean {
-  const { snapshot, currentPhysicalId, persistedLineId, preparedQuantity, expectedBsaleQuantity, requiredBsaleAction } = params
-  if (!snapshot || Array.isArray(snapshot) || !Number.isSafeInteger(currentPhysicalId) || currentPhysicalId <= 0) return false
+  const {
+    snapshot,
+    currentPhysicalId,
+    persistedLineId,
+    preparedQuantity,
+    expectedBsaleQuantity,
+    requiredBsaleAction,
+  } = params
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return false
+  if (!Number.isSafeInteger(currentPhysicalId) || currentPhysicalId <= 0) return false
+
   if (snapshot.verification_basis !== REQUIRED_INCIDENT_VERIFICATION_BASIS) return false
   if (snapshot.verification_error != null && snapshot.verification_error !== '') return false
   if (parseStrictSafeInt(snapshot.document_state) !== 0) return false
-  if (snapshot.canonical_identity_matched !== true || snapshot.sync_proven !== true || snapshot.line_link_valid !== true) return false
-  if (snapshot.full_card_matched !== true || snapshot.incident_action_matched !== true) return false
+  if (snapshot.canonical_identity_matched !== true) return false
+  if (snapshot.sync_proven !== true) return false
+  if (snapshot.line_link_valid !== true) return false
+  if (snapshot.full_card_matched !== true) return false
+  if (snapshot.incident_action_matched !== true) return false
   if (snapshot.required_bsale_action !== requiredBsaleAction) return false
-  if (snapshot.preparation_line_id !== persistedLineId || snapshot.matched_preparation_line_id !== persistedLineId) return false
-  if (parseStrictFiniteNumber(snapshot.expected_bsale_quantity) !== expectedBsaleQuantity) return false
-  if (parseStrictFiniteNumber(snapshot.bsale_observed_quantity) !== expectedBsaleQuantity) return false
-  if (parseStrictFiniteNumber(snapshot.physically_prepared_quantity) !== preparedQuantity) return false
-  if (parseStrictSafeInt(snapshot.document_id) !== currentPhysicalId || parseStrictSafeInt(snapshot.current_nv_id) !== currentPhysicalId) return false
+  if (typeof snapshot.preparation_line_id !== 'string' || snapshot.preparation_line_id !== persistedLineId) return false
+  if (typeof snapshot.matched_preparation_line_id !== 'string' || snapshot.matched_preparation_line_id !== persistedLineId) return false
+
+  const snapshotExpectedQty = parseStrictFiniteNumber(snapshot.expected_bsale_quantity)
+  const snapshotObservedQty = parseStrictFiniteNumber(snapshot.bsale_observed_quantity)
+  const snapshotPreparedQty = parseStrictFiniteNumber(snapshot.physically_prepared_quantity)
+  if (snapshotExpectedQty == null || snapshotExpectedQty !== expectedBsaleQuantity) return false
+  if (snapshotObservedQty == null || snapshotObservedQty !== expectedBsaleQuantity) return false
+  if (snapshotPreparedQty == null || snapshotPreparedQty !== preparedQuantity) return false
+
+  const documentId = parseStrictSafeInt(snapshot.document_id)
+  const currentNvId = parseStrictSafeInt(snapshot.current_nv_id)
+  if (documentId == null || documentId <= 0 || documentId !== currentPhysicalId) return false
+  if (currentNvId == null || currentNvId <= 0 || currentNvId !== currentPhysicalId) return false
+
   for (const key of EXTRA_SNAPSHOT_PHYSICAL_ID_KEYS) {
     if (!Object.prototype.hasOwnProperty.call(snapshot, key) || snapshot[key] === undefined) continue
-    if (parseStrictSafeInt(snapshot[key]) !== currentPhysicalId) return false
+    const extraId = parseStrictSafeInt(snapshot[key])
+    if (extraId == null || extraId <= 0 || extraId !== currentPhysicalId) return false
   }
+
   return true
 }
 
@@ -356,6 +404,7 @@ function isResolvedQuantityReductionIncident(params: {
   const persistedVariantId = normalizeVariantId(persistedLine.bsale_variant_id)
   const persistedSku = normalizeSku(persistedLine.sku)
   if (persistedVariantId == null && persistedSku == null) return false
+
   if (relatedIncidents.length === 0) return false
   if (relatedIncidents.some(incident => (
     !incident.id
@@ -376,24 +425,37 @@ function isResolvedQuantityReductionIncident(params: {
     if (incident.preparation_line_id !== persistedLine.id) return false
     if (!incident.company_id || incident.company_id !== card.companyId) return false
     if (!incident.card_id || incident.card_id !== card.cardId) return false
-    if (incident.status !== 'RESOLVED' || incident.verification_status !== 'MATCHED') return false
-    if (incident.incident_type !== 'QUANTITY_REDUCTION' || incident.required_bsale_action !== 'SET_QUANTITY') return false
-    if (parseOptionalNumber(incident.requested_quantity) !== requestedQuantity) return false
-    if (parseOptionalNumber(incident.prepared_quantity) !== preparedQuantity) return false
-    if (parseOptionalNumber(incident.expected_bsale_quantity) !== newQuantity) return false
-    if (parseOptionalNumber(incident.bsale_observed_quantity) !== newQuantity) return false
+    if (incident.status !== 'RESOLVED') return false
+    if (incident.verification_status !== 'MATCHED') return false
+    if (incident.incident_type !== 'QUANTITY_REDUCTION') return false
+    if (incident.required_bsale_action !== 'SET_QUANTITY') return false
+
+    const incidentRequestedQuantity = parseOptionalNumber(incident.requested_quantity)
+    const incidentPreparedQuantity = parseOptionalNumber(incident.prepared_quantity)
+    const expectedBsaleQuantity = parseOptionalNumber(incident.expected_bsale_quantity)
+    const observedBsaleQuantity = parseOptionalNumber(incident.bsale_observed_quantity)
+    if (incidentRequestedQuantity == null || incidentRequestedQuantity !== requestedQuantity) return false
+    if (incidentPreparedQuantity == null || incidentPreparedQuantity !== preparedQuantity) return false
+    if (expectedBsaleQuantity == null || expectedBsaleQuantity !== newQuantity) return false
+    if (observedBsaleQuantity == null || observedBsaleQuantity !== newQuantity) return false
+
     const incidentVariantId = normalizeVariantId(incident.bsale_variant_id)
     const incidentSku = normalizeSku(incident.sku)
     if (incidentVariantId == null && incidentSku == null) return false
     if (incidentVariantId !== persistedVariantId || incidentSku !== persistedSku) return false
-    return hasCompatibleObservedSnapshot({
+
+    if (!hasCompatibleObservedSnapshot({
       snapshot: incident.bsale_observed_snapshot,
       currentPhysicalId: currentVersion.physicalId,
       persistedLineId: persistedLine.id,
       preparedQuantity,
       expectedBsaleQuantity: newQuantity,
       requiredBsaleAction: 'SET_QUANTITY',
-    })
+    })) {
+      return false
+    }
+
+    return true
   })
 }
 
@@ -405,43 +467,80 @@ function isResolvedLineExclusionIncident(params: {
   relatedIncidents: PreparationReconciliationIncident[]
 }): boolean {
   const { card, currentVersion, difference, persistedLine, relatedIncidents } = params
-  if (difference.kind !== 'REMOVED' || difference.confidence !== 'CERTAIN' || !difference.previous || difference.current != null) return false
-  if ((persistedLine.retired_at ?? null) != null || persistedLine.line_status !== 'INCIDENT' || !persistedLine.excluded_from_dispatch) return false
+  if (difference.kind !== 'REMOVED' || difference.confidence !== 'CERTAIN') return false
+  if (!difference.previous || difference.current != null) return false
+  if ((persistedLine.retired_at ?? null) != null) return false
+  if (persistedLine.line_status !== 'INCIDENT' || persistedLine.excluded_from_dispatch !== true) return false
   if (persistedLine.company_id != null && persistedLine.company_id !== card.companyId) return false
   if (persistedLine.card_id != null && persistedLine.card_id !== card.cardId) return false
+
   const preparedQuantity = persistedLine.prepared_quantity
   const requestedQuantity = persistedLine.requested_quantity
-  if (preparedQuantity !== 0 || !Number.isFinite(requestedQuantity) || requestedQuantity <= 0) return false
-  if (difference.previous.quantity !== requestedQuantity || !hasConfirmedPersistedLineIdentity(difference.previous, persistedLine)) return false
+  if (preparedQuantity == null || !Number.isFinite(preparedQuantity) || preparedQuantity !== 0) return false
+  if (!Number.isFinite(requestedQuantity) || requestedQuantity <= 0) return false
+  if (difference.previous.quantity !== requestedQuantity) return false
+  if (!hasConfirmedPersistedLineIdentity(difference.previous, persistedLine)) return false
+
   const persistedVariantId = normalizeVariantId(persistedLine.bsale_variant_id)
   const persistedSku = normalizeSku(persistedLine.sku)
   if (persistedVariantId == null && persistedSku == null) return false
+
   if (!Array.isArray(currentVersion.lines) || currentVersion.lines.length === 0) return false
-  if (currentVersion.lines.some(line => isCommercialLineMatchingPersistedIdentity(line, persistedLine))) return false
-  if (relatedIncidents.length === 0 || relatedIncidents.some(incident => (
-    !incident.id || incident.preparation_line_id !== persistedLine.id || !incident.company_id || incident.company_id !== card.companyId
-    || !incident.card_id || incident.card_id !== card.cardId || (incident.status !== 'RESOLVED' && incident.status !== 'SUPERSEDED')
-  ))) return false
+  if (currentVersion.lines.some(line => isCommercialLineMatchingPersistedIdentity(line, persistedLine))) {
+    return false
+  }
+
+  if (relatedIncidents.length === 0) return false
+  if (relatedIncidents.some(incident => (
+    !incident.id
+    || incident.preparation_line_id !== persistedLine.id
+    || !incident.company_id
+    || incident.company_id !== card.companyId
+    || !incident.card_id
+    || incident.card_id !== card.cardId
+    || (incident.status !== 'RESOLVED' && incident.status !== 'SUPERSEDED')
+  ))) {
+    return false
+  }
+
   const resolvedIncidents = relatedIncidents.filter(incident => incident.status === 'RESOLVED')
   if (resolvedIncidents.length === 0) return false
+
   return resolvedIncidents.every(incident => {
-    if (!incident.company_id || incident.company_id !== card.companyId || !incident.card_id || incident.card_id !== card.cardId) return false
-    if (incident.status !== 'RESOLVED' || incident.verification_status !== 'MATCHED') return false
-    if (incident.incident_type !== 'LINE_EXCLUDED' || incident.required_bsale_action !== 'REMOVE_LINE') return false
-    if (parseOptionalNumber(incident.requested_quantity) !== requestedQuantity) return false
-    if (parseOptionalNumber(incident.prepared_quantity) !== 0 || parseOptionalNumber(incident.expected_bsale_quantity) !== 0 || parseOptionalNumber(incident.bsale_observed_quantity) !== 0) return false
+    if (incident.preparation_line_id !== persistedLine.id) return false
+    if (!incident.company_id || incident.company_id !== card.companyId) return false
+    if (!incident.card_id || incident.card_id !== card.cardId) return false
+    if (incident.status !== 'RESOLVED') return false
+    if (incident.verification_status !== 'MATCHED') return false
+    if (incident.incident_type !== 'LINE_EXCLUDED') return false
+    if (incident.required_bsale_action !== 'REMOVE_LINE') return false
+
+    const incidentRequestedQuantity = parseOptionalNumber(incident.requested_quantity)
+    const incidentPreparedQuantity = parseOptionalNumber(incident.prepared_quantity)
+    const expectedBsaleQuantity = parseOptionalNumber(incident.expected_bsale_quantity)
+    const observedBsaleQuantity = parseOptionalNumber(incident.bsale_observed_quantity)
+    if (incidentRequestedQuantity == null || incidentRequestedQuantity !== requestedQuantity) return false
+    if (incidentPreparedQuantity == null || incidentPreparedQuantity !== 0) return false
+    if (expectedBsaleQuantity == null || expectedBsaleQuantity !== 0) return false
+    if (observedBsaleQuantity == null || observedBsaleQuantity !== 0) return false
+
     const incidentVariantId = normalizeVariantId(incident.bsale_variant_id)
     const incidentSku = normalizeSku(incident.sku)
     if (incidentVariantId == null && incidentSku == null) return false
     if (incidentVariantId !== persistedVariantId || incidentSku !== persistedSku) return false
-    return hasCompatibleObservedSnapshot({
+
+    if (!hasCompatibleObservedSnapshot({
       snapshot: incident.bsale_observed_snapshot,
       currentPhysicalId: currentVersion.physicalId,
       persistedLineId: persistedLine.id,
       preparedQuantity: 0,
       expectedBsaleQuantity: 0,
       requiredBsaleAction: 'REMOVE_LINE',
-    })
+    })) {
+      return false
+    }
+
+    return true
   })
 }
 
@@ -539,17 +638,31 @@ function actionForDifference(
       return conflictAction('COMMERCIAL_SUBSTITUTION', 'La línea eliminada no coincide con la identidad canónica de la línea operativa.', difference.previous, difference.current, match.line, incidents)
     }
     if (match.line.excluded_from_dispatch) {
-      if (isResolvedLineExclusionIncident({ card, currentVersion, difference, persistedLine: match.line, relatedIncidents })) {
+      if (isResolvedLineExclusionIncident({
+        card,
+        currentVersion,
+        difference,
+        persistedLine: match.line,
+        relatedIncidents,
+      })) {
         return {
-          kind: 'REMOVE', preparationLineId: match.line.id, previous: difference.previous, current: null,
-          previousRequestedQuantity: match.line.requested_quantity, newRequestedQuantity: 0,
-          preparedQuantity: match.line.prepared_quantity, quantityDelta: -(difference.previous?.quantity ?? match.line.requested_quantity),
-          incidentIds: relatedIncidents.map(incident => incident.id), conflict: null,
+          kind: 'REMOVE',
+          preparationLineId: match.line.id,
+          previous: difference.previous,
+          current: null,
+          previousRequestedQuantity: match.line.requested_quantity,
+          newRequestedQuantity: 0,
+          preparedQuantity: match.line.prepared_quantity,
+          quantityDelta: -(difference.previous?.quantity ?? match.line.requested_quantity),
+          incidentIds: relatedIncidents.map(incident => incident.id),
+          conflict: null,
         }
       }
       return conflictAction('PREPARATION_LINE_EXCLUDED', 'La línea está excluida y su referencia operativa debe preservarse.', difference.previous, difference.current, match.line, incidents)
     }
-    if (!isUntouched(match.line) || difference.previous?.quantity !== match.line.requested_quantity) return conflictAction('REMOVAL_WOULD_DISCARD_WORK', 'La línea eliminada ya tiene trabajo operativo o un estado distinto de pendiente.', difference.previous, difference.current, match.line, incidents)
+    if (!isUntouched(match.line) || difference.previous?.quantity !== match.line.requested_quantity) {
+      return conflictAction('REMOVAL_WOULD_DISCARD_WORK', 'La línea eliminada ya tiene trabajo operativo o un estado distinto de pendiente.', difference.previous, difference.current, match.line, incidents)
+    }
     if (relatedIncidents.length > 0) return conflictAction('OPERATIONAL_INCIDENT_EXISTS', 'La línea eliminada tiene referencias de incidencia que deben preservarse.', difference.previous, difference.current, match.line, incidents)
     return {
       kind: 'REMOVE', preparationLineId: match.line.id, previous: difference.previous, current: null,
@@ -588,7 +701,9 @@ function actionForDifference(
     if (match.line.excluded_from_dispatch) return conflictAction('PREPARATION_LINE_EXCLUDED', 'La línea está excluida y su referencia operativa debe preservarse.', difference.previous, difference.current, match.line, incidents)
     const newQuantity = difference.current?.quantity ?? 0
     const preparedQuantity = match.line.prepared_quantity ?? 0
-    if (!Number.isFinite(newQuantity) || newQuantity <= 0 || newQuantity < preparedQuantity) return conflictAction('QUANTITY_BELOW_PREPARED', 'La nueva cantidad solicitada es inferior a la cantidad ya preparada.', difference.previous, difference.current, match.line, incidents)
+    if (!Number.isFinite(newQuantity) || newQuantity <= 0 || newQuantity < preparedQuantity) {
+      return conflictAction('QUANTITY_BELOW_PREPARED', 'La nueva cantidad solicitada es inferior a la cantidad ya preparada.', difference.previous, difference.current, match.line, incidents)
+    }
     if (
       (relatedIncidents.length > 0 || match.line.line_status === 'INCIDENT')
       && !isResolvedQuantityReductionIncident({
@@ -614,7 +729,9 @@ function actionForDifference(
     && difference.previous?.quantity === difference.current?.quantity
     && match.line.requested_quantity === difference.current?.quantity
   ) {
-    if (match.line.excluded_from_dispatch) return conflictAction('PREPARATION_LINE_EXCLUDED', 'La línea está excluida y su referencia operativa debe preservarse.', difference.previous, difference.current, match.line, incidents)
+    if (match.line.excluded_from_dispatch) {
+      return conflictAction('PREPARATION_LINE_EXCLUDED', 'La línea está excluida y su referencia operativa debe preservarse.', difference.previous, difference.current, match.line, incidents)
+    }
     return {
       kind: 'KEEP',
       preparationLineId: match.line.id,
@@ -701,11 +818,18 @@ export function buildPreparationCommercialReconciliationPlan(input: BuildPrepara
   const planningDifferences = input.comparison.differences.filter(difference => !isQuantityValueCompanion(difference, input.comparison?.differences ?? []))
   const planningInput = { ...input, comparison: { ...input.comparison, differences: planningDifferences } }
   const rawActions = [...keepActions(planningInput), ...planningDifferences.map(difference => actionForDifference(difference, input.preparationLines, input.incidents, input.card, currentVersion))]
-  const hasRemainingActiveLine = Array.isArray(currentVersion.lines)
+  const hasRemainingActiveLine =
+    Array.isArray(currentVersion.lines)
     && currentVersion.lines.length > 0
     && currentVersion.lines.every(line => Number.isFinite(line.quantity) && line.quantity > 0)
-    && rawActions.some(action => (action.kind === 'KEEP' || action.kind === 'UPDATE_QUANTITY' || action.kind === 'ADD') && (action.newRequestedQuantity ?? 0) > 0)
-  const activePersistedById = new Map(scopedPreparationLines(input.preparationLines, input.card, false).map(line => [line.id, line]))
+    && rawActions.some(action => (
+      (action.kind === 'KEEP' || action.kind === 'UPDATE_QUANTITY' || action.kind === 'ADD')
+      && (action.newRequestedQuantity ?? 0) > 0
+    ))
+
+  const activePersistedById = new Map(
+    scopedPreparationLines(input.preparationLines, input.card, false).map(line => [line.id, line]),
+  )
   const actions = !hasRemainingActiveLine && rawActions.every(action => action.conflict == null)
     ? rawActions.map(action => {
       if (action.kind !== 'REMOVE') return action
@@ -713,14 +837,26 @@ export function buildPreparationCommercialReconciliationPlan(input: BuildPrepara
       return conflictAction(
         persistedLine?.excluded_from_dispatch ? 'PREPARATION_LINE_EXCLUDED' : 'REMOVAL_WOULD_DISCARD_WORK',
         'No se puede aceptar una versión comercial que deje el pedido sin ninguna línea activa válida.',
-        action.previous, action.current, persistedLine, input.incidents,
+        action.previous,
+        action.current,
+        persistedLine,
+        input.incidents,
       )
     })
     : rawActions
+
   const actionConflicts = actions.flatMap(action => action.conflict ? [action.conflict] : [])
   const conflicts = !hasRemainingActiveLine && actionConflicts.length === 0
-    ? [{ reason: 'REMOVAL_WOULD_DISCARD_WORK' as const, message: 'No se puede aceptar una versión comercial que deje el pedido sin ninguna línea activa válida.', preparationLineId: null, previous: null, current: null, incidentIds: [] }]
+    ? [{
+      reason: 'REMOVAL_WOULD_DISCARD_WORK' as const,
+      message: 'No se puede aceptar una versión comercial que deje el pedido sin ninguna línea activa válida.',
+      preparationLineId: null,
+      previous: null,
+      current: null,
+      incidentIds: [],
+    }]
     : actionConflicts
+
   const hasCommercialDifference = input.comparison.differences.length > 0
   return {
     status: conflicts.length > 0 ? 'REQUIRES_RESOLUTION' : 'READY',

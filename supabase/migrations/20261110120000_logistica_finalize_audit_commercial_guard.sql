@@ -68,7 +68,7 @@ BEGIN
     IF v_audit.locked_by_user_id <> v_actor THEN
         RAISE EXCEPTION 'Esta auditoría está asignada a otro usuario.';
     END IF;
-    IF v_audit.prepared_by_user_id_snapshot = v_actor THEN
+    IF v_audit.prepared_by_user_id_snapshot = v_actor AND NOT portal.is_super_usuario(v_actor) THEN
         RAISE EXCEPTION 'No puedes finalizar una auditoría de una preparación realizada por ti.';
     END IF;
     IF v_audit.assigned_auditor_user_id IS DISTINCT FROM v_actor THEN

@@ -58,6 +58,7 @@ import {
   prunePreparationSelection,
   sortPreparationCards,
   sortPreparationColumnCards,
+  sortRoutePreparationCards,
   getPreparationColumnSelectionIds,
   summarizePreparationBoard,
   summarizePreparationSelection,
@@ -1881,29 +1882,37 @@ export function SalesOrderPreparationPanel({
     for (const column of visibleColumns) {
       const target = data[column.id]
       if (!target) continue
-      target.cards = sortPreparationColumnCards(target.cards, columnSorts[column.id] ?? 'default', confirmedInvoiceNumberByCardId)
+      const explicitSort = columnSorts[column.id] ?? 'default'
+      if (column.id === 'INVOICED_READY_FOR_ROUTE' && explicitSort === 'default' && sortBy === 'default') {
+        target.cards = sortRoutePreparationCards(target.cards, confirmedInvoiceNumberByCardId)
+      } else {
+        target.cards = sortPreparationColumnCards(target.cards, explicitSort, confirmedInvoiceNumberByCardId)
+      }
     }
 
     return data
-  }, [filteredCards, readinessByCardId, columnSorts, confirmedInvoiceNumberByCardId, visibleColumns])
+  }, [filteredCards, readinessByCardId, columnSorts, confirmedInvoiceNumberByCardId, visibleColumns, sortBy])
+
+  const selectedPendingCards = useMemo(() => {
+    const columnCards = columnData['PENDING_ROUTE_PREP']?.cards ?? []
+    return columnCards.filter(card => selectedCardIds.has(card.card_id))
+  }, [columnData, selectedCardIds])
+
+  const selectedRouteCards = useMemo(() => {
+    const columnCards = columnData['INVOICED_READY_FOR_ROUTE']?.cards ?? []
+    return columnCards.filter(card => selectedCardIds.has(card.card_id))
+  }, [columnData, selectedCardIds])
 
   const selectedCards = useMemo(
-    () => cards.filter(card => selectedCardIds.has(card.card_id) && (card.status === 'PENDING_ROUTE_PREP' || card.status === 'INVOICED_READY_FOR_ROUTE')),
-    [cards, selectedCardIds],
-  )
-  const selectedPendingCards = useMemo(
-    () => selectedCards.filter(card => card.status === 'PENDING_ROUTE_PREP'),
-    [selectedCards],
-  )
-  const selectedRouteCards = useMemo(
-    () => selectedCards.filter(card => card.status === 'INVOICED_READY_FOR_ROUTE'),
-    [selectedCards],
+    () => [...selectedPendingCards, ...selectedRouteCards],
+    [selectedPendingCards, selectedRouteCards],
   )
   const selectedInvoiceDocumentInfo = useMemo(() => selectedRouteCards.map(card => {
     const entry = invoiceDocumentCacheRef.current.get(getInvoiceDocumentCacheKey(card.card_id, card.nv_bsale_id))
-    const invoiceIds = [...new Set((entry?.documents ?? [])
+    const confirmedDocs = (entry?.documents ?? [])
       .filter(document => document.status === 'CONFIRMED' && Number.isSafeInteger(document.invoice_bsale_id))
-      .map(document => Number(document.invoice_bsale_id)))]
+      .sort((a, b) => Number(a.invoice_folio || 0) - Number(b.invoice_folio || 0))
+    const invoiceIds = [...new Set(confirmedDocs.map(document => Number(document.invoice_bsale_id)))]
     return { card, entry, invoiceIds }
   }), [selectedRouteCards, invoiceDocumentCacheVersion])
   const selectedInvoicedCards = useMemo(

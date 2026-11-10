@@ -6,7 +6,7 @@ const source = await readFile(new URL('../src/components/layout/app-topbar.tsx',
 
 test('Mermas routes use the executive financial topbar theme', () => {
   assert.match(source, /const isMermasSurface = pathname\.startsWith\('\/dashboard\/logistica\/mermas'\)/)
-  assert.match(source, /const usesExecutiveTheme = isAnalysisCommercialSurface \|\| isAdquisicionesSurface \|\| isMermasSurface/)
+  assert.match(source, /const usesExecutiveTheme = isAnalysisCommercialSurface \|\| isAdquisicionesSurface \|\| isWmsSurface \|\| isMermasSurface/)
   assert.match(source, /usesExecutiveTheme \? 'border-\[#D1C7BD\] bg-\[#EFE9E1\]\/95'/)
 })
 
@@ -17,7 +17,8 @@ test('Mermas route name takes precedence over normal WMS', () => {
   assert.ok(wmsIndex > mermasIndex)
 })
 
-test('normal WMS is not included in the financial surface predicate', () => {
-  assert.doesNotMatch(source, /pathname\.startsWith\('\/dashboard\/logistica'\)\s*\n\s*const usesExecutiveTheme/)
+test('normal WMS is included in the financial surface predicate', () => {
+  assert.match(source, /const isWmsSurface = pathname\.startsWith\('\/dashboard\/logistica'\)/)
+  assert.match(source, /usesExecutiveTheme = [^\n]*\bisWmsSurface\b/)
   assert.match(source, /'WMS · Logística'/)
 })

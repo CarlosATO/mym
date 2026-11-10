@@ -15,6 +15,7 @@ const migration = await readFile(new URL('supabase/migrations/20261020180000_log
 const profitabilityMigration = await readFile(new URL('supabase/migrations/20261020170000_logistica_preparation_profitability_v1.sql', root), 'utf8')
 const action = await readFile(new URL('src/app/actions/logistica/sales-order-preparation-profitability.ts', root), 'utf8')
 const panel = await readFile(new URL('src/modules/logistica/preparacion-pedidos/sales-order-preparation-panel.tsx', root), 'utf8')
+const breadcrumb = await readFile(new URL('src/modules/logistica/preparacion-pedidos/preparation-breadcrumb-indicators.tsx', root), 'utf8')
 const dialog = await readFile(new URL('src/modules/logistica/preparacion-pedidos/preparation-missing-cost-dialog.tsx', root), 'utf8')
 const packageJson = JSON.parse(await readFile(new URL('package.json', root), 'utf8'))
 
@@ -61,12 +62,14 @@ test('4. 100% no agrega 0 NV', () => {
 
 test('5. KPI permanece en una sola línea', () => {
   assert.match(panel, /whitespace-nowrap text-left/)
-  assert.match(panel, /const className = 'flex min-w-0 items-baseline gap-1 whitespace-nowrap text-left'/)
+  assert.match(panel, /const className = 'flex shrink-0 items-baseline gap-1 whitespace-nowrap text-left'/)
 })
 
-test('6. no cambia la altura estructural de la banda KPI', () => {
-  assert.match(panel, /bg-\[#FCFBF9\] px-3 py-1\.5/)
-  assert.match(panel, /flex flex-wrap items-center gap-x-4 gap-y-1/)
+test('6. los indicadores usan el breadcrumb y el detalle expandible', () => {
+  assert.match(panel, /<PreparationBreadcrumbIndicators>/)
+  assert.match(breadcrumb, /createPortal\([\s\S]*?target\)/)
+  assert.match(breadcrumb, /aria-expanded=\{expanded\}/)
+  assert.match(breadcrumb, /expanded && <div id="preparation-kpi-details"/)
   assert.doesNotMatch(panel, /Costo identificado[\s\S]{0,200}<div className="mt-/)
 })
 

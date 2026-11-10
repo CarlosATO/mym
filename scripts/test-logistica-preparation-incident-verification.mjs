@@ -2,6 +2,11 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
+const migrationHistorical = await readFile(
+  new URL('../supabase/migrations/20261030100000_logistica_preparation_incident_verification_strict.sql', import.meta.url),
+  'utf8'
+)
+
 const migrationForward = await readFile(
   new URL('../supabase/migrations/20261104120000_logistica_preparation_incident_verification_action_strict.sql', import.meta.url),
   'utf8'
@@ -262,6 +267,14 @@ function verifyOpenPreparationIncidentsSimulation({
 // -----------------------------------------------------------------------------
 // Test suites
 // -----------------------------------------------------------------------------
+
+test('la migración histórica 20261030100000 conserva su estructura base intacta', () => {
+  assert.match(migrationHistorical, /CREATE OR REPLACE FUNCTION logistica\.verify_open_preparation_incidents_v1\(/)
+  assert.match(migrationHistorical, /status = CASE WHEN c\.verification_status = 'MATCHED' THEN 'RESOLVED' ELSE 'OPEN' END/)
+  assert.match(migrationHistorical, /GRANT EXECUTE ON FUNCTION logistica\.verify_open_preparation_incidents_v1\(uuid, bigint\[\]\)\s+TO service_role/)
+  assert.doesNotMatch(migrationHistorical, /sales_order_audits|sales_order_audit_incidents|invoice_attempt_prevalidate|begin_sales_order_invoice_submission/)
+  assert.doesNotMatch(migrationHistorical, /fetch\(|bsaleWrite|\/documents\.json/)
+})
 
 test('la migración forward-only 20261104120000 valida estrictamente el vínculo con la línea física activa', () => {
   assert.match(migrationForward, /CREATE OR REPLACE FUNCTION logistica\.verify_open_preparation_incidents_v1\(/)

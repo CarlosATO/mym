@@ -1,6 +1,88 @@
 -- Selección explícita de facturas elegibles para crear una Guía de Ruta.
 -- Esta migration conserva las firmas públicas y la edición avanzada histórica.
+-- Los duplicados manuales siguen siendo advertencias; la selección nueva aplica
+-- su propia validación estricta sin convertir esa regla en un trigger global.
 BEGIN;
+
+-- Existing route_guide_items are the persistent assignment record. The guide
+-- origin is the only additional state needed to distinguish legacy/manual
+-- duplicates from assignments created by Preparation.
+ALTER TABLE logistica.route_guides
+  ADD COLUMN IF NOT EXISTS creation_origin text NOT NULL DEFAULT 'MANUAL';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_constraint
+    WHERE conrelid = 'logistica.route_guides'::regclass
+      AND conname = 'route_guides_creation_origin_check'
+  ) THEN
+    ALTER TABLE logistica.route_guides
+      ADD CONSTRAINT route_guides_creation_origin_check
+      CHECK (creation_origin IN ('MANUAL', 'PREPARATION_SELECTION'));
+  END IF;
+END;
+$$;
+
+-- Both manual and Preparation writers acquire the same canonical identity lock.
+-- A unique active Bsale document lets both writers share the ID lock. Ambiguous
+-- folios deliberately use the same stable folio lock, even when Preparation
+-- already has an explicit ID, so the two writers cannot race on different keys.
+CREATE OR REPLACE FUNCTION logistica.lock_route_invoice_identity(
+  p_company_id uuid,
+  p_invoice_bsale_id bigint,
+  p_invoice_number text
+) RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$
+DECLARE
+  v_lock_key bigint;
+  v_canonical_invoice_id bigint;
+  v_candidate_count integer := 0;
+BEGIN
+  IF NULLIF(btrim(p_invoice_number), '') IS NOT NULL THEN
+    SELECT count(*)::integer,
+           CASE WHEN count(*) = 1 THEN min(d.bsale_id) END
+      INTO v_candidate_count, v_canonical_invoice_id
+    FROM integraciones.bsale_documents d
+    WHERE d.company_id = p_company_id
+      AND d.document_type_id = 5
+      AND d.state = 0
+      AND coalesce(d.raw_json->>'cancellationStatus', '0') = '0'
+      AND d.number::text = btrim(p_invoice_number);
+
+    IF v_candidate_count = 1
+       AND (p_invoice_bsale_id IS NULL OR v_canonical_invoice_id = p_invoice_bsale_id) THEN
+      -- The technical ID is safe only for a unique, matching folio.
+      NULL;
+    ELSE
+      -- Ambiguous, mismatched, or unresolved folios share the folio lock.
+      v_canonical_invoice_id := NULL;
+    END IF;
+  ELSIF p_invoice_bsale_id IS NOT NULL THEN
+    v_canonical_invoice_id := p_invoice_bsale_id;
+  END IF;
+
+  IF v_canonical_invoice_id IS NOT NULL THEN
+    v_lock_key := pg_catalog.hashtextextended(
+      p_company_id::text || ':route-invoice-id:' || v_canonical_invoice_id::text,
+      0
+    );
+  ELSIF NULLIF(btrim(p_invoice_number), '') IS NOT NULL THEN
+    v_lock_key := pg_catalog.hashtextextended(
+      p_company_id::text || ':route-invoice-folio:' || btrim(p_invoice_number),
+      0
+    );
+  END IF;
+
+  IF v_lock_key IS NOT NULL THEN
+    PERFORM pg_catalog.pg_advisory_xact_lock(v_lock_key);
+  END IF;
+END;
+$$;
 
 -- Never replace or drop the preparation board view blindly. A future version of
 -- this migration must stop before DROP if another object depends on the view.
@@ -41,7 +123,7 @@ SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
 DECLARE
-  v_candidates integer;
+  v_new_origin text;
 BEGIN
   IF TG_OP = 'UPDATE'
      AND OLD.invoice_bsale_id IS NOT NULL
@@ -87,25 +169,61 @@ BEGIN
       AND coalesce(d.raw_json->>'cancellationStatus', '0') = '0';
   END IF;
 
-  IF NEW.invoice_bsale_id IS NOT NULL AND EXISTS (
-    SELECT 1
-    FROM logistica.route_guide_items rgi
-    JOIN logistica.route_guides rg
-      ON rg.id = rgi.route_guide_id
-     AND rg.company_id = rgi.company_id
-     AND rg.status IN ('DRAFT', 'DISPATCHED')
-    WHERE rgi.company_id = NEW.company_id
-      AND rgi.id IS DISTINCT FROM NEW.id
-      AND rgi.route_guide_id IS DISTINCT FROM NEW.route_guide_id
-      AND (
-        rgi.invoice_bsale_id = NEW.invoice_bsale_id
-        OR (
-          rgi.invoice_bsale_id IS NULL
-          AND rgi.invoice_number = NEW.invoice_number
+  SELECT coalesce(rg.creation_origin, 'MANUAL')
+    INTO v_new_origin
+  FROM logistica.route_guides rg
+  WHERE rg.id = NEW.route_guide_id
+    AND rg.company_id = NEW.company_id;
+  IF v_new_origin IS NULL THEN
+    RAISE EXCEPTION 'La empresa de la línea no coincide con la guía de ruta.';
+  END IF;
+
+  PERFORM logistica.lock_route_invoice_identity(
+    NEW.company_id,
+    NEW.invoice_bsale_id,
+    NEW.invoice_number
+  );
+
+  -- Manual/manual duplicates remain historical warnings. Any assignment that
+  -- involves a Preparation guide is exclusive across active guides.
+  IF v_new_origin = 'PREPARATION_SELECTION'
+     AND EXISTS (
+       SELECT 1
+       FROM logistica.route_guide_items rgi
+       JOIN logistica.route_guides rg
+         ON rg.id = rgi.route_guide_id
+        AND rg.company_id = rgi.company_id
+        AND rg.status IN ('DRAFT', 'DISPATCHED')
+       WHERE rgi.company_id = NEW.company_id
+         AND rgi.id IS DISTINCT FROM NEW.id
+         AND rgi.route_guide_id IS DISTINCT FROM NEW.route_guide_id
+         AND (
+           rgi.invoice_bsale_id = NEW.invoice_bsale_id
+           OR rgi.invoice_number = NEW.invoice_number
+         )
+     )
+  THEN
+    RAISE EXCEPTION 'La factura % ya está asociada a una guía activa.',
+      coalesce(NEW.invoice_bsale_id::text, NEW.invoice_number);
+  ELSIF v_new_origin = 'MANUAL'
+        AND EXISTS (
+          SELECT 1
+          FROM logistica.route_guide_items rgi
+          JOIN logistica.route_guides rg
+            ON rg.id = rgi.route_guide_id
+           AND rg.company_id = rgi.company_id
+           AND rg.status IN ('DRAFT', 'DISPATCHED')
+          WHERE rgi.company_id = NEW.company_id
+            AND rg.creation_origin = 'PREPARATION_SELECTION'
+            AND rgi.id IS DISTINCT FROM NEW.id
+            AND rgi.route_guide_id IS DISTINCT FROM NEW.route_guide_id
+            AND (
+              rgi.invoice_bsale_id = NEW.invoice_bsale_id
+              OR rgi.invoice_number = NEW.invoice_number
+            )
         )
-      )
-  ) THEN
-    RAISE EXCEPTION 'invoice % is already associated with another active route guide line',
+  THEN
+    RAISE EXCEPTION 'La factura % ya está asignada desde Preparación.',
       coalesce(NEW.invoice_bsale_id::text, NEW.invoice_number);
   END IF;
 
@@ -115,12 +233,12 @@ $$;
 
 DROP TRIGGER IF EXISTS populate_route_invoice_identity ON logistica.route_guide_items;
 CREATE TRIGGER populate_route_invoice_identity
-  BEFORE INSERT OR UPDATE OF invoice_number, invoice_bsale_id
+  BEFORE INSERT OR UPDATE OF company_id, route_guide_id, invoice_number, invoice_bsale_id
   ON logistica.route_guide_items
   FOR EACH ROW EXECUTE FUNCTION logistica.populate_route_invoice_identity();
 
 COMMENT ON FUNCTION logistica.populate_route_invoice_identity() IS
-  'Explicit invoice_bsale_id is authoritative; historical folio fallback is unique-only. Existing technical identity is immutable.';
+  'Explicit invoice_bsale_id is authoritative; historical folio fallback is unique-only. Existing technical identity is immutable. Manual duplicate warnings remain unchanged.';
 
 -- Preserve the historical manual writer and its audit/error behavior. The only
 -- additive change is carrying an explicit technical invoice identity.
@@ -144,6 +262,19 @@ DECLARE
   v_duplicates jsonb := '[]'::jsonb;
   v_warnings jsonb := '[]'::jsonb;
 BEGIN
+  FOR v_item IN
+    SELECT value
+    FROM jsonb_array_elements(p_items_data) AS x(value)
+    ORDER BY NULLIF(value->>'invoice_bsale_id', '')::bigint NULLS LAST,
+             value->>'invoice_number'
+  LOOP
+    PERFORM logistica.lock_route_invoice_identity(
+      p_company_id,
+      NULLIF(v_item.value->>'invoice_bsale_id', '')::bigint,
+      v_item.value->>'invoice_number'
+    );
+  END LOOP;
+
   INSERT INTO logistica.route_guide_counters (company_id, guide_year, last_sequence)
   VALUES (p_company_id, v_year, 1)
   ON CONFLICT (company_id, guide_year) DO UPDATE
@@ -258,6 +389,7 @@ DECLARE
   v_row_id uuid;
   v_existing_invoice bigint;
   v_explicit_invoice bigint;
+  v_matching_rows integer;
   v_kept_ids uuid[] := '{}'::uuid[];
 BEGIN
   IF auth.uid() IS NULL OR auth.uid() <> p_user_id THEN
@@ -282,6 +414,33 @@ BEGIN
     RETURN pg_catalog.jsonb_build_object('success', false, 'error', 'La guia tiene rendicion o evidencia financiera asociada');
   END IF;
 
+  FOR v_item IN
+    SELECT invoice_bsale_id, invoice_number
+    FROM logistica.route_guide_items
+    WHERE company_id = p_company_id
+      AND route_guide_id = p_guide_id
+    ORDER BY invoice_bsale_id NULLS LAST, invoice_number, id
+  LOOP
+    PERFORM logistica.lock_route_invoice_identity(
+      p_company_id,
+      v_item.invoice_bsale_id,
+      v_item.invoice_number
+    );
+  END LOOP;
+
+  FOR v_item IN
+    SELECT value
+    FROM jsonb_array_elements(p_items_data) AS x(value)
+    ORDER BY NULLIF(value->>'invoice_bsale_id', '')::bigint NULLS LAST,
+             value->>'invoice_number'
+  LOOP
+    PERFORM logistica.lock_route_invoice_identity(
+      p_company_id,
+      NULLIF(v_item.value->>'invoice_bsale_id', '')::bigint,
+      v_item.value->>'invoice_number'
+    );
+  END LOOP;
+
   -- Rehydrate identities from the existing rows; line_number is only
   -- Validate stable identities before changing the guide. line_number is only
   -- a presentation/order field and is never used to recover an invoice ID.
@@ -303,14 +462,37 @@ BEGIN
          AND v_existing_invoice IS DISTINCT FROM v_explicit_invoice THEN
         RAISE EXCEPTION 'La identidad técnica de la línea % es inmutable.', v_row_id;
       END IF;
-    ELSIF EXISTS (
-      SELECT 1 FROM logistica.route_guide_items rgi
-      WHERE rgi.route_guide_id = p_guide_id AND rgi.company_id = p_company_id
-        AND rgi.line_number = (v_item.value->>'line_number')::integer
-        AND rgi.invoice_bsale_id IS NOT NULL
-    ) THEN
-      RAISE EXCEPTION 'La línea % requiere su id estable para conservar la identidad técnica.',
-        v_item.value->>'line_number';
+    ELSE
+      -- The manual form can save again before it knows persisted line IDs.
+      -- Rehydrate only from one matching folio inside this guide; line_number
+      -- is never an identity substitute. If that one persisted row was already
+      -- reserved by an earlier payload entry, this entry is a new manual line.
+      SELECT (array_agg(rgi.id ORDER BY rgi.id))[1], count(*)::integer
+        INTO v_row_id, v_matching_rows
+      FROM logistica.route_guide_items rgi
+      WHERE rgi.route_guide_id = p_guide_id
+        AND rgi.company_id = p_company_id
+        AND rgi.invoice_number = v_item.value->>'invoice_number';
+      IF v_matching_rows > 1 THEN
+        RAISE EXCEPTION 'El folio % tiene múltiples líneas en la guía; se requiere el id estable.',
+          v_item.value->>'invoice_number';
+      ELSIF v_matching_rows = 1 THEN
+        IF v_row_id = ANY(v_kept_ids) THEN
+          -- The only existing row is already represented in this payload.
+          -- Leave the ID NULL so the final pass inserts a distinct line.
+          v_row_id := NULL;
+        ELSE
+          v_kept_ids := array_append(v_kept_ids, v_row_id);
+          SELECT invoice_bsale_id INTO v_existing_invoice
+          FROM logistica.route_guide_items
+          WHERE id = v_row_id AND route_guide_id = p_guide_id AND company_id = p_company_id;
+          v_explicit_invoice := NULLIF(v_item.value->>'invoice_bsale_id', '')::bigint;
+          IF v_existing_invoice IS NOT NULL AND v_explicit_invoice IS NOT NULL
+             AND v_existing_invoice IS DISTINCT FROM v_explicit_invoice THEN
+            RAISE EXCEPTION 'La identidad técnica de la línea % es inmutable.', v_row_id;
+          END IF;
+        END IF;
+      END IF;
     END IF;
   END LOOP;
 
@@ -333,6 +515,19 @@ BEGIN
   FOR v_item IN SELECT value FROM jsonb_array_elements(p_items_data) AS x(value) LOOP
     v_row_id := NULLIF(v_item.value->>'id', '')::uuid;
     v_explicit_invoice := NULLIF(v_item.value->>'invoice_bsale_id', '')::bigint;
+    IF v_row_id IS NULL THEN
+      SELECT (array_agg(rgi.id ORDER BY rgi.id))[1], count(*)::integer
+        INTO v_row_id, v_matching_rows
+      FROM logistica.route_guide_items rgi
+      WHERE rgi.route_guide_id = p_guide_id
+        AND rgi.company_id = p_company_id
+        AND rgi.invoice_number = v_item.value->>'invoice_number'
+        AND NOT (rgi.id = ANY(v_kept_ids));
+      IF v_matching_rows > 1 THEN
+        RAISE EXCEPTION 'El folio % tiene múltiples líneas en la guía; se requiere el id estable.',
+          v_item.value->>'invoice_number';
+      END IF;
+    END IF;
     IF v_row_id IS NULL THEN
       INSERT INTO logistica.route_guide_items (
         company_id, route_guide_id, line_number, invoice_bsale_id, invoice_number,
@@ -447,11 +642,12 @@ BEGIN
       FROM logistica.sales_order_invoice_attempts a
       JOIN logistica.sales_order_preparation_cards c
         ON c.id = a.card_id AND c.company_id = a.company_id
-      WHERE a.company_id = p_company_id
-        AND a.bsale_invoice_id = d.bsale_id
-        AND a.status = 'CONFIRMED'
-        AND c.status = 'INVOICED_READY_FOR_ROUTE'
-        AND EXISTS (
+       WHERE a.company_id = p_company_id
+         AND a.bsale_invoice_id = d.bsale_id
+         AND a.status = 'CONFIRMED'
+         AND c.status = 'INVOICED_READY_FOR_ROUTE'
+         AND NOT logistica.preparation_card_is_excluded(c.company_id, c.id)
+         AND EXISTS (
           SELECT 1
           FROM integraciones.bsale_invoice_sales_order_links l
           WHERE l.company_id = p_company_id
@@ -466,8 +662,8 @@ BEGIN
       WHERE rgi.company_id = p_company_id
         AND rg.company_id = rgi.company_id
         AND rg.status IN ('DRAFT', 'DISPATCHED')
-        AND (rgi.invoice_bsale_id = d.bsale_id
-          OR (rgi.invoice_bsale_id IS NULL AND rgi.invoice_number = d.number::text))
+           AND (rgi.invoice_bsale_id = d.bsale_id
+             OR rgi.invoice_number = d.number::text)
     );
 
   RETURN jsonb_build_object('success', true, 'items', v_rows);
@@ -517,9 +713,10 @@ BEGIN
       ON d.company_id = a.company_id AND d.bsale_id = a.bsale_invoice_id
      AND d.document_type_id = 5 AND d.state = 0
      AND coalesce(d.raw_json->>'cancellationStatus', '0') = '0'
-    WHERE c.company_id = p_company_id
-      AND c.status = 'INVOICED_READY_FOR_ROUTE'
-      AND EXISTS (
+     WHERE c.company_id = p_company_id
+       AND c.status = 'INVOICED_READY_FOR_ROUTE'
+       AND NOT logistica.preparation_card_is_excluded(c.company_id, c.id)
+       AND EXISTS (
         SELECT 1
         FROM integraciones.bsale_invoice_sales_order_links l
         WHERE l.company_id = p_company_id
@@ -533,8 +730,8 @@ BEGIN
          AND rg.company_id = rgi.company_id
          AND rg.status IN ('DRAFT', 'DISPATCHED')
         WHERE rgi.company_id = p_company_id
-          AND (rgi.invoice_bsale_id = d.bsale_id
-            OR (rgi.invoice_bsale_id IS NULL AND rgi.invoice_number = d.number::text))
+           AND (rgi.invoice_bsale_id = d.bsale_id
+             OR rgi.invoice_number = d.number::text)
       )
     ORDER BY c.id, d.bsale_id, a.confirmed_at DESC NULLS LAST, a.created_at DESC
   ) q;
@@ -544,7 +741,7 @@ END;
 $$;
 
 -- New selection writer. Existing manual create, update, dispatch and advanced
--- edit functions retain their signatures and bodies. This path writes its own
+-- edit functions retain their signatures and duplicate-warning behavior. This path writes its own
 -- DRAFT atomically so the legacy writer's error-return contract is untouched.
 CREATE OR REPLACE FUNCTION logistica.create_route_guide_draft_from_invoices(
   p_company_id uuid,
@@ -561,6 +758,7 @@ DECLARE
   v_id bigint;
   v_card_id uuid;
   v_card_nv bigint;
+  v_invoice_number text;
   v_count integer;
   v_year integer;
   v_sequence integer;
@@ -577,20 +775,25 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'error', 'Debe seleccionar al menos una factura.');
   END IF;
 
-  -- Locks are company-scoped and acquired in one canonical order.
+  -- Locks are company-scoped and shared with manual item writes.
   FOR v_id IN SELECT DISTINCT x FROM unnest(p_invoice_bsale_ids) AS u(x) ORDER BY x LOOP
-    PERFORM pg_catalog.pg_advisory_xact_lock(
-      pg_catalog.hashtextextended(p_company_id::text || ':route-invoice:' || v_id::text, 0)
-    );
-
-    IF NOT EXISTS (
-      SELECT 1 FROM integraciones.bsale_documents d
-      WHERE d.company_id = p_company_id AND d.bsale_id = v_id
-        AND d.document_type_id = 5 AND d.state = 0
-        AND coalesce(d.raw_json->>'cancellationStatus', '0') = '0'
-    ) THEN
+    SELECT d.number::text
+      INTO v_invoice_number
+    FROM integraciones.bsale_documents d
+    WHERE d.company_id = p_company_id
+      AND d.bsale_id = v_id
+      AND d.document_type_id = 5
+      AND d.state = 0
+      AND coalesce(d.raw_json->>'cancellationStatus', '0') = '0';
+    IF NOT FOUND THEN
       RAISE EXCEPTION 'La factura % no es una factura vigente tipo 5 de la empresa.', v_id;
     END IF;
+
+    PERFORM logistica.lock_route_invoice_identity(
+      p_company_id,
+      v_id,
+      v_invoice_number
+    );
 
     SELECT a.card_id, coalesce(c.current_bsale_nv_id, c.bsale_nv_id)
       INTO v_card_id, v_card_nv
@@ -598,12 +801,17 @@ BEGIN
     JOIN logistica.sales_order_preparation_cards c
       ON c.id = a.card_id AND c.company_id = a.company_id
     WHERE a.company_id = p_company_id AND a.bsale_invoice_id = v_id
-      AND a.status = 'CONFIRMED'
-      AND c.status = 'INVOICED_READY_FOR_ROUTE'
-    ORDER BY a.confirmed_at DESC NULLS LAST, a.created_at DESC
+       AND a.status = 'CONFIRMED'
+       AND c.status = 'INVOICED_READY_FOR_ROUTE'
+       AND NOT logistica.preparation_card_is_excluded(c.company_id, c.id)
+     ORDER BY a.confirmed_at DESC NULLS LAST, a.created_at DESC
     LIMIT 1;
     IF NOT FOUND THEN
       RAISE EXCEPTION 'La factura % no tiene attempt CONFIRMED en una card elegible.', v_id;
+    END IF;
+
+    IF logistica.preparation_card_is_excluded(p_company_id, v_card_id) THEN
+      RAISE EXCEPTION 'La factura % pertenece a una NV excluida administrativamente.', v_id;
     END IF;
 
     IF NOT EXISTS (
@@ -623,11 +831,9 @@ BEGIN
        AND rg.company_id = rgi.company_id
        AND rg.status IN ('DRAFT', 'DISPATCHED')
       WHERE rgi.company_id = p_company_id
-         AND (rgi.invoice_bsale_id = v_id OR (
-          rgi.invoice_bsale_id IS NULL
-          AND rgi.invoice_number = (SELECT d.number::text FROM integraciones.bsale_documents d
-                                    WHERE d.company_id = p_company_id AND d.bsale_id = v_id)
-        ))
+         AND (rgi.invoice_bsale_id = v_id OR
+           rgi.invoice_number = (SELECT d.number::text FROM integraciones.bsale_documents d
+                                 WHERE d.company_id = p_company_id AND d.bsale_id = v_id))
     ) THEN
       RAISE EXCEPTION 'La factura % ya está asociada a una guía activa.', v_id;
     END IF;
@@ -658,7 +864,7 @@ BEGIN
     company_id, guide_year, guide_sequence, guide_number, guide_date,
     route_id, route_name_snapshot, vehicle_id, vehicle_name_snapshot,
     driver_id, driver_name_snapshot, seller_id, seller_name_snapshot,
-    dispatcher_id, dispatcher_name_snapshot, notes, status, created_by
+    dispatcher_id, dispatcher_name_snapshot, notes, status, creation_origin, created_by
   ) VALUES (
     p_company_id, v_year, v_sequence, v_guide_number, (p_guide_data->>'guide_date')::date,
     NULLIF(p_guide_data->>'route_id', '')::uuid, p_guide_data->>'route_name_snapshot',
@@ -666,7 +872,7 @@ BEGIN
     NULLIF(p_guide_data->>'driver_id', '')::uuid, p_guide_data->>'driver_name_snapshot',
     NULLIF(p_guide_data->>'seller_id', '')::uuid, p_guide_data->>'seller_name_snapshot',
     NULLIF(p_guide_data->>'dispatcher_id', '')::uuid, p_guide_data->>'dispatcher_name_snapshot',
-    p_guide_data->>'notes', 'DRAFT', p_user_id
+    p_guide_data->>'notes', 'DRAFT', 'PREPARATION_SELECTION', p_user_id
   ) RETURNING id INTO v_guide_id;
 
   FOR v_item IN SELECT value FROM jsonb_array_elements(v_items) AS x(value) LOOP
@@ -737,10 +943,26 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
+DECLARE
+  v_item record;
 BEGIN
   IF auth.uid() IS NULL OR auth.uid() <> p_user_id THEN
     RETURN jsonb_build_object('success', false, 'error', 'No autorizado');
   END IF;
+
+  FOR v_item IN
+    SELECT invoice_bsale_id, invoice_number
+    FROM logistica.route_guide_items
+    WHERE company_id = p_company_id
+      AND route_guide_id = p_guide_id
+    ORDER BY invoice_bsale_id NULLS LAST, invoice_number, id
+  LOOP
+    PERFORM logistica.lock_route_invoice_identity(
+      p_company_id,
+      v_item.invoice_bsale_id,
+      v_item.invoice_number
+    );
+  END LOOP;
 
   IF EXISTS (
     SELECT 1
@@ -765,19 +987,26 @@ BEGIN
   IF EXISTS (
     SELECT 1
     FROM logistica.route_guide_items mine
+    JOIN logistica.route_guides mine_guide
+      ON mine_guide.id = mine.route_guide_id
+     AND mine_guide.company_id = mine.company_id
     JOIN logistica.route_guide_items theirs
       ON theirs.company_id = mine.company_id
      AND theirs.route_guide_id <> mine.route_guide_id
-     AND (
-       mine.invoice_bsale_id IS NOT NULL AND theirs.invoice_bsale_id = mine.invoice_bsale_id
-       OR mine.invoice_bsale_id IS NULL AND theirs.invoice_bsale_id IS NULL AND theirs.invoice_number = mine.invoice_number
-     )
-    JOIN logistica.route_guides rg
+      AND (
+        theirs.invoice_bsale_id = mine.invoice_bsale_id
+        OR theirs.invoice_number = mine.invoice_number
+      )
+     JOIN logistica.route_guides rg
       ON rg.id = theirs.route_guide_id
      AND rg.company_id = theirs.company_id
      AND rg.status IN ('DRAFT', 'DISPATCHED')
-    WHERE mine.company_id = p_company_id
-      AND mine.route_guide_id = p_guide_id
+     WHERE mine.company_id = p_company_id
+       AND mine.route_guide_id = p_guide_id
+       AND (
+         mine_guide.creation_origin = 'PREPARATION_SELECTION'
+         OR rg.creation_origin = 'PREPARATION_SELECTION'
+       )
   ) THEN
     RETURN jsonb_build_object('success', false, 'error', 'Una factura ya está asociada a otra guía activa.');
   END IF;
@@ -792,6 +1021,8 @@ $$;
 
 ALTER FUNCTION logistica.populate_route_invoice_identity() OWNER TO postgres;
 REVOKE ALL ON FUNCTION logistica.populate_route_invoice_identity() FROM PUBLIC, anon, authenticated, service_role;
+ALTER FUNCTION logistica.lock_route_invoice_identity(uuid, bigint, text) OWNER TO postgres;
+REVOKE ALL ON FUNCTION logistica.lock_route_invoice_identity(uuid, bigint, text) FROM PUBLIC, anon, authenticated, service_role;
 ALTER FUNCTION logistica.create_route_guide_draft_unchecked(uuid, jsonb, jsonb, uuid) OWNER TO postgres;
 REVOKE ALL ON FUNCTION logistica.create_route_guide_draft_unchecked(uuid, jsonb, jsonb, uuid) FROM PUBLIC, anon, authenticated, service_role;
 ALTER FUNCTION logistica.update_route_guide_draft_unchecked(uuid, uuid, jsonb, jsonb, uuid) OWNER TO postgres;

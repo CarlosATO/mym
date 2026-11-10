@@ -4,6 +4,7 @@ CREATE SCHEMA auth; CREATE SCHEMA core; CREATE SCHEMA logistica; CREATE SCHEMA i
 CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql AS $$ SELECT '00000000-0000-0000-0000-000000000001'::uuid $$;
 CREATE FUNCTION core.has_company_access(uuid,uuid) RETURNS boolean LANGUAGE sql AS $$ SELECT true $$;
 CREATE FUNCTION core.has_permission_for_company(uuid,uuid,text) RETURNS boolean LANGUAGE sql AS $$ SELECT true $$;
+CREATE FUNCTION portal.is_super_usuario(uuid) RETURNS boolean LANGUAGE sql AS $$ SELECT coalesce(current_setting('test.superuser', true), '') = 'true' $$;
 CREATE TABLE logistica.sales_order_audits(id uuid, company_id uuid, card_id uuid, status text, locked_by_user_id uuid, prepared_by_user_id_snapshot uuid, assigned_auditor_user_id uuid, package_count integer, completed_at timestamptz, locked_at timestamptz, updated_at timestamptz);
 CREATE TABLE logistica.sales_order_preparation_cards(id uuid, company_id uuid, status text, canonical_bsale_token text, current_bsale_nv_id bigint, last_moved_by uuid, last_moved_at timestamptz, updated_at timestamptz);
 CREATE TABLE logistica.sales_order_audit_commercial_verifications(id uuid, company_id uuid, card_id uuid, audit_id uuid, is_current boolean, verified_at timestamptz, status text, fingerprint text, snapshot jsonb, differences jsonb, current_bsale_nv_id bigint, canonical_bsale_token text);
@@ -26,9 +27,11 @@ INSERT INTO logistica.sales_order_audit_lines VALUES ('00000000-0000-0000-0000-0
 DO $$
 DECLARE result jsonb; blocked boolean; scenario text;
 BEGIN
-  FOREACH scenario IN ARRAY ARRAY['missing','blocked','incidents','other_audit','invalidated','wrong_company','differences','pending_line','no_packages','open_incident','valid'] LOOP
+  FOREACH scenario IN ARRAY ARRAY['missing','blocked','incidents','other_audit','invalidated','wrong_company','differences','pending_line','no_packages','open_incident','self_audit_denied','self_audit_superuser','valid'] LOOP
     DELETE FROM logistica.sales_order_audit_commercial_verifications;
     UPDATE logistica.sales_order_audits SET status='OPEN', locked_by_user_id='00000000-0000-0000-0000-000000000001', package_count=CASE WHEN scenario='no_packages' THEN 0 ELSE 1 END;
+    UPDATE logistica.sales_order_audits SET prepared_by_user_id_snapshot=CASE WHEN scenario IN ('self_audit_denied','self_audit_superuser') THEN '00000000-0000-0000-0000-000000000001'::uuid ELSE NULL END;
+    PERFORM set_config('test.superuser', CASE WHEN scenario='self_audit_superuser' THEN 'true' ELSE 'false' END, true);
     UPDATE logistica.sales_order_preparation_cards SET status='IN_AUDIT';
     UPDATE logistica.sales_order_audit_lines SET line_status=CASE WHEN scenario='pending_line' THEN 'PENDING' ELSE 'CONFIRMED' END;
     DELETE FROM logistica.sales_order_audit_incidents;
@@ -49,7 +52,7 @@ BEGIN
       result := logistica.finalize_sales_order_audit('00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000004','00000000-0000-0000-0000-000000000003');
     EXCEPTION WHEN raise_exception THEN blocked := true;
     END;
-    IF scenario='valid' THEN
+    IF scenario IN ('valid','self_audit_superuser') THEN
       IF blocked OR result->>'audit_status' <> 'COMPLETED' THEN RAISE EXCEPTION 'valid scenario failed'; END IF;
     ELSIF NOT blocked THEN RAISE EXCEPTION 'scenario % unexpectedly passed', scenario;
     END IF;

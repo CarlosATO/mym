@@ -4,6 +4,7 @@ import test from 'node:test'
 
 const action = await readFile(new URL('../src/app/actions/logistica/sales-order-preparation-incident-sync.ts', import.meta.url), 'utf8')
 const hydration = await readFile(new URL('../src/lib/integraciones/bsale-document-hydration.ts', import.meta.url), 'utf8')
+const atomicMigration = await readFile(new URL('../supabase/migrations/20261030140000_logistica_preparation_incident_atomic_bsale_replace.sql', import.meta.url), 'utf8')
 
 test('la operación consulta Bsale en vivo y usa la identidad canónica', () => {
   assert.match(action, /createBsalePreparationCommercialProvider\(\)\.getCurrentVersion/)
@@ -19,6 +20,11 @@ test('la operación hidrata cabecera y líneas bajo una misma corrida', () => {
   assert.match(action, /mirror\?\.bsale_sync_run_id !== runId/)
   assert.match(action, /mirrorDetails.*bsale_sync_run_id !== runId/)
   assert.match(action, /persist = false|false\)/)
+  assert.match(atomicMigration, /CREATE OR REPLACE FUNCTION integraciones\.replace_bsale_document_snapshot_v1/)
+  assert.match(atomicMigration, /ON COMMIT DROP/)
+  assert.match(atomicMigration, /DELETE FROM integraciones\.bsale_document_details/)
+  assert.match(atomicMigration, /UPDATE integraciones\.bsale_sync_runs/)
+  assert.match(atomicMigration, /status = 'COMPLETED'/)
   assert.match(hydration, /persist = true/)
 })
 
@@ -47,9 +53,22 @@ test('el reemplazo valida identidad y detalles antes de escribir, y completa la 
   assert.match(action, /document\.document\.id/)
   assert.match(action, /document\.details\.length/)
   assert.match(action, /replacement\.document_id !== currentBsaleNvId/)
+  const validation = atomicMigration.indexOf('BSALE_DETAILS_IDENTITY_INVALID')
+  const headerWrite = atomicMigration.indexOf('INSERT INTO integraciones.bsale_documents')
+  const detailWrite = atomicMigration.indexOf('INSERT INTO integraciones.bsale_document_details')
+  const staleDelete = atomicMigration.indexOf('DELETE FROM integraciones.bsale_document_details')
+  const runComplete = atomicMigration.indexOf("status = 'COMPLETED'")
+  assert.ok(validation >= 0 && validation < headerWrite)
+  assert.ok(headerWrite < detailWrite)
+  assert.ok(detailWrite < staleDelete)
+  assert.ok(staleDelete < runComplete)
+  assert.match(atomicMigration, /BSALE_DOCUMENT_IDENTITY_INVALID/)
+  assert.match(atomicMigration, /BSALE_SYNC_RUN_INVALID/)
 })
 
 test('el fallo de escritura queda dentro del bloque transaccional y no resuelve antes del reemplazo', () => {
+  assert.match(atomicMigration, /BEGIN;/)
+  assert.match(atomicMigration, /COMMIT;\s*$/)
   assert.match(action, /replace_bsale_document_snapshot_v1[\s\S]*verify_open_preparation_incidents_v1/)
   assert.ok(action.indexOf('replace_bsale_document_snapshot_v1') < action.indexOf('verify_open_preparation_incidents_v1'))
 })

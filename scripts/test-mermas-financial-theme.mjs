@@ -7,11 +7,12 @@ const root = process.cwd()
 const wmsShell = join(root, 'src/app/dashboard/logistica/wms-shell.tsx')
 const mermasDir = join(root, 'src/modules/logistica/mermas')
 
-test('financial theme is scoped to Mermas in the WMS shell', async () => {
+test('WMS and Mermas use the financial shell while retaining Mermas identity', async () => {
   const source = await readFile(wmsShell, 'utf8')
-  assert.match(source, /surfaceMode=\{isMermasContext \? 'none'/)
-  assert.match(source, /sidebarVariant=\{isMermasContext \? 'financial' : 'default'\}/)
-  assert.match(source, /themeVariant=\{isMermasContext \? 'financial' : 'default'\}/)
+  assert.match(source, /identity=\{isMermasContext \? \{ id: 'mermas'/)
+  assert.match(source, /surfaceMode="none"/)
+  assert.match(source, /sidebarVariant="financial"/)
+  assert.match(source, /themeVariant="financial"/)
 })
 
 test('Mermas has no legacy blue or cyan utility colors', async () => {

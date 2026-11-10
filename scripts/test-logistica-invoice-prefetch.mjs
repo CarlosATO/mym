@@ -15,6 +15,7 @@ import {
 
 const root = new URL('../', import.meta.url)
 const action = await readFile(new URL('src/app/actions/logistica/sales-order-preparation.ts', root), 'utf8')
+const batchActions = action.slice(action.indexOf('export async function getInvoiceDocumentPreviews('), action.indexOf('export async function getSalesOrderPreparationLines('))
 const panel = await readFile(new URL('src/modules/logistica/preparacion-pedidos/sales-order-preparation-panel.tsx', root), 'utf8')
 const ui = await readFile(new URL('src/modules/logistica/preparacion-pedidos/invoice-flow-ui.tsx', root), 'utf8')
 
@@ -38,10 +39,11 @@ test('batch action uses set-based reads and does not call Bsale', () => {
   assert.match(action, /\.in\('bsale_id', nvIds\)/)
   assert.match(action, /\.in\('nv_bsale_id', nvIds\)/)
   assert.match(action, /\.in\('bsale_client_id', clientIds\)/)
-  assert.doesNotMatch(action, /fetch\(/)
+  assert.ok(batchActions.includes('export async function getInvoiceReviewPreviews('))
+  assert.doesNotMatch(batchActions, /fetch\(/)
   assert.match(action, /urlPdf|urlXml|urlPublicView/)
-  assert.doesNotMatch(action, /\.eq\('number'|\.eq\('total_amount'|\.eq\('client_id'/)
-  assert.doesNotMatch(action, /POST.*bsale|PUT.*bsale|DELETE.*bsale/i)
+  assert.doesNotMatch(batchActions, /\.eq\('number'|\.eq\('total_amount'|\.eq\('client_id'/)
+  assert.doesNotMatch(batchActions, /POST.*bsale|PUT.*bsale|DELETE.*bsale/i)
   assert.match(action, /commercialCatalogCache/)
   assert.doesNotMatch(action, /AUDITED_EFFECTIVE_CONDITIONS|BSALE_UI_AUDIT/)
   assert.match(action, /invoice_emission_date/)
