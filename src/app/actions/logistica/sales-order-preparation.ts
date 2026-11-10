@@ -72,6 +72,7 @@ export type SalesOrderPreparationBoardResult = {
   isOperatorBodega: boolean
   readiness: SalesOrderRouteReadiness[]
   readinessError: string | null
+  commercialIncidentCounts: Record<string, number>
 }
 
 export type SalesOrderClientData = {
@@ -83,6 +84,19 @@ export type SalesOrderClientData = {
 const NON_INVOICE_PAYMENT_TYPES = new Set(['NOTA CREDITO DEVOLUCION', 'ABONO DE CLIENTE'])
 
 const commercialCatalogCache = new Map<string, { expiresAt: number; data: { paymentTypes: InvoicePaymentTypeOption[]; saleConditions: InvoiceSaleConditionOption[] } }>()
+
+async function getOpenCommercialIncidentCounts(supabase: Awaited<ReturnType<typeof createClient>>, companyId: string, cardIds: string[]) {
+  if (cardIds.length === 0) return { counts: {} as Record<string, number>, error: null }
+  const { data, error } = await supabase.schema('logistica')
+    .from('sales_order_preparation_incidents')
+    .select('card_id')
+    .eq('company_id', companyId)
+    .eq('status', 'OPEN')
+    .in('card_id', cardIds)
+  const counts: Record<string, number> = {}
+  for (const row of data ?? []) counts[String(row.card_id)] = (counts[String(row.card_id)] ?? 0) + 1
+  return { counts, error }
+}
 
 function readRawUnixDate(value: unknown): string | null {
   const timestamp = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN
@@ -366,9 +380,9 @@ export type SalesOrderPreparationTrace = {
 export async function getSalesOrderPreparationBoard(companyId: string): Promise<SalesOrderPreparationBoardResult> {
   const loadStartedAt = performance.now()
   const { supabase, auth, error: permissionError } = await requirePreparationView()
-  if (permissionError) return { data: [], error: permissionError, isOperatorBodega: false, readiness: [], readinessError: null }
+  if (permissionError) return { data: [], error: permissionError, isOperatorBodega: false, readiness: [], readinessError: null, commercialIncidentCounts: {} }
 
-  if (!auth || auth.companyId !== companyId) return { data: [], error: 'Empresa activa inválida.', isOperatorBodega: auth?.isOperatorBodega === true, readiness: [], readinessError: null }
+  if (!auth || auth.companyId !== companyId) return { data: [], error: 'Empresa activa inválida.', isOperatorBodega: auth?.isOperatorBodega === true, readiness: [], readinessError: null, commercialIncidentCounts: {} }
 
   if (auth.isOperatorBodega) {
     // OPERATOR_RPC: Consulta especializada y optimizada para OPERADOR_BODEGA
@@ -410,6 +424,7 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
         isOperatorBodega: true,
         readiness: [],
         readinessError: null,
+        commercialIncidentCounts: {},
       }
     }
 
@@ -494,6 +509,9 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
       cardCount: rows.length,
     })
 
+    const incidentCounts = await getOpenCommercialIncidentCounts(supabase, companyId, rows.map(row => row.card_id))
+    if (incidentCounts.error) return { data: [], error: 'No se pudieron cargar las incidencias comerciales abiertas.', isOperatorBodega: true, readiness: [], readinessError: null, commercialIncidentCounts: {} }
+
     return {
       data: rows.map(row => {
         const { route_readiness: _, ...cardFields } = row
@@ -509,6 +527,7 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
       isOperatorBodega: true,
       readiness,
       readinessError: null,
+      commercialIncidentCounts: incidentCounts.counts,
     }
   }
 
@@ -550,7 +569,7 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
       error: error.code,
     })
     console.error('getSalesOrderPreparationBoard error:', error)
-    return { data: [], error: error.message, isOperatorBodega: false, readiness: exposedReadiness, readinessError }
+    return { data: [], error: error.message, isOperatorBodega: false, readiness: exposedReadiness, readinessError, commercialIncidentCounts: {} }
   }
 
   let rows = (data ?? []) as SalesOrderPreparationCardInfo[]
@@ -579,6 +598,9 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
     cardCount: rows.length,
   })
 
+  const incidentCounts = await getOpenCommercialIncidentCounts(supabase, companyId, rows.map(row => row.card_id))
+  if (incidentCounts.error) return { data: [], error: 'No se pudieron cargar las incidencias comerciales abiertas.', isOperatorBodega: false, readiness: exposedReadiness, readinessError, commercialIncidentCounts: {} }
+
   return {
     data: rows.map(row => ({
       ...row,
@@ -589,6 +611,7 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
     isOperatorBodega: false,
     readiness: exposedReadiness,
     readinessError,
+    commercialIncidentCounts: incidentCounts.counts,
   }
 }
 

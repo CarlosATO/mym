@@ -19,10 +19,16 @@ export function getPreparationColumnId(
   readiness: PreparationRouteReadiness | null | undefined,
 ): string {
   if (status === 'AUDITED') {
-    return readiness === 'READY_TO_INVOICE' ? 'READY_TO_INVOICE' : 'INCIDENTS'
+    if (readiness === 'READY_TO_INVOICE') return 'READY_TO_INVOICE'
+    if (readiness === 'INCIDENTS') return 'INCIDENTS'
+    return 'BLOCKED'
   }
   if (status === 'INVOICED_READY_FOR_ROUTE') return 'INVOICED_READY_FOR_ROUTE'
   return status
+}
+
+export function isCommercialIncidentMirror(columnId: string, openIncidentCount: number): boolean {
+  return columnId !== 'INCIDENTS' && openIncidentCount > 0
 }
 
 export function isPreparationReadinessTerminal(

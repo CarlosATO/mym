@@ -29,7 +29,9 @@ test('the view still exposes exactly 28 ordered columns and security invoker', (
   assert.match(migration, /ALTER VIEW logistica\.vw_sales_order_preparation_board SET \(security_invoker = true\)/)
 })
 
-test('the frontend maps audited readiness to billing or incidents', () => {
+test('the frontend maps audited readiness to billing, incidents or pending verification', () => {
   assert.match(readiness, /if \(status === 'AUDITED'\)/)
-  assert.match(readiness, /readiness === 'READY_TO_INVOICE' \? 'READY_TO_INVOICE' : 'INCIDENTS'/)
+  assert.match(readiness, /readiness === 'READY_TO_INVOICE'\) return 'READY_TO_INVOICE'/)
+  assert.match(readiness, /readiness === 'INCIDENTS'\) return 'INCIDENTS'/)
+  assert.match(readiness, /return 'BLOCKED'/)
 })

@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   getPreparationColumnId,
   getPreparationReadinessLabel,
+  isCommercialIncidentMirror,
 } from '../src/modules/logistica/preparacion-pedidos/preparation-route-readiness.ts'
 
 const root = new URL('../', import.meta.url)
@@ -12,11 +13,11 @@ const card = await readFile(new URL('src/modules/logistica/preparacion-pedidos/s
 const action = await readFile(new URL('src/app/actions/logistica/sales-order-preparation.ts', root), 'utf8')
 const dialog = await readFile(new URL('src/modules/logistica/preparacion-pedidos/preparation-commercial-incidents-dialog.tsx', root), 'utf8')
 
-test('1. existen cinco columnas', () => {
+test('1. existen siete columnas para usuarios autorizados', () => {
   assert.deepEqual(
-    ['PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT', 'INCIDENTS', 'READY_TO_INVOICE']
+    ['PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT', 'INCIDENTS', 'BLOCKED', 'READY_TO_INVOICE', 'INVOICED_READY_FOR_ROUTE']
       .filter(id => panel.includes(`id: '${id}'`)),
-    ['PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT', 'INCIDENTS', 'READY_TO_INVOICE'],
+    ['PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT', 'INCIDENTS', 'BLOCKED', 'READY_TO_INVOICE', 'INVOICED_READY_FOR_ROUTE'],
   )
 })
 
@@ -25,12 +26,12 @@ test('3. PENDING va a Pendientes', () => assert.equal(getPreparationColumnId('PE
 test('4. IN_PREPARATION va a En preparación', () => assert.equal(getPreparationColumnId('IN_PREPARATION', null), 'IN_PREPARATION'))
 test('5. IN_AUDIT va a En auditoría', () => assert.equal(getPreparationColumnId('IN_AUDIT', null), 'IN_AUDIT'))
 test('6. AUDITED con INCIDENTS va a Incidencias', () => assert.equal(getPreparationColumnId('AUDITED', 'INCIDENTS'), 'INCIDENTS'))
-test('7. AUDITED con BLOCKED va a Incidencias', () => assert.equal(getPreparationColumnId('AUDITED', 'BLOCKED'), 'INCIDENTS'))
+test('7. AUDITED con BLOCKED va a Verificación pendiente', () => assert.equal(getPreparationColumnId('AUDITED', 'BLOCKED'), 'BLOCKED'))
 test('8. AUDITED con READY_TO_INVOICE va a Lista para facturar', () => assert.equal(getPreparationColumnId('AUDITED', 'READY_TO_INVOICE'), 'READY_TO_INVOICE'))
-test('9. readiness loading nunca produce READY', () => assert.equal(getPreparationColumnId('AUDITED', undefined), 'INCIDENTS'))
-test('10. readiness error nunca produce READY', () => assert.equal(getPreparationColumnId('AUDITED', null), 'INCIDENTS'))
+test('9. readiness loading nunca produce READY', () => assert.equal(getPreparationColumnId('AUDITED', undefined), 'BLOCKED'))
+test('10. readiness error nunca produce READY', () => assert.equal(getPreparationColumnId('AUDITED', null), 'BLOCKED'))
 test('11. readiness no disponible conserva la tarjeta', () => assert.match(panel, /getPreparationColumnId\(card\.status, readinessByCardId\[card\.card_id\]\?\.route_readiness\)/))
-test('12. AUDITED permanece no draggable', () => assert.match(panel, /dragDisabled=\{card\.status === 'AUDITED'/))
+test('12. AUDITED permanece no draggable', () => assert.match(panel, /dragDisabled=\{commercialMirror \|\| card\.status === 'AUDITED'/))
 test('13. IN_AUDIT no se clasifica por incidencias', () => assert.equal(getPreparationColumnId('IN_AUDIT', 'INCIDENTS'), 'IN_AUDIT'))
 test('14. una tarjeta se clasifica con una sola columna', () => assert.notEqual(getPreparationColumnId('AUDITED', 'READY_TO_INVOICE'), 'INCIDENTS'))
 test('15. columnas se calculan desde filteredCards', () => assert.match(panel, /for \(const card of filteredCards\)[\s\S]*?getPreparationColumnId\(card\.status, readinessByCardId\[card\.card_id\]\?\.route_readiness\)[\s\S]*?column\.cards\.push\(card\)/))
@@ -43,7 +44,7 @@ test('18. refresh invalida y vuelve a cargar readiness', () => {
   assert.match(panel, /setReadinessState\(res\.readinessError \? 'error' : 'ready'\)/)
 })
 test('19. readiness cambia de columna sin drag', () => assert.match(panel, /getPreparationColumnId\(card\.status, readinessByCardId\[card\.card_id\]\?\.route_readiness\)/))
-test('20. count de tareas viene del read model', () => assert.match(panel, /openCommercialIncidentCount=\{readinessByCardId\[card\.card_id\]\?\.open_commercial_incident_count/))
+test('20. count de tareas usa el lote con fallback al read model', () => assert.match(panel, /openCommercialIncidentCount=\{commercialIncidentCounts\[card\.card_id\] \?\? readinessByCardId\[card\.card_id\]\?\.open_commercial_incident_count/))
 test('21. el detalle sólo consulta OPEN', () => assert.match(action, /\.eq\('status', 'OPEN'\)/))
 test('22. el detalle no usa SUPERSEDED ni RESOLVED', () => assert.doesNotMatch(dialog, /SUPERSEDED|RESOLVED/))
 test('23. BLOCKED tiene etiqueta visual conservadora', () => assert.equal(getPreparationReadinessLabel('BLOCKED', 'ready'), 'Bloqueada'))
@@ -67,4 +68,20 @@ test('28. detalle comercial es lazy y compacto', () => {
 test('29. acciones comerciales traducen SET_QUANTITY y REMOVE_LINE', () => {
   assert.match(action, /'SET_QUANTITY' \| 'REMOVE_LINE'/)
   assert.match(dialog, /REMOVE_LINE/)
+})
+
+test('espejos sólo para incidencias abiertas fuera de su columna, sin duplicar el total', () => {
+  const cards = [
+    { id: 'a', status: 'IN_PREPARATION', readiness: null, open: 2 },
+    { id: 'b', status: 'AUDITED', readiness: 'INCIDENTS', open: 1 },
+    { id: 'c', status: 'AUDITED', readiness: 'BLOCKED', open: 0 },
+  ]
+  const mirrors = cards.filter(card => isCommercialIncidentMirror(getPreparationColumnId(card.status, card.readiness), card.open))
+  assert.deepEqual(mirrors.map(card => card.id), ['a'])
+  assert.equal(cards.length, 3)
+  assert.match(panel, /summarizePreparationBoard\(filteredCards\)/)
+  assert.match(card, /disabled: isOverlay \|\| isPending \|\| dragDisabled \|\| commercialMirror/)
+  assert.match(card, /selectable && !isOverlay && !commercialMirror/)
+  assert.match(panel, /commercialMirror \? onOpenCommercialIncidents\(card\) : onOpenCardDetails\(card\)/)
+  assert.match(action, /getOpenCommercialIncidentCounts\(supabase, companyId, rows\.map\(row => row\.card_id\)\)/)
 })

@@ -39,6 +39,7 @@ interface SalesOrderCardProps {
   invoiceDocuments?: InvoiceDocumentPreview[]
   onViewInvoice?: () => void
   commercialAlert?: PreparationCommercialAlert | null
+  commercialMirror?: boolean
 }
 
 function formatShortDate(value: string | null): string | null {
@@ -79,6 +80,7 @@ export function SalesOrderCard({
   invoiceDocuments = [],
   onViewInvoice,
   commercialAlert = null,
+  commercialMirror = false,
 }: SalesOrderCardProps) {
   const routeDate = formatShortDate(card.route_date)
   const routeFullDate = formatFullDate(card.route_date)
@@ -118,7 +120,7 @@ export function SalesOrderCard({
   const isFinalized = card.status === 'AUDITED'
   const isReadyToInvoice = isFinalized && routeReadiness === 'READY_TO_INVOICE'
   const readinessLabel = isFinalized ? getPreparationReadinessLabel(routeReadiness, readinessState) : null
-  const responsibilityLabel = isFinalized ? readinessLabel : auditLabel ?? lockLabel
+  const responsibilityLabel = commercialMirror ? 'Tarea comercial pendiente' : isFinalized ? readinessLabel : auditLabel ?? lockLabel
   const responsibilityTone = isFinalized && routeReadiness === 'BLOCKED'
     ? 'text-[#8A4B4B]'
     : isFinalized && routeReadiness === 'READY_TO_INVOICE'
@@ -132,9 +134,9 @@ export function SalesOrderCard({
   const hasCommercialChange = commercialAlert?.status === 'CHANGED'
 
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: card.card_id,
+    id: commercialMirror ? `commercial-incident-${card.card_id}` : card.card_id,
     data: { card },
-    disabled: isOverlay || isPending || dragDisabled
+    disabled: isOverlay || isPending || dragDisabled || commercialMirror
   })
 
   const style = transform && !isOverlay ? {
@@ -159,6 +161,8 @@ export function SalesOrderCard({
   let wrapperClasses = "group relative w-full rounded-md border bg-white px-2.5 py-2 text-left transition-all duration-150 "
   if (isOverlay) {
     wrapperClasses += "pointer-events-none shadow-xl ring-2 ring-[#72383D] rotate-1 scale-[1.02] "
+  } else if (commercialMirror) {
+    wrapperClasses += 'cursor-pointer border-[#C97A70] bg-[#FFF7F5] shadow-xs hover:border-[#A94D43] hover:shadow-sm '
   } else if (isDragging) {
     wrapperClasses += "cursor-grabbing opacity-40 shadow-sm border-[#D1C7BD] "
   } else if (selected && !hasCommercialChange) {
@@ -174,10 +178,10 @@ export function SalesOrderCard({
 
   return (
     <div
-      ref={!isOverlay ? setNodeRef : undefined}
+      ref={!isOverlay && !commercialMirror ? setNodeRef : undefined}
       style={style}
-      {...(!isOverlay ? listeners : {})}
-      {...(!isOverlay ? attributes : {})}
+      {...(!isOverlay && !commercialMirror ? listeners : {})}
+      {...(!isOverlay && !commercialMirror ? attributes : {})}
       onPointerDownCapture={!isOverlay ? event => {
         pointerStartRef.current = { x: event.clientX, y: event.clientY }
       } : undefined}
@@ -191,11 +195,11 @@ export function SalesOrderCard({
       } : undefined}
       role={!isOverlay ? 'button' : undefined}
       tabIndex={!isOverlay ? 0 : undefined}
-      aria-label={!isOverlay ? `Abrir detalle de NV ${card.nv_folio}` : undefined}
+      aria-label={!isOverlay ? (commercialMirror ? `Abrir tareas comerciales de NV ${card.nv_folio}` : `Abrir detalle de NV ${card.nv_folio}`) : undefined}
       className={wrapperClasses}
     >
       <div className="flex items-center gap-1.5">
-        {selectable && !isOverlay && (
+        {selectable && !isOverlay && !commercialMirror && (
           <button
             type="button"
             data-card-action
@@ -223,6 +227,7 @@ export function SalesOrderCard({
         <span className="min-w-0 flex-1 truncate text-[12px] font-bold tracking-tight text-[#322D29]" title={`NV #${card.nv_folio}`}>
           NV #{card.nv_folio}
         </span>
+        {commercialMirror && <span className="shrink-0 rounded bg-[#F5D8D2] px-1 py-0.5 text-[8px] font-bold uppercase tracking-wider text-[#8A4B4B]">Bsale</span>}
         <span
           className="shrink-0 text-[10px] font-semibold tabular-nums text-[#322D29]/55"
           title={`${card.total_quantity} ${card.total_quantity === 1 ? 'unidad' : 'unidades'}`}
@@ -238,7 +243,7 @@ export function SalesOrderCard({
         {card.client_name}
       </p>
 
-      {!isOverlay && <div className="mt-1.5"><PreparationCommercialChangeAlert alert={commercialAlert} compact /></div>}
+      {!isOverlay && !commercialMirror && <div className="mt-1.5"><PreparationCommercialChangeAlert alert={commercialAlert} compact /></div>}
 
       <div className="mt-1 flex items-center justify-between gap-2">
         <span className="min-w-0 truncate text-[10px] font-medium text-[#322D29]/55" title={`${comuna} · ${primaryDate.title}`}>
@@ -259,7 +264,7 @@ export function SalesOrderCard({
             {isInvoiced ? <><span className="mr-1 rounded bg-emerald-50 px-1 py-0.5 text-[8px] font-bold uppercase tracking-wider text-emerald-800">Facturada</span>{invoiceSummary}</> : <>{isFinalized && routeReadiness === 'READY_TO_INVOICE' ? '✓ ' : ''}{responsibilityLabel}</>}
           </span>
           <div className="flex shrink-0 items-center gap-1">
-            {isFinalized && openCommercialIncidentCount > 0 && onOpenCommercialIncidents && (
+            {(isFinalized || commercialMirror) && openCommercialIncidentCount > 0 && onOpenCommercialIncidents && (
               <button
                 type="button"
                 data-card-action
@@ -271,13 +276,13 @@ export function SalesOrderCard({
                 onDoubleClick={event => event.stopPropagation()}
                 className="rounded px-1 py-0.5 text-[9px] font-semibold text-[#72383D] hover:bg-[#F5EDE9] hover:underline"
               >
-                {openCommercialIncidentCount} {openCommercialIncidentCount === 1 ? 'tarea pendiente' : 'tareas pendientes'}
+                {commercialMirror ? `Ver tareas (${openCommercialIncidentCount})` : `${openCommercialIncidentCount} ${openCommercialIncidentCount === 1 ? 'tarea pendiente' : 'tareas pendientes'}`}
               </button>
             )}
             {isPending && (
               <span className="text-[9px] font-semibold uppercase tracking-wider text-[#806238]">Guardando…</span>
             )}
-            {isReadyToInvoice && !isOverlay && onInvoice && (
+            {isReadyToInvoice && !isOverlay && !commercialMirror && onInvoice && (
               <button
                 type="button"
                 data-card-action
@@ -292,7 +297,7 @@ export function SalesOrderCard({
                 <FileText className="h-2.5 w-2.5" /> Facturar
               </button>
             )}
-            {isInvoiced && !isOverlay && onViewInvoice && (
+            {isInvoiced && !isOverlay && !commercialMirror && onViewInvoice && (
               <button
                 type="button"
                 data-card-action
@@ -307,7 +312,7 @@ export function SalesOrderCard({
                 <FileText className="h-2.5 w-2.5" /> Ver factura
               </button>
             )}
-            {canExclude && !isOverlay && card.status === 'PENDING_ROUTE_PREP' && (
+            {canExclude && !isOverlay && !commercialMirror && card.status === 'PENDING_ROUTE_PREP' && (
               <button
                 type="button"
                 data-card-action

@@ -28,9 +28,10 @@ test('PERM-01 blocks commercial invoice actions for the operator', async () => {
   assert.match(diagnostics, /auth\.isOperatorBodega/)
 })
 
-test('PERM-01 renders only four columns for the operator without exposing hidden column data', async () => {
+test('PERM-01 renders operational and verification columns without exposing billing or route columns', async () => {
   const panel = await read('src/modules/logistica/preparacion-pedidos/sales-order-preparation-panel.tsx')
-  assert.match(panel, /COLUMNS\.slice\(0, 4\)/)
+  assert.match(panel, /COLUMNS\.slice\(0, 5\)/)
+  assert.ok(panel.indexOf("id: 'BLOCKED'") < panel.indexOf("id: 'READY_TO_INVOICE'"))
   assert.match(panel, /visibleColumns\.map\(col =>/)
   assert.match(panel, /visibleColumns\.map\(column =>/)
 })

@@ -122,7 +122,7 @@ import {
 import { PreparationMissingCostDialog } from './preparation-missing-cost-dialog'
 import { SalesOrderAuditDrawer } from '@/modules/logistica/auditoria/sales-order-audit-drawer'
 import { PreparationCommercialIncidentsDialog } from './preparation-commercial-incidents-dialog'
-import { getPreparationColumnId, type PreparationReadinessLoadState } from './preparation-route-readiness'
+import { getPreparationColumnId, isCommercialIncidentMirror, type PreparationReadinessLoadState } from './preparation-route-readiness'
 import { buildInvoiceDraftPayload, type InvoiceCommercialSelection } from './invoice-commercial'
 import { getPreparationLineValidation } from './preparation-line-validation'
 import { usePreparationCommercialAlerts } from './use-preparation-commercial-alerts'
@@ -171,6 +171,14 @@ const COLUMNS: KanbanColumn[] = [
     colorBody: 'bg-theme-base/30',
     badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
     dot: 'bg-red-500',
+  },
+  {
+    id: 'BLOCKED',
+    title: 'Verificación pendiente',
+    colorHeader: 'bg-theme-base border-slate-300 dark:border-theme-border/80',
+    colorBody: 'bg-theme-base/30',
+    badge: 'bg-theme-panel border-slate-300 dark:border-theme-border/80 text-theme-text',
+    dot: 'bg-orange-500',
   },
   {
     id: 'READY_TO_INVOICE',
@@ -271,6 +279,8 @@ function DroppableColumn({
   getInvoiceDocuments,
   columnAmount,
   commercialAlerts,
+  commercialIncidentCounts,
+  commercialMirrorCards,
 }: {
   col: KanbanColumn
   colCards: SalesOrderPreparationCardInfo[]
@@ -294,6 +304,8 @@ function DroppableColumn({
   getInvoiceDocuments: (card: SalesOrderPreparationCardInfo) => InvoiceDocumentPreview[]
   columnAmount: number
   commercialAlerts: Record<string, PreparationCommercialAlert>
+  commercialIncidentCounts: Record<string, number>
+  commercialMirrorCards: SalesOrderPreparationCardInfo[]
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: col.id,
@@ -321,6 +333,7 @@ function DroppableColumn({
   useEffect(() => {
     if (selectAllRef.current) selectAllRef.current.indeterminate = partiallySelected
   }, [partiallySelected])
+  const displayCards = [...colCards.map(card => ({ card, commercialMirror: false })), ...commercialMirrorCards.map(card => ({ card, commercialMirror: true }))]
   return (
     <section
       ref={setNodeRef}
@@ -338,7 +351,7 @@ function DroppableColumn({
             <h3 className="truncate text-[10px] font-bold uppercase tracking-wider text-[#322D29]">{col.title}</h3>
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            <span className="flex h-4 min-w-[18px] items-center justify-center rounded-full bg-[#EAE3DA] px-1.5 text-[10px] font-bold tabular-nums text-[#6B625C]">{colCards.length}</span>
+            <span className="flex h-4 min-w-[18px] items-center justify-center rounded-full bg-[#EAE3DA] px-1.5 text-[10px] font-bold tabular-nums text-[#6B625C]">{displayCards.length}</span>
             {(col.id === 'PENDING_ROUTE_PREP' || col.id === 'INVOICED_READY_FOR_ROUTE') && <label className="inline-flex shrink-0 items-center gap-1 text-[9px] font-semibold text-[#6B625C]" title={selectableCards.length === 0 ? 'No hay tarjetas elegibles' : 'Seleccionar tarjetas visibles'}>
               <input ref={selectAllRef} type="checkbox" checked={allSelected} disabled={selectableCards.length === 0} onChange={onSelectAll} aria-checked={partiallySelected ? 'mixed' : allSelected} aria-label={`Seleccionar todas las tarjetas de ${col.title}`} className="h-3 w-3 rounded accent-[#72383D]" />
               <span>Todos</span>
@@ -358,14 +371,14 @@ function DroppableColumn({
 
       {/* Column body */}
       <div className="flex-1 space-y-2 overflow-y-auto p-2">
-        {colCards.length === 0 && (
+        {displayCards.length === 0 && (
           <div className="flex min-h-[72px] items-center justify-center rounded-md border border-dashed border-[#DDD4CA] bg-white/40">
             <p className="text-[11px] font-medium text-[#322D29]/40">Sin pedidos</p>
           </div>
         )}
-        {colCards.map((card, index) => {
+        {displayCards.map(({ card, commercialMirror }, index) => {
           const comuna = getPreparationComuna(card)
-          const previousComuna = index > 0 ? getPreparationComuna(colCards[index - 1]) : ''
+          const previousComuna = index > 0 ? getPreparationComuna(displayCards[index - 1].card) : ''
           const showComunaDivider = (sortBy === 'comuna' || columnSort === 'comunaAsc') && comuna !== previousComuna
 
           return (
@@ -380,25 +393,26 @@ function DroppableColumn({
               )}
               <SalesOrderCard
                 card={card}
+                commercialMirror={commercialMirror}
                 isPending={pendingCardIds.has(card.card_id)}
-                onOpen={() => onOpenCardDetails(card)}
-                onDoubleClick={() => onOpenCardDetails(card)}
-                canExclude={canExclude}
+                onOpen={() => commercialMirror ? onOpenCommercialIncidents(card) : onOpenCardDetails(card)}
+                onDoubleClick={() => commercialMirror ? onOpenCommercialIncidents(card) : onOpenCardDetails(card)}
+                canExclude={!commercialMirror && canExclude}
                 onExclude={onExclude}
-                selectable={card.status === 'PENDING_ROUTE_PREP' || card.status === 'INVOICED_READY_FOR_ROUTE'}
+                selectable={!commercialMirror && (card.status === 'PENDING_ROUTE_PREP' || card.status === 'INVOICED_READY_FOR_ROUTE')}
                 selected={selectedCardIds.has(card.card_id)}
                 onToggleSelected={onToggleSelection}
                 currentUserId={currentUserId}
                 auditLock={auditLocks[card.card_id] ?? null}
                 routeReadiness={readinessByCardId[card.card_id]?.route_readiness ?? null}
                 readinessState={readinessState}
-                openCommercialIncidentCount={readinessByCardId[card.card_id]?.open_commercial_incident_count ?? 0}
+                openCommercialIncidentCount={commercialIncidentCounts[card.card_id] ?? readinessByCardId[card.card_id]?.open_commercial_incident_count ?? 0}
                 onOpenCommercialIncidents={() => onOpenCommercialIncidents(card)}
-                onInvoice={() => onInvoice(card)}
-                 invoiceDocuments={getInvoiceDocuments(card)}
-                 onViewInvoice={() => onViewInvoice(card)}
-                 commercialAlert={commercialAlerts[card.card_id] ?? null}
-                dragDisabled={card.status === 'AUDITED' || card.status === 'INVOICED_READY_FOR_ROUTE' || isPreparationReadOnly({
+                onInvoice={commercialMirror ? undefined : () => onInvoice(card)}
+                 invoiceDocuments={commercialMirror ? [] : getInvoiceDocuments(card)}
+                 onViewInvoice={commercialMirror ? undefined : () => onViewInvoice(card)}
+                 commercialAlert={commercialMirror ? null : commercialAlerts[card.card_id] ?? null}
+                dragDisabled={commercialMirror || card.status === 'AUDITED' || card.status === 'INVOICED_READY_FOR_ROUTE' || isPreparationReadOnly({
                   status: card.status,
                   currentUserId,
                   lockedByUserId: card.locked_by_user_id,
@@ -493,7 +507,7 @@ export function SalesOrderPreparationPanel({
   const [syncError, setSyncError] = useState<string | null>(null)
 
   const visibleColumns = useMemo(
-    () => (serverIsOperatorBodega ?? roleName === 'OPERADOR_BODEGA' ? COLUMNS.slice(0, 4) : COLUMNS),
+    () => (serverIsOperatorBodega ?? roleName === 'OPERADOR_BODEGA' ? COLUMNS.slice(0, 5) : COLUMNS),
     [roleName, serverIsOperatorBodega],
   )
 
@@ -514,6 +528,7 @@ export function SalesOrderPreparationPanel({
   const [commercialIncidents, setCommercialIncidents] = useState<SalesOrderPreparationCommercialIncident[]>([])
   const [commercialIncidentsLoading, setCommercialIncidentsLoading] = useState(false)
   const [commercialIncidentsError, setCommercialIncidentsError] = useState<string | null>(null)
+  const [commercialIncidentCounts, setCommercialIncidentCounts] = useState<Record<string, number>>({})
 
   const cardsRef = useRef<SalesOrderPreparationCardInfo[]>([])
   const boardRequestSeqRef = useRef(0)
@@ -905,6 +920,7 @@ export function SalesOrderPreparationPanel({
         pendingStatuses: pendingStatusByCardRef.current,
         pendingExclusionNvIds: pendingExclusionNvIdsRef.current,
       })
+      setCommercialIncidentCounts(res.commercialIncidentCounts)
       const byCardId: Record<string, SalesOrderRouteReadiness> = {}
       for (const row of res.readiness) byCardId[row.card_id] = row
       setReadinessByCardId(byCardId)
@@ -1351,7 +1367,7 @@ export function SalesOrderPreparationPanel({
   const localInvoiceDiagnosticState = getLocalInvoiceDiagnosticState(invoiceReviewSnapshot)
 
   const openCommercialIncidents = async (card: SalesOrderPreparationCardInfo) => {
-    if (!companyId || card.status !== 'AUDITED') return
+    if (!companyId) return
     const seq = ++commercialIncidentsSeqRef.current
     setCommercialIncidentsCard(card)
     setCommercialIncidents([])
@@ -1867,8 +1883,8 @@ export function SalesOrderPreparationPanel({
   }, [cards, invoiceDocumentCacheVersion])
 
   const columnData = useMemo(() => {
-    const data: Record<string, { cards: SalesOrderPreparationCardInfo[]; amount: number }> = Object.fromEntries(
-      visibleColumns.map(column => [column.id, { cards: [], amount: 0 }]),
+    const data: Record<string, { cards: SalesOrderPreparationCardInfo[]; mirrorCards: SalesOrderPreparationCardInfo[]; amount: number }> = Object.fromEntries(
+      visibleColumns.map(column => [column.id, { cards: [], mirrorCards: [], amount: 0 }]),
     )
 
     for (const card of filteredCards) {
@@ -1877,6 +1893,9 @@ export function SalesOrderPreparationPanel({
       if (!column) continue
       column.cards.push(card)
       column.amount += getPreparationCardAmount(card) ?? 0
+      if (data.INCIDENTS && isCommercialIncidentMirror(columnId, commercialIncidentCounts[card.card_id] ?? 0)) {
+        data.INCIDENTS.mirrorCards.push(card)
+      }
     }
 
     for (const column of visibleColumns) {
@@ -1888,10 +1907,11 @@ export function SalesOrderPreparationPanel({
       } else {
         target.cards = sortPreparationColumnCards(target.cards, explicitSort, confirmedInvoiceNumberByCardId)
       }
+      target.mirrorCards = sortPreparationColumnCards(target.mirrorCards, explicitSort, confirmedInvoiceNumberByCardId)
     }
 
     return data
-  }, [filteredCards, readinessByCardId, columnSorts, confirmedInvoiceNumberByCardId, visibleColumns, sortBy])
+  }, [filteredCards, readinessByCardId, columnSorts, confirmedInvoiceNumberByCardId, visibleColumns, sortBy, commercialIncidentCounts])
 
   const selectedPendingCards = useMemo(() => {
     const columnCards = columnData['PENDING_ROUTE_PREP']?.cards ?? []
@@ -2422,6 +2442,8 @@ export function SalesOrderPreparationPanel({
                          key={col.id}
                          col={col}
                          colCards={column?.cards ?? []}
+                         commercialMirrorCards={column?.mirrorCards ?? []}
+                         commercialIncidentCounts={commercialIncidentCounts}
                          columnAmount={column?.amount ?? 0}
                          pendingCardIds={pendingCardIds}
                          onOpenCardDetails={openCardDetails}

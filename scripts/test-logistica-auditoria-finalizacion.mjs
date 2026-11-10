@@ -233,8 +233,8 @@ test('26a. el cierre recarga readiness sin sincronizar Bsale', () => {
 test('26b. readiness no disponible conserva la clasificación fallback', () => {
   assert.equal(getPreparationColumnId('AUDITED', 'READY_TO_INVOICE'), 'READY_TO_INVOICE')
   assert.equal(getPreparationColumnId('AUDITED', 'INCIDENTS'), 'INCIDENTS')
-  assert.equal(getPreparationColumnId('AUDITED', 'BLOCKED'), 'INCIDENTS')
-  assert.equal(getPreparationColumnId('AUDITED', null), 'INCIDENTS')
+  assert.equal(getPreparationColumnId('AUDITED', 'BLOCKED'), 'BLOCKED')
+  assert.equal(getPreparationColumnId('AUDITED', null), 'BLOCKED')
   assert.match(panel, /setReadinessState\(res\.readinessError \? 'error' : 'ready'\)/)
 })
 
