@@ -14,6 +14,7 @@ interface BsaleFetchOptions {
   path: string
   params?: Record<string, string | number | undefined>
   signal?: AbortSignal
+  cache?: RequestCache
 }
 
 export class BsaleApiError extends Error {
@@ -61,7 +62,7 @@ interface BsaleFetchForCompanyOptions extends BsaleFetchOptions {
 }
 
 async function fetchBsaleForCompany<T>(options: BsaleFetchForCompanyOptions): Promise<T> {
-  const { companyId, path, params, signal } = options
+  const { companyId, path, params, signal, cache } = options
   const { baseUrl, accessToken } = getBsaleConfigForCompany(companyId)
   const url = new URL(`${baseUrl}${path}`)
 
@@ -78,6 +79,7 @@ async function fetchBsaleForCompany<T>(options: BsaleFetchForCompanyOptions): Pr
       Accept: 'application/json',
     },
     signal,
+    cache,
   })
   if (!response.ok) {
     const body = await response.text().catch(() => '')
