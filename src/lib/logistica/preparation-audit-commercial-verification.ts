@@ -1,4 +1,5 @@
-import { compareCommercialVersions, type PreparationCommercialLine, type PreparationCommercialVersion } from './preparation-commercial-version'
+// @ts-expect-error The local strip-types test runner resolves the source extension directly.
+import { compareCommercialVersions, type PreparationCommercialLine, type PreparationCommercialVersion } from './preparation-commercial-version.ts'
 
 export type AuditCommercialLine = {
   bsale_detail_id: number

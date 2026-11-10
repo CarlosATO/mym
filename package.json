@@ -59,6 +59,8 @@
     "test:logistica-auditoria-base": "node --experimental-strip-types --test scripts/test-logistica-auditoria-base.mjs",
     "test:logistica-auditoria-ux": "node --experimental-strip-types --test scripts/test-logistica-auditoria-ux.mjs",
     "test:logistica-auditoria-finalizacion": "node --experimental-strip-types --test scripts/test-logistica-auditoria-finalizacion.mjs",
+    "test:logistica-auditoria-commercial-closure": "node --test scripts/test-logistica-auditoria-commercial-closure.mjs",
+    "test:logistica-audit-individual-commercial-verification": "node --experimental-strip-types --test scripts/test-logistica-audit-individual-commercial-verification.mjs",
     "test:logistica-auditoria-cycles": "node --test scripts/test-logistica-auditoria-cycles.mjs",
     "test:logistica-auditoria-active-cycle-ui": "node --test scripts/test-logistica-auditoria-active-cycle-ui.mjs",
     "test:logistica-auditoria-superuser-self-audit": "node --experimental-strip-types --test scripts/test-logistica-auditoria-superuser-self-audit.mjs",

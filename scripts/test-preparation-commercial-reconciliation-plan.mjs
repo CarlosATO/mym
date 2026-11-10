@@ -1,7 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  PREPARATION_RECONCILIATION_INCIDENT_SELECT,
   buildPreparationCommercialReconciliationPlan,
+  mapPersistedIncidentToReconciliationIncident,
 } from '../src/lib/logistica/preparation-commercial-reconciliation-plan.ts'
 import { compareCommercialVersions } from '../src/lib/logistica/preparation-commercial-version.ts'
 
@@ -34,6 +36,26 @@ function prep(id, source, requested, prepared = null, status = 'PENDING', exclud
     prepared_quantity: prepared,
     line_status: status,
     excluded_from_dispatch: excluded,
+  }
+}
+
+function validEvidence(lineId, action, expectedQuantity, preparedQuantity) {
+  return {
+    document_id: 92714,
+    current_nv_id: 92714,
+    document_state: 0,
+    canonical_identity_matched: true,
+    sync_proven: true,
+    line_link_valid: true,
+    full_card_matched: true,
+    incident_action_matched: true,
+    required_bsale_action: action,
+    expected_bsale_quantity: expectedQuantity,
+    bsale_observed_quantity: expectedQuantity,
+    physically_prepared_quantity: preparedQuantity,
+    preparation_line_id: lineId,
+    matched_preparation_line_id: lineId,
+    verification_basis: 'FULL_CARD_AND_INCIDENT_ACTION_WITH_PHYSICAL_LINE',
   }
 }
 
@@ -165,6 +187,60 @@ test('unavailable vigente devuelve UNAVAILABLE', () => {
 test('ejecuciones repetidas son deterministas', () => {
   const input = { oldLines: baseOld, newLines: [...baseOld, line(4, 'D', 1)], preparationLines: baseOld.map((item, index) => prep(`line-${index}`, item, item.quantity)) }
   assert.deepEqual(plan(input), plan(input))
+})
+
+test('línea retirada no se reutiliza y una alta con identidad colisionada queda bloqueada', () => {
+  const oldItem = line(1, 'A', 1)
+  const readded = line(2, 'B', 2, { detailId: 7002 })
+  const retiredLine = { ...prep('retired-b', readded, 1), retired_at: '2026-11-04T12:00:00.000Z' }
+  const result = plan({
+    oldLines: [oldItem],
+    newLines: [oldItem, readded],
+    preparationLines: [prep('line-a', oldItem, 1), retiredLine],
+  })
+  assert.equal(result.status, 'REQUIRES_RESOLUTION')
+  assert.equal(result.conflicts[0].reason, 'PREPARATION_LINE_AMBIGUOUS')
+})
+
+test('reducción resuelta exige el snapshot completo de evidencia y su identidad física', () => {
+  const oldItem = line(501, 'SKU-RED', 5, { detailId: 4001 })
+  const newItem = line(501, 'SKU-RED', 4, { detailId: 4002 })
+  const row = {
+    id: 'inc-resolved', company_id: card.companyId, card_id: card.cardId, preparation_line_id: 'line-red',
+    status: 'RESOLVED', incident_type: 'QUANTITY_REDUCTION', required_bsale_action: 'SET_QUANTITY',
+    requested_quantity: 5, prepared_quantity: 4, expected_bsale_quantity: 4, verification_status: 'MATCHED',
+    bsale_observed_quantity: 4, bsale_variant_id: 501, sku: 'SKU-RED', bsale_observed_snapshot: validEvidence('line-red', 'SET_QUANTITY', 4, 4),
+  }
+  const selected = PREPARATION_RECONCILIATION_INCIDENT_SELECT.split(',').map(column => column.trim())
+  const mapped = mapPersistedIncidentToReconciliationIncident(Object.fromEntries(selected.map(column => [column, row[column]])))
+  const valid = plan({ oldLines: [oldItem], newLines: [newItem], preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT')], incidents: [mapped] })
+  assert.equal(valid.status, 'READY')
+
+  const incomplete = plan({
+    oldLines: [oldItem], newLines: [newItem], preparationLines: [prep('line-red', oldItem, 5, 4, 'INCIDENT')],
+    incidents: [{ ...mapped, bsale_observed_snapshot: { document_id: 92714 } }],
+  })
+  assert.equal(incomplete.status, 'REQUIRES_RESOLUTION')
+  assert.equal(incomplete.conflicts[0].reason, 'OPERATIONAL_INCIDENT_EXISTS')
+})
+
+test('exclusión resuelta con REMOVE_LINE puede retirar solo la línea excluida y conserva las demás', () => {
+  const active = line(101, 'ACTIVE', 3, { detailId: 5001 })
+  const excluded = line(601, 'EXCLUDED', 5, { detailId: 5002 })
+  const incident = {
+    id: 'inc-excluded', company_id: card.companyId, card_id: card.cardId, preparation_line_id: 'line-excluded',
+    status: 'RESOLVED', incident_type: 'LINE_EXCLUDED', required_bsale_action: 'REMOVE_LINE',
+    requested_quantity: 5, prepared_quantity: 0, expected_bsale_quantity: 0, verification_status: 'MATCHED',
+    bsale_observed_quantity: 0, bsale_variant_id: 601, sku: 'EXCLUDED',
+    bsale_observed_snapshot: validEvidence('line-excluded', 'REMOVE_LINE', 0, 0),
+  }
+  const result = plan({
+    oldLines: [active, excluded], newLines: [active],
+    preparationLines: [prep('line-active', active, 3, 3, 'CONFIRMED'), prep('line-excluded', excluded, 5, 0, 'INCIDENT', true)],
+    incidents: [incident],
+  })
+  assert.equal(result.status, 'READY')
+  assert.equal(result.actions.find(action => action.kind === 'REMOVE')?.preparationLineId, 'line-excluded')
 })
 
 test('NV 5148 (92753 -> 92799): WG85765 de 3 a 2 y ajuste comercial en USA651 produce READY sin conflictos y totalDelta -1750', () => {
@@ -433,7 +509,7 @@ test('MEJ-01 Bloque 1 — Escenario 1: reducción válida (Original 5, Preparado
         bsale_observed_quantity: 4,
         status: 'RESOLVED',
         verification_status: 'MATCHED',
-        bsale_observed_snapshot: { physicalId: 92714, line: { variantId: 501, sku: 'SKU-RED', quantity: 4 } },
+        bsale_observed_snapshot: validEvidence('line-red', 'SET_QUANTITY', 4, 4),
       },
     ],
   })
