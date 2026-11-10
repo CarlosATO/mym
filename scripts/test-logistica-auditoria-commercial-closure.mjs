@@ -31,7 +31,7 @@ test('la verificación debe pertenecer a la misma empresa, tarjeta y auditoría'
   assert.match(body, /company_id = p_company_id/)
   assert.match(body, /card_id = p_card_id/)
   assert.match(body, /audit_id = p_audit_id/)
-  assert.match(body, /v_snapshot->>'companyId'/)
+  assert.match(body, /v_snapshot->'identity'->>'companyId'/)
   assert.match(body, /v_snapshot->>'auditId'/)
 })
 

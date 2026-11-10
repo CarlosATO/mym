@@ -106,7 +106,7 @@ BEGIN
 
     v_snapshot := v_verification.snapshot;
     v_current_version := v_snapshot->'currentVersion';
-    IF v_snapshot->>'companyId' IS DISTINCT FROM p_company_id::text
+    IF v_snapshot->'identity'->>'companyId' IS DISTINCT FROM p_company_id::text
        OR v_snapshot->>'cardId' IS DISTINCT FROM p_card_id::text
        OR v_snapshot->>'auditId' IS DISTINCT FROM p_audit_id::text
        OR v_snapshot->>'status' IS DISTINCT FROM 'READY_TO_INVOICE'
