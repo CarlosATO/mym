@@ -101,7 +101,10 @@ export async function buildAuditCommercialReview(input: AuditCommercialPreviewIn
     if (number(oldDoc.number) !== 0 || number(oldDoc.state) !== 8888) throw new Error('BSALE_HISTORICAL_IDENTITY_UNVERIFIED')
     text(oldDoc.token)
   }
-  const historicalDetails = await all(fetch, `/documents/${oldId}/details.json`)
+  const [historicalDetails, details] = await Promise.all([
+    all(fetch, `/documents/${oldId}/details.json`),
+    all(fetch, `/documents/${currentId}/details.json`),
+  ])
   if (!Array.isArray(previous.sourceDetails) || !previous.lines.length || historicalDetails.length !== previous.lines.length) throw new Error('BSALE_HISTORICAL_DETAILS_MISMATCH')
   for (const line of previous.lines) {
     const matches = historicalDetails.filter(row => id(row.id) === line.detailId)
@@ -119,7 +122,6 @@ export async function buildAuditCommercialReview(input: AuditCommercialPreviewIn
     if (version && (number(doc.netAmount) !== version.netAmount || number(doc.taxAmount) !== version.taxAmount || number(doc.totalAmount) !== version.totalAmount)) throw new Error('BSALE_HISTORICAL_DOCUMENT_MISMATCH')
   }
   if (id(currentDoc.state, true) !== 0) throw new Error('BSALE_CURRENT_DOCUMENT_INACTIVE')
-  const details = await all(fetch, `/documents/${currentId}/details.json`)
   const current: PreparationCommercialVersion = {
     identity: { canonicalToken, historicalBsaleId: input.historicalBsaleId, currentBsaleId: currentId, folio }, physicalId: currentId,
     lines: details.map(row => ({ detailId: id(row.id), variantId: id(object(row.variant).id), sku: text(object(row.variant).code), productName: typeof row.description === 'string' ? row.description : null,
