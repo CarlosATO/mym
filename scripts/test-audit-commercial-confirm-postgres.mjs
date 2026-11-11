@@ -27,11 +27,16 @@ test('vista previa → confirmación y reintento con Bsale simulado y PostgreSQL
     await client.query('DELETE FROM logistica.sales_order_audit_commercial_acceptance_requests')
     await client.query('DELETE FROM logistica.sales_order_preparation_commercial_versions WHERE sequence_no=2')
     await client.query("UPDATE logistica.sales_order_audit_commercial_verifications SET is_current=true WHERE id='00000000-0000-0000-0000-000000000010'")
+    const prior = (await client.query('SELECT version_snapshot FROM logistica.sales_order_preparation_commercial_versions WHERE sequence_no=1')).rows[0].version_snapshot
+    prior.identity.historicalBsaleId = 10; prior.identity.folio = '5172'
+    prior.sourceDocument = { id: 93141, number: 5172, token: 'token', document_type: { id: '23' } }
+    await client.query('UPDATE logistica.sales_order_preparation_commercial_versions SET version_snapshot=$1, fingerprint=$2, historical_bsale_nv_id=10,current_bsale_nv_id=93141 WHERE sequence_no=1', [JSON.stringify(prior), fingerprintCommercialVersion(prior).value])
     const makeDocument = (id, state, net, tax, total, generationDate) => ({ id, number: 5172, state, token: 'token', document_type: { id: '23' }, netAmount: net, taxAmount: tax, totalAmount: total, exemptAmount: 0, generationDate })
-    const old = makeDocument(93141, 1, 39650, 7534, 47184, 1)
+    const old = { ...makeDocument(93141, 8888, 39650, 7534, 47184, 1), number: 0, token: 'historical-token' }
     const current = makeDocument(10, 0, 38920, 7395, 46315, 2)
     const lists = {
       '/documents.json': [old, current],
+      '/documents/93141/details.json': [{ id: 1, variant: { id: '1', code: 'P317' }, quantity: 5, netUnitValue: 730, netAmount: 3650, taxAmount: 694, totalAmount: 4344, netDiscount: 0 }, { id: 2, variant: { id: '2', code: 'AUT.' }, quantity: 12, netUnitValue: 3000, netAmount: 36000, taxAmount: 6840, totalAmount: 42840, netDiscount: 0 }],
       '/documents/10/details.json': [{ id: 1, variant: { id: '1', code: 'P317' }, quantity: 4, netUnitValue: 730, netAmount: 2920, taxAmount: 555, totalAmount: 3475, netDiscount: 0 }, { id: 2, variant: { id: '2', code: 'AUT.' }, quantity: 12, netUnitValue: 3000, netAmount: 36000, taxAmount: 6840, totalAmount: 42840, netDiscount: 0 }],
       '/documents/93141/document_taxes.json': [{ id: 111, tax: { id: '1' }, totalAmount: 7534, exemptAmount: 0 }],
       '/documents/10/document_taxes.json': [{ id: 112, tax: { id: '1' }, totalAmount: 7395, exemptAmount: 0 }],
@@ -83,6 +88,12 @@ test('vista previa → confirmación y reintento con Bsale simulado y PostgreSQL
     lists['/documents/10/details.json'][0].netDiscount = 1
     assert.equal((await confirm(request)).error, 'AUDIT_COMMERCIAL_REVIEW_CHANGED')
     lists['/documents/10/details.json'][0].netDiscount = 0
+    old.token = 'different-historical-token'
+    assert.equal((await confirm(request)).error, 'AUDIT_COMMERCIAL_REVIEW_CHANGED')
+    old.token = 'historical-token'
+    lists['/documents/93141/details.json'][0].quantity = 6
+    assert.equal((await confirm(request)).error, 'BSALE_HISTORICAL_DETAILS_MISMATCH')
+    lists['/documents/93141/details.json'][0].quantity = 5
     bsaleDown = true; assert.equal((await confirm(request)).error, 'BSALE_UNAVAILABLE'); bsaleDown = false
     await client.query('UPDATE logistica.sales_order_audits SET package_count=9')
     assert.equal((await confirm(request)).error, 'AUDIT_PHYSICAL_SNAPSHOT_CHANGED')

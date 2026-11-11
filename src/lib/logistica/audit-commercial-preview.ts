@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 // @ts-expect-error The local strip-types test runner resolves the source extension directly.
 import { planAuditCommercialAcceptance, type AuditCommercialTaxEvidence } from './audit-commercial-acceptance-plan.ts'
+// @ts-expect-error The local strip-types test runner resolves the source extension directly.
+import { fingerprintCommercialVersion } from './preparation-commercial-version.ts'
 import type { PreparationCommercialVersion } from './preparation-commercial-version.ts'
 import type { AuditCommercialLine } from './preparation-audit-commercial-verification.ts'
 
@@ -50,6 +52,7 @@ export type AuditCommercialPreviewInput = {
   previousVersionId: string
   previousFingerprint: string
   previous: PreparationCommercialVersion
+  previousRecord: { id: string; companyId: string; cardId: string; canonicalToken: string; historicalBsaleId: number; currentBsaleId: number }
   auditedLines: AuditCommercialLine[]
   auditContext: { companyId: string; cardId: string; auditId: string; packageCount: number }
 }
@@ -84,8 +87,34 @@ export async function buildAuditCommercialReview(input: AuditCommercialPreviewIn
   const currentId = sorted[0].id
   const [oldDocRaw, currentDocRaw] = await Promise.all([fetch(`/documents/${oldId}.json`), fetch(`/documents/${currentId}.json`)])
   const oldDoc = object(oldDocRaw); const currentDoc = object(currentDocRaw)
-  for (const [doc, expectedId, version] of [[oldDoc, oldId, previous], [currentDoc, currentId, null]] as const) {
-    if (id(doc.id) !== expectedId || String(doc.number) !== folio || doc.token !== canonicalToken || id(object(doc.document_type).id) !== 23) throw new Error('BSALE_DOCUMENT_IDENTITY_MISMATCH')
+  if (id(currentDoc.id) !== currentId || String(currentDoc.number) !== folio || currentDoc.token !== canonicalToken || id(object(currentDoc.document_type).id) !== 23) throw new Error('BSALE_DOCUMENT_IDENTITY_MISMATCH')
+  if (id(oldDoc.id) !== oldId || id(object(oldDoc.document_type).id) !== 23) throw new Error('BSALE_DOCUMENT_IDENTITY_MISMATCH')
+  const historicalIdentityChanged = String(oldDoc.number) !== folio || oldDoc.token !== canonicalToken
+  const record = input.previousRecord
+  const source = object(previous.sourceDocument)
+  if (!record || record.id !== input.previousVersionId || record.companyId !== input.auditContext.companyId || record.cardId !== input.auditContext.cardId
+    || record.canonicalToken !== canonicalToken || id(record.currentBsaleId) !== oldId || id(record.historicalBsaleId) !== id(input.historicalBsaleId)
+    || id(previous.identity.historicalBsaleId) !== id(input.historicalBsaleId) || String(previous.identity.folio) !== folio
+    || id(source.id) !== oldId || String(source.number) !== folio || source.token !== canonicalToken || id(object(source.document_type).id) !== 23
+    || fingerprintCommercialVersion(previous).value !== input.previousFingerprint) throw new Error('BSALE_HISTORICAL_IDENTITY_UNVERIFIED')
+  if (historicalIdentityChanged) {
+    if (number(oldDoc.number) !== 0 || number(oldDoc.state) !== 8888) throw new Error('BSALE_HISTORICAL_IDENTITY_UNVERIFIED')
+    text(oldDoc.token)
+  }
+  const historicalDetails = await all(fetch, `/documents/${oldId}/details.json`)
+  if (!Array.isArray(previous.sourceDetails) || !previous.lines.length || historicalDetails.length !== previous.lines.length) throw new Error('BSALE_HISTORICAL_DETAILS_MISMATCH')
+  for (const line of previous.lines) {
+    const matches = historicalDetails.filter(row => id(row.id) === line.detailId)
+    const sources = previous.sourceDetails.map(row => row.raw_json && typeof row.raw_json === 'object' && !Array.isArray(row.raw_json) ? row.raw_json as Json : row)
+      .filter(row => row.id != null && line.detailId != null && String(row.id) === String(line.detailId) && typeof row.netDiscount === 'number')
+    if (matches.length !== 1 || sources.length !== 1 || previous.lines.filter(other => other.detailId === line.detailId).length !== 1) throw new Error('BSALE_HISTORICAL_DETAILS_MISMATCH')
+    const row = matches[0]; const variant = object(row.variant)
+    if (id(variant.id) !== line.variantId || text(variant.code) !== (line.sku ?? '').trim()
+      || number(row.quantity) !== line.quantity || number(row.netUnitValue) !== line.unitNetValue
+      || number(row.netAmount) !== line.lineNetAmount || number(row.taxAmount) !== line.lineTaxAmount
+      || number(row.totalAmount) !== line.lineGrossAmount || number(row.netDiscount) !== sources[0].netDiscount) throw new Error('BSALE_HISTORICAL_DETAILS_MISMATCH')
+  }
+  for (const [doc, version] of [[oldDoc, previous], [currentDoc, null]] as const) {
     if (number(doc.exemptAmount) !== 0) throw new Error('BSALE_EXEMPT_DOCUMENT')
     if (version && (number(doc.netAmount) !== version.netAmount || number(doc.taxAmount) !== version.taxAmount || number(doc.totalAmount) !== version.totalAmount)) throw new Error('BSALE_HISTORICAL_DOCUMENT_MISMATCH')
   }
@@ -126,7 +155,8 @@ export async function buildAuditCommercialReview(input: AuditCommercialPreviewIn
   // The timestamp changes on each read; bind the actual evidence rather than its collection time.
   const { fetchedAt: _fetchedAt, ...stableEvidence } = taxEvidence
   const auditedLines = [...input.auditedLines].sort((a, b) => (a.bsale_variant_id ?? -1) - (b.bsale_variant_id ?? -1) || a.bsale_detail_id - b.bsale_detail_id)
-  const reviewedReference = createHash('sha256').update(JSON.stringify({ auditContext: input.auditContext, auditedLines, previousVersionId: input.previousVersionId, previousFingerprint: input.previousFingerprint, current, taxEvidence: stableEvidence })).digest('hex')
+  const historicalIdentity = { id: oldId, number: number(oldDoc.number), state: number(oldDoc.state), token: oldDoc.token, documentTypeId: id(object(oldDoc.document_type).id) }
+  const reviewedReference = createHash('sha256').update(JSON.stringify({ auditContext: input.auditContext, auditedLines, previousVersionId: input.previousVersionId, previousFingerprint: input.previousFingerprint, historicalIdentity, current, taxEvidence: stableEvidence })).digest('hex')
   return { preview: { eligible: plan.eligible, differences: plan.differences, errors: plan.errors, reviewedReference, currentBsaleId: currentId, previousVersionId: input.previousVersionId, historicalTaxRateCertified: false as const, comparison: { previous: comparisonVersion(previous), current: comparisonVersion(current) } }, current, taxEvidence }
 }
 
