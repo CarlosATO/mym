@@ -45,7 +45,7 @@ export function AuditCloseReviewDialog({
   onReviewCommercial,
 }: AuditCloseReviewDialogProps) {
   const commercialBlocked = Boolean(finalizeError && /diferencias comerciales pendientes/i.test(finalizeError))
-  const ready = finalization?.can_finalize === true && !commercialBlocked
+  const ready = finalization?.can_finalize === true && !commercialBlocked && !finalizeError && !error
   const busy = loading || finalizing
   const blockers = finalization ? auditBlockerMessages(finalization.blockers) : []
 
@@ -112,6 +112,12 @@ export function AuditCloseReviewDialog({
                     <p className="font-bold">Requisitos pendientes</p>
                     <ul className="mt-2 list-disc space-y-1 pl-5">
                       {blockers.map((message, index) => <li key={`${message}-${index}`}>{message}</li>)}
+                      {commercialBlocked && (
+                        <li>Existen diferencias comerciales pendientes de revisión con Bsale.</li>
+                      )}
+                      {!commercialBlocked && finalizeError && (
+                        <li>{finalizeError}</li>
+                      )}
                     </ul>
                   </div>
                 )

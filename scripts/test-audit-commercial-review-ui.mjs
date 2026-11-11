@@ -87,3 +87,144 @@ test('desde el bloqueo comercial se abre la revisión y aceptar no finaliza ni m
   assert.match(handler, /setPreclose\(null\)/); assert.match(handler, /verificar nuevamente antes de finalizar/); assert.match(handler, /loadDetail\(\)/)
   assert.doesNotMatch(handler, /finalizeSalesOrderAudit|confirmSalesOrderAuditLine|setSalesOrderAuditPackageCount|invoice/i)
 })
+
+function closeDialogHarness(props) {
+  const jsx = (type, p) => ({ type, props: p ?? {} })
+  const mocks = {
+    react: {
+      useState(initial) { return [initial, () => {}] },
+      useRef(initial) { return { current: initial } },
+    },
+    'react/jsx-runtime': { jsx, jsxs: jsx },
+    'lucide-react': { CheckCircle2: 'CheckCircle2', Loader2: 'Loader2', ShieldAlert: 'ShieldAlert' },
+    '@/components/ui/button': { Button: (p) => ({ type: 'Button', props: p }) },
+    '@/components/ui/dialog': {
+      Dialog: (p) => ({ type: 'Dialog', props: p }),
+      DialogContent: (p) => ({ type: 'DialogContent', props: p }),
+      DialogDescription: (p) => ({ type: 'DialogDescription', props: p }),
+      DialogHeader: (p) => ({ type: 'DialogHeader', props: p }),
+      DialogTitle: (p) => ({ type: 'DialogTitle', props: p }),
+    },
+    './audit-ui-utils': {
+      auditBlockerMessages: (blockers) => (blockers ?? []).map(b => typeof b === 'string' ? b : (b.message || b.code)),
+    },
+  }
+  const source = readFileSync(new URL('../src/modules/logistica/auditoria/audit-close-review-dialog.tsx', import.meta.url), 'utf8')
+  const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText
+  const exports = {}
+  vm.runInNewContext(compiled, { exports, require: name => { if (!mocks[name]) throw new Error(`Unexpected import ${name}`); return mocks[name] }, Set, Intl, Error })
+  const tree = exports.AuditCloseReviewDialog(props)
+  function nodes(value) { if (!value || typeof value !== 'object') return []; if (Array.isArray(value)) return value.flatMap(nodes); const rendered = typeof value.type === 'function' ? value.type(value.props) : null; return [value, ...nodes(rendered), ...nodes(value.props?.children)] }
+  const label = item => { const text = value => typeof value === 'string' || typeof value === 'number' ? String(value) : Array.isArray(value) ? value.map(text).join('') : value?.props ? text(value.props.children) : ''; return text(item?.props?.children) }
+  return { tree, nodes: () => nodes(tree), label }
+}
+
+const baseSummary = {
+  totalLines: 2,
+  auditedLines: 2,
+  conformingLines: 2,
+  incidentLines: 0,
+  openIncidents: 0,
+  requested: 10,
+  prepared: 10,
+  audited: 10,
+}
+
+test('flujo de cierre: auditoría conforme habilita finalización sin botón comercial', () => {
+  const h = closeDialogHarness({
+    open: true,
+    loading: false,
+    error: null,
+    finalization: { can_finalize: true, blockers: [] },
+    summary: baseSummary,
+    packageCount: 2,
+    hasGlobalPhoto: true,
+    finalizing: false,
+    finalizeError: null,
+    onOpenChange() {},
+    onFinalize: async () => ({ ok: true }),
+    onReviewCommercial() {},
+  })
+  const rows = h.nodes()
+  const text = rows.map(h.label).join(' ')
+  assert.match(text, /✓ Auditoría lista para finalizar/)
+  assert.match(text, /La Auditoría cumple todos los requisitos de cierre\./)
+  const finalizeBtn = rows.find(item => item.type === 'Button' && h.label(item) === 'Finalizar Auditoría')
+  assert.ok(finalizeBtn, 'Botón Finalizar Auditoría debe estar presente')
+  assert.equal(finalizeBtn.props.disabled, false)
+  const reviewCommercialBtn = rows.find(item => item.type === 'Button' && h.label(item) === 'Revisar cambio comercial')
+  assert.equal(reviewCommercialBtn, undefined, 'No debe mostrar botón de revisión comercial cuando todo está conforme')
+})
+
+test('flujo de cierre: auditoría con diferencias comerciales bloquea cierre y ofrece Revisar cambio comercial', () => {
+  let reviewed = false
+  const h = closeDialogHarness({
+    open: true,
+    loading: false,
+    error: null,
+    finalization: { can_finalize: true, blockers: [] },
+    summary: baseSummary,
+    packageCount: 2,
+    hasGlobalPhoto: true,
+    finalizing: false,
+    finalizeError: 'No se puede finalizar la Auditoría: existen diferencias comerciales pendientes.',
+    onOpenChange() {},
+    onFinalize: async () => ({ ok: false }),
+    onReviewCommercial: () => { reviewed = true },
+  })
+  const rows = h.nodes()
+  const text = rows.map(h.label).join(' ')
+  assert.match(text, /Auditoría aún no puede cerrar/)
+  assert.match(text, /existen diferencias comerciales pendientes/)
+  assert.match(text, /Existen diferencias comerciales pendientes de revisión con Bsale\./)
+  const finalizeBtn = rows.find(item => item.type === 'Button' && h.label(item) === 'Finalizar Auditoría')
+  assert.equal(finalizeBtn, undefined, 'No debe mostrar botón Finalizar Auditoría ante diferencias comerciales')
+  const reviewCommercialBtn = rows.find(item => item.type === 'Button' && h.label(item) === 'Revisar cambio comercial')
+  assert.ok(reviewCommercialBtn, 'Debe mostrar botón Revisar cambio comercial directamente')
+  reviewCommercialBtn.props.onClick()
+  assert.equal(reviewed, true, 'Click en Revisar cambio comercial debe disparar onReviewCommercial')
+})
+
+test('flujo de cierre: Bsale no disponible o error técnico impide cierre e informa causa', () => {
+  const h = closeDialogHarness({
+    open: true,
+    loading: false,
+    error: null,
+    finalization: { can_finalize: true, blockers: [] },
+    summary: baseSummary,
+    packageCount: 2,
+    hasGlobalPhoto: true,
+    finalizing: false,
+    finalizeError: 'No se puede finalizar la Auditoría: Bsale no está disponible temporalmente para verificar cambios comerciales.',
+    onOpenChange() {},
+    onFinalize: async () => ({ ok: false }),
+    onReviewCommercial() {},
+  })
+  const rows = h.nodes()
+  const text = rows.map(h.label).join(' ')
+  assert.match(text, /Auditoría aún no puede cerrar/)
+  assert.match(text, /Bsale no está disponible temporalmente/)
+  const finalizeBtn = rows.find(item => item.type === 'Button' && h.label(item) === 'Finalizar Auditoría')
+  assert.equal(finalizeBtn, undefined, 'No debe permitir finalizar si Bsale no está disponible')
+  const reviewCommercialBtn = rows.find(item => item.type === 'Button' && h.label(item) === 'Revisar cambio comercial')
+  assert.equal(reviewCommercialBtn, undefined, 'No debe ofrecer revisión comercial si Bsale falló por red/disponibilidad')
+})
+
+test('drawer: handleReviewClose verifica estado comercial antes de habilitar cierre', () => {
+  const drawerSource = readFileSync(new URL('../src/modules/logistica/auditoria/sales-order-audit-drawer.tsx', import.meta.url), 'utf8')
+  assert.match(drawerSource, /import \{ verifySalesOrderAuditCommercial \} from '@\/app\/actions\/logistica\/sales-order-audit-commercial'/)
+  const reviewCloseFn = drawerSource.slice(drawerSource.indexOf('const handleReviewClose = async () => {'), drawerSource.indexOf('const handleFinalize = async (): Promise'))
+  assert.match(reviewCloseFn, /getSalesOrderAuditFinalizationStatus\(audit\.id\)/)
+  assert.match(reviewCloseFn, /if \(result\.data\.can_finalize\) \{/)
+  assert.match(reviewCloseFn, /verifySalesOrderAuditCommercial\(\{/)
+  assert.match(reviewCloseFn, /auditId: audit\.id,/)
+  assert.match(reviewCloseFn, /cardId: card\.card_id,/)
+  assert.match(reviewCloseFn, /companyId: card\.company_id,/)
+  assert.match(reviewCloseFn, /setFinalizeError\('No se puede finalizar la Auditoría: existen diferencias comerciales pendientes\.'\)/)
+  assert.match(reviewCloseFn, /BSale_UNAVAILABLE/)
+  // No debe llamar a confirmación comercial automática ni RPCs de escritura en handleReviewClose
+  assert.doesNotMatch(reviewCloseFn, /confirmSalesOrderAuditCommercialAcceptance|finalizeSalesOrderAudit|accept_sales_order_preparation_commercial_changes/i)
+
+  const finalizeFn = drawerSource.slice(drawerSource.indexOf('const handleFinalize = async (): Promise'), drawerSource.indexOf('const hasSnapshot'))
+  assert.match(finalizeFn, /finalizeError/)
+})

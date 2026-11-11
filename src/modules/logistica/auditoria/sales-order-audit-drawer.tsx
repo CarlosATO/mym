@@ -37,6 +37,7 @@ import {
   type SalesOrderAuditIncident,
   type SalesOrderAuditLine,
 } from '@/app/actions/logistica/sales-order-audit'
+import { verifySalesOrderAuditCommercial } from '@/app/actions/logistica/sales-order-audit-commercial'
 import { getAuditCache, invalidateAuditCache, setAuditCache } from './audit-cache'
 import {
   AUDIT_EVIDENCE_ACCEPT,
@@ -666,14 +667,40 @@ export function SalesOrderAuditDrawer({
         return
       }
       setPreclose(result.data)
+
+      if (result.data.can_finalize) {
+        const commercial = await verifySalesOrderAuditCommercial({
+          auditId: audit.id,
+          cardId: card.card_id,
+          companyId: card.company_id,
+        })
+        if (commercial.error) {
+          setFinalizeError(`No se pudo verificar el estado comercial en Bsale: ${commercial.error}`)
+          return
+        }
+        if (!commercial.data) {
+          setFinalizeError('No se recibió una verificación comercial válida para finalizar la Auditoría.')
+          return
+        }
+        if (commercial.data.status === 'INCIDENTS') {
+          setFinalizeError('No se puede finalizar la Auditoría: existen diferencias comerciales pendientes.')
+        } else if (commercial.data.status === 'BLOCKED') {
+          const detail = commercial.data.reason === 'BSale_UNAVAILABLE'
+            ? 'Bsale no está disponible temporalmente para verificar cambios comerciales.'
+            : 'la verificación comercial en Bsale quedó bloqueada.'
+          setFinalizeError(`No se puede finalizar la Auditoría: ${detail}`)
+        } else if (commercial.data.status !== 'READY_TO_INVOICE') {
+          setFinalizeError('No se puede finalizar la Auditoría: la verificación comercial no está conforme.')
+        }
+      }
     } finally {
       setPrecloseLoading(false)
     }
   }
 
   const handleFinalize = async (): Promise<{ ok: boolean; error?: string }> => {
-    if (!audit || !preclose?.can_finalize || finalizingRef.current) {
-      return { ok: false, error: 'La Auditoría aún no cumple los requisitos de cierre.' }
+    if (!audit || !preclose?.can_finalize || finalizeError || finalizingRef.current) {
+      return { ok: false, error: finalizeError || 'La Auditoría aún no cumple los requisitos de cierre.' }
     }
     finalizingRef.current = true
     setFinalizing(true)
