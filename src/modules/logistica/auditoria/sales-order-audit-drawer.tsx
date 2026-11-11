@@ -60,6 +60,7 @@ import { AuditIncidentDialog } from './audit-incident-dialog'
 import { AuditTakeoverDialog } from './audit-takeover-dialog'
 import { AuditCloseReviewDialog } from './audit-close-review-dialog'
 import { AuditEvidencePreviewDialog, type AuditEvidencePreview } from './audit-evidence-preview-dialog'
+import { AuditCommercialReviewDialog } from './audit-commercial-review-dialog'
 
 interface SalesOrderAuditDrawerProps {
   card: SalesOrderPreparationCardInfo
@@ -160,6 +161,7 @@ export function SalesOrderAuditDrawer({
   const [precloseError, setPrecloseError] = useState<string | null>(null)
   const [finalizing, setFinalizing] = useState(false)
   const [finalizeError, setFinalizeError] = useState<string | null>(null)
+  const [commercialReviewOpen, setCommercialReviewOpen] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
@@ -1253,7 +1255,24 @@ export function SalesOrderAuditDrawer({
         finalizeError={finalizeError}
         onOpenChange={setPrecloseOpen}
         onFinalize={handleFinalize}
+        onReviewCommercial={canWrite && audit ? () => { setPrecloseOpen(false); setCommercialReviewOpen(true) } : undefined}
       />
+
+      {audit && <AuditCommercialReviewDialog
+        open={commercialReviewOpen}
+        companyId={card.company_id}
+        cardId={card.card_id}
+        auditId={audit.id}
+        onOpenChange={setCommercialReviewOpen}
+        onAccepted={status => {
+          setCommercialReviewOpen(false)
+          setPreclose(null)
+          setFinalizeError(null)
+          toast.success(status === 'ACCEPTED' ? 'Nueva versión comercial aceptada. Debes verificar nuevamente antes de finalizar.' : 'La versión comercial ya fue aceptada. Debes verificar nuevamente antes de finalizar.')
+          onAuditLockChange()
+          void loadDetail()
+        }}
+      />}
 
       <AuditEvidencePreviewDialog
         open={previewOpen}

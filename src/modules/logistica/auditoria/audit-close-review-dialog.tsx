@@ -27,6 +27,7 @@ interface AuditCloseReviewDialogProps {
   finalizeError: string | null
   onOpenChange: (open: boolean) => void
   onFinalize: () => Promise<{ ok: boolean; error?: string }>
+  onReviewCommercial?: () => void
 }
 
 export function AuditCloseReviewDialog({
@@ -41,8 +42,10 @@ export function AuditCloseReviewDialog({
   finalizeError,
   onOpenChange,
   onFinalize,
+  onReviewCommercial,
 }: AuditCloseReviewDialogProps) {
-  const ready = finalization?.can_finalize === true
+  const commercialBlocked = Boolean(finalizeError && /diferencias comerciales pendientes/i.test(finalizeError))
+  const ready = finalization?.can_finalize === true && !commercialBlocked
   const busy = loading || finalizing
   const blockers = finalization ? auditBlockerMessages(finalization.blockers) : []
 
@@ -70,6 +73,7 @@ export function AuditCloseReviewDialog({
         <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
           {error && <p className="rounded-md border border-[#8A4B4B]/30 bg-[#8A4B4B]/10 px-3 py-2 text-xs text-[#8A4B4B]">{error}</p>}
           {finalizeError && <p className="rounded-md border border-[#8A4B4B]/30 bg-[#8A4B4B]/10 px-3 py-2 text-xs text-[#8A4B4B]">{finalizeError}</p>}
+          {commercialBlocked && onReviewCommercial && <Button variant="outline" disabled={busy} onClick={onReviewCommercial}>Revisar cambio comercial</Button>}
 
           {loading && !finalization ? (
             <div className="flex items-center justify-center gap-2 py-8 text-xs text-theme-text-muted">

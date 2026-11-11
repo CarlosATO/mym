@@ -54,6 +54,21 @@ export type AuditCommercialPreviewInput = {
   auditContext: { companyId: string; cardId: string; auditId: string; packageCount: number }
 }
 
+// Only comparison fields cross the server boundary; never expose raw Bsale data.
+function comparisonVersion(version: PreparationCommercialVersion) {
+  const amount = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : null
+  return {
+    netAmount: amount(version.netAmount), taxAmount: amount(version.taxAmount), totalAmount: amount(version.totalAmount),
+    lines: version.lines.map(line => {
+      const sources = (version.sourceDetails ?? []).map(row => {
+        const raw = row.raw_json
+        return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : row
+      }).filter(row => row.id != null && line.detailId != null && String(row.id) === String(line.detailId) && typeof row.netDiscount === 'number')
+      return { variantId: line.variantId ?? null, sku: line.sku ?? null, productName: line.productName ?? null, quantity: amount(line.quantity), unitNetValue: amount(line.unitNetValue), lineNetAmount: amount(line.lineNetAmount), lineTaxAmount: amount(line.lineTaxAmount), lineGrossAmount: amount(line.lineGrossAmount), netDiscount: sources.length === 1 ? amount(sources[0].netDiscount) : null }
+    }),
+  }
+}
+
 /** Read-only preview. reviewedReference is a digest for subsequent revalidation,
  * not an authorization or the PostgreSQL approval fingerprint. */
 export async function buildAuditCommercialReview(input: AuditCommercialPreviewInput, fetch: FetchResource) {
@@ -112,7 +127,7 @@ export async function buildAuditCommercialReview(input: AuditCommercialPreviewIn
   const { fetchedAt: _fetchedAt, ...stableEvidence } = taxEvidence
   const auditedLines = [...input.auditedLines].sort((a, b) => (a.bsale_variant_id ?? -1) - (b.bsale_variant_id ?? -1) || a.bsale_detail_id - b.bsale_detail_id)
   const reviewedReference = createHash('sha256').update(JSON.stringify({ auditContext: input.auditContext, auditedLines, previousVersionId: input.previousVersionId, previousFingerprint: input.previousFingerprint, current, taxEvidence: stableEvidence })).digest('hex')
-  return { preview: { eligible: plan.eligible, differences: plan.differences, errors: plan.errors, reviewedReference, currentBsaleId: currentId, previousVersionId: input.previousVersionId, historicalTaxRateCertified: false as const }, current, taxEvidence }
+  return { preview: { eligible: plan.eligible, differences: plan.differences, errors: plan.errors, reviewedReference, currentBsaleId: currentId, previousVersionId: input.previousVersionId, historicalTaxRateCertified: false as const, comparison: { previous: comparisonVersion(previous), current: comparisonVersion(current) } }, current, taxEvidence }
 }
 
 export async function buildAuditCommercialPreview(input: AuditCommercialPreviewInput, fetch: FetchResource) {
