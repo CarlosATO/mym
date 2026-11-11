@@ -178,8 +178,21 @@ export function createBsalePreparationCommercialProvider(providerOptions: BsaleP
       if (selectedId == null) throw providerError('INCOMPLETE', 'Bsale devolvió un documento sin ID.')
       let detailResult = extractDetails(selected.details)
       if (!detailResult.complete) {
-        const detailPage = await fetchPage<BsaleRawDetail>({ companyId: identity.companyId, path: `/documents/${selected.id}/details.json`, params: { limit: 50, offset: 0 }, signal })
-        detailResult = extractDetails(detailPage)
+        const details: BsaleRawDetail[] = []
+        let offset = 0
+        let expectedCount: number | null = null
+        for (let pageNumber = 0; pageNumber < 20; pageNumber += 1) {
+          const detailPage = await fetchPage<BsaleRawDetail>({ companyId: identity.companyId, path: `/documents/${selected.id}/details.json`, params: { limit: 50, offset }, signal })
+          const page = extractDetails(detailPage)
+          if (!page.complete && page.items.length === 0) break
+          expectedCount = expectedCount ?? numeric((detailPage as BsaleReadPage<BsaleRawDetail>).count)
+          details.push(...page.items)
+          if (page.items.length < 50 || (expectedCount != null && details.length >= expectedCount)) {
+            detailResult = { items: details, complete: expectedCount == null || details.length >= expectedCount }
+            break
+          }
+          offset += 50
+        }
       }
       if (!detailResult.complete) throw providerError('INCOMPLETE', 'La respuesta de Bsale no contiene todos los detalles de la NV.')
       const variantIds = [...new Set(detailResult.items
