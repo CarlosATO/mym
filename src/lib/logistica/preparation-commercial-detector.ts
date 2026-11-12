@@ -1,7 +1,5 @@
 import type { CommercialComparisonResult, PreparationCommercialVersion } from './preparation-commercial-version'
 
-const preparationVersionModulePath = './preparation-commercial-version.ts'
-
 export type PreparationDetectionCardStatus = 'PENDING_ROUTE_PREP' | 'IN_PREPARATION' | 'IN_AUDIT' | 'AUDITED' | string
 
 export type PreparationDetectionCardIdentity = {
@@ -166,7 +164,8 @@ export async function detectPreparationCommercialChange(
     return { ...baseResult(request, status, error instanceof Error ? error.message : 'No se pudo consultar Bsale.'), errorCode }
   }
 
-  const { compareCommercialVersions } = await import(preparationVersionModulePath)
+  // @ts-expect-error The local strip-types test runner resolves the source extension directly.
+  const { compareCommercialVersions } = await import('./preparation-commercial-version.ts')
   const comparison = compareCommercialVersions(request.knownVersion, live.version)
   if (!comparison.sameIdentity) {
     return { status: 'AMBIGUOUS', card: request.card, knownVersion: request.knownVersion, currentVersion: live.version, comparison, verifiedAt: live.verifiedAt, verificationSource: live.source, detail: 'La respuesta de Bsale no pertenece al token canónico esperado.', errorCode: 'IDENTITY_AMBIGUOUS' }

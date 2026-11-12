@@ -297,6 +297,39 @@ export async function confirmSalesOrderAuditLine(params: {
   }
 }
 
+function shouldStopAuditBulk(message: string, code?: string): boolean {
+  return ['42501', '28000', '401', '403', 'PGRST301', 'PGRST302'].includes(code ?? '')
+    || /sin acceso a la empresa|no tienes permiso|no autorizado|jwt|asignada a otro usuario|aún no tiene responsable|sesión de auditoría no está abierta|tarjeta debe estar en auditoría/i.test(message)
+}
+
+export async function registerPendingSalesOrderAuditLine(params: {
+  auditId: string
+  auditLineId: string
+  companyId?: string | null
+}): Promise<{ data: SalesOrderAuditConfirmResult | null; error: string | null; stopBatch: boolean }> {
+  const startedAt = performance.now()
+  try {
+    const { supabase, companyId, error: authError } = await requireAuditUser(params.companyId)
+    if (authError || !companyId) return { data: null, error: authError || 'No autorizado', stopBatch: true }
+    const { data, error } = await supabase.schema('logistica').rpc('register_pending_sales_order_audit_line', {
+      p_company_id: companyId,
+      p_audit_id: params.auditId,
+      p_audit_line_id: params.auditLineId,
+    })
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug('[audit-bulk][server-line]', { totalMs: Math.round((performance.now() - startedAt) * 10) / 10, ok: !error })
+    }
+    if (error) {
+      const stopBatch = shouldStopAuditBulk(error.message, error.code)
+      return { data: null, error: error.code === '55P03' ? `55P03: ${error.message}` : error.message, stopBatch }
+    }
+    return { data: data as SalesOrderAuditConfirmResult, error: null, stopBatch: false }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Error desconocido'
+    return { data: null, error: message, stopBatch: shouldStopAuditBulk(message) }
+  }
+}
+
 export async function setSalesOrderAuditPackageCount(params: {
   auditId: string
   packageCount: number

@@ -34,6 +34,7 @@ const previewCard: SalesOrderPreparationCardInfo = {
   seller_bsale_id: null,
   seller_name: 'Fixture Bsale',
   total_quantity: 39,
+  lines_count: 5,
   total_amount: 237162,
   net_amount: 199296,
   tax_amount: 37866,

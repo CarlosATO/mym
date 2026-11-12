@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   ClipboardCheck,
   FileImage,
-  FileText,
   ImagePlus,
   Loader2,
   LockKeyhole,
@@ -21,6 +20,7 @@ import { toast } from 'sonner'
 import type { SalesOrderPreparationCardInfo } from '@/app/actions/logistica/sales-order-preparation'
 import {
   confirmSalesOrderAuditLine,
+  registerPendingSalesOrderAuditLine,
   finalizeSalesOrderAudit,
   getSalesOrderAuditAttachmentSignedUrl,
   getSalesOrderAuditDetail,
@@ -28,7 +28,6 @@ import {
   setSalesOrderAuditPackageCount,
   takeSalesOrderAudit,
   uploadSalesOrderAuditEvidence,
-  type SalesOrderAudit,
   type SalesOrderAuditAttachment,
   type SalesOrderAuditConfirmResult,
   type SalesOrderAuditDetail,
@@ -62,6 +61,7 @@ import { AuditTakeoverDialog } from './audit-takeover-dialog'
 import { AuditCloseReviewDialog } from './audit-close-review-dialog'
 import { AuditEvidencePreviewDialog, type AuditEvidencePreview } from './audit-evidence-preview-dialog'
 import { AuditCommercialReviewDialog } from './audit-commercial-review-dialog'
+import { pendingBulkAuditLines, runAuditBulk } from './audit-bulk-confirm'
 
 interface SalesOrderAuditDrawerProps {
   card: SalesOrderPreparationCardInfo
@@ -145,6 +145,8 @@ export function SalesOrderAuditDrawer({
   const [error, setError] = useState<string | null>(null)
   const [lineDrafts, setLineDrafts] = useState<Record<string, string>>({})
   const [savingLineId, setSavingLineId] = useState<string | null>(null)
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null)
+  const [bulkErrors, setBulkErrors] = useState<Record<string, string>>({})
   const [lineError, setLineError] = useState<string | null>(null)
   const [incidentDialog, setIncidentDialog] = useState<IncidentDialogState | null>(null)
   const [takeoverOpen, setTakeoverOpen] = useState(false)
@@ -172,6 +174,9 @@ export function SalesOrderAuditDrawer({
   const previewRequestSeqRef = useRef(0)
   const mountedRef = useRef(true)
   const finalizingRef = useRef(false)
+  const savingRef = useRef(false)
+  const bulkRef = useRef(false)
+  const focusedLineRef = useRef<string | null>(null)
 
   const audit = detail?.audit ?? null
   const lines = detail?.lines ?? []
@@ -184,7 +189,7 @@ export function SalesOrderAuditDrawer({
   const isOwner = Boolean(audit?.locked_by_user_id && audit.locked_by_user_id === currentUserId)
   const isLockedByOther = Boolean(audit?.locked_by_user_id && !isOwner)
   const isFinalized = card.status === 'AUDITED' || audit?.status === 'COMPLETED'
-  const canWrite = canManage && isOwner && !isSelfAuditBlocked && !isFinalized
+  const canWrite = canManage && isOwner && !isSelfAuditBlocked && !isFinalized && card.status === 'IN_AUDIT' && audit?.status === 'OPEN'
   const canTake = !isFinalized && canManage && !isSelfAuditBlocked && !isOwner && Boolean(
     !audit || !audit.locked_by_user_id || (isLockedByOther && canAuthorizeException)
   )
@@ -195,13 +200,12 @@ export function SalesOrderAuditDrawer({
   const comuna = card.normalized_city || card.municipality_raw || card.city_raw || '—'
 
   const patchDetail = useCallback((updater: (current: SalesOrderAuditDetail) => SalesOrderAuditDetail) => {
-    setDetail(current => {
-      if (!current) return current
-      const next = updater(current)
-      if (card.status !== 'IN_AUDIT') setAuditCache(card.card_id, next)
-      return next
-    })
-  }, [card.card_id, card.status])
+    setDetail(current => current ? updater(current) : current)
+  }, [])
+
+  useEffect(() => {
+    if (detail && card.status !== 'IN_AUDIT') setAuditCache(card.card_id, detail)
+  }, [card.card_id, card.status, detail])
 
   const loadDetail = useCallback(async () => {
     const seq = ++requestSeqRef.current
@@ -267,6 +271,8 @@ export function SalesOrderAuditDrawer({
 
   useEffect(() => {
     mountedRef.current = true
+    // The drawer must fetch its active cycle when it opens.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadDetail()
     return () => {
       mountedRef.current = false
@@ -275,6 +281,8 @@ export function SalesOrderAuditDrawer({
   }, [loadDetail])
 
   useEffect(() => {
+    // Keep the editable package value in sync with the loaded audit.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPackageDraft(audit?.package_count == null ? '' : String(audit.package_count))
   }, [audit?.package_count])
 
@@ -331,13 +339,13 @@ export function SalesOrderAuditDrawer({
   const handleTakeoverConfirm = async (reason: string) => handleTake(reason)
 
   const handleConfirmLine = async (line: SalesOrderAuditLine) => {
+    if (savingRef.current || bulkRef.current || incidentDialog) return
     if (!canWrite) {
       setLineError('Esta auditoría está asignada a otro usuario o no tienes permiso de escritura.')
       return
     }
     const raw = lineDrafts[line.id] ?? (line.audit_quantity == null ? '' : String(line.audit_quantity))
     if (raw.trim() === '') {
-      setLineError('Ingresa la cantidad auditada.')
       return
     }
     const quantity = Number(raw)
@@ -346,8 +354,9 @@ export function SalesOrderAuditDrawer({
       return
     }
     setLineError(null)
+    if (line.audit_quantity != null && quantity === Number(line.audit_quantity) && !(line.id in lineDrafts)) return
+    savingRef.current = true
     setSavingLineId(line.id)
-    const startedAt = performance.now()
     try {
       const difference = quantity - Number(line.prepared_quantity_snapshot)
       if (difference !== 0) {
@@ -364,7 +373,6 @@ export function SalesOrderAuditDrawer({
         return
       }
 
-      const actionStartedAt = performance.now()
       const result = await confirmSalesOrderAuditLine({
         auditLineId: line.id,
         auditQuantity: quantity,
@@ -372,7 +380,6 @@ export function SalesOrderAuditDrawer({
         observation: null,
         companyId: card.company_id,
       })
-      const actionMs = performance.now() - actionStartedAt
       if (result.error || !result.data) {
         const message = result.error || 'No se pudo confirmar la línea.'
         setLineError(message)
@@ -382,18 +389,61 @@ export function SalesOrderAuditDrawer({
         }
         return
       }
-      const patchStartedAt = performance.now()
       applyLineConfirmation(result.data.line, result.data.incident)
-      const patchMs = performance.now() - patchStartedAt
-      if (process.env.NODE_ENV !== 'production') {
-        console.debug('[audit-confirm][client-line]', {
-          actionMs: Math.round(actionMs * 10) / 10,
-          patchMs: Math.round(patchMs * 10) / 10,
-          totalMs: Math.round((performance.now() - startedAt) * 10) / 10,
-        })
-      }
+    } catch (err: unknown) {
+      setLineError(err instanceof Error ? err.message : 'No se pudo confirmar la línea.')
     } finally {
+      savingRef.current = false
       setSavingLineId(null)
+    }
+  }
+
+  const handleRegisterAll = async () => {
+    if (!audit || !canWrite || bulkRef.current || savingRef.current || incidentDialog) return
+    const pending = pendingBulkAuditLines(lines, incidents, lineDrafts, focusedLineRef.current)
+    if (!pending.length) return
+    bulkRef.current = true
+    setBulkErrors({})
+    let succeeded = 0
+    const startedAt = performance.now()
+    setBulkProgress({ done: 0, total: pending.length })
+    try {
+      await runAuditBulk(pending, async line => {
+        setSavingLineId(line.id)
+        const lineStartedAt = performance.now()
+        try {
+          const result = await registerPendingSalesOrderAuditLine({
+            auditId: audit.id,
+            auditLineId: line.id,
+            companyId: card.company_id,
+          })
+          if (result.error || !result.data) {
+            const message = result.error || 'No se pudo confirmar la línea.'
+            setBulkErrors(current => ({ ...current, [line.id]: `${line.product_name}: ${message}` }))
+            if (result.stopBatch) {
+              await loadDetail()
+              if (isAuditLockError(message)) onOwnershipConflict()
+              return false
+            }
+          } else {
+            applyLineConfirmation(result.data.line, result.data.incident)
+            succeeded += 1
+            setBulkProgress({ done: succeeded, total: pending.length })
+          }
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : 'No se pudo confirmar la línea.'
+          setBulkErrors(current => ({ ...current, [line.id]: `${line.product_name}: ${message}` }))
+        } finally {
+          if (process.env.NODE_ENV !== 'production') console.debug('[audit-bulk][client-line]', { durationMs: Math.round((performance.now() - lineStartedAt) * 10) / 10 })
+        }
+        return true
+      }, () => {}, () => mountedRef.current)
+    } finally {
+      if (process.env.NODE_ENV !== 'production') console.debug('[audit-bulk][client-total]', { durationMs: Math.round((performance.now() - startedAt) * 10) / 10, succeeded, total: pending.length })
+      savingRef.current = false
+      bulkRef.current = false
+      setSavingLineId(null)
+      setBulkProgress(null)
     }
   }
 
@@ -944,10 +994,16 @@ export function SalesOrderAuditDrawer({
                       <Package className="h-4 w-4 text-[#72383D]" /> Productos
                       <span className="font-extrabold text-[#72383D]">({hasSnapshot ? summary.totalLines : '—'})</span>
                     </h3>
-                    <button type="button" onClick={() => void loadDetail()} disabled={loading} className="flex items-center gap-1 rounded-md border border-[#D1C7BD] bg-white px-2.5 py-1.5 text-[11px] font-semibold text-theme-text hover:bg-[#F8F5F1] disabled:opacity-50">
+                    <div className="flex gap-2">
+                    <button type="button" onMouseDown={event => event.preventDefault()} onClick={() => void handleRegisterAll()} disabled={!canWrite || Boolean(bulkProgress) || Boolean(savingLineId) || Boolean(incidentDialog)} className="rounded-md bg-[#72383D] px-2.5 py-1.5 text-[11px] font-bold text-white disabled:opacity-50">
+                      {bulkProgress ? `Registrando ${bulkProgress.done}/${bulkProgress.total}` : 'Registrar todo'}
+                    </button>
+                    <button type="button" onClick={() => void loadDetail()} disabled={loading || Boolean(bulkProgress) || Boolean(savingLineId)} className="flex items-center gap-1 rounded-md border border-[#D1C7BD] bg-white px-2.5 py-1.5 text-[11px] font-semibold text-theme-text hover:bg-[#F8F5F1] disabled:opacity-50">
                       <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Actualizar
                     </button>
+                    </div>
                   </div>
+                  {Object.entries(bulkErrors).map(([id, message]) => <p key={id} role="alert" className="text-xs text-[#8A4B4B]">{message}</p>)}
 
                   {lines.length === 0 ? (
                     <div className="rounded-lg border border-[#DDD4CA] bg-white px-4 py-10 text-center text-xs text-theme-text-muted">
@@ -976,7 +1032,7 @@ export function SalesOrderAuditDrawer({
                             const incidentEvidence = openIncident ? attachments.filter(item => item.incident_id === openIncident.id) : []
                             const missingRequiredEvidence = Boolean(openIncident && incidentRequiresPhoto(openIncident.incident_type) && incidentEvidence.length === 0)
                             const previousIncidents = incidents.filter(item => item.audit_line_id === line.id && item.status === 'SUPERSEDED').length
-                            const disabled = !canWrite || savingLineId === line.id
+                            const disabled = !canWrite || Boolean(savingLineId) || Boolean(bulkProgress)
                             return (
                               <Fragment key={line.id}>
                                 <tr className="border-b border-[#E8DFD5] align-top hover:bg-[#FCFBF9]">
@@ -1003,15 +1059,24 @@ export function SalesOrderAuditDrawer({
                                       aria-label={`Cantidad auditada de ${line.product_name}`}
                                       value={quantity}
                                       disabled={disabled}
-                                      onChange={event => setLineDrafts(current => ({ ...current, [line.id]: event.target.value }))}
-                                      onKeyDown={event => { if (event.key === 'Enter') void handleConfirmLine(line) }}
+                                      onChange={event => {
+                                        const value = event.target.value
+                                        setLineDrafts(current => ({ ...current, [line.id]: value }))
+                                      }}
+                                      onFocus={() => { focusedLineRef.current = line.id }}
+                                      onBlur={event => {
+                                        focusedLineRef.current = null
+                                        if ((event.relatedTarget as HTMLElement | null)?.dataset.auditIncident === line.id) return
+                                        void handleConfirmLine(line)
+                                      }}
+                                      onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void handleConfirmLine(line) } }}
                                       className="w-20 rounded border border-[#D1C7BD] bg-white px-1.5 py-1 text-center text-xs font-bold tabular-nums text-theme-text placeholder:text-theme-text-muted focus:border-[#72383D] focus:outline-none focus:ring-1 focus:ring-[#72383D]/20 disabled:bg-[#F0ECE8] disabled:opacity-60"
                                     />
                                     )}
                                   </td>
                                   <td className="px-3 py-2">
                                     <span className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${resultToneClasses(tone)}`}>
-                                      {resultLabel}
+                                      {savingLineId === line.id ? 'Guardando…' : resultLabel}
                                     </span>
                                     {line.line_status === 'CONFIRMED' && line.requested_quantity_snapshot !== line.prepared_quantity_snapshot && (
                                       <p className="mt-0.5 text-[10px] text-theme-text-muted">Faltante declarado en Preparación</p>
@@ -1023,10 +1088,7 @@ export function SalesOrderAuditDrawer({
                                   {!isFinalized && (
                                   <td className="px-3 py-2">
                                     <div className="flex flex-wrap items-center gap-1">
-                                      <button type="button" onClick={() => void handleConfirmLine(line)} disabled={disabled} className="rounded bg-[#72383D] px-2 py-1 text-[10px] font-bold text-white hover:bg-[#612F34] disabled:opacity-40">
-                                        {savingLineId === line.id ? 'Guardando…' : 'Confirmar'}
-                                      </button>
-                                      <button type="button" onClick={() => handleReportIncident(line)} disabled={disabled} className="rounded border border-[#8A4B4B]/30 bg-[#8A4B4B]/5 px-2 py-1 text-[10px] font-semibold text-[#8A4B4B] hover:bg-[#8A4B4B]/10 disabled:opacity-40">
+                                      <button type="button" data-audit-incident={line.id} onClick={() => handleReportIncident(line)} disabled={disabled} className="rounded border border-[#8A4B4B]/30 bg-[#8A4B4B]/5 px-2 py-1 text-[10px] font-semibold text-[#8A4B4B] hover:bg-[#8A4B4B]/10 disabled:opacity-40">
                                         Incidencia
                                       </button>
                                     </div>

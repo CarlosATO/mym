@@ -65,9 +65,13 @@ test('10. comuna y fecha compactas en una línea', () => {
   assert.match(card, /title=\{`\$\{comuna\} · \$\{primaryDate\.title\}`\}/)
 })
 
-test('11. unidades compactas con texto accesible', () => {
-  assert.match(card, /\{card\.total_quantity\} un\./)
-  assert.match(card, /title=\{`\$\{card\.total_quantity\} \$\{card\.total_quantity === 1 \? 'unidad' : 'unidades'\}`\}/)
+test('11. líneas reales de la NV compactas con regla de colores (>= 17 rojo destacado)', () => {
+  assert.match(card, /linesLabel/)
+  assert.match(card, /isHighLineCount/)
+  assert.match(card, /linesCount >= 17/)
+  assert.match(card, /font-bold text-red-600/)
+  assert.match(card, /text-\[#322D29\]\/55/)
+  assert.match(card, /title=\{linesLabel\}/)
 })
 
 test('12. monto visible y compacto', () => {

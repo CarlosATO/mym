@@ -351,7 +351,9 @@ test('visual 6. Resultado compacto con badge', () => {
 })
 
 test('visual 7. acciones compactas por fila', () => {
-  assert.match(drawer, /Confirmar/)
+  assert.match(drawer, /onBlur=\{event =>/)
+  assert.match(drawer, /event\.key === 'Enter'/)
+  assert.doesNotMatch(drawer, />\s*Confirmar\s*</)
   assert.match(drawer, />\s*Incidencia\s*</)
   assert.match(drawer, /px-2 py-1 text-\[10px\]/)
 })

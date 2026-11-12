@@ -98,6 +98,75 @@ async function getOpenCommercialIncidentCounts(supabase: Awaited<ReturnType<type
   return { counts, error }
 }
 
+async function getCardLinesCounts(
+  companyId: string,
+  cards: Array<{ card_id: string; nv_bsale_id: number | string | null }>
+): Promise<Map<string, number | null> | null> {
+  if (cards.length === 0) return new Map()
+
+  const cardIds = [...new Set(cards.map(c => c.card_id).filter(Boolean))]
+  const nvIds = [...new Set(cards.map(c => Number(c.nv_bsale_id)).filter(id => Number.isSafeInteger(id) && id > 0))]
+
+  const db = createAdminClient()
+  const hasPrepLines = new Set<string>()
+  const prepActiveCountByCard = new Map<string, number>()
+  const bsaleCountByNv = new Map<number, number>()
+  const pageSize = 500
+  try {
+    await Promise.all([
+      (async () => {
+        for (let start = 0; start < cardIds.length; start += 150) {
+          const batch = cardIds.slice(start, start + 150)
+          for (let offset = 0; ; offset += pageSize) {
+            const { data, error } = await db.schema('logistica').from('sales_order_preparation_lines')
+              .select('id, card_id, retired_at').eq('company_id', companyId).in('card_id', batch)
+              .order('id').range(offset, offset + pageSize - 1)
+            if (error) throw error
+            for (const row of data ?? []) {
+              const cardId = String(row.card_id)
+              hasPrepLines.add(cardId)
+              if (row.retired_at == null) prepActiveCountByCard.set(cardId, (prepActiveCountByCard.get(cardId) ?? 0) + 1)
+            }
+            if ((data?.length ?? 0) < pageSize) break
+          }
+        }
+      })(),
+      (async () => {
+        for (let start = 0; start < nvIds.length; start += 150) {
+          const batch = nvIds.slice(start, start + 150)
+          for (let offset = 0; ; offset += pageSize) {
+            const { data, error } = await db.schema('integraciones').from('bsale_document_details')
+              .select('bsale_id, bsale_document_id').eq('company_id', companyId).in('bsale_document_id', batch)
+              .order('bsale_id').range(offset, offset + pageSize - 1)
+            if (error) throw error
+            for (const row of data ?? []) {
+              const docId = Number(row.bsale_document_id)
+              bsaleCountByNv.set(docId, (bsaleCountByNv.get(docId) ?? 0) + 1)
+            }
+            if ((data?.length ?? 0) < pageSize) break
+          }
+        }
+      })(),
+    ])
+  } catch (error) {
+    console.error('getCardLinesCounts error:', error)
+    return null
+  }
+
+  const result = new Map<string, number | null>()
+  for (const card of cards) {
+    const cId = String(card.card_id)
+    if (hasPrepLines.has(cId)) {
+      result.set(cId, prepActiveCountByCard.get(cId) ?? 0)
+    } else {
+      const docId = Number(card.nv_bsale_id)
+      result.set(cId, bsaleCountByNv.get(docId) ?? null)
+    }
+  }
+
+  return result
+}
+
 function readRawUnixDate(value: unknown): string | null {
   const timestamp = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN
   if (!Number.isFinite(timestamp)) return null
@@ -159,6 +228,7 @@ export type SalesOrderPreparationCardInfo = {
   seller_bsale_id: number | null
   seller_name: string | null
   total_quantity: number
+  lines_count?: number | null
   total_amount: number | null
   net_amount: number | null
   tax_amount: number | null
@@ -479,7 +549,7 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
 
     // Restricciones de negocio y seguridad PERM-01:
     // Excluir tarjetas no operacionales o de columnas comerciales restringidas
-    let rows = rpcRows.filter(row =>
+    const rows = rpcRows.filter(row =>
       row.status !== 'INVOICED_READY_FOR_ROUTE' &&
       (row.status !== 'AUDITED' || (row.route_readiness === 'INCIDENTS' || row.route_readiness === 'BLOCKED'))
     )
@@ -487,20 +557,28 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
     const userIds = [...new Set(rows.flatMap(row => [row.assigned_user_id, row.locked_by_user_id]).filter((id): id is string => Boolean(id)))]
     const nameById = new Map<string, string>()
 
-    if (userIds.length > 0) {
-      const { data: users, error: usersError } = await createAdminClient()
-        .from('users')
-        .select('id, nombre, apellido')
-        .in('id', userIds)
+    const [usersResult, incidentCounts, linesCounts] = await Promise.all([
+      userIds.length > 0
+        ? createAdminClient()
+            .from('users')
+            .select('id, nombre, apellido')
+            .in('id', userIds)
+        : Promise.resolve({ data: [], error: null }),
+      getOpenCommercialIncidentCounts(supabase, companyId, rows.map(row => row.card_id)),
+      getCardLinesCounts(companyId, rows.map(r => ({ card_id: r.card_id, nv_bsale_id: r.nv_bsale_id }))),
+    ])
 
-      if (usersError) {
-        console.error('getSalesOrderPreparationBoard users error:', usersError)
-      } else {
-        for (const user of users ?? []) {
-          const name = `${user.nombre ?? ''} ${user.apellido ?? ''}`.trim()
-          if (name) nameById.set(String(user.id), name)
-        }
+    if (usersResult.error) {
+      console.error('getSalesOrderPreparationBoard users error:', usersResult.error)
+    } else {
+      for (const user of usersResult.data ?? []) {
+        const name = `${user.nombre ?? ''} ${user.apellido ?? ''}`.trim()
+        if (name) nameById.set(String(user.id), name)
       }
+    }
+
+    if (incidentCounts.error) {
+      return { data: [], error: 'No se pudieron cargar las incidencias comerciales abiertas.', isOperatorBodega: true, readiness: [], readinessError: null, commercialIncidentCounts: {} }
     }
 
     logPreparationDiagnostics('load-total', {
@@ -509,9 +587,6 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
       cardCount: rows.length,
     })
 
-    const incidentCounts = await getOpenCommercialIncidentCounts(supabase, companyId, rows.map(row => row.card_id))
-    if (incidentCounts.error) return { data: [], error: 'No se pudieron cargar las incidencias comerciales abiertas.', isOperatorBodega: true, readiness: [], readinessError: null, commercialIncidentCounts: {} }
-
     return {
       data: rows.map(row => {
         const { route_readiness: _, ...cardFields } = row
@@ -519,6 +594,7 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
           ...cardFields,
           nv_folio: String(row.nv_folio ?? ''),
           total_quantity: Number(row.total_quantity ?? 0),
+          lines_count: linesCounts?.get(row.card_id) ?? null,
           assigned_user_name: row.assigned_user_id ? nameById.get(row.assigned_user_id) ?? null : null,
           locked_by_user_name: row.locked_by_user_id ? nameById.get(row.locked_by_user_id) ?? null : null,
         }
@@ -572,24 +648,32 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
     return { data: [], error: error.message, isOperatorBodega: false, readiness: exposedReadiness, readinessError, commercialIncidentCounts: {} }
   }
 
-  let rows = (data ?? []) as SalesOrderPreparationCardInfo[]
+  const rows = (data ?? []) as SalesOrderPreparationCardInfo[]
   const userIds = [...new Set(rows.flatMap(row => [row.assigned_user_id, row.locked_by_user_id]).filter((id): id is string => Boolean(id)))]
   const nameById = new Map<string, string>()
 
-  if (userIds.length > 0) {
-    const { data: users, error: usersError } = await createAdminClient()
-      .from('users')
-      .select('id, nombre, apellido')
-      .in('id', userIds)
+  const [usersResult, incidentCounts, linesCounts] = await Promise.all([
+    userIds.length > 0
+      ? createAdminClient()
+          .from('users')
+          .select('id, nombre, apellido')
+          .in('id', userIds)
+      : Promise.resolve({ data: [], error: null }),
+    getOpenCommercialIncidentCounts(supabase, companyId, rows.map(row => row.card_id)),
+    getCardLinesCounts(companyId, rows.map(r => ({ card_id: r.card_id, nv_bsale_id: r.nv_bsale_id }))),
+  ])
 
-    if (usersError) {
-      console.error('getSalesOrderPreparationBoard users error:', usersError)
-    } else {
-      for (const user of users ?? []) {
-        const name = `${user.nombre ?? ''} ${user.apellido ?? ''}`.trim()
-        if (name) nameById.set(String(user.id), name)
-      }
+  if (usersResult.error) {
+    console.error('getSalesOrderPreparationBoard users error:', usersResult.error)
+  } else {
+    for (const user of usersResult.data ?? []) {
+      const name = `${user.nombre ?? ''} ${user.apellido ?? ''}`.trim()
+      if (name) nameById.set(String(user.id), name)
     }
+  }
+
+  if (incidentCounts.error) {
+    return { data: [], error: 'No se pudieron cargar las incidencias comerciales abiertas.', isOperatorBodega: false, readiness: exposedReadiness, readinessError, commercialIncidentCounts: {} }
   }
 
   logPreparationDiagnostics('load-total', {
@@ -598,12 +682,10 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
     cardCount: rows.length,
   })
 
-  const incidentCounts = await getOpenCommercialIncidentCounts(supabase, companyId, rows.map(row => row.card_id))
-  if (incidentCounts.error) return { data: [], error: 'No se pudieron cargar las incidencias comerciales abiertas.', isOperatorBodega: false, readiness: exposedReadiness, readinessError, commercialIncidentCounts: {} }
-
   return {
     data: rows.map(row => ({
       ...row,
+      lines_count: linesCounts?.get(row.card_id) ?? null,
       assigned_user_name: row.assigned_user_id ? nameById.get(row.assigned_user_id) ?? null : null,
       locked_by_user_name: row.locked_by_user_id ? nameById.get(row.locked_by_user_id) ?? null : null,
     })),

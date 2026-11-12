@@ -189,7 +189,8 @@ test('22. drawer AUDITED read-only y sin acciones de escritura', () => {
   assert.match(drawer, /const isFinalized = card\.status === 'AUDITED'/)
   assert.match(drawer, /AUDITORÍA FINALIZADA/)
   assert.match(drawer, /!isFinalized && \([\s\S]*?REVISAR CIERRE/)
-  assert.match(drawer, /\{!isFinalized && \([\s\S]*?Confirmar/)
+  assert.match(drawer, /const canWrite = canManage && isOwner && !isSelfAuditBlocked && !isFinalized/)
+  assert.match(drawer, /disabled=\{disabled\}[\s\S]*?onBlur/)
 })
 
 test('23. fotos históricas visibles después del cierre', () => {
@@ -309,5 +310,5 @@ test('35. cache post-finalize conserva snapshot', () => {
   assert.match(body, /patchDetail/)
   assert.match(body, /onFinalized\?\.\(finalized\)/)
   assert.match(body, /void loadDetail\(\)/)
-  assert.match(drawer, /setAuditCache\(card\.card_id, next\)/)
+  assert.match(drawer, /setAuditCache\(card\.card_id, detail\)/)
 })

@@ -130,6 +130,9 @@ export function SalesOrderCard({
     : card.status === 'IN_AUDIT'
       ? 'text-[#5B4A78]'
       : 'text-[#806238]'
+  const linesCount = card.lines_count ?? null
+  const isHighLineCount = linesCount != null && linesCount >= 17
+  const linesLabel = linesCount == null ? '— líneas' : `${linesCount} ${linesCount === 1 ? 'línea' : 'líneas'}`
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null)
   const hasCommercialChange = commercialAlert?.status === 'CHANGED'
 
@@ -229,10 +232,14 @@ export function SalesOrderCard({
         </span>
         {commercialMirror && <span className="shrink-0 rounded bg-[#F5D8D2] px-1 py-0.5 text-[8px] font-bold uppercase tracking-wider text-[#8A4B4B]">Bsale</span>}
         <span
-          className="shrink-0 text-[10px] font-semibold tabular-nums text-[#322D29]/55"
-          title={`${card.total_quantity} ${card.total_quantity === 1 ? 'unidad' : 'unidades'}`}
+          className={`shrink-0 text-[10px] tabular-nums ${
+            isHighLineCount
+              ? 'font-bold text-red-600'
+              : 'font-semibold text-[#322D29]/55'
+          }`}
+          title={linesLabel}
         >
-          {card.total_quantity} un.
+          {linesLabel}
         </span>
       </div>
 
