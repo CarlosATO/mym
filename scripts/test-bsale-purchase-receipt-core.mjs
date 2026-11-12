@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { reconcilePurchaseReceipt, autoSyncIsAllowed, buildPurchaseReceiptNote, buildPurchaseReceiptPayload, chooseUniqueReconciliationCandidate, numericDocumentNumber, purchaseReceiptPayloadError, sendPurchaseReceipt, syncAfterLocalReceipt, verifyPurchaseReceipt } from '../src/lib/integraciones/bsale-purchase-receipt-core.ts'
+import { reconcilePurchaseReceipt, autoSyncIsAllowed, buildPurchaseReceiptNote, buildPurchaseReceiptPayload, chooseUniqueReconciliationCandidate, numericDocumentNumber, purchaseReceiptPayloadError, sendPurchaseReceipt, syncAfterLocalReceipt, verifyPurchaseReceipt, isLegitimateBonusLine } from '../src/lib/integraciones/bsale-purchase-receipt-core.ts'
 
 const base = { documentType: 'FA', documentNumber: '4545', officeId: 1, receiptNumber: 'REC-000001', poCorrelative: 'OC-2026-000031', serviceVariantId: 4554 }
 test('note preserves identifiers and truncates unicode observation to 100 chars', () => {
@@ -128,3 +128,226 @@ test('migration contract enforces company isolation, permission and unique local
   assert.match(activation, /auto_sync_enabled = true/)
   assert.match(activation, /d1000000-0000-0000-0000-000000000001/)
 })
+
+test('legitimate 100% bonification allows zero cost in buildPurchaseReceiptPayload and BSale payload', () => {
+  // Case Animal Care 115469 / REC-000057: S01130100 (jaulas), qty 2, original price 7911, discount 100%, netAmount 0
+  const payload = buildPurchaseReceiptPayload({
+    ...base,
+    receiptNumber: 'REC-000057',
+    poCorrelative: 'OC-2026-000075',
+    documentNumber: '115469',
+    lines: [
+      {
+        itemType: 'PRODUCT',
+        condition: 'CONFORME',
+        variantId: 1234,
+        quantity: 2,
+        netAmount: 0,
+        unitPrice: 7911,
+        discountPercent: 100,
+        isBonus: true,
+      },
+    ],
+  })
+
+  assert.equal(payload.details.length, 1)
+  assert.equal(payload.details[0].variantId, 1234)
+  assert.equal(payload.details[0].quantity, 2)
+  assert.equal(payload.details[0].cost, 0)
+  assert.equal(purchaseReceiptPayloadError(payload), null)
+})
+
+test('buildPurchaseReceiptPayload rejects non-bonified zero, negative, and invalid costs', () => {
+  // Zero cost without legitimate bonification must be rejected
+  assert.throws(
+    () => buildPurchaseReceiptPayload({
+      ...base,
+      lines: [{ itemType: 'PRODUCT', condition: 'CONFORME', variantId: 10, quantity: 2, netAmount: 0 }],
+    }),
+    /La línea PRODUCT requiere cantidad y costo neto válidos/
+  )
+
+  // Zero cost with zero original price (not a bonification) must be rejected
+  assert.throws(
+    () => buildPurchaseReceiptPayload({
+      ...base,
+      lines: [{ itemType: 'PRODUCT', condition: 'CONFORME', variantId: 10, quantity: 2, netAmount: 0, unitPrice: 0, discountPercent: 100 }],
+    }),
+    /La línea PRODUCT requiere cantidad y costo neto válidos/
+  )
+
+  // Negative net amount must be rejected
+  assert.throws(
+    () => buildPurchaseReceiptPayload({
+      ...base,
+      lines: [{ itemType: 'PRODUCT', condition: 'CONFORME', variantId: 10, quantity: 2, netAmount: -100 }],
+    }),
+    /La línea PRODUCT requiere cantidad y costo neto válidos/
+  )
+
+  // Non-positive quantity must be rejected
+  assert.throws(
+    () => buildPurchaseReceiptPayload({
+      ...base,
+      lines: [{ itemType: 'PRODUCT', condition: 'CONFORME', variantId: 10, quantity: 0, netAmount: 100 }],
+    }),
+    /La línea PRODUCT requiere cantidad y costo neto válidos/
+  )
+})
+
+test('purchaseReceiptPayloadError accepts zero cost but rejects negative and non-numeric costs', () => {
+  const validZeroCostPayload = {
+    document: 'FACTURA',
+    officeId: 1,
+    documentNumber: 115469,
+    note: 'REC-000057 | OC-2026-000075',
+    details: [{ variantId: 1234, quantity: 2, cost: 0 }],
+  }
+  assert.equal(purchaseReceiptPayloadError(validZeroCostPayload), null)
+
+  const negativeCostPayload = {
+    ...validZeroCostPayload,
+    details: [{ variantId: 1234, quantity: 2, cost: -1 }],
+  }
+  assert.notEqual(purchaseReceiptPayloadError(negativeCostPayload), null)
+
+  const nanCostPayload = {
+    ...validZeroCostPayload,
+    details: [{ variantId: 1234, quantity: 2, cost: NaN }],
+  }
+  assert.notEqual(purchaseReceiptPayloadError(nanCostPayload), null)
+
+  const missingCostPayload = {
+    ...validZeroCostPayload,
+    details: [{ variantId: 1234, quantity: 2 }],
+  }
+  assert.notEqual(purchaseReceiptPayloadError(missingCostPayload), null)
+})
+
+test('sendPurchaseReceipt and verifyPurchaseReceipt confirm remote reception with zero cost', async () => {
+  const snapshot = {
+    document: 'FACTURA',
+    officeId: 1,
+    documentNumber: 115469,
+    note: 'REC-000057 | OC-2026-000075',
+    details: [{ variantId: 1234, quantity: 2, cost: 0 }],
+  }
+  const remote = {
+    createReception: async () => ({ id: 57 }),
+    getReception: async () => ({ id: 57, office: { id: 1 }, document: 'FACTURA', documentNumber: 115469, note: snapshot.note }),
+    getDetails: async () => [{ variant: { id: 1234 }, quantity: 2, cost: 0 }],
+    findReceptions: async () => [],
+  }
+  const sendResult = await sendPurchaseReceipt(snapshot, remote)
+  assert.equal(sendResult.status, 'CONFIRMED')
+  assert.equal(sendResult.receptionId, 57)
+
+  const reconcileResult = await reconcilePurchaseReceipt(snapshot, remote, 57)
+  assert.equal(reconcileResult.status, 'CONFIRMED')
+  assert.equal(reconcileResult.receptionId, 57)
+})
+
+test('zero cost bonification migration contract enforces validation, isolation and security', () => {
+  const migration = readFileSync(new URL('../supabase/migrations/20261112100000_logistica_bsale_purchase_receipt_zero_cost_bonification.sql', import.meta.url), 'utf8')
+
+  // Enforces legitimate bonification check in prepare RPC
+  assert.match(migration, /is_legitimate_bonus/)
+  assert.match(migration, /coalesce\(poi\.discount_percent, 0\) = 100/)
+  assert.match(migration, /OR coalesce\(poi\.discount_unit_amount, 0\) >= poi\.unit_price/)
+  assert.match(migration, /x\.net_amount = 0 AND NOT coalesce\(x\.is_legitimate_bonus, false\)/)
+  assert.match(migration, /x\.net_amount < 0/)
+
+  // Enforces zero-cost allowed in payload validation
+  assert.match(migration, /\(v_detail->>'cost'\)::numeric < 0/)
+  assert.doesNotMatch(migration, /\(v_detail->>'cost'\)::numeric <= 0/)
+
+  // Security definer and company access check preserved
+  assert.match(migration, /SECURITY DEFINER/)
+  assert.match(migration, /core\.has_company_access\(p_user_id, r\.company_id\)/)
+  assert.match(migration, /core\.has_permission_for_company\(p_user_id, r\.company_id, 'logistica\.receptions\.create'\)/)
+
+  // Permissions granted only to service_role and revoked from public/anon/authenticated
+  assert.match(migration, /REVOKE ALL ON FUNCTION integraciones\.prepare_bsale_purchase_receipt_operation\(uuid, uuid\) FROM PUBLIC, anon, authenticated;/)
+  assert.match(migration, /GRANT EXECUTE ON FUNCTION integraciones\.prepare_bsale_purchase_receipt_operation\(uuid, uuid\) TO service_role;/)
+  assert.match(migration, /REVOKE ALL ON FUNCTION integraciones\.purchase_receipt_payload_is_valid\(jsonb\) FROM PUBLIC, anon, authenticated, service_role;/)
+  assert.match(migration, /GRANT EXECUTE ON FUNCTION integraciones\.purchase_receipt_payload_is_valid\(jsonb\) TO service_role;/)
+})
+
+test('payload excludes non-stock-controlling products from physical BSale reception details', () => {
+  // Case Animal Care 115469:
+  // - Product with stock control (physical goods: variant 5678)
+  // - Bonified product (S01130100, variant 1234, cost 0)
+  // - Product without stock control (FLETE PROVEDOR, variant 7068, stock_control = false, netAmount 81671)
+  const payload = buildPurchaseReceiptPayload({
+    ...base,
+    receiptNumber: 'REC-000057',
+    poCorrelative: 'OC-2026-000075',
+    documentNumber: '115469',
+    lines: [
+      {
+        itemType: 'PRODUCT',
+        condition: 'CONFORME',
+        variantId: 1234,
+        quantity: 2,
+        netAmount: 0,
+        unitPrice: 7911,
+        discountPercent: 100,
+        isBonus: true,
+        controlsStock: true,
+      },
+      {
+        itemType: 'PRODUCT',
+        condition: 'CONFORME',
+        variantId: 5678,
+        quantity: 10,
+        netAmount: 50000,
+        controlsStock: true,
+      },
+      {
+        itemType: 'PRODUCT',
+        condition: 'CONFORME',
+        variantId: 7068,
+        quantity: 1,
+        netAmount: 81671,
+        controlsStock: false,
+      },
+    ],
+  })
+
+  // Physical products are detailed under their own variants with bonification preserved
+  // Non-stock product (FLETE PROVEDOR) is excluded from BSale stock details and does NOT use variant 4554
+  assert.deepEqual(payload.details, [
+    { variantId: 1234, quantity: 2, cost: 0 },
+    { variantId: 5678, quantity: 10, cost: 5000 },
+  ])
+  assert.equal(purchaseReceiptPayloadError(payload), null)
+})
+
+test('non-stock-control product migration contract enforces Kardex exclusion and Bsale payload exclusion', () => {
+  const migration = readFileSync(new URL('../supabase/migrations/20261112110000_logistica_receipt_non_stock_control_products.sql', import.meta.url), 'utf8')
+
+  // Real indicator lookup on integraciones.bsale_products.stock_control
+  assert.match(migration, /coalesce\(bp\.stock_control, bp_var\.stock_control, true\)/)
+  assert.match(migration, /FROM adquisiciones\.products p/)
+  assert.match(migration, /LEFT JOIN integraciones\.bsale_products bp/)
+  assert.match(migration, /LEFT JOIN integraciones\.bsale_variants bv/)
+
+  // Kardex insertion strictly conditional on v_controls_stock
+  assert.match(migration, /IF v_condition IN \('CONFORME', 'DANADO'\) AND v_item_type = 'PRODUCT' AND v_controls_stock THEN\s+INSERT INTO logistica\.kardex_movements/)
+
+  // Location requirement strictly conditional on v_controls_stock
+  assert.match(migration, /IF v_condition IN \('CONFORME', 'DANADO'\) AND v_item_type = 'PRODUCT' AND v_controls_stock THEN\s+IF v_location_id IS NULL OR p_warehouse_id IS NULL THEN/)
+
+  // Non-stock product exclusion from BSale stock reception details (not routed to service variant)
+  assert.match(migration, /coalesce\(bp\.stock_control, bp_var\.stock_control, true\) = true/)
+  assert.match(migration, /poi\.item_type = 'SERVICE'/)
+
+  // Security definer and service_role permissions
+  assert.match(migration, /SECURITY DEFINER/)
+  assert.match(migration, /REVOKE ALL ON FUNCTION logistica\.create_purchase_receipt_db_pre_hotfix\(.*\) FROM PUBLIC, anon, authenticated;/)
+  assert.match(migration, /GRANT EXECUTE ON FUNCTION logistica\.create_purchase_receipt_db_pre_hotfix\(.*\) TO service_role;/)
+  assert.match(migration, /REVOKE ALL ON FUNCTION integraciones\.prepare_bsale_purchase_receipt_operation\(uuid, uuid\) FROM PUBLIC, anon, authenticated;/)
+  assert.match(migration, /GRANT EXECUTE ON FUNCTION integraciones\.prepare_bsale_purchase_receipt_operation\(uuid, uuid\) TO service_role;/)
+})
+
+

@@ -22,7 +22,7 @@ export function purchaseReceiptPayloadError(value: unknown): string | null {
     !line ||
     !Number.isSafeInteger(line.variantId) || line.variantId <= 0 ||
     !Number.isFinite(line.quantity) || line.quantity <= 0 ||
-    !Number.isFinite(line.cost) || line.cost <= 0
+    !Number.isFinite(line.cost) || line.cost < 0
   )) return INVALID_PURCHASE_RECEIPT_PAYLOAD
   return null
 }
@@ -43,22 +43,45 @@ export function chooseUniqueReconciliationCandidate(compatibleIds: number[]) {
   return compatibleIds.length === 1 ? compatibleIds[0] : null
 }
 
-export type AcceptedReceiptLine = { itemType: 'PRODUCT' | 'SERVICE'; condition: 'CONFORME' | 'DANADO' | 'RECHAZADO' | 'FALTANTE'; variantId?: number | null; quantity: number; netAmount: number }
+export type AcceptedReceiptLine = {
+  itemType: 'PRODUCT' | 'SERVICE'
+  condition: 'CONFORME' | 'DANADO' | 'RECHAZADO' | 'FALTANTE'
+  variantId?: number | null
+  quantity: number
+  netAmount: number
+  unitPrice?: number | null
+  discountPercent?: number | null
+  isBonus?: boolean
+  controlsStock?: boolean
+}
+
+export function isLegitimateBonusLine(line: AcceptedReceiptLine): boolean {
+  if (line.isBonus === true) return true
+  if (typeof line.unitPrice === 'number' && line.unitPrice > 0 && line.discountPercent === 100) return true
+  return false
+}
 
 export function buildPurchaseReceiptPayload(input: { documentType: string; documentNumber: string | number; officeId: number; receiptNumber: string; poCorrelative: string; observation?: string | null; serviceVariantId: number; lines: AcceptedReceiptLine[] }): PurchaseReceiptPayload {
   const grouped = new Map<number, { quantity: number; net: number }>()
   let serviceNet = 0
   for (const line of input.lines) {
     if (!['CONFORME', 'DANADO'].includes(line.condition)) continue
+    if (line.controlsStock === false) continue
     if (line.itemType === 'SERVICE') { serviceNet += line.netAmount; continue }
     if (line.variantId == null) throw new Error('Una línea PRODUCT no tiene bsale_variant_id.')
-    if (line.quantity <= 0 || line.netAmount <= 0) throw new Error('La línea PRODUCT requiere cantidad y costo neto válidos.')
+    if (line.quantity <= 0 || line.netAmount < 0 || (line.netAmount === 0 && !isLegitimateBonusLine(line))) {
+      throw new Error('La línea PRODUCT requiere cantidad y costo neto válidos.')
+    }
     const current = grouped.get(line.variantId) ?? { quantity: 0, net: 0 }
     current.quantity += line.quantity
     current.net += line.netAmount
     grouped.set(line.variantId, current)
   }
-  const details = [...grouped].map(([variantId, value]) => ({ variantId, quantity: value.quantity, cost: value.net / value.quantity }))
+  const details = [...grouped].map(([variantId, value]) => ({
+    variantId,
+    quantity: value.quantity,
+    cost: value.quantity > 0 ? value.net / value.quantity : 0,
+  }))
   if (serviceNet > 0) details.push({ variantId: input.serviceVariantId, quantity: 1, cost: serviceNet })
   if (!details.length) throw new Error('La recepción no tiene líneas aceptadas para BSale.')
   return { document: documentForBsale(input.documentType), officeId: input.officeId, documentNumber: numericDocumentNumber(input.documentNumber), note: buildPurchaseReceiptNote(input.receiptNumber, input.poCorrelative, input.observation), details }
