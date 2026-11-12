@@ -1208,19 +1208,39 @@ export async function confirmSalesOrderPreparationLine(params: {
   reasonCode?: string | null
   observation?: string | null
   excluded?: boolean
-}): Promise<{ data: SalesOrderPreparationLine | null; error: string | null }> {
+}): Promise<{
+  data: SalesOrderPreparationLine | null
+  error: string | null
+  timing?: {
+    authMs: number
+    rpcMs: number
+    totalMs: number
+  }
+}> {
+  const actionStart = performance.now()
   let auth: WmsAuthorization
   try {
     auth = await requirePreparationLineConfirmationAuthorization(params.lineId, params.companyId)
   } catch (error) {
-    return { data: null, error: error instanceof Error ? error.message : 'No autorizado' }
+    const authDuration = performance.now() - actionStart
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : 'No autorizado',
+      timing: {
+        authMs: Math.round(authDuration * 10) / 10,
+        rpcMs: 0,
+        totalMs: Math.round(authDuration * 10) / 10,
+      },
+    }
   }
+  const authDuration = performance.now() - actionStart
   const supabase = await createClient()
 
   // Una cantidad preparada igual a 0 siempre es exclusión operacional de la línea,
   // venga del input numérico o del botón Excluir.
   const excluded = params.excluded === true || params.preparedQuantity === 0
 
+  const rpcStart = performance.now()
   const { data, error } = await supabase.schema('logistica').rpc('confirm_sales_order_preparation_line', {
     p_company_id: auth.companyId,
     p_line_id: params.lineId,
@@ -1229,11 +1249,29 @@ export async function confirmSalesOrderPreparationLine(params: {
     p_observation: params.observation?.trim() || null,
     p_excluded: excluded,
   })
+  const rpcDuration = performance.now() - rpcStart
+  const totalDuration = performance.now() - actionStart
+
+  const timing = {
+    authMs: Math.round(authDuration * 10) / 10,
+    rpcMs: Math.round(rpcDuration * 10) / 10,
+    totalMs: Math.round(totalDuration * 10) / 10,
+  }
+
+  if (process.env.NODE_ENV !== 'production') {
+    console.info('[confirmSalesOrderPreparationLine:timing]', {
+      lineId: params.lineId,
+      companyId: auth.companyId,
+      ...timing,
+      success: !error,
+    })
+  }
+
   if (error) {
     console.error('confirmSalesOrderPreparationLine error:', error)
-    return { data: null, error: error.message }
+    return { data: null, error: error.message, timing }
   }
-  return { data: data as SalesOrderPreparationLine, error: null }
+  return { data: data as SalesOrderPreparationLine, error: null, timing }
 }
 
 export type SalesOrderPreparationLock = {

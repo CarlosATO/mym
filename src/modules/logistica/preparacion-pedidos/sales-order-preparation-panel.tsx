@@ -447,7 +447,12 @@ export function SalesOrderPreparationPanel({
   const [companyId, setCompanyId] = useState<string | null>(null)
   const [serverIsOperatorBodega, setServerIsOperatorBodega] = useState<boolean | null>(null)
   const [cards, setCards] = useState<SalesOrderPreparationCardInfo[]>([])
-  const { alerts: commercialAlerts, clearCard: clearCommercialAlert } = usePreparationCommercialAlerts(cards)
+  const [selectedCard, setSelectedCard] = useState<SalesOrderPreparationCardInfo | null>(null)
+  const isDrawerOpen = Boolean(selectedCard)
+  const { alerts: commercialAlerts, clearCard: clearCommercialAlert } = usePreparationCommercialAlerts(cards, {
+    activeCardId: selectedCard?.card_id,
+    isDrawerOpen,
+  })
   const [readinessByCardId, setReadinessByCardId] = useState<Record<string, SalesOrderRouteReadiness>>({})
   const [readinessState, setReadinessState] = useState<PreparationReadinessLoadState>('loading')
   const [auditLocks, setAuditLocks] = useState<Record<string, AuditBoardLock>>({})
@@ -457,7 +462,6 @@ export function SalesOrderPreparationPanel({
   const [syncHealth, setSyncHealth] = useState<WarehousePreparationSyncHealth | null>(null)
 
   // Drawer state
-  const [selectedCard, setSelectedCard] = useState<SalesOrderPreparationCardInfo | null>(null)
   const [selectedItems, setSelectedItems] = useState<SalesOrderPreparationItem[]>([])
   const [selectedPreparationLines, setSelectedPreparationLines] = useState<SalesOrderPreparationLine[]>([])
   const [loadingPreparationLines, setLoadingPreparationLines] = useState(false)
@@ -1064,7 +1068,8 @@ export function SalesOrderPreparationPanel({
     if (!mountedRef.current || syncInFlightRef.current) return
 
     const now = Date.now()
-    if (reason !== 'mount' && now - lastAutoAttemptAtRef.current < 30_000) return
+    // Evita ráfagas repetidas de sincronización Bsale: mínimo 30s entre llamadas automáticas
+    if (now - lastAutoAttemptAtRef.current < 30_000) return
     lastAutoAttemptAtRef.current = now
 
     await runSync('auto')

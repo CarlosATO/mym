@@ -1,10 +1,10 @@
 'use client'
 
-import { X, MapPin, Package, User, FileText, Printer, Building2, Hash, AlertTriangle, LockKeyhole, CheckCircle2, Loader2 } from 'lucide-react'
+import { X, MapPin, Package, User, FileText, Printer, Building2, Hash, AlertTriangle, LockKeyhole, CheckCircle2, Loader2, CheckCheck } from 'lucide-react'
 import { SalesOrderPreparationCardInfo, SalesOrderPreparationItem, SalesOrderPreparationLine, confirmSalesOrderPreparationLine, getSalesOrderClientData, SalesOrderClientData, getSalesOrderPreparationLines, getSalesOrderPreparationMovements, SalesOrderPreparationMovement } from '@/app/actions/logistica/sales-order-preparation'
 import { acceptSalesOrderPreparationCommercialChanges, type CommercialAcceptanceResult } from '@/app/actions/logistica/sales-order-preparation-commercial-acceptance'
 import { generatePreparationOrdersPdf, openPreparationOrdersPdf } from '@/lib/pdf/generate-preparation-orders-pdf'
-import { Fragment, useState, useEffect } from 'react'
+import { Fragment, useState, useEffect, useRef, useMemo } from 'react'
 import { MOVEMENT_RULES } from './movement-rules'
 import { parseDateOnly } from './preparation-board-utils'
 import { PREPARATION_INCIDENT_REASONS } from './preparation-incidents'
@@ -131,6 +131,11 @@ export function SalesOrderDrawer({
   const [incidentObservation, setIncidentObservation] = useState('')
   const [lineError, setLineError] = useState<string | null>(null)
   const [savingLineId, setSavingLineId] = useState<string | null>(null)
+  const [savingLineIds, setSavingLineIds] = useState<Record<string, boolean>>({})
+  const [lineErrors, setLineErrors] = useState<Record<string, string>>({})
+  const [isRegisteringAll, setIsRegisteringAll] = useState(false)
+  const [registerAllProgress, setRegisterAllProgress] = useState<{ current: number; total: number } | null>(null)
+  const inFlightLineConfirmsRef = useRef<Set<string>>(new Set())
   const [isTakingPreparation, setIsTakingPreparation] = useState(false)
   const [auditSummaryOpen, setAuditSummaryOpen] = useState(false)
   const [isAcceptingCommercialChanges, setIsAcceptingCommercialChanges] = useState(false)
@@ -177,8 +182,24 @@ export function SalesOrderDrawer({
     setAuditSummaryOpen(false)
     setIsAcceptingCommercialChanges(false)
     setCommercialAcceptanceError(null)
+    setSavingLineIds({})
+    setLineErrors({})
+    setIsRegisteringAll(false)
+    setRegisterAllProgress(null)
+    inFlightLineConfirmsRef.current.clear()
   }, [card?.card_id])
   /* eslint-enable react-hooks/set-state-in-effect */
+
+  const pendingLinesToRegister = useMemo(() => {
+    if (!card || card.status !== 'IN_PREPARATION') return []
+    return preparationLines.filter(line => {
+      if (line.excluded_from_dispatch || line.line_status !== 'PENDING') return false
+      if (savingLineIds[line.id] || savingLineId === line.id) return false
+      const draft = lineDrafts[line.id]
+      if (draft !== undefined && draft.trim() !== '') return false
+      return true
+    })
+  }, [card, preparationLines, savingLineIds, savingLineId, lineDrafts])
 
   const handleMovementsToggle = (e: React.SyntheticEvent<HTMLDetailsElement>) => {
     const isOpen = e.currentTarget.open
@@ -316,42 +337,103 @@ export function SalesOrderDrawer({
     SOLICITUD_CLIENTE: 'Solicitud del cliente', OTRO: 'Otro',
   } as Record<string, string>)[reason] || reason
 
-  const savePreparationLine = async (line: SalesOrderPreparationLine, quantity: number, reasonCode?: string, observationText?: string, excluded = false) => {
-    if (!card?.company_id || savingLineId) return
+  const savePreparationLine = async (
+    line: SalesOrderPreparationLine,
+    quantity: number,
+    reasonCode?: string,
+    observationText?: string,
+    excluded = false,
+    eventStartTimestamp?: number,
+  ) => {
+    const eventTime = eventStartTimestamp ?? performance.now()
+    if (!card?.company_id || savingLineIds[line.id] || savingLineId === line.id) return
     if (isReadOnly) {
       setLineError('Esta preparación está asignada a otro usuario.')
       return
     }
     setSavingLineId(line.id)
+    setSavingLineIds(prev => ({ ...prev, [line.id]: true }))
     setLineError(null)
-    const result = await confirmSalesOrderPreparationLine({
-      companyId: card.company_id,
-      lineId: line.id,
-      preparedQuantity: quantity,
-      reasonCode,
-      observation: observationText,
-      excluded,
-    })
-    setSavingLineId(null)
-    if (result.error || !result.data) {
-      setLineError(result.error || 'No se pudo confirmar la línea.')
-      reportLockConflict(result.error)
-      return
-    }
-    onPreparationLineChange(result.data)
-    setLineDrafts(current => {
-      const next = { ...current }
+    setLineErrors(prev => {
+      const next = { ...prev }
       delete next[line.id]
       return next
     })
-    setIncidentLine(null)
-    setIncidentReason('')
-    setIncidentObservation('')
+
+    const requestStart = performance.now()
+    try {
+      const result = await confirmSalesOrderPreparationLine({
+        companyId: card.company_id,
+        lineId: line.id,
+        preparedQuantity: quantity,
+        reasonCode,
+        observation: observationText,
+        excluded,
+      })
+      const actionEnd = performance.now()
+
+      if (result.error || !result.data) {
+        const errorMsg = result.error || 'No se pudo confirmar la línea.'
+        setLineError(errorMsg)
+        setLineErrors(prev => ({ ...prev, [line.id]: errorMsg }))
+        reportLockConflict(result.error)
+
+        if (process.env.NODE_ENV !== 'production') {
+          const totalEnd = performance.now()
+          console.groupCollapsed(`⏱️ [PREPARACIÓN ERROR] Línea ${line.sku || line.id} (${(totalEnd - eventTime).toFixed(1)} ms)`)
+          console.log(`• Tiempo previo al despacho: ${(requestStart - eventTime).toFixed(1)} ms`)
+          console.log(`• Tiempo Server Action: ${(actionEnd - requestStart).toFixed(1)} ms`)
+          if (result.timing) {
+            console.log(`  └─ Autorización (servidor): ${result.timing.authMs.toFixed(1)} ms`)
+            console.log(`  └─ RPC PostgreSQL (Supabase): ${result.timing.rpcMs.toFixed(1)} ms`)
+          }
+          console.log(`• Error: ${errorMsg}`)
+          console.groupEnd()
+        }
+        return
+      }
+
+      onPreparationLineChange(result.data)
+      setLineDrafts(current => {
+        const next = { ...current }
+        delete next[line.id]
+        return next
+      })
+      setIncidentLine(null)
+      setIncidentReason('')
+      setIncidentObservation('')
+
+      if (process.env.NODE_ENV !== 'production') {
+        const totalEnd = performance.now()
+        console.groupCollapsed(`⏱️ [PREPARACIÓN OK] Línea ${line.sku || line.id} (${(totalEnd - eventTime).toFixed(1)} ms)`)
+        console.log(`• Tiempo previo al despacho: ${(requestStart - eventTime).toFixed(1)} ms`)
+        console.log(`• Tiempo Server Action (Red + RPC): ${(actionEnd - requestStart).toFixed(1)} ms`)
+        if (result.timing) {
+          console.log(`  └─ Autorización (servidor): ${result.timing.authMs.toFixed(1)} ms`)
+          console.log(`  └─ RPC PostgreSQL (Supabase): ${result.timing.rpcMs.toFixed(1)} ms`)
+        }
+        console.log(`• Tiempo actualización visual: ${(totalEnd - actionEnd).toFixed(1)} ms`)
+        console.log(`• Duración total (evento → confirmada): ${(totalEnd - eventTime).toFixed(1)} ms`)
+        console.groupEnd()
+      }
+    } finally {
+      setSavingLineId(null)
+      setSavingLineIds(prev => {
+        const next = { ...prev }
+        delete next[line.id]
+        return next
+      })
+      inFlightLineConfirmsRef.current.delete(line.id)
+    }
   }
 
-  const confirmLineInput = (line: SalesOrderPreparationLine, excluded = false) => {
+  const confirmLineInput = (line: SalesOrderPreparationLine, excluded = false, eventTime?: number) => {
+    const t0 = eventTime ?? performance.now()
     if (isReadOnly) {
       setLineError('Esta preparación está asignada a otro usuario.')
+      return
+    }
+    if (savingLineIds[line.id] || savingLineId === line.id || isRegisteringAll) {
       return
     }
     const raw = excluded
@@ -363,19 +445,139 @@ export function SalesOrderDrawer({
     }
     const quantity = Number(raw)
     if (!Number.isFinite(quantity) || quantity < 0 || quantity > line.requested_quantity) {
-      setLineError('La cantidad debe estar entre 0 y la cantidad solicitada.')
+      const err = 'La cantidad debe estar entre 0 y la cantidad solicitada.'
+      setLineError(err)
+      setLineErrors(prev => ({ ...prev, [line.id]: err }))
       return
     }
     // Cero y "Excluir" son la misma realidad operacional: la línea no se despacha.
     const effectiveExcluded = excluded || quantity === 0
     if (quantity === line.requested_quantity && !effectiveExcluded) {
-      void savePreparationLine(line, quantity)
+      inFlightLineConfirmsRef.current.add(line.id)
+      void savePreparationLine(line, quantity, undefined, undefined, false, t0)
       return
     }
     setIncidentLine({ line, quantity, excluded: effectiveExcluded })
     setIncidentReason('')
     setIncidentObservation('')
     setLineError(null)
+  }
+
+  const handleLineAutoConfirm = (line: SalesOrderPreparationLine, explicitRaw?: string, eventTime?: number) => {
+    const t0 = eventTime ?? performance.now()
+    if (isReadOnly || isRegisteringAll || savingLineIds[line.id] || savingLineId === line.id) return
+    if (inFlightLineConfirmsRef.current.has(line.id)) return
+
+    const raw = explicitRaw !== undefined ? explicitRaw : lineDrafts[line.id]
+    // Un campo vacío no debe confirmarse automáticamente.
+    if (raw === undefined || raw.trim() === '') {
+      return
+    }
+    const quantity = Number(raw)
+    if (!Number.isFinite(quantity) || quantity < 0 || quantity > line.requested_quantity) {
+      const err = 'La cantidad debe estar entre 0 y la cantidad solicitada.'
+      setLineErrors(prev => ({ ...prev, [line.id]: err }))
+      return
+    }
+    // Si la línea ya estaba confirmada y la cantidad no ha cambiado, no volver a llamar
+    if (line.line_status === 'CONFIRMED' && line.prepared_quantity === quantity && !line.excluded_from_dispatch) {
+      setLineDrafts(current => {
+        const next = { ...current }
+        delete next[line.id]
+        return next
+      })
+      return
+    }
+
+    inFlightLineConfirmsRef.current.add(line.id)
+    const effectiveExcluded = quantity === 0
+    if (quantity === line.requested_quantity && !effectiveExcluded) {
+      void savePreparationLine(line, quantity, undefined, undefined, false, t0)
+      return
+    }
+    setIncidentLine({ line, quantity, excluded: effectiveExcluded })
+    setIncidentReason('')
+    setIncidentObservation('')
+    setLineError(null)
+  }
+
+  const handleRegisterAll = async () => {
+    if (!card?.company_id || isRegisteringAll || isReadOnly) return
+    if (pendingLinesToRegister.length === 0) return
+
+    setIsRegisteringAll(true)
+    setLineError(null)
+    const candidates = [...pendingLinesToRegister]
+    setRegisterAllProgress({ current: 0, total: candidates.length })
+    const failedSkus: string[] = []
+
+    const CONCURRENCY_LIMIT = 4
+    let currentIndex = 0
+    let completedCount = 0
+
+    const processCandidateLine = async (line: SalesOrderPreparationLine) => {
+      setSavingLineIds(prev => ({ ...prev, [line.id]: true }))
+
+      try {
+        const result = await confirmSalesOrderPreparationLine({
+          companyId: card.company_id,
+          lineId: line.id,
+          preparedQuantity: line.requested_quantity,
+          reasonCode: undefined,
+          observation: undefined,
+          excluded: false,
+        })
+        if (result.error || !result.data) {
+          failedSkus.push(line.sku || line.product_name)
+          setLineErrors(prev => ({ ...prev, [line.id]: result.error || 'No se pudo confirmar' }))
+          reportLockConflict(result.error)
+        } else {
+          onPreparationLineChange(result.data)
+          setLineErrors(prev => {
+            const next = { ...prev }
+            delete next[line.id]
+            return next
+          })
+          setLineDrafts(prev => {
+            const next = { ...prev }
+            delete next[line.id]
+            return next
+          })
+        }
+      } catch (err) {
+        failedSkus.push(line.sku || line.product_name)
+        setLineErrors(prev => ({ ...prev, [line.id]: err instanceof Error ? err.message : 'Error al registrar' }))
+      } finally {
+        completedCount++
+        setRegisterAllProgress({ current: completedCount, total: candidates.length })
+        setSavingLineIds(prev => {
+          const next = { ...prev }
+          delete next[line.id]
+          return next
+        })
+      }
+    }
+
+    const worker = async () => {
+      while (currentIndex < candidates.length) {
+        const index = currentIndex++
+        const line = candidates[index]
+        if (!line) break
+        await processCandidateLine(line)
+      }
+    }
+
+    const workerCount = Math.min(CONCURRENCY_LIMIT, candidates.length)
+    await Promise.all(Array.from({ length: workerCount }, () => worker()))
+
+    setIsRegisteringAll(false)
+    setRegisterAllProgress(null)
+
+    if (failedSkus.length > 0) {
+      setLineError(`No se pudieron registrar las siguientes líneas: ${failedSkus.join(', ')}. Puedes reintentar individualmente.`)
+    } else {
+      setLineError(null)
+    }
   }
 
   const emissionDateObj = parseDateOnly(card.nv_emission_date)
@@ -535,10 +737,40 @@ export function SalesOrderDrawer({
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_340px] 2xl:grid-cols-[minmax(0,1fr)_360px]">
             <section className="min-w-0 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-theme-text">
-                  <Package className="h-4 w-4 text-[#72383D]" /> Productos
-                  <span className="font-extrabold text-[#72383D]">({productCount})</span>
-                </h3>
+                <div className="flex flex-wrap items-center gap-3">
+                  <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-theme-text">
+                    <Package className="h-4 w-4 text-[#72383D]" /> Productos
+                    <span className="font-extrabold text-[#72383D]">({productCount})</span>
+                  </h3>
+                  {isPreparation && (
+                    <button
+                      type="button"
+                      onClick={() => void handleRegisterAll()}
+                      disabled={isRegisteringAll || isReadOnly || pendingLinesToRegister.length === 0 || Object.keys(savingLineIds).length > 0}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-[#72383D]/30 bg-[#72383D]/10 px-2.5 py-1 text-xs font-bold text-[#72383D] transition-colors hover:bg-[#72383D] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                      title={pendingLinesToRegister.length === 0 ? 'No hay productos pendientes por registrar' : `Completar y confirmar ${pendingLinesToRegister.length} producto${pendingLinesToRegister.length === 1 ? '' : 's'} pendiente${pendingLinesToRegister.length === 1 ? '' : 's'}`}
+                    >
+                      {isRegisteringAll ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          <span>
+                            Registrando{registerAllProgress ? ` (${registerAllProgress.current}/${registerAllProgress.total})…` : '…'}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <CheckCheck className="h-3.5 w-3.5" />
+                          <span>Registrar todo</span>
+                          {pendingLinesToRegister.length > 0 && (
+                            <span className="rounded bg-[#72383D]/15 px-1 py-0.2 text-[10px] font-extrabold text-[#72383D]">
+                              {pendingLinesToRegister.length}
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
                 <span className="text-[11px] font-semibold text-theme-text-muted">Neto: <strong className="text-theme-text">{netLabel}</strong></span>
               </div>
 
@@ -554,8 +786,8 @@ export function SalesOrderDrawer({
                         <>
                           <th className="w-[72px] px-2 py-2 text-center">Solicitado</th>
                           <th className="w-[96px] px-2 py-2 text-center">A despachar</th>
-                          <th className="w-[120px] px-2 py-2">Resultado</th>
-                          <th className="w-[124px] px-3 py-2 text-center">Acciones</th>
+                          <th className="w-[120px] px-2 py-2 text-center">Resultado</th>
+                          <th className="w-[84px] px-3 py-2 text-center">Acciones</th>
                         </>
                       ) : (
                         <>
@@ -579,11 +811,31 @@ export function SalesOrderDrawer({
                     ) : isPreparation ? (
                       preparationLines.map(line => {
                         const quantity = lineDrafts[line.id] ?? (line.prepared_quantity == null ? '' : String(line.prepared_quantity))
+                        const isSavingThisLine = Boolean(savingLineIds[line.id] || savingLineId === line.id)
+                        const lineErrorText = lineErrors[line.id]
+                        const isConfirmed = line.line_status === 'CONFIRMED' && !line.excluded_from_dispatch
                         return (
                           <Fragment key={line.id}>
-                            <tr className={`border-b border-[#E8DFD5] align-middle transition-colors ${line.excluded_from_dispatch ? 'bg-[#F4F0EC] opacity-70' : 'hover:bg-[#FCFBF9]'}`}>
+                            <tr className={`border-b border-[#E8DFD5] align-middle transition-colors ${
+                              line.excluded_from_dispatch
+                                ? 'bg-[#F4F0EC] opacity-70'
+                                : lineErrorText
+                                  ? 'bg-red-50/50'
+                                  : isSavingThisLine
+                                    ? 'bg-[#F8F5F1]'
+                                    : isConfirmed
+                                      ? 'bg-emerald-50/20 hover:bg-[#FCFBF9]'
+                                      : 'hover:bg-[#FCFBF9]'
+                            }`}>
                               <td className="px-3 py-2"><p className="break-all font-mono text-[11px] font-semibold text-theme-text">{line.sku || '—'}</p></td>
-                              <td className="px-3 py-2"><p className="max-w-[520px] truncate text-xs font-semibold text-theme-text" title={line.product_name}>{line.product_name}</p></td>
+                              <td className="px-3 py-2">
+                                <p className="max-w-[520px] truncate text-xs font-semibold text-theme-text" title={line.product_name}>{line.product_name}</p>
+                                {lineErrorText && (
+                                  <p className="mt-0.5 flex items-center gap-1 text-[10px] font-medium text-[#8A4B4B]">
+                                    <AlertTriangle className="h-3 w-3 shrink-0" /> {lineErrorText}
+                                  </p>
+                                )}
+                              </td>
                               <td className="px-2 py-2 text-center text-xs font-bold tabular-nums text-theme-text">{line.requested_quantity}</td>
                               <td className="px-2 py-2 text-center">
                                 <input
@@ -594,34 +846,61 @@ export function SalesOrderDrawer({
                                   aria-label={`Cantidad a despachar de ${line.product_name}`}
                                   placeholder={line.prepared_quantity == null ? '—' : undefined}
                                   value={quantity}
-                                  disabled={savingLineId === line.id || line.excluded_from_dispatch || isReadOnly}
+                                  disabled={savingLineId === line.id || line.excluded_from_dispatch || isReadOnly || isSavingThisLine || isRegisteringAll}
                                   onFocus={() => setLineDrafts(current => ({ ...current, [line.id]: '' }))}
                                   onBlur={() => setLineDrafts(current => {
                                     if (current[line.id]?.trim() !== '') return current
                                     const next = { ...current }
                                     delete next[line.id]
                                     return next
-                                  })}
-                                  onChange={event => setLineDrafts(current => ({ ...current, [line.id]: event.target.value }))}
-                                  onKeyDown={event => { if (event.key === 'Enter') confirmLineInput(line) }}
-                                  className="w-20 rounded border border-[#D1C7BD] bg-white px-1.5 py-1 text-center text-xs font-bold tabular-nums text-theme-text placeholder:text-theme-text-muted focus:border-[#72383D] focus:outline-none focus:ring-1 focus:ring-[#72383D]/20 disabled:bg-[#F0ECE8] disabled:opacity-60"
+                                  }) as undefined ?? handleLineAutoConfirm(line, undefined, performance.now())}
+                                  onChange={event => {
+                                    const val = event.target.value
+                                    setLineDrafts(current => ({ ...current, [line.id]: val }))
+                                    if (lineErrors[line.id]) {
+                                      setLineErrors(current => {
+                                        const next = { ...current }
+                                        delete next[line.id]
+                                        return next
+                                      })
+                                    }
+                                  }}
+                                  onKeyDown={event => {
+                                    if (event.key === 'Enter') {
+                                      const t0 = performance.now()
+                                      confirmLineInput(line, false, t0)
+                                    }
+                                  }}
+                                  className={`w-20 rounded border px-1.5 py-1 text-center text-xs font-bold tabular-nums text-theme-text placeholder:text-theme-text-muted focus:outline-none focus:ring-1 disabled:bg-[#F0ECE8] disabled:opacity-60 transition-colors ${
+                                    lineErrorText
+                                      ? 'border-red-400 bg-red-50/40 focus:border-red-500 focus:ring-red-500/20'
+                                      : 'border-[#D1C7BD] bg-white focus:border-[#72383D] focus:ring-[#72383D]/20'
+                                  }`}
                                 />
                               </td>
-                              <td className="px-2 py-2">
-                                <span className={`inline-flex rounded-md border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ${lineStateClasses(line)}`}>
-                                  {lineStateLabel(line)}
-                                </span>
-                                {line.excluded_from_dispatch && <p className="mt-0.5 text-[9px] text-theme-text-muted">No se despacha</p>}
+                              <td className="px-2 py-2 text-center">
+                                {isSavingThisLine ? (
+                                  <span className="inline-flex items-center gap-1 rounded-md border border-[#72383D]/25 bg-[#72383D]/10 px-1.5 py-0.5 text-[9px] font-bold text-[#72383D] animate-pulse">
+                                    <Loader2 className="h-2.5 w-2.5 animate-spin" /> Guardando…
+                                  </span>
+                                ) : (
+                                  <>
+                                    <span className={`inline-flex rounded-md border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ${lineStateClasses(line)}`}>
+                                      {lineStateLabel(line)}
+                                    </span>
+                                    {line.excluded_from_dispatch && <p className="mt-0.5 text-[9px] text-theme-text-muted">No se despacha</p>}
+                                  </>
+                                )}
                               </td>
-                              <td className="px-3 py-2">
-                                <div className="flex items-center justify-center gap-2">
-                                  <button type="button" disabled={savingLineId === line.id || line.excluded_from_dispatch || isReadOnly} onClick={() => confirmLineInput(line)} className="rounded bg-[#72383D] px-2 py-1 text-[10px] font-bold text-white hover:bg-[#612F34] disabled:opacity-40">
-                                    {savingLineId === line.id ? 'Guardando…' : 'Confirmar'}
-                                  </button>
-                                  <button type="button" disabled={savingLineId === line.id || line.excluded_from_dispatch || isReadOnly} onClick={() => confirmLineInput(line, true)} className="rounded border border-[#8A4B4B]/30 bg-[#8A4B4B]/5 px-2 py-1 text-[10px] font-semibold text-[#8A4B4B] hover:bg-[#8A4B4B]/10 disabled:opacity-40">
-                                    Excluir
-                                  </button>
-                                </div>
+                              <td className="px-3 py-2 text-center">
+                                <button
+                                  type="button"
+                                  disabled={savingLineId === line.id || line.excluded_from_dispatch || isReadOnly || isSavingThisLine || isRegisteringAll}
+                                  onClick={() => confirmLineInput(line, true)}
+                                  className="rounded border border-[#8A4B4B]/30 bg-[#8A4B4B]/5 px-2 py-1 text-[10px] font-semibold text-[#8A4B4B] hover:bg-[#8A4B4B]/10 disabled:opacity-40 transition-colors"
+                                >
+                                  Excluir
+                                </button>
                               </td>
                             </tr>
                             {line.line_status === 'INCIDENT' && !line.excluded_from_dispatch && (

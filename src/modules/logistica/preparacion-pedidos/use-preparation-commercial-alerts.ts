@@ -17,10 +17,19 @@ function isOperationalCard(card: SalesOrderPreparationCardInfo): boolean {
   return card.status === 'IN_PREPARATION'
 }
 
-export function usePreparationCommercialAlerts(cards: SalesOrderPreparationCardInfo[]): {
+export function usePreparationCommercialAlerts(
+  cards: SalesOrderPreparationCardInfo[],
+  options?: {
+    activeCardId?: string | null
+    isDrawerOpen?: boolean
+  },
+): {
   alerts: AlertState
   clearCard: (cardId: string) => void
+  checkCardNow: (cardId: string) => Promise<void>
 } {
+  const isDrawerOpen = options?.isDrawerOpen
+  const activeCardId = options?.activeCardId
   const [alerts, setAlerts] = useState<AlertState>({})
   const cardsRef = useRef(cards)
   const checkedAtRef = useRef<Map<string, number>>(new Map())
@@ -43,6 +52,9 @@ export function usePreparationCommercialAlerts(cards: SalesOrderPreparationCardI
 
     const existing = inFlightRef.current.get(card.card_id)
     if (existing) return existing
+
+    // Marcar timestamp de inicio inmediatamente para evitar que renders concurrentes dupliquen llamadas
+    checkedAtRef.current.set(card.card_id, now)
 
     const request = getSalesOrderPreparationCommercialAlert(card.card_id)
       .then(result => {
@@ -87,11 +99,23 @@ export function usePreparationCommercialAlerts(cards: SalesOrderPreparationCardI
 
   const checkVisibleCards = useCallback(async (force = false) => {
     if (!mountedRef.current || document.visibilityState === 'hidden') return
-    const candidates = cardsRef.current.filter(isOperationalCard)
+    const operational = cardsRef.current.filter(isOperationalCard)
+
+    // Si el drawer está abierto, verificamos prioritariamente la tarjeta activa
+    // para evitar que consultas masivas de tarjetas ajenas saturen los sockets HTTP
+    if (isDrawerOpen && activeCardId) {
+      const activeCard = operational.find(c => c.card_id === activeCardId)
+      if (activeCard) {
+        await checkCard(activeCard, force)
+      }
+      return
+    }
+
+    const candidates = operational
     for (let index = 0; index < candidates.length; index += PREPARATION_COMMERCIAL_MAX_CONCURRENCY) {
       await Promise.all(candidates.slice(index, index + PREPARATION_COMMERCIAL_MAX_CONCURRENCY).map(card => checkCard(card, force)))
     }
-  }, [checkCard])
+  }, [checkCard, isDrawerOpen, activeCardId])
 
   const clearCard = useCallback((cardId: string) => {
     checkedAtRef.current.set(cardId, Date.now())
@@ -103,12 +127,21 @@ export function usePreparationCommercialAlerts(cards: SalesOrderPreparationCardI
     })
   }, [])
 
+  const checkCardNow = useCallback(async (cardId: string) => {
+    const card = cardsRef.current.find(c => c.card_id === cardId)
+    if (card && isOperationalCard(card)) {
+      await checkCard(card, true)
+    }
+  }, [checkCard])
+
+  // Ciclo de vida y polling periódico: no destruye mountedRef en cambios de tarjetas
   useEffect(() => {
     mountedRef.current = true
-    void checkVisibleCards()
-    const interval = window.setInterval(() => { void checkVisibleCards() }, PREPARATION_COMMERCIAL_POLL_INTERVAL_MS)
+    void checkVisibleCards(false)
+    const interval = window.setInterval(() => { void checkVisibleCards(false) }, PREPARATION_COMMERCIAL_POLL_INTERVAL_MS)
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') void checkVisibleCards(true)
+      // visibilitychange respeta el TTL de 30s sin forzar ráfagas masivas
+      if (document.visibilityState === 'visible') void checkVisibleCards(false)
     }
     document.addEventListener('visibilitychange', handleVisibilityChange)
     return () => {
@@ -116,10 +149,17 @@ export function usePreparationCommercialAlerts(cards: SalesOrderPreparationCardI
       window.clearInterval(interval)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
+  }, [checkVisibleCards])
+
+  // Trigger por cambio en conjunto de tarjetas operativas
+  useEffect(() => {
+    if (!cardIdsKey) return
+    void checkVisibleCards(false)
   }, [cardIdsKey, checkVisibleCards])
 
   useEffect(() => {
     const activeIds = new Set(cards.filter(isOperationalCard).map(card => card.card_id))
+    if (activeIds.size === 0) return
     for (const cardId of checkedAtRef.current.keys()) {
       if (!activeIds.has(cardId)) checkedAtRef.current.delete(cardId)
     }
@@ -129,5 +169,6 @@ export function usePreparationCommercialAlerts(cards: SalesOrderPreparationCardI
   return {
     alerts: Object.fromEntries(Object.entries(alerts).filter(([cardId]) => activeIds.has(cardId))),
     clearCard,
+    checkCardNow,
   }
 }
