@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { BsaleApiError, bsaleFetchForCompany, bsaleFetchResourceForCompany } from '@/lib/bsale/client'
 import { bsaleWriteForCompany } from '@/lib/bsale/write-client'
-import { buildInvoiceEmissionIdentity, buildInvoiceEmissionPayload, chileDateToBsaleEpoch, chileToday, formatBsaleRejection, invoiceEmissionEnabled, invoiceAddressResolutionEnabled, fetchAllBsaleClientAddresses, resolveInvoiceEmissionAddress, validateCompleteInvoiceLines, validateInvoiceDocument } from '@/lib/integraciones/invoice-emission-contract'
+import { buildInvoiceEmissionIdentity, buildInvoiceEmissionPayload, recoverRejectedInvoiceIdentity, sameInvoiceRetryPayloadExceptDates, chileDateToBsaleEpoch, chileToday, formatBsaleRejection, invoiceEmissionEnabled, invoiceAddressResolutionEnabled, fetchAllBsaleClientAddresses, resolveInvoiceEmissionAddress, validateCompleteInvoiceLines, validateInvoiceDocument } from '@/lib/integraciones/invoice-emission-contract'
 import { verifyBsaleInvoiceAddress, type BsaleAdditionalAddressItem } from '@/lib/integraciones/bsale-address-resolution'
 import { evaluateInvoiceCommercialValidation } from '@/lib/integraciones/invoice-commercial-validation'
 import { verifyInvoiceStockDispatch, buildInvoiceStockEvidencePayload, type InvoiceStockVerificationResult } from '@/lib/integraciones/invoice-stock-verification'
@@ -242,7 +242,8 @@ export async function emitSalesOrderInvoice(cardId: string, selection?: InvoiceC
   }
   const identity = buildInvoiceEmissionIdentity(snapshot)
   const { data: existingAttempt, error: existingAttemptError } = await db.schema('logistica').from('sales_order_invoice_attempts')
-    .select('id,status,sales_id,fingerprint,retry_count')
+    .select('id,status,sales_id,fingerprint,retry_count,payload_snapshot,last_error,bsale_invoice_id,bsale_invoice_number')
+    .eq('company_id', auth.companyId)
     .eq('card_id', card.id)
     .eq('current_bsale_nv_id', currentNvId)
     .order('created_at', { ascending: false })
@@ -253,8 +254,34 @@ export async function emitSalesOrderInvoice(cardId: string, selection?: InvoiceC
   if (existingAttempt && ['SUBMITTING', 'UNKNOWN', 'RECONCILIATION_REQUIRED'].includes(existingAttempt.status)) {
     return { status: 'INVOICE_IN_PROGRESS' as const, attempt_id: existingAttempt.id, error: null }
   }
+  if (existingAttempt?.status === 'FAILED_RETRYABLE') {
+    if (existingAttempt.bsale_invoice_id != null || existingAttempt.bsale_invoice_number != null) {
+      return { status: 'ALREADY_INVOICED' as const, attempt_id: existingAttempt.id, error: null }
+    }
+    const [invoiceEvidence, mirrorEvidence] = await Promise.all([
+      db.schema('logistica').from('sales_order_invoice_attempts')
+        .select('id').eq('company_id', auth.companyId).eq('canonical_bsale_token', card.canonical_bsale_token)
+        .or('bsale_invoice_id.not.is.null,bsale_invoice_number.not.is.null,status.eq.CONFIRMED').limit(1),
+      db.schema('integraciones').from('bsale_documents')
+        .select('bsale_id').eq('company_id', auth.companyId).eq('document_type_id', 5)
+        .eq('raw_json->>salesId', existingAttempt.sales_id).limit(1),
+    ])
+    if (invoiceEvidence.error || mirrorEvidence.error || !Array.isArray(invoiceEvidence.data) || !Array.isArray(mirrorEvidence.data)) return { status: 'PREVALIDATION_FAILED' as const, error: 'No se pudo verificar si existe una factura asociada.' }
+    if (invoiceEvidence.data?.length || mirrorEvidence.data?.length) return { status: 'ALREADY_INVOICED' as const, attempt_id: existingAttempt.id, error: null }
+  }
+  let recoveredDates = false
   if (existingAttempt && (existingAttempt.sales_id !== identity.salesId || existingAttempt.fingerprint !== identity.fingerprint)) {
-    return { status: 'PREVALIDATION_FAILED' as const, error: 'El attempt existente no coincide con la identidad persistida.' }
+    const recovered = recoverRejectedInvoiceIdentity(snapshot, existingAttempt)
+    if (!recovered) return { status: 'PREVALIDATION_FAILED' as const, error: 'El attempt existente no coincide con la identidad persistida.' }
+    // The RPC resolves by company, canonical token and fingerprint, not by card.
+    // Confirm that it would select the same attempt before submitting anything.
+    const { data: retryTarget, error: retryTargetError } = await db.schema('logistica').from('sales_order_invoice_attempts')
+      .select('id').eq('company_id', auth.companyId).eq('canonical_bsale_token', card.canonical_bsale_token)
+      .eq('fingerprint', existingAttempt.fingerprint).order('created_at', { ascending: false }).limit(1).maybeSingle()
+    if (retryTargetError || retryTarget?.id !== existingAttempt.id) {
+      return { status: 'PREVALIDATION_FAILED' as const, error: 'No se pudo verificar el intento original para el reintento.' }
+    }
+    recoveredDates = true
   }
   const attemptSalesId = existingAttempt?.sales_id ?? identity.salesId
   const attemptFingerprint = existingAttempt?.fingerprint ?? identity.fingerprint
@@ -290,6 +317,9 @@ export async function emitSalesOrderInvoice(cardId: string, selection?: InvoiceC
     details: snapshotDetails.map((detail: Record<string, any>) => ({ detailId: detail.detail_id, quantity: detail.quantity })),
     payments: [{ paymentTypeId: selectedPaymentTypeId, amount: fullTotals.total, recordDate: emissionDateEpoch }],
   })
+  if (recoveredDates && !sameInvoiceRetryPayloadExceptDates(existingAttempt?.payload_snapshot, payload)) {
+    return { status: 'PREVALIDATION_FAILED' as const, error: 'El payload de reintento contiene cambios distintos de las fechas.' }
+  }
   const { data: started, error: startError } = await db.schema('logistica').rpc('begin_sales_order_invoice_submission', {
     p_company_id: auth.companyId,
     p_card_id: card.id,
@@ -303,6 +333,9 @@ export async function emitSalesOrderInvoice(cardId: string, selection?: InvoiceC
   })
   if (startError) return { status: 'PREVALIDATION_FAILED' as const, error: startError.message }
   if (!started?.ok) return { status: started?.code ?? 'INVOICE_IN_PROGRESS', attempt_id: started?.attempt_id ?? null, error: null }
+  if (recoveredDates && String(started.attempt_id) !== existingAttempt?.id) {
+    return { status: 'RECONCILIATION_REQUIRED' as const, attempt_id: started.attempt_id ?? null, error: 'El intento iniciado no coincide con el intento original; no se envió la factura.' }
+  }
 
   const attemptId = String(started.attempt_id)
   let posted: Record<string, any>

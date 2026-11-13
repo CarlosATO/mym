@@ -157,6 +157,50 @@ export function buildInvoiceEmissionIdentity(snapshot: InvoiceEmissionSnapshot):
   return { fingerprint, salesId: invoiceAttemptSalesId(snapshot.company_id, snapshot.canonical_bsale_token, fingerprint) }
 }
 
+/** Only the explicit Bsale client-blocked rejection can reuse identity across dates. */
+export function recoverRejectedInvoiceIdentity(
+  snapshot: InvoiceEmissionSnapshot,
+  attempt: { status: string; sales_id: string; fingerprint: string; payload_snapshot: unknown; last_error: string | null; bsale_invoice_id: number | null; bsale_invoice_number: string | null },
+): { fingerprint: string; salesId: string } | null {
+  if (attempt.status !== 'FAILED_RETRYABLE' || attempt.bsale_invoice_id != null || attempt.bsale_invoice_number != null
+      || !/^BSALE_REJECTED\|http_status=400\|/.test(attempt.last_error ?? '')
+      || !/"error"\s*:\s*"client blocked"/i.test(attempt.last_error ?? '')) return null
+  if (!attempt.payload_snapshot || typeof attempt.payload_snapshot !== 'object' || Array.isArray(attempt.payload_snapshot)) return null
+  const payload = attempt.payload_snapshot as Record<string, unknown>
+  if (payload.salesId !== attempt.sales_id) return null
+  const toDate = (value: unknown): string | null => {
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0 || value % 86400 !== 0) return null
+    const date = new Date(value * 1000)
+    return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : null
+  }
+  const emissionDate = toDate(payload.emissionDate)
+  const expirationDate = toDate(payload.expirationDate)
+  if (!emissionDate || !expirationDate) return null
+  const identity = buildInvoiceEmissionIdentity({ ...snapshot, emission_date: emissionDate, expiration_date: expirationDate })
+  return identity.fingerprint === attempt.fingerprint && identity.salesId === attempt.sales_id ? identity : null
+}
+
+/** Refuse changes outside the invoice and payment dates, including addressId. */
+export function sameInvoiceRetryPayloadExceptDates(original: unknown, current: InvoiceEmissionPayload): boolean {
+  if (!original || typeof original !== 'object' || Array.isArray(original)) return false
+  const withoutDates = (value: Record<string, unknown>): unknown => {
+    const rest = { ...value }
+    delete rest.emissionDate
+    delete rest.expirationDate
+    if (!Array.isArray(rest.payments)) return null
+    return stable({
+      ...rest,
+      payments: rest.payments.map(payment => {
+        if (!payment || typeof payment !== 'object' || Array.isArray(payment)) return null
+        const other = { ...payment as Record<string, unknown> }
+        delete other.recordDate
+        return other
+      }),
+    })
+  }
+  return JSON.stringify(withoutDates(original as Record<string, unknown>)) === JSON.stringify(withoutDates(current))
+}
+
 export function chileToday(now = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Santiago',
