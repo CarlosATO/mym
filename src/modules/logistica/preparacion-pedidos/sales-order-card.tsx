@@ -1,7 +1,9 @@
 'use client'
 
-import { Ban, FileText } from 'lucide-react'
-import { useRef } from 'react'
+import { Ban, FileText, RefreshCw, ShieldAlert } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { toast } from 'sonner'
+import { verifyCardClientCommercialStatus, type VerifyCardClientCommercialResult } from '@/app/actions/logistica/sales-order-client-commercial-verification'
 import { SalesOrderPreparationCardInfo } from '@/app/actions/logistica/sales-order-preparation'
 import type { InvoiceDocumentPreview } from './invoice-flow-ui'
 import { useDraggable } from '@dnd-kit/core'
@@ -40,6 +42,13 @@ interface SalesOrderCardProps {
   onViewInvoice?: () => void
   commercialAlert?: PreparationCommercialAlert | null
   commercialMirror?: boolean
+  canVerifyClientCommercial?: boolean
+  onClientCommercialStatusChange?: (cardId: string, result: {
+    status: 'BLOCKED' | 'UNBLOCKED' | 'UNKNOWN'
+    commerciallyBlocked: boolean | null
+    verifiedAt: string
+  }) => void
+  onVerifyClientCommercial?: (cardId: string) => Promise<VerifyCardClientCommercialResult>
 }
 
 function formatShortDate(value: string | null): string | null {
@@ -81,6 +90,9 @@ export function SalesOrderCard({
   onViewInvoice,
   commercialAlert = null,
   commercialMirror = false,
+  canVerifyClientCommercial = false,
+  onClientCommercialStatusChange,
+  onVerifyClientCommercial,
 }: SalesOrderCardProps) {
   const routeDate = formatShortDate(card.route_date)
   const routeFullDate = formatFullDate(card.route_date)
@@ -135,6 +147,53 @@ export function SalesOrderCard({
   const linesLabel = linesCount == null ? '— líneas' : `${linesCount} ${linesCount === 1 ? 'línea' : 'líneas'}`
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null)
   const hasCommercialChange = commercialAlert?.status === 'CHANGED'
+
+  const [isVerifyingCommercial, setIsVerifyingCommercial] = useState(false)
+  const isClientBlocked = card.client_commercially_blocked === true || card.client_commercial_status === 'BLOCKED'
+  const isClientUnknown = !card.client_commercial_status || card.client_commercial_status === 'UNKNOWN'
+
+  const handleVerifyClientCommercial = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
+    event.preventDefault()
+    if (isVerifyingCommercial) return
+    setIsVerifyingCommercial(true)
+    try {
+      const result = onVerifyClientCommercial
+        ? await onVerifyClientCommercial(card.card_id)
+        : await verifyCardClientCommercialStatus(card.card_id)
+      if (result.data?.applied === false) {
+        toast.warning(result.error ?? 'La verificación fue descartada: existe un estado más reciente en la base de datos.')
+        if (result.data.status && result.data.status !== 'UNKNOWN') {
+          onClientCommercialStatusChange?.(card.card_id, {
+            status: result.data.status,
+            commerciallyBlocked: result.data.commerciallyBlocked,
+            verifiedAt: result.data.verifiedAt,
+          })
+        }
+      } else if (result.data?.status === 'UNBLOCKED') {
+        toast.success(`Cliente desbloqueado en Bsale para NV #${card.nv_folio}`)
+        onClientCommercialStatusChange?.(card.card_id, {
+          status: 'UNBLOCKED',
+          commerciallyBlocked: false,
+          verifiedAt: result.data.verifiedAt,
+        })
+      } else if (result.data?.status === 'BLOCKED') {
+        toast.warning(`Cliente continúa bloqueado en Bsale para NV #${card.nv_folio}`)
+        onClientCommercialStatusChange?.(card.card_id, {
+          status: 'BLOCKED',
+          commerciallyBlocked: true,
+          verifiedAt: result.data.verifiedAt,
+        })
+      } else {
+        toast.error(result.error ?? 'No fue posible verificar el cliente en Bsale.')
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Error al verificar en Bsale'
+      toast.error(message)
+    } finally {
+      setIsVerifyingCommercial(false)
+    }
+  }
 
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: commercialMirror ? `commercial-incident-${card.card_id}` : card.card_id,
@@ -244,11 +303,56 @@ export function SalesOrderCard({
       </div>
 
       <p
-        className="mt-0.5 truncate text-[11.5px] font-semibold leading-snug text-[#322D29] transition-colors group-hover:text-[#72383D]"
-        title={card.client_name}
+        className={`mt-0.5 truncate text-[11.5px] leading-snug transition-colors ${
+          isClientBlocked
+            ? 'font-bold text-red-700 group-hover:text-red-800'
+            : 'font-semibold text-[#322D29] group-hover:text-[#72383D]'
+        }`}
+        title={isClientBlocked ? `${card.client_name} (Cliente bloqueado)` : card.client_name}
       >
         {card.client_name}
       </p>
+
+      {isClientBlocked && (
+        <div className="mt-0.5 flex items-center justify-between gap-1.5" data-testid={`card-client-blocked-${card.card_id}`}>
+          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-red-700">
+            <ShieldAlert className="h-3 w-3 shrink-0 text-red-600" />
+            Cliente bloqueado
+          </span>
+          {canVerifyClientCommercial && !isOverlay && !commercialMirror && (
+            <button
+              type="button"
+              data-card-action
+              disabled={isVerifyingCommercial}
+              onPointerDown={event => event.stopPropagation()}
+              onClick={handleVerifyClientCommercial}
+              className="inline-flex items-center gap-1 rounded border border-red-300 bg-red-50 px-1.5 py-0.5 text-[9px] font-bold text-red-800 hover:bg-red-100 disabled:opacity-60 transition-colors"
+              title="Consultar bloqueo de cliente en Bsale"
+            >
+              <RefreshCw className={`h-2.5 w-2.5 ${isVerifyingCommercial ? 'animate-spin' : ''}`} />
+              {isVerifyingCommercial ? 'Verificando…' : 'Verificar en Bsale'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {!isClientBlocked && isClientUnknown && canVerifyClientCommercial && !isOverlay && !commercialMirror && (
+        <div className="mt-0.5 flex items-center justify-between gap-1.5 text-[9px] text-[#322D29]/60">
+          <span className="italic">Estado no verificado</span>
+          <button
+            type="button"
+            data-card-action
+            disabled={isVerifyingCommercial}
+            onPointerDown={event => event.stopPropagation()}
+            onClick={handleVerifyClientCommercial}
+            className="inline-flex items-center gap-0.5 rounded border border-[#B8ABA0]/40 bg-[#F5EDE9]/60 px-1 py-0.5 font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:opacity-60 transition-colors"
+            title="Verificar estado de cliente en Bsale"
+          >
+            <RefreshCw className={`h-2 w-2 ${isVerifyingCommercial ? 'animate-spin' : ''}`} />
+            {isVerifyingCommercial ? 'Verificando…' : 'Verificar en Bsale'}
+          </button>
+        </div>
+      )}
 
       {!isOverlay && !commercialMirror && <div className="mt-1.5"><PreparationCommercialChangeAlert alert={commercialAlert} compact /></div>}
 

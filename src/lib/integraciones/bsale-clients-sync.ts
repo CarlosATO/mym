@@ -49,10 +49,19 @@ export interface SyncBsaleClientsOptions {
   isDryRun?: boolean
   recordDryRun?: boolean
   limitOverride?: number | null
+  skipRunCreation?: boolean
 }
 
 export async function syncBsaleClients(options: SyncBsaleClientsOptions) {
-  const { companyId, triggerType, requestedBy, isDryRun = false, recordDryRun = false, limitOverride = null } = options
+  const {
+    companyId,
+    triggerType,
+    requestedBy,
+    isDryRun = false,
+    recordDryRun = false,
+    limitOverride = null,
+    skipRunCreation = false,
+  } = options
   const provider = 'BSALE'
   const entity = 'clients'
   const deadlineAt = Date.now() + CLIENTS_SYNC_DEADLINE_MS
@@ -75,7 +84,7 @@ export async function syncBsaleClients(options: SyncBsaleClientsOptions) {
   )
 
   // Create the run first so the lock is owned by this specific run.
-  const shouldCreateRun = !isDryRun || recordDryRun
+  const shouldCreateRun = (!isDryRun || recordDryRun) && !skipRunCreation
   let runId: string | null = null
   let ownsLock = false
 
@@ -97,6 +106,21 @@ export async function syncBsaleClients(options: SyncBsaleClientsOptions) {
         await finishSyncRun({ runId, status: 'SKIPPED', message: 'Sync ya se encuentra en ejecución (Lock activo).', strict: true })
         return { status: 'SKIPPED', message: 'Sync already running' }
       }
+    }
+
+    // Si la ejecución se realiza sin runId (y no es dry-run), capturar marca temporal de PostgreSQL
+    // antes de descargar clientes desde Bsale para garantizar snapshot_started_at válido y monotónico
+    let snapshotStartedAt: string | null = null
+    if (!runId && !isDryRun) {
+      const { data: serverTs, error: tsError } = await admin
+        .schema('integraciones')
+        .rpc('get_server_timestamp')
+      if (tsError || !serverTs) {
+        throw new Error(
+          `Error al obtener marca temporal del servidor antes de descargar clientes: ${tsError?.message ?? 'Sin respuesta de PostgreSQL'}`
+        )
+      }
+      snapshotStartedAt = serverTs
     }
     const [{ data: paymentTypeCatalog, error: paymentTypeCatalogError }, { data: saleConditionCatalog, error: saleConditionCatalogError }] = await Promise.all([
       admin.schema('integraciones').from('bsale_payment_types').select('bsale_id, name').eq('company_id', companyId).eq('is_active', true),
@@ -231,18 +255,33 @@ export async function syncBsaleClients(options: SyncBsaleClientsOptions) {
       return { status: 'SUCCESS', stats, isDryRun: true }
     }
 
-    // 4. Upsert integraciones.bsale_clients
+    // 4. Upsert atómico integraciones.bsale_clients mediante RPC
+    // Se elimina el upsert directo para preservar atómicamente la monotonicidad y estados comerciales verificados.
     const chunkSize = 100
     for (let i = 0; i < integracionesRecords.length; i += chunkSize) {
       const chunk = integracionesRecords.slice(i, i + chunkSize)
-      const { error } = await admin.schema('integraciones').from('bsale_clients').upsert(chunk, {
-        onConflict: 'company_id, bsale_client_id',
-        ignoreDuplicates: false
-      })
-      if (error) {
+      const { error: rpcError } = await admin
+        .schema('integraciones')
+        .rpc('upsert_bsale_clients_sync', {
+          p_company_id: companyId,
+          p_clients: chunk,
+          p_sync_run_id: runId ?? null,
+          p_snapshot_started_at: runId ? null : snapshotStartedAt,
+        })
+
+      if (rpcError) {
         stats.errorCount++
-        if (runId) await recordSyncError({ runId, companyId, provider, entity, errorMessage: error.message, timeoutMs: CLIENTS_CONTROL_REQUEST_TIMEOUT_MS })
-        throw error
+        if (runId) {
+          await recordSyncError({
+            runId,
+            companyId,
+            provider,
+            entity,
+            errorMessage: `Error en RPC upsert_bsale_clients_sync: ${rpcError.message}`,
+            timeoutMs: CLIENTS_CONTROL_REQUEST_TIMEOUT_MS,
+          })
+        }
+        throw new Error(`Error en RPC upsert_bsale_clients_sync: ${rpcError.message}`)
       }
     }
 

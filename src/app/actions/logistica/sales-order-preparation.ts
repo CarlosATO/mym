@@ -7,7 +7,7 @@ import { getWarehousePreparationSyncHealth, type WarehousePreparationSyncHealth 
 import { decidePreparationSync } from '@/modules/logistica/preparacion-pedidos/preparation-sync-policy'
 import type { InvoicePaymentTypeOption, InvoiceSaleConditionOption } from '@/modules/logistica/preparacion-pedidos/invoice-commercial'
 import { chileToday } from '@/lib/integraciones/invoice-emission-contract'
-import { extractBsaleRelationIdFromHref } from '@/lib/integraciones/bsale-client-commercial-normalization'
+import { extractBsaleRelationIdFromHref, parseCommerciallyBlocked } from '@/lib/integraciones/bsale-client-commercial-normalization'
 import { getSafeHttpsHostname, validateBsalePdfResponseUrl, validateBsalePdfUrl, validateBsaleRedirectUrl } from '@/lib/integraciones/invoice-print-assistant'
 import { requirePreparationCardAccess, requirePreparationCardMoveAuthorization, requirePreparationLineConfirmationAuthorization, requireWmsPermission, type WmsAuthorization } from './authorization'
 
@@ -205,6 +205,156 @@ async function getInvoiceCommercialCatalog(companyId: string, supabase: Awaited<
   return data
 }
 
+export type PreparationClientCommercialStatusInfo = {
+  clientId: number | null
+  status: 'BLOCKED' | 'UNBLOCKED' | 'UNKNOWN'
+  commerciallyBlocked: boolean | null
+  verifiedAt: string | null
+}
+
+export type PreparationClientCommercialStatusMap = Map<string, PreparationClientCommercialStatusInfo>
+
+export async function getCardClientCommercialStatusesBatch(
+  companyId: string,
+  cardIds: string[]
+): Promise<PreparationClientCommercialStatusMap> {
+  const result = new Map<string, PreparationClientCommercialStatusInfo>()
+  if (cardIds.length === 0) return result
+
+  const db = createAdminClient()
+  try {
+    const uniqueCardIds = [...new Set(cardIds.filter(Boolean))]
+    const { data: cards, error: cardsError } = await db
+      .schema('logistica')
+      .from('sales_order_preparation_cards')
+      .select('id, bsale_nv_id, current_bsale_nv_id, canonical_bsale_token')
+      .eq('company_id', companyId)
+      .in('id', uniqueCardIds)
+
+    if (cardsError || !cards) {
+      console.error('getCardClientCommercialStatusesBatch cards error:', cardsError)
+      return result
+    }
+
+    const tokens = [...new Set(cards.map(c => c.canonical_bsale_token).filter((t): t is string => Boolean(t)))]
+    const canonicalByToken = new Map<string, { current_bsale_id: number | null; client_id: number | null }>()
+    if (tokens.length > 0) {
+      const { data: canonicalDocs, error: canonError } = await db
+        .schema('integraciones')
+        .from('vw_bsale_sales_order_documents_canonical')
+        .select('canonical_bsale_token, current_bsale_id, client_id')
+        .eq('company_id', companyId)
+        .in('canonical_bsale_token', tokens)
+
+      if (!canonError && canonicalDocs) {
+        for (const doc of canonicalDocs) {
+          if (doc.canonical_bsale_token) {
+            canonicalByToken.set(doc.canonical_bsale_token, {
+              current_bsale_id: doc.current_bsale_id != null ? Number(doc.current_bsale_id) : null,
+              client_id: doc.client_id != null ? Number(doc.client_id) : null,
+            })
+          }
+        }
+      }
+    }
+
+    const pendingNvIds = new Set<number>()
+    for (const card of cards) {
+      const canon = card.canonical_bsale_token ? canonicalByToken.get(card.canonical_bsale_token) : null
+      if (canon?.client_id == null) {
+        const nvId = Number(canon?.current_bsale_id ?? card.current_bsale_nv_id ?? card.bsale_nv_id)
+        if (Number.isSafeInteger(nvId) && nvId > 0) pendingNvIds.add(nvId)
+        if (card.bsale_nv_id != null) {
+          const origNvId = Number(card.bsale_nv_id)
+          if (Number.isSafeInteger(origNvId) && origNvId > 0) pendingNvIds.add(origNvId)
+        }
+      }
+    }
+
+    const docClientByNvId = new Map<number, number>()
+    if (pendingNvIds.size > 0) {
+      const { data: bsaleDocs, error: docError } = await db
+        .schema('integraciones')
+        .from('bsale_documents')
+        .select('bsale_id, client_id')
+        .eq('company_id', companyId)
+        .in('bsale_id', [...pendingNvIds])
+
+      if (!docError && bsaleDocs) {
+        for (const doc of bsaleDocs) {
+          if (doc.bsale_id != null && doc.client_id != null) {
+            docClientByNvId.set(Number(doc.bsale_id), Number(doc.client_id))
+          }
+        }
+      }
+    }
+
+    const cardClientIdMap = new Map<string, number>()
+    for (const card of cards) {
+      const canon = card.canonical_bsale_token ? canonicalByToken.get(card.canonical_bsale_token) : null
+      let clientId = canon?.client_id ?? null
+      if (!clientId) {
+        const nvId = Number(canon?.current_bsale_id ?? card.current_bsale_nv_id ?? card.bsale_nv_id)
+        if (nvId) clientId = docClientByNvId.get(nvId) ?? null
+      }
+      if (!clientId && card.bsale_nv_id != null) {
+        clientId = docClientByNvId.get(Number(card.bsale_nv_id)) ?? null
+      }
+      if (clientId && Number.isSafeInteger(clientId) && clientId > 0) {
+        cardClientIdMap.set(card.id, clientId)
+      }
+    }
+
+    const uniqueClientIds = [...new Set(cardClientIdMap.values())]
+    const clientStatusById = new Map<number, {
+      status: 'BLOCKED' | 'UNBLOCKED' | 'UNKNOWN'
+      commerciallyBlocked: boolean | null
+      verifiedAt: string | null
+    }>()
+
+    if (uniqueClientIds.length > 0) {
+      const { data: clientRows, error: clientError } = await db
+        .schema('integraciones')
+        .from('bsale_clients')
+        .select('bsale_client_id, raw_payload, last_seen_at')
+        .eq('company_id', companyId)
+        .in('bsale_client_id', uniqueClientIds)
+
+      if (!clientError && clientRows) {
+        for (const row of clientRows) {
+          const rawBlocked = row.raw_payload?.commerciallyBlocked
+          const parsed = parseCommerciallyBlocked(rawBlocked)
+          const status = parsed === true ? 'BLOCKED' : parsed === false ? 'UNBLOCKED' : 'UNKNOWN'
+          clientStatusById.set(Number(row.bsale_client_id), {
+            status,
+            commerciallyBlocked: parsed,
+            verifiedAt: row.last_seen_at ?? null,
+          })
+        }
+      }
+    }
+
+    for (const cardId of cardIds) {
+      const clientId = cardClientIdMap.get(cardId) ?? null
+      if (!clientId) {
+        result.set(cardId, { clientId: null, status: 'UNKNOWN', commerciallyBlocked: null, verifiedAt: null })
+      } else {
+        const info = clientStatusById.get(clientId)
+        result.set(cardId, {
+          clientId,
+          status: info?.status ?? 'UNKNOWN',
+          commerciallyBlocked: info?.commerciallyBlocked ?? null,
+          verifiedAt: info?.verifiedAt ?? null,
+        })
+      }
+    }
+  } catch (error) {
+    console.error('getCardClientCommercialStatusesBatch unexpected error:', error)
+  }
+
+  return result
+}
+
 export type SalesOrderPreparationCardInfo = {
   card_id: string
   company_id: string
@@ -222,6 +372,10 @@ export type SalesOrderPreparationCardInfo = {
   nv_emission_date: string
   nv_generation_date: string
   client_name: string
+  client_id?: number | null
+  client_commercial_status?: 'BLOCKED' | 'UNBLOCKED' | 'UNKNOWN'
+  client_commercially_blocked?: boolean | null
+  client_commercial_verified_at?: string | null
   city_raw: string | null
   municipality_raw: string | null
   address_raw: string | null
@@ -557,7 +711,7 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
     const userIds = [...new Set(rows.flatMap(row => [row.assigned_user_id, row.locked_by_user_id]).filter((id): id is string => Boolean(id)))]
     const nameById = new Map<string, string>()
 
-    const [usersResult, incidentCounts, linesCounts] = await Promise.all([
+    const [usersResult, incidentCounts, linesCounts, clientStatuses] = await Promise.all([
       userIds.length > 0
         ? createAdminClient()
             .from('users')
@@ -566,6 +720,7 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
         : Promise.resolve({ data: [], error: null }),
       getOpenCommercialIncidentCounts(supabase, companyId, rows.map(row => row.card_id)),
       getCardLinesCounts(companyId, rows.map(r => ({ card_id: r.card_id, nv_bsale_id: r.nv_bsale_id }))),
+      getCardClientCommercialStatusesBatch(companyId, rows.map(r => r.card_id)),
     ])
 
     if (usersResult.error) {
@@ -590,6 +745,7 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
     return {
       data: rows.map(row => {
         const { route_readiness: _, ...cardFields } = row
+        const commercialStatus = clientStatuses?.get(row.card_id)
         return {
           ...cardFields,
           nv_folio: String(row.nv_folio ?? ''),
@@ -597,6 +753,10 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
           lines_count: linesCounts?.get(row.card_id) ?? null,
           assigned_user_name: row.assigned_user_id ? nameById.get(row.assigned_user_id) ?? null : null,
           locked_by_user_name: row.locked_by_user_id ? nameById.get(row.locked_by_user_id) ?? null : null,
+          client_id: commercialStatus?.clientId ?? null,
+          client_commercial_status: commercialStatus?.status ?? 'UNKNOWN',
+          client_commercially_blocked: commercialStatus?.commerciallyBlocked ?? null,
+          client_commercial_verified_at: commercialStatus?.verifiedAt ?? null,
         }
       }),
       error: null,
@@ -652,7 +812,7 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
   const userIds = [...new Set(rows.flatMap(row => [row.assigned_user_id, row.locked_by_user_id]).filter((id): id is string => Boolean(id)))]
   const nameById = new Map<string, string>()
 
-  const [usersResult, incidentCounts, linesCounts] = await Promise.all([
+  const [usersResult, incidentCounts, linesCounts, clientStatuses] = await Promise.all([
     userIds.length > 0
       ? createAdminClient()
           .from('users')
@@ -661,6 +821,7 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
       : Promise.resolve({ data: [], error: null }),
     getOpenCommercialIncidentCounts(supabase, companyId, rows.map(row => row.card_id)),
     getCardLinesCounts(companyId, rows.map(r => ({ card_id: r.card_id, nv_bsale_id: r.nv_bsale_id }))),
+    getCardClientCommercialStatusesBatch(companyId, rows.map(r => r.card_id)),
   ])
 
   if (usersResult.error) {
@@ -683,12 +844,19 @@ export async function getSalesOrderPreparationBoard(companyId: string): Promise<
   })
 
   return {
-    data: rows.map(row => ({
-      ...row,
-      lines_count: linesCounts?.get(row.card_id) ?? null,
-      assigned_user_name: row.assigned_user_id ? nameById.get(row.assigned_user_id) ?? null : null,
-      locked_by_user_name: row.locked_by_user_id ? nameById.get(row.locked_by_user_id) ?? null : null,
-    })),
+    data: rows.map(row => {
+      const commercialStatus = clientStatuses?.get(row.card_id)
+      return {
+        ...row,
+        lines_count: linesCounts?.get(row.card_id) ?? null,
+        assigned_user_name: row.assigned_user_id ? nameById.get(row.assigned_user_id) ?? null : null,
+        locked_by_user_name: row.locked_by_user_id ? nameById.get(row.locked_by_user_id) ?? null : null,
+        client_id: commercialStatus?.clientId ?? null,
+        client_commercial_status: commercialStatus?.status ?? 'UNKNOWN',
+        client_commercially_blocked: commercialStatus?.commerciallyBlocked ?? null,
+        client_commercial_verified_at: commercialStatus?.verifiedAt ?? null,
+      }
+    }),
     error: null,
     isOperatorBodega: false,
     readiness: exposedReadiness,

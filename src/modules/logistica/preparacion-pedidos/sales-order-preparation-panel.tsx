@@ -281,6 +281,8 @@ function DroppableColumn({
   commercialAlerts,
   commercialIncidentCounts,
   commercialMirrorCards,
+  canVerifyClientCommercial = false,
+  onClientCommercialStatusChange,
 }: {
   col: KanbanColumn
   colCards: SalesOrderPreparationCardInfo[]
@@ -306,6 +308,12 @@ function DroppableColumn({
   commercialAlerts: Record<string, PreparationCommercialAlert>
   commercialIncidentCounts: Record<string, number>
   commercialMirrorCards: SalesOrderPreparationCardInfo[]
+  canVerifyClientCommercial?: boolean
+  onClientCommercialStatusChange?: (cardId: string, result: {
+    status: 'BLOCKED' | 'UNBLOCKED' | 'UNKNOWN'
+    commerciallyBlocked: boolean | null
+    verifiedAt: string
+  }) => void
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: col.id,
@@ -412,6 +420,8 @@ function DroppableColumn({
                  invoiceDocuments={commercialMirror ? [] : getInvoiceDocuments(card)}
                  onViewInvoice={commercialMirror ? undefined : () => onViewInvoice(card)}
                  commercialAlert={commercialMirror ? null : commercialAlerts[card.card_id] ?? null}
+                 canVerifyClientCommercial={!commercialMirror && canVerifyClientCommercial}
+                 onClientCommercialStatusChange={onClientCommercialStatusChange}
                 dragDisabled={commercialMirror || card.status === 'AUDITED' || card.status === 'INVOICED_READY_FOR_ROUTE' || isPreparationReadOnly({
                   status: card.status,
                   currentUserId,
@@ -446,6 +456,8 @@ export function SalesOrderPreparationPanel({
 
   const [companyId, setCompanyId] = useState<string | null>(null)
   const [serverIsOperatorBodega, setServerIsOperatorBodega] = useState<boolean | null>(null)
+  const canVerifyClientCommercial = !serverIsOperatorBodega && roleName !== 'OPERADOR_BODEGA' && (canManagePreparation || canManageAudit || roleName === 'SUPER_USUARIO' || roleName === 'GERENCIA')
+
   const [cards, setCards] = useState<SalesOrderPreparationCardInfo[]>([])
   const [selectedCard, setSelectedCard] = useState<SalesOrderPreparationCardInfo | null>(null)
   const isDrawerOpen = Boolean(selectedCard)
@@ -453,6 +465,27 @@ export function SalesOrderPreparationPanel({
     activeCardId: selectedCard?.card_id,
     isDrawerOpen,
   })
+
+  const handleClientCommercialStatusChange = useCallback((cardId: string, result: {
+    status: 'BLOCKED' | 'UNBLOCKED' | 'UNKNOWN'
+    commerciallyBlocked: boolean | null
+    verifiedAt: string
+  }) => {
+    setCards(currentCards =>
+      currentCards.map(c => {
+        if (c.card_id !== cardId) return c
+        if (c.client_commercial_verified_at && new Date(c.client_commercial_verified_at).getTime() > new Date(result.verifiedAt).getTime()) {
+          return c
+        }
+        return {
+          ...c,
+          client_commercial_status: result.status,
+          client_commercially_blocked: result.commerciallyBlocked,
+          client_commercial_verified_at: result.verifiedAt,
+        }
+      })
+    )
+  }, [])
   const [readinessByCardId, setReadinessByCardId] = useState<Record<string, SalesOrderRouteReadiness>>({})
   const [readinessState, setReadinessState] = useState<PreparationReadinessLoadState>('loading')
   const [auditLocks, setAuditLocks] = useState<Record<string, AuditBoardLock>>({})
@@ -2469,6 +2502,8 @@ export function SalesOrderPreparationPanel({
                            onViewInvoice={openInvoiceDocuments}
                          getInvoiceDocuments={card => invoiceDocumentCacheRef.current.get(getInvoiceDocumentCacheKey(card.card_id, card.nv_bsale_id))?.documents ?? []}
                          commercialAlerts={commercialAlerts}
+                         canVerifyClientCommercial={canVerifyClientCommercial}
+                         onClientCommercialStatusChange={handleClientCommercialStatusChange}
                         />
                      )
                   })}

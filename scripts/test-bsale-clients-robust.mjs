@@ -86,7 +86,24 @@ test('sync conserva error, libera su lock y posterior recuperación actualiza am
     async insert() { return { error: null } },
     update() { return this },
   })
-  const admin = { schema: schema => ({ from: table => query(schema, table) }) }
+  const admin = {
+    schema: schema => ({
+      from: table => query(schema, table),
+      rpc: async (fn, params) => {
+        if (fn === 'get_server_timestamp') {
+          return { data: new Date().toISOString(), error: null }
+        }
+        if (fn === 'upsert_bsale_clients_sync') {
+          if (uncertainWrite) await boundedFetch('https://mock.invalid', { method: 'POST' })
+          if (schema === 'integraciones' && params?.p_clients) {
+            persisted.push(...params.p_clients)
+          }
+          return { data: params?.p_clients?.length ?? 0, error: null }
+        }
+        return { data: null, error: new Error(`Unknown RPC ${fn}`) }
+      },
+    }),
+  }
   const modules = {
     '@supabase/supabase-js': { createClient: (_url, _key, options) => { boundedFetch = options.global.fetch; return admin } }, crypto,
     './sync-core': {

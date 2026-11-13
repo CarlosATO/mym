@@ -44,3 +44,8 @@ test('normalizes commercial fields from catalog-backed data and preserves region
 test('sync completo sin ausentes reporta cero desactivaciones', () => {
   assert.deepEqual(getAbsentBsaleClientIds([1, 2], [1, 2]), [])
 })
+
+test('sincronizador utiliza RPC atómica upsert_bsale_clients_sync y no upsert directo', () => {
+  assert.match(syncSource, /rpc\('upsert_bsale_clients_sync'/)
+  assert.doesNotMatch(syncSource, /from\('bsale_clients'\)\.upsert\(/)
+})
