@@ -216,12 +216,12 @@ export function InvoiceReviewModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="!w-[85vw] !max-w-[1100px] max-h-[88vh] overflow-hidden border-[#DDD4CA] bg-[#FCFAF7] p-0 text-[#322D29] sm:!max-w-[1100px]">
-        <DialogHeader className="flex-row items-start justify-between border-b border-[#E5DDD5] px-6 py-5 pr-12">
+      <DialogContent className="!w-[85vw] !max-w-[1100px] max-h-[88vh] flex flex-col gap-0 overflow-hidden border-[#DDD4CA] bg-[#FCFAF7] p-0 text-[#322D29] sm:!max-w-[1100px]">
+        <DialogHeader className="shrink-0 flex-row items-start justify-between border-b border-[#E5DDD5] px-6 py-5 pr-12">
           <div><DialogTitle className="flex items-center gap-2 text-lg"><FileText className="h-4 w-4 text-[#72383D]" /> Revisar facturación</DialogTitle><DialogDescription className="mt-1 text-xs">Verifica los datos antes de emitir la factura.</DialogDescription></div>
           {snapshot && <div className="text-right text-xs leading-5 text-[#6B625C]"><p className="font-bold text-[#322D29]">NV #{snapshot.folio}</p><p>{formatInvoiceDate(snapshot.emission_date)}</p></div>}
         </DialogHeader>
-        <div className="max-h-[calc(88vh-142px)] space-y-5 overflow-y-auto bg-white px-6 py-5">
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto bg-white px-6 py-5">
           {loading && <div className="flex items-center gap-2 text-sm text-[#6B625C]"><Loader2 className="h-4 w-4 animate-spin" /> Preparando revisión…</div>}
           {error && <p className="rounded-md border border-[#8A4B4B]/25 bg-[#8A4B4B]/8 p-3 text-xs text-[#8A4B4B]">No se pudo cargar la revisión de facturación.</p>}
           {snapshot && (
@@ -240,7 +240,7 @@ export function InvoiceReviewModal({
             </>
           )}
         </div>
-        <DialogFooter className="border-[#E5DDD5] bg-[#FCFAF7] px-6 py-3">
+        <DialogFooter className="mx-0 mb-0 shrink-0 border-[#E5DDD5] bg-[#FCFAF7] px-6 py-3">
           <p className="mr-auto text-[11px] text-[#6B625C]">Al continuar se solicitará una confirmación antes de emitir la factura.</p><Button variant="outline" onClick={() => onOpenChange(false)}>Cerrar</Button>
            <Button disabled={!canContinue || loading} onClick={() => onContinue({ payment_type_id: paymentTypeId, sale_condition_id: saleConditionId, expiration_date: expirationDate })} className="bg-[#72383D] text-white hover:bg-[#612F34]">Continuar</Button>
         </DialogFooter>
