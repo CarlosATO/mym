@@ -1,11 +1,15 @@
 import { createClient } from '@supabase/supabase-js'
 
 // Usa Service Role para operaciones internas de sync
-function getSyncAdminClient() {
+function getSyncAdminClient(timeoutMs?: number) {
+  const boundedFetch: typeof fetch = (input, init) => {
+    const timeout = AbortSignal.timeout(timeoutMs!)
+    return fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout })
+  }
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { autoRefreshToken: false, persistSession: false } }
+    { auth: { autoRefreshToken: false, persistSession: false }, ...(timeoutMs ? { global: { fetch: boundedFetch } } : {}) }
   )
 }
 
@@ -19,10 +23,11 @@ export interface CreateSyncRunParams {
   triggerType: SyncTriggerType
   requestedBy?: string
   metadata?: any
+  timeoutMs?: number
 }
 
 export async function createSyncRun(params: CreateSyncRunParams) {
-  const admin = getSyncAdminClient()
+  const admin = getSyncAdminClient(params.timeoutMs)
   const { data, error } = await admin.schema('integraciones').from('sync_runs').insert({
     company_id: params.companyId,
     provider: params.provider,
@@ -47,14 +52,16 @@ export interface FinishSyncRunParams {
   errorCount?: number
   message?: string
   metadata?: any
+  strict?: boolean
 }
 
 export async function finishSyncRun(params: FinishSyncRunParams) {
-  const admin = getSyncAdminClient()
+  const admin = getSyncAdminClient(params.strict ? 30_000 : undefined)
   
   // Calculate duration
-  const { data: runData } = await admin.schema('integraciones').from('sync_runs')
+  const { data: runData, error: readError } = await admin.schema('integraciones').from('sync_runs')
     .select('started_at, metadata').eq('id', params.runId).single()
+  if (params.strict && (readError || !runData)) throw new Error(`Error finishSyncRun read: ${readError?.message ?? 'run not found'}`)
     
   let durationMs = null
   if (runData?.started_at) {
@@ -63,7 +70,7 @@ export async function finishSyncRun(params: FinishSyncRunParams) {
 
   const mergedMetadata = runData ? { ...runData.metadata, ...params.metadata } : (params.metadata || {})
 
-  const { error } = await admin.schema('integraciones').from('sync_runs').update({
+  const update = admin.schema('integraciones').from('sync_runs').update({
     status: params.status,
     finished_at: new Date().toISOString(),
     duration_ms: durationMs,
@@ -75,6 +82,13 @@ export async function finishSyncRun(params: FinishSyncRunParams) {
     message: params.message || null,
     metadata: mergedMetadata
   }).eq('id', params.runId)
+
+  if (params.strict) {
+    const { data, error } = await update.select('id').maybeSingle()
+    if (error || !data) throw new Error(`Error finishSyncRun update: ${error?.message ?? 'run not found'}`)
+    return
+  }
+  const { error } = await update
 
   if (error) console.error(`Error finishSyncRun: ${error.message}`)
 }
@@ -88,11 +102,12 @@ export interface RecordSyncErrorParams {
   errorCode?: string
   errorMessage: string
   safePayload?: any
+  timeoutMs?: number
 }
 
 export async function recordSyncError(params: RecordSyncErrorParams) {
-  const admin = getSyncAdminClient()
-  await admin.schema('integraciones').from('sync_errors').insert({
+  const admin = getSyncAdminClient(params.timeoutMs)
+  const { error } = await admin.schema('integraciones').from('sync_errors').insert({
     sync_run_id: params.runId,
     company_id: params.companyId,
     provider: params.provider,
@@ -102,6 +117,7 @@ export async function recordSyncError(params: RecordSyncErrorParams) {
     error_message: params.errorMessage,
     safe_payload: params.safePayload || null
   })
+  if (params.timeoutMs && error) throw new Error(`Error recordSyncError: ${error.message}`)
 }
 
 export interface TryAcquireSyncLockParams {
@@ -111,18 +127,20 @@ export interface TryAcquireSyncLockParams {
   ttlMinutes: number
   lockedBy?: string
   syncRunId?: string
+  timeoutMs?: number
 }
 
 export async function tryAcquireSyncLock(params: TryAcquireSyncLockParams): Promise<boolean> {
-  const admin = getSyncAdminClient()
+  const admin = getSyncAdminClient(params.timeoutMs)
   
   // Limpiar locks expirados antes de intentar adquirir
-  await admin.schema('integraciones').from('sync_locks')
+  const { error: cleanupError } = await admin.schema('integraciones').from('sync_locks')
     .delete()
     .eq('company_id', params.companyId)
     .eq('provider', params.provider)
     .eq('entity', params.entity)
     .lt('expires_at', new Date().toISOString())
+  if (params.syncRunId && cleanupError) throw new Error(`Error cleaning expired lock: ${cleanupError.message}`)
 
   const expiresAt = new Date(Date.now() + params.ttlMinutes * 60000).toISOString()
 
@@ -144,13 +162,19 @@ export async function tryAcquireSyncLock(params: TryAcquireSyncLockParams): Prom
   return true
 }
 
-export async function releaseSyncLock(companyId: string, provider: string, entity: string) {
-  const admin = getSyncAdminClient()
-  await admin.schema('integraciones').from('sync_locks')
+export async function releaseSyncLock(companyId: string, provider: string, entity: string, syncRunId?: string) {
+  const admin = getSyncAdminClient(syncRunId ? 30_000 : undefined)
+  const query = admin.schema('integraciones').from('sync_locks')
     .delete()
     .eq('company_id', companyId)
     .eq('provider', provider)
     .eq('entity', entity)
+  if (syncRunId) {
+    const { data, error } = await query.eq('sync_run_id', syncRunId).select('id').maybeSingle()
+    if (error || !data) throw new Error(`Error releasing sync lock: ${error?.message ?? 'lock ownership lost'}`)
+    return
+  }
+  await query
 }
 
 export async function getSyncStatus(companyId: string, provider: string, entity: string) {

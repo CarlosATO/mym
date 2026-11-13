@@ -12,10 +12,12 @@ export async function GET(req: NextRequest) {
 
 async function handleSync(req: NextRequest) {
   // Protect with CRON_SECRET
+  const secret = process.env.CRON_SECRET
+  if (!secret) return NextResponse.json({ error: 'CRON_SECRET is not configured' }, { status: 500 })
   const authHeader = req.headers.get('authorization')
   if (
-    authHeader !== `Bearer ${process.env.CRON_SECRET}` && 
-    req.headers.get('x-cron-secret') !== process.env.CRON_SECRET
+    authHeader !== `Bearer ${secret}` &&
+    req.headers.get('x-cron-secret') !== secret
   ) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
@@ -36,8 +38,8 @@ async function handleSync(req: NextRequest) {
       status: result.status,
       message: result.message || 'Sync execution completed',
       stats: result.stats
-    })
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    }, { status: result.status === 'SUCCESS' ? 200 : result.status === 'SKIPPED' ? 409 : 500 })
+  } catch (error: unknown) {
+    return NextResponse.json({ status: 'FAILED', error: error instanceof Error ? error.message : 'Error desconocido' }, { status: 500 })
   }
 }

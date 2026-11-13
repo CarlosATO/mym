@@ -1,0 +1,13 @@
+{
+  "name": "petgroup-bsale-clients-cron",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "start": "node cron.mjs",
+    "test": "node --test cron.test.mjs"
+  }
+}

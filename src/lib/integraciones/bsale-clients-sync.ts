@@ -12,8 +12,16 @@ import {
 import { getBsaleConfigForCompany } from '@/lib/bsale/company-config'
 import { canDeactivateAbsentClients, getAbsentBsaleClientIds } from './bsale-clients-sync-logic'
 import { normalizeBsaleClientCommercialFields } from './bsale-client-commercial-normalization'
+import { fetchBsaleClientsPage } from './bsale-clients-fetch'
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+const CLIENTS_SYNC_DEADLINE_MS = 8 * 60_000
+const CLIENTS_CONTROL_REQUEST_TIMEOUT_MS = 30_000
+
+type BsaleClient = Record<string, unknown> & {
+  id: number; code?: string; company?: string; firstName?: string; lastName?: string;
+  email?: string; phone?: string; address?: string; city?: string; municipality?: string;
+  activity?: string; state?: number
+}
 
 function cleanCode(code: any): string | null {
   if (!code || typeof code !== 'string') return null
@@ -47,42 +55,29 @@ export async function syncBsaleClients(options: SyncBsaleClientsOptions) {
   const { companyId, triggerType, requestedBy, isDryRun = false, recordDryRun = false, limitOverride = null } = options
   const provider = 'BSALE'
   const entity = 'clients'
+  const deadlineAt = Date.now() + CLIENTS_SYNC_DEADLINE_MS
+  let dbWriteOutcomeUnknown = false
   
   const { baseUrl: bsaleUrl, accessToken: bsaleToken } = getBsaleConfigForCompany(companyId)
 
+  const boundedFetch: typeof fetch = (input, init) => {
+    const timeout = AbortSignal.timeout(Math.max(1, deadlineAt - Date.now()))
+    const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
+    return fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout }).catch(error => {
+      if (method !== 'GET' && method !== 'HEAD') dbWriteOutcomeUnknown = true
+      throw error
+    })
+  }
   const admin = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { autoRefreshToken: false, persistSession: false } }
+    { auth: { autoRefreshToken: false, persistSession: false }, global: { fetch: boundedFetch } }
   )
 
-  // 1. Try acquire lock (except for non-recorded dry-runs)
+  // Create the run first so the lock is owned by this specific run.
   const shouldCreateRun = !isDryRun || recordDryRun
-  
-  if (shouldCreateRun) {
-    const locked = await tryAcquireSyncLock({
-      companyId,
-      provider,
-      entity,
-      ttlMinutes: 60,
-      lockedBy: triggerType
-    })
-
-    if (!locked) {
-      if (shouldCreateRun) {
-        const runId = await createSyncRun({ companyId, provider, entity, triggerType, requestedBy })
-        await finishSyncRun({ runId, status: 'SKIPPED', message: 'Sync ya se encuentra en ejecución (Lock activo).' })
-      }
-      return { status: 'SKIPPED', message: 'Sync already running' }
-    }
-  }
-
   let runId: string | null = null
-  if (shouldCreateRun) {
-    runId = await createSyncRun({ companyId, provider, entity, triggerType, requestedBy })
-    // Update lock with runId
-    await admin.schema('integraciones').from('sync_locks').update({ sync_run_id: runId }).eq('company_id', companyId).eq('provider', provider).eq('entity', entity)
-  }
+  let ownsLock = false
 
   const stats = {
     bsaleTotal: 0,
@@ -95,6 +90,14 @@ export async function syncBsaleClients(options: SyncBsaleClientsOptions) {
   }
 
   try {
+    if (shouldCreateRun) {
+      runId = await createSyncRun({ companyId, provider, entity, triggerType, requestedBy, timeoutMs: CLIENTS_CONTROL_REQUEST_TIMEOUT_MS })
+      ownsLock = await tryAcquireSyncLock({ companyId, provider, entity, ttlMinutes: 60, lockedBy: triggerType, syncRunId: runId, timeoutMs: CLIENTS_CONTROL_REQUEST_TIMEOUT_MS })
+      if (!ownsLock) {
+        await finishSyncRun({ runId, status: 'SKIPPED', message: 'Sync ya se encuentra en ejecución (Lock activo).', strict: true })
+        return { status: 'SKIPPED', message: 'Sync already running' }
+      }
+    }
     const [{ data: paymentTypeCatalog, error: paymentTypeCatalogError }, { data: saleConditionCatalog, error: saleConditionCatalogError }] = await Promise.all([
       admin.schema('integraciones').from('bsale_payment_types').select('bsale_id, name').eq('company_id', companyId).eq('is_active', true),
       admin.schema('integraciones').from('bsale_sale_conditions').select('bsale_id, name').eq('company_id', companyId).eq('state', 0),
@@ -108,28 +111,12 @@ export async function syncBsaleClients(options: SyncBsaleClientsOptions) {
     let offset = 0
     const limit = 50
     let totalCount = -1
-    const allClients = []
+    const allClients: BsaleClient[] = []
 
     let fetchCompleted = false
     while (!fetchCompleted) {
       const url = `${bsaleUrl}/clients.json?limit=${limit}&offset=${offset}`
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'access_token': bsaleToken,
-          'Content-Type': 'application/json'
-        }
-      })
-
-      if (!response.ok) {
-        if (response.status === 429) {
-          await sleep(2000)
-          continue
-        }
-        throw new Error(`Bsale API error: ${response.status} ${response.statusText}`)
-      }
-
-      const data = await response.json()
+      const data = await fetchBsaleClientsPage<{ count: number; items: BsaleClient[] }>({ url, token: bsaleToken, deadlineAt })
       if (totalCount === -1) {
         totalCount = Number(data.count)
         if (!Number.isFinite(totalCount) || totalCount < 0) {
@@ -237,8 +224,9 @@ export async function syncBsaleClients(options: SyncBsaleClientsOptions) {
     }
 
     if (isDryRun) {
+      if (Date.now() >= deadlineAt) throw new Error('BSALE_CLIENTS_SYNC_TIMEOUT')
       if (runId) {
-        await finishSyncRun({ runId, status: 'SUCCESS', message: 'Dry-run completado', readCount: stats.bsaleFetched })
+        await finishSyncRun({ runId, status: 'SUCCESS', message: 'Dry-run completado', readCount: stats.bsaleFetched, strict: true })
       }
       return { status: 'SUCCESS', stats, isDryRun: true }
     }
@@ -253,7 +241,7 @@ export async function syncBsaleClients(options: SyncBsaleClientsOptions) {
       })
       if (error) {
         stats.errorCount++
-        if (runId) await recordSyncError({ runId, companyId, provider, entity, errorMessage: error.message })
+        if (runId) await recordSyncError({ runId, companyId, provider, entity, errorMessage: error.message, timeoutMs: CLIENTS_CONTROL_REQUEST_TIMEOUT_MS })
         throw error
       }
     }
@@ -345,6 +333,7 @@ export async function syncBsaleClients(options: SyncBsaleClientsOptions) {
       }
     }
 
+    if (Date.now() >= deadlineAt) throw new Error('BSALE_CLIENTS_SYNC_TIMEOUT')
     if (runId) {
       await finishSyncRun({ 
         runId, 
@@ -352,21 +341,32 @@ export async function syncBsaleClients(options: SyncBsaleClientsOptions) {
         readCount: stats.bsaleFetched,
         insertedCount: stats.insertedCount,
         updatedCount: stats.updatedCount,
-        errorCount: stats.errorCount
+        errorCount: stats.errorCount,
+        strict: true
       })
     }
 
     return { status: 'SUCCESS', stats }
 
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : (error && typeof error === 'object' && 'message' in error ? String(error.message) : 'Error desconocido')
     if (runId) {
-      await recordSyncError({ runId, companyId, provider, entity, errorMessage: error.message })
-      await finishSyncRun({ runId, status: 'FAILED', message: error.message, errorCount: stats.errorCount + 1 })
+      try { await recordSyncError({ runId, companyId, provider, entity, errorMessage: message, timeoutMs: CLIENTS_CONTROL_REQUEST_TIMEOUT_MS }) } catch (recordError) { console.error('[syncBsaleClients] error recording sync error', recordError) }
+      try { await finishSyncRun({ runId, status: 'FAILED', message, errorCount: stats.errorCount + 1, strict: true }) } catch (finishError) { console.error('[syncBsaleClients] error recording FAILED', finishError) }
     }
-    return { status: 'FAILED', message: error.message, stats }
+    return { status: 'FAILED', message, stats }
   } finally {
-    if (shouldCreateRun) {
-      await releaseSyncLock(companyId, provider, entity)
+    if (ownsLock && runId && dbWriteOutcomeUnknown) {
+      // A disconnected write may still commit remotely; keep the lock until
+      // expiry rather than overlap it with the next scheduled sync.
+      console.error('[syncBsaleClients] resultado de escritura desconocido; lock conservado hasta su vencimiento')
+    } else if (ownsLock && runId) {
+      try {
+        await releaseSyncLock(companyId, provider, entity, runId)
+      } catch (releaseError) {
+        try { await finishSyncRun({ runId, status: 'FAILED', message: 'No se pudo liberar el lock de clientes.', errorCount: stats.errorCount + 1, strict: true }) } catch (finishError) { console.error('[syncBsaleClients] error recording lock failure', finishError) }
+        throw releaseError
+      }
     }
   }
 }
