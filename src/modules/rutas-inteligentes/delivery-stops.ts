@@ -8,6 +8,7 @@ export type DeliveryIssue =
   | 'MISSING_CUSTOMER_ID'
   | 'MISSING_DOCUMENT_IDENTITY'
   | 'DUPLICATE_DOCUMENT'
+  | 'INVALID_SOURCE_FIELD'
 
 export type PotentialStop = {
   id: string
@@ -103,6 +104,7 @@ export function buildDeliveryStops(
     const address = normalize(delivery.destination.address)
     const commune = normalize(delivery.destination.commune)
     const issues: DeliveryIssue[] = []
+    if (delivery.invalidSourceFields?.length) issues.push('INVALID_SOURCE_FIELD')
     if (!address) issues.push('MISSING_ADDRESS')
     else if (delivery.destination.addressSource === 'UNKNOWN' || !/\p{L}/u.test(address) || !/\d/u.test(address) || /\b(?:s\s*\/\s*n|sin\s+n[uú]mero|por\s+confirmar)\b/iu.test(address)) issues.push('AMBIGUOUS_ADDRESS')
     if (!commune) issues.push('MISSING_COMMUNE')

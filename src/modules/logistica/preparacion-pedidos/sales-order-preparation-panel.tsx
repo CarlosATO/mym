@@ -1,9 +1,10 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from 'react'
-import { Search, SlidersHorizontal, Loader2, RotateCcw, RefreshCw, ShieldCheck, Printer, ArrowUpDown, X, ArrowLeft } from 'lucide-react'
+import { Search, SlidersHorizontal, Loader2, RotateCcw, RefreshCw, ShieldCheck, Printer, ArrowUpDown, X, ArrowLeft, Route } from 'lucide-react'
 import Link from 'next/link'
 import { PreparationBreadcrumbIndicators } from './preparation-breadcrumb-indicators'
+import { PreliminaryRouteDialog } from '@/modules/rutas-inteligentes/preliminary-route-dialog'
 import { 
   getSalesOrderPreparationBoard, 
   getSalesOrderPreparationLines,
@@ -502,6 +503,7 @@ export function SalesOrderPreparationPanel({
   const [selectedClientData, setSelectedClientData] = useState<SalesOrderClientData | null>(null)
   const [loadingItems, setLoadingItems] = useState(false)
   const [invoiceReviewOpen, setInvoiceReviewOpen] = useState(false)
+  const [routeSimulationOpen, setRouteSimulationOpen] = useState(false)
   const [invoiceConfirmationOpen, setInvoiceConfirmationOpen] = useState(false)
   const [invoiceReviewLoading, setInvoiceReviewLoading] = useState(false)
   const [invoiceReviewError, setInvoiceReviewError] = useState<string | null>(null)
@@ -1986,6 +1988,21 @@ export function SalesOrderPreparationPanel({
   const selectedInvoiceDocumentsWithoutIdentity = !selectedInvoiceDocumentsLoading
     && !selectedInvoiceDocumentsError
     && selectedInvoiceDocumentInfo.some(item => item.invoiceIds.length === 0)
+  const routeWarningsByCardId = useMemo(() => {
+    if (!routeSimulationOpen) return {}
+    return Object.fromEntries(filteredCards.map(card => {
+      const warnings: string[] = []
+      if (card.status !== 'INVOICED_READY_FOR_ROUTE') {
+        const column = getPreparationColumnId(card.status, readinessByCardId[card.card_id]?.route_readiness)
+        const stage = COLUMNS.find(item => item.id === column)?.title ?? card.status
+        warnings.push(`Pendiente para preparar guía: etapa ${stage}.`)
+      } else {
+        warnings.push('Verificar factura confirmada antes de preparar guía.')
+      }
+      if ((commercialIncidentCounts[card.card_id] ?? 0) > 0) warnings.push('Tiene incidencias comerciales abiertas.')
+      return [card.card_id, warnings]
+    }))
+  }, [routeSimulationOpen, filteredCards, readinessByCardId, commercialIncidentCounts])
   const isMixedStageSelection = selectedPendingCards.length > 0 && selectedRouteCards.length > 0
   const canPrepareOrders = selectedCards.length > 0 && selectedPendingCards.length === selectedCards.length
   const canPrepareRoute = selectedCards.length > 0
@@ -2314,7 +2331,7 @@ export function SalesOrderPreparationPanel({
 
       {/* Indicadores en la línea existente del breadcrumb. */}
       {!loading && !error && (
-        <PreparationBreadcrumbIndicators>
+        <PreparationBreadcrumbIndicators action={<button type="button" onClick={() => setRouteSimulationOpen(true)} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-[#72383D] px-2.5 py-1.5 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-[#5F2F33]"><Route className="h-3.5 w-3.5" /> Evaluar ruta</button>}>
             <SummaryStat
               label="NV"
               value={boardSummary.nvCount}
@@ -2572,6 +2589,19 @@ export function SalesOrderPreparationPanel({
         missingNvCount={missingCostNvCount}
         missingNetAmount={missingCostNetAmount}
         onOpenChange={setMissingCostOpen}
+      />
+
+      <PreliminaryRouteDialog
+        open={routeSimulationOpen}
+        onOpenChange={setRouteSimulationOpen}
+        companyId={companyId}
+        filteredCards={filteredCards}
+        profitabilityByNv={profitabilityByNv}
+        profitabilityLoading={profitabilityLoading}
+        profitabilityError={profitabilityError}
+        boardLoading={loading}
+        boardError={error}
+        routeWarningsByCardId={routeWarningsByCardId}
       />
 
       <PreparationCommercialIncidentsDialog

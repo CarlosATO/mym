@@ -25,6 +25,8 @@ export type EvaluationDelivery = {
   /** Identificador provisional por entrega; no presupone agrupación geográfica. */
   stopId: string
   source: { type: EvaluationOrigin; recordId: string }
+  /** Campos recibidos con tipos incompatibles; se mantienen identificados para revisión. */
+  invalidSourceFields?: string[]
   documents: DocumentReference[]
   routeGuide: { guideId: string | null; itemId: string | null; lineNumber: number | null }
   customer: { id: number | null; name: string | null }
