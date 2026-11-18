@@ -1099,7 +1099,7 @@ export function SalesOrderPreparationPanel({
     }
   }, [loadBoard, loadSyncHealth])
 
-  const maybeAutoSync = useCallback(async (reason: 'mount' | 'interval' | 'visibility') => {
+  const maybeAutoSync = useCallback(async () => {
     if (!mountedRef.current || syncInFlightRef.current) return
 
     const now = Date.now()
@@ -1127,7 +1127,6 @@ export function SalesOrderPreparationPanel({
       if (cancelled) return
       await loadSyncHealth()
       if (cancelled) return
-      void maybeAutoSync('mount')
     })()
 
     return () => {
@@ -1148,21 +1147,10 @@ export function SalesOrderPreparationPanel({
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      void maybeAutoSync('interval')
+      void maybeAutoSync()
     }, PREPARATION_SYNC_CHECK_INTERVAL_MS)
 
     return () => window.clearInterval(interval)
-  }, [maybeAutoSync])
-
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        void maybeAutoSync('visibility')
-      }
-    }
-
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
   }, [maybeAutoSync])
 
   const openInvoiceDocuments = async (card: SalesOrderPreparationCardInfo) => {
