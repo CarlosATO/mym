@@ -82,28 +82,52 @@ export function BsaleReplenishmentTopbarControl({ isSuperUsuario }: Props) {
 
   const isRunning = syncing || latestRun?.status === 'STARTED'
   const status = syncing ? 'STARTED' : latestRun?.status
+  const formattedDate = loading ? 'Cargando…' : isRunning ? 'Sincronizando…' : formatRunDate(latestRun)
+
+  const dotColor =
+    status === 'COMPLETED'
+      ? 'bg-emerald-500'
+      : status === 'PARTIAL'
+        ? 'bg-amber-500'
+        : status === 'FAILED'
+          ? 'bg-red-500'
+          : status === 'STARTED'
+            ? 'bg-sky-500'
+            : 'bg-slate-400'
 
   return (
-    <div className="flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-theme-border/60 bg-theme-surface/40 px-1.5 text-[10px]" title="Última sincronización Bsale">
-      <span className={`flex items-center ${statusClass(status)}`} aria-hidden="true">
-        {isRunning ? <RefreshCw className="h-3 w-3 animate-spin" /> : status === 'COMPLETED' ? <CheckCircle2 className="h-3 w-3" /> : status === 'PARTIAL' || status === 'FAILED' ? <AlertCircle className="h-3 w-3" /> : <Clock3 className="h-3 w-3" />}
-      </span>
-      <span className="hidden whitespace-nowrap text-theme-text-muted sm:inline">Última sync</span>
-      <span className="whitespace-nowrap font-medium text-theme-text">
-        {loading ? '…' : isRunning ? 'Sincronizando…' : formatRunDate(latestRun)}
-      </span>
-      {!loading && !isRunning && <span className={`hidden whitespace-nowrap font-semibold sm:inline ${statusClass(status)}`}>{statusLabel(status)}</span>}
-      {isSuperUsuario && (
+    <div className="flex items-center">
+      {isSuperUsuario ? (
         <button
           type="button"
           onClick={handleSync}
           disabled={Boolean(isRunning)}
-          className="ml-0.5 rounded px-1.5 py-0.5 font-semibold text-theme-text-muted transition-colors hover:bg-theme-text/10 hover:text-theme-text disabled:cursor-not-allowed disabled:opacity-50"
+          title={`Sincronización Bsale · Última: ${formattedDate} (${statusLabel(status)}) — Clic para sincronizar`}
           aria-label={isRunning ? 'Sincronización Bsale en curso' : 'Sincronizar Bsale ahora'}
+          className="group relative flex h-8 items-center gap-1.5 rounded-full border border-theme-border/60 bg-theme-surface/60 px-2.5 text-[11px] font-medium text-theme-text-muted transition-all duration-200 hover:border-sky-500/40 hover:bg-sky-500/8 hover:text-theme-text disabled:cursor-not-allowed disabled:opacity-60"
         >
-          <span className="hidden sm:inline">{isRunning ? 'Sincronizando…' : 'Sincronizar'}</span>
-          <RefreshCw className={`h-3 w-3 sm:hidden ${isRunning ? 'animate-spin' : ''}`} aria-hidden="true" />
+          <span className="relative flex h-2 w-2 shrink-0">
+            {isRunning && (
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75" />
+            )}
+            <span className={`relative inline-flex h-2 w-2 rounded-full ${dotColor}`} />
+          </span>
+          <RefreshCw
+            className={`h-3.5 w-3.5 shrink-0 text-theme-text-muted transition-transform duration-300 group-hover:rotate-90 group-hover:text-sky-600 dark:group-hover:text-sky-400 ${isRunning ? 'animate-spin text-sky-500' : ''}`}
+            aria-hidden="true"
+          />
+          <span className="hidden md:inline whitespace-nowrap">
+            {isRunning ? 'Sincronizando…' : 'Sincronizar'}
+          </span>
         </button>
+      ) : (
+        <div
+          className="flex h-8 items-center gap-1.5 rounded-full border border-theme-border/50 bg-theme-surface/40 px-2.5 text-[11px] text-theme-text-muted"
+          title={`Última sincronización Bsale: ${formattedDate} (${statusLabel(status)})`}
+        >
+          <span className={`inline-flex h-2 w-2 rounded-full ${dotColor}`} />
+          <span className="hidden lg:inline whitespace-nowrap text-[10px]">Sync {formattedDate}</span>
+        </div>
       )}
     </div>
   )

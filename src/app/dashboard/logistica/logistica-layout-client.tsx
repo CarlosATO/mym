@@ -104,8 +104,18 @@ export function LogisticaLayoutClient({ children, profile, permissions, canAcces
   const isRouteGuidesRoute = pathname === '/dashboard/logistica/guias-ruta'
   const isMermasRoute = pathname.startsWith('/dashboard/logistica/mermas')
 
-  const activeTab = searchParams.get('tab') ?? 'inicio'
-  const activeActionId = searchParams.get('action') ?? 'resumen'
+  const defaultLanding = (canAccessPreparation || permissions.includes('system.admin') || permissions.includes('logistica.preparation.manage'))
+    ? { tab: 'preparacion_pedidos', action: 'preparacion_pedidos' }
+    : permissions.includes('logistica.stock.view')
+      ? { tab: 'consultas', action: 'stock' }
+      : permissions.includes('logistica.receptions.create')
+        ? { tab: 'movimientos', action: 'recepciones' }
+        : permissions.includes('logistica.route_guides.view')
+          ? { tab: 'movimientos', action: 'guias_ruta' }
+          : { tab: 'catalogos', action: 'bodegas' }
+
+  const activeTab = searchParams.get('tab') ?? defaultLanding.tab
+  const activeActionId = searchParams.get('action') ?? defaultLanding.action
 
   const actionPermissions: Record<string, string> = {
     bodegas: 'adquisiciones.warehouses.view',

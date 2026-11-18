@@ -17,6 +17,7 @@ type ModuleSidebarProps = {
   identity: ModuleIdentity
   navigation: { home?: ModuleNavItem; primaryAction?: ModuleNavItem; groups: ModuleNavGroup[] }
   expanded: boolean
+  railOpen?: boolean
   mobileOpen: boolean
   mobileViewport: boolean
   permissions: string[]
@@ -25,7 +26,23 @@ type ModuleSidebarProps = {
   onNavigate: () => void
 }
 
-export function ModuleSidebar({ identity, navigation, expanded, mobileOpen, mobileViewport, permissions, variant, onToggle, onNavigate }: ModuleSidebarProps) {
+function cleanShortLabel(label: string): string {
+  // Limpia prefijos numéricos como "01  Vista general" para que el texto bajo el ícono quede limpio estilo Bsale
+  return label.replace(/^\d+\s+/, '').trim()
+}
+
+export function ModuleSidebar({
+  identity,
+  navigation,
+  expanded,
+  railOpen = true,
+  mobileOpen,
+  mobileViewport,
+  permissions,
+  variant,
+  onToggle,
+  onNavigate,
+}: ModuleSidebarProps) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const location = { pathname, searchParams }
@@ -38,139 +55,295 @@ export function ModuleSidebar({ identity, navigation, expanded, mobileOpen, mobi
   const primaryAction = navigation.primaryAction && isVisible(navigation.primaryAction, permissions) ? navigation.primaryAction : null
   const toggleLabel = expanded ? 'Contraer navegación' : 'Expandir navegación'
 
+  const isVisibleOnDesktop = railOpen
+
   return (
     <aside
       id="module-sidebar"
-      inert={mobileViewport && !mobileOpen ? true : undefined}
-      aria-hidden={mobileViewport && !mobileOpen ? true : undefined}
+      inert={(mobileViewport && !mobileOpen) || (!mobileViewport && !isVisibleOnDesktop) ? true : undefined}
+      aria-hidden={(mobileViewport && !mobileOpen) || (!mobileViewport && !isVisibleOnDesktop) ? true : undefined}
+      data-width-contract={sidebarWidth}
       className={cn(
-        'fixed left-3 top-3 bottom-3 z-40 flex flex-col overflow-hidden rounded-[20px] border text-theme-sidebar-text shadow-lg transition-[width,transform] duration-200',
-        variant === 'financial'
-          ? 'border-[#AC9C8D]/40 bg-[#322D29] text-[#EFE9E1]'
-          : 'border-theme-sidebar-border bg-theme-sidebar-bg',
-        sidebarWidth,
-        mobileOpen ? 'translate-x-0 w-[244px]' : '-translate-x-[calc(100%+0.75rem)] md:translate-x-0'
+        'fixed left-0 top-12 bottom-0 z-30 flex w-[92px] flex-col overflow-hidden bg-theme-bg text-theme-text transition-all duration-200 select-none',
+        mobileOpen
+          ? 'translate-x-0 w-[220px] border-r border-theme-border bg-theme-surface shadow-xl'
+          : '-translate-x-full',
+        isVisibleOnDesktop
+          ? 'md:translate-x-0 md:w-[92px] md:opacity-100'
+          : 'md:-translate-x-full md:opacity-0 md:pointer-events-none'
       )}
     >
-      <div className={cn(
-        'flex h-[76px] shrink-0 items-center border-b px-4',
-        variant === 'financial' ? 'border-[#AC9C8D]/30 bg-[#322D29]' : 'border-theme-sidebar-border bg-theme-sidebar-surface',
-        effectiveCollapsed && 'md:justify-center md:px-2',
-      )}>
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-2">
-            {identity.icon && <identity.icon className={cn('h-4 w-4 shrink-0', variant === 'financial' ? 'text-[#AC9C8D]' : 'text-theme-sidebar-accent')} />}
-            <p className={cn('truncate text-[11px] font-bold uppercase tracking-[0.22em]', variant === 'financial' ? 'text-[#AC9C8D]' : 'text-theme-sidebar-accent')}>{identity.label}</p>
-          </div>
-          {(!effectiveCollapsed || mobileOpen) && identity.subtitle && <p className={cn('mt-1 truncate text-sm font-medium', variant === 'financial' ? 'text-[#EFE9E1]' : 'text-theme-sidebar-text')}>{identity.subtitle}</p>}
+      {/* Cabecera visible solo en drawer móvil */}
+      {mobileOpen && (
+        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-theme-border/70 px-4 md:hidden">
+          {identity.icon && <identity.icon className="h-4 w-4 shrink-0 text-sky-600" />}
+          <p className="truncate text-xs font-bold uppercase tracking-wider text-theme-text">
+            {identity.label}
+          </p>
         </div>
-      </div>
+      )}
 
-      {primaryAction && <PrimaryAction item={primaryAction} collapsed={effectiveCollapsed} searchParams={searchParams} onNavigate={onNavigate} />}
+      {primaryAction && (
+        <PrimaryAction
+          item={primaryAction}
+          collapsed={effectiveCollapsed}
+          searchParams={searchParams}
+          onNavigate={onNavigate}
+        />
+      )}
 
+      {/* Rail vertical estilo Bsale (Ícono arriba + Texto corto abajo) */}
       <nav className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
-        {home && <SidebarItem item={home} location={location} collapsed={effectiveCollapsed} permissions={permissions} variant={variant} onNavigate={onNavigate} />}
-        {visibleGroups.map(group => {
-          const groupActive = group.items.some(item => isBranchActive(item, location))
-          return (
-            <div key={group.id} className="mt-5">
-              {(!effectiveCollapsed || mobileOpen) && group.label && (
-                <p className={cn('mb-1 px-3 text-[10px] font-bold uppercase tracking-[0.16em]', variant === 'financial' ? (groupActive ? 'text-[#AC9C8D]' : 'text-[#AC9C8D]/70') : (groupActive ? 'text-theme-sidebar-accent' : 'text-theme-sidebar-muted'))}>
-                  {group.label}
-                </p>
-              )}
-              {group.items.map(item => (
-                <SidebarItem key={item.id} item={item} location={location} collapsed={effectiveCollapsed} permissions={permissions} variant={variant} onNavigate={onNavigate} />
-              ))}
-            </div>
-          )
-        })}
+        {home && (
+          <SidebarItem
+            item={home}
+            location={location}
+            collapsed={effectiveCollapsed}
+            mobileOpen={mobileOpen}
+            permissions={permissions}
+            variant={variant}
+            onNavigate={onNavigate}
+          />
+        )}
+
+        {visibleGroups.map((group, groupIndex) => (
+          <div
+            key={group.id}
+            className={cn(
+              'space-y-1.5',
+              (home || groupIndex > 0) && 'pt-2 border-t border-theme-border/50'
+            )}
+          >
+            {group.items.map(item => (
+              <SidebarItem
+                key={item.id}
+                item={item}
+                location={location}
+                collapsed={effectiveCollapsed}
+                mobileOpen={mobileOpen}
+                permissions={permissions}
+                variant={variant}
+                onNavigate={onNavigate}
+              />
+            ))}
+          </div>
+        ))}
       </nav>
 
-      <div className={cn('shrink-0 border-t p-3', variant === 'financial' ? 'border-[#AC9C8D]/30 bg-[#322D29]' : 'border-theme-sidebar-border bg-theme-sidebar-surface', effectiveCollapsed && 'md:px-2')}>
+      {/* Pie con botón para ocultar completamente el riel */}
+      <div className={cn('shrink-0 border-t p-3', 'border-theme-border/50 bg-theme-bg/80', effectiveCollapsed && 'md:px-2')}>
         <button
           title={toggleLabel}
           aria-label={toggleLabel}
           aria-expanded={expanded}
           aria-controls="module-sidebar"
           onClick={onToggle}
-          className={cn('hidden w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset md:flex', variant === 'financial' ? 'text-[#AC9C8D] hover:bg-white/10 hover:text-[#EFE9E1] focus-visible:ring-[#AC9C8D]' : 'text-theme-sidebar-muted hover:bg-theme-sidebar-hover hover:text-theme-sidebar-text focus-visible:ring-theme-sidebar-accent')}
+          className="hidden w-full flex-col items-center justify-center gap-1 rounded-xl py-1.5 text-[10px] font-medium text-theme-text-muted transition-colors hover:bg-theme-text/6 hover:text-theme-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 md:flex"
         >
           {effectiveCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
-          {!effectiveCollapsed && 'Contraer menú'}
+          <span>Ocultar</span>
         </button>
       </div>
     </aside>
   )
 }
 
-function SidebarItem({ item, location, collapsed, permissions, variant, onNavigate, depth = 0 }: { item: ModuleNavItem; location: { pathname: string; searchParams: Pick<URLSearchParams, 'get' | 'has'> }; collapsed: boolean; permissions: string[]; variant: 'default' | 'financial'; onNavigate: () => void; depth?: number }) {
+function SidebarItem({
+  item,
+  location,
+  collapsed,
+  mobileOpen = false,
+  permissions,
+  variant,
+  onNavigate,
+  depth = 0,
+}: {
+  item: ModuleNavItem
+  location: { pathname: string; searchParams: Pick<URLSearchParams, 'get' | 'has'> }
+  collapsed: boolean
+  mobileOpen?: boolean
+  permissions: string[]
+  variant: 'default' | 'financial'
+  onNavigate: () => void
+  depth?: number
+}) {
   const children = (item.children ?? []).filter(child => isVisible(child, permissions))
   const childBranchActive = children.some(child => isBranchActive(child, location))
   // A parent remains visible as context, but only the selected child receives
   // the active treatment when this branch has a child selection.
   const active = isItemActive(item, location) && !childBranchActive
+  const isHighlighted = active || (depth === 0 && childBranchActive)
   const Icon = item.icon
   const href = buildNavHref(item.target, location.searchParams)
-  const itemContent = (
-    <>
-      {Icon ? <Icon className={cn('h-[17px] w-[17px] shrink-0', variant === 'financial' ? (active ? 'text-[#EFE9E1]' : 'text-[#AC9C8D] group-hover:text-[#EFE9E1]') : (active ? 'text-theme-sidebar-accent' : 'text-theme-sidebar-muted group-hover:text-theme-sidebar-text'))} /> : <span className="h-[17px] w-[17px] shrink-0" />}
-      {!collapsed && <span className="truncate">{item.label}</span>}
-      {active && !collapsed && <span className={cn('ml-auto h-1.5 w-1.5 rounded-full', variant === 'financial' ? 'bg-[#D1C7BD]' : 'bg-theme-sidebar-accent')} />}
-    </>
+  const displayLabel = cleanShortLabel(item.label)
+
+  // Sub-ítems (depth > 0): mostrar como píldora compacta debajo del padre cuando la rama está activa
+  if (depth > 0) {
+    return (
+      <Link
+        href={href}
+        title={item.label}
+        aria-label={collapsed ? item.label : undefined}
+        onClick={onNavigate}
+        className={cn(
+          'block w-full rounded-lg px-1.5 py-1 text-center text-[10px] leading-tight transition-colors',
+          active
+            ? 'bg-sky-500/15 font-bold text-sky-700 dark:text-sky-300'
+            : 'font-medium text-theme-text-muted hover:bg-theme-text/6 hover:text-theme-text'
+        )}
+      >
+        <span className="line-clamp-2">{displayLabel}</span>
+      </Link>
+    )
+  }
+
+  const itemContent = mobileOpen ? (
+    <div className="flex w-full items-center gap-3 px-2 py-1">
+      <div
+        className={cn(
+          'flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition-colors',
+          isHighlighted
+            ? 'bg-sky-500/15 text-sky-600 dark:bg-sky-400/20 dark:text-sky-300'
+            : 'text-theme-text-muted group-hover:bg-theme-text/6 group-hover:text-theme-text'
+        )}
+      >
+        {Icon && <Icon className="h-[18px] w-[18px]" />}
+      </div>
+      <span
+        className={cn(
+          'truncate text-xs',
+          isHighlighted ? 'font-bold text-sky-600 dark:text-sky-400' : 'font-medium text-theme-text'
+        )}
+      >
+        {displayLabel}
+      </span>
+    </div>
+  ) : (
+    <div className="flex w-full flex-col items-center justify-center py-1 text-center">
+      {/* Contenedor del ícono estilo Bsale */}
+      <div
+        className={cn(
+          'flex h-10 w-10 items-center justify-center rounded-xl transition-all duration-150',
+          isHighlighted
+            ? 'bg-sky-500/16 text-sky-600 shadow-2xs dark:bg-sky-400/20 dark:text-sky-300'
+            : 'text-slate-500 group-hover:bg-slate-200/70 group-hover:text-slate-800 dark:text-slate-400 dark:group-hover:bg-white/10 dark:group-hover:text-white'
+        )}
+      >
+        {Icon ? (
+          <Icon className="h-[20px] w-[20px] shrink-0" />
+        ) : (
+          <span className="text-[11px] font-bold">{displayLabel.slice(0, 2).toUpperCase()}</span>
+        )}
+      </div>
+
+      {/* Etiqueta corta centrada debajo del ícono estilo Bsale */}
+      <span
+        className={cn(
+          'mt-1 w-full px-0.5 text-center text-[10.5px] leading-[1.2] tracking-tight line-clamp-2 break-words transition-colors',
+          isHighlighted
+            ? 'font-bold text-sky-600 dark:text-sky-400'
+            : 'font-medium text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-white'
+        )}
+      >
+        {displayLabel}
+      </span>
+    </div>
   )
+
   const className = cn(
-    'group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[13px] transition-colors',
-    collapsed && 'md:justify-center md:px-2',
-    !collapsed && depth === 1 && 'pl-8',
-    !collapsed && depth >= 2 && 'pl-11',
-    item.disabled
-      ? 'cursor-not-allowed text-theme-sidebar-muted/50'
-      : active
-        ? variant === 'financial'
-          ? 'bg-[#72383D] font-semibold text-[#EFE9E1]'
-          : 'bg-theme-sidebar-active/20 font-semibold text-theme-sidebar-active-text ring-1 ring-inset ring-theme-sidebar-accent/30'
-        : variant === 'financial'
-          ? 'text-[#D1C7BD] hover:bg-white/10 hover:text-[#EFE9E1]'
-          : 'text-theme-sidebar-muted hover:bg-theme-sidebar-hover hover:text-theme-sidebar-text'
+    'group flex w-full flex-col items-center justify-center rounded-xl transition-colors',
+    item.disabled && 'cursor-not-allowed opacity-45'
   )
 
   if (item.disabled) {
-    return <div title={collapsed ? item.label : undefined} aria-label={collapsed ? item.label : undefined} className={className}>{itemContent}{children.map(child => <SidebarItem key={child.id} item={child} location={location} collapsed={collapsed} permissions={permissions} variant={variant} onNavigate={onNavigate} depth={depth + 1} />)}</div>
+    return (
+      <div
+        title={collapsed ? item.label : undefined}
+        aria-label={collapsed ? item.label : undefined}
+        className={className}
+      >
+        {itemContent}
+      </div>
+    )
   }
 
   return (
-    <>
-      <Link href={href} title={collapsed ? item.label : undefined} aria-label={collapsed ? item.label : undefined} onClick={onNavigate} className={className}>
+    <div className="space-y-1">
+      <Link
+        href={href}
+        title={collapsed ? item.label : undefined}
+        aria-label={collapsed ? item.label : undefined}
+        onClick={onNavigate}
+        className={className}
+      >
         {itemContent}
       </Link>
-      {children.map(child => <SidebarItem key={child.id} item={child} location={location} collapsed={collapsed} permissions={permissions} variant={variant} onNavigate={onNavigate} depth={depth + 1} />)}
-    </>
+      {children.length > 0 && (active || childBranchActive) && (
+        <div className="space-y-0.5 pt-0.5">
+          {children.map(child => (
+            <SidebarItem
+              key={child.id}
+              item={child}
+              location={location}
+              collapsed={collapsed}
+              mobileOpen={mobileOpen}
+              permissions={permissions}
+              variant={variant}
+              onNavigate={onNavigate}
+              depth={depth + 1}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
-function PrimaryAction({ item, collapsed, searchParams, onNavigate }: { item: ModuleNavItem; collapsed: boolean; searchParams: Pick<URLSearchParams, 'get'>; onNavigate: () => void }) {
+function PrimaryAction({
+  item,
+  collapsed,
+  searchParams,
+  onNavigate,
+}: {
+  item: ModuleNavItem
+  collapsed: boolean
+  searchParams: Pick<URLSearchParams, 'get'>
+  onNavigate: () => void
+}) {
   const Icon = item.icon
   return (
-    <div className={cn('shrink-0 py-2.5', collapsed ? 'px-2' : 'px-3')}>
+    <div className="shrink-0 px-2 pt-3 pb-1">
       <Link
         href={buildNavHref(item.target, searchParams)}
         title={collapsed ? item.label : undefined}
         aria-label={item.label}
         onClick={onNavigate}
-        className={cn('flex items-center justify-center gap-1.5 rounded-lg bg-theme-accent px-2 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-theme-accent-hover', collapsed && 'px-0')}
+        className="group flex flex-col items-center justify-center text-center"
       >
-        {Icon && <Icon className="h-4 w-4 shrink-0" />}
-        {!collapsed && <span>{item.label}</span>}
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-600 text-white shadow-xs transition-colors group-hover:bg-sky-700">
+          {Icon && <Icon className="h-5 w-5 shrink-0" />}
+        </div>
+        <span className="mt-1 text-[10px] font-bold leading-tight text-sky-700 dark:text-sky-300 line-clamp-2">
+          {cleanShortLabel(item.label)}
+        </span>
       </Link>
     </div>
   )
 }
 
-function isItemActive(item: ModuleNavItem, location: { pathname: string; searchParams: Pick<URLSearchParams, 'get' | 'has'> }) {
+function isItemActive(
+  item: ModuleNavItem,
+  location: { pathname: string; searchParams: Pick<URLSearchParams, 'get' | 'has'> }
+) {
   return matchesActive(location, item.active, item.target)
 }
 
-function isBranchActive(item: ModuleNavItem, location: { pathname: string; searchParams: Pick<URLSearchParams, 'get' | 'has'> }): boolean {
-  return isItemActive(item, location) || (item.children ?? []).some(child => isBranchActive(child, location))
+function isBranchActive(
+  item: ModuleNavItem,
+  location: { pathname: string; searchParams: Pick<URLSearchParams, 'get' | 'has'> }
+): boolean {
+  return (
+    isItemActive(item, location) ||
+    (item.children ?? []).some(child => isBranchActive(child, location))
+  )
 }

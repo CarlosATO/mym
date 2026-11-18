@@ -40,29 +40,30 @@ export function UserMenu({ profile, activeCompany, permissions }: UserMenuProps)
   }, [])
 
   const allowedAdminLinks = adminLinkDefs.filter(link => permissions.includes(link.permission))
+  const initials = `${profile.nombre?.[0] ?? ''}${profile.apellido?.[0] ?? ''}`.trim().toUpperCase() || 'U'
+  const roleLabel = profile.roles?.name?.replace(/_/g, ' ') ?? 'USUARIO'
 
   return (
     <div ref={ref} className="relative">
-      {/* ── Trigger ── */}
+      {/* ── Trigger estilo Bsale / Caylo ── */}
       <button
         onClick={() => setOpen(!open)}
         aria-expanded={open}
         aria-haspopup="menu"
-        className="group flex h-9 max-w-[240px] items-center gap-2 rounded-xl border border-theme-accent/20 bg-theme-accent/8 px-2.5 text-left text-theme-text shadow-sm transition-all duration-200 hover:border-theme-accent/40 hover:bg-theme-accent/12"
+        className="group flex h-9 max-w-[230px] items-center gap-2.5 rounded-full px-1.5 py-1 text-left text-theme-text transition-colors duration-150 hover:bg-theme-text/6"
       >
-        {/* Avatar */}
-        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-theme-accent/25 bg-theme-accent/15 text-xs font-bold uppercase text-theme-text-accent transition-colors group-hover:bg-theme-accent/20">
-          {profile.nombre?.[0] ?? 'U'}
+        {/* Avatar circular con iniciales */}
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-sky-700 text-[11px] font-bold tracking-tight text-white shadow-xs transition-transform duration-150 group-hover:scale-105">
+          {initials}
         </div>
-        <div className="truncate leading-tight">
-          <p className="max-w-[120px] truncate text-[11px] font-bold text-theme-text">
+        <div className="hidden sm:block truncate leading-tight pr-1">
+          <p className="max-w-[140px] truncate text-[11px] font-bold uppercase tracking-tight text-theme-text">
             {profile.nombre} {profile.apellido}
           </p>
-          <p className="max-w-[120px] truncate text-[9px] font-medium capitalize text-theme-text-muted/70">
-            {profile.roles?.name?.toLowerCase()?.replace('_', ' ') ?? ''}
+          <p className="max-w-[140px] truncate text-[9.5px] font-medium uppercase tracking-wider text-theme-text-muted/75">
+            {roleLabel} · CAYLO
           </p>
         </div>
-        <LucideIcons.ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-theme-text-accent transition-transform duration-200', open && 'rotate-180')} />
       </button>
 
       {/* ── Panel ── */}

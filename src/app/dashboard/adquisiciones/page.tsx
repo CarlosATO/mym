@@ -1,5 +1,5 @@
-import { AdquisicionesHome } from '@/modules/adquisiciones/components/adquisiciones-home'
+import { redirect } from 'next/navigation'
 
 export default async function AdquisicionesPage() {
-  return <AdquisicionesHome />
+  redirect('/dashboard/adquisiciones/ordenes-compra')
 }

@@ -29,18 +29,6 @@ function mermasPathMatcher(pathname: string): ActiveMatcher {
 }
 
 export const wmsNavigation: ModuleNavigation = {
-  home: {
-    id: 'inicio',
-    label: 'Inicio',
-    icon: House,
-    target: actionTarget('inicio', 'resumen'),
-    visibility: { allOf: ['module.logistica.view'] },
-    active: ({ pathname, searchParams }: NavigationLocation) => {
-      const action = searchParams.get('action')
-      if (!action) return pathname === logisticaPath
-      return action === 'resumen' || !actionIds.has(action)
-    },
-  },
   groups: [
     {
       id: 'parametros',
@@ -58,7 +46,7 @@ export const wmsNavigation: ModuleNavigation = {
         { id: 'recepciones', label: 'Recepciones', icon: PackageOpen, target: actionTarget('movimientos', 'recepciones'), active: ({ pathname, searchParams }: NavigationLocation) => pathname.startsWith('/dashboard/logistica/recepciones/') && !searchParams.has('action') || searchParams.get('action') === 'recepciones', visibility: { anyOf: ['logistica.receptions.create', 'system.admin'] } },
         { id: 'traspasos', label: 'Traspasos', icon: ArrowLeftRight, target: actionTarget('movimientos', 'traspasos'), active: actionMatcher('traspasos'), visibility: { allOf: ['system.admin'] } },
         { id: 'ajustes', label: 'Ajustes', icon: SlidersHorizontal, target: actionTarget('movimientos', 'ajustes'), active: actionMatcher('ajustes'), visibility: { allOf: ['system.admin'] } },
-         { id: 'preparacion_pedidos', label: 'Preparación de Pedidos', icon: ClipboardList, target: actionTarget('preparacion_pedidos', 'preparacion_pedidos'), active: actionMatcher('preparacion_pedidos'), visibility: { anyOf: ['logistica.preparation.manage', 'logistica.preparation.access'] } },
+         { id: 'preparacion_pedidos', label: 'Preparación de Pedidos', icon: ClipboardList, target: actionTarget('preparacion_pedidos', 'preparacion_pedidos'), active: ({ pathname, searchParams }: NavigationLocation) => searchParams.get('action') === 'preparacion_pedidos' || (pathname === logisticaPath && !searchParams.has('action')), visibility: { anyOf: ['logistica.preparation.manage', 'logistica.preparation.access'] } },
         { id: 'guias_ruta', label: 'Guías de Ruta', icon: Map, target: actionTarget('movimientos', 'guias_ruta'), active: ({ pathname, searchParams }: NavigationLocation) => pathname === '/dashboard/logistica/guias-ruta' && !searchParams.has('action') || searchParams.get('action') === 'guias_ruta', visibility: { allOf: ['logistica.route_guides.view'] } },
         { id: 'mermas', label: 'Mermas', icon: Trash2, target: { href: '/dashboard/logistica/mermas' }, active: ({ pathname }: NavigationLocation) => pathname.startsWith('/dashboard/logistica/mermas'), visibility: { allOf: ['logistica.mermas.view'] } },
       ],
@@ -69,14 +57,6 @@ export const wmsNavigation: ModuleNavigation = {
       items: [
         { id: 'stock', label: 'Stock', icon: Layers3, target: actionTarget('consultas', 'stock'), active: actionMatcher('stock'), visibility: { allOf: ['logistica.stock.view'] } },
         { id: 'kardex', label: 'Kardex', icon: History, target: actionTarget('consultas', 'kardex'), active: actionMatcher('kardex'), visibility: { allOf: ['logistica.kardex.view'] } },
-        { id: 'trazabilidad', label: 'Trazabilidad', icon: GitMerge, target: actionTarget('consultas', 'trazabilidad'), active: actionMatcher('trazabilidad'), visibility: { allOf: ['system.admin'] } },
-      ],
-    },
-    {
-      id: 'reportes',
-      label: 'Reportes',
-      items: [
-        { id: 'reportes_log', label: 'Reportes de Almacén', icon: ChartNoAxesCombined, target: actionTarget('reportes', 'reportes_log'), active: actionMatcher('reportes_log'), visibility: { allOf: ['system.admin'] } },
       ],
     },
   ],

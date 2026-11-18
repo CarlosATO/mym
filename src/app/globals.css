@@ -154,22 +154,22 @@
 }
 
 [data-theme="light"] {
-  --theme-bg: oklch(0.98 0.01 250);
-  --theme-bg-gradient-start: oklch(0.98 0.01 250);
-  --theme-bg-gradient-mid: oklch(0.96 0.01 250);
-  --theme-bg-gradient-end: oklch(0.94 0.01 250);
-  --theme-surface: oklch(1 0 0);
-  --theme-surface-hover: oklch(0.97 0 0);
-  --theme-accent: oklch(0.55 0.18 250);
-  --theme-accent-hover: oklch(0.50 0.18 250);
-  --theme-accent-muted: oklch(0.55 0.18 250 / 0.1);
-  --theme-text: oklch(0.20 0.02 250);
-  --theme-text-muted: oklch(0.40 0.02 250);
-  --theme-text-accent: oklch(0.30 0.10 250);
-  --theme-border: oklch(0.1 0.1 0.1 / 0.1);
-  --theme-border-accent: oklch(0.55 0.18 250 / 0.2);
-  --theme-glow: oklch(0.55 0.18 250 / 0.05);
-  --theme-glow-intense: oklch(0.55 0.18 250 / 0.15);
+  --theme-bg: #F4F7FA;
+  --theme-bg-gradient-start: #F4F7FA;
+  --theme-bg-gradient-mid: #F4F7FA;
+  --theme-bg-gradient-end: #EEF2F6;
+  --theme-surface: #FFFFFF;
+  --theme-surface-hover: #F8FAFC;
+  --theme-accent: #0284C7;
+  --theme-accent-hover: #0369A1;
+  --theme-accent-muted: rgba(2, 132, 199, 0.10);
+  --theme-text: #0F172A;
+  --theme-text-muted: #64748B;
+  --theme-text-accent: #0284C7;
+  --theme-border: #E2E8F0;
+  --theme-border-accent: rgba(2, 132, 199, 0.25);
+  --theme-glow: rgba(2, 132, 199, 0.05);
+  --theme-glow-intense: rgba(2, 132, 199, 0.15);
 }
 
 [data-theme="light"] {
@@ -178,15 +178,15 @@
   --theme-panel-hover: var(--theme-surface-hover);
   --theme-primary: var(--theme-accent);
   --theme-secondary: var(--theme-surface-hover);
-  --theme-sidebar-bg: oklch(0.25 0.05 250);
-  --theme-sidebar-surface: oklch(0.29 0.06 250);
-  --theme-sidebar-border: oklch(1 0 0 / 0.14);
-  --theme-sidebar-text: oklch(0.98 0.01 250);
-  --theme-sidebar-muted: oklch(0.82 0.03 250);
-  --theme-sidebar-hover: oklch(0.34 0.07 250);
-  --theme-sidebar-active: oklch(0.66 0.16 230);
-  --theme-sidebar-active-text: oklch(0.98 0.01 250);
-  --theme-sidebar-accent: oklch(0.72 0.14 220);
+  --theme-sidebar-bg: #F4F7FA;
+  --theme-sidebar-surface: #FFFFFF;
+  --theme-sidebar-border: #E2E8F0;
+  --theme-sidebar-text: #0F172A;
+  --theme-sidebar-muted: #64748B;
+  --theme-sidebar-hover: rgba(2, 132, 199, 0.08);
+  --theme-sidebar-active: #0284C7;
+  --theme-sidebar-active-text: #0284C7;
+  --theme-sidebar-accent: #0284C7;
   --sidebar: var(--theme-sidebar-bg);
   --sidebar-foreground: var(--theme-sidebar-text);
   --sidebar-primary: var(--theme-sidebar-active);
@@ -265,4 +265,126 @@ input[type="number"] {
 .hide-scrollbar {
   -ms-overflow-style: none;  /* IE y Edge */
   scrollbar-width: none;  /* Firefox */
+}
+
+/* Unificación de paleta Caylo / Bsale y corrección global de contraste en tablas y cabeceras */
+.bg-\[\#EFE9E1\],
+.bg-\[\#EFE9E1\]\/95,
+.bg-\[\#EAE2D9\],
+.bg-\[\#F0ECE8\],
+.bg-\[\#F5F0EA\],
+.bg-\[\#F7F4F0\] {
+  background-color: var(--theme-bg) !important;
+}
+
+.bg-\[\#FCFBF9\],
+.bg-\[\#F8F5F1\] {
+  background-color: var(--theme-surface) !important;
+}
+
+.bg-\[\#F1E4DE\],
+.bg-\[\#F5EDE9\],
+.bg-\[\#F5EDEE\] {
+  background-color: rgba(2, 132, 199, 0.08) !important;
+}
+
+.hover\:bg-\[\#F3EFE9\]:hover,
+.hover\:bg-\[\#F8F5F1\]:hover,
+.hover\:bg-\[\#F5F0EA\]:hover {
+  background-color: var(--theme-surface-hover) !important;
+}
+
+.bg-\[\#72383D\],
+.hover\:bg-\[\#612F34\]:hover,
+.hover\:bg-\[\#5D2E32\]:hover {
+  background-color: #0284C7 !important;
+}
+
+/* Cabeceras de tabla y barras superiores que antes eran café oscuro pasan a gris pizarra suave con texto nítido */
+.bg-\[\#322D29\] {
+  background-color: #F1F5F9 !important;
+  color: #1E293B !important;
+}
+
+[data-theme="dark"] .bg-\[\#322D29\] {
+  background-color: #1E293B !important;
+  color: #F8FAFC !important;
+}
+
+/* Textos claros heredados (#EFE9E1) sobre cabeceras o fondos claros pasan a texto oscuro de alto contraste */
+.text-\[\#EFE9E1\],
+.hover\:text-\[\#EFE9E1\]:hover {
+  color: #1E293B !important;
+}
+
+[data-theme="dark"] .text-\[\#EFE9E1\],
+[data-theme="dark"] .hover\:text-\[\#EFE9E1\]:hover {
+  color: #F8FAFC !important;
+}
+
+/* Excepto cuando el elemento es un botón primario azul (.bg-[#72383D]), donde el texto debe ser blanco puro */
+.bg-\[\#72383D\].text-\[\#EFE9E1\],
+.bg-\[\#72383D\] .text-\[\#EFE9E1\] {
+  color: #FFFFFF !important;
+}
+
+.text-\[\#72383D\],
+.hover\:text-\[\#72383D\]:hover {
+  color: #0284C7 !important;
+}
+
+.text-\[\#322D29\],
+.text-\[\#322D29\]\/80,
+.text-\[\#322D29\]\/70,
+.text-\[\#322D29\]\/65,
+.text-\[\#322D29\]\/60,
+.text-\[\#322D29\]\/55,
+.text-\[\#6D625B\] {
+  color: var(--theme-text) !important;
+}
+
+/* Subtítulos, etiquetas secundarias e íconos que usaban tonos arena pálidos (#AC9C8D / #D1C7BD) */
+.text-\[\#AC9C8D\],
+.text-\[\#AC9C8D\]\/75,
+.text-\[\#AC9C8D\]\/70,
+.text-\[\#D1C7BD\] {
+  color: #475569 !important;
+}
+
+[data-theme="dark"] .text-\[\#AC9C8D\],
+[data-theme="dark"] .text-\[\#AC9C8D\]\/75,
+[data-theme="dark"] .text-\[\#AC9C8D\]\/70,
+[data-theme="dark"] .text-\[\#D1C7BD\] {
+  color: #94A3B8 !important;
+}
+
+.placeholder\:text-\[\#AC9C8D\]::placeholder {
+  color: #64748B !important;
+}
+
+/* Contraste garantizado en todos los encabezados de tablas del sistema */
+thead th,
+thead tr {
+  color: #334155;
+}
+
+[data-theme="dark"] thead th,
+[data-theme="dark"] thead tr {
+  color: #E2E8F0;
+}
+
+.border-\[\#D1C7BD\],
+.border-\[\#DDD4CA\],
+.border-\[\#E5DDD4\],
+.border-\[\#AC9C8D\],
+.border-\[\#AC9C8D\]\/35,
+.border-\[\#AC9C8D\]\/40,
+.border-\[\#AC9C8D\]\/55,
+.border-\[\#72383D\]\/25 {
+  border-color: var(--theme-border) !important;
+}
+
+.border-\[\#72383D\],
+.border-l-\[\#72383D\] {
+  border-color: #0284C7 !important;
 }

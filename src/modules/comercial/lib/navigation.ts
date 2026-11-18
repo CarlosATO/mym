@@ -4,13 +4,6 @@ import type { BreadcrumbValue, ModuleNavigation } from '@/components/layout/modu
 const comercialBase = '/dashboard/comercial'
 
 export const comercialNavigation: ModuleNavigation = {
-  home: {
-    id: 'inicio',
-    label: 'Inicio',
-    icon: Home,
-    target: { href: comercialBase },
-    active: { pathname: { exact: comercialBase } },
-  },
   groups: [
     {
       id: 'gestion-comercial',

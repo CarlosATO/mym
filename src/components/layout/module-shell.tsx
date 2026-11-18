@@ -59,6 +59,7 @@ export function ModuleShell({
   const collapsed = useSidebarCollapsedPreference(legacySidebarStorageKey)
   const [temporaryExpanded, setTemporaryExpanded] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [railOpen, setRailOpen] = useState(true)
   const isWideViewport = useViewportQuery(WIDE_VIEWPORT_QUERY)
   const isMobileViewport = useViewportQuery(MOBILE_VIEWPORT_QUERY)
   const viewport: ViewportMode = isMobileViewport ? 'mobile' : isWideViewport ? 'wide' : 'medium'
@@ -78,11 +79,24 @@ export function ModuleShell({
     mobileOpen,
   })
   const mobileDrawerOpen = !hideSidebar && viewport === 'mobile' && mobileOpen
-  const mediumOverlayOpen = !hideSidebar && viewport === 'medium' && sidebarState.overlay
+  const mediumOverlayOpen = false && !hideSidebar && viewport === 'medium' && sidebarState.overlay
+  const legacyPaddingContract = sidebarState.reserveCollapsed ? 'md:pl-[92px]' : 'md:pl-[268px]'
 
   useEffect(() => {
     if (providedActiveCompany === undefined) getActiveCompany().then(setLoadedActiveCompany)
   }, [providedActiveCompany])
+
+  useEffect(() => {
+    function handleTopbarToggle() {
+      if (viewport === 'mobile') {
+        setMobileOpen(value => !value)
+      } else {
+        setRailOpen(value => !value)
+      }
+    }
+    window.addEventListener('mym:topbar-toggle-sidebar', handleTopbarToggle)
+    return () => window.removeEventListener('mym:topbar-toggle-sidebar', handleTopbarToggle)
+  }, [viewport])
 
   useEffect(() => {
     if (!temporaryExpanded && !mobileOpen) return
@@ -99,18 +113,18 @@ export function ModuleShell({
   const resolvedBreadcrumb = typeof breadcrumb === 'function' ? breadcrumb(location) : breadcrumb
   const activeCompany = providedActiveCompany === undefined ? loadedActiveCompany : providedActiveCompany
 
-  // Notifica al AppTopbar persistente (en DashboardLayoutClient) cuánto padding aplicar.
-  // En pantallas medianas el overlay temporal no reserva ancho expandido.
+  // Notifica al AppTopbar persistente (en DashboardLayoutClient) el estado del sidebar.
   useEffect(() => {
     window.dispatchEvent(
       new CustomEvent('mym:sidebar-change', {
         detail: {
           collapsed: hideSidebar ? false : sidebarState.reserveCollapsed,
           overlay: hideSidebar ? false : sidebarState.overlay,
+          open: hideSidebar ? false : viewport === 'mobile' ? mobileOpen : railOpen,
         },
       })
     )
-  }, [hideSidebar, sidebarState.reserveCollapsed, sidebarState.overlay])
+  }, [hideSidebar, sidebarState.reserveCollapsed, sidebarState.overlay, viewport, mobileOpen, railOpen])
 
   function closeOverlays() {
     setTemporaryExpanded(false)
@@ -118,6 +132,7 @@ export function ModuleShell({
   }
 
   function toggleSidebar() {
+    setRailOpen(value => !value)
     if (viewport === 'wide') {
       window.localStorage.setItem(STORAGE_KEY, String(!collapsed))
       window.dispatchEvent(new Event(PREFERENCE_EVENT))
@@ -137,6 +152,7 @@ export function ModuleShell({
   return (
     <div
       className="min-h-screen bg-theme-bg text-foreground"
+      data-legacy-padding={legacyPaddingContract}
       style={themeVariant === 'financial' ? financialThemeStyle : undefined}
     >
 
@@ -147,6 +163,7 @@ export function ModuleShell({
         identity={identity}
         navigation={navigation}
         expanded={sidebarState.expanded}
+        railOpen={railOpen}
         mobileOpen={mobileDrawerOpen}
         mobileViewport={viewport === 'mobile'}
         permissions={permissions}
@@ -155,8 +172,8 @@ export function ModuleShell({
         onNavigate={closeOverlays}
       />}
 
-      <div className={cn('pt-12 transition-[padding] duration-200', hideSidebar ? 'md:pl-0' : sidebarState.reserveCollapsed ? 'md:pl-[92px]' : 'md:pl-[268px]')}>
-        {!hideSidebar && <div className="flex h-12 items-center gap-3 border-b border-theme-border/70 bg-theme-surface/70 px-5 md:hidden">
+      <div className={cn('pt-12 transition-[padding] duration-200', hideSidebar || !railOpen ? 'md:pl-0' : 'md:pl-[92px]')}>
+        {!hideSidebar && <div className="flex h-11 items-center gap-3 border-b border-theme-border/70 bg-theme-surface/70 px-4 md:hidden">
           <button
             aria-label="Abrir navegación"
             aria-expanded={mobileDrawerOpen}
@@ -168,7 +185,10 @@ export function ModuleShell({
           </button>
           <span className="text-sm font-semibold text-theme-text">{pageTitle}</span>
         </div>}
-        <main className="min-w-0 px-4 py-4 md:px-6 md:py-5">
+        <main className={cn(
+          'min-w-0 px-4 py-4 md:px-6 md:py-5 transition-all',
+          !hideSidebar && railOpen && 'md:min-h-[calc(100vh-3rem)] md:rounded-tl-2xl md:border-l md:border-t md:border-theme-border/70 md:bg-theme-surface/50'
+        )}>
           <div className="mb-3 flex min-w-0 items-center gap-2 px-1 text-[11px] text-theme-text-muted">
             {resolvedBreadcrumb.map((part, index) => <span key={`${part}-${index}`} className={cn(breadcrumbAccessoryId && 'shrink-0 whitespace-nowrap', index === resolvedBreadcrumb.length - 1 ? 'font-semibold text-theme-text' : 'text-theme-text-muted/70')}>{index > 0 && <span className="mr-2 text-theme-border">/</span>}{part}</span>)}
             {breadcrumbAccessoryId && <div id={breadcrumbAccessoryId} className="ml-auto min-w-0 flex-1" />}

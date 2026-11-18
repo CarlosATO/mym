@@ -32,13 +32,6 @@ function prefix(pathname: string) {
 }
 
 export const adquisicionesNavigation: ModuleNavigation = {
-  home: {
-    id: 'inicio',
-    label: 'Inicio',
-    icon: icons.home,
-    target: { href: routes.home },
-    active: exact(routes.home),
-  },
   groups: [
     {
       id: 'catalogos',
