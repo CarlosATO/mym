@@ -124,7 +124,10 @@ function baseIdentity(card: PersistedPreparationCard): PreparationDetectionCardI
   }
 }
 
-export async function getSalesOrderPreparationCommercialAlert(cardId: string): Promise<{
+export async function getSalesOrderPreparationCommercialAlert(
+  cardId: string,
+  options?: { bypassCache?: boolean },
+): Promise<{
   data: PreparationCommercialAlert | null
   error: string | null
 }> {
@@ -185,7 +188,11 @@ export async function getSalesOrderPreparationCommercialAlert(cardId: string): P
     ?? snapshotVersion(persistedCard, (lines ?? []) as PersistedPreparationLine[])
   const result = await detectPreparationCommercialChange(
     { card: identity, knownVersion },
-    { provider: createBsalePreparationCommercialProvider(), authorize: () => undefined },
+    {
+      provider: createBsalePreparationCommercialProvider(),
+      authorize: () => undefined,
+      useCache: !options?.bypassCache,
+    },
   )
   return { data: serializeAlert(result), error: null }
 }

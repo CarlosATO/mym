@@ -10,6 +10,11 @@ import { chileToday } from '@/lib/integraciones/invoice-emission-contract'
 import { extractBsaleRelationIdFromHref, parseCommerciallyBlocked } from '@/lib/integraciones/bsale-client-commercial-normalization'
 import { getSafeHttpsHostname, validateBsalePdfResponseUrl, validateBsalePdfUrl, validateBsaleRedirectUrl } from '@/lib/integraciones/invoice-print-assistant'
 import { requirePreparationCardAccess, requirePreparationCardMoveAuthorization, requirePreparationLineConfirmationAuthorization, requireWmsPermission, type WmsAuthorization } from './authorization'
+import { getSalesOrderPreparationCommercialAlert } from './sales-order-preparation-commercial'
+import {
+  PREPARATION_COMMERCIAL_CHANGE_AUDIT_BLOCK_MESSAGE,
+  PREPARATION_COMMERCIAL_UNAVAILABLE_AUDIT_BLOCK_MESSAGE,
+} from '@/modules/logistica/preparacion-pedidos/preparation-line-validation'
 
 function logPreparationDiagnostics(label: string, detail: Record<string, unknown>) {
   if (process.env.NODE_ENV !== 'production') {
@@ -2070,6 +2075,31 @@ export async function moveSalesOrderPreparationCard(params: {
     }
     if (auth.isOperatorBodega && !['PENDING_ROUTE_PREP', 'IN_PREPARATION', 'IN_AUDIT', 'INCIDENTS'].includes(params.toStatus)) {
       return { ok: false, error: 'No autorizado para mover a esta etapa.' }
+    }
+
+    // -----------------------------------------------------------------------
+    // 2b. Si avanza a Auditoría, verificar cambios comerciales EN VIVO en Bsale
+    //     (sin caché) antes de invocar la RPC. Fail-closed ante UNAVAILABLE,
+    //     timeouts o cualquier estado distinto de UNCHANGED verificado en vivo.
+    // -----------------------------------------------------------------------
+    if (params.toStatus === 'IN_AUDIT') {
+      const commercialAlertResult = await getSalesOrderPreparationCommercialAlert(params.cardId, { bypassCache: true })
+      if (commercialAlertResult.error || !commercialAlertResult.data) {
+        return {
+          ok: false,
+          error: commercialAlertResult.error || PREPARATION_COMMERCIAL_UNAVAILABLE_AUDIT_BLOCK_MESSAGE,
+        }
+      }
+      const alertStatus = commercialAlertResult.data.status
+      if (alertStatus === 'CHANGED') {
+        return { ok: false, error: PREPARATION_COMMERCIAL_CHANGE_AUDIT_BLOCK_MESSAGE }
+      }
+      if (alertStatus !== 'UNCHANGED' || commercialAlertResult.data.verificationSource !== 'LIVE_BSALE') {
+        return {
+          ok: false,
+          error: commercialAlertResult.data.detail || PREPARATION_COMMERCIAL_UNAVAILABLE_AUDIT_BLOCK_MESSAGE,
+        }
+      }
     }
 
     // -----------------------------------------------------------------------

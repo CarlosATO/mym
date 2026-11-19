@@ -1,6 +1,7 @@
 'use client'
 
 import { X, MapPin, Package, User, FileText, Printer, Building2, Hash, AlertTriangle, LockKeyhole, CheckCircle2, Loader2, CheckCheck } from 'lucide-react'
+import { toast } from 'sonner'
 import { SalesOrderPreparationCardInfo, SalesOrderPreparationItem, SalesOrderPreparationLine, confirmSalesOrderPreparationLine, getSalesOrderClientData, SalesOrderClientData, getSalesOrderPreparationLines, getSalesOrderPreparationMovements, SalesOrderPreparationMovement } from '@/app/actions/logistica/sales-order-preparation'
 import { acceptSalesOrderPreparationCommercialChanges, type CommercialAcceptanceResult } from '@/app/actions/logistica/sales-order-preparation-commercial-acceptance'
 import { generatePreparationOrdersPdf, openPreparationOrdersPdf } from '@/lib/pdf/generate-preparation-orders-pdf'
@@ -8,7 +9,11 @@ import { Fragment, useState, useEffect, useRef, useMemo } from 'react'
 import { MOVEMENT_RULES } from './movement-rules'
 import { parseDateOnly } from './preparation-board-utils'
 import { PREPARATION_INCIDENT_REASONS } from './preparation-incidents'
-import { getPreparationLineValidation } from './preparation-line-validation'
+import {
+  evaluatePreparationAuditEligibility,
+  getPreparationLineValidation,
+  PREPARATION_INCIDENTS_AUDIT_BLOCK_MESSAGE,
+} from './preparation-line-validation'
 import { canClaimPreparation as canClaimPreparationView, canTakeoverPreparation as canTakeoverPreparationView, isPreparationLockError, isPreparationReadOnly } from './preparation-lock-policy'
 import { PreparationCommercialChangeAlert, PreparationCommercialPreparationNote } from './preparation-commercial-change-alert'
 import type { PreparationCommercialAlert } from '@/app/actions/logistica/sales-order-preparation-commercial'
@@ -31,6 +36,7 @@ interface SalesOrderDrawerProps {
   onClose: () => void
   onTransition: (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string) => Promise<{ ok: boolean; error?: string }>
   commercialAlert?: PreparationCommercialAlert | null
+  openCommercialIncidentCount?: number
   onCommercialAcceptanceSuccess?: (cardId: string) => void
 }
 
@@ -110,6 +116,7 @@ export function SalesOrderDrawer({
   onClose,
   onTransition,
   commercialAlert = null,
+  openCommercialIncidentCount = 0,
   onCommercialAcceptanceSuccess,
 }: SalesOrderDrawerProps) {
   const [fallbackClientData, setFallbackClientData] = useState<SalesOrderClientData | null>(null)
@@ -137,7 +144,6 @@ export function SalesOrderDrawer({
   const [registerAllProgress, setRegisterAllProgress] = useState<{ current: number; total: number } | null>(null)
   const inFlightLineConfirmsRef = useRef<Set<string>>(new Set())
   const [isTakingPreparation, setIsTakingPreparation] = useState(false)
-  const [auditSummaryOpen, setAuditSummaryOpen] = useState(false)
   const [isAcceptingCommercialChanges, setIsAcceptingCommercialChanges] = useState(false)
   const [commercialAcceptanceError, setCommercialAcceptanceError] = useState<string | null>(null)
 
@@ -179,7 +185,6 @@ export function SalesOrderDrawer({
     setLineDrafts({})
     setIncidentLine(null)
     setIsTakingPreparation(false)
-    setAuditSummaryOpen(false)
     setIsAcceptingCommercialChanges(false)
     setCommercialAcceptanceError(null)
     setSavingLineIds({})
@@ -291,12 +296,8 @@ export function SalesOrderDrawer({
       return
     }
     if (toStatus === 'IN_AUDIT' && card?.status === 'IN_PREPARATION') {
-      if (pendingLines.length > 0) {
-        setMoveError(`Faltan ${pendingLines.length} producto${pendingLines.length === 1 ? '' : 's'} por confirmar.`)
-        return
-      }
-      if (incidentLines.length > 0) {
-        setAuditSummaryOpen(true)
+      if (!auditEligibility.canSendToAudit) {
+        setMoveError(auditEligibility.message || PREPARATION_INCIDENTS_AUDIT_BLOCK_MESSAGE)
         return
       }
     }
@@ -331,6 +332,11 @@ export function SalesOrderDrawer({
 
   const operationalLines = card?.status === 'IN_PREPARATION' ? preparationLines : []
   const { pendingLines, incidentLines } = getPreparationLineValidation(operationalLines)
+  const auditEligibility = evaluatePreparationAuditEligibility({
+    lines: operationalLines,
+    openCommercialIncidentCount,
+    commercialAlertStatus: commercialAlert?.status ?? null,
+  })
   const reasonLabel = (reason: string) => ({
     SIN_STOCK: 'Sin stock', STOCK_INSUFICIENTE: 'Stock insuficiente', PRODUCTO_DANADO: 'Producto dañado',
     PRODUCTO_VENCIDO_NO_APTO: 'Producto vencido / no apto', ERROR_PEDIDO: 'Error de pedido',
@@ -394,6 +400,11 @@ export function SalesOrderDrawer({
       }
 
       onPreparationLineChange(result.data)
+      if (result.data.line_status === 'INCIDENT' || result.data.excluded_from_dispatch) {
+        toast.warning('Preparación con incidencias', {
+          description: PREPARATION_INCIDENTS_AUDIT_BLOCK_MESSAGE,
+        })
+      }
       setLineDrafts(current => {
         const next = { ...current }
         delete next[line.id]
@@ -671,24 +682,6 @@ export function SalesOrderDrawer({
           </div>
         </div>
       )}
-      {auditSummaryOpen && (
-        <div className="fixed inset-0 z-[65] flex items-center justify-center bg-[#322D29]/35 p-4" role="dialog" aria-modal="true">
-          <div className="w-full max-w-md rounded-lg border border-[#D1C7BD] bg-white p-5 shadow-2xl">
-            <h3 className="text-sm font-bold text-theme-text">Confirmar envío a Auditoría</h3>
-            <p className="mt-2 text-xs leading-relaxed text-theme-text-muted">Esta preparación contiene diferencias. Las incidencias quedarán pendientes de gestión administrativa. La Nota de Venta será enviada a Auditoría con las cantidades preparadas.</p>
-            <div className="mt-3 rounded border border-[#DDD4CA] bg-[#FCFBF9] p-3 text-xs text-theme-text">
-              <p>Líneas completas: <strong>{operationalLines.filter(line => line.line_status === 'CONFIRMED').length}</strong></p>
-              <p>Líneas con diferencia: <strong>{incidentLines.length}</strong></p>
-              <p>Unidades solicitadas: <strong>{operationalLines.reduce((sum, line) => sum + line.requested_quantity, 0)}</strong></p>
-              <p>Unidades preparadas: <strong>{operationalLines.reduce((sum, line) => sum + (line.prepared_quantity ?? 0), 0)}</strong></p>
-            </div>
-            <div className="mt-4 flex gap-2">
-              <button type="button" onClick={() => setAuditSummaryOpen(false)} className="flex-1 rounded border border-[#D1C7BD] px-3 py-2 text-xs font-semibold text-theme-text">Cancelar</button>
-              <button type="button" onClick={() => { setAuditSummaryOpen(false); void executeMove('IN_AUDIT') }} disabled={isMoving} className="flex-1 rounded bg-purple-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Enviar a Auditoría</button>
-            </div>
-          </div>
-        </div>
-      )}
       <div 
         className="fixed inset-0 bg-[#322D29]/35 backdrop-blur-sm z-50 transition-opacity"
         onClick={onClose} 
@@ -775,6 +768,13 @@ export function SalesOrderDrawer({
               </div>
 
               <PreparationCommercialPreparationNote alert={commercialAlert} />
+
+              {isPreparation && (incidentLines.length > 0 || openCommercialIncidentCount > 0) && (
+                <div role="status" className="mb-3 flex items-start gap-2.5 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 text-xs leading-relaxed text-amber-900">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                  <p>{PREPARATION_INCIDENTS_AUDIT_BLOCK_MESSAGE}</p>
+                </div>
+              )}
 
               <div className="overflow-x-auto rounded-lg border border-[#DDD4CA] bg-white shadow-xs">
                 <table className={`w-full border-collapse text-left ${isPreparation ? 'min-w-[860px]' : 'min-w-[620px]'}`}>
@@ -1064,9 +1064,19 @@ export function SalesOrderDrawer({
                     </div>
                   ) : card.status === 'IN_PREPARATION' ? (
                     <div className="space-y-2">
-                      <button onClick={() => handleMove('IN_AUDIT', MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.backward, MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.label)} disabled={isMoving || isReadOnly} className="w-full rounded-lg bg-purple-600 px-3 py-2 text-xs font-bold text-white shadow-xs transition-colors hover:bg-purple-700 disabled:opacity-50">
+                      <button
+                        onClick={() => handleMove('IN_AUDIT', MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.backward, MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.label)}
+                        disabled={isMoving || isReadOnly || !auditEligibility.canSendToAudit}
+                        title={auditEligibility.message ?? undefined}
+                        className="w-full rounded-lg bg-purple-600 px-3 py-2 text-xs font-bold text-white shadow-xs transition-colors hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
                         {MOVEMENT_RULES.IN_PREPARATION.IN_AUDIT.label}
                       </button>
+                      {!auditEligibility.canSendToAudit && auditEligibility.message && (
+                        <p className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-snug text-amber-900">
+                          {auditEligibility.message}
+                        </p>
+                      )}
                       <button onClick={() => handleMove('PENDING_ROUTE_PREP', MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.backward, MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.label)} disabled={isMoving || isReadOnly} className="w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 shadow-xs transition-colors hover:bg-amber-100 disabled:opacity-50">
                         {MOVEMENT_RULES.IN_PREPARATION.PENDING_ROUTE_PREP.label}
                       </button>

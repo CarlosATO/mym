@@ -125,7 +125,10 @@ import { SalesOrderAuditDrawer } from '@/modules/logistica/auditoria/sales-order
 import { PreparationCommercialIncidentsDialog } from './preparation-commercial-incidents-dialog'
 import { getPreparationColumnId, isCommercialIncidentMirror, type PreparationReadinessLoadState } from './preparation-route-readiness'
 import { buildInvoiceDraftPayload, type InvoiceCommercialSelection } from './invoice-commercial'
-import { getPreparationLineValidation } from './preparation-line-validation'
+import {
+  evaluatePreparationAuditEligibility,
+  PREPARATION_INCIDENTS_AUDIT_BLOCK_MESSAGE,
+} from './preparation-line-validation'
 import { usePreparationCommercialAlerts } from './use-preparation-commercial-alerts'
 import type { PreparationCommercialAlert } from '@/app/actions/logistica/sales-order-preparation-commercial'
 
@@ -1841,23 +1844,32 @@ export function SalesOrderPreparationPanel({
           return
         }
 
-        const { pendingLines, incidentLines } = getPreparationLineValidation(linesResult.data)
-        if (pendingLines.length > 0) {
-          toast.error('No se puede enviar a auditoría', {
-            description: `La Nota de Venta #${card.nv_folio} tiene productos con cantidades pendientes de confirmar. Abre la tarjeta y confirma todas las líneas antes de enviarla a auditoría.`,
-          })
-          return
-        }
-        if (incidentLines.length > 0) {
-          toast.error('Esta Nota de Venta tiene incidencias de preparación', {
-            description: 'Abre la tarjeta para revisarlas antes de enviarla a auditoría.',
-          })
+        const eligibility = evaluatePreparationAuditEligibility({
+          lines: linesResult.data,
+          openCommercialIncidentCount: commercialIncidentCounts[card.card_id] ?? 0,
+          commercialAlertStatus: commercialAlerts[card.card_id]?.status ?? null,
+        })
+        if (!eligibility.canSendToAudit) {
+          if (eligibility.reason === 'PENDING_LINES') {
+            toast.error('No se puede enviar a auditoría', {
+              description: `La Nota de Venta #${card.nv_folio} tiene productos con cantidades pendientes de confirmar. Abre la tarjeta y confirma todas las líneas antes de enviarla a auditoría.`,
+            })
+          } else if (eligibility.reason === 'INCIDENT_LINES' || eligibility.reason === 'OPEN_INCIDENTS') {
+            toast.error('Preparación con incidencias', {
+              description: eligibility.message || PREPARATION_INCIDENTS_AUDIT_BLOCK_MESSAGE,
+            })
+          } else {
+            toast.error('No se puede enviar a auditoría', {
+              description: eligibility.message || `La Nota de Venta #${card.nv_folio} tiene diferencias comerciales pendientes de aceptar.`,
+            })
+          }
           return
         }
       } catch {
         toast.error('No se puede verificar la preparación', {
           description: `La Nota de Venta #${card.nv_folio} no pudo validar sus líneas de preparación. Abre la tarjeta para revisar sus líneas antes de enviarla a auditoría.`,
         })
+        return
       } finally {
         auditValidationCardIdsRef.current.delete(card.card_id)
       }
@@ -2565,6 +2577,7 @@ export function SalesOrderPreparationPanel({
           onClose={() => setSelectedCard(null)}
            onTransition={transitionCard}
            commercialAlert={selectedCard ? commercialAlerts[selectedCard.card_id] ?? null : null}
+           openCommercialIncidentCount={selectedCard ? commercialIncidentCounts[selectedCard.card_id] ?? 0 : 0}
            onCommercialAcceptanceSuccess={handleCommercialAcceptanceSuccess}
           />
       )}
