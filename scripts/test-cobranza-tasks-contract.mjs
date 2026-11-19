@@ -10,7 +10,7 @@ test('la agenda de tareas vive en el header y precede a los filtros', () => {
   assert.match(view, /const pendingTasks = buildCobranzaTasks\(clients, workflow, today\)/)
   assert.match(view, /<PendingTasksPanel tasks=\{pendingTasks\}/)
   assert.match(view, /No hay tareas pendientes para hoy\./)
-  assert.ok(view.indexOf('<PendingTasksPanel') < view.indexOf('className="mt-2.5 flex flex-wrap items-center gap-1.5 border-b'))
+  assert.ok(view.indexOf('<PendingTasksPanel') < view.indexOf('className="flex flex-none flex-wrap items-center gap-1.5 border-b'))
 })
 
 test('seleccionar una tarea registra selectedTask y localiza, sin abrir drawer', () => {
@@ -32,7 +32,7 @@ test('seleccionar no abre el ClientPanel; sólo Abrir cliente lo hace', () => {
 test('la tarjeta localizada recibe id, bandera locate y animación no agresiva', () => {
   assert.match(view, /id=\{isOverlay \? undefined : `collection-card-\$\{client\.clientId\}`\}/)
   assert.match(view, /locate=\{client\.clientId === selectedClientId\}/)
-  assert.match(view, /const locateTone = locate && !isOverlay \? 'ring-2 ring-\[#72383D\] cobranza-locate' : ''/)
+  assert.match(view, /const locateTone = locate && !isOverlay \? 'ring-2 ring-sky-500 cobranza-locate' : ''/)
   assert.match(css, /\.cobranza-locate \{/)
   assert.match(css, /@keyframes cobranzaLocatePulse/)
   assert.match(css, /prefers-reduced-motion/)
@@ -50,8 +50,8 @@ test('un cliente oculto por filtros se muestra temporalmente en su columna', () 
 })
 
 test('el panel de tareas usa altura fija y scroll interno', () => {
-  assert.match(view, /h-\[130px\] overflow-y-auto/)
-  assert.match(view, /min-h-\[36px\] items-center border-t border-\[#EAE2D9\]/)
+  assert.match(view, /h-\[78px\] overflow-y-auto/)
+  assert.match(view, /min-h-\[26px\] shrink-0 items-center border-t border-slate-200/)
   assert.match(view, /grid h-\[26px\] w-full grid-cols-\[10px_minmax\(0,1fr\)_auto_auto\]/)
 })
 
@@ -73,20 +73,21 @@ test('fecha civil y America/Santiago son explícitos', () => {
   assert.match(view, /setInterval\(\(\) => setToday[\s\S]*60_000\)/)
 })
 
-test('KPIs están en 2x2 con el orden solicitado', () => {
-  assert.match(view, /grid grid-cols-2 grid-rows-2 gap-px bg-\[#EAE2D9\]/)
+test('KPIs están compactos en el orden solicitado', () => {
+  assert.match(view, /grid shrink-0 grid-cols-2 gap-px border-b border-slate-200 bg-slate-200 sm:grid-cols-4/)
   assert.match(view, /tone="overdue"/)
   const total = view.indexOf('label="CxC total"')
   const saldo = view.indexOf('label="Clientes con saldo"')
   const vencida = view.indexOf('label="CxC vencida"')
   const deuda = view.indexOf('label="Clientes con deuda vencida"')
-  assert.ok(total < vencida && vencida < saldo && saldo < deuda, 'orden 2x2 esperado')
+  assert.ok(total < vencida && vencida < saldo && saldo < deuda, 'orden esperado')
 })
 
-test('el header es una sola banda responsive con grid y sync contenido', () => {
-  assert.match(view, /overflow-hidden border border-\[#D1C7BD\] bg-white/)
-  assert.match(view, /grid grid-cols-1 gap-px bg-\[#EAE2D9\] lg:grid-cols-2 2xl:grid-cols-\[minmax\(190px,1\.05fr\)_minmax\(280px,1\.15fr\)_minmax\(330px,1\.3fr\)_minmax\(200px,\.8fr\)\]/)
-  assert.match(view, /flex min-w-0 flex-col gap-1\.5 bg-white p-3 text-\[10px\] text-\[#322D29\]\/55/)
+test('el header es una banda 50/50 compacta con morosos a la derecha', () => {
+  assert.match(view, /flex-none border-b border-slate-200 bg-white/)
+  assert.match(view, /grid grid-cols-1 gap-px bg-slate-200 lg:grid-cols-2/)
+  assert.match(view, /Clientes más morosos/)
+  assert.match(view, /right\.oldestDaysOverdue - left\.oldestDaysOverdue/)
 })
 
 test('vista Facturas conserva su orden y no se prioriza por tarea', () => {

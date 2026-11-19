@@ -3,25 +3,26 @@ import type { ReceivablesFreshnessStatus } from '@/lib/control-financiero/receiv
 export function CobranzaFreshnessNotice({ status, snapshotLabel }: { status: ReceivablesFreshnessStatus; snapshotLabel: string | null }) {
   if (status === 'NO_DATA') {
     return (
-      <div className="border-l-2 border-[#B38A55]/60 bg-[#F6EFE2] px-2 py-1 text-left text-[10px] leading-4 text-[#806238]" role="status">
-        <p className="break-words font-semibold">Sin snapshot de deuda vigente</p>
-        <p className="break-words">No hay un snapshot COMPLETED disponible para esta empresa.</p>
-      </div>
+      <span className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800" role="status" title="No hay un snapshot COMPLETED disponible para esta empresa.">
+        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden />
+        Sin snapshot vigente
+      </span>
     )
   }
 
   if (status === 'STALE') {
     return (
-      <div className="border-l-2 border-[#A45B58]/60 bg-[#F5E8E4] px-2 py-1 text-left text-[10px] leading-4 text-[#8A4B4B]" role="alert">
-        <p className="break-words font-semibold">Datos de deuda desactualizados</p>
-        <p className="break-words">Última actualización: {snapshotLabel ?? '—'}. El saldo puede no representar la posición vigente en BSale.</p>
-      </div>
+      <span className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700" role="alert" title={`Última actualización: ${snapshotLabel ?? '—'}. El saldo puede no representar la posición vigente en BSale.`}>
+        <span className="h-1.5 w-1.5 rounded-full bg-rose-500" aria-hidden />
+        Desactualizado ({snapshotLabel ?? '—'})
+      </span>
     )
   }
 
   return (
-    <div className="border-l-2 border-[#66856B]/60 bg-[#EDF4EC] px-2 py-1 text-left text-[10px] leading-4 text-[#426247]" role="status">
-      <p className="break-words">Datos de deuda actualizados al <strong>{snapshotLabel ?? '—'}</strong></p>
-    </div>
+    <span className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-800" role="status">
+      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
+      Actualizado <strong>{snapshotLabel ?? '—'}</strong>
+    </span>
   )
 }

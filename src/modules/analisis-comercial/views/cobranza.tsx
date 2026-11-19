@@ -103,11 +103,19 @@ export const buildCollectionMessage = (client: CobranzaClient) => {
   return `Hola ${client.name}, junto con saludar, según nuestros registros ${balanceMessage}${documentSummary} ¿Nos podría confirmar una fecha estimada de pago? Gracias.`
 }
 
+const stageDotTone: Record<CollectionStage, string> = {
+  TO_MANAGE: 'bg-slate-400',
+  IN_PROGRESS: 'bg-sky-500',
+  PAYMENT_COMMITMENT: 'bg-amber-500',
+  FOLLOW_UP: 'bg-violet-500',
+  CLOSED: 'bg-emerald-500',
+}
+
 function MiniKpi({ label, value, tone = 'default' }: { label: string; value: string; tone?: 'default' | 'overdue' }) {
   return (
-    <div className="min-w-0 bg-white px-2.5 py-1.5">
-      <p className="truncate text-[8px] font-bold uppercase tracking-[0.1em] text-[#AC9C8D]">{label}</p>
-      <p className={`mt-0.5 truncate text-sm font-semibold tabular-nums ${tone === 'overdue' ? 'text-[#8A4B4B]' : 'text-[#322D29]'}`}>{value}</p>
+    <div className="min-w-0 bg-white px-2 py-1">
+      <p className="truncate text-[8px] font-bold uppercase tracking-[0.07em] text-slate-500">{label}</p>
+      <p className={`truncate text-[13px] font-bold leading-tight tabular-nums ${tone === 'overdue' ? 'text-rose-600' : 'text-slate-900'}`}>{value}</p>
     </div>
   )
 }
@@ -124,47 +132,47 @@ const paymentBatchStatusLabel: Record<string, string> = {
 }
 
 const paymentBatchStatusTone: Record<string, string> = {
-  CREATED: 'border-[#D1C7BD] bg-[#F5F0EA] text-[#6B625C]',
-  PROCESSING: 'border-[#B38A55]/40 bg-[#F6EFE2] text-[#806238]',
-  UNKNOWN: 'border-[#A45B58]/40 bg-[#F5E8E4] text-[#8A4B4B]',
-  COMPLETED: 'border-[#66856B]/40 bg-[#EDF4EC] text-[#426247]',
-  PARTIAL: 'border-[#B38A55]/40 bg-[#F6EFE2] text-[#806238]',
-  FAILED: 'border-[#A45B58]/40 bg-[#F5E8E4] text-[#8A4B4B]',
+  CREATED: 'border-slate-200 bg-slate-100 text-slate-600',
+  PROCESSING: 'border-amber-200 bg-amber-50 text-amber-800',
+  UNKNOWN: 'border-rose-200 bg-rose-50 text-rose-700',
+  COMPLETED: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  PARTIAL: 'border-amber-200 bg-amber-50 text-amber-800',
+  FAILED: 'border-rose-200 bg-rose-50 text-rose-700',
 }
 
 const paymentDocumentTone: Record<string, string> = {
-  PENDING: 'text-[#6B625C]',
-  PROCESSING: 'text-[#806238]',
-  CONFIRMED: 'text-[#426247]',
-  REQUIRES_REVIEW: 'text-[#8A4B4B]',
-  FAILED: 'text-[#8A4B4B]',
-  CANCELLED: 'text-[#6B625C]',
+  PENDING: 'text-slate-500',
+  PROCESSING: 'text-amber-700',
+  CONFIRMED: 'text-emerald-700',
+  REQUIRES_REVIEW: 'text-rose-700',
+  FAILED: 'text-rose-700',
+  CANCELLED: 'text-slate-500',
 }
 
 function PaymentBatchCard({ batch, onSelect }: { batch: CollectionPaymentBatchProgress; onSelect: () => void }) {
   const progress = batch.expectedDocuments > 0 ? Math.round((batch.confirmedDocuments / batch.expectedDocuments) * 100) : 0
   return (
-    <button type="button" onClick={onSelect} className="w-full border border-[#D1C7BD] bg-white p-3 text-left transition-colors hover:border-[#72383D] hover:bg-[#FCFBF9]">
+    <button type="button" onClick={onSelect} className="w-full rounded-lg border border-slate-200 bg-white p-3 text-left shadow-xs transition-colors hover:border-sky-400 hover:bg-slate-50/70">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="truncate text-xs font-semibold text-[#322D29]">{batch.clientName}</p>
-          <p className="mt-1 text-[10px] text-[#322D29]/55">{dateTimeLabel(batch.completedAt ?? batch.createdAt)}</p>
+          <p className="truncate text-xs font-semibold text-slate-900">{batch.clientName}</p>
+          <p className="mt-1 text-[10px] text-slate-500">{dateTimeLabel(batch.completedAt ?? batch.createdAt)}</p>
         </div>
-        <span className={`shrink-0 border px-1.5 py-0.5 text-[9px] font-semibold ${paymentBatchStatusTone[batch.status] ?? paymentBatchStatusTone.UNKNOWN}`}>{paymentBatchStatusLabel[batch.status] ?? 'Requiere revisión'}</span>
+        <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-semibold ${paymentBatchStatusTone[batch.status] ?? paymentBatchStatusTone.UNKNOWN}`}>{paymentBatchStatusLabel[batch.status] ?? 'Requiere revisión'}</span>
       </div>
       <div className="mt-3 flex items-end justify-between gap-3">
         <div>
-          <p className="text-[10px] uppercase tracking-[0.08em] text-[#AC9C8D]">Total esperado</p>
-          <p className="mt-0.5 text-sm font-semibold tabular-nums text-[#322D29]">{money(batch.expectedTotal)}</p>
+          <p className="text-[10px] uppercase tracking-[0.08em] text-slate-500">Total esperado</p>
+          <p className="mt-0.5 text-sm font-semibold tabular-nums text-slate-900">{money(batch.expectedTotal)}</p>
         </div>
         <div className="text-right">
-          <p className="text-[10px] uppercase tracking-[0.08em] text-[#AC9C8D]">Confirmado</p>
-          <p className="mt-0.5 text-sm font-semibold tabular-nums text-[#322D29]">{money(batch.confirmedTotal)}</p>
+          <p className="text-[10px] uppercase tracking-[0.08em] text-slate-500">Confirmado</p>
+          <p className="mt-0.5 text-sm font-semibold tabular-nums text-slate-900">{money(batch.confirmedTotal)}</p>
         </div>
       </div>
       <div className="mt-3">
-        <div className="flex items-center justify-between text-[10px] text-[#322D29]/60"><span>{batch.confirmedDocuments} de {batch.expectedDocuments} facturas pagadas</span><strong>{progress}%</strong></div>
-        <div className="mt-1 h-1.5 overflow-hidden bg-[#F0EAE3]"><div className="h-full bg-[#72383D] transition-[width]" style={{ width: `${progress}%` }} /></div>
+        <div className="flex items-center justify-between text-[10px] text-slate-600"><span>{batch.confirmedDocuments} de {batch.expectedDocuments} facturas pagadas</span><strong>{progress}%</strong></div>
+        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-sky-600 transition-[width]" style={{ width: `${progress}%` }} /></div>
       </div>
     </button>
   )
@@ -174,21 +182,21 @@ function PaymentProgressDetail({ batch, onBack }: { batch: CollectionPaymentBatc
   const documents = [...batch.documents].sort((left, right) => left.sequenceNumber - right.sequenceNumber)
   return (
     <div className="space-y-4">
-      <button type="button" onClick={onBack} className="inline-flex items-center gap-1 text-xs font-semibold text-[#72383D] hover:underline"><ChevronLeft className="h-3.5 w-3.5" />Todos los pagos</button>
-      <div className="border border-[#D1C7BD] bg-white p-3">
-        <div className="flex items-start justify-between gap-3"><div><p className="text-sm font-semibold">{batch.clientName}</p><p className="mt-1 text-[10px] text-[#322D29]/55">{dateTimeLabel(batch.completedAt ?? batch.createdAt)}</p></div><span className={`border px-1.5 py-0.5 text-[9px] font-semibold ${paymentBatchStatusTone[batch.status] ?? paymentBatchStatusTone.UNKNOWN}`}>{paymentBatchStatusLabel[batch.status] ?? 'Requiere revisión'}</span></div>
-        <div className="mt-3 grid grid-cols-2 gap-px border border-[#D1C7BD] bg-[#D1C7BD] sm:grid-cols-4">
-          <div className="bg-white px-2 py-2"><p className="text-[9px] uppercase text-[#AC9C8D]">Esperado</p><p className="mt-1 text-xs font-semibold tabular-nums">{money(batch.expectedTotal)}</p></div>
-          <div className="bg-white px-2 py-2"><p className="text-[9px] uppercase text-[#AC9C8D]">Confirmado</p><p className="mt-1 text-xs font-semibold tabular-nums">{money(batch.confirmedTotal)}</p></div>
-          <div className="bg-white px-2 py-2"><p className="text-[9px] uppercase text-[#AC9C8D]">Facturas</p><p className="mt-1 text-xs font-semibold tabular-nums">{batch.confirmedDocuments} / {batch.expectedDocuments}</p></div>
-          <div className="bg-white px-2 py-2"><p className="text-[9px] uppercase text-[#AC9C8D]">Fecha</p><p className="mt-1 text-xs font-semibold">{dateTimeLabel(batch.completedAt ?? batch.createdAt)}</p></div>
+      <button type="button" onClick={onBack} className="inline-flex items-center gap-1 text-xs font-semibold text-sky-700 hover:underline"><ChevronLeft className="h-3.5 w-3.5" />Todos los pagos</button>
+      <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-xs">
+        <div className="flex items-start justify-between gap-3"><div><p className="text-sm font-semibold text-slate-900">{batch.clientName}</p><p className="mt-1 text-[10px] text-slate-500">{dateTimeLabel(batch.completedAt ?? batch.createdAt)}</p></div><span className={`rounded border px-1.5 py-0.5 text-[9px] font-semibold ${paymentBatchStatusTone[batch.status] ?? paymentBatchStatusTone.UNKNOWN}`}>{paymentBatchStatusLabel[batch.status] ?? 'Requiere revisión'}</span></div>
+        <div className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-slate-200 bg-slate-200 sm:grid-cols-4">
+          <div className="bg-white px-2 py-2"><p className="text-[9px] uppercase text-slate-500">Esperado</p><p className="mt-1 text-xs font-semibold tabular-nums text-slate-900">{money(batch.expectedTotal)}</p></div>
+          <div className="bg-white px-2 py-2"><p className="text-[9px] uppercase text-slate-500">Confirmado</p><p className="mt-1 text-xs font-semibold tabular-nums text-slate-900">{money(batch.confirmedTotal)}</p></div>
+          <div className="bg-white px-2 py-2"><p className="text-[9px] uppercase text-slate-500">Facturas</p><p className="mt-1 text-xs font-semibold tabular-nums text-slate-900">{batch.confirmedDocuments} / {batch.expectedDocuments}</p></div>
+          <div className="bg-white px-2 py-2"><p className="text-[9px] uppercase text-slate-500">Fecha</p><p className="mt-1 text-xs font-semibold text-slate-900">{dateTimeLabel(batch.completedAt ?? batch.createdAt)}</p></div>
         </div>
-        {batch.requiresReview && <div className="mt-3 border border-[#A45B58]/35 bg-[#F5E8E4] px-3 py-2 text-[11px] text-[#8A4B4B]"><p className="font-semibold">Este procesamiento requiere revisión antes de continuar.</p><p className="mt-1">Revisa el estado de la factura antes de continuar.</p></div>}
+        {batch.requiresReview && <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-700"><p className="font-semibold">Este procesamiento requiere revisión antes de continuar.</p><p className="mt-1">Revisa el estado de la factura antes de continuar.</p></div>}
       </div>
-      <section className="border border-[#D1C7BD] bg-white">
-        <div className="border-b border-[#D1C7BD] bg-[#F5F0EA] px-3 py-2"><p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#72383D]">Documentos</p></div>
-        <div className="divide-y divide-[#D1C7BD]/70">
-          {documents.map(document => <div key={document.attemptId} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-3 text-xs"><div><p className="font-semibold">Factura {document.folio ?? document.documentId}</p><p className="mt-1 text-[10px] text-[#322D29]/50">Documento {document.documentId}</p></div><span className="tabular-nums">{money(document.amount)}</span><span className={`text-right text-[10px] font-semibold ${paymentDocumentTone[document.visualStatus] ?? paymentDocumentTone.REQUIRES_REVIEW}`}>{document.message}</span></div>)}
+      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xs">
+        <div className="border-b border-slate-200 bg-slate-50 px-3 py-2"><p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-700">Documentos</p></div>
+        <div className="divide-y divide-slate-200/80">
+          {documents.map(document => <div key={document.attemptId} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-3 text-xs"><div><p className="font-semibold text-slate-900">Factura {document.folio ?? document.documentId}</p><p className="mt-1 text-[10px] text-slate-500">Documento {document.documentId}</p></div><span className="tabular-nums text-slate-800">{money(document.amount)}</span><span className={`text-right text-[10px] font-semibold ${paymentDocumentTone[document.visualStatus] ?? paymentDocumentTone.REQUIRES_REVIEW}`}>{document.message}</span></div>)}
         </div>
       </section>
     </div>
@@ -207,16 +215,16 @@ function PaymentProgressSheet({ open, onOpenChange, listing, loading, error, sel
   onSelectBatch: (batchId: string) => void
   onBack: () => void
 }) {
-  const renderSection = (title: string, rows: CollectionPaymentBatchProgress[]) => rows.length > 0 && <section><div className="mb-2 flex items-center justify-between"><h3 className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#72383D]">{title}</h3><span className="text-[10px] text-[#322D29]/50">{rows.length}</span></div><div className="space-y-2">{rows.map(batch => <PaymentBatchCard key={batch.batchId} batch={batch} onSelect={() => onSelectBatch(batch.batchId)} />)}</div></section>
+  const renderSection = (title: string, rows: CollectionPaymentBatchProgress[]) => rows.length > 0 && <section><div className="mb-2 flex items-center justify-between"><h3 className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-700">{title}</h3><span className="text-[10px] text-slate-500">{rows.length}</span></div><div className="space-y-2">{rows.map(batch => <PaymentBatchCard key={batch.batchId} batch={batch} onSelect={() => onSelectBatch(batch.batchId)} />)}</div></section>
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="flex h-screen w-full flex-col overflow-hidden border-[#D1C7BD] bg-[#EFE9E1] p-0 text-[#322D29] sm:!w-[560px] sm:!max-w-[560px]">
-        <SheetHeader className="shrink-0 border-b border-[#D1C7BD] bg-white px-5 py-4 pr-12 text-left"><div className="flex items-start justify-between gap-3"><div><SheetTitle>Procesamiento de pagos</SheetTitle><SheetDescription>Seguimiento sólo lectura de pagos en segundo plano.</SheetDescription></div><button type="button" onClick={onRefresh} disabled={loading} className="inline-flex items-center gap-1 border border-[#D1C7BD] px-2 py-1 text-[10px] font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:opacity-50"><RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />Actualizar</button></div></SheetHeader>
+      <SheetContent side="right" className="flex h-screen w-full flex-col overflow-hidden border-slate-200 bg-slate-50 p-0 text-slate-900 sm:!w-[560px] sm:!max-w-[560px]">
+        <SheetHeader className="shrink-0 border-b border-slate-200 bg-white px-5 py-4 pr-12 text-left"><div className="flex items-start justify-between gap-3"><div><SheetTitle>Procesamiento de pagos</SheetTitle><SheetDescription>Seguimiento sólo lectura de pagos en segundo plano.</SheetDescription></div><button type="button" onClick={onRefresh} disabled={loading} className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-50"><RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />Actualizar</button></div></SheetHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-          {error && <p className="mb-3 border border-[#A45B58]/30 bg-[#F5E8E4] px-3 py-2 text-[11px] text-[#8A4B4B]">No se pudo actualizar el estado de pagos.</p>}
-          {detailLoading && <p className="mb-3 text-[10px] text-[#322D29]/50">Cargando detalle…</p>}
-          {selectedBatch ? <PaymentProgressDetail batch={selectedBatch} onBack={onBack} /> : listing && <div className="space-y-5">{renderSection('En proceso', listing.batches.active)}{renderSection('Requieren revisión', listing.batches.requiresReview)}{renderSection('Recientes', listing.batches.recent)}{listing.batches.active.length + listing.batches.requiresReview.length + listing.batches.recent.length === 0 && <p className="border border-[#D1C7BD] bg-white px-3 py-6 text-center text-xs text-[#322D29]/55">No hay pagos en procesamiento.</p>}</div>}
-          {!listing && !loading && !error && <p className="border border-[#D1C7BD] bg-white px-3 py-6 text-center text-xs text-[#322D29]/55">No hay pagos en procesamiento.</p>}
+          {error && <p className="mb-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-700">No se pudo actualizar el estado de pagos.</p>}
+          {detailLoading && <p className="mb-3 text-[10px] text-slate-500">Cargando detalle…</p>}
+          {selectedBatch ? <PaymentProgressDetail batch={selectedBatch} onBack={onBack} /> : listing && <div className="space-y-5">{renderSection('En proceso', listing.batches.active)}{renderSection('Requieren revisión', listing.batches.requiresReview)}{renderSection('Recientes', listing.batches.recent)}{listing.batches.active.length + listing.batches.requiresReview.length + listing.batches.recent.length === 0 && <p className="rounded-lg border border-slate-200 bg-white px-3 py-6 text-center text-xs text-slate-500">No hay pagos en procesamiento.</p>}</div>}
+          {!listing && !loading && !error && <p className="rounded-lg border border-slate-200 bg-white px-3 py-6 text-center text-xs text-slate-500">No hay pagos en procesamiento.</p>}
         </div>
       </SheetContent>
     </Sheet>
@@ -293,9 +301,9 @@ function PaymentProgressObserver() {
   const activeCount = listing?.activeCount ?? 0
   const requiresReviewCount = listing?.requiresReviewCount ?? 0
   return <>
-    <div className="grid grid-cols-2 gap-1.5" data-payment-progress-observer>
-      <button type="button" onClick={openProgress} className={`min-w-0 border px-2 py-1 text-left ${activeCount > 0 ? 'border-[#B38A55]/50 bg-[#F6EFE2] text-[#806238] hover:border-[#72383D]' : 'border-[#D1C7BD] bg-white text-[#322D29]/65'}`}><span className="block truncate text-[10px] font-semibold">Pagos en proceso: <strong>{activeCount}</strong></span></button>
-      <button type="button" onClick={openProgress} className={`min-w-0 border px-2 py-1 text-left ${requiresReviewCount > 0 ? 'border-[#A45B58]/60 bg-[#F5E8E4] text-[#8A4B4B] hover:border-[#72383D]' : 'border-[#D1C7BD] bg-white text-[#322D29]/65'}`}><span className="block truncate text-[10px] font-semibold">Requieren revisión: <strong>{requiresReviewCount}</strong></span></button>
+    <div className="flex flex-wrap items-center gap-1" data-payment-progress-observer>
+      <button type="button" onClick={openProgress} className={`rounded-md border px-2 py-0.5 text-left transition-colors ${activeCount > 0 ? 'border-amber-300 bg-amber-50 text-amber-800 hover:border-amber-400' : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300'}`}><span className="whitespace-nowrap text-[10px] font-semibold">Pagos en proceso: <strong>{activeCount}</strong></span></button>
+      <button type="button" onClick={openProgress} className={`rounded-md border px-2 py-0.5 text-left transition-colors ${requiresReviewCount > 0 ? 'border-rose-300 bg-rose-50 text-rose-700 hover:border-rose-400' : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300'}`}><span className="whitespace-nowrap text-[10px] font-semibold">Requieren revisión: <strong>{requiresReviewCount}</strong></span></button>
     </div>
     <PaymentProgressSheet open={open} onOpenChange={setOpen} listing={listing} loading={loading} error={error} selectedBatch={selectedBatch} detailLoading={detailLoading} onRefresh={() => void refreshProgress()} onSelectBatch={batchId => void selectBatch(batchId)} onBack={backToList} />
   </>
@@ -303,11 +311,11 @@ function PaymentProgressObserver() {
 
 function Priority({ value }: { value: CobranzaClient['priority'] }) {
   const styles = value === 'Alta'
-    ? 'border-[#A45B58]/30 bg-[#F5E8E4] text-[#8A4B4B]'
+    ? 'border-rose-200 bg-rose-50 text-rose-700'
     : value === 'Media'
-      ? 'border-[#B38A55]/30 bg-[#F6EFE2] text-[#806238]'
-      : 'border-[#AC9C8D]/30 bg-[#F5F0EA] text-[#6B625C]'
-  return <span className={`inline-flex border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] ${styles}`}>{value}</span>
+      ? 'border-amber-200 bg-amber-50 text-amber-700'
+      : 'border-slate-200 bg-slate-100 text-slate-600'
+  return <span className={`inline-flex shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.06em] ${styles}`}>{value}</span>
 }
 
 function StagePicker({ stage, onChange }: { stage: CollectionStage; onChange: (stage: CollectionStage) => void }) {
@@ -315,11 +323,11 @@ function StagePicker({ stage, onChange }: { stage: CollectionStage; onChange: (s
   const selected = stages.find(option => option.key === stage) ?? stages[0]
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger render={<button type="button" className="mt-2 flex h-9 w-full items-center justify-between border border-[#D1C7BD] bg-white px-2 text-left text-xs hover:border-[#72383D]" />}>
-        <span>{selected.label}</span><span className="text-[#322D29]/45">⌄</span>
+      <PopoverTrigger render={<button type="button" className="mt-2 flex h-9 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-left text-xs text-slate-900 hover:border-sky-400" />}>
+        <span>{selected.label}</span><span className="text-slate-400">⌄</span>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-[calc(100vw-3rem)] max-w-[500px] border border-[#D1C7BD] bg-white p-1 shadow-lg">
-        {stages.map(option => <button key={option.key} type="button" onClick={() => { setOpen(false); onChange(option.key) }} className={`block w-full px-2.5 py-2 text-left text-xs hover:bg-[#F5F0EA] ${option.key === stage ? 'font-semibold text-[#72383D]' : 'text-[#322D29]'}`}>{option.label}</button>)}
+      <PopoverContent align="start" className="w-[calc(100vw-3rem)] max-w-[500px] rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
+        {stages.map(option => <button key={option.key} type="button" onClick={() => { setOpen(false); onChange(option.key) }} className={`block w-full rounded px-2.5 py-2 text-left text-xs hover:bg-slate-100 ${option.key === stage ? 'font-semibold text-sky-700 bg-sky-50' : 'text-slate-800'}`}>{option.label}</button>)}
       </PopoverContent>
     </Popover>
   )
@@ -389,7 +397,7 @@ function CollectionStageDialog({
 
   return (
     <Dialog open={open} onOpenChange={value => { if (!value && !processing) onOpenChange(false) }}>
-      <DialogContent className="border-[#D1C7BD] bg-[#FCFBF9] text-[#322D29]">
+      <DialogContent className="border-slate-200 bg-white text-slate-900">
         <DialogHeader>
           <DialogTitle>Actualizar etapa de cobranza</DialogTitle>
           <DialogDescription>{clientName}</DialogDescription>
@@ -398,13 +406,13 @@ function CollectionStageDialog({
           <p className="text-xs"><strong>Etapa actual:</strong> {stageLabel(currentStage)}</p>
           <p className="text-xs"><strong>Nueva etapa:</strong> {stageLabel(nextStage)}</p>
           {nextStage === 'PAYMENT_COMMITMENT' && <>
-            <label className="block text-xs font-semibold">Fecha comprometida *<input type="date" value={commitmentAt} onChange={event => setCommitmentAt(event.target.value)} disabled={processing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>
-            <label className="block text-xs font-semibold">Monto comprometido <span className="font-normal text-[#322D29]/50">(opcional)</span><input type="number" min="1" value={commitmentAmount} onChange={event => setCommitmentAmount(event.target.value)} disabled={processing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>
-            <p className="text-[10px] text-[#322D29]/55">Máximo permitido: {money(clientTotal)}</p>
+            <label className="block text-xs font-semibold">Fecha comprometida *<input type="date" value={commitmentAt} onChange={event => setCommitmentAt(event.target.value)} disabled={processing} className="mt-1 h-9 w-full rounded-md border border-slate-200 bg-white px-2.5 text-xs focus:border-sky-500 focus:outline-none" /></label>
+            <label className="block text-xs font-semibold">Monto comprometido <span className="font-normal text-slate-500">(opcional)</span><input type="number" min="1" value={commitmentAmount} onChange={event => setCommitmentAmount(event.target.value)} disabled={processing} className="mt-1 h-9 w-full rounded-md border border-slate-200 bg-white px-2.5 text-xs focus:border-sky-500 focus:outline-none" /></label>
+            <p className="text-[10px] text-slate-500">Máximo permitido: {money(clientTotal)}</p>
           </>}
-          {nextStage === 'FOLLOW_UP' && <label className="block text-xs font-semibold">Próxima fecha de gestión *<input type="date" value={nextActionAt} onChange={event => setNextActionAt(event.target.value)} disabled={processing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>}
-          <label className="block text-xs font-semibold">Comentario / nota de gestión <span className="font-normal text-[#322D29]/50">(opcional)</span><textarea value={note} onChange={event => setNote(event.target.value)} disabled={processing} rows={3} className="mt-1 w-full resize-none border border-[#D1C7BD] bg-white p-2 text-xs" /></label>
-          {error && <p className="text-xs text-[#8A4B4B]">{error}</p>}
+          {nextStage === 'FOLLOW_UP' && <label className="block text-xs font-semibold">Próxima fecha de gestión *<input type="date" value={nextActionAt} onChange={event => setNextActionAt(event.target.value)} disabled={processing} className="mt-1 h-9 w-full rounded-md border border-slate-200 bg-white px-2.5 text-xs focus:border-sky-500 focus:outline-none" /></label>}
+          <label className="block text-xs font-semibold">Comentario / nota de gestión <span className="font-normal text-slate-500">(opcional)</span><textarea value={note} onChange={event => setNote(event.target.value)} disabled={processing} rows={3} className="mt-1 w-full resize-none rounded-md border border-slate-200 bg-white p-2 text-xs focus:border-sky-500 focus:outline-none" /></label>
+          {error && <p className="text-xs text-rose-600">{error}</p>}
         </div>
         <DialogFooter>
           <Button type="button" variant="outline" disabled={processing} onClick={() => onOpenChange(false)}>Cancelar</Button>
@@ -481,20 +489,20 @@ function CommitmentDialog({
 
   return (
     <Dialog open={open} onOpenChange={value => { if (!value && !processing) onOpenChange(false) }}>
-      <DialogContent className="border-[#D1C7BD] bg-[#FCFBF9] text-[#322D29]">
+      <DialogContent className="border-slate-200 bg-white text-slate-900">
         <DialogHeader>
           <DialogTitle>{hasCommitment ? 'Editar compromiso' : 'Fecha compromiso'}</DialogTitle>
           <DialogDescription>{clientName}</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
-          <label className="block text-xs font-semibold">Fecha de compromiso *<input type="date" value={commitmentAt} onChange={event => setCommitmentAt(event.target.value)} disabled={processing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>
-          <label className="block text-xs font-semibold">Monto comprometido <span className="font-normal text-[#322D29]/50">(opcional)</span><input type="number" min="1" value={commitmentAmount} onChange={event => setCommitmentAmount(event.target.value)} disabled={processing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label>
-          <p className="text-[10px] text-[#322D29]/55">Máximo permitido: {money(clientTotal)}</p>
-          <label className="block text-xs font-semibold">Comentario / nota <span className="font-normal text-[#322D29]/50">(opcional)</span><textarea value={note} onChange={event => setNote(event.target.value)} disabled={processing} rows={3} maxLength={2000} className="mt-1 w-full resize-none border border-[#D1C7BD] bg-white p-2 text-xs" /></label>
-          {error && <p className="text-xs text-[#8A4B4B]">{error}</p>}
+          <label className="block text-xs font-semibold">Fecha de compromiso *<input type="date" value={commitmentAt} onChange={event => setCommitmentAt(event.target.value)} disabled={processing} className="mt-1 h-9 w-full rounded-md border border-slate-200 bg-white px-2.5 text-xs focus:border-sky-500 focus:outline-none" /></label>
+          <label className="block text-xs font-semibold">Monto comprometido <span className="font-normal text-slate-500">(opcional)</span><input type="number" min="1" value={commitmentAmount} onChange={event => setCommitmentAmount(event.target.value)} disabled={processing} className="mt-1 h-9 w-full rounded-md border border-slate-200 bg-white px-2.5 text-xs focus:border-sky-500 focus:outline-none" /></label>
+          <p className="text-[10px] text-slate-500">Máximo permitido: {money(clientTotal)}</p>
+          <label className="block text-xs font-semibold">Comentario / nota <span className="font-normal text-slate-500">(opcional)</span><textarea value={note} onChange={event => setNote(event.target.value)} disabled={processing} rows={3} maxLength={2000} className="mt-1 w-full resize-none rounded-md border border-slate-200 bg-white p-2 text-xs focus:border-sky-500 focus:outline-none" /></label>
+          {error && <p className="text-xs text-rose-600">{error}</p>}
         </div>
         <DialogFooter className="flex-wrap sm:justify-between">
-          <div>{hasCommitment && <Button type="button" variant="outline" disabled={processing} onClick={() => void clear()} className="border-[#A45B58]/50 text-[#8A4B4B]">Quitar compromiso</Button>}</div>
+          <div>{hasCommitment && <Button type="button" variant="outline" disabled={processing} onClick={() => void clear()} className="border-rose-200 text-rose-700 hover:bg-rose-50">Quitar compromiso</Button>}</div>
           <div className="flex gap-2"><Button type="button" variant="outline" disabled={processing} onClick={() => onOpenChange(false)}>Cancelar</Button><Button type="button" disabled={processing} onClick={() => void save()}>{processing ? 'Guardando…' : hasCommitment ? 'Guardar cambios' : 'Guardar compromiso'}</Button></div>
         </DialogFooter>
       </DialogContent>
@@ -535,15 +543,15 @@ function QuickInteractionDialog({
 
   return (
     <Dialog open={open} onOpenChange={value => { if (!value && !processing) onOpenChange(false) }}>
-      <DialogContent className="border-[#D1C7BD] bg-[#FCFBF9] text-[#322D29]">
+      <DialogContent className="border-slate-200 bg-white text-slate-900">
         <DialogHeader>
           <DialogTitle>Agregar nota</DialogTitle>
           <DialogDescription>{clientName}</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
-          <label className="block text-xs font-semibold">Tipo<select value={type} onChange={event => setType(event.target.value as CollectionInteractionType)} disabled={processing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs"><option value="NOTE">Nota</option><option value="CALL">Llamada</option><option value="MESSAGE">Mensaje / WhatsApp</option><option value="EMAIL">Correo</option></select></label>
-          <label className="block text-xs font-semibold">Descripción<textarea required maxLength={2000} value={body} onChange={event => setBody(event.target.value)} disabled={processing} rows={4} className="mt-1 w-full resize-none border border-[#D1C7BD] bg-white p-2 text-xs" /></label>
-          {error && <p className="text-xs text-[#8A4B4B]">{error}</p>}
+          <label className="block text-xs font-semibold">Tipo<select value={type} onChange={event => setType(event.target.value as CollectionInteractionType)} disabled={processing} className="mt-1 h-9 w-full rounded-md border border-slate-200 bg-white px-2.5 text-xs focus:border-sky-500 focus:outline-none"><option value="NOTE">Nota</option><option value="CALL">Llamada</option><option value="MESSAGE">Mensaje / WhatsApp</option><option value="EMAIL">Correo</option></select></label>
+          <label className="block text-xs font-semibold">Descripción<textarea required maxLength={2000} value={body} onChange={event => setBody(event.target.value)} disabled={processing} rows={4} className="mt-1 w-full resize-none rounded-md border border-slate-200 bg-white p-2 text-xs focus:border-sky-500 focus:outline-none" /></label>
+          {error && <p className="text-xs text-rose-600">{error}</p>}
         </div>
         <DialogFooter>
           <Button type="button" variant="outline" disabled={processing} onClick={() => onOpenChange(false)}>Cancelar</Button>
@@ -570,33 +578,146 @@ function PendingTasksPanel({ tasks, selectedTaskId, onSelectTask, onOpenClient }
 }) {
   const selected = tasks.find(task => task.id === selectedTaskId) ?? null
   return (
-    <div className="flex min-w-0 flex-col">
-      <div className="flex items-center justify-between border-b border-[#EAE2D9] px-3 py-1">
-        <h2 className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#72383D]">Tareas pendientes</h2>
-        <span className="text-[10px] font-semibold text-[#322D29]/60">{tasks.length}</span>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-slate-50/60 px-2.5 py-1">
+        <h2 className="text-[9px] font-bold uppercase tracking-[0.12em] text-sky-700">Tareas pendientes</h2>
+        <span className="rounded-full bg-slate-200/80 px-1.5 py-px text-[10px] font-bold tabular-nums text-slate-700">{tasks.length}</span>
       </div>
-      <div className="h-[130px] overflow-y-auto" role="list">
+      <div className="h-[78px] overflow-y-auto xl:h-auto xl:min-h-0 xl:flex-1" role="list">
         {tasks.length === 0
-          ? <p className="px-3 py-3 text-[10px] text-[#322D29]/50">No hay tareas pendientes para hoy.</p>
+          ? <p className="px-2.5 py-2.5 text-[10px] text-slate-400">No hay tareas pendientes para hoy.</p>
           : tasks.map(task => {
             const isSelected = task.id === selectedTaskId
             const overdue = task.urgency === 'OVERDUE'
-            return <button key={task.id} type="button" role="listitem" onClick={() => onSelectTask(task)} className={`grid h-[26px] w-full grid-cols-[10px_minmax(0,1fr)_auto_auto] items-center gap-2 border-l-2 px-3 text-left text-[11px] leading-none ${isSelected ? 'border-l-[#72383D] bg-[#F6EFE8]' : 'border-l-transparent hover:bg-[#FCFBF9]'}`}>
-              <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${overdue ? 'bg-[#A45B58]' : 'bg-[#B38A55]'}`} />
-              <span className="truncate text-[#322D29]">{task.clientName}</span>
-              <span className="whitespace-nowrap text-[10px] tabular-nums text-[#322D29]/60">{taskMetaLabel(task)}</span>
-              <span className={`border px-1 py-px text-[9px] font-semibold ${overdue ? 'border-[#A45B58]/30 bg-[#F5E8E4] text-[#8A4B4B]' : 'border-[#B38A55]/30 bg-[#F6EFE2] text-[#806238]'}`}>{taskStatusLabel(task)}</span>
+            return <button key={task.id} type="button" role="listitem" onClick={() => onSelectTask(task)} className={`grid h-[26px] w-full grid-cols-[10px_minmax(0,1fr)_auto_auto] items-center gap-2 border-l-2 px-2.5 text-left text-[11px] leading-none transition-colors ${isSelected ? 'border-l-sky-600 bg-sky-50' : 'border-l-transparent hover:bg-slate-50'}`}>
+              <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${overdue ? 'bg-rose-500' : 'bg-amber-500'}`} />
+              <span className="truncate font-medium text-slate-800">{task.clientName}</span>
+              <span className="whitespace-nowrap text-[10px] tabular-nums text-slate-500">{taskMetaLabel(task)}</span>
+              <span className={`rounded border px-1 py-px text-[9px] font-semibold ${overdue ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>{taskStatusLabel(task)}</span>
             </button>
           })}
       </div>
-      <div className="flex min-h-[36px] items-center border-t border-[#EAE2D9] px-3 py-1">
+      <div className="flex min-h-[26px] shrink-0 items-center border-t border-slate-200 bg-slate-50/70 px-2.5 py-0.5">
         {selected
           ? <div className="flex w-full min-w-0 items-center justify-between gap-2">
-            <span className="min-w-0 truncate text-[11px] font-semibold text-[#322D29]">{selected.clientName}</span>
-            <span className="hidden min-w-0 truncate text-[10px] text-[#806238] sm:inline">{taskTypeLabel(selected.type)} {selected.urgency === 'OVERDUE' ? `vencido ${taskShortDate(selected.date)}` : 'hoy'}{selected.amount !== null ? ` · ${money(selected.amount)}` : ''}</span>
-            <button type="button" onClick={() => onOpenClient(selected.clientId)} className="shrink-0 border border-[#72383D]/30 px-2 py-0.5 text-[10px] font-semibold text-[#72383D] hover:bg-[#F5EDE9]">Abrir cliente</button>
+            <span className="min-w-0 truncate text-[11px] font-semibold text-slate-900">{selected.clientName}</span>
+            <span className="hidden min-w-0 truncate text-[10px] text-amber-700 sm:inline">{taskTypeLabel(selected.type)} {selected.urgency === 'OVERDUE' ? `vencido ${taskShortDate(selected.date)}` : 'hoy'}{selected.amount !== null ? ` · ${money(selected.amount)}` : ''}</span>
+            <button type="button" onClick={() => onOpenClient(selected.clientId)} className="shrink-0 rounded border border-sky-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-sky-700 hover:bg-sky-50">Abrir cliente</button>
           </div>
-          : <p className="text-[10px] text-[#322D29]/45">Selecciona una tarea para ver el detalle.</p>}
+          : <p className="text-[10px] text-slate-400">Selecciona una tarea para ver el detalle.</p>}
+      </div>
+    </div>
+  )
+}
+
+function MostOverdueClientsPanel({ clients, onOpenClient }: {
+  clients: CobranzaClient[]
+  onOpenClient: (client: CobranzaClient) => void
+}) {
+  const totalOverdueAmount = clients.reduce((sum, client) => sum + client.overdueAmount, 0)
+  const totalOverdueDocs = clients.reduce((sum, client) => sum + client.documents.filter(document => document.overdue).length, 0)
+  return (
+    <div className="flex min-h-0 min-w-0 flex-col bg-white xl:h-full">
+      <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-slate-50/60 px-2.5 py-1">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <h2 className="truncate text-[10px] font-bold uppercase tracking-[0.08em] text-rose-700">Clientes más morosos</h2>
+          <span className="hidden truncate text-[9px] text-slate-400 2xl:inline">Por días vencidos</span>
+        </div>
+        <span className="rounded-full bg-rose-100 px-1.5 py-px text-[10px] font-bold tabular-nums text-rose-700">{clients.length}</span>
+      </div>
+      <div className="h-[104px] max-h-[104px] divide-y divide-slate-100 overflow-y-auto xl:h-auto xl:max-h-none xl:min-h-0 xl:flex-1" role="list" aria-label="Clientes más morosos">
+        {clients.length === 0
+          ? <p className="px-2.5 py-4 text-center text-[11px] text-slate-400">No hay clientes con deuda vencida.</p>
+          : clients.map((client, index) => {
+            const overdueDocsCount = client.documents.filter(document => document.overdue).length
+            const severe = client.oldestDaysOverdue >= 30
+            const critical = client.oldestDaysOverdue >= 60
+            return (
+              <button
+                key={client.key}
+                type="button"
+                role="listitem"
+                onClick={() => onOpenClient(client)}
+                className="grid w-full grid-cols-[16px_minmax(0,1fr)_auto_auto_auto] items-center gap-1.5 px-2.5 py-1.5 text-left transition-colors hover:bg-sky-50/70"
+              >
+                <span className="text-[10px] font-bold tabular-nums text-slate-400">{index + 1}</span>
+                <span className="min-w-0 truncate text-[11px] font-medium text-slate-900" title={client.name}>{client.name}</span>
+                <span className="hidden whitespace-nowrap text-[10px] tabular-nums text-slate-500 2xl:inline">{overdueDocsCount} {overdueDocsCount === 1 ? 'doc' : 'docs'}</span>
+                <span className="whitespace-nowrap text-[11px] font-semibold tabular-nums text-rose-600">{money(client.overdueAmount)}</span>
+                <span className={`min-w-[52px] rounded border px-1 py-px text-center text-[10px] font-bold tabular-nums ${critical ? 'border-rose-300 bg-rose-100 text-rose-800' : severe ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+                  {client.oldestDaysOverdue} {client.oldestDaysOverdue === 1 ? 'día' : 'días'}
+                </span>
+              </button>
+            )
+          })}
+      </div>
+      <div className="flex min-h-[26px] shrink-0 items-center justify-between gap-2 border-t border-slate-200 bg-slate-50/70 px-2.5 py-0.5 text-[10px]">
+        <span className="truncate font-semibold text-slate-700">
+          Total vencida <span className="font-normal text-slate-500">({clients.length} · {totalOverdueDocs} {totalOverdueDocs === 1 ? 'doc' : 'docs'})</span>
+        </span>
+        <strong className="shrink-0 text-[11px] tabular-nums text-rose-700">{money(totalOverdueAmount)}</strong>
+      </div>
+    </div>
+  )
+}
+
+type CurrentDebtEntry = {
+  client: CobranzaClient
+  currentAmount: number
+  currentDocsCount: number
+  nextDueDate: string | null
+  daysUntilDue: number | null
+}
+
+function CurrentDebtClientsPanel({ entries, onOpenClient }: {
+  entries: CurrentDebtEntry[]
+  onOpenClient: (client: CobranzaClient) => void
+}) {
+  const totalCurrentAmount = entries.reduce((sum, entry) => sum + entry.currentAmount, 0)
+  const totalCurrentDocs = entries.reduce((sum, entry) => sum + entry.currentDocsCount, 0)
+  return (
+    <div className="flex min-h-0 min-w-0 flex-col bg-white xl:h-full">
+      <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-slate-50/60 px-2.5 py-1">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <h2 className="truncate text-[10px] font-bold uppercase tracking-[0.08em] text-sky-700">Deuda sin atraso</h2>
+          <span className="hidden truncate text-[9px] text-slate-400 2xl:inline">Por vencer</span>
+        </div>
+        <span className="rounded-full bg-sky-100 px-1.5 py-px text-[10px] font-bold tabular-nums text-sky-700">{entries.length}</span>
+      </div>
+      <div className="h-[104px] max-h-[104px] divide-y divide-slate-100 overflow-y-auto xl:h-auto xl:max-h-none xl:min-h-0 xl:flex-1" role="list" aria-label="Clientes con deuda sin atraso">
+        {entries.length === 0
+          ? <p className="px-2.5 py-4 text-center text-[11px] text-slate-400">No hay deuda vigente por vencer.</p>
+          : entries.map((entry, index) => {
+            const dueToday = entry.daysUntilDue === 0
+            const dueLabel = entry.daysUntilDue === null
+              ? 'Al día'
+              : dueToday
+                ? 'Hoy'
+                : `${entry.daysUntilDue} ${entry.daysUntilDue === 1 ? 'día' : 'días'}`
+            return (
+              <button
+                key={entry.client.key}
+                type="button"
+                role="listitem"
+                onClick={() => onOpenClient(entry.client)}
+                className="grid w-full grid-cols-[16px_minmax(0,1fr)_auto_auto_auto] items-center gap-1.5 px-2.5 py-1.5 text-left transition-colors hover:bg-sky-50/70"
+              >
+                <span className="text-[10px] font-bold tabular-nums text-slate-400">{index + 1}</span>
+                <span className="min-w-0 truncate text-[11px] font-medium text-slate-900" title={entry.client.name}>{entry.client.name}</span>
+                <span className="hidden whitespace-nowrap text-[10px] tabular-nums text-slate-500 2xl:inline">{entry.currentDocsCount} {entry.currentDocsCount === 1 ? 'doc' : 'docs'}</span>
+                <span className="whitespace-nowrap text-[11px] font-semibold tabular-nums text-slate-800">{money(entry.currentAmount)}</span>
+                <span className={`min-w-[50px] rounded border px-1 py-px text-center text-[10px] font-bold tabular-nums ${dueToday ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-sky-200 bg-sky-50 text-sky-700'}`} title={entry.nextDueDate ? `Próximo vencimiento: ${dateLabel(entry.nextDueDate)}` : undefined}>
+                  {dueLabel}
+                </span>
+              </button>
+            )
+          })}
+      </div>
+      <div className="flex min-h-[26px] shrink-0 items-center justify-between gap-2 border-t border-slate-200 bg-slate-50/70 px-2.5 py-0.5 text-[10px]">
+        <span className="truncate font-semibold text-slate-700">
+          Total sin atraso <span className="font-normal text-slate-500">({entries.length} · {totalCurrentDocs} {totalCurrentDocs === 1 ? 'doc' : 'docs'})</span>
+        </span>
+        <strong className="shrink-0 text-[11px] tabular-nums text-sky-700">{money(totalCurrentAmount)}</strong>
       </div>
     </div>
   )
@@ -630,9 +751,9 @@ function ClientKanbanCard({
     disabled: isOverlay,
   })
   const style = transform && !isOverlay ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined
-  const taskTone = task?.urgency === 'OVERDUE' ? 'border-[#A45B58]/60 bg-[#FCF7F5]' : task?.urgency === 'TODAY' ? 'border-[#B38A55]/60 bg-[#FFFCF6]' : 'border-[#D1C7BD] bg-white'
-  const locateTone = locate && !isOverlay ? 'ring-2 ring-[#72383D] cobranza-locate' : ''
-  const className = `w-full border p-2.5 text-left transition-shadow ${taskTone} ${locateTone} ${isOverlay ? 'pointer-events-none shadow-xl ring-2 ring-[#72383D]' : isDragging ? 'cursor-grabbing opacity-45 shadow-lg' : 'cursor-grab hover:border-[#72383D] hover:shadow-sm'}`
+  const taskTone = task?.urgency === 'OVERDUE' ? 'border-rose-300 bg-rose-50/40' : task?.urgency === 'TODAY' ? 'border-amber-300 bg-amber-50/40' : 'border-slate-200 bg-white'
+  const locateTone = locate && !isOverlay ? 'ring-2 ring-sky-500 cobranza-locate' : ''
+  const className = `w-full rounded-lg border p-2.5 text-left shadow-xs transition-all ${taskTone} ${locateTone} ${isOverlay ? 'pointer-events-none shadow-xl ring-2 ring-sky-500' : isDragging ? 'cursor-grabbing opacity-45 shadow-lg' : 'cursor-grab hover:border-sky-400 hover:shadow-sm'}`
   const copyMessage = async (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation()
     await navigator.clipboard.writeText(buildCollectionMessage(client))
@@ -642,19 +763,19 @@ function ClientKanbanCard({
   const stopCardInteraction = (event: React.SyntheticEvent) => event.stopPropagation()
   return (
     <div id={isOverlay ? undefined : `collection-card-${client.clientId}`} ref={isOverlay ? undefined : setNodeRef} style={style} {...(!isOverlay ? listeners : {})} {...(!isOverlay ? attributes : {})} onDoubleClick={isOverlay ? undefined : onOpen} onKeyDown={isOverlay ? undefined : event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen() } }} role="button" tabIndex={0} aria-label={`Abrir detalle de ${client.name}`} className={className}>
-      <div className="flex items-start justify-between gap-2"><span className="min-w-0 break-words text-xs font-semibold">{client.name}</span><Priority value={effectivePriority(client.priority, task)} /></div>
-      {task && <p className={`mt-1 text-[9px] font-semibold ${task.urgency === 'OVERDUE' ? 'text-[#8A4B4B]' : 'text-[#806238]'}`}>{taskTypeLabel(task.type)} {task.urgency === 'OVERDUE' ? 'vencido' : 'hoy'}</p>}
-      <p className="mt-2 text-[10px] text-[#322D29]/55">{client.pendingDocuments} doc{client.pendingDocuments === 1 ? '' : 's'} · {client.oldestDaysOverdue} días</p>
-      <p className={`mt-1 text-sm font-semibold tabular-nums ${stage === 'CLOSED' ? 'text-[#322D29]' : 'text-[#8A4B4B]'}`}>{stage === 'CLOSED' ? '$0 · Pagado' : `Vencida ${money(client.overdueAmount)}`}</p>
-      {stage !== 'CLOSED' && client.totalAmount !== client.overdueAmount && <p className="mt-0.5 text-[10px] text-[#322D29]/55 tabular-nums">Total {money(client.totalAmount)}</p>}
-       {workflow?.commitment_at && <p className="mt-2 text-[10px] text-[#806238]">Compromiso {dateLabel(workflow.commitment_at)}{workflow.commitment_amount !== null && workflow.commitment_amount !== undefined ? ` · ${money(workflow.commitment_amount)}` : ''}</p>}
-      {stage === 'FOLLOW_UP' && workflow?.next_action_at && <p className="mt-2 text-[10px] text-[#806238]">Seguimiento {dateLabel(workflow.next_action_at)}</p>}
-      {!isOverlay && <div className="mt-2 flex flex-wrap gap-1 border-t border-[#D1C7BD]/70 pt-2">
-         <button type="button" onPointerDown={stopCardInteraction} onClick={copyMessage} className="min-w-[84px] flex-1 border border-[#72383D]/25 px-1.5 py-1 text-[9px] font-semibold text-[#72383D] hover:bg-[#F5EDE9]">{copied ? 'Mensaje copiado' : 'Copiar mensaje'}</button>
-          <button type="button" onPointerDown={stopCardInteraction} onClick={event => { event.stopPropagation(); onAddNote() }} className="min-w-[84px] flex-1 border border-[#D1C7BD] px-1.5 py-1 text-[9px] font-semibold text-[#322D29] hover:bg-[#F5F0EA]">Agregar nota</button>
-          <button type="button" onPointerDown={stopCardInteraction} onClick={event => { event.stopPropagation(); onCommitment() }} className="min-w-[84px] flex-1 border border-[#B38A55]/50 px-1.5 py-1 text-[9px] font-semibold text-[#806238] hover:bg-[#F6EFE2]">{workflow?.commitment_at ? 'Editar compromiso' : 'Fecha compromiso'}</button>
-             </div>}
-     </div>
+      <div className="flex items-start justify-between gap-2"><span className="min-w-0 break-words text-xs font-semibold leading-snug text-slate-900">{client.name}</span><Priority value={effectivePriority(client.priority, task)} /></div>
+      {task && <p className={`mt-1 text-[10px] font-semibold ${task.urgency === 'OVERDUE' ? 'text-rose-600' : 'text-amber-700'}`}>{taskTypeLabel(task.type)} {task.urgency === 'OVERDUE' ? 'vencido' : 'hoy'}</p>}
+      <p className="mt-1.5 text-[10px] text-slate-500">{client.pendingDocuments} doc{client.pendingDocuments === 1 ? '' : 's'} · {client.oldestDaysOverdue} días</p>
+      <p className={`mt-1 text-sm font-bold tabular-nums ${stage === 'CLOSED' ? 'text-emerald-700' : 'text-rose-600'}`}>{stage === 'CLOSED' ? '$0 · Pagado' : `Vencida ${money(client.overdueAmount)}`}</p>
+      {stage !== 'CLOSED' && client.totalAmount !== client.overdueAmount && <p className="mt-0.5 text-[10px] font-medium tabular-nums text-slate-500">Total {money(client.totalAmount)}</p>}
+      {workflow?.commitment_at && <p className="mt-1.5 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">Compromiso {dateLabel(workflow.commitment_at)}{workflow.commitment_amount !== null && workflow.commitment_amount !== undefined ? ` · ${money(workflow.commitment_amount)}` : ''}</p>}
+      {stage === 'FOLLOW_UP' && workflow?.next_action_at && <p className="mt-1.5 rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">Seguimiento {dateLabel(workflow.next_action_at)}</p>}
+      {!isOverlay && <div className="mt-2 flex flex-wrap gap-1 border-t border-slate-200/80 pt-2">
+        <button type="button" onPointerDown={stopCardInteraction} onClick={copyMessage} className="min-w-[84px] flex-1 rounded border border-sky-200 bg-sky-50/70 px-1.5 py-1 text-[9px] font-semibold text-sky-700 transition-colors hover:bg-sky-100">{copied ? 'Mensaje copiado' : 'Copiar mensaje'}</button>
+        <button type="button" onPointerDown={stopCardInteraction} onClick={event => { event.stopPropagation(); onAddNote() }} className="min-w-[84px] flex-1 rounded border border-slate-200 bg-white px-1.5 py-1 text-[9px] font-semibold text-slate-700 transition-colors hover:bg-slate-50">Agregar nota</button>
+        <button type="button" onPointerDown={stopCardInteraction} onClick={event => { event.stopPropagation(); onCommitment() }} className="min-w-[84px] flex-1 rounded border border-amber-200 bg-amber-50/70 px-1.5 py-1 text-[9px] font-semibold text-amber-800 transition-colors hover:bg-amber-100">{workflow?.commitment_at ? 'Editar compromiso' : 'Fecha compromiso'}</button>
+      </div>}
+    </div>
   )
 }
 
@@ -685,15 +806,25 @@ function ClientKanbanColumn({
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `collection-stage-${stage.key}`, data: { stage: stage.key }, disabled: stage.key === 'CLOSED' })
   const orderedClients = prioritizeCobranzaColumn(clients, workflow, today)
+  const columnAmount = stage.key === 'CLOSED' ? 0 : clients.reduce((sum, client) => sum + client.totalAmount, 0)
   return (
-    <section ref={setNodeRef} className={`min-w-0 border bg-[#F5F0EA] transition-colors ${isOver && stage.key !== 'CLOSED' ? 'border-[#72383D] bg-[#F1E4DD]' : 'border-[#D1C7BD]'}`}>
-       <header className="border-b border-[#D1C7BD] px-3 py-2"><div className="flex items-center justify-between"><h3 className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#72383D]">{stage.label}</h3><span className="text-[10px] text-[#322D29]/50">{stage.key === 'CLOSED' ? closedRecent.length : clients.length}</span></div></header>
-       <div className="space-y-2 p-2">
-         {stage.key === 'CLOSED'
-           ? closedRecent.map(client => <button key={client.clientId} type="button" onClick={() => onOpenClosed?.(client)} className="w-full border border-[#D1C7BD] bg-white p-2.5 text-left hover:border-[#72383D]"><span className="block break-words text-xs font-semibold">{client.name}</span><span className="mt-2 block text-[10px] text-[#322D29]/65">Saldo $0</span><span className="mt-1 block text-[10px] text-[#322D29]/55">Cerrado {dateTimeLabel(client.closedAt)}</span><span className="mt-2 block border-t border-[#D1C7BD]/70 pt-2 text-[9px] font-semibold text-[#72383D]">Ver bitácora</span></button>)
-             : orderedClients.map(client => <ClientKanbanCard key={client.key} client={client} stage={stage.key} workflow={workflow[client.clientId]} task={taskForClient(client.clientId, tasks)} locate={client.clientId === selectedClientId} onOpen={() => onOpen(client)} onAddNote={() => onAddNote(client)} onCommitment={() => onCommitment(client)} />)}
-         {((stage.key === 'CLOSED' ? closedRecent.length : clients.length) === 0) && <p className="px-2 py-5 text-center text-[10px] text-[#322D29]/45">Sin clientes</p>}
-       </div>
+    <section ref={setNodeRef} className={`flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border bg-slate-100/80 shadow-xs transition-all duration-150 ${isOver && stage.key !== 'CLOSED' ? 'border-sky-500 bg-sky-50/70 ring-2 ring-sky-500/20 shadow-md' : 'border-slate-200'}`}>
+      <header className="sticky top-0 z-10 shrink-0 border-b border-slate-200 bg-white/95 px-2.5 py-2 backdrop-blur-xs">
+        <div className="flex items-center justify-between gap-1.5">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className={`h-2 w-2 shrink-0 rounded-full ${stageDotTone[stage.key]}`} />
+            <h3 className="truncate text-[10px] font-bold uppercase tracking-wider text-slate-800">{stage.label}</h3>
+          </div>
+          <span className="flex h-4 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-slate-200/80 px-1.5 text-[10px] font-bold tabular-nums text-slate-700">{stage.key === 'CLOSED' ? closedRecent.length : clients.length}</span>
+        </div>
+        <p className="mt-0.5 pl-3.5 text-[10px] font-semibold tabular-nums text-slate-500">{money(columnAmount)}</p>
+      </header>
+      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
+        {stage.key === 'CLOSED'
+          ? closedRecent.map(client => <button key={client.clientId} type="button" onClick={() => onOpenClosed?.(client)} className="w-full rounded-lg border border-slate-200 bg-white p-2.5 text-left shadow-xs transition-colors hover:border-sky-400"><span className="block break-words text-xs font-semibold text-slate-900">{client.name}</span><span className="mt-1.5 block text-[10px] font-semibold text-emerald-700">Saldo $0</span><span className="mt-0.5 block text-[10px] text-slate-500">Cerrado {dateTimeLabel(client.closedAt)}</span><span className="mt-2 block border-t border-slate-200/80 pt-1.5 text-[10px] font-semibold text-sky-700">Ver bitácora</span></button>)
+          : orderedClients.map(client => <ClientKanbanCard key={client.key} client={client} stage={stage.key} workflow={workflow[client.clientId]} task={taskForClient(client.clientId, tasks)} locate={client.clientId === selectedClientId} onOpen={() => onOpen(client)} onAddNote={() => onAddNote(client)} onCommitment={() => onCommitment(client)} />)}
+        {((stage.key === 'CLOSED' ? closedRecent.length : clients.length) === 0) && <div className="flex min-h-[72px] items-center justify-center rounded-md border border-dashed border-slate-200 bg-white/50"><p className="text-[11px] font-medium text-slate-400">Sin clientes</p></div>}
+      </div>
     </section>
   )
 }
@@ -923,54 +1054,56 @@ function ClientPanel({
   }
 
   return (
-    <SheetContent side="right" className="flex h-screen w-full flex-col overflow-hidden border-[#D1C7BD] bg-[#EFE9E1] p-0 text-[#322D29] sm:!w-[560px] sm:!max-w-[560px]">
-      <SheetHeader className="shrink-0 border-b border-[#D1C7BD] bg-white px-5 py-4 text-left">
+    <SheetContent side="right" className="flex h-screen w-full flex-col overflow-hidden border-slate-200 bg-slate-50 p-0 text-slate-900 sm:!w-[560px] sm:!max-w-[560px]">
+      <SheetHeader className="shrink-0 border-b border-slate-200 bg-white px-5 py-4 text-left">
         <div className="flex items-start justify-between gap-3">
           <div>
             <SheetTitle>{client.name}</SheetTitle>
             <SheetDescription>{client.code ? `RUT / código ${client.code}` : 'RUT no disponible'} · Corte {dateLabel(cutoffDate)}</SheetDescription>
           </div>
-           <button type="button" disabled={paymentBusy} onClick={onClose} className="rounded p-1 text-[#322D29]/50 hover:bg-[#F5F0EA] disabled:cursor-not-allowed disabled:opacity-40" aria-label="Cerrar panel">
+          <button type="button" disabled={paymentBusy} onClick={onClose} className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40" aria-label="Cerrar panel">
             <X className="h-4 w-4" />
           </button>
         </div>
       </SheetHeader>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-        {!isHistoricalClosed && <div className="grid grid-cols-2 gap-px border border-[#D1C7BD] bg-[#D1C7BD] sm:grid-cols-4">
-          <div className="bg-white px-2.5 py-2"><p className="text-[9px] uppercase tracking-[0.08em] text-[#AC9C8D]">Deuda total</p><p className="mt-1 text-sm font-semibold tabular-nums">{money(client.totalAmount)}</p></div>
-          <div className="bg-white px-2.5 py-2"><p className="text-[9px] uppercase tracking-[0.08em] text-[#AC9C8D]">Vencida</p><p className="mt-1 text-sm font-semibold tabular-nums text-[#8A4B4B]">{money(client.overdueAmount)}</p></div>
-          <div className="bg-white px-2.5 py-2"><p className="text-[9px] uppercase tracking-[0.08em] text-[#AC9C8D]">Documentos</p><p className="mt-1 text-sm font-semibold tabular-nums">{client.pendingDocuments}</p></div>
-          <div className="bg-white px-2.5 py-2"><p className="text-[9px] uppercase tracking-[0.08em] text-[#AC9C8D]">Prioridad</p><div className="mt-1"><Priority value={client.priority} /></div></div>
+        {!isHistoricalClosed && <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-4">
+          <div className="bg-white px-2.5 py-2"><p className="text-[9px] font-bold uppercase tracking-[0.08em] text-slate-500">Deuda total</p><p className="mt-1 text-sm font-bold tabular-nums text-slate-900">{money(client.totalAmount)}</p></div>
+          <div className="bg-white px-2.5 py-2"><p className="text-[9px] font-bold uppercase tracking-[0.08em] text-slate-500">Vencida</p><p className="mt-1 text-sm font-bold tabular-nums text-rose-600">{money(client.overdueAmount)}</p></div>
+          <div className="bg-white px-2.5 py-2"><p className="text-[9px] font-bold uppercase tracking-[0.08em] text-slate-500">Documentos</p><p className="mt-1 text-sm font-bold tabular-nums text-slate-900">{client.pendingDocuments}</p></div>
+          <div className="bg-white px-2.5 py-2"><p className="text-[9px] font-bold uppercase tracking-[0.08em] text-slate-500">Prioridad</p><div className="mt-1"><Priority value={client.priority} /></div></div>
         </div>}
 
-        {!isHistoricalClosed && <button type="button" onClick={copyMessage} className="mt-4 flex items-center gap-2 border border-[#72383D]/30 bg-[#F5EDE9] px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#EDD9D3]">
-          {copied ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}
-          {copied ? 'Mensaje copiado' : 'Copiar mensaje de cobranza'}
-        </button>}
-         {!isHistoricalClosed && pendingDocuments.length >= 2 && <button type="button" disabled={paymentBusy} onClick={() => void prepareBatch()} className="mt-2 inline-flex items-center gap-2 border border-[#72383D]/30 bg-white px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">{batchPreparing && <LoaderCircle className="h-3 w-3 animate-spin" />}{batchPreparing ? 'Consultando saldos en Bsale…' : 'Pagar todas'}</button>}
-        {batchError && <p className="mt-2 text-[10px] text-[#8A4B4B]">{batchError}</p>}
-        {!isHistoricalClosed && <button type="button" disabled={paymentBusy} onClick={() => { setInteractionError(null); setInteractionOpen(true) }} className="mt-2 inline-flex items-center gap-2 border border-[#72383D]/30 bg-white px-3 py-2 text-xs font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">Agregar nota</button>}
+        {!isHistoricalClosed && <div className="mt-4 flex flex-wrap items-center gap-2">
+          <button type="button" onClick={copyMessage} className="inline-flex items-center gap-1.5 rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-100">
+            {copied ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}
+            {copied ? 'Mensaje copiado' : 'Copiar mensaje de cobranza'}
+          </button>
+          {pendingDocuments.length >= 2 && <button type="button" disabled={paymentBusy} onClick={() => void prepareBatch()} className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:border-sky-300 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50">{batchPreparing && <LoaderCircle className="h-3 w-3 animate-spin" />}{batchPreparing ? 'Consultando saldos en Bsale…' : 'Pagar todas'}</button>}
+          <button type="button" disabled={paymentBusy} onClick={() => { setInteractionError(null); setInteractionOpen(true) }} className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50">Agregar nota</button>
+        </div>}
+        {batchError && <p className="mt-2 text-[10px] text-rose-600">{batchError}</p>}
 
-         <div className="mt-4 border border-[#D1C7BD] bg-white p-3">
-           <label className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#72383D]">Etapa de cobranza</label>
-           {isHistoricalClosed ? <p className="mt-2 text-xs font-semibold">Cerrado</p> : <StagePicker stage={stage} onChange={requestStage} />}
-         </div>
+        <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3 shadow-xs">
+          <label className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-600">Etapa de cobranza</label>
+          {isHistoricalClosed ? <p className="mt-2 text-xs font-semibold text-emerald-700">Cerrado</p> : <StagePicker stage={stage} onChange={requestStage} />}
+        </div>
 
-         {isHistoricalClosed && <div className="mt-4 border border-[#D1C7BD] bg-white p-3 text-xs"><p><strong>Saldo:</strong> $0</p><p className="mt-1"><strong>Cerrado:</strong> {dateTimeLabel(historicalClosed?.closedAt ?? '')}</p></div>}
+        {isHistoricalClosed && <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3 text-xs shadow-xs"><p><strong>Saldo:</strong> $0</p><p className="mt-1"><strong>Cerrado:</strong> {dateTimeLabel(historicalClosed?.closedAt ?? '')}</p></div>}
 
         <CollectionStageDialog key={`drawer-stage-${pendingStage ?? 'closed'}`} open={Boolean(pendingStage)} clientName={client.name} clientTotal={client.totalAmount} currentStage={stage} nextStage={pendingStage} onOpenChange={open => { if (!open) setPendingStage(null) }} onSave={saveStage} />
 
         <Dialog open={interactionOpen} onOpenChange={open => { if (!open && !interactionProcessing) setInteractionOpen(false) }}>
-          <DialogContent className="border-[#D1C7BD] bg-[#FCFBF9] text-[#322D29]">
+          <DialogContent className="border-slate-200 bg-white text-slate-900">
             <DialogHeader>
               <DialogTitle>Agregar nota</DialogTitle>
               <DialogDescription>Registra una interacción sin cambiar la etapa de cobranza.</DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
-              <label className="block text-xs font-semibold">Tipo<select value={interactionType} onChange={event => setInteractionType(event.target.value as CollectionInteractionType)} disabled={interactionProcessing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs"><option value="NOTE">Nota</option><option value="CALL">Llamada</option><option value="MESSAGE">Mensaje / WhatsApp</option><option value="EMAIL">Correo</option></select></label>
-              <label className="block text-xs font-semibold">Descripción<textarea required maxLength={2000} value={interactionBody} onChange={event => setInteractionBody(event.target.value)} disabled={interactionProcessing} rows={4} className="mt-1 w-full resize-none border border-[#D1C7BD] bg-white p-2 text-xs" /></label>
-              {interactionError && <p className="text-xs text-[#8A4B4B]">{interactionError}</p>}
+              <label className="block text-xs font-semibold">Tipo<select value={interactionType} onChange={event => setInteractionType(event.target.value as CollectionInteractionType)} disabled={interactionProcessing} className="mt-1 h-9 w-full rounded-md border border-slate-200 bg-white px-2.5 text-xs focus:border-sky-500 focus:outline-none"><option value="NOTE">Nota</option><option value="CALL">Llamada</option><option value="MESSAGE">Mensaje / WhatsApp</option><option value="EMAIL">Correo</option></select></label>
+              <label className="block text-xs font-semibold">Descripción<textarea required maxLength={2000} value={interactionBody} onChange={event => setInteractionBody(event.target.value)} disabled={interactionProcessing} rows={4} className="mt-1 w-full resize-none rounded-md border border-slate-200 bg-white p-2 text-xs focus:border-sky-500 focus:outline-none" /></label>
+              {interactionError && <p className="text-xs text-rose-600">{interactionError}</p>}
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" disabled={interactionProcessing} onClick={() => setInteractionOpen(false)}>Cancelar</Button>
@@ -979,115 +1112,115 @@ function ClientPanel({
           </DialogContent>
         </Dialog>
 
-          {!isHistoricalClosed && <Dialog open={Boolean(paymentPreview)} onOpenChange={open => { if (!open && !paymentProcessing) setPaymentPreview(null) }}>
-          <DialogContent className="border-[#D1C7BD] bg-[#FCFBF9] text-[#322D29]">
+        {!isHistoricalClosed && <Dialog open={Boolean(paymentPreview)} onOpenChange={open => { if (!open && !paymentProcessing) setPaymentPreview(null) }}>
+          <DialogContent className="border-slate-200 bg-white text-slate-900">
             <DialogHeader>
               <DialogTitle>Confirmar pago en Bsale</DialogTitle>
-             <DialogDescription>Revisa el saldo live antes de confirmar. El pago quedará registrado sólo al confirmar.</DialogDescription>
+              <DialogDescription>Revisa el saldo live antes de confirmar. El pago quedará registrado sólo al confirmar.</DialogDescription>
             </DialogHeader>
             {paymentPreview && <div className="space-y-2 text-xs">
               <p><strong>Cliente:</strong> {client.name}</p>
               <p><strong>Factura:</strong> {client.documents.find(document => document.document_id === paymentPreview.documentId)?.folio ?? paymentPreview.documentId}</p>
               <p><strong>Saldo Bsale actual:</strong> {money(paymentPreview.liveBalance)}</p>
-               <div className="space-y-2 border-y border-[#D1C7BD] py-3">
-                 <label className="flex items-center gap-2"><input type="radio" checked={paymentMode === 'TOTAL'} onChange={() => { setPaymentMode('TOTAL'); setPartialAmount('') }} disabled={paymentProcessing} /> Pago total de esta factura <strong className="ml-auto">{money(paymentPreview.liveBalance)}</strong></label>
-                 <label className="flex items-center gap-2"><input type="radio" checked={paymentMode === 'PARTIAL'} onChange={() => { setPaymentMode('PARTIAL'); setPartialAmount('') }} disabled={paymentProcessing} /> Pago parcial</label>
-                 {paymentMode === 'PARTIAL' && <div className="space-y-1"><label className="block text-[10px] font-semibold">Monto a registrar<input aria-label="Monto parcial" type="text" inputMode="numeric" value={clpInput(partialAmount)} onChange={event => setPartialAmount(event.target.value.replace(/\D/g, ''))} disabled={paymentProcessing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs" /></label><p className="text-[10px] text-[#322D29]/55">Saldo máximo disponible: {money(paymentPreview.liveBalance)}</p></div>}
-                </div>
-                <p><strong>Monto a registrar:</strong> {paymentMode === 'TOTAL' ? money(paymentPreview.liveBalance) : partialAmount ? money(Number(partialAmount)) : '—'}</p>
-                {paymentMode === 'PARTIAL' && Number(partialAmount) > 0 && Number(partialAmount) <= paymentPreview.liveBalance && <p><strong>Saldo estimado posterior:</strong> {money(paymentPreview.liveBalance - Number(partialAmount))}</p>}
-               <label className="block text-xs font-semibold">Forma de pago *<select value={paymentPreview.paymentTypeId ?? ''} onChange={event => setPaymentPreview(current => current ? { ...current, paymentTypeId: event.target.value ? Number(event.target.value) : null } : current)} disabled={paymentProcessing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs"><option value="">Selecciona una forma de pago</option>{paymentPreview.paymentTypes.map(type => <option key={type.id} value={type.id}>{type.label}</option>)}</select></label>
+              <div className="space-y-2 border-y border-slate-200 py-3">
+                <label className="flex items-center gap-2"><input type="radio" checked={paymentMode === 'TOTAL'} onChange={() => { setPaymentMode('TOTAL'); setPartialAmount('') }} disabled={paymentProcessing} /> Pago total de esta factura <strong className="ml-auto">{money(paymentPreview.liveBalance)}</strong></label>
+                <label className="flex items-center gap-2"><input type="radio" checked={paymentMode === 'PARTIAL'} onChange={() => { setPaymentMode('PARTIAL'); setPartialAmount('') }} disabled={paymentProcessing} /> Pago parcial</label>
+                {paymentMode === 'PARTIAL' && <div className="space-y-1"><label className="block text-[10px] font-semibold">Monto a registrar<input aria-label="Monto parcial" type="text" inputMode="numeric" value={clpInput(partialAmount)} onChange={event => setPartialAmount(event.target.value.replace(/\D/g, ''))} disabled={paymentProcessing} className="mt-1 h-9 w-full rounded-md border border-slate-200 bg-white px-2.5 text-xs focus:border-sky-500 focus:outline-none" /></label><p className="text-[10px] text-slate-500">Saldo máximo disponible: {money(paymentPreview.liveBalance)}</p></div>}
+              </div>
+              <p><strong>Monto a registrar:</strong> {paymentMode === 'TOTAL' ? money(paymentPreview.liveBalance) : partialAmount ? money(Number(partialAmount)) : '—'}</p>
+              {paymentMode === 'PARTIAL' && Number(partialAmount) > 0 && Number(partialAmount) <= paymentPreview.liveBalance && <p><strong>Saldo estimado posterior:</strong> {money(paymentPreview.liveBalance - Number(partialAmount))}</p>}
+              <label className="block text-xs font-semibold">Forma de pago *<select value={paymentPreview.paymentTypeId ?? ''} onChange={event => setPaymentPreview(current => current ? { ...current, paymentTypeId: event.target.value ? Number(event.target.value) : null } : current)} disabled={paymentProcessing} className="mt-1 h-9 w-full rounded-md border border-slate-200 bg-white px-2.5 text-xs focus:border-sky-500 focus:outline-none"><option value="">Selecciona una forma de pago</option>{paymentPreview.paymentTypes.map(type => <option key={type.id} value={type.id}>{type.label}</option>)}</select></label>
               <p><strong>Fecha:</strong> {dateLabel(paymentPreview.recordDate)}</p>
-              <p className="mt-3 border border-[#B38A55]/40 bg-[#F6EFE2] px-3 py-2 text-[11px] text-[#806238]">Esta acción registrará un pago real en Bsale.</p>
+              <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">Esta acción registrará un pago real en Bsale.</p>
             </div>}
-               {paymentStatus === 'SUCCESS' && paymentResult && <div className="border border-[#66856B]/40 bg-[#EDF4EC] px-3 py-2 text-[11px] text-[#426247]"><p className="font-semibold">Pago confirmado y reconciliado.</p><p className="mt-1">Saldo factura: <strong>{money(paymentResult.documentBalance)}</strong>. Saldo cliente: <strong>{money(paymentResult.clientBalance)}</strong>{paymentResult.clientBalance === 0 && ' · Cliente cerrado automáticamente.'}</p></div>}
-              {paymentStatus === 'FAILED' && <div className="border border-[#A45B58]/40 bg-[#F5E8E4] px-3 py-2 text-[11px] text-[#8A4B4B]"><p className="font-semibold">No se pudo registrar el pago</p><p className="mt-1">El pago NO fue confirmado en Bsale.</p><p className="mt-1">Detalle: {paymentError ?? 'No fue posible completar el registro interno del pago.'}</p></div>}
-              {paymentStatus === 'UNKNOWN' && <p className="border border-[#B38A55]/40 bg-[#F6EFE2] px-3 py-2 text-[11px] text-[#806238]">Estado incierto: no reintentes automáticamente. Verifica el pago en Bsale y revisa la conciliación.</p>}
-               <DialogFooter>
-                 {paymentStatus === 'IDLE' && <Button type="button" variant="outline" disabled={paymentProcessing} onClick={() => setPaymentPreview(null)}>Cancelar</Button>}
-                 {paymentStatus === 'IDLE' && <Button type="button" disabled={paymentProcessing} onClick={() => void confirmPayment()}>{paymentProcessing ? 'Registrando y verificando…' : 'CONFIRMAR PAGO EN BSALE'}</Button>}
-                 {paymentStatus !== 'IDLE' && <Button type="button" onClick={() => setPaymentPreview(null)}>Cerrar</Button>}
+            {paymentStatus === 'SUCCESS' && paymentResult && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-800"><p className="font-semibold">Pago confirmado y reconciliado.</p><p className="mt-1">Saldo factura: <strong>{money(paymentResult.documentBalance)}</strong>. Saldo cliente: <strong>{money(paymentResult.clientBalance)}</strong>{paymentResult.clientBalance === 0 && ' · Cliente cerrado automáticamente.'}</p></div>}
+            {paymentStatus === 'FAILED' && <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-700"><p className="font-semibold">No se pudo registrar el pago</p><p className="mt-1">El pago NO fue confirmado en Bsale.</p><p className="mt-1">Detalle: {paymentError ?? 'No fue posible completar el registro interno del pago.'}</p></div>}
+            {paymentStatus === 'UNKNOWN' && <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">Estado incierto: no reintentes automáticamente. Verifica el pago en Bsale y revisa la conciliación.</p>}
+            <DialogFooter>
+              {paymentStatus === 'IDLE' && <Button type="button" variant="outline" disabled={paymentProcessing} onClick={() => setPaymentPreview(null)}>Cancelar</Button>}
+              {paymentStatus === 'IDLE' && <Button type="button" disabled={paymentProcessing} onClick={() => void confirmPayment()}>{paymentProcessing ? 'Registrando y verificando…' : 'CONFIRMAR PAGO EN BSALE'}</Button>}
+              {paymentStatus !== 'IDLE' && <Button type="button" onClick={() => setPaymentPreview(null)}>Cerrar</Button>}
             </DialogFooter>
           </DialogContent>
-         </Dialog>}
+        </Dialog>}
 
-         {!isHistoricalClosed && <Dialog open={Boolean(batchPreview)} onOpenChange={open => { if (!open && !batchProcessing) setBatchPreview(null) }}>
-          <DialogContent className="border-[#D1C7BD] bg-[#FCFBF9] text-[#322D29]">
+        {!isHistoricalClosed && <Dialog open={Boolean(batchPreview)} onOpenChange={open => { if (!open && !batchProcessing) setBatchPreview(null) }}>
+          <DialogContent className="border-slate-200 bg-white text-slate-900">
             <DialogHeader>
               <DialogTitle>Pagar todas las facturas</DialogTitle>
               <DialogDescription>Se procesarán los documentos del cliente uno por uno.</DialogDescription>
             </DialogHeader>
-               {batchPreview && <div className="space-y-2 text-xs">
+            {batchPreview && <div className="space-y-2 text-xs">
               <p className="font-semibold">{client.name}</p>
-              {batchPreview.documents.map(document => <div key={document.documentId} className="flex justify-between border-b border-[#D1C7BD]/70 py-1"><span>Factura {document.folio ?? document.documentId}</span><strong>{money(document.balance)}</strong></div>)}
-               <div className="flex justify-between pt-1 text-sm font-bold"><span>TOTAL</span><span>{money(batchPreview.total)}</span></div>
-               <label className="mt-3 block text-xs font-semibold">Forma de pago *<select value={batchPreview.paymentTypeId ?? ''} onChange={event => setBatchPreview(current => current ? { ...current, paymentTypeId: event.target.value ? Number(event.target.value) : null } : current)} disabled={batchProcessing} className="mt-1 h-9 w-full border border-[#D1C7BD] bg-white px-2 text-xs"><option value="">Selecciona una forma de pago</option>{batchPreview.paymentTypes.map(type => <option key={type.id} value={type.id}>{type.label}</option>)}</select></label>
-               <p className="mt-3 border border-[#B38A55]/40 bg-[#F6EFE2] px-3 py-2 text-[11px] text-[#806238]">Se registrarán {batchPreview.documents.length} pagos reales en Bsale por un total de {money(batchPreview.total)}.</p>
+              {batchPreview.documents.map(document => <div key={document.documentId} className="flex justify-between border-b border-slate-200/80 py-1"><span>Factura {document.folio ?? document.documentId}</span><strong>{money(document.balance)}</strong></div>)}
+              <div className="flex justify-between pt-1 text-sm font-bold"><span>TOTAL</span><span>{money(batchPreview.total)}</span></div>
+              <label className="mt-3 block text-xs font-semibold">Forma de pago *<select value={batchPreview.paymentTypeId ?? ''} onChange={event => setBatchPreview(current => current ? { ...current, paymentTypeId: event.target.value ? Number(event.target.value) : null } : current)} disabled={batchProcessing} className="mt-1 h-9 w-full rounded-md border border-slate-200 bg-white px-2.5 text-xs focus:border-sky-500 focus:outline-none"><option value="">Selecciona una forma de pago</option>{batchPreview.paymentTypes.map(type => <option key={type.id} value={type.id}>{type.label}</option>)}</select></label>
+              <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">Se registrarán {batchPreview.documents.length} pagos reales en Bsale por un total de {money(batchPreview.total)}.</p>
             </div>}
-             {batchProcessing && <p className="border border-[#B38A55]/40 bg-[#F6EFE2] px-3 py-2 text-[11px] text-[#806238]">Procesando pagos secuencialmente y verificando cada documento. No cierres esta ventana.</p>}
-             {batchResult && <div className="space-y-1 border border-[#D1C7BD] bg-[#F5F0EA] px-3 py-2 text-[11px]"><p className="font-semibold">Batch {batchResult.status}: {money(batchResult.confirmedTotal)} confirmado de {money(batchResult.expectedTotal)}.</p>{batchResult.results.map(result => <p key={result.documentId} className={result.status === 'CONFIRMED' ? 'text-[#426247]' : 'text-[#8A4B4B]'}>Factura {result.folio ?? result.documentId}: {result.status === 'CONFIRMED' ? 'confirmada' : result.status === 'UNKNOWN' ? 'estado incierto' : 'fallida'}</p>)}</div>}
-             <DialogFooter>
-               <Button type="button" variant="outline" disabled={batchProcessing} onClick={() => setBatchPreview(null)}>Cancelar</Button>
-               <Button type="button" disabled={batchProcessing || Boolean(batchResult)} onClick={() => void confirmBatch()}>{batchProcessing ? 'Registrando y verificando…' : 'CONFIRMAR PAGOS EN BSALE'}</Button>
+            {batchProcessing && <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">Procesando pagos secuencialmente y verificando cada documento. No cierres esta ventana.</p>}
+            {batchResult && <div className="space-y-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px]"><p className="font-semibold">Batch {batchResult.status}: {money(batchResult.confirmedTotal)} confirmado de {money(batchResult.expectedTotal)}.</p>{batchResult.results.map(result => <p key={result.documentId} className={result.status === 'CONFIRMED' ? 'text-emerald-700' : 'text-rose-700'}>Factura {result.folio ?? result.documentId}: {result.status === 'CONFIRMED' ? 'confirmada' : result.status === 'UNKNOWN' ? 'estado incierto' : 'fallida'}</p>)}</div>}
+            <DialogFooter>
+              <Button type="button" variant="outline" disabled={batchProcessing} onClick={() => setBatchPreview(null)}>Cancelar</Button>
+              <Button type="button" disabled={batchProcessing || Boolean(batchResult)} onClick={() => void confirmBatch()}>{batchProcessing ? 'Registrando y verificando…' : 'CONFIRMAR PAGOS EN BSALE'}</Button>
             </DialogFooter>
           </DialogContent>
-         </Dialog>}
+        </Dialog>}
 
-         {!isHistoricalClosed && <div className="mt-5 border border-[#D1C7BD] bg-white">
-          <div className="border-b border-[#D1C7BD] bg-[#F5F0EA] px-3 py-2">
-             <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#72383D]">Documentos pendientes</p>
-           </div>
-          <div className="divide-y divide-[#D1C7BD]/70">
+        {!isHistoricalClosed && <div className="mt-5 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xs">
+          <div className="border-b border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-700">Documentos pendientes</p>
+          </div>
+          <div className="divide-y divide-slate-200/80">
             {pendingDocuments.map((document) => {
-               const dueToday = document.expiration_date === cutoffDate
-               const visibleStatus = document.overdue ? 'Vencida' : dueToday ? 'Adeudada · vence hoy' : 'Adeudada'
-               const unknownAttempt = unknownAttempts.find(attempt => attempt.documentId === document.document_id)
-               const resolution = unknownResolution[document.document_id]
-               return (
-                 <div key={document.document_id} className={`px-3 py-3 text-xs ${focusedDocumentId === document.document_id ? 'bg-[#F6EFE2] ring-1 ring-inset ring-[#B38A55]' : ''}`}>
+              const dueToday = document.expiration_date === cutoffDate
+              const visibleStatus = document.overdue ? 'Vencida' : dueToday ? 'Adeudada · vence hoy' : 'Adeudada'
+              const unknownAttempt = unknownAttempts.find(attempt => attempt.documentId === document.document_id)
+              const resolution = unknownResolution[document.document_id]
+              return (
+                <div key={document.document_id} className={`px-3 py-3 text-xs ${focusedDocumentId === document.document_id ? 'bg-amber-50/70 ring-1 ring-inset ring-amber-300' : ''}`}>
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="font-semibold">{document.document_type_name ?? 'Documento'} #{document.folio ?? document.document_id}</p>
-                      <p className="mt-1 text-[10px] text-[#322D29]/55">Emitida {dateLabel(document.emission_date)} · Vence {dateLabel(document.expiration_date)}</p>
+                      <p className="font-semibold text-slate-900">{document.document_type_name ?? 'Documento'} #{document.folio ?? document.document_id}</p>
+                      <p className="mt-1 text-[10px] text-slate-500">Emitida {dateLabel(document.emission_date)} · Vence {dateLabel(document.expiration_date)}</p>
                     </div>
-                    <strong className="tabular-nums">{money(document.pending_amount)}</strong>
+                    <strong className="tabular-nums text-slate-900">{money(document.pending_amount)}</strong>
                   </div>
-                   <p className={`mt-1 text-[10px] ${document.overdue ? 'text-[#8A4B4B]' : 'text-[#322D29]/55'}`}>{visibleStatus}</p>
-                    <div className="mt-2 flex items-center justify-between gap-2"><span className="text-[10px] text-[#322D29]/55">Saldo pendiente</span><strong className="text-[11px]">{money(document.pending_amount)}</strong></div>
-                     {unknownAttempt ? <button type="button" disabled={paymentBusy} onClick={() => void verifyUnknown(unknownAttempt)} className="mt-2 inline-flex items-center gap-2 border border-[#B38A55]/50 bg-[#F6EFE2] px-2 py-1 text-[10px] font-semibold text-[#806238] hover:bg-[#EDE1C9] disabled:cursor-not-allowed disabled:opacity-50">{unknownBusyId === unknownAttempt.id && <LoaderCircle className="h-3 w-3 animate-spin" />}{unknownBusyId === unknownAttempt.id ? 'Verificando en Bsale…' : 'Verificar en Bsale'}</button> : <button type="button" disabled={paymentBusy} onClick={() => void previewPayment(document.document_id, String(document.pending_amount))} className="mt-2 inline-flex items-center gap-2 border border-[#72383D]/30 px-2 py-1 text-[10px] font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">{preflightDocumentId === document.document_id && <LoaderCircle className="h-3 w-3 animate-spin" />}{preflightDocumentId === document.document_id ? 'Consultando saldo en Bsale…' : 'Registrar pago'}</button>}
-                     {unknownAttempt && <p className="mt-2 border-l-2 border-[#B38A55] pl-2 text-[10px] text-[#806238]">Estado UNKNOWN: no vuelvas a intentar hasta verificarlo.</p>}
-                     {resolution && <p className={`mt-2 border-l-2 pl-2 text-[10px] ${resolution.outcome === 'CONFIRMED' ? 'border-[#66856B] text-[#426247]' : resolution.outcome === 'FAILED' ? 'border-[#66856B] text-[#426247]' : 'border-[#B38A55] text-[#806238]'}`}>{resolution.message}</p>}
-                    {paymentPreview?.documentId === document.document_id && paymentStatus === 'IDLE' && <p className="mt-2 border-l-2 border-[#B38A55] pl-2 text-[10px] text-[#806238]">Preflight OK. Saldo vivo Bsale: {money(paymentPreview.liveBalance)}. No se ha escrito ningún pago.</p>}
-                 </div>
+                  <p className={`mt-1 text-[10px] font-medium ${document.overdue ? 'text-rose-600' : 'text-slate-500'}`}>{visibleStatus}</p>
+                  <div className="mt-2 flex items-center justify-between gap-2"><span className="text-[10px] text-slate-500">Saldo pendiente</span><strong className="text-[11px] text-slate-900">{money(document.pending_amount)}</strong></div>
+                  {unknownAttempt ? <button type="button" disabled={paymentBusy} onClick={() => void verifyUnknown(unknownAttempt)} className="mt-2 inline-flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50">{unknownBusyId === unknownAttempt.id && <LoaderCircle className="h-3 w-3 animate-spin" />}{unknownBusyId === unknownAttempt.id ? 'Verificando en Bsale…' : 'Verificar en Bsale'}</button> : <button type="button" disabled={paymentBusy} onClick={() => void previewPayment(document.document_id, String(document.pending_amount))} className="mt-2 inline-flex items-center gap-2 rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1 text-[10px] font-semibold text-sky-700 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50">{preflightDocumentId === document.document_id && <LoaderCircle className="h-3 w-3 animate-spin" />}{preflightDocumentId === document.document_id ? 'Consultando saldo en Bsale…' : 'Registrar pago'}</button>}
+                  {unknownAttempt && <p className="mt-2 border-l-2 border-amber-400 pl-2 text-[10px] text-amber-800">Estado UNKNOWN: no vuelvas a intentar hasta verificarlo.</p>}
+                  {resolution && <p className={`mt-2 border-l-2 pl-2 text-[10px] ${resolution.outcome === 'CONFIRMED' ? 'border-emerald-500 text-emerald-700' : resolution.outcome === 'FAILED' ? 'border-emerald-500 text-emerald-700' : 'border-amber-400 text-amber-800'}`}>{resolution.message}</p>}
+                  {paymentPreview?.documentId === document.document_id && paymentStatus === 'IDLE' && <p className="mt-2 border-l-2 border-amber-400 pl-2 text-[10px] text-amber-800">Preflight OK. Saldo vivo Bsale: {money(paymentPreview.liveBalance)}. No se ha escrito ningún pago.</p>}
+                </div>
               )
             })}
-           </div>
-           </div>}
-          <section className="mt-5 border border-[#D1C7BD] bg-white">
-           <div className="border-b border-[#D1C7BD] bg-[#F5F0EA] px-3 py-2">
-             <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#72383D]">Bitácora de cobranza</p>
-           </div>
-           {historyLoading && <p className="px-3 py-4 text-[10px] text-[#322D29]/50">Cargando historial…</p>}
-           {!historyLoading && historyError && <p className="px-3 py-4 text-[10px] text-[#8A4B4B]">{historyError}</p>}
-           {!historyLoading && !historyError && history.length === 0 && <p className="px-3 py-4 text-[10px] text-[#322D29]/50">Aún no hay gestiones registradas.</p>}
-            {!historyLoading && !historyError && history.length > 0 && <div className="divide-y divide-[#D1C7BD]/70">
-              {history.map(event => <article key={event.id} className="border-l-2 border-[#B38A55] px-3 py-3 text-xs">
-                <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
-                  <p className="font-bold uppercase tracking-[0.08em] text-[10px] text-[#72383D]">{historyTitle(event)}</p>
-                  <time className="text-[10px] text-[#322D29]/50">{dateTimeLabel(event.createdAt)}</time>
-                </div>
-                <p className="mt-1 text-[10px] font-medium text-[#322D29]/60">{event.actorName}</p>
-                {event.eventType === 'STAGE_CHANGED' && (event.fromStage || event.toStage) && <p className="mt-2 text-[11px] text-[#322D29]">{stageLabel(event.fromStage) ?? 'Inicio'} → {stageLabel(event.toStage)}</p>}
-                {event.eventType === 'COMMITMENT' && (event.commitmentDate || event.commitmentAmount !== null) && <p className="mt-2 text-[10px] text-[#806238]">{event.commitmentDate && <>Fecha: {dateLabel(event.commitmentDate)}</>}{event.commitmentDate && event.commitmentAmount !== null && ' · '}{event.commitmentAmount !== null && <>Monto: {money(event.commitmentAmount)}</>}</p>}
-                {event.nextActionAt && <p className="mt-2 text-[10px] text-[#806238]">Próxima gestión: {dateLabel(event.nextActionAt)}</p>}
-                {event.note && <p className="mt-3 whitespace-pre-wrap border-l-2 border-[#72383D] bg-[#F5EDE9] px-3 py-2 text-[13px] leading-5 text-[#322D29]">{event.note}</p>}
-               </article>)}
-            </div>}
-           {!historyLoading && !historyError && historyHasMore && <button type="button" onClick={() => { setHistoryExpanded(true); void refreshHistory(100) }} className="border-t border-[#D1C7BD] px-3 py-2 text-[10px] font-semibold text-[#72383D] hover:bg-[#F5F0EA]">Ver historial completo</button>}
-         </section>
-         {paymentError && <p className="mt-3 border border-[#A45B58]/30 bg-[#F5E8E4] px-3 py-2 text-[10px] text-[#8A4B4B]">{paymentError}</p>}
+          </div>
+        </div>}
+        <section className="mt-5 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xs">
+          <div className="border-b border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-700">Bitácora de cobranza</p>
+          </div>
+          {historyLoading && <p className="px-3 py-4 text-[10px] text-slate-500">Cargando historial…</p>}
+          {!historyLoading && historyError && <p className="px-3 py-4 text-[10px] text-rose-600">{historyError}</p>}
+          {!historyLoading && !historyError && history.length === 0 && <p className="px-3 py-4 text-[10px] text-slate-500">Aún no hay gestiones registradas.</p>}
+          {!historyLoading && !historyError && history.length > 0 && <div className="divide-y divide-slate-200/80">
+            {history.map(event => <article key={event.id} className="border-l-2 border-sky-400 px-3 py-3 text-xs">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
+                <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-sky-700">{historyTitle(event)}</p>
+                <time className="text-[10px] text-slate-500">{dateTimeLabel(event.createdAt)}</time>
+              </div>
+              <p className="mt-1 text-[10px] font-medium text-slate-600">{event.actorName}</p>
+              {event.eventType === 'STAGE_CHANGED' && (event.fromStage || event.toStage) && <p className="mt-2 text-[11px] text-slate-800">{stageLabel(event.fromStage) ?? 'Inicio'} → {stageLabel(event.toStage)}</p>}
+              {event.eventType === 'COMMITMENT' && (event.commitmentDate || event.commitmentAmount !== null) && <p className="mt-2 text-[10px] text-amber-800">{event.commitmentDate && <>Fecha: {dateLabel(event.commitmentDate)}</>}{event.commitmentDate && event.commitmentAmount !== null && ' · '}{event.commitmentAmount !== null && <>Monto: {money(event.commitmentAmount)}</>}</p>}
+              {event.nextActionAt && <p className="mt-2 text-[10px] text-violet-700">Próxima gestión: {dateLabel(event.nextActionAt)}</p>}
+              {event.note && <p className="mt-3 whitespace-pre-wrap rounded-r border-l-2 border-sky-600 bg-sky-50/70 px-3 py-2 text-[13px] leading-5 text-slate-900">{event.note}</p>}
+            </article>)}
+          </div>}
+          {!historyLoading && !historyError && historyHasMore && <button type="button" onClick={() => { setHistoryExpanded(true); void refreshHistory(100) }} className="w-full border-t border-slate-200 px-3 py-2 text-left text-[10px] font-semibold text-sky-700 hover:bg-slate-50">Ver historial completo</button>}
+        </section>
+        {paymentError && <p className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] text-rose-700">{paymentError}</p>}
 
-       </div>
+      </div>
     </SheetContent>
   )
 }
@@ -1114,6 +1247,7 @@ export function Cobranza({ data, error, snapshotStatus }: { data?: FinanceReceiv
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [locatedClientId, setLocatedClientId] = useState<number | null>(null)
   const [quickNoteFeedback, setQuickNoteFeedback] = useState(false)
+  const [summaryCollapsed, setSummaryCollapsed] = useState(false)
   const [today, setToday] = useState(() => todayInChile())
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }))
 
@@ -1162,7 +1296,7 @@ export function Cobranza({ data, error, snapshotStatus }: { data?: FinanceReceiv
     }
   }, [data])
   if (error || !data) {
-    return <main className="min-h-[430px] bg-[#EFE9E1] px-4 py-5 sm:px-5 sm:py-6 lg:px-6"><div className="flex flex-wrap items-start justify-between gap-3 border border-[#72383D]/25 bg-white/60 px-5 py-8"><div className="text-sm text-[#72383D]">{error ?? 'No hay datos de cobranza disponibles.'}</div>{snapshotStatus && <CobranzaSnapshotControl initialStatus={snapshotStatus} />}</div></main>
+    return <main className="min-h-[430px] rounded-xl border border-slate-200 bg-white p-5 shadow-xs"><div className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50/70 px-5 py-8"><div className="text-sm font-medium text-rose-700">{error ?? 'No hay datos de cobranza disponibles.'}</div>{snapshotStatus && <CobranzaSnapshotControl initialStatus={snapshotStatus} />}</div></main>
   }
   const freshness = data.freshness_status
     ? { status: data.freshness_status, ageMinutes: data.snapshot_age_minutes ?? null }
@@ -1200,6 +1334,30 @@ export function Cobranza({ data, error, snapshotStatus }: { data?: FinanceReceiv
     return leftDate.localeCompare(rightDate) || Number(right.pending_amount) - Number(left.pending_amount) || String(left.folio ?? '').localeCompare(String(right.folio ?? ''))
   })
   const pendingTasks = buildCobranzaTasks(clients, workflow, today)
+  const mostOverdueClients = [...visibleClients]
+    .filter(client => client.overdueAmount > 0)
+    .sort((left, right) => right.oldestDaysOverdue - left.oldestDaysOverdue || right.overdueAmount - left.overdueAmount || left.name.localeCompare(right.name, 'es'))
+  const currentDebtEntries: CurrentDebtEntry[] = visibleClients
+    .flatMap<CurrentDebtEntry>(client => {
+      const currentDocs = client.documents.filter(document => !document.overdue)
+      const currentAmount = client.totalAmount - client.overdueAmount
+      if (currentAmount <= 0 || currentDocs.length === 0) return []
+      const nextDueDate: string | null = currentDocs
+        .map(document => document.expiration_date)
+        .filter((date): date is string => Boolean(date))
+        .sort()[0] ?? null
+      const daysUntilDue = nextDueDate && cutoffDate
+        ? Math.max(0, Math.floor((new Date(`${nextDueDate}T00:00:00Z`).getTime() - new Date(`${cutoffDate}T00:00:00Z`).getTime()) / 86_400_000))
+        : null
+      return [{
+        client,
+        currentAmount,
+        currentDocsCount: currentDocs.length,
+        nextDueDate,
+        daysUntilDue,
+      }]
+    })
+    .sort((left, right) => right.currentAmount - left.currentAmount || (left.daysUntilDue ?? Number.MAX_SAFE_INTEGER) - (right.daysUntilDue ?? Number.MAX_SAFE_INTEGER) || left.client.name.localeCompare(right.client.name, 'es'))
   const locatedClient = locatedClientId === null ? null : clients.find(client => client.clientId === locatedClientId) ?? null
   const selectTask = (task: CobranzaTask) => {
     setSelectedTaskId(task.id)
@@ -1299,90 +1457,104 @@ export function Cobranza({ data, error, snapshotStatus }: { data?: FinanceReceiv
     : calculateCobranzaInvoiceKpis(visibleInvoices)
 
   return (
-    <main className="min-h-[430px] bg-[#EFE9E1] px-4 py-5 sm:px-5 sm:py-6 lg:px-6">
-      <section className="border border-[#D1C7BD] bg-[#FCFBF9] p-4 shadow-[0_8px_24px_rgba(50,45,41,0.05)] lg:p-5">
-        <div className="overflow-hidden border border-[#D1C7BD] bg-white">
-          <div className="grid grid-cols-1 gap-px bg-[#EAE2D9] lg:grid-cols-2 2xl:grid-cols-[minmax(190px,1.05fr)_minmax(280px,1.15fr)_minmax(330px,1.3fr)_minmax(200px,.8fr)]">
-            <div className="flex flex-col justify-center gap-0.5 bg-white p-3">
-              <p className="text-[9px] font-bold uppercase tracking-[0.16em] text-[#72383D]">Cobranza</p>
-              <h1 className="truncate text-base font-semibold tracking-[-0.02em] text-[#322D29]">Gestión de cartera y clientes</h1>
-              <p className="truncate text-[10px] leading-4 text-[#322D29]/50">Ordenada por deuda vencida, antigüedad y saldo total.</p>
-            </div>
-            <div className="grid grid-cols-2 grid-rows-2 gap-px bg-[#EAE2D9]">
-              <MiniKpi label="CxC total" value={money(kpis.totalAmount)} />
-              <MiniKpi label="CxC vencida" value={money(kpis.overdueAmount)} tone="overdue" />
-              <MiniKpi label="Clientes con saldo" value={kpis.clientsWithBalance.toLocaleString('es-CL')} />
-              <MiniKpi label="Clientes con deuda vencida" value={kpis.clientsWithOverdueDebt.toLocaleString('es-CL')} tone="overdue" />
-            </div>
-            <div className="flex flex-col bg-white">
-              <PendingTasksPanel tasks={pendingTasks} selectedTaskId={selectedTaskId} onSelectTask={selectTask} onOpenClient={openClientFromTask} />
-            </div>
-            <div className="flex min-w-0 flex-col gap-1.5 bg-white p-3 text-[10px] text-[#322D29]/55">
-              <CobranzaFreshnessNotice status={freshness.status} snapshotLabel={snapshotLabel} />
-              {snapshotStatus && <CobranzaSnapshotControl initialStatus={snapshotStatus} />}
-              <p className="break-words">{data.summary.pending_documents} documentos pendientes</p>
-              <PaymentProgressObserver />
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-2.5 flex flex-wrap items-center gap-1.5 border-b border-[#D1C7BD] pb-3">
-              <div className="flex items-center gap-1 border border-[#D1C7BD] bg-white p-0.5 text-[10px] font-semibold"><button type="button" onClick={() => changeView('CLIENTS')} className={`px-1.5 py-1 ${viewMode === 'CLIENTS' ? 'bg-[#72383D] text-white' : 'text-[#72383D]'}`}>Clientes</button><button type="button" onClick={() => changeView('INVOICES')} className={`px-1.5 py-1 ${viewMode === 'INVOICES' ? 'bg-[#72383D] text-white' : 'text-[#72383D]'}`}>Facturas</button></div>
-             <label className="relative">
-               <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#322D29]/40" />
-                <input value={query} onChange={event => setQuery(event.target.value)} placeholder={viewMode === 'CLIENTS' ? 'Buscar cliente' : 'Buscar cliente o folio'} className="h-8 w-full min-w-[220px] border border-[#D1C7BD] bg-white pl-7 pr-2 text-xs outline-none focus:border-[#72383D] sm:w-52" />
-             </label>
-            <select value={scope} onChange={event => setScope(event.target.value as 'all' | 'overdue')} className="h-8 border border-[#D1C7BD] bg-white px-2 text-xs text-[#322D29]">
-              <option value="overdue">Con deuda vencida</option>
-              <option value="all">Todos</option>
-            </select>
-             <select value={age} onChange={event => setAge(event.target.value)} className="h-8 border border-[#D1C7BD] bg-white px-2 text-xs text-[#322D29]">
-              <option value="0">Cualquier antigüedad</option>
-              <option value="15">15+ días</option>
-              <option value="30">30+ días</option>
-               <option value="60">60+ días</option>
-             </select>
-             <label className="flex h-8 items-center gap-1 border border-[#D1C7BD] bg-white px-2 text-xs"><span className="text-[#322D29]/50">Ordenar</span><select value={sortMode} onChange={event => setSortMode(event.target.value as ClientSort | InvoiceSort)} className="bg-transparent text-xs text-[#322D29] outline-none">
-               {viewMode === 'CLIENTS' ? <><option value="overdue-desc">Deuda vencida: mayor a menor</option><option value="age-desc">Antigüedad: mayor primero</option><option value="total-desc">Deuda total: mayor a menor</option><option value="total-asc">Deuda total: menor a mayor</option><option value="name-asc">Cliente: A–Z</option></> : <><option value="due-asc">Vencimiento: más antiguo primero</option><option value="due-desc">Vencimiento: más reciente primero</option><option value="amount-desc">Monto: mayor a menor</option><option value="amount-asc">Monto: menor a mayor</option><option value="name-asc">Cliente: A–Z</option></>}
-              </select></label>
-              <button type="button" onClick={clearFilters} disabled={filtersClean} className="h-8 border border-[#D1C7BD] px-2 text-xs text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-40">Limpiar filtros</button>
-        </div>
-
-            {viewMode === 'CLIENTS' ? <DndContext sensors={sensors} onDragStart={handleDragStart} onDragCancel={() => setActiveDragClientId(null)} onDragEnd={handleDragEnd}>
-              <div className="mt-3 overflow-x-auto pb-2">
-                <div className="grid min-w-[1120px] grid-cols-[repeat(5,minmax(212px,1fr))] gap-2">
-                 {kanbanStages.map(stage => {
-                   const stageClients = sortedClients.filter(client => stage.key !== 'CLOSED' && (workflow[client.clientId]?.stage ?? 'TO_MANAGE') === stage.key)
-                   const includeLocated = locatedClient !== null && stage.key !== 'CLOSED' && (workflow[locatedClient.clientId]?.stage ?? 'TO_MANAGE') === stage.key && !stageClients.some(client => client.clientId === locatedClient.clientId)
-                   return <ClientKanbanColumn key={stage.key} stage={stage} clients={includeLocated && locatedClient ? [...stageClients, locatedClient] : stageClients} tasks={pendingTasks} today={today} selectedClientId={locatedClientId} closedRecent={stage.key === 'CLOSED' ? visibleClosedRecent : []} workflow={workflow} onOpen={selectClient} onOpenClosed={selectClosed} onAddNote={setQuickNoteClient} onCommitment={setCommitmentClient} />
-                 })}
+    <main className="flex h-[calc(100vh-110px)] min-h-[520px] w-full flex-col overflow-hidden rounded-xl border border-slate-200 bg-slate-50 text-slate-900 shadow-xs">
+      <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        {!summaryCollapsed && <div className="flex-none border-b border-slate-200 bg-white">
+          <div className="grid grid-cols-1 gap-px bg-slate-200 lg:grid-cols-2 xl:h-[214px] xl:grid-cols-[minmax(380px,1.25fr)_minmax(270px,1fr)_minmax(270px,1fr)]">
+            <div className="flex min-h-0 min-w-0 flex-col bg-white lg:col-span-2 xl:col-span-1 xl:h-full">
+              <div className="flex shrink-0 flex-wrap items-center justify-between gap-1.5 border-b border-slate-200 px-2.5 py-1.5">
+                <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                  <h1 className="text-[11px] font-bold uppercase tracking-[0.1em] text-sky-700">Cobranza</h1>
+                  <CobranzaFreshnessNotice status={freshness.status} snapshotLabel={snapshotLabel} />
+                  {snapshotStatus && <CobranzaSnapshotControl initialStatus={snapshotStatus} />}
+                </div>
+                <div className="flex flex-wrap items-center gap-1 text-[10px] text-slate-500">
+                  <PaymentProgressObserver />
                 </div>
               </div>
-             <DragOverlay>
-                 {activeDragClientId ? (() => { const client = clients.find(candidate => candidate.clientId === activeDragClientId); if (!client) return null; return <ClientKanbanCard client={client} stage={workflow[client.clientId]?.stage ?? 'TO_MANAGE'} workflow={workflow[client.clientId]} task={taskForClient(client.clientId, pendingTasks)} onOpen={() => undefined} onAddNote={() => undefined} onCommitment={() => undefined} isOverlay /> })() : null}
-             </DragOverlay>
-             </DndContext> : <div className="mt-3 overflow-x-auto pb-2"><div className="grid min-w-[1120px] grid-cols-[repeat(5,minmax(212px,1fr))] gap-2">
-             {kanbanStages.map(stage => {
-               const stageInvoices = sortedInvoices.filter(invoice => (workflow[invoice.client_id]?.stage ?? 'TO_MANAGE') === stage.key)
-                return <section key={stage.key} className="min-w-0 border border-[#D1C7BD] bg-[#F5F0EA]">
-                 <header className="border-b border-[#D1C7BD] px-3 py-2"><div className="flex items-center justify-between"><h3 className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#72383D]">{stage.label}</h3><span className="text-[10px] text-[#322D29]/50">{stageInvoices.length}</span></div></header>
-                 <div className="space-y-2 p-2">
-                   {stageInvoices.map(invoice => { const client = clients.find(candidate => candidate.clientId === invoice.client_id); if (!client) return null; return <div key={invoice.key} role="button" tabIndex={0} onDoubleClick={() => selectClient(client, invoice.document_id)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectClient(client, invoice.document_id) } }} className="w-full cursor-pointer border border-[#D1C7BD] bg-white p-2.5 text-left hover:border-[#72383D]">
-                     <div className="flex items-start justify-between gap-2"><div><p className="text-xs font-semibold">{invoice.clientName}</p><p className="mt-1 text-[10px] text-[#322D29]/60">Factura #{invoice.folio ?? invoice.document_id}</p></div><Priority value={invoice.priority} /></div>
-                     <p className="mt-2 text-[10px] text-[#322D29]/55">Emitida {dateLabel(invoice.emission_date)} · Vence {dateLabel(invoice.expiration_date)}</p>
-                     <p className={`mt-1 text-[10px] ${invoice.overdue ? 'text-[#8A4B4B]' : 'text-[#322D29]/55'}`}>{invoice.overdue ? `${invoice.daysOverdue} días vencida` : 'Por vencer'}</p>
-                     <div className="mt-1 flex items-center justify-between gap-2"><strong className="text-sm tabular-nums">{money(invoice.pending_amount)}</strong><button type="button" onClick={event => { event.stopPropagation(); selectClient(client, invoice.document_id) }} className="border border-[#72383D]/30 px-2 py-1 text-[10px] font-semibold text-[#72383D]">Registrar pago</button></div>
-                   </div> })}
-                   {stageInvoices.length === 0 && <p className="px-2 py-5 text-center text-[10px] text-[#322D29]/45">Sin facturas pendientes</p>}
-                 </div>
-               </section>
-             })}
-            </div></div>}
-           <CollectionStageDialog key={`drop-stage-${pendingDrop?.client.clientId ?? 'closed'}-${pendingDrop?.nextStage ?? ''}`} open={Boolean(pendingDrop)} clientName={pendingDrop?.client.name ?? ''} clientTotal={pendingDrop?.client.totalAmount ?? 0} currentStage={pendingDrop?.currentStage ?? 'TO_MANAGE'} nextStage={pendingDrop?.nextStage ?? null} onOpenChange={open => { if (!open) setPendingDrop(null) }} onSave={saveDroppedStage} />
-            <QuickInteractionDialog key={`quick-note-${quickNoteClient?.clientId ?? 'closed'}`} open={Boolean(quickNoteClient)} clientName={quickNoteClient?.name ?? ''} onOpenChange={open => { if (!open) setQuickNoteClient(null) }} onSave={saveQuickInteraction} />
-            <CommitmentDialog key={`commitment-${commitmentClient?.clientId ?? 'closed'}-${workflow[commitmentClient?.clientId ?? 0]?.commitment_at ?? 'new'}`} open={Boolean(commitmentClient)} clientName={commitmentClient?.name ?? ''} clientTotal={commitmentClient?.totalAmount ?? 0} workflow={commitmentClient ? workflow[commitmentClient.clientId] : undefined} onOpenChange={open => { if (!open) setCommitmentClient(null) }} onSave={saveCommitment} onClear={removeCommitment} />
-           {quickNoteFeedback && <p className="fixed bottom-4 right-4 z-40 border border-[#66856B]/40 bg-[#EDF4EC] px-3 py-2 text-xs text-[#426247] shadow-sm">Nota guardada</p>}
-        <p className="mt-2 text-[10px] text-[#322D29]/45">Vencida según Bsale: vencimiento anterior al corte. Una factura que vence el día del corte permanece como adeudada.</p>
+              <div className="grid shrink-0 grid-cols-2 gap-px border-b border-slate-200 bg-slate-200 sm:grid-cols-4">
+                <MiniKpi label="CxC total" value={money(kpis.totalAmount)} />
+                <MiniKpi label="CxC vencida" value={money(kpis.overdueAmount)} tone="overdue" />
+                <MiniKpi label="Clientes con saldo" value={kpis.clientsWithBalance.toLocaleString('es-CL')} />
+                <MiniKpi label="Clientes con deuda vencida" value={kpis.clientsWithOverdueDebt.toLocaleString('es-CL')} tone="overdue" />
+              </div>
+              <PendingTasksPanel tasks={pendingTasks} selectedTaskId={selectedTaskId} onSelectTask={selectTask} onOpenClient={openClientFromTask} />
+            </div>
+            <MostOverdueClientsPanel clients={mostOverdueClients} onOpenClient={client => selectClient(client)} />
+            <CurrentDebtClientsPanel entries={currentDebtEntries} onOpenClient={client => selectClient(client)} />
+          </div>
+        </div>}
+
+        <div className="flex flex-none flex-wrap items-center gap-1.5 border-b border-slate-200 bg-white px-2.5 py-1.5">
+          <div className="flex items-center gap-0.5 rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-[11px] font-semibold"><button type="button" onClick={() => changeView('CLIENTS')} className={`rounded-md px-2.5 py-1 transition-colors ${viewMode === 'CLIENTS' ? 'bg-sky-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}>Clientes</button><button type="button" onClick={() => changeView('INVOICES')} className={`rounded-md px-2.5 py-1 transition-colors ${viewMode === 'INVOICES' ? 'bg-sky-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}>Facturas</button></div>
+          <label className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+            <input value={query} onChange={event => setQuery(event.target.value)} placeholder={viewMode === 'CLIENTS' ? 'Buscar cliente' : 'Buscar cliente o folio'} className="h-8 w-full min-w-[220px] rounded-lg border border-slate-200 bg-white pl-8 pr-2.5 text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:border-sky-500 sm:w-56" />
+          </label>
+          <select value={scope} onChange={event => setScope(event.target.value as 'all' | 'overdue')} className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-800 outline-none focus:border-sky-500">
+            <option value="overdue">Con deuda vencida</option>
+            <option value="all">Todos</option>
+          </select>
+          <select value={age} onChange={event => setAge(event.target.value)} className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-800 outline-none focus:border-sky-500">
+            <option value="0">Cualquier antigüedad</option>
+            <option value="15">15+ días</option>
+            <option value="30">30+ días</option>
+            <option value="60">60+ días</option>
+          </select>
+          <label className="flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs"><span className="text-slate-500">Ordenar</span><select value={sortMode} onChange={event => setSortMode(event.target.value as ClientSort | InvoiceSort)} className="bg-transparent text-xs font-medium text-slate-800 outline-none">
+            {viewMode === 'CLIENTS' ? <><option value="overdue-desc">Deuda vencida: mayor a menor</option><option value="age-desc">Antigüedad: mayor primero</option><option value="total-desc">Deuda total: mayor a menor</option><option value="total-asc">Deuda total: menor a mayor</option><option value="name-asc">Cliente: A–Z</option></> : <><option value="due-asc">Vencimiento: más antiguo primero</option><option value="due-desc">Vencimiento: más reciente primero</option><option value="amount-desc">Monto: mayor a menor</option><option value="amount-asc">Monto: menor a mayor</option><option value="name-asc">Cliente: A–Z</option></>}
+          </select></label>
+          <button type="button" onClick={clearFilters} disabled={filtersClean} className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40">Limpiar filtros</button>
+          <button type="button" onClick={() => setSummaryCollapsed(value => !value)} className="ml-auto h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-semibold text-slate-600 transition-colors hover:bg-slate-50 hover:text-sky-700">
+            {summaryCollapsed ? 'Mostrar resumen' : 'Ocultar resumen'}
+          </button>
+        </div>
+
+        {viewMode === 'CLIENTS' ? <DndContext sensors={sensors} onDragStart={handleDragStart} onDragCancel={() => setActiveDragClientId(null)} onDragEnd={handleDragEnd}>
+          <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden bg-slate-100/70 p-2.5">
+            <div className="grid h-full min-w-[1120px] grid-cols-[repeat(5,minmax(212px,1fr))] gap-2.5">
+              {kanbanStages.map(stage => {
+                const stageClients = sortedClients.filter(client => stage.key !== 'CLOSED' && (workflow[client.clientId]?.stage ?? 'TO_MANAGE') === stage.key)
+                const includeLocated = locatedClient !== null && stage.key !== 'CLOSED' && (workflow[locatedClient.clientId]?.stage ?? 'TO_MANAGE') === stage.key && !stageClients.some(client => client.clientId === locatedClient.clientId)
+                return <ClientKanbanColumn key={stage.key} stage={stage} clients={includeLocated && locatedClient ? [...stageClients, locatedClient] : stageClients} tasks={pendingTasks} today={today} selectedClientId={locatedClientId} closedRecent={stage.key === 'CLOSED' ? visibleClosedRecent : []} workflow={workflow} onOpen={selectClient} onOpenClosed={selectClosed} onAddNote={setQuickNoteClient} onCommitment={setCommitmentClient} />
+              })}
+            </div>
+          </div>
+          <DragOverlay>
+            {activeDragClientId ? (() => { const client = clients.find(candidate => candidate.clientId === activeDragClientId); if (!client) return null; return <ClientKanbanCard client={client} stage={workflow[client.clientId]?.stage ?? 'TO_MANAGE'} workflow={workflow[client.clientId]} task={taskForClient(client.clientId, pendingTasks)} onOpen={() => undefined} onAddNote={() => undefined} onCommitment={() => undefined} isOverlay /> })() : null}
+          </DragOverlay>
+        </DndContext> : <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden bg-slate-100/70 p-2.5"><div className="grid h-full min-w-[1120px] grid-cols-[repeat(5,minmax(212px,1fr))] gap-2.5">
+          {kanbanStages.map(stage => {
+            const stageInvoices = sortedInvoices.filter(invoice => (workflow[invoice.client_id]?.stage ?? 'TO_MANAGE') === stage.key)
+            const columnAmount = stageInvoices.reduce((sum, invoice) => sum + Number(invoice.pending_amount || 0), 0)
+            return <section key={stage.key} className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-slate-100/80 shadow-xs">
+              <header className="sticky top-0 z-10 shrink-0 border-b border-slate-200 bg-white/95 px-2.5 py-2 backdrop-blur-xs">
+                <div className="flex items-center justify-between gap-1.5">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <span className={`h-2 w-2 shrink-0 rounded-full ${stageDotTone[stage.key]}`} />
+                    <h3 className="truncate text-[10px] font-bold uppercase tracking-wider text-slate-800">{stage.label}</h3>
+                  </div>
+                  <span className="flex h-4 min-w-[20px] shrink-0 items-center justify-center rounded-full bg-slate-200/80 px-1.5 text-[10px] font-bold tabular-nums text-slate-700">{stageInvoices.length}</span>
+                </div>
+                <p className="mt-0.5 pl-3.5 text-[10px] font-semibold tabular-nums text-slate-500">{money(columnAmount)}</p>
+              </header>
+              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
+                {stageInvoices.map(invoice => { const client = clients.find(candidate => candidate.clientId === invoice.client_id); if (!client) return null; return <div key={invoice.key} role="button" tabIndex={0} onDoubleClick={() => selectClient(client, invoice.document_id)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectClient(client, invoice.document_id) } }} className="w-full cursor-pointer rounded-lg border border-slate-200 bg-white p-2.5 text-left shadow-xs transition-all hover:border-sky-400 hover:shadow-sm">
+                  <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate text-xs font-semibold text-slate-900">{invoice.clientName}</p><p className="mt-0.5 text-[10px] font-medium text-slate-500">Factura #{invoice.folio ?? invoice.document_id}</p></div><Priority value={invoice.priority} /></div>
+                  <p className="mt-1.5 text-[10px] text-slate-500">Emitida {dateLabel(invoice.emission_date)} · Vence {dateLabel(invoice.expiration_date)}</p>
+                  <p className={`mt-1 text-[10px] font-medium ${invoice.overdue ? 'text-rose-600' : 'text-slate-500'}`}>{invoice.overdue ? `${invoice.daysOverdue} días vencida` : 'Por vencer'}</p>
+                  <div className="mt-1.5 flex items-center justify-between gap-2 border-t border-slate-100 pt-1.5"><strong className="text-sm font-bold tabular-nums text-slate-900">{money(invoice.pending_amount)}</strong><button type="button" onClick={event => { event.stopPropagation(); selectClient(client, invoice.document_id) }} className="rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-[10px] font-semibold text-sky-700 hover:bg-sky-100">Registrar pago</button></div>
+                </div> })}
+                {stageInvoices.length === 0 && <div className="flex min-h-[72px] items-center justify-center rounded-md border border-dashed border-slate-200 bg-white/50"><p className="text-[11px] font-medium text-slate-400">Sin facturas pendientes</p></div>}
+              </div>
+            </section>
+          })}
+        </div></div>}
+        <CollectionStageDialog key={`drop-stage-${pendingDrop?.client.clientId ?? 'closed'}-${pendingDrop?.nextStage ?? ''}`} open={Boolean(pendingDrop)} clientName={pendingDrop?.client.name ?? ''} clientTotal={pendingDrop?.client.totalAmount ?? 0} currentStage={pendingDrop?.currentStage ?? 'TO_MANAGE'} nextStage={pendingDrop?.nextStage ?? null} onOpenChange={open => { if (!open) setPendingDrop(null) }} onSave={saveDroppedStage} />
+        <QuickInteractionDialog key={`quick-note-${quickNoteClient?.clientId ?? 'closed'}`} open={Boolean(quickNoteClient)} clientName={quickNoteClient?.name ?? ''} onOpenChange={open => { if (!open) setQuickNoteClient(null) }} onSave={saveQuickInteraction} />
+        <CommitmentDialog key={`commitment-${commitmentClient?.clientId ?? 'closed'}-${workflow[commitmentClient?.clientId ?? 0]?.commitment_at ?? 'new'}`} open={Boolean(commitmentClient)} clientName={commitmentClient?.name ?? ''} clientTotal={commitmentClient?.totalAmount ?? 0} workflow={commitmentClient ? workflow[commitmentClient.clientId] : undefined} onOpenChange={open => { if (!open) setCommitmentClient(null) }} onSave={saveCommitment} onClear={removeCommitment} />
+        {quickNoteFeedback && <p className="fixed bottom-4 right-4 z-40 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800 shadow-sm">Nota guardada</p>}
+        <p className="flex-none border-t border-slate-200 bg-white px-3 py-1.5 text-[10px] text-slate-500">Vencida según Bsale: vencimiento anterior al corte. Una factura que vence el día del corte permanece como adeudada.</p>
       </section>
 
         <Sheet open={Boolean(selectedClient)} onOpenChange={open => { if (!open) { setSelectedClient(null); setSelectedClosed(null); setSelectedDocumentId(null) } }}>

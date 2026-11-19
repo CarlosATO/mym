@@ -81,13 +81,13 @@ test('Vista Facturas no usa draggable ni permite cambiar workflow', () => {
 
 test('feedback de arrastre eleva y atenúa tarjeta y resalta destino', () => {
   assert.match(card, /opacity-45 shadow-lg/)
-  assert.match(view, /bg-\[#F1E4DD\]/)
+  assert.match(view, /border-sky-500 bg-sky-50\/70/)
 })
 
 test('bitácora da prioridad visual al mensaje', () => {
-  assert.match(view, /whitespace-pre-wrap border-l-2 border-\[#72383D\] bg-\[#F5EDE9\]/)
-  assert.match(view, /text-\[13px\] leading-5 text-\[#322D29\]/)
-  assert.doesNotMatch(view, /italic text-\[#322D29\]/)
+  assert.match(view, /whitespace-pre-wrap rounded-r border-l-2 border-sky-600 bg-sky-50\/70/)
+  assert.match(view, /text-\[13px\] leading-5 text-slate-900/)
+  assert.doesNotMatch(view, /italic text-slate-900/)
 })
 
 test('evento sin nota no genera bloque de contenido', () => assert.match(view, /event\.note && <p/))
@@ -110,30 +110,29 @@ test('clientes son los únicos datos del contexto DnD', () => {
 })
 
 test('Kanban conserva ancho mínimo legible y scroll horizontal local', () => {
-  assert.match(view, /overflow-x-auto pb-2/)
+  assert.match(view, /min-h-0 flex-1 overflow-x-auto overflow-y-hidden/)
   assert.match(view, /min-w-\[1120px\]/)
   assert.match(view, /grid-cols-\[repeat\(5,minmax\(212px,1fr\)\)\]/)
-  assert.match(view, /className=\{`min-w-0 border/)
+  assert.match(view, /className=\{`flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border/)
 })
 
 test('tarjeta conserva acciones rápidas utilizables en ancho compacto', () => {
   assert.match(card, /flex flex-wrap gap-1 border/)
-  assert.match(card, /min-w-\[84px\] flex-1 border.*Copiar mensaje/)
-  assert.match(card, /min-w-\[84px\] flex-1 border.*Agregar nota/)
+  assert.match(card, /min-w-\[84px\] flex-1 rounded border.*Copiar mensaje/)
+  assert.match(card, /min-w-\[84px\] flex-1 rounded border.*Agregar nota/)
 })
 
-test('KPIs compactos viven en el header en 2x2 y desaparece la fila independiente', () => {
-  assert.match(view, /grid grid-cols-2 grid-rows-2 gap-px bg-\[#EAE2D9\]/)
+test('KPIs compactos viven en el header y desaparece la fila independiente', () => {
+  assert.match(view, /grid shrink-0 grid-cols-2 gap-px border-b border-slate-200 bg-slate-200 sm:grid-cols-4/)
   assert.doesNotMatch(view, /mt-4 grid gap-1\.5 sm:grid-cols-2 xl:grid-cols-4/)
   assert.doesNotMatch(view, /Cobranza priorizada/)
 })
 
 test('toolbar admite wrap y mantiene búsqueda legible', () => {
-  assert.match(view, /mt-2\.5 flex flex-wrap items-center gap-1\.5 border-b border-\[#D1C7BD\]/)
-  assert.match(view, /w-full min-w-\[220px\].*sm:w-52/)
+  assert.match(view, /flex flex-none flex-wrap items-center gap-1\.5 border-b border-slate-200/)
+  assert.match(view, /w-full min-w-\[220px\].*sm:w-56/)
 })
 
-test('padding de Cobranza aprovecha mejor el ancho medio', () => {
-  assert.match(view, /px-4 py-5 sm:px-5 sm:py-6 lg:px-6/)
-  assert.match(view, /bg-\[#FCFBF9\] p-4 .* lg:p-5/)
+test('contenedor principal de Cobranza fija altura al viewport como Preparación de Pedidos', () => {
+  assert.match(view, /flex h-\[calc\(100vh-110px\)\] min-h-\[520px\] w-full flex-col overflow-hidden rounded-xl border border-slate-200/)
 })

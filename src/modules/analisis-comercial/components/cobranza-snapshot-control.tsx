@@ -60,19 +60,17 @@ export function CobranzaSnapshotControl({ initialStatus }: { initialStatus: Rece
   const effectiveCoverageLabel = effectiveCoverage === 100 ? '100%' : `${effectiveCoverage.toLocaleString('es-CL', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
   const terminalSnapshot = status.status === 'COMPLETED' || status.status === 'PARTIAL'
   return (
-    <div className="flex min-w-0 flex-col items-start gap-1">
-      <button type="button" onClick={() => void start()} disabled={running} className="border border-[#72383D]/35 bg-white px-2 py-1 text-[10px] font-semibold text-[#72383D] hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50">
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <button type="button" onClick={() => void start()} disabled={running} className="rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700 transition-colors hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50">
         {running ? 'Sincronizando cobranzas…' : 'Sincronizar cobranzas'}
       </button>
-      {running && <span className="break-words text-[10px] leading-4 text-[#806238]">{status.rateLimited ? 'BSale solicitó una pausa. La actualización continuará automáticamente.' : 'Actualizando cobranzas…'}{progress ? ` ${progress}` : ''}</span>}
+      {running && <span className="break-words text-[10px] leading-4 text-amber-700">{status.rateLimited ? 'BSale solicitó una pausa. La actualización continuará automáticamente.' : 'Actualizando cobranzas…'}{progress ? ` ${progress}` : ''}</span>}
       {!running && terminalSnapshot && status.clientsTotal > 0 && (
-        <span className={`break-words text-[10px] leading-4 ${status.clientsError > 0 ? 'text-[#8A4B4B]' : 'text-[#806238]'}`}>
-          {status.clientsSuccess} consultados · {status.clientsUnqueryable} no consultables
-          {status.clientsError > 0 ? ` · ${status.clientsError} con error` : ''}
-          {' · '}Cobertura efectiva {effectiveCoverageLabel}
+        <span className={`text-[10px] leading-4 ${status.clientsError > 0 ? 'text-rose-700' : 'text-slate-500'}`} title={`${status.clientsSuccess} consultados · ${status.clientsUnqueryable} no consultables${status.clientsError > 0 ? ` · ${status.clientsError} con error` : ''} · Cobertura efectiva ${effectiveCoverageLabel}`}>
+          Cobertura {effectiveCoverageLabel}
         </span>
       )}
-      {!running && feedback && <span role="status" className={`break-words text-[10px] leading-4 ${status.status === 'COMPLETED' ? 'text-[#426247]' : 'text-[#8A4B4B]'}`}>{feedback}</span>}
+      {!running && feedback && <span role="status" className={`break-words text-[10px] leading-4 ${status.status === 'COMPLETED' ? 'text-emerald-700' : 'text-rose-700'}`}>{feedback}</span>}
     </div>
   )
 }
