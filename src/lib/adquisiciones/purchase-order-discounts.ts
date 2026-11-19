@@ -5,8 +5,11 @@ export interface PurchaseOrderDiscountValues {
   discount_unit_amount: number
 }
 
-function finiteOrZero(value: number | null | undefined) {
-  return Number.isFinite(value) ? Number(value) : 0
+export function finiteOrZero(value: number | string | null | undefined): number {
+  if (value === null || value === undefined || value === '') return 0
+  const normalized = typeof value === 'string' ? value.replace(',', '.').trim() : value
+  const parsed = typeof normalized === 'number' ? normalized : Number(normalized)
+  return Number.isFinite(parsed) ? parsed : 0
 }
 
 function roundDiscount(value: number) {
@@ -14,8 +17,8 @@ function roundDiscount(value: number) {
 }
 
 export function resolvePurchaseOrderDiscountMode(
-  discountPercent: number | null | undefined,
-  discountUnitAmount: number | null | undefined,
+  discountPercent: number | string | null | undefined,
+  discountUnitAmount: number | string | null | undefined,
 ): PurchaseOrderDiscountMode {
   if (finiteOrZero(discountPercent) > 0) return 'percent'
   if (finiteOrZero(discountUnitAmount) > 0) return 'unit'
@@ -23,39 +26,43 @@ export function resolvePurchaseOrderDiscountMode(
 }
 
 export function getPurchaseOrderDiscountDisplayValues(line: {
-  unit_price: number
-  discount_percent: number
-  discount_unit_amount?: number | null
-  discount_mode: PurchaseOrderDiscountMode
+  unit_price: number | string
+  discount_percent: number | string
+  discount_unit_amount?: number | string | null
+  discount_mode?: PurchaseOrderDiscountMode
 }): PurchaseOrderDiscountValues {
   const unitPrice = Math.max(finiteOrZero(line.unit_price), 0)
-  if (line.discount_mode === 'unit') {
+  const mode = line.discount_mode ?? resolvePurchaseOrderDiscountMode(line.discount_percent, line.discount_unit_amount)
+
+  if (mode === 'unit') {
     const unitAmount = Math.min(Math.max(finiteOrZero(line.discount_unit_amount), 0), unitPrice)
     return {
       discount_percent: unitPrice > 0 ? roundDiscount((unitAmount / unitPrice) * 100) : 0,
       discount_unit_amount: unitAmount,
     }
   }
-  if (line.discount_mode === 'percent') {
+  if (mode === 'percent') {
     const percent = Math.min(Math.max(finiteOrZero(line.discount_percent), 0), 100)
     return {
       discount_percent: percent,
-      discount_unit_amount: roundDiscount(unitPrice * percent / 100),
+      discount_unit_amount: roundDiscount((unitPrice * percent) / 100),
     }
   }
   return { discount_percent: 0, discount_unit_amount: 0 }
 }
 
 export function getPurchaseOrderDiscountPayload(line: {
-  unit_price: number
-  discount_percent: number
-  discount_unit_amount?: number | null
-  discount_mode: PurchaseOrderDiscountMode
+  unit_price: number | string
+  discount_percent: number | string
+  discount_unit_amount?: number | string | null
+  discount_mode?: PurchaseOrderDiscountMode
 }): PurchaseOrderDiscountValues {
-  const display = getPurchaseOrderDiscountDisplayValues(line)
-  return line.discount_mode === 'unit'
+  const mode = line.discount_mode ?? resolvePurchaseOrderDiscountMode(line.discount_percent, line.discount_unit_amount)
+  const display = getPurchaseOrderDiscountDisplayValues({ ...line, discount_mode: mode })
+
+  return mode === 'unit'
     ? { discount_percent: 0, discount_unit_amount: display.discount_unit_amount }
-    : line.discount_mode === 'percent'
+    : mode === 'percent'
       ? { discount_percent: display.discount_percent, discount_unit_amount: 0 }
       : { discount_percent: 0, discount_unit_amount: 0 }
 }

@@ -408,24 +408,36 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       }
     }
 
-    return detailItems.map(i => ({
-      tempId: i.id,
-      item_type: (i.item_type === 'SERVICE' ? 'SERVICE' : 'PRODUCT') as 'PRODUCT' | 'SERVICE',
-      product_id: i.product_id || '',
-      sku: i.item_type === 'SERVICE' ? '' : productsById.get(i.product_id || '')?.sku || '',
-      description: i.product_description || '',
-      unit: i.unit || 'UNIDAD',
-      quantity: i.quantity || 0,
-      unit_price: i.unit_price || 0,
-      raw_unit_price: i.unit_price !== null && i.unit_price !== undefined ? String(i.unit_price) : '',
-      discount_percent: i.discount_percent || 0,
-      discount_unit_amount: i.discount_unit_amount ?? 0,
-      raw_discount_unit_amount: i.discount_unit_amount ? String(i.discount_unit_amount) : '',
-      discount_mode: resolvePurchaseOrderDiscountMode(i.discount_percent, i.discount_unit_amount),
-      tax_rate: i.tax_rate || 19,
-      warehouse_id: i.warehouse_id || '',
-      notes: i.notes || '',
-    }))
+    return detailItems.map(i => {
+      const qty = Number(i.quantity) || 0
+      const unitPrice = Number(i.unit_price) || 0
+      const discPct = Number(i.discount_percent) || 0
+      let discUnit = Number(i.discount_unit_amount) || 0
+      const discAmt = Number(i.discount_amount) || 0
+
+      if (discPct === 0 && discUnit === 0 && discAmt > 0 && qty > 0) {
+        discUnit = Math.round(((discAmt / qty) + Number.EPSILON) * 100) / 100
+      }
+
+      return {
+        tempId: i.id,
+        item_type: (i.item_type === 'SERVICE' ? 'SERVICE' : 'PRODUCT') as 'PRODUCT' | 'SERVICE',
+        product_id: i.product_id || '',
+        sku: i.item_type === 'SERVICE' ? '' : productsById.get(i.product_id || '')?.sku || '',
+        description: i.product_description || '',
+        unit: i.unit || 'UNIDAD',
+        quantity: qty,
+        unit_price: unitPrice,
+        raw_unit_price: unitPrice > 0 ? String(unitPrice) : '',
+        discount_percent: discPct,
+        discount_unit_amount: discUnit,
+        raw_discount_unit_amount: discUnit > 0 ? String(discUnit) : '',
+        discount_mode: resolvePurchaseOrderDiscountMode(discPct, discUnit),
+        tax_rate: Number(i.tax_rate) || 19,
+        warehouse_id: i.warehouse_id || '',
+        notes: i.notes || '',
+      }
+    })
   }
 
   interface ReplenishmentPreparationPayload {
@@ -769,7 +781,14 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         });
          setEditId(d.po.id);
          setIsReplenishmentPreparation(d.po.source_type === 'REPLENISHMENT');
-         setItems(await buildLineItems(d.items));
+         const builtItems = await buildLineItems(d.items)
+      setItems(builtItems)
+      const hasAnyDiscount = builtItems.some(
+        (it) => it.discount_percent > 0 || it.discount_unit_amount > 0,
+      )
+      if (hasAnyDiscount) {
+        setShowDiscountColumns(true)
+      };
         setSelectedPo(null);
         setView('form');
       }
@@ -1154,7 +1173,14 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
           setEditingPoCorrelative(d.po.correlative)
         }
       }
-      setItems(await buildLineItems(d.items))
+      const builtItems = await buildLineItems(d.items)
+      setItems(builtItems)
+      const hasAnyDiscount = builtItems.some(
+        (it) => it.discount_percent > 0 || it.discount_unit_amount > 0,
+      )
+      if (hasAnyDiscount) {
+        setShowDiscountColumns(true)
+      }
     }
   }
 
@@ -2875,7 +2901,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                       <th className="text-left py-3 px-4 font-medium">Descripción</th>
                       <th className="text-right py-3 px-4 font-medium">Cantidad</th>
                       <th className="text-right py-3 px-4 font-medium">P.Unitario</th>
-                      <th className="text-right py-3 px-4 font-medium">Dto%</th>
+                      <th className="text-right py-3 px-4 font-medium">Descuento</th>
                       <th className="text-right py-3 px-4 font-medium">IVA%</th>
                       <th className="text-right py-3 px-4 font-medium">Total</th>
                     </tr>
@@ -2888,7 +2914,15 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                         <td className="py-3 px-4 text-xs text-theme-text">{it.product_description}</td>
                         <td className="py-3 px-4 text-xs text-theme-text text-right">{it.quantity}</td>
                         <td className="py-3 px-4 text-xs text-theme-text text-right">{formatCurrency(it.unit_price, detail.po.currency)}</td>
-                        <td className="py-3 px-4 text-xs text-theme-text text-right">{it.discount_percent > 0 ? `${it.discount_percent}%` : '—'}</td>
+                        <td className="py-3 px-4 text-xs text-theme-text text-right">
+                          {it.discount_percent > 0
+                            ? `${it.discount_percent}%`
+                            : (it.discount_unit_amount ?? 0) > 0
+                              ? `-${formatCurrency(it.discount_unit_amount ?? 0, detail.po.currency)}/u`
+                              : (it.discount_amount ?? 0) > 0
+                                ? `-${formatCurrency(it.discount_amount ?? 0, detail.po.currency)}`
+                                : '—'}
+                        </td>
                         <td className="py-3 px-4 text-xs text-theme-text text-right">{it.tax_rate}%</td>
                         <td className="py-3 px-4 text-xs text-theme-text font-semibold text-right">{formatCurrency(it.line_total, detail.po.currency)}</td>
                       </tr>

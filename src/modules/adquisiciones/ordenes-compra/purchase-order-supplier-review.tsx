@@ -71,12 +71,30 @@ function reviewLineMap(comparison: PurchaseOrderReviewComparisonLine[]) {
 }
 
 function toEditable(item: PurchaseOrderReviewItem, index: number): EditableReviewItem {
+  const qty = Number(item.quantity) || 0
+  const unitPrice = Number(item.unit_price) || 0
+  const taxRate = Number(item.tax_rate) || 19
+  const discountPercent = Number(item.discount_percent) || 0
+  let discountUnitAmount = Number(item.discount_unit_amount) || 0
+  const discountAmount = Number(item.discount_amount) || 0
+
+  if (discountPercent === 0 && discountUnitAmount === 0 && discountAmount > 0 && qty > 0) {
+    discountUnitAmount = Math.round(((discountAmount / qty) + Number.EPSILON) * 100) / 100
+  }
+
+  const mode = resolvePurchaseOrderDiscountMode(discountPercent, discountUnitAmount)
+
   return {
     ...item,
+    quantity: qty,
+    unit_price: unitPrice,
+    tax_rate: taxRate,
     item_id: item.item_id || null,
     client_id: item.item_id ? `persisted-${item.item_id}` : `persisted-new-${index}`,
-    discount_unit_amount: item.discount_unit_amount ?? 0,
-    discount_mode: resolvePurchaseOrderDiscountMode(item.discount_percent, item.discount_unit_amount),
+    discount_percent: discountPercent,
+    discount_unit_amount: discountUnitAmount,
+    discount_amount: discountAmount,
+    discount_mode: mode,
   }
 }
 
@@ -89,7 +107,24 @@ function discountUnitAmountDisplay(line: EditableReviewItem) {
 }
 
 function matchesOriginal(line: EditableReviewItem, original: PurchaseOrderReviewItem) {
-  return line.item_type === original.item_type && line.product_id === original.product_id && line.quantity === original.quantity && line.unit_price === original.unit_price && line.discount_percent === original.discount_percent && line.discount_unit_amount === (original.discount_unit_amount ?? 0) && line.tax_rate === original.tax_rate && line.notes === original.notes
+  const origQty = Number(original.quantity) || 0
+  const origPrice = Number(original.unit_price) || 0
+  const origPercent = Number(original.discount_percent) || 0
+  let origUnitAmount = Number(original.discount_unit_amount) || 0
+  const origAmount = Number(original.discount_amount) || 0
+  if (origPercent === 0 && origUnitAmount === 0 && origAmount > 0 && origQty > 0) {
+    origUnitAmount = Math.round(((origAmount / origQty) + Number.EPSILON) * 100) / 100
+  }
+  return (
+    line.item_type === original.item_type &&
+    line.product_id === original.product_id &&
+    Number(line.quantity) === origQty &&
+    Number(line.unit_price) === origPrice &&
+    Number(line.discount_percent) === origPercent &&
+    Number(line.discount_unit_amount) === origUnitAmount &&
+    Number(line.tax_rate) === (Number(original.tax_rate) || 19) &&
+    (line.notes || null) === (original.notes || null)
+  )
 }
 
 export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed }: PurchaseOrderSupplierReviewProps) {
@@ -141,7 +176,14 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
     }
     if ('data' in result && result.data) {
       setComparison(result.data)
-      setLines(result.data.current.items.map(toEditable))
+      const editableItems = result.data.current.items.map(toEditable)
+      setLines(editableItems)
+      const hasAnyDiscount = editableItems.some(
+        (it) => it.discount_percent > 0 || it.discount_unit_amount > 0 || (it.discount_amount ?? 0) > 0,
+      )
+      if (hasAnyDiscount) {
+        setShowDiscountColumns(true)
+      }
       setDirty(false)
     }
     setLoading(false)
@@ -217,7 +259,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
             ...line,
             unit_price: unitPrice,
             discount_unit_amount: unitAmount,
-            discount_mode: unitAmount > 0 ? 'unit' : null,
+            discount_mode: unitAmount > 0 ? 'unit' : (line.discount_percent > 0 ? 'percent' : null),
           }
         }
         return { ...line, [field]: nextValue }
@@ -577,7 +619,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
               </span>
             )}
             <button type="button" onClick={() => setShowDiscountColumns((visible) => !visible)} className="rounded-md border border-[#AC9C8D] bg-white/70 px-3 py-2 text-xs font-semibold text-[#6D625B] hover:bg-[#EFE9E1]">
-              {showDiscountColumns ? 'Ocultar descuentos' : 'Agregar descuentos'}
+              {showDiscountColumns ? 'Ocultar columnas de descuento' : 'Ver / agregar descuentos'}
             </button>
           </div>
         </section>
@@ -638,10 +680,10 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
                     {showDiscountColumns && (
                       <>
                         <td className="px-3 py-2">
-                          <input aria-label={`Dcto % ${line.product_description}`} type="number" min="0" max="100" step="0.01" value={discountPercentDisplay(line)} onChange={(event) => updateLine(line.item_id, 'discount_percent', event.target.value)} className={`${inputClass} w-20 text-right`} />
+                          <input aria-label={`Dcto % ${line.product_description}`} type="number" min="0" max="100" step="0.01" value={discountPercentDisplay(line) > 0 ? discountPercentDisplay(line) : ''} placeholder="0" onChange={(event) => updateLine(line.item_id, 'discount_percent', event.target.value)} className={`${inputClass} w-20 text-right`} />
                         </td>
                         <td className="px-3 py-2">
-                          <input aria-label={`Dcto/U Neto ${line.product_description}`} type="number" min="0" max={line.unit_price} step="0.01" value={discountUnitAmountDisplay(line)} onChange={(event) => updateLine(line.item_id, 'discount_unit_amount', event.target.value)} className={`${inputClass} w-28 text-right`} />
+                          <input aria-label={`Dcto/U Neto ${line.product_description}`} type="number" min="0" max={line.unit_price} step="0.01" value={discountUnitAmountDisplay(line) > 0 ? discountUnitAmountDisplay(line) : ''} placeholder="0" onChange={(event) => updateLine(line.item_id, 'discount_unit_amount', event.target.value)} className={`${inputClass} w-28 text-right`} />
                         </td>
                       </>
                     )}
