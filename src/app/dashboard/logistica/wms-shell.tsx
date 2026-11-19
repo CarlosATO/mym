@@ -16,9 +16,16 @@ interface WmsShellProps {
 export function WmsShell({ children, profile, permissions, pageTitle, breadcrumb, canAccessPreparation }: WmsShellProps) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
-  const isPreparationFullscreen = pathname === '/dashboard/logistica'
-    && searchParams.get('tab') === 'preparacion_pedidos'
-    && searchParams.get('action') === 'preparacion_pedidos'
+  const tab = searchParams.get('tab')
+  const action = searchParams.get('action')
+  const hasPreparationAccess = canAccessPreparation
+    || permissions.includes('system.admin')
+    || permissions.includes('logistica.preparation.manage')
+  const isDefaultPreparationLanding = pathname === '/dashboard/logistica' && !tab && !action && hasPreparationAccess
+  const isPreparationView = pathname === '/dashboard/logistica' && (
+    (tab === 'preparacion_pedidos' && action === 'preparacion_pedidos')
+    || isDefaultPreparationLanding
+  )
   const isMermasContext = pathname.startsWith('/dashboard/logistica/mermas')
   const navigationPermissions = canAccessPreparation
     ? [...permissions, 'logistica.preparation.access']
@@ -37,8 +44,7 @@ export function WmsShell({ children, profile, permissions, pageTitle, breadcrumb
       topbarVariant="module"
       sidebarVariant="financial"
       themeVariant="financial"
-      hideSidebar={isPreparationFullscreen}
-      breadcrumbAccessoryId={isPreparationFullscreen ? 'preparation-breadcrumb-kpis' : undefined}
+      breadcrumbAccessoryId={isPreparationView ? 'preparation-breadcrumb-kpis' : undefined}
     >
       {children}
     </ModuleShell>
