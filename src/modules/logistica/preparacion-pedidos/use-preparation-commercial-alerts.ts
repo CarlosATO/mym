@@ -7,9 +7,9 @@ import {
 } from '@/app/actions/logistica/sales-order-preparation-commercial'
 import type { SalesOrderPreparationCardInfo } from '@/app/actions/logistica/sales-order-preparation'
 
-export const PREPARATION_COMMERCIAL_POLL_INTERVAL_MS = 60_000
-const PREPARATION_COMMERCIAL_CACHE_TTL_MS = 30_000
-const PREPARATION_COMMERCIAL_MAX_CONCURRENCY = 3
+export const PREPARATION_COMMERCIAL_POLL_INTERVAL_MS = 180_000
+const PREPARATION_COMMERCIAL_CACHE_TTL_MS = 90_000
+const PREPARATION_COMMERCIAL_MAX_CONCURRENCY = 2
 
 type AlertState = Record<string, PreparationCommercialAlert>
 
@@ -134,18 +134,20 @@ export function usePreparationCommercialAlerts(
     }
   }, [checkCard])
 
-  // Ciclo de vida y polling periódico: no destruye mountedRef en cambios de tarjetas
+  // Ciclo de vida y polling periódico con jitter para evitar estampidas con varios usuarios
   useEffect(() => {
     mountedRef.current = true
-    void checkVisibleCards(false)
-    const interval = window.setInterval(() => { void checkVisibleCards(false) }, PREPARATION_COMMERCIAL_POLL_INTERVAL_MS)
+    const jitterMs = Math.floor(Math.random() * 4_000)
+    const initialTimer = window.setTimeout(() => { void checkVisibleCards(false) }, jitterMs)
+    const interval = window.setInterval(() => { void checkVisibleCards(false) }, PREPARATION_COMMERCIAL_POLL_INTERVAL_MS + jitterMs)
     const handleVisibilityChange = () => {
-      // visibilitychange respeta el TTL de 30s sin forzar ráfagas masivas
+      // visibilitychange respeta el TTL sin forzar ráfagas masivas
       if (document.visibilityState === 'visible') void checkVisibleCards(false)
     }
     document.addEventListener('visibilitychange', handleVisibilityChange)
     return () => {
       mountedRef.current = false
+      window.clearTimeout(initialTimer)
       window.clearInterval(interval)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }

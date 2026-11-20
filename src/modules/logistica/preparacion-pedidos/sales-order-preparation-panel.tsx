@@ -1164,9 +1164,11 @@ export function SalesOrderPreparationPanel({
   }, [])
 
   useEffect(() => {
+    const jitterMs = Math.floor(Math.random() * 30_000)
     const interval = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
       void maybeAutoSync()
-    }, PREPARATION_SYNC_CHECK_INTERVAL_MS)
+    }, PREPARATION_SYNC_CHECK_INTERVAL_MS + jitterMs)
 
     return () => window.clearInterval(interval)
   }, [maybeAutoSync])

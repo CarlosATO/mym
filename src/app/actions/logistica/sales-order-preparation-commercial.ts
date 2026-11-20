@@ -124,6 +124,38 @@ function baseIdentity(card: PersistedPreparationCard): PreparationDetectionCardI
   }
 }
 
+const COMMERCIAL_ALERT_SHARED_TTL_MS = 30_000
+const COMMERCIAL_ALERT_CACHE_MAX_ENTRIES = 500
+
+type CachedCommercialAlertEntry = {
+  data: PreparationCommercialAlert
+  expiresAt: number
+}
+
+const sharedCommercialAlertCache = new Map<string, CachedCommercialAlertEntry>()
+const inFlightCommercialAlerts = new Map<string, Promise<{ data: PreparationCommercialAlert | null; error: string | null }>>()
+
+function readSharedCommercialAlert(key: string): PreparationCommercialAlert | null {
+  const entry = sharedCommercialAlertCache.get(key)
+  if (!entry) return null
+  if (Date.now() > entry.expiresAt) {
+    sharedCommercialAlertCache.delete(key)
+    return null
+  }
+  return entry.data
+}
+
+function writeSharedCommercialAlert(key: string, data: PreparationCommercialAlert): void {
+  if (sharedCommercialAlertCache.size >= COMMERCIAL_ALERT_CACHE_MAX_ENTRIES) {
+    const oldestKey = sharedCommercialAlertCache.keys().next().value
+    if (oldestKey) sharedCommercialAlertCache.delete(oldestKey)
+  }
+  sharedCommercialAlertCache.set(key, {
+    data,
+    expiresAt: Date.now() + COMMERCIAL_ALERT_SHARED_TTL_MS,
+  })
+}
+
 export async function getSalesOrderPreparationCommercialAlert(
   cardId: string,
   options?: { bypassCache?: boolean },
@@ -138,61 +170,90 @@ export async function getSalesOrderPreparationCommercialAlert(
     return { data: null, error: error instanceof Error ? error.message : 'No autorizado para consultar Preparación de Pedidos.' }
   }
 
-  const supabase = await createClient()
-  const { data: card, error: cardError } = await supabase
-    .schema('logistica')
-    .from('sales_order_preparation_cards')
-    .select('id, company_id, status, bsale_nv_id, bsale_nv_folio, canonical_bsale_token, current_bsale_nv_id')
-    .eq('id', cardId)
-    .eq('company_id', auth.companyId)
-    .maybeSingle()
+  const bypassCache = Boolean(options?.bypassCache)
+  const cacheKey = `${auth.companyId}:${cardId}`
 
-  if (cardError || !card) return { data: null, error: cardError?.message ?? 'No se encontró la tarjeta de preparación.' }
-  const persistedCard = card as PersistedPreparationCard
-  const identity = baseIdentity(persistedCard)
-  if (persistedCard.status !== 'IN_PREPARATION') {
-    return {
-      data: {
+  if (!bypassCache) {
+    const cached = readSharedCommercialAlert(cacheKey)
+    if (cached) {
+      return { data: cached, error: null }
+    }
+    const existing = inFlightCommercialAlerts.get(cacheKey)
+    if (existing) {
+      return existing
+    }
+  }
+
+  const runDetection = async (): Promise<{ data: PreparationCommercialAlert | null; error: string | null }> => {
+    const supabase = await createClient()
+    const { data: card, error: cardError } = await supabase
+      .schema('logistica')
+      .from('sales_order_preparation_cards')
+      .select('id, company_id, status, bsale_nv_id, bsale_nv_folio, canonical_bsale_token, current_bsale_nv_id')
+      .eq('id', cardId)
+      .eq('company_id', auth.companyId)
+      .maybeSingle()
+
+    if (cardError || !card) return { data: null, error: cardError?.message ?? 'No se encontró la tarjeta de preparación.' }
+    const persistedCard = card as PersistedPreparationCard
+    const identity = baseIdentity(persistedCard)
+    if (persistedCard.status !== 'IN_PREPARATION') {
+      const notApplicable: PreparationCommercialAlert = {
         status: 'NOT_APPLICABLE',
         detail: 'La tarjeta no está En preparación.',
         verifiedAt: null,
         verificationSource: 'NONE',
         differences: [],
         totalDelta: null,
-      },
-      error: null,
+      }
+      writeSharedCommercialAlert(cacheKey, notApplicable)
+      return { data: notApplicable, error: null }
     }
+
+    const { data: lines, error: linesError } = await supabase
+      .schema('logistica')
+      .from('sales_order_preparation_lines')
+      .select('source_snapshot')
+      .eq('company_id', auth.companyId)
+      .eq('card_id', persistedCard.id)
+      .is('retired_at', null)
+      .order('bsale_detail_id', { ascending: true })
+
+    if (linesError) return { data: null, error: linesError.message }
+    const { data: acceptedVersion, error: acceptedVersionError } = await createAdminClient()
+      .schema('logistica')
+      .from('sales_order_preparation_commercial_versions')
+      .select('version_snapshot')
+      .eq('company_id', auth.companyId)
+      .eq('card_id', persistedCard.id)
+      .order('sequence_no', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (acceptedVersionError) return { data: null, error: acceptedVersionError.message }
+    const knownVersion = (acceptedVersion as PersistedAcceptedVersion | null)?.version_snapshot
+      ?? snapshotVersion(persistedCard, (lines ?? []) as PersistedPreparationLine[])
+    const result = await detectPreparationCommercialChange(
+      { card: identity, knownVersion },
+      {
+        provider: createBsalePreparationCommercialProvider(),
+        authorize: () => undefined,
+        useCache: !options?.bypassCache,
+      },
+    )
+    const serialized = serializeAlert(result)
+    if (serialized.status !== 'UNAVAILABLE') {
+      writeSharedCommercialAlert(cacheKey, serialized)
+    }
+    return { data: serialized, error: null }
   }
 
-  const { data: lines, error: linesError } = await supabase
-    .schema('logistica')
-    .from('sales_order_preparation_lines')
-    .select('source_snapshot')
-    .eq('company_id', auth.companyId)
-    .eq('card_id', persistedCard.id)
-    .is('retired_at', null)
-    .order('bsale_detail_id', { ascending: true })
+  if (bypassCache) {
+    return runDetection()
+  }
 
-  if (linesError) return { data: null, error: linesError.message }
-  const { data: acceptedVersion, error: acceptedVersionError } = await createAdminClient()
-    .schema('logistica')
-    .from('sales_order_preparation_commercial_versions')
-    .select('version_snapshot')
-    .eq('company_id', auth.companyId)
-    .eq('card_id', persistedCard.id)
-    .order('sequence_no', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  if (acceptedVersionError) return { data: null, error: acceptedVersionError.message }
-  const knownVersion = (acceptedVersion as PersistedAcceptedVersion | null)?.version_snapshot
-    ?? snapshotVersion(persistedCard, (lines ?? []) as PersistedPreparationLine[])
-  const result = await detectPreparationCommercialChange(
-    { card: identity, knownVersion },
-    {
-      provider: createBsalePreparationCommercialProvider(),
-      authorize: () => undefined,
-      useCache: !options?.bypassCache,
-    },
-  )
-  return { data: serializeAlert(result), error: null }
+  const promise = runDetection().finally(() => {
+    inFlightCommercialAlerts.delete(cacheKey)
+  })
+  inFlightCommercialAlerts.set(cacheKey, promise)
+  return promise
 }
