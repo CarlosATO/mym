@@ -725,10 +725,10 @@ export function SalesOrderDrawer({
         onClick={onClose} 
       />
       
-      <div className="fixed inset-y-0 right-0 z-50 flex w-[96vw] max-w-[1550px] flex-col border-l border-[#D1C7BD] bg-[#EFE9E1] shadow-2xl lg:w-[86vw] xl:w-[80vw]">
+      <div className="fixed inset-y-0 right-0 z-50 flex w-screen max-w-[1550px] flex-col border-l border-[#D1C7BD] bg-[#EFE9E1] shadow-2xl xl:w-[92vw] 2xl:w-[82vw]">
         {/* Header compacto */}
         <header className="flex-none border-b border-[#D1C7BD] bg-white">
-          <div className="flex items-start justify-between gap-3 px-4 py-3 sm:px-5">
+          <div className="flex items-start justify-between gap-3 px-3.5 py-2 sm:px-4 xl:px-5 xl:py-3">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="flex items-center gap-2 text-base font-bold tracking-tight text-theme-text sm:text-lg">
@@ -748,13 +748,13 @@ export function SalesOrderDrawer({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-full p-2 text-theme-text-muted transition-colors hover:bg-theme-border/50 hover:text-theme-text"
+              className="rounded-full p-1.5 text-theme-text-muted transition-colors hover:bg-theme-border/50 hover:text-theme-text xl:p-2"
               aria-label="Cerrar detalle"
             >
               <X className="h-5 w-5" />
             </button>
           </div>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1 border-t border-[#E8DFD5] bg-[#FCFBF9] px-4 py-2 sm:grid-cols-3 sm:px-5 xl:grid-cols-5">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 border-t border-[#E8DFD5] bg-[#FCFBF9] px-3.5 py-1.5 sm:grid-cols-3 md:grid-cols-5 sm:px-4 xl:gap-x-4 xl:px-5 xl:py-2">
             <HeaderStat label="Preparó" value={preparerName} />
             <HeaderStat label="Vendedor" value={card.seller_name || '—'} />
             <HeaderStat label="Estado" value={statusLabel(card.status)} />
@@ -763,10 +763,10 @@ export function SalesOrderDrawer({
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-4 lg:p-5">
-          {commercialAlert && <div className="mb-3"><PreparationCommercialChangeAlert alert={commercialAlert} /></div>}
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_340px] 2xl:grid-cols-[minmax(0,1fr)_360px]">
-            <section className="min-w-0 space-y-3">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden p-2.5 sm:p-3 md:overflow-hidden xl:p-4">
+          {commercialAlert && <div className="mb-2.5 flex-none"><PreparationCommercialChangeAlert alert={commercialAlert} /></div>}
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_272px] lg:grid-cols-[minmax(0,1fr)_292px] xl:gap-4 xl:grid-cols-[minmax(0,1fr)_340px] 2xl:grid-cols-[minmax(0,1fr)_360px]">
+            <section className="min-w-0 space-y-2.5 md:min-h-0 md:overflow-y-auto md:pr-1 xl:space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap items-center gap-3">
                   <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-theme-text">
@@ -815,22 +815,22 @@ export function SalesOrderDrawer({
               )}
 
               <div className="overflow-x-auto rounded-lg border border-[#DDD4CA] bg-white shadow-xs">
-                <table className={`w-full border-collapse text-left ${isPreparation ? 'min-w-[860px]' : 'min-w-[620px]'}`}>
+                <table className={`w-full border-collapse text-left ${isPreparation ? 'min-w-[600px] xl:min-w-[760px]' : 'min-w-[520px]'}`}>
                   <thead>
                     <tr className="sticky top-0 z-10 border-b border-[#DDD4CA] bg-[#F8F5F1] text-[9px] font-bold uppercase tracking-wider text-[#6B625C]">
-                      <th className="w-[95px] px-3 py-2">SKU</th>
-                      <th className="px-3 py-2">Producto / presentación</th>
+                      <th className="w-[78px] px-2 py-1.5 xl:w-[95px] xl:px-3 xl:py-2">SKU</th>
+                      <th className="px-2 py-1.5 xl:px-3 xl:py-2">Producto / presentación</th>
                       {isPreparation ? (
                         <>
-                          <th className="w-[72px] px-2 py-2 text-center">Solicitado</th>
-                          <th className="w-[96px] px-2 py-2 text-center">A despachar</th>
-                          <th className="w-[120px] px-2 py-2 text-center">Resultado</th>
-                          <th className="w-[84px] px-3 py-2 text-center">Acciones</th>
+                          <th className="w-[62px] px-1.5 py-1.5 text-center xl:w-[72px] xl:px-2 xl:py-2">Solicitado</th>
+                          <th className="w-[82px] px-1.5 py-1.5 text-center xl:w-[96px] xl:px-2 xl:py-2">A despachar</th>
+                          <th className="w-[96px] px-1.5 py-1.5 text-center xl:w-[116px] xl:px-2 xl:py-2">Resultado</th>
+                          <th className="w-[68px] px-2 py-1.5 text-center xl:w-[84px] xl:px-3 xl:py-2">Acciones</th>
                         </>
                       ) : (
                         <>
-                          <th className="w-[64px] px-2 py-2 text-center">Cant.</th>
-                          <th className="w-[100px] px-3 py-2 text-right">C/U</th>
+                          <th className="w-[64px] px-2 py-1.5 text-center xl:py-2">Cant.</th>
+                          <th className="w-[92px] px-2 py-1.5 text-right xl:w-[100px] xl:px-3 xl:py-2">C/U</th>
                         </>
                       )}
                     </tr>
@@ -865,8 +865,8 @@ export function SalesOrderDrawer({
                                       ? 'bg-emerald-50/20 hover:bg-[#FCFBF9]'
                                       : 'hover:bg-[#FCFBF9]'
                             }`}>
-                              <td className="px-3 py-2"><p className="break-all font-mono text-[11px] font-semibold text-theme-text">{line.sku || '—'}</p></td>
-                              <td className="px-3 py-2">
+                              <td className="px-2 py-1.5 xl:px-3 xl:py-2"><p className="break-all font-mono text-[11px] font-semibold text-theme-text">{line.sku || '—'}</p></td>
+                              <td className="px-2 py-1.5 xl:px-3 xl:py-2">
                                 <p className="max-w-[520px] truncate text-xs font-semibold text-theme-text" title={line.product_name}>{line.product_name}</p>
                                 {lineErrorText && (
                                   <p className="mt-0.5 flex items-center gap-1 text-[10px] font-medium text-[#8A4B4B]">
@@ -874,8 +874,8 @@ export function SalesOrderDrawer({
                                   </p>
                                 )}
                               </td>
-                              <td className="px-2 py-2 text-center text-xs font-bold tabular-nums text-theme-text">{line.requested_quantity}</td>
-                              <td className="px-2 py-2 text-center">
+                              <td className="px-1.5 py-1.5 text-center text-xs font-bold tabular-nums text-theme-text xl:px-2 xl:py-2">{line.requested_quantity}</td>
+                              <td className="px-1.5 py-1.5 text-center xl:px-2 xl:py-2">
                                 <input
                                   type="number"
                                   min={0}
@@ -909,14 +909,14 @@ export function SalesOrderDrawer({
                                       confirmLineInput(line, false, t0)
                                     }
                                   }}
-                                  className={`w-20 rounded border px-1.5 py-1 text-center text-xs font-bold tabular-nums text-theme-text placeholder:text-theme-text-muted focus:outline-none focus:ring-1 disabled:bg-[#F0ECE8] disabled:opacity-60 transition-colors ${
+                                  className={`w-16 rounded border px-1.5 py-1 text-center text-xs font-bold tabular-nums text-theme-text placeholder:text-theme-text-muted focus:outline-none focus:ring-1 disabled:bg-[#F0ECE8] disabled:opacity-60 transition-colors xl:w-20 ${
                                     lineErrorText
                                       ? 'border-red-400 bg-red-50/40 focus:border-red-500 focus:ring-red-500/20'
                                       : 'border-[#D1C7BD] bg-white focus:border-[#72383D] focus:ring-[#72383D]/20'
                                   }`}
                                 />
                               </td>
-                              <td className="px-2 py-2 text-center">
+                              <td className="px-1.5 py-1.5 text-center xl:px-2 xl:py-2">
                                 {isSavingThisLine ? (
                                   <span className="inline-flex items-center gap-1 rounded-md border border-[#72383D]/25 bg-[#72383D]/10 px-1.5 py-0.5 text-[9px] font-bold text-[#72383D] animate-pulse">
                                     <Loader2 className="h-2.5 w-2.5 animate-spin" /> Guardando…
@@ -930,7 +930,7 @@ export function SalesOrderDrawer({
                                   </>
                                 )}
                               </td>
-                              <td className="px-3 py-2 text-center">
+                              <td className="px-2 py-1.5 text-center xl:px-3 xl:py-2">
                                 <button
                                   type="button"
                                   disabled={savingLineId === line.id || line.excluded_from_dispatch || isReadOnly || isSavingThisLine || isRegisteringAll}
@@ -1011,14 +1011,14 @@ export function SalesOrderDrawer({
               </details>
             </section>
 
-            <aside className="self-start xl:sticky xl:top-4">
-              <div className="space-y-3 rounded-lg border border-[#DDD4CA] bg-white p-3 shadow-xs">
+            <aside className="self-start md:min-h-0 md:self-stretch md:overflow-y-auto">
+              <div className="space-y-2.5 rounded-lg border border-[#DDD4CA] bg-white p-2.5 shadow-xs xl:space-y-3 xl:p-3">
                 <div className="flex items-center gap-1.5">
                   <Package className="h-4 w-4 text-[#72383D]" />
                   <h3 className="text-xs font-bold uppercase tracking-wider text-theme-text">Operación</h3>
                 </div>
 
-                <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+                <div className="grid grid-cols-3 gap-x-2 gap-y-1 xl:grid-cols-2 xl:gap-x-3 xl:gap-y-1.5">
                   <SideStat label="Estado" value={statusLabel(card.status)} />
                   <SideStat label="Preparador" value={preparerName} />
                   <SideStat label="Facturación" value={billingLabel} />
@@ -1027,7 +1027,7 @@ export function SalesOrderDrawer({
                 </div>
 
                 {isPreparation && (
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 border-t border-[#E8DFD5] pt-3">
+                  <div className="grid grid-cols-3 gap-x-2 gap-y-1 border-t border-[#E8DFD5] pt-2 xl:grid-cols-2 xl:gap-x-3 xl:gap-y-1.5 xl:pt-3">
                     <SideStat label="Líneas" value={operationalLines.length} />
                     <SideStat label="Confirmadas" value={confirmedLines} />
                     <SideStat label="Pendientes" value={pendingLines.length} />
@@ -1159,8 +1159,8 @@ export function SalesOrderDrawer({
           </div>
         </div>
 
-        <div className="flex flex-none justify-end border-t border-[#D1C7BD] bg-white px-5 py-3">
-          <button type="button" onClick={onClose} className="rounded-lg border border-[#DDD4CA] bg-white px-4 py-2 text-xs font-semibold text-[#322D29]/80 hover:bg-[#F5F0EA]">
+        <div className="flex flex-none justify-end border-t border-[#D1C7BD] bg-white px-4 py-2 xl:px-5 xl:py-3">
+          <button type="button" onClick={onClose} className="rounded-lg border border-[#DDD4CA] bg-white px-4 py-1.5 text-xs font-semibold text-[#322D29]/80 hover:bg-[#F5F0EA] xl:py-2">
             Cerrar detalle
           </button>
         </div>
