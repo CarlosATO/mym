@@ -10,6 +10,7 @@ import { useDraggable } from '@dnd-kit/core'
 import { formatPreparationClp, getPreparationCardAmount, getPreparationComuna, parseDateOnly } from './preparation-board-utils'
 import { getPreparationLockLabel } from './preparation-lock-policy'
 import { getPreparationReadinessLabel, type PreparationReadinessLoadState, type PreparationRouteReadiness } from './preparation-route-readiness'
+import { isPreparationCardBlockedForSync } from './preparation-line-validation'
 import { PreparationCommercialChangeAlert } from './preparation-commercial-change-alert'
 import type { PreparationCommercialAlert } from '@/app/actions/logistica/sales-order-preparation-commercial'
 
@@ -49,6 +50,9 @@ interface SalesOrderCardProps {
     verifiedAt: string
   }) => void
   onVerifyClientCommercial?: (cardId: string) => Promise<VerifyCardClientCommercialResult>
+  canSyncCard?: boolean
+  isSyncingCard?: boolean
+  onSyncCard?: (card: SalesOrderPreparationCardInfo) => void | Promise<unknown>
 }
 
 function formatShortDate(value: string | null): string | null {
@@ -93,6 +97,9 @@ export function SalesOrderCard({
   canVerifyClientCommercial = false,
   onClientCommercialStatusChange,
   onVerifyClientCommercial,
+  canSyncCard = false,
+  isSyncingCard = false,
+  onSyncCard,
 }: SalesOrderCardProps) {
   const routeDate = formatShortDate(card.route_date)
   const routeFullDate = formatFullDate(card.route_date)
@@ -147,6 +154,12 @@ export function SalesOrderCard({
   const linesLabel = linesCount == null ? '— líneas' : `${linesCount} ${linesCount === 1 ? 'línea' : 'líneas'}`
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null)
   const hasCommercialChange = commercialAlert?.status === 'CHANGED'
+  const isBlockedForSync = isPreparationCardBlockedForSync({
+    cardStatus: card.status,
+    openCommercialIncidentCount,
+    commercialAlertStatus: commercialAlert?.status ?? null,
+  })
+  const showManualSyncButton = canSyncCard && isBlockedForSync && !isOverlay && !commercialMirror && Boolean(onSyncCard)
 
   const [isVerifyingCommercial, setIsVerifyingCommercial] = useState(false)
   const isClientBlocked = card.client_commercially_blocked === true || card.client_commercial_status === 'BLOCKED'
@@ -369,12 +382,31 @@ export function SalesOrderCard({
         )}
       </div>
 
-      {(responsibilityLabel || isInvoiced || isPending || onInvoice || (canExclude && !isOverlay && card.status === 'PENDING_ROUTE_PREP')) && (
+      {(responsibilityLabel || isInvoiced || isPending || onInvoice || showManualSyncButton || (canExclude && !isOverlay && card.status === 'PENDING_ROUTE_PREP')) && (
         <div className="mt-1 flex min-h-[15px] items-center justify-between gap-2">
           <span className={`min-w-0 truncate text-[9.5px] font-semibold ${isInvoiced ? 'text-emerald-700' : responsibilityTone}`} title={isInvoiced ? invoiceSummary : responsibilityLabel ?? undefined}>
             {isInvoiced ? <><span className="mr-1 rounded bg-emerald-50 px-1 py-0.5 text-[8px] font-bold uppercase tracking-wider text-emerald-800">Facturada</span>{invoiceSummary}</> : <>{isFinalized && routeReadiness === 'READY_TO_INVOICE' ? '✓ ' : ''}{responsibilityLabel}</>}
           </span>
           <div className="flex shrink-0 items-center gap-1">
+            {showManualSyncButton && (
+              <button
+                type="button"
+                data-card-action
+                disabled={isSyncingCard || isPending}
+                title="Sincronizar esta Nota de Venta con Bsale"
+                onPointerDown={event => event.stopPropagation()}
+                onClick={event => {
+                  event.stopPropagation()
+                  if (isSyncingCard || isPending) return
+                  void onSyncCard?.(card)
+                }}
+                onDoubleClick={event => event.stopPropagation()}
+                className="inline-flex items-center gap-1 rounded border border-[#72383D]/35 bg-[#F5EDE9] px-1.5 py-0.5 text-[9px] font-bold text-[#72383D] transition-colors hover:bg-[#EBDDD6] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <RefreshCw className={`h-2.5 w-2.5 ${isSyncingCard ? 'animate-spin' : ''}`} />
+                {isSyncingCard ? 'Sincronizando…' : 'Sincronizar'}
+              </button>
+            )}
             {(isFinalized || commercialMirror) && openCommercialIncidentCount > 0 && onOpenCommercialIncidents && (
               <button
                 type="button"

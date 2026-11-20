@@ -56,7 +56,7 @@ export function usePreparationCommercialAlerts(
     // Marcar timestamp de inicio inmediatamente para evitar que renders concurrentes dupliquen llamadas
     checkedAtRef.current.set(card.card_id, now)
 
-    const request = getSalesOrderPreparationCommercialAlert(card.card_id)
+    const request = getSalesOrderPreparationCommercialAlert(card.card_id, force ? { bypassCache: true } : undefined)
       .then(result => {
         checkedAtRef.current.set(card.card_id, Date.now())
         if (!mountedRef.current) return

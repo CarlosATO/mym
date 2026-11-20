@@ -1,9 +1,10 @@
 'use client'
 
-import { X, MapPin, Package, User, FileText, Printer, Building2, Hash, AlertTriangle, LockKeyhole, CheckCircle2, Loader2, CheckCheck } from 'lucide-react'
+import { X, MapPin, Package, User, FileText, Printer, Building2, Hash, AlertTriangle, LockKeyhole, CheckCircle2, Loader2, CheckCheck, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { SalesOrderPreparationCardInfo, SalesOrderPreparationItem, SalesOrderPreparationLine, confirmSalesOrderPreparationLine, getSalesOrderClientData, SalesOrderClientData, getSalesOrderPreparationLines, getSalesOrderPreparationMovements, SalesOrderPreparationMovement } from '@/app/actions/logistica/sales-order-preparation'
 import { acceptSalesOrderPreparationCommercialChanges, type CommercialAcceptanceResult } from '@/app/actions/logistica/sales-order-preparation-commercial-acceptance'
+import type { PreparationCardSyncResult } from '@/app/actions/logistica/sales-order-preparation-incident-sync'
 import { generatePreparationOrdersPdf, openPreparationOrdersPdf } from '@/lib/pdf/generate-preparation-orders-pdf'
 import { Fragment, useState, useEffect, useRef, useMemo } from 'react'
 import { MOVEMENT_RULES } from './movement-rules'
@@ -12,6 +13,7 @@ import { PREPARATION_INCIDENT_REASONS } from './preparation-incidents'
 import {
   evaluatePreparationAuditEligibility,
   getPreparationLineValidation,
+  isPreparationCardBlockedForSync,
   PREPARATION_INCIDENTS_AUDIT_BLOCK_MESSAGE,
 } from './preparation-line-validation'
 import { canClaimPreparation as canClaimPreparationView, canTakeoverPreparation as canTakeoverPreparationView, isPreparationLockError, isPreparationReadOnly } from './preparation-lock-policy'
@@ -38,6 +40,9 @@ interface SalesOrderDrawerProps {
   commercialAlert?: PreparationCommercialAlert | null
   openCommercialIncidentCount?: number
   onCommercialAcceptanceSuccess?: (cardId: string) => void
+  canSyncCard?: boolean
+  isSyncingCard?: boolean
+  onSyncCard?: (card: SalesOrderPreparationCardInfo) => Promise<PreparationCardSyncResult | null>
 }
 
 const statusLabel = (status: string) => status === 'PENDING_ROUTE_PREP' ? 'Pendiente' : status === 'IN_PREPARATION' ? 'En preparación' : status === 'IN_AUDIT' ? 'En auditoría' : status === 'AUDITED' ? 'Auditada' : 'Estado operativo'
@@ -118,6 +123,9 @@ export function SalesOrderDrawer({
   commercialAlert = null,
   openCommercialIncidentCount = 0,
   onCommercialAcceptanceSuccess,
+  canSyncCard = false,
+  isSyncingCard = false,
+  onSyncCard,
 }: SalesOrderDrawerProps) {
   const [fallbackClientData, setFallbackClientData] = useState<SalesOrderClientData | null>(null)
   const clientData = clientDataProp !== undefined ? clientDataProp : fallbackClientData
@@ -146,6 +154,11 @@ export function SalesOrderDrawer({
   const [isTakingPreparation, setIsTakingPreparation] = useState(false)
   const [isAcceptingCommercialChanges, setIsAcceptingCommercialChanges] = useState(false)
   const [commercialAcceptanceError, setCommercialAcceptanceError] = useState<string | null>(null)
+  const [cardSyncFeedback, setCardSyncFeedback] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
+
+  useEffect(() => {
+    setCardSyncFeedback(null)
+  }, [card?.card_id])
 
   // Solo consulta cliente si el padre no lo entregó ya precargado.
   /* eslint-disable react-hooks/set-state-in-effect */
@@ -287,6 +300,31 @@ export function SalesOrderDrawer({
       setCommercialAcceptanceError(error instanceof Error ? error.message : 'No se pudieron aceptar los cambios comerciales.')
     } finally {
       setIsAcceptingCommercialChanges(false)
+    }
+  }
+
+  const isBlockedForSync = isPreparationCardBlockedForSync({
+    cardStatus: card.status,
+    openCommercialIncidentCount,
+    commercialAlertStatus: commercialAlert?.status ?? null,
+    lines: card.status === 'IN_PREPARATION' ? preparationLines : [],
+  })
+
+  const handleManualCardSync = async () => {
+    if (!card || !onSyncCard || isSyncingCard) return
+    setCardSyncFeedback(null)
+    try {
+      const result = await onSyncCard(card)
+      if (!result) return
+      setCardSyncFeedback({
+        tone: result.ok && !result.blockMessage ? 'success' : 'error',
+        message: result.message,
+      })
+    } catch (error) {
+      setCardSyncFeedback({
+        tone: 'error',
+        message: error instanceof Error ? error.message : 'No se pudo sincronizar la Nota de Venta.',
+      })
     }
   }
 
@@ -1007,6 +1045,36 @@ export function SalesOrderDrawer({
                       <button type="button" onClick={() => void handleTakePreparation()} disabled={isTakingPreparation} className="mt-1.5 w-full rounded bg-[#72383D] px-2 py-1.5 text-[10px] font-bold text-white hover:bg-[#612F34] disabled:opacity-50">
                         {isTakingPreparation ? 'Tomando…' : 'Tomar preparación'}
                       </button>
+                    )}
+                  </div>
+                )}
+
+                {isPreparation && canSyncCard && isBlockedForSync && onSyncCard && (
+                  <div className="rounded-md border border-[#72383D]/25 bg-[#FBF7F4] px-2.5 py-2">
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-[#72383D]">
+                      Sincronización puntual Bsale
+                    </p>
+                    <p className="mt-0.5 text-[10px] leading-snug text-[#6B625C]">
+                      Sincroniza esta Nota de Venta desde Bsale y avanza a Auditoría solo si queda completamente conciliada.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void handleManualCardSync()}
+                      disabled={isSyncingCard || isMoving}
+                      className="mt-2 flex w-full items-center justify-center gap-1.5 rounded border border-[#72383D]/35 bg-white px-2.5 py-1.5 text-[11px] font-bold text-[#72383D] transition-colors hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${isSyncingCard ? 'animate-spin' : ''}`} />
+                      {isSyncingCard ? 'Sincronizando…' : 'Sincronizar'}
+                    </button>
+                    {cardSyncFeedback && (
+                      <p
+                        role={cardSyncFeedback.tone === 'error' ? 'alert' : 'status'}
+                        className={`mt-2 text-[10px] font-medium leading-snug ${
+                          cardSyncFeedback.tone === 'success' ? 'text-emerald-800' : 'text-red-800'
+                        }`}
+                      >
+                        {cardSyncFeedback.message}
+                      </p>
                     )}
                   </div>
                 )}

@@ -141,3 +141,76 @@ export function evaluatePreparationAuditEligibility(params: {
     openCommercialIncidentCount: 0,
   }
 }
+
+export function isPreparationCardBlockedForSync(params: {
+  cardStatus: string
+  openCommercialIncidentCount?: number
+  commercialAlertStatus?: PreparationDetectorStatus | null
+  lines?: SalesOrderPreparationLine[]
+}): boolean {
+  if (params.cardStatus !== 'IN_PREPARATION') return false
+  if (Math.max(0, Number(params.openCommercialIncidentCount ?? 0)) > 0) return true
+  if (
+    params.commercialAlertStatus === 'CHANGED'
+    || params.commercialAlertStatus === 'UNAVAILABLE'
+    || params.commercialAlertStatus === 'AMBIGUOUS'
+    || params.commercialAlertStatus === 'INCOMPLETE'
+  ) {
+    return true
+  }
+  if (Array.isArray(params.lines) && params.lines.length > 0) {
+    return params.lines.some(isPreparationLineWithIncident)
+  }
+  return false
+}
+
+export type PostSyncAuditTransitionDecision = {
+  shouldAdvanceToAudit: boolean
+  reason: PreparationAuditBlockReason | 'INVALID_CARD_STATUS' | null
+  message: string | null
+}
+
+export function evaluatePostSyncAuditTransition(params: {
+  cardStatus: string
+  lines: SalesOrderPreparationLine[]
+  openCommercialIncidentCount: number
+  commercialAlertStatus: PreparationDetectorStatus | null | undefined
+  commercialVerificationSource: 'LIVE_BSALE' | 'CACHE' | 'NONE' | null | undefined
+  commercialDetail?: string | null
+}): PostSyncAuditTransitionDecision {
+  if (params.cardStatus !== 'IN_PREPARATION') {
+    return {
+      shouldAdvanceToAudit: false,
+      reason: 'INVALID_CARD_STATUS',
+      message: 'La tarjeta ya no se encuentra En preparación y no puede avanzar automáticamente.',
+    }
+  }
+
+  const eligibility = evaluatePreparationAuditEligibility({
+    lines: params.lines,
+    openCommercialIncidentCount: params.openCommercialIncidentCount,
+    commercialAlertStatus: params.commercialAlertStatus ?? null,
+  })
+
+  if (!eligibility.canSendToAudit) {
+    return {
+      shouldAdvanceToAudit: false,
+      reason: eligibility.reason,
+      message: eligibility.message,
+    }
+  }
+
+  if (params.commercialAlertStatus !== 'UNCHANGED' || params.commercialVerificationSource !== 'LIVE_BSALE') {
+    return {
+      shouldAdvanceToAudit: false,
+      reason: 'COMMERCIAL_UNVERIFIED',
+      message: params.commercialDetail || PREPARATION_COMMERCIAL_UNAVAILABLE_AUDIT_BLOCK_MESSAGE,
+    }
+  }
+
+  return {
+    shouldAdvanceToAudit: true,
+    reason: null,
+    message: null,
+  }
+}

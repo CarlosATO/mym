@@ -78,6 +78,10 @@ import { getMovementRule } from './movement-rules'
 import { MovementObservationDialog } from './movement-observation-dialog'
 import { moveSalesOrderPreparationCard } from '@/app/actions/logistica/sales-order-preparation'
 import { toast } from 'sonner'
+import {
+  syncSalesOrderPreparationCardFromBsale,
+  type PreparationCardSyncResult,
+} from '@/app/actions/logistica/sales-order-preparation-incident-sync'
 import { CreditNoteConfirmationModal, InvoiceConfirmationModal, InvoiceDocumentsDetail, InvoiceReviewModal, type InvoiceDocumentPreview, type InvoiceEmissionUiResult, type InvoiceReviewSnapshot } from './invoice-flow-ui'
 import { openConfirmedInvoicePdf, prepareInvoicePrintWindow, setInvoicePrintWindowStatus, validateBsalePdfUrl } from '@/lib/integraciones/invoice-print-assistant'
 import { createInvoicePreviewCache, getInvoicePreviewCacheKey, invalidateInvoicePreview, isInvoicePreviewFresh, type InvoicePreviewCache } from './invoice-preview-cache'
@@ -287,6 +291,9 @@ function DroppableColumn({
   commercialMirrorCards,
   canVerifyClientCommercial = false,
   onClientCommercialStatusChange,
+  canSyncCard = false,
+  syncingCardIds,
+  onSyncCard,
 }: {
   col: KanbanColumn
   colCards: SalesOrderPreparationCardInfo[]
@@ -318,6 +325,9 @@ function DroppableColumn({
     commerciallyBlocked: boolean | null
     verifiedAt: string
   }) => void
+  canSyncCard?: boolean
+  syncingCardIds: Set<string>
+  onSyncCard?: (card: SalesOrderPreparationCardInfo) => Promise<PreparationCardSyncResult | null>
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: col.id,
@@ -426,6 +436,9 @@ function DroppableColumn({
                  commercialAlert={commercialMirror ? null : commercialAlerts[card.card_id] ?? null}
                  canVerifyClientCommercial={!commercialMirror && canVerifyClientCommercial}
                  onClientCommercialStatusChange={onClientCommercialStatusChange}
+                 canSyncCard={!commercialMirror && canSyncCard}
+                 isSyncingCard={syncingCardIds.has(card.card_id)}
+                 onSyncCard={onSyncCard}
                 dragDisabled={commercialMirror || card.status === 'AUDITED' || card.status === 'INVOICED_READY_FOR_ROUTE' || isPreparationReadOnly({
                   status: card.status,
                   currentUserId,
@@ -465,10 +478,12 @@ export function SalesOrderPreparationPanel({
   const [cards, setCards] = useState<SalesOrderPreparationCardInfo[]>([])
   const [selectedCard, setSelectedCard] = useState<SalesOrderPreparationCardInfo | null>(null)
   const isDrawerOpen = Boolean(selectedCard)
-  const { alerts: commercialAlerts, clearCard: clearCommercialAlert } = usePreparationCommercialAlerts(cards, {
+  const { alerts: commercialAlerts, clearCard: clearCommercialAlert, checkCardNow: checkCommercialAlertNow } = usePreparationCommercialAlerts(cards, {
     activeCardId: selectedCard?.card_id,
     isDrawerOpen,
   })
+  const [syncingCardIds, setSyncingCardIds] = useState<Set<string>>(() => new Set())
+  const syncingCardIdsRef = useRef<Set<string>>(new Set())
 
   const handleClientCommercialStatusChange = useCallback((cardId: string, result: {
     status: 'BLOCKED' | 'UNBLOCKED' | 'UNKNOWN'
@@ -1516,6 +1531,107 @@ export function SalesOrderPreparationPanel({
     void loadBoard({ showSpinner: false })
   }
 
+  const handleSyncBlockedCard = useCallback(async (card: SalesOrderPreparationCardInfo): Promise<PreparationCardSyncResult | null> => {
+    if (syncingCardIdsRef.current.has(card.card_id)) return null
+    syncingCardIdsRef.current.add(card.card_id)
+    setSyncingCardIds(current => {
+      const next = new Set(current)
+      next.add(card.card_id)
+      return next
+    })
+    try {
+      const result = await syncSalesOrderPreparationCardFromBsale(card.card_id)
+      if (!result.ok) {
+        if (result.status === 'CONFLICT' || result.status === 'IN_PROGRESS') {
+          toast.warning(result.message)
+        } else {
+          toast.error(result.message)
+        }
+        return result
+      }
+
+      detailCacheRef.current.delete(card.nv_bsale_id)
+      if (result.currentBsaleNvId != null) {
+        detailCacheRef.current.delete(result.currentBsaleNvId)
+      }
+
+      if (result.autoMovedToAudit) {
+        clearCommercialAlert(card.card_id)
+        const nextCards = cardsRef.current.map(item => (
+          item.card_id === card.card_id
+            ? {
+                ...item,
+                status: 'IN_AUDIT',
+                locked_by_user_id: null,
+                locked_by_user_name: null,
+                locked_at: null,
+              }
+            : item
+        ))
+        cardsRef.current = nextCards
+        setCards(nextCards)
+        setSelectedCard(current => (
+          current?.card_id === card.card_id
+            ? {
+                ...current,
+                status: 'IN_AUDIT',
+                locked_by_user_id: null,
+                locked_by_user_name: null,
+                locked_at: null,
+              }
+            : current
+        ))
+        void loadBoard({ showSpinner: false })
+        toast.success(result.message)
+        return result
+      }
+
+      await checkCommercialAlertNow(card.card_id)
+
+      if (selectedCardRef.current?.card_id === card.card_id) {
+        const linesRes = await getSalesOrderPreparationLines(card.company_id, card.card_id)
+        if (!linesRes.error) {
+          setSelectedPreparationLines(linesRes.data)
+          putPreparationLines(preparationLinesCacheRef.current, card.card_id, linesRes.data)
+        }
+      }
+
+      void loadBoard({ showSpinner: false })
+      if (result.blockMessage) {
+        toast.warning(result.message)
+      } else {
+        toast.success(result.message)
+      }
+      return result
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo sincronizar la Nota de Venta.'
+      toast.error(message)
+      return {
+        ok: false,
+        status: 'ERROR',
+        cardId: card.card_id,
+        previousBsaleNvId: card.nv_bsale_id,
+        currentBsaleNvId: card.nv_bsale_id,
+        substitutedDocument: false,
+        detailCount: 0,
+        syncRunId: null,
+        syncedAt: null,
+        autoMovedToAudit: false,
+        blockReason: null,
+        blockMessage: message,
+        message,
+      }
+    } finally {
+      syncingCardIdsRef.current.delete(card.card_id)
+      setSyncingCardIds(current => {
+        if (!current.has(card.card_id)) return current
+        const next = new Set(current)
+        next.delete(card.card_id)
+        return next
+      })
+    }
+  }, [checkCommercialAlertNow])
+
   const transitionCard = async (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string): Promise<{ ok: boolean; error?: string }> => {
     if (pendingCardIds.has(card.card_id) || card.status === toStatus) {
       return { ok: false, error: 'La tarjeta ya está siendo procesada o ya se encuentra en ese estado.' }
@@ -2521,6 +2637,9 @@ export function SalesOrderPreparationPanel({
                          commercialAlerts={commercialAlerts}
                          canVerifyClientCommercial={canVerifyClientCommercial}
                          onClientCommercialStatusChange={handleClientCommercialStatusChange}
+                         canSyncCard={canManagePreparation}
+                         syncingCardIds={syncingCardIds}
+                         onSyncCard={handleSyncBlockedCard}
                         />
                      )
                   })}
@@ -2579,6 +2698,9 @@ export function SalesOrderPreparationPanel({
            commercialAlert={selectedCard ? commercialAlerts[selectedCard.card_id] ?? null : null}
            openCommercialIncidentCount={selectedCard ? commercialIncidentCounts[selectedCard.card_id] ?? 0 : 0}
            onCommercialAcceptanceSuccess={handleCommercialAcceptanceSuccess}
+           canSyncCard={canManagePreparation}
+           isSyncingCard={selectedCard ? syncingCardIds.has(selectedCard.card_id) : false}
+           onSyncCard={handleSyncBlockedCard}
           />
       )}
       
