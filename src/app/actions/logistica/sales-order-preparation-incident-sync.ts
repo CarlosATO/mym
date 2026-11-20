@@ -3,6 +3,8 @@
 import { requireWmsPermission } from './authorization'
 import { getSalesOrderPreparationCommercialAlert } from './sales-order-preparation-commercial'
 import { moveSalesOrderPreparationCard, type SalesOrderPreparationLine } from './sales-order-preparation'
+import { getSalesOrderAuditFinalizationStatus } from './sales-order-audit'
+import { verifySalesOrderAuditCommercial, type SalesOrderAuditCommercialVerification } from './sales-order-audit-commercial'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createBsalePreparationCommercialProvider } from '@/lib/logistica/preparation-commercial-bsale-provider'
@@ -541,6 +543,436 @@ export async function syncSalesOrderPreparationCardFromBsale(cardId: string): Pr
       detailCount: 0,
       syncRunId: runId,
       syncedAt: null,
+      message: errorMessage,
+    })
+  } finally {
+    if (operationalLockAcquired && runId) {
+      await releaseOperationalBsaleSyncLock(auth.companyId, 'bsale_operational_prep_sync', runId)
+    }
+    inFlightCardSyncs.delete(inFlightKey)
+  }
+}
+
+export type AuditCardSyncStatus =
+  | 'SYNCED_READY'
+  | 'SYNCED_PENDING'
+  | 'CONFLICT'
+  | 'IN_PROGRESS'
+  | 'INVALID_STATE'
+  | 'ERROR'
+
+export type AuditCardSyncResult = {
+  ok: boolean
+  status: AuditCardSyncStatus
+  cardId: string
+  auditId: string | null
+  previousBsaleNvId: number | null
+  currentBsaleNvId: number | null
+  substitutedDocument: boolean
+  detailCount: number
+  syncRunId: string | null
+  syncedAt: string | null
+  commercialVerification: SalesOrderAuditCommercialVerification | null
+  openAuditIncidentsCount: number
+  canFinalize: boolean
+  message: string
+}
+
+function auditSyncResult(params: AuditCardSyncResult): AuditCardSyncResult {
+  return params
+}
+
+/**
+ * Bloque 3A: sincronización puntual de UNA Nota de Venta en Auditoría (IN_AUDIT).
+ * Reutiliza la infraestructura individual de Bsale (2A/2B) y la verificación comercial
+ * oficial de Auditoría (verifySalesOrderAuditCommercial), respetando permisos y bloqueos
+ * de Auditoría. Jamás altera cantidades auditadas, incidencias físicas, fotos/evidencias
+ * ni auditorías finalizadas (AUDITED), y jamás finaliza automáticamente.
+ */
+export async function syncSalesOrderAuditCardFromBsale(cardId: string): Promise<AuditCardSyncResult> {
+  let auth: Awaited<ReturnType<typeof requireWmsPermission>>
+  try {
+    auth = await requireWmsPermission('logistica.audit.manage')
+  } catch (error) {
+    return auditSyncResult({
+      ok: false,
+      status: 'ERROR',
+      cardId,
+      auditId: null,
+      previousBsaleNvId: null,
+      currentBsaleNvId: null,
+      substitutedDocument: false,
+      detailCount: 0,
+      syncRunId: null,
+      syncedAt: null,
+      commercialVerification: null,
+      openAuditIncidentsCount: 0,
+      canFinalize: false,
+      message: error instanceof Error ? error.message : 'No autorizado para sincronizar en Auditoría.',
+    })
+  }
+
+  const inFlightKey = `audit:${auth.companyId}:${cardId}`
+  if (inFlightCardSyncs.has(inFlightKey)) {
+    return auditSyncResult({
+      ok: false,
+      status: 'IN_PROGRESS',
+      cardId,
+      auditId: null,
+      previousBsaleNvId: null,
+      currentBsaleNvId: null,
+      substitutedDocument: false,
+      detailCount: 0,
+      syncRunId: null,
+      syncedAt: null,
+      commercialVerification: null,
+      openAuditIncidentsCount: 0,
+      canFinalize: false,
+      message: 'Esta Nota de Venta en Auditoría ya se está sincronizando con Bsale.',
+    })
+  }
+
+  inFlightCardSyncs.add(inFlightKey)
+  let runId: string | null = null
+  let runCompleted = false
+  let operationalLockAcquired = false
+  let previousBsaleNvId: number | null = null
+  let auditId: string | null = null
+
+  try {
+    const db = await createClient()
+    const { data: card, error: cardError } = await db.schema('logistica')
+      .from('sales_order_preparation_cards')
+      .select('id, company_id, status, bsale_nv_id, bsale_nv_folio, canonical_bsale_token, current_bsale_nv_id')
+      .eq('id', cardId)
+      .eq('company_id', auth.companyId)
+      .maybeSingle()
+
+    if (cardError || !card) {
+      return auditSyncResult({
+        ok: false,
+        status: 'ERROR',
+        cardId,
+        auditId: null,
+        previousBsaleNvId: null,
+        currentBsaleNvId: null,
+        substitutedDocument: false,
+        detailCount: 0,
+        syncRunId: null,
+        syncedAt: null,
+        commercialVerification: null,
+        openAuditIncidentsCount: 0,
+        canFinalize: false,
+        message: 'No se encontró la tarjeta en la empresa activa.',
+      })
+    }
+
+    const cardRow = card as CardRow
+    previousBsaleNvId = cardRow.current_bsale_nv_id ?? cardRow.bsale_nv_id
+
+    if (cardRow.status !== 'IN_AUDIT') {
+      return auditSyncResult({
+        ok: false,
+        status: 'INVALID_STATE',
+        cardId: cardRow.id,
+        auditId: null,
+        previousBsaleNvId,
+        currentBsaleNvId: previousBsaleNvId,
+        substitutedDocument: false,
+        detailCount: 0,
+        syncRunId: null,
+        syncedAt: null,
+        commercialVerification: null,
+        openAuditIncidentsCount: 0,
+        canFinalize: false,
+        message: cardRow.status === 'AUDITED'
+          ? 'La Auditoría ya fue finalizada y no puede modificarse ni sincronizarse.'
+          : 'La sincronización de Auditoría solo aplica a tarjetas en estado En auditoría.',
+      })
+    }
+
+    if (!cardRow.canonical_bsale_token || !cardRow.bsale_nv_folio) {
+      return auditSyncResult({
+        ok: false,
+        status: 'INVALID_STATE',
+        cardId: cardRow.id,
+        auditId: null,
+        previousBsaleNvId,
+        currentBsaleNvId: previousBsaleNvId,
+        substitutedDocument: false,
+        detailCount: 0,
+        syncRunId: null,
+        syncedAt: null,
+        commercialVerification: null,
+        openAuditIncidentsCount: 0,
+        canFinalize: false,
+        message: 'La identidad documental de esta Nota de Venta está incompleta.',
+      })
+    }
+
+    const admin = createAdminClient()
+    const { data: openAudit, error: openAuditError } = await admin.schema('logistica')
+      .from('sales_order_audits')
+      .select('id, status, locked_by_user_id')
+      .eq('company_id', auth.companyId)
+      .eq('card_id', cardRow.id)
+      .eq('status', 'OPEN')
+      .order('cycle_no', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (openAuditError || !openAudit) {
+      return auditSyncResult({
+        ok: false,
+        status: 'INVALID_STATE',
+        cardId: cardRow.id,
+        auditId: null,
+        previousBsaleNvId,
+        currentBsaleNvId: previousBsaleNvId,
+        substitutedDocument: false,
+        detailCount: 0,
+        syncRunId: null,
+        syncedAt: null,
+        commercialVerification: null,
+        openAuditIncidentsCount: 0,
+        canFinalize: false,
+        message: 'La Auditoría aún no ha sido tomada o ya fue cerrada.',
+      })
+    }
+
+    auditId = String(openAudit.id)
+    if (openAudit.locked_by_user_id && String(openAudit.locked_by_user_id) !== auth.user.id) {
+      return auditSyncResult({
+        ok: false,
+        status: 'INVALID_STATE',
+        cardId: cardRow.id,
+        auditId,
+        previousBsaleNvId,
+        currentBsaleNvId: previousBsaleNvId,
+        substitutedDocument: false,
+        detailCount: 0,
+        syncRunId: null,
+        syncedAt: null,
+        commercialVerification: null,
+        openAuditIncidentsCount: 0,
+        canFinalize: false,
+        message: 'Esta Auditoría está asignada a otro usuario. Solo el auditor responsable puede sincronizarla.',
+      })
+    }
+
+    runId = await createBsaleRun(auth.companyId)
+    const operationalLockName = 'bsale_operational_prep_sync'
+    operationalLockAcquired = await acquireOperationalBsaleSyncLock(auth.companyId, operationalLockName, runId, 10)
+    if (!operationalLockAcquired) {
+      await finishBsaleRun(runId, 'FAILED', 'Sincronización operativa de Bsale en curso.')
+      runCompleted = true
+      return auditSyncResult({
+        ok: false,
+        status: 'CONFLICT',
+        cardId: cardRow.id,
+        auditId,
+        previousBsaleNvId,
+        currentBsaleNvId: previousBsaleNvId,
+        substitutedDocument: false,
+        detailCount: 0,
+        syncRunId: runId,
+        syncedAt: null,
+        commercialVerification: null,
+        openAuditIncidentsCount: 0,
+        canFinalize: false,
+        message: 'Ya existe una sincronización de Bsale en curso. Intenta nuevamente en unos segundos.',
+      })
+    }
+
+    const identity = {
+      companyId: auth.companyId,
+      cardId: cardRow.id,
+      status: cardRow.status,
+      canonicalToken: cardRow.canonical_bsale_token,
+      historicalBsaleId: cardRow.bsale_nv_id,
+      currentBsaleId: cardRow.current_bsale_nv_id,
+      folio: cardRow.bsale_nv_folio,
+    }
+    const live = await createBsalePreparationCommercialProvider().getCurrentVersion(identity, AbortSignal.timeout(30_000))
+    const currentBsaleNvId = live.identity.currentBsaleId
+
+    const hydrated = await hydrateBsaleDocumentsById(admin, auth.companyId, [currentBsaleNvId], null, undefined, false)
+    const document = hydrated[0]
+    if (!document || Number(document.document.id) !== currentBsaleNvId || document.details.length !== live.lines.length) {
+      throw new Error('La lectura de la Nota de Venta desde Bsale quedó incompleta. No se modificó el estado local.')
+    }
+
+    const documentSnapshot = mapBsaleDocument(auth.companyId, runId, document.document) as Record<string, unknown>
+    const detailSnapshots = mapBsaleDocumentDetails(auth.companyId, runId, currentBsaleNvId, document.details) as Array<Record<string, unknown>>
+    const replacement = await replaceBsaleDocumentSnapshot(auth.companyId, runId, documentSnapshot, detailSnapshots)
+    runCompleted = true
+
+    const syncedAt = new Date().toISOString()
+    let updatedCardRow: { id: string; status: string } | null = null
+    let pointerError: { message: string } | null = null
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const pointerRes = await admin.schema('logistica')
+        .from('sales_order_preparation_cards')
+        .update({ current_bsale_nv_id: currentBsaleNvId, updated_at: syncedAt })
+        .eq('id', cardRow.id)
+        .eq('company_id', auth.companyId)
+        .eq('status', 'IN_AUDIT')
+        .select('id, status')
+        .maybeSingle()
+
+      updatedCardRow = pointerRes.data as { id: string; status: string } | null
+      pointerError = pointerRes.error
+      if (!pointerError) break
+      if (attempt < 2) {
+        await new Promise(resolve => setTimeout(resolve, 150))
+      }
+    }
+
+    if (pointerError) {
+      throw new Error(`No se pudo actualizar la referencia vigente de la tarjeta tras reintentos: ${pointerError.message}. Vuelve a pulsar «Sincronizar».`)
+    }
+    if (!updatedCardRow || updatedCardRow.status !== 'IN_AUDIT') {
+      return auditSyncResult({
+        ok: false,
+        status: 'INVALID_STATE',
+        cardId: cardRow.id,
+        auditId,
+        previousBsaleNvId,
+        currentBsaleNvId,
+        substitutedDocument: previousBsaleNvId !== null && previousBsaleNvId !== currentBsaleNvId,
+        detailCount: detailSnapshots.length,
+        syncRunId: runId,
+        syncedAt,
+        commercialVerification: null,
+        openAuditIncidentsCount: 0,
+        canFinalize: false,
+        message: 'La tarjeta salió de Auditoría mientras se sincronizaba y no fue modificada.',
+      })
+    }
+
+    if (replacement.document_id !== currentBsaleNvId) {
+      throw new Error('La actualización del espejo Bsale no quedó consistente para esta corrida.')
+    }
+
+    if (operationalLockAcquired && runId) {
+      await releaseOperationalBsaleSyncLock(auth.companyId, 'bsale_operational_prep_sync', runId)
+      operationalLockAcquired = false
+    }
+
+    const substitutedDocument = previousBsaleNvId !== null && previousBsaleNvId !== currentBsaleNvId
+
+    // Reutilizar la verificación comercial oficial de Auditoría y la lectura de pre-cierre
+    // sin alterar cantidades auditadas, incidencias físicas, fotos ni finalizar automáticamente.
+    const [commercialRes, finalizationRes, { count: openAuditIncidentsCount }] = await Promise.all([
+      verifySalesOrderAuditCommercial({
+        auditId,
+        cardId: cardRow.id,
+        companyId: auth.companyId,
+      }),
+      getSalesOrderAuditFinalizationStatus(auditId),
+      admin.schema('logistica')
+        .from('sales_order_audit_incidents')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', auth.companyId)
+        .eq('audit_id', auditId)
+        .eq('status', 'OPEN'),
+    ])
+
+    const commercialVerification = commercialRes.data
+    const openIncidents = openAuditIncidentsCount ?? 0
+    const physicalCanFinalize = Boolean(finalizationRes.data?.can_finalize)
+
+    if (commercialRes.error || !commercialVerification) {
+      return auditSyncResult({
+        ok: true,
+        status: 'SYNCED_PENDING',
+        cardId: cardRow.id,
+        auditId,
+        previousBsaleNvId,
+        currentBsaleNvId,
+        substitutedDocument,
+        detailCount: detailSnapshots.length,
+        syncRunId: runId,
+        syncedAt,
+        commercialVerification: null,
+        openAuditIncidentsCount: openIncidents,
+        canFinalize: false,
+        message: `NV #${cardRow.bsale_nv_folio} sincronizada, pero no se pudo completar la verificación comercial: ${commercialRes.error || 'sin respuesta'}. La auditoría permanece abierta.`,
+      })
+    }
+
+    const commercialConforming = commercialVerification.status === 'READY_TO_INVOICE' && commercialVerification.differences.length === 0
+    const canFinalize = commercialConforming && physicalCanFinalize
+
+    if (canFinalize) {
+      return auditSyncResult({
+        ok: true,
+        status: 'SYNCED_READY',
+        cardId: cardRow.id,
+        auditId,
+        previousBsaleNvId,
+        currentBsaleNvId,
+        substitutedDocument,
+        detailCount: detailSnapshots.length,
+        syncRunId: runId,
+        syncedAt,
+        commercialVerification,
+        openAuditIncidentsCount: openIncidents,
+        canFinalize: true,
+        message: `NV #${cardRow.bsale_nv_folio} sincronizada y conforme con Bsale. Ya puedes continuar con «Revisar cierre» para finalizar la Auditoría.`,
+      })
+    }
+
+    const pendingParts: string[] = []
+    if (commercialVerification.status === 'INCIDENTS') {
+      pendingParts.push(`persisten ${commercialVerification.differences.length} diferencia${commercialVerification.differences.length === 1 ? '' : 's'} comercial${commercialVerification.differences.length === 1 ? '' : 'es'} en Bsale`)
+    } else if (commercialVerification.status === 'BLOCKED') {
+      pendingParts.push(`verificación comercial bloqueada (${commercialVerification.reason})`)
+    }
+    if (openIncidents > 0) {
+      pendingParts.push(`${openIncidents} incidencia${openIncidents === 1 ? '' : 's'} física${openIncidents === 1 ? '' : 's'} abierta${openIncidents === 1 ? '' : 's'}`)
+    }
+    if (!physicalCanFinalize && finalizationRes.data?.blockers?.length) {
+      pendingParts.push(finalizationRes.data.blockers[0].message)
+    }
+
+    return auditSyncResult({
+      ok: true,
+      status: 'SYNCED_PENDING',
+      cardId: cardRow.id,
+      auditId,
+      previousBsaleNvId,
+      currentBsaleNvId,
+      substitutedDocument,
+      detailCount: detailSnapshots.length,
+      syncRunId: runId,
+      syncedAt,
+      commercialVerification,
+      openAuditIncidentsCount: openIncidents,
+      canFinalize: false,
+      message: pendingParts.length > 0
+        ? `NV #${cardRow.bsale_nv_folio} sincronizada. La auditoría permanece abierta: ${pendingParts.join('; ')}.`
+        : `NV #${cardRow.bsale_nv_folio} sincronizada. La auditoría permanece abierta hasta completar las validaciones de cierre.`,
+    })
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'No se pudo sincronizar la Nota de Venta en Auditoría.'
+    if (runId && !runCompleted) {
+      await finishBsaleRun(runId, 'FAILED', errorMessage)
+    }
+    return auditSyncResult({
+      ok: false,
+      status: 'ERROR',
+      cardId,
+      auditId,
+      previousBsaleNvId,
+      currentBsaleNvId: previousBsaleNvId,
+      substitutedDocument: false,
+      detailCount: 0,
+      syncRunId: runId,
+      syncedAt: null,
+      commercialVerification: null,
+      openAuditIncidentsCount: 0,
+      canFinalize: false,
       message: errorMessage,
     })
   } finally {

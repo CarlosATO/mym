@@ -214,3 +214,15 @@ export function evaluatePostSyncAuditTransition(params: {
     message: null,
   }
 }
+
+export function isAuditCardBlockedForSync(params: {
+  cardStatus: string
+  openAuditIncidentCount?: number
+  openCommercialIncidentCount?: number
+  commercialVerificationStatus?: 'READY_TO_INVOICE' | 'INCIDENTS' | 'BLOCKED' | null
+}): boolean {
+  if (params.cardStatus !== 'IN_AUDIT') return false
+  if (Math.max(0, Number(params.openAuditIncidentCount ?? 0)) > 0) return true
+  if (Math.max(0, Number(params.openCommercialIncidentCount ?? 0)) > 0) return true
+  return params.commercialVerificationStatus === 'INCIDENTS' || params.commercialVerificationStatus === 'BLOCKED'
+}

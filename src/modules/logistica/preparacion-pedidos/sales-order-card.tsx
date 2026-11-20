@@ -10,7 +10,7 @@ import { useDraggable } from '@dnd-kit/core'
 import { formatPreparationClp, getPreparationCardAmount, getPreparationComuna, parseDateOnly } from './preparation-board-utils'
 import { getPreparationLockLabel } from './preparation-lock-policy'
 import { getPreparationReadinessLabel, type PreparationReadinessLoadState, type PreparationRouteReadiness } from './preparation-route-readiness'
-import { isPreparationCardBlockedForSync } from './preparation-line-validation'
+import { isAuditCardBlockedForSync, isPreparationCardBlockedForSync } from './preparation-line-validation'
 import { PreparationCommercialChangeAlert } from './preparation-commercial-change-alert'
 import type { PreparationCommercialAlert } from '@/app/actions/logistica/sales-order-preparation-commercial'
 
@@ -18,6 +18,8 @@ export type SalesOrderCardAuditLock = {
   locked_by_user_id: string | null
   locked_by_user_name: string | null
   assigned_auditor_user_name: string | null
+  open_audit_incident_count?: number
+  commercial_verification_status?: 'READY_TO_INVOICE' | 'INCIDENTS' | 'BLOCKED' | null
 }
 
 interface SalesOrderCardProps {
@@ -53,6 +55,8 @@ interface SalesOrderCardProps {
   canSyncCard?: boolean
   isSyncingCard?: boolean
   onSyncCard?: (card: SalesOrderPreparationCardInfo) => void | Promise<unknown>
+  canSyncAuditCard?: boolean
+  onSyncAuditCard?: (card: SalesOrderPreparationCardInfo) => void | Promise<unknown>
 }
 
 function formatShortDate(value: string | null): string | null {
@@ -100,6 +104,8 @@ export function SalesOrderCard({
   canSyncCard = false,
   isSyncingCard = false,
   onSyncCard,
+  canSyncAuditCard = false,
+  onSyncAuditCard,
 }: SalesOrderCardProps) {
   const routeDate = formatShortDate(card.route_date)
   const routeFullDate = formatFullDate(card.route_date)
@@ -159,7 +165,18 @@ export function SalesOrderCard({
     openCommercialIncidentCount,
     commercialAlertStatus: commercialAlert?.status ?? null,
   })
-  const showManualSyncButton = canSyncCard && isBlockedForSync && !isOverlay && !commercialMirror && Boolean(onSyncCard)
+  const isAuditBlockedForSync = isAuditCardBlockedForSync({
+    cardStatus: card.status,
+    openAuditIncidentCount: auditLock?.open_audit_incident_count ?? 0,
+    openCommercialIncidentCount,
+    commercialVerificationStatus: auditLock?.commercial_verification_status ?? null,
+  })
+  const isAuditOwnedByOther = card.status === 'IN_AUDIT'
+    && Boolean(auditLock?.locked_by_user_id)
+    && auditLock?.locked_by_user_id !== currentUserId
+  const showPrepManualSyncButton = canSyncCard && isBlockedForSync && !isOverlay && !commercialMirror && Boolean(onSyncCard)
+  const showAuditManualSyncButton = canSyncAuditCard && isAuditBlockedForSync && !isAuditOwnedByOther && !isOverlay && !commercialMirror && Boolean(onSyncAuditCard)
+  const showManualSyncButton = showPrepManualSyncButton || showAuditManualSyncButton
 
   const [isVerifyingCommercial, setIsVerifyingCommercial] = useState(false)
   const isClientBlocked = card.client_commercially_blocked === true || card.client_commercial_status === 'BLOCKED'
@@ -398,7 +415,11 @@ export function SalesOrderCard({
                 onClick={event => {
                   event.stopPropagation()
                   if (isSyncingCard || isPending) return
-                  void onSyncCard?.(card)
+                  if (showAuditManualSyncButton) {
+                    void onSyncAuditCard?.(card)
+                  } else {
+                    void onSyncCard?.(card)
+                  }
                 }}
                 onDoubleClick={event => event.stopPropagation()}
                 className="inline-flex items-center gap-1 rounded border border-[#72383D]/35 bg-[#F5EDE9] px-1.5 py-0.5 text-[9px] font-bold text-[#72383D] transition-colors hover:bg-[#EBDDD6] disabled:cursor-not-allowed disabled:opacity-60"

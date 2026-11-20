@@ -25,6 +25,7 @@ import {
   getSalesOrderAuditAttachmentSignedUrl,
   getSalesOrderAuditDetail,
   getSalesOrderAuditFinalizationStatus,
+  resolveSalesOrderAuditIncident,
   setSalesOrderAuditPackageCount,
   takeSalesOrderAudit,
   uploadSalesOrderAuditEvidence,
@@ -37,6 +38,7 @@ import {
   type SalesOrderAuditLine,
 } from '@/app/actions/logistica/sales-order-audit'
 import { verifySalesOrderAuditCommercial } from '@/app/actions/logistica/sales-order-audit-commercial'
+import { syncSalesOrderAuditCardFromBsale, type AuditCardSyncResult } from '@/app/actions/logistica/sales-order-preparation-incident-sync'
 import { getAuditCache, invalidateAuditCache, setAuditCache } from './audit-cache'
 import {
   AUDIT_EVIDENCE_ACCEPT,
@@ -164,6 +166,12 @@ export function SalesOrderAuditDrawer({
   const [precloseError, setPrecloseError] = useState<string | null>(null)
   const [finalizing, setFinalizing] = useState(false)
   const [finalizeError, setFinalizeError] = useState<string | null>(null)
+  const [syncingAuditBsale, setSyncingAuditBsale] = useState(false)
+  const [auditSyncResult, setAuditSyncResult] = useState<AuditCardSyncResult | null>(null)
+  const [resolveDialog, setResolveDialog] = useState<{ line: SalesOrderAuditLine; incident: SalesOrderAuditIncident } | null>(null)
+  const [resolutionNote, setResolutionNote] = useState('')
+  const [resolvingIncident, setResolvingIncident] = useState(false)
+  const [resolveIncidentError, setResolveIncidentError] = useState<string | null>(null)
   const [commercialReviewOpen, setCommercialReviewOpen] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -176,6 +184,7 @@ export function SalesOrderAuditDrawer({
   const finalizingRef = useRef(false)
   const savingRef = useRef(false)
   const bulkRef = useRef(false)
+  const resolvingIncidentRef = useRef(false)
   const focusedLineRef = useRef<string | null>(null)
 
   const audit = detail?.audit ?? null
@@ -703,6 +712,111 @@ export function SalesOrderAuditDrawer({
     }
   }
 
+  useEffect(() => {
+    setAuditSyncResult(null)
+    setResolveDialog(null)
+    setResolutionNote('')
+    setResolveIncidentError(null)
+  }, [card.card_id])
+
+  const openResolveIncidentDialog = (line: SalesOrderAuditLine, incident: SalesOrderAuditIncident) => {
+    if (!canWrite || resolvingIncident) return
+    setResolveDialog({ line, incident })
+    setResolutionNote('')
+    setResolveIncidentError(null)
+  }
+
+  const handleConfirmResolveIncident = async () => {
+    if (!audit || !resolveDialog || !canWrite || resolvingIncidentRef.current) return
+    const note = resolutionNote.trim()
+    if (!note) {
+      setResolveIncidentError('La observación de resolución es obligatoria.')
+      return
+    }
+    resolvingIncidentRef.current = true
+    setResolvingIncident(true)
+    setResolveIncidentError(null)
+    try {
+      const result = await resolveSalesOrderAuditIncident({
+        cardId: card.card_id,
+        auditId: audit.id,
+        incidentId: resolveDialog.incident.id,
+        resolutionNote: note,
+        companyId: card.company_id,
+      })
+      if (!mountedRef.current) return
+      if (result.error || !result.data) {
+        const message = result.error || 'No se pudo resolver la incidencia.'
+        setResolveIncidentError(message)
+        if (isAuditLockError(message)) onOwnershipConflict()
+        return
+      }
+      setResolveDialog(null)
+      setResolutionNote('')
+      setResolveIncidentError(null)
+      toast.success('Incidencia resuelta. Puedes continuar con «Revisar cierre» cuando corresponda.')
+      invalidateAuditCache(card.card_id)
+      onAuditLockChange()
+      await loadDetail()
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'No se pudo resolver la incidencia.'
+      if (mountedRef.current) setResolveIncidentError(message)
+    } finally {
+      resolvingIncidentRef.current = false
+      if (mountedRef.current) setResolvingIncident(false)
+    }
+  }
+
+  const handleSyncAuditBsale = async () => {
+    if (!audit || isFinalized || !canManage || isSelfAuditBlocked || isLockedByOther || syncingAuditBsale) return
+    setSyncingAuditBsale(true)
+    try {
+      const result = await syncSalesOrderAuditCardFromBsale(card.card_id)
+      if (!mountedRef.current) return
+      setAuditSyncResult(result)
+      if (!result.ok) {
+        if (result.status === 'CONFLICT' || result.status === 'IN_PROGRESS') {
+          toast.warning(result.message)
+        } else {
+          toast.error(result.message)
+        }
+        return
+      }
+      if (result.canFinalize) {
+        setFinalizeError(null)
+        toast.success(result.message)
+      } else {
+        toast.warning(result.message)
+      }
+      invalidateAuditCache(card.card_id)
+      onAuditLockChange()
+      await loadDetail()
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'No se pudo sincronizar con Bsale.'
+      if (mountedRef.current) {
+        setAuditSyncResult({
+          ok: false,
+          status: 'ERROR',
+          cardId: card.card_id,
+          auditId: audit.id,
+          previousBsaleNvId: card.nv_bsale_id,
+          currentBsaleNvId: card.nv_bsale_id,
+          substitutedDocument: false,
+          detailCount: 0,
+          syncRunId: null,
+          syncedAt: null,
+          commercialVerification: null,
+          openAuditIncidentsCount: summary.openIncidents,
+          canFinalize: false,
+          message,
+        })
+        toast.error(message)
+      }
+    } finally {
+      if (mountedRef.current) setSyncingAuditBsale(false)
+    }
+  }
+
   const handleReviewClose = async () => {
     if (!audit) return
     setPrecloseOpen(true)
@@ -1027,9 +1141,13 @@ export function SalesOrderAuditDrawer({
                           {lines.map(line => {
                             const quantity = lineDrafts[line.id] ?? (line.audit_quantity == null ? '' : String(line.audit_quantity))
                             const openIncident = getAuditOpenIncident(incidents, line.id)
+                            const resolvedIncident = !openIncident
+                              ? incidents.find(item => item.audit_line_id === line.id && item.status === 'RESOLVED') ?? null
+                              : null
                             const tone = getAuditLineResultTone(line)
                             const resultLabel = getAuditLineResultLabel(line, openIncident)
                             const incidentEvidence = openIncident ? attachments.filter(item => item.incident_id === openIncident.id) : []
+                            const resolvedEvidence = resolvedIncident ? attachments.filter(item => item.incident_id === resolvedIncident.id) : []
                             const missingRequiredEvidence = Boolean(openIncident && incidentRequiresPhoto(openIncident.incident_type) && incidentEvidence.length === 0)
                             const previousIncidents = incidents.filter(item => item.audit_line_id === line.id && item.status === 'SUPERSEDED').length
                             const disabled = !canWrite || Boolean(savingLineId) || Boolean(bulkProgress)
@@ -1137,6 +1255,50 @@ export function SalesOrderAuditDrawer({
                                             type="button"
                                             onClick={() => void handleOpenEvidence(evidence)}
                                             className="inline-flex items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700 hover:bg-emerald-100"
+                                            title="Ver evidencia"
+                                          >
+                                            <FileImage className="h-3 w-3" /> {evidence.file_name}
+                                          </button>
+                                        ))}
+                                        {canWrite && (
+                                          <button
+                                            type="button"
+                                            onClick={() => openResolveIncidentDialog(line, openIncident)}
+                                            disabled={resolvingIncident || Boolean(savingLineId) || Boolean(bulkProgress)}
+                                            className="ml-auto inline-flex items-center gap-1 rounded border border-emerald-600/35 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-800 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
+                                          >
+                                            <CheckCircle2 className="h-3 w-3" />
+                                            Resolver incidencia
+                                          </button>
+                                        )}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                )}
+                                {resolvedIncident && (
+                                  <tr className="border-b border-[#E8DFD5] bg-emerald-50/40">
+                                    <td colSpan={isFinalized ? 6 : 7} className="px-3 py-2">
+                                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-theme-text">
+                                        <span className="inline-flex items-center gap-1 rounded border border-emerald-300/70 bg-emerald-100/70 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-emerald-900">
+                                          <CheckCircle2 className="h-3 w-3" /> Resuelta (RESOLVED)
+                                        </span>
+                                        <span className="font-semibold text-[#6B625C]">
+                                          {AUDIT_INCIDENT_LABELS[resolvedIncident.incident_type]}
+                                        </span>
+                                        <span className="tabular-nums text-theme-text-muted">
+                                          Preparado {resolvedIncident.prepared_quantity_snapshot} → Auditado {resolvedIncident.audit_quantity}
+                                        </span>
+                                        {typeof resolvedIncident.metadata?.resolution_note === 'string' && resolvedIncident.metadata.resolution_note.trim() && (
+                                          <span className="text-emerald-900">
+                                            Resolución: {resolvedIncident.metadata.resolution_note}
+                                          </span>
+                                        )}
+                                        {resolvedEvidence.map(evidence => (
+                                          <button
+                                            key={evidence.id}
+                                            type="button"
+                                            onClick={() => void handleOpenEvidence(evidence)}
+                                            className="inline-flex items-center gap-1 rounded border border-emerald-200 bg-white px-1.5 py-0.5 text-[10px] text-emerald-700 hover:bg-emerald-100"
                                             title="Ver evidencia"
                                           >
                                             <FileImage className="h-3 w-3" /> {evidence.file_name}
@@ -1287,6 +1449,44 @@ export function SalesOrderAuditDrawer({
 
                     {!isFinalized && (
                       <>
+                        {audit && canManage && !isSelfAuditBlocked && !isLockedByOther && (
+                          summary.openIncidents > 0
+                          || summary.incidentLines > 0
+                          || Boolean(finalizeError)
+                          || Boolean(auditSyncResult)
+                        ) && (
+                          <div className="rounded-md border border-[#72383D]/25 bg-[#FBF7F4] px-2.5 py-2">
+                            <p className="text-[10px] font-bold uppercase tracking-wide text-[#72383D]">
+                              Sincronización comercial Bsale
+                            </p>
+                            <p className="mt-0.5 text-[10px] leading-snug text-[#6B625C]">
+                              Consulta la Nota de Venta vigente en Bsale y actualiza la verificación comercial sin alterar tus cantidades auditadas ni evidencias.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => void handleSyncAuditBsale()}
+                              disabled={syncingAuditBsale || precloseLoading || finalizing}
+                              className="mt-2 flex w-full items-center justify-center gap-1.5 rounded border border-[#72383D]/35 bg-white px-2.5 py-1.5 text-[11px] font-bold text-[#72383D] transition-colors hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <RefreshCw className={`h-3.5 w-3.5 ${syncingAuditBsale ? 'animate-spin' : ''}`} />
+                              {syncingAuditBsale ? 'Sincronizando…' : 'Sincronizar'}
+                            </button>
+                            {auditSyncResult && (
+                              <p
+                                role={auditSyncResult.ok ? 'status' : 'alert'}
+                                className={`mt-2 text-[10px] font-medium leading-snug ${
+                                  auditSyncResult.canFinalize
+                                    ? 'text-emerald-800'
+                                    : auditSyncResult.ok
+                                      ? 'text-amber-900'
+                                      : 'text-red-800'
+                                }`}
+                              >
+                                {auditSyncResult.message}
+                              </p>
+                            )}
+                          </div>
+                        )}
                         <button type="button" onClick={() => void handleReviewClose()} disabled={!audit || precloseLoading} className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#72383D] px-3 py-2 text-xs font-bold text-white hover:bg-[#612F34] disabled:opacity-40">
                           {precloseLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
                           REVISAR CIERRE
@@ -1300,6 +1500,87 @@ export function SalesOrderAuditDrawer({
             </>
           ) : null}
         </div>
+
+        {resolveDialog && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4">
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="resolve-audit-incident-title"
+              className="w-full max-w-md rounded-xl border border-[#DDD4CA] bg-white p-4 shadow-2xl"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h3 id="resolve-audit-incident-title" className="text-sm font-bold text-theme-text">
+                    Resolver incidencia de Auditoría
+                  </h3>
+                  <p className="mt-0.5 text-xs text-theme-text-muted">
+                    {resolveDialog.line.sku ? `${resolveDialog.line.sku} · ` : ''}{resolveDialog.line.product_name}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => !resolvingIncident && setResolveDialog(null)}
+                  className="rounded p-1 text-theme-text-muted hover:bg-[#F5F0EA]"
+                  aria-label="Cerrar diálogo"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="mt-3 rounded-lg border border-[#E8DFD5] bg-[#FCFBF9] px-3 py-2 text-[11px] text-theme-text">
+                <p className="font-semibold text-[#8A4B4B]">{AUDIT_INCIDENT_LABELS[resolveDialog.incident.incident_type]}</p>
+                <p className="mt-0.5 tabular-nums text-theme-text-muted">
+                  Preparado: <strong>{resolveDialog.line.prepared_quantity_snapshot}</strong> · Auditado: <strong>{resolveDialog.line.audit_quantity ?? '—'}</strong>
+                </p>
+              </div>
+
+              <div className="mt-3">
+                <label htmlFor="audit-incident-resolution-note" className="text-[10px] font-bold uppercase tracking-wider text-[#6B625C]">
+                  Observación de resolución (obligatoria)
+                </label>
+                <textarea
+                  id="audit-incident-resolution-note"
+                  rows={3}
+                  value={resolutionNote}
+                  disabled={resolvingIncident}
+                  onChange={event => {
+                    setResolutionNote(event.target.value)
+                    if (resolveIncidentError) setResolveIncidentError(null)
+                  }}
+                  placeholder="Ej.: NV ajustada en Bsale de 5 a 3 unidades y sincronizada, o unidad reemplazada con evidencia."
+                  className="mt-1 w-full resize-none rounded border border-[#D1C7BD] bg-white p-2 text-xs text-theme-text focus:border-[#72383D] focus:outline-none focus:ring-1 focus:ring-[#72383D]/20 disabled:opacity-60"
+                />
+              </div>
+
+              {resolveIncidentError && (
+                <p role="alert" className="mt-2 rounded-md border border-[#8A4B4B]/30 bg-[#8A4B4B]/10 px-2.5 py-2 text-[11px] font-medium text-[#8A4B4B]">
+                  {resolveIncidentError}
+                </p>
+              )}
+
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={resolvingIncident}
+                  onClick={() => setResolveDialog(null)}
+                  className="rounded-lg border border-[#DDD4CA] bg-white px-3 py-1.5 text-xs font-semibold text-[#322D29]/80 hover:bg-[#F5F0EA] disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={resolvingIncident || resolutionNote.trim().length === 0}
+                  onClick={() => void handleConfirmResolveIncident()}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#72383D] px-3 py-1.5 text-xs font-bold text-white hover:bg-[#612F34] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {resolvingIncident ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                  {resolvingIncident ? 'Resolviendo…' : 'Confirmar resolución'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="flex flex-none justify-end gap-2 border-t border-[#D1C7BD] bg-white px-5 py-3">
           <button type="button" onClick={onClose} className="rounded-lg border border-[#DDD4CA] bg-white px-4 py-2 text-xs font-semibold text-[#322D29]/80 hover:bg-[#F5F0EA]">

@@ -150,6 +150,19 @@ export type SalesOrderAuditFinalizeResult = {
   has_global_dispatch_photo: boolean
 }
 
+export type SalesOrderAuditResolveIncidentResult = {
+  incident_id: string
+  audit_id: string
+  card_id: string
+  status: 'RESOLVED'
+  incident_type: AuditIncidentType
+  resolved_by: string
+  resolved_at: string
+  resolution_note: string
+  commercial_verification_id: string | null
+  commercial_bsale_nv_id: number | null
+}
+
 async function requireAuditUser(companyIdOverride?: string | null) {
   const supabase = await createClient()
 
@@ -500,13 +513,59 @@ export async function finalizeSalesOrderAudit(params: {
   }
 }
 
+export async function resolveSalesOrderAuditIncident(params: {
+  cardId: string
+  auditId: string
+  incidentId: string
+  resolutionNote: string
+  companyId?: string | null
+}): Promise<{ data: SalesOrderAuditResolveIncidentResult | null; error: string | null }> {
+  try {
+    const note = params.resolutionNote?.trim() ?? ''
+    if (!note) {
+      return { data: null, error: 'La observación de resolución es obligatoria.' }
+    }
+
+    const { supabase, companyId, error: authError } = await requireAuditUser(params.companyId)
+    if (authError || !companyId) return { data: null, error: authError }
+
+    const { data, error } = await supabase
+      .schema('logistica')
+      .rpc('resolve_sales_order_audit_incident', {
+        p_company_id: companyId,
+        p_card_id: params.cardId,
+        p_audit_id: params.auditId,
+        p_incident_id: params.incidentId,
+        p_resolution_note: note,
+      })
+
+    if (error) {
+      console.error('[resolveSalesOrderAuditIncident] RPC error', {
+        auditId: params.auditId,
+        cardId: params.cardId,
+        incidentId: params.incidentId,
+        message: error.message,
+      })
+      return { data: null, error: error.message }
+    }
+
+    return { data: data as SalesOrderAuditResolveIncidentResult, error: null }
+  } catch (err: unknown) {
+    console.error('[resolveSalesOrderAuditIncident] Exception:', err)
+    return { data: null, error: err instanceof Error ? err.message : 'Error desconocido' }
+  }
+}
+
 export type AuditBoardLock = {
   card_id: string
+  audit_id?: string | null
   assigned_auditor_user_id: string | null
   assigned_auditor_user_name: string | null
   locked_by_user_id: string | null
   locked_by_user_name: string | null
   locked_at: string | null
+  open_audit_incident_count?: number
+  commercial_verification_status?: 'READY_TO_INVOICE' | 'INCIDENTS' | 'BLOCKED' | null
 }
 
 export async function getSalesOrderAuditBoardLocks(
@@ -522,7 +581,7 @@ export async function getSalesOrderAuditBoardLocks(
     const { data, error } = await supabase
       .schema('logistica')
       .from('sales_order_audits')
-      .select('card_id, assigned_auditor_user_id, locked_by_user_id, locked_at')
+      .select('id, card_id, assigned_auditor_user_id, locked_by_user_id, locked_at')
       .eq('company_id', companyId)
       .eq('status', 'OPEN')
       .in('card_id', ids)
@@ -533,11 +592,45 @@ export async function getSalesOrderAuditBoardLocks(
     }
 
     const rows = (data ?? []) as Array<{
+      id: string
       card_id: string
       assigned_auditor_user_id: string | null
       locked_by_user_id: string | null
       locked_at: string | null
     }>
+
+    const auditIds = rows.map(row => row.id)
+    const openIncidentCountByAuditId = new Map<string, number>()
+    const verificationStatusByAuditId = new Map<string, 'READY_TO_INVOICE' | 'INCIDENTS' | 'BLOCKED'>()
+
+    if (auditIds.length > 0) {
+      const admin = createAdminClient()
+      const [{ data: openIncidents }, { data: currentVerifications }] = await Promise.all([
+        admin.schema('logistica')
+          .from('sales_order_audit_incidents')
+          .select('audit_id')
+          .eq('company_id', companyId)
+          .eq('status', 'OPEN')
+          .in('audit_id', auditIds),
+        admin.schema('logistica')
+          .from('sales_order_audit_commercial_verifications')
+          .select('audit_id, status')
+          .eq('company_id', companyId)
+          .eq('is_current', true)
+          .in('audit_id', auditIds),
+      ])
+
+      for (const incident of openIncidents ?? []) {
+        const auditId = String(incident.audit_id)
+        openIncidentCountByAuditId.set(auditId, (openIncidentCountByAuditId.get(auditId) ?? 0) + 1)
+      }
+      for (const verification of currentVerifications ?? []) {
+        const status = verification.status as 'READY_TO_INVOICE' | 'INCIDENTS' | 'BLOCKED' | null
+        if (status === 'READY_TO_INVOICE' || status === 'INCIDENTS' || status === 'BLOCKED') {
+          verificationStatusByAuditId.set(String(verification.audit_id), status)
+        }
+      }
+    }
 
     const userIds = [...new Set(rows.flatMap(row => [row.assigned_auditor_user_id, row.locked_by_user_id]).filter((id): id is string => Boolean(id)))]
     const nameById = new Map<string, string>()
@@ -562,11 +655,14 @@ export async function getSalesOrderAuditBoardLocks(
     for (const row of rows) {
       result[row.card_id] = {
         card_id: row.card_id,
+        audit_id: row.id,
         assigned_auditor_user_id: row.assigned_auditor_user_id,
         assigned_auditor_user_name: row.assigned_auditor_user_id ? nameById.get(row.assigned_auditor_user_id) ?? null : null,
         locked_by_user_id: row.locked_by_user_id,
         locked_by_user_name: row.locked_by_user_id ? nameById.get(row.locked_by_user_id) ?? null : null,
         locked_at: row.locked_at,
+        open_audit_incident_count: openIncidentCountByAuditId.get(row.id) ?? 0,
+        commercial_verification_status: verificationStatusByAuditId.get(row.id) ?? null,
       }
     }
 

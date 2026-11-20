@@ -79,7 +79,9 @@ import { MovementObservationDialog } from './movement-observation-dialog'
 import { moveSalesOrderPreparationCard } from '@/app/actions/logistica/sales-order-preparation'
 import { toast } from 'sonner'
 import {
+  syncSalesOrderAuditCardFromBsale,
   syncSalesOrderPreparationCardFromBsale,
+  type AuditCardSyncResult,
   type PreparationCardSyncResult,
 } from '@/app/actions/logistica/sales-order-preparation-incident-sync'
 import { CreditNoteConfirmationModal, InvoiceConfirmationModal, InvoiceDocumentsDetail, InvoiceReviewModal, type InvoiceDocumentPreview, type InvoiceEmissionUiResult, type InvoiceReviewSnapshot } from './invoice-flow-ui'
@@ -294,6 +296,8 @@ function DroppableColumn({
   canSyncCard = false,
   syncingCardIds,
   onSyncCard,
+  canSyncAuditCard = false,
+  onSyncAuditCard,
 }: {
   col: KanbanColumn
   colCards: SalesOrderPreparationCardInfo[]
@@ -328,6 +332,8 @@ function DroppableColumn({
   canSyncCard?: boolean
   syncingCardIds: Set<string>
   onSyncCard?: (card: SalesOrderPreparationCardInfo) => Promise<PreparationCardSyncResult | null>
+  canSyncAuditCard?: boolean
+  onSyncAuditCard?: (card: SalesOrderPreparationCardInfo) => Promise<AuditCardSyncResult | null>
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: col.id,
@@ -439,6 +445,8 @@ function DroppableColumn({
                  canSyncCard={!commercialMirror && canSyncCard}
                  isSyncingCard={syncingCardIds.has(card.card_id)}
                  onSyncCard={onSyncCard}
+                 canSyncAuditCard={!commercialMirror && canSyncAuditCard}
+                 onSyncAuditCard={onSyncAuditCard}
                 dragDisabled={commercialMirror || card.status === 'AUDITED' || card.status === 'INVOICED_READY_FOR_ROUTE' || isPreparationReadOnly({
                   status: card.status,
                   currentUserId,
@@ -1634,6 +1642,51 @@ export function SalesOrderPreparationPanel({
     }
   }, [checkCommercialAlertNow])
 
+  const handleSyncAuditCard = useCallback(async (card: SalesOrderPreparationCardInfo): Promise<AuditCardSyncResult | null> => {
+    if (syncingCardIdsRef.current.has(card.card_id)) return null
+    syncingCardIdsRef.current.add(card.card_id)
+    setSyncingCardIds(current => {
+      const next = new Set(current)
+      next.add(card.card_id)
+      return next
+    })
+    try {
+      const result = await syncSalesOrderAuditCardFromBsale(card.card_id)
+      if (!result.ok) {
+        if (result.status === 'CONFLICT' || result.status === 'IN_PROGRESS') {
+          toast.warning(result.message)
+        } else {
+          toast.error(result.message)
+        }
+        return result
+      }
+
+      detailCacheRef.current.delete(card.nv_bsale_id)
+      if (result.currentBsaleNvId != null) {
+        detailCacheRef.current.delete(result.currentBsaleNvId)
+      }
+      void loadBoard({ showSpinner: false })
+      if (result.canFinalize) {
+        toast.success(result.message)
+      } else {
+        toast.warning(result.message)
+      }
+      return result
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo sincronizar la Auditoría con Bsale.'
+      toast.error(message)
+      return null
+    } finally {
+      syncingCardIdsRef.current.delete(card.card_id)
+      setSyncingCardIds(current => {
+        if (!current.has(card.card_id)) return current
+        const next = new Set(current)
+        next.delete(card.card_id)
+        return next
+      })
+    }
+  }, [])
+
   const transitionCard = async (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string): Promise<{ ok: boolean; error?: string }> => {
     if (pendingCardIds.has(card.card_id) || card.status === toStatus) {
       return { ok: false, error: 'La tarjeta ya está siendo procesada o ya se encuentra en ese estado.' }
@@ -2642,6 +2695,8 @@ export function SalesOrderPreparationPanel({
                          canSyncCard={canManagePreparation}
                          syncingCardIds={syncingCardIds}
                          onSyncCard={handleSyncBlockedCard}
+                         canSyncAuditCard={canManageAudit}
+                         onSyncAuditCard={handleSyncAuditCard}
                         />
                      )
                   })}
