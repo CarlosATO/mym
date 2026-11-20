@@ -26,6 +26,7 @@ export function DashboardLayoutClient({ children, profile, permissions, activeCo
     '/dashboard/logistica',
     '/dashboard/comercial',
     '/dashboard/analisis-comercial',
+    '/dashboard/cuentas-por-pagar',
     '/dashboard/inventarios',
     '/dashboard/rrhh',
   ]

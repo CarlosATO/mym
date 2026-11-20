@@ -4,55 +4,66 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useState } from 'react'
-import { Download, FileText, Image as ImageIcon, Loader2, X } from 'lucide-react'
+import { Download, FileText, Loader2, X } from 'lucide-react'
 import { getPurchaseOrderInvoiceSignedUrl, type PurchaseOrderInvoiceDocument } from '@/app/actions/adquisiciones/purchase-orders'
 
-type PurchaseOrderInvoiceViewerModalProps = {
-  correlative: string
-  supplierName: string
-  documents: PurchaseOrderInvoiceDocument[]
-  onClose: () => void
-}
-
-type InvoiceLink = {
+export type InvoiceLink = {
   signedUrl: string
   downloadUrl: string
   fileName: string
   mimeType: string
 }
 
-export function PurchaseOrderInvoiceViewerModal({ correlative, supplierName, documents, onClose }: PurchaseOrderInvoiceViewerModalProps) {
-  const [selectedId, setSelectedId] = useState(documents[0]?.id ?? '')
-  const [link, setLink] = useState<InvoiceLink | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [previewError, setPreviewError] = useState(false)
+type PurchaseOrderInvoiceViewerModalProps = {
+  correlative: string
+  supplierName: string
+  documents: PurchaseOrderInvoiceDocument[]
+  initialDocumentId?: string
+  loadSignedUrl?: (documentId: string) => Promise<InvoiceLink | { error: string }>
+  onClose: () => void
+}
+
+export function PurchaseOrderInvoiceViewerModal({ correlative, supplierName, documents, initialDocumentId, loadSignedUrl, onClose }: PurchaseOrderInvoiceViewerModalProps) {
+  const [selectedId, setSelectedId] = useState(initialDocumentId || documents[0]?.id || '')
+  const [fetchState, setFetchState] = useState<{
+    docId: string
+    link: InvoiceLink | null
+    error: string | null
+    previewError: boolean
+  }>({ docId: '', link: null, error: null, previewError: false })
 
   const selected = documents.find(document => document.id === selectedId) ?? documents[0] ?? null
+  const selectedDocId = selected?.id ?? ''
+  const selectedHasFile = Boolean(selected?.has_file)
+  const isCurrentDoc = fetchState.docId === selectedDocId
+  const link = selected && selectedHasFile && isCurrentDoc ? fetchState.link : null
+  const error = !selected
+    ? null
+    : !selectedHasFile
+      ? 'Esta factura no tiene un archivo adjunto disponible.'
+      : isCurrentDoc
+        ? fetchState.error
+        : null
+  const loading = Boolean(selected && selectedHasFile && !isCurrentDoc)
+  const previewError = Boolean(isCurrentDoc && fetchState.previewError)
 
   useEffect(() => {
-    if (!selected) return
+    if (!selected || !selected.has_file) return
     let active = true
-    setLink(null)
-    setError(null)
-    setPreviewError(false)
-    if (!selected.has_file) {
-      setError('Esta factura no tiene un archivo adjunto disponible.')
-      return () => { active = false }
-    }
-    setLoading(true)
-    void getPurchaseOrderInvoiceSignedUrl(selected.id).then(result => {
+    const targetId = selected.id
+    void (loadSignedUrl ? loadSignedUrl(selected.id) : getPurchaseOrderInvoiceSignedUrl(selected.id)).then(result => {
       if (!active) return
-      if ('error' in result) setError(result.error || 'No se pudo obtener la factura.')
-      else setLink(result)
-      setLoading(false)
+      if ('error' in result) {
+        setFetchState({ docId: targetId, link: null, error: result.error || 'No se pudo obtener la factura.', previewError: false })
+      } else {
+        setFetchState({ docId: targetId, link: result, error: null, previewError: false })
+      }
     }).catch(() => {
       if (!active) return
-      setError('No se pudo obtener el enlace temporal de la factura.')
-      setLoading(false)
+      setFetchState({ docId: targetId, link: null, error: 'No se pudo obtener el enlace temporal de la factura.', previewError: false })
     })
     return () => { active = false }
-  }, [selected?.id, selected?.has_file])
+  }, [selected, loadSignedUrl])
 
   const isImage = link?.mimeType.startsWith('image/')
   const isPdf = link?.mimeType === 'application/pdf'
@@ -91,8 +102,8 @@ export function PurchaseOrderInvoiceViewerModal({ correlative, supplierName, doc
               {loading && <div className="flex items-center gap-2 text-sm text-slate-600"><Loader2 className="h-5 w-5 animate-spin" /> Cargando factura...</div>}
               {!loading && error && <div className="max-w-md text-center text-sm text-red-700"><p>{error}</p><p className="mt-1 text-xs text-red-600/80">El archivo puede haber sido eliminado, estar vencido o no pertenecer a la empresa activa.</p></div>}
               {!loading && !error && link && previewError && <p className="max-w-md text-center text-sm text-slate-600">La previsualización no está disponible. Puedes descargar el archivo original.</p>}
-              {!loading && !error && link && !previewError && isImage && <img src={link.signedUrl} alt={displayName} className="max-h-full max-w-full object-contain" onError={() => setPreviewError(true)} />}
-              {!loading && !error && link && !previewError && isPdf && <iframe src={link.signedUrl} title={displayName} className="h-full w-full rounded border border-theme-border bg-white" onError={() => setPreviewError(true)} />}
+              {!loading && !error && link && !previewError && isImage && <img src={link.signedUrl} alt={displayName} className="max-h-full max-w-full object-contain" onError={() => setFetchState(prev => ({ ...prev, previewError: true }))} />}
+              {!loading && !error && link && !previewError && isPdf && <iframe src={link.signedUrl} title={displayName} className="h-full w-full rounded border border-theme-border bg-white" onError={() => setFetchState(prev => ({ ...prev, previewError: true }))} />}
               {!loading && !error && link && !isImage && !isPdf && <p className="max-w-md text-center text-sm text-slate-600">Este tipo de archivo no tiene previsualización disponible. Puedes descargar el archivo original.</p>}
             </div>
           </section>
