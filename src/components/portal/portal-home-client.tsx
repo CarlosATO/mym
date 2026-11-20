@@ -137,6 +137,12 @@ const MODULE_META: Record<
     iconName: 'ShoppingCart',
     accent: 'amber',
   },
+  cuentas_por_pagar: {
+    title: 'Cuentas por Pagar',
+    description: 'Facturas de proveedores y recepciones pendientes de validación',
+    iconName: 'FileText',
+    accent: 'teal',
+  },
   logistica: {
     title: 'Logística',
     description: 'Preparación de pedidos, recepciones, guías de ruta y control de bodegas WMS',

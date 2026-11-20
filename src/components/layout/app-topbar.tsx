@@ -46,6 +46,7 @@ export const ROUTE_NAMES: { prefix: string; name: string }[] = [
   { prefix: '/dashboard/logistica',        name: 'WMS · Logística' },
   { prefix: '/dashboard/comercial',        name: 'Clientes / Ventas' },
   { prefix: '/dashboard/analisis-comercial', name: 'Comercial' },
+  { prefix: '/dashboard/cuentas-por-pagar', name: 'Cuentas por Pagar' },
   { prefix: '/dashboard/inventarios',      name: 'Inventario' },
   { prefix: '/dashboard/rrhh',             name: 'RRHH' },
   { prefix: '/dashboard',                  name: 'Caylo' },
@@ -73,6 +74,13 @@ export const TOPBAR_MODULES: TopbarNavModule[] = [
     href: '/dashboard/analisis-comercial',
     permission: 'module.analisis-comercial.view',
     matchPrefixes: ['/dashboard/analisis-comercial'],
+  },
+  {
+    id: 'cuentas_por_pagar',
+    label: 'Cuentas por Pagar',
+    href: '/dashboard/cuentas-por-pagar',
+    permission: 'module.cuentas_por_pagar.view',
+    matchPrefixes: ['/dashboard/cuentas-por-pagar'],
   },
   {
     id: 'inventarios',
