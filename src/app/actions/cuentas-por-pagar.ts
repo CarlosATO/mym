@@ -9,6 +9,7 @@ import type {
   CreateServiceInvoiceResult,
   InvoiceDetail,
   InvoiceInboxSummary,
+  InboxDocument,
   ReceiptDocumentSignedLink,
   ReceiptInvoiceCandidate,
   SaveInvoiceValidationInput,
@@ -28,6 +29,7 @@ import {
   normalizeNumericFolio,
   validateQuickSupplierDraft,
 } from '@/modules/cuentas-por-pagar/service-rules'
+import { inboxDocumentMimeType } from '@/modules/cuentas-por-pagar/document-security'
 
 const CAYLO = 'd1000000-0000-0000-0000-000000000001'
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -167,6 +169,56 @@ export async function getInvoiceSummaries(): Promise<InvoiceInboxSummary[]> {
     const page = (data ?? []) as InvoiceInboxSummary[]
     rows.push(...page)
     if (page.length < pageSize) return rows
+  }
+}
+
+export async function getReceiptInvoiceDueDates(): Promise<Array<{
+  candidate_id: string
+  invoice_id: string | null
+  due_date: string | null
+  suggested_due_date: string | null
+  due_date_source: 'SAVED' | 'MANUAL' | 'PURCHASE_ORDER' | 'SUPPLIER' | null
+}>> {
+  const db = await authorizedClient()
+  const rows: Array<{
+    candidate_id: string
+    invoice_id: string | null
+    due_date: string | null
+    suggested_due_date: string | null
+    due_date_source: 'SAVED' | 'MANUAL' | 'PURCHASE_ORDER' | 'SUPPLIER' | null
+  }> = []
+  const pageSize = 1000
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await db.rpc('cxp_receipt_due_dates').range(offset, offset + pageSize - 1)
+    if (error) throw new Error(extractSafeRpcError(error, 'No se pudieron consultar los vencimientos.'))
+    const page = (data ?? []) as typeof rows
+    rows.push(...page)
+    if (page.length < pageSize) return rows
+  }
+}
+
+export async function setInvoiceDueDate(input: {
+  candidateId?: string
+  invoiceId?: string
+  dueDate: string | null
+}): Promise<{ ok: true; data: { candidate_id: string | null; invoice_id: string | null; due_date: string | null; validation_status?: string } } | { ok: false; error: string }> {
+  if (!input || ((input.candidateId === undefined) === (input.invoiceId === undefined)) ||
+      (input.candidateId !== undefined && !isUuid(input.candidateId)) || (input.invoiceId !== undefined && !isUuid(input.invoiceId)) ||
+      (input.dueDate !== null && (typeof input.dueDate !== 'string' || !CIVIL_DATE_RE.test(input.dueDate)))) {
+    return { ok: false, error: 'Factura o fecha de vencimiento inválida.' }
+  }
+  try {
+    const db = await authorizedClient()
+    const { data, error } = await db.rpc('cxp_set_due_date', {
+      p_candidate_id: input.candidateId ?? null,
+      p_invoice_id: input.invoiceId ?? null,
+      p_due_date: input.dueDate,
+    })
+    if (error || !data) return { ok: false, error: extractSafeRpcError(error ?? {}, 'No se pudo guardar el vencimiento.') }
+    revalidatePath('/dashboard/cuentas-por-pagar')
+    return { ok: true, data }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'No se pudo guardar el vencimiento.' }
   }
 }
 
@@ -339,6 +391,78 @@ export async function getCxpReceiptDocumentSignedUrl(
     return {
       error: error instanceof Error ? error.message : 'No se pudo obtener el enlace temporal del documento.',
     }
+  }
+}
+
+type InboxDocumentRecord = {
+  id: string
+  file_name: string | null
+  mime_type: string | null
+  storage_bucket: string
+  storage_path: string
+}
+
+/** The bulk query returns only one availability flag per invoice. */
+export async function getCxpInboxDocumentStatus(): Promise<Record<string, boolean>> {
+  const db = await authorizedClient()
+  const documents: Record<string, boolean> = {}
+  const pageSize = 1000
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await db.rpc('cxp_inbox_document_status').range(offset, offset + pageSize - 1)
+    if (error) throw new Error('No se pudieron consultar los respaldos de la bandeja.')
+    const page = (data ?? []) as { candidate_key: string; has_file: boolean }[]
+    for (const doc of page) documents[doc.candidate_key] = doc.has_file
+    if (page.length < pageSize) return documents
+  }
+}
+
+function inboxDocumentTarget(candidateKey: unknown) {
+  if (typeof candidateKey !== 'string') return null
+  const isService = candidateKey.startsWith('service:')
+  const id = isService ? candidateKey.slice('service:'.length) : candidateKey
+  return isUuid(id) ? { p_candidate_id: isService ? null : id, p_service_invoice_id: isService ? id : null } : null
+}
+
+export async function getCxpInboxDocuments(candidateKey: string): Promise<{ documents: InboxDocument[] } | { error: string }> {
+  const target = inboxDocumentTarget(candidateKey)
+  if (!target) return { error: 'Identificador de factura inválido.' }
+  try {
+    const db = await authorizedClient()
+    const { data, error } = await db.rpc('cxp_inbox_documents', target)
+    if (error) return { error: extractSafeRpcError(error, 'No se pudieron consultar los respaldos.') }
+    return { documents: (data ?? []) as InboxDocument[] }
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'No se pudieron consultar los respaldos.' }
+  }
+}
+
+export async function getCxpInboxDocumentSignedUrl(
+  candidateKey: string,
+  documentId: string,
+): Promise<ReceiptDocumentSignedLink | { error: string }> {
+  const target = inboxDocumentTarget(candidateKey)
+  if (!target || !isUuid(documentId)) return { error: 'Identificador de respaldo inválido.' }
+
+  try {
+    const db = await authorizedClient()
+    const { data, error } = await db.rpc('cxp_inbox_document_storage', { ...target, p_document_id: documentId })
+    if (error) return { error: extractSafeRpcError(error, 'No se pudo validar el respaldo.') }
+    const doc = ((data ?? []) as InboxDocumentRecord[]).find(item => item.id === documentId)
+    if (!doc) return { error: 'Documento no disponible o no vinculado a esta factura.' }
+    const mimeType = inboxDocumentMimeType(doc, CAYLO)
+    if (!mimeType) return { error: 'Tipo de archivo no permitido.' }
+    const storage = storageAdminClient().storage.from(doc.storage_bucket)
+    const expiresIn = 300
+    const [{ data: preview, error: previewError }, { data: download, error: downloadError }] = await Promise.all([
+      storage.createSignedUrl(doc.storage_path, expiresIn),
+      storage.createSignedUrl(doc.storage_path, expiresIn, { download: doc.file_name || true }),
+    ])
+    if (previewError || downloadError || !preview?.signedUrl || !download?.signedUrl) {
+      return { error: 'No se pudo generar el enlace temporal del documento.' }
+    }
+    return { signedUrl: preview.signedUrl, downloadUrl: download.signedUrl, fileName: doc.file_name || `factura-${doc.id}`, mimeType, expiresIn }
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'No se pudo obtener el respaldo.' }
   }
 }
 

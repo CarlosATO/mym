@@ -23,8 +23,8 @@ import { erpErrorInputClass, erpInputClass } from '@/lib/form-styles'
 import { cn } from '@/lib/utils'
 import type { ServiceDeliveryStatus, ServiceSupplierOption } from './types'
 import {
-  addDaysToCivilDate,
   formatRut,
+  suggestServiceDueDate,
 } from './validation-rules'
 import {
   calculateServiceAmounts,
@@ -52,7 +52,8 @@ export function ServiceInvoiceForm({ suppliers }: { suppliers: ServiceSupplierOp
   const [folio, setFolio] = useState('')
   const [serviceDescription, setServiceDescription] = useState('')
   const [issueDate, setIssueDate] = useState(() => todayInSantiago())
-  const [dueDate, setDueDate] = useState('')
+  // null significa que el usuario aún no ha editado el vencimiento.
+  const [manualDueDate, setManualDueDate] = useState<string | null>(null)
   const [amountInput, setAmountInput] = useState<{ source: ServiceAmountSource; text: string }>({ source: 'net', text: '' })
   const [taxType, setTaxType] = useState<ServiceTaxType>('taxable')
   const [editingAmount, setEditingAmount] = useState<ServiceAmountSource | null>(null)
@@ -68,6 +69,8 @@ export function ServiceInvoiceForm({ suppliers }: { suppliers: ServiceSupplierOp
   )
 
   const selectedSupplier = supplierId ? supplierById.get(supplierId) ?? null : null
+  const suggestedDueDate = suggestServiceDueDate(issueDate, selectedSupplier?.credit_days)
+  const dueDate = manualDueDate ?? suggestedDueDate
 
   const supplierOptions = useMemo<ComboboxOption[]>(
     () =>
@@ -132,11 +135,8 @@ export function ServiceInvoiceForm({ suppliers }: { suppliers: ServiceSupplierOp
   const canSubmit = !isPending && !hasNumericParseError && validationErrors.length === 0
 
   function handleSuggestDueDate() {
-    const days = selectedSupplier?.credit_days ?? 0
-    if (!issueDate || days <= 0) return
-    const suggested = addDaysToCivilDate(issueDate, days)
-    if (suggested) {
-      setDueDate(suggested)
+    if (suggestedDueDate) {
+      setManualDueDate(suggestedDueDate)
       setSubmitError(null)
     }
   }
@@ -146,7 +146,7 @@ export function ServiceInvoiceForm({ suppliers }: { suppliers: ServiceSupplierOp
     setFolio('')
     setServiceDescription('')
     setIssueDate(todayInSantiago())
-    setDueDate('')
+    setManualDueDate(null)
     setAmountInput({ source: 'net', text: '' })
     setTaxType('taxable')
     setEditingAmount(null)
@@ -336,7 +336,7 @@ export function ServiceInvoiceForm({ suppliers }: { suppliers: ServiceSupplierOp
                   type="date"
                   disabled={isPending}
                   value={dueDate}
-                  onChange={e => { setDueDate(e.target.value); setSubmitError(null) }}
+                  onChange={e => { setManualDueDate(e.target.value); setSubmitError(null) }}
                   className={cn(
                     erpInputClass,
                     'h-8.5 w-full px-2.5 text-xs',

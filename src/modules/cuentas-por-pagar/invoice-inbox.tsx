@@ -1,9 +1,10 @@
 'use client'
 
-import { useMemo, useState, useTransition } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import { AlertTriangle, CheckCircle2, FileText, RotateCcw, Search, ShieldCheck } from 'lucide-react'
-import { incorporateReceiptInvoices } from '@/app/actions/cuentas-por-pagar'
+import { AlertTriangle, CalendarDays, CheckCircle2, FileText, RotateCcw, Search, ShieldCheck } from 'lucide-react'
+import { getCxpInboxDocuments, getCxpInboxDocumentSignedUrl, incorporateReceiptInvoices, setInvoiceDueDate } from '@/app/actions/cuentas-por-pagar'
+import { PurchaseOrderInvoiceViewerModal } from '@/modules/adquisiciones/ordenes-compra/purchase-order-invoice-viewer-modal'
 import {
   OperationalTableResizeHandle,
   OperationalTableSortIndicator,
@@ -16,8 +17,11 @@ import { formatCivilDate } from '@/lib/datetime'
 import { erpInputClass, erpSelectClass } from '@/lib/form-styles'
 import { cn } from '@/lib/utils'
 import { InvoiceValidationDrawer } from './invoice-validation-drawer'
+import { InvoiceDueDateEditor } from './invoice-due-date-editor'
+import { resolveInboxDueDate, saveOptimisticDueDate, type InboxDueOverride, type ReceiptDueDate } from './inbox-due-date'
 import type {
   InvoiceInboxSummary,
+  InboxDocument,
   ReceiptInvoiceCandidate,
   SaveInvoiceValidationResult,
 } from './types'
@@ -32,7 +36,7 @@ const CXP_COLUMNS: OperationalTableColumn[] = [
   { id: 'purchaseType', defaultWidth: 86, minWidth: 74, maxWidth: 130, sortable: true, sortKey: 'purchaseType', sortType: 'text' },
   { id: 'folio', defaultWidth: 88, minWidth: 72, maxWidth: 145, sortable: true, sortKey: 'folio', sortType: 'number' },
   { id: 'issueDate', defaultWidth: 88, minWidth: 80, maxWidth: 130, sortable: true, sortKey: 'issueDate', sortType: 'date' },
-  { id: 'dueDate', defaultWidth: 88, minWidth: 80, maxWidth: 130, sortable: true, sortKey: 'dueDate', sortType: 'date' },
+  { id: 'dueDate', defaultWidth: 120, minWidth: 105, maxWidth: 160, sortable: true, sortKey: 'dueDate', sortType: 'date' },
   { id: 'po', defaultWidth: 120, minWidth: 92, maxWidth: 230, sortable: true, sortKey: 'po', sortType: 'text' },
   { id: 'receptionStatus', defaultWidth: 92, minWidth: 78, maxWidth: 140, sortable: true, sortKey: 'receptionStatus', sortType: 'text' },
   { id: 'referenceAmount', defaultWidth: 106, minWidth: 90, maxWidth: 170, sortable: true, sortKey: 'referenceAmount', sortType: 'number' },
@@ -93,9 +97,13 @@ function statusSortLabel(state: string, effectiveStatus: string | null): string 
 export function InvoiceInbox({
   initialCandidates,
   initialSummaries = [],
+  documents,
+  dueDates,
 }: {
   initialCandidates: ReceiptInvoiceCandidate[]
   initialSummaries?: InvoiceInboxSummary[]
+  documents: Record<string, boolean> | null
+  dueDates: ReceiptDueDate[] | null
 }) {
   const router = useRouter()
   const [search, setSearch] = useState('')
@@ -103,6 +111,30 @@ export function InvoiceInbox({
   const [selected, setSelected] = useState<string[]>([])
   const [message, setMessage] = useState('')
   const [activeInvoiceId, setActiveInvoiceId] = useState<string | null>(null)
+  const [editingDueRow, setEditingDueRow] = useState<{ row: ReceiptInvoiceCandidate; date: string | null; baseKey: string; readOnlyReason: string | null } | null>(null)
+  const [dueOverrides, setDueOverrides] = useState<Record<string, InboxDueOverride>>({})
+  const [pendingDueDates, setPendingDueDates] = useState<Record<string, InboxDueOverride>>({})
+  const dueDateLocks = useRef(new Set<string>())
+  const [viewer, setViewer] = useState<{ row: ReceiptInvoiceCandidate; documents: InboxDocument[] } | null>(null)
+  const [loadingDocument, setLoadingDocument] = useState(false)
+  const loadInboxDocument = useCallback((documentId: string) => {
+    if (!viewer) return Promise.resolve({ error: 'Seleccione una factura.' })
+    return getCxpInboxDocumentSignedUrl(viewer.row.candidate_id, documentId)
+  }, [viewer])
+
+  async function openDocuments(row: ReceiptInvoiceCandidate) {
+    setLoadingDocument(true)
+    try {
+      const result = await getCxpInboxDocuments(row.candidate_id)
+      if ('error' in result) setMessage(result.error)
+      else if (!result.documents.some(doc => doc.has_file)) setMessage('El respaldo ya no está disponible. Actualice la bandeja.')
+      else setViewer({ row, documents: result.documents })
+    } catch {
+      setMessage('No se pudieron consultar los respaldos de la factura.')
+    } finally {
+      setLoadingDocument(false)
+    }
+  }
   const [optimisticById, setOptimisticById] = useState<Record<string, OptimisticEntry>>({})
   const [pending, startTransition] = useTransition()
 
@@ -131,9 +163,34 @@ export function InvoiceInbox({
     return map
   }, [serverSummaryById, optimisticById])
 
+  const receiptDueById = useMemo(() => new Map((dueDates ?? []).map(item => [item.candidate_id, item])), [dueDates])
+
+  // Mantener la confirmación local hasta observar el mismo resultado en las propiedades del servidor.
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDueOverrides(current => {
+      let next = current
+      for (const row of initialCandidates) {
+        const override = current[row.candidate_id]
+        if (!override?.confirmed) continue
+        const summary = row.invoice_id ? serverSummaryById.get(row.invoice_id) : undefined
+        const receiptDue = row.purchase_type === 'SERVICES' ? undefined : receiptDueById.get(row.candidate_id)
+        const server = resolveInboxDueDate(row, summary, receiptDue, undefined)
+        if (server.date === override.date && server.source === override.source) {
+          if (next === current) next = { ...current }
+          delete next[row.candidate_id]
+        }
+      }
+      return next
+    }), 0)
+    return () => window.clearTimeout(timer)
+  }, [initialCandidates, serverSummaryById, receiptDueById, dueOverrides])
+
   const enrichedRows = useMemo(() => {
     return initialCandidates.map(row => {
       const summary = row.invoice_id ? summaryById.get(row.invoice_id) : undefined
+      const serverSummary = row.invoice_id ? serverSummaryById.get(row.invoice_id) : undefined
+      const receiptDue = row.purchase_type === 'SERVICES' ? undefined : receiptDueById.get(row.candidate_id)
+      const effectiveDue = resolveInboxDueDate(row, serverSummary, receiptDue, pendingDueDates[row.candidate_id] ?? dueOverrides[row.candidate_id])
       const effectiveStatus = summary?.validation_status ?? row.invoice_status ?? null
       const state = !row.invoice_id
         ? 'NEW'
@@ -149,9 +206,12 @@ export function InvoiceInbox({
         effectiveStatus,
         state,
         effectiveIssueDate: summary?.issue_date ?? row.issue_date,
+        effectiveDueDate: effectiveDue.date,
+        dueSource: effectiveDue.source,
+        dueBaseKey: effectiveDue.baseKey,
       }
     })
-  }, [initialCandidates, summaryById])
+  }, [initialCandidates, summaryById, serverSummaryById, receiptDueById, dueOverrides, pendingDueDates])
 
   const counts = useMemo(() => {
     let pendingValidation = 0
@@ -207,7 +267,7 @@ export function InvoiceInbox({
         case 'issueDate':
           return item.effectiveIssueDate
         case 'dueDate':
-          return item.summary?.due_date ?? null
+          return item.effectiveDueDate
         case 'po':
           return item.row.purchase_orders.join(', ')
         case 'receptionStatus':
@@ -217,14 +277,14 @@ export function InvoiceInbox({
         case 'realAmount':
           return item.summary?.total_amount != null ? Number(item.summary.total_amount) : null
         case 'document':
-          return item.row.has_document ? 1 : 0
+          return documents?.[item.row.candidate_id] ? 2 : documents && item.row.candidate_id in documents ? 1 : 0
         case 'status':
           return statusSortLabel(item.state, item.effectiveStatus)
         default:
           return null
       }
     })
-  }, [filteredRows, sort, selectedSet])
+  }, [filteredRows, sort, selectedSet, documents])
 
   const selectableVisibleIds = useMemo(
     () =>
@@ -270,6 +330,10 @@ export function InvoiceInbox({
   }
 
   function handleValidationUpdated(result: SaveInvoiceValidationResult) {
+    const currentRow = enrichedRows.find(item => item.row.invoice_id === result.id)
+    if (currentRow) {
+      setDueOverrides(prev => ({ ...prev, [currentRow.row.candidate_id]: { date: result.due_date, baseKey: currentRow.dueBaseKey } }))
+    }
     const currentServer = serverSummaryById.get(result.id)
     setOptimisticById(prev => ({
       ...prev,
@@ -279,6 +343,38 @@ export function InvoiceInbox({
       },
     }))
     router.refresh()
+  }
+
+  function saveDueDate(editing: NonNullable<typeof editingDueRow>, date: string | null) {
+    const { row, baseKey } = editing
+    const keys = [`candidate:${row.candidate_id}`, ...(row.invoice_id ? [`invoice:${row.invoice_id}`] : [])]
+    void saveOptimisticDueDate({
+      locks: dueDateLocks.current,
+      keys,
+      start: () => {
+        setMessage('')
+        setPendingDueDates(current => ({ ...current, [row.candidate_id]: { date, baseKey, confirmed: true, source: 'MANUAL' } }))
+        setEditingDueRow(null)
+      },
+      request: async () => {
+        const target = row.invoice_id ? { invoiceId: row.invoice_id } : { candidateId: row.candidate_id }
+        const result = await setInvoiceDueDate({ ...target, dueDate: date })
+        if (!result.ok) throw new Error(result.error)
+        return result.data
+      },
+      success: result => {
+        const source = row.purchase_type === 'SERVICES'
+          ? (result.due_date ? 'SAVED' : null)
+          : (result.invoice_id && result.due_date ? 'SAVED' : 'MANUAL')
+        setDueOverrides(current => ({ ...current, [row.candidate_id]: { date: result.due_date, baseKey, confirmed: true, source } }))
+      },
+      failure: error => setMessage(error instanceof Error ? error.message : 'No se pudo guardar el vencimiento. Intente nuevamente.'),
+      finish: () => setPendingDueDates(current => {
+        const next = { ...current }
+        delete next[row.candidate_id]
+        return next
+      }),
+    })
   }
 
   function renderSortableHeader(
@@ -533,7 +629,7 @@ export function InvoiceInbox({
               </tr>
             </thead>
             <tbody className="text-xs [&_td]:border-b [&_td]:border-theme-border [&_tr:last-child_td]:border-b-0">
-              {rows.map(({ row, summary, effectiveStatus, state, effectiveIssueDate }) => {
+              {rows.map(({ row, summary, effectiveStatus, state, effectiveIssueDate, effectiveDueDate, dueSource, dueBaseKey }) => {
                 const isValidated = effectiveStatus === 'VALIDATED'
                 const isPending = effectiveStatus === 'PENDING'
                 const hasUnresolvedDiscrepancy = isPending && summary?.discrepancy_status === 'UNRESOLVED'
@@ -605,8 +701,28 @@ export function InvoiceInbox({
                       {formatCivilDate(effectiveIssueDate) || '—'}
                     </td>
 
-                    <td className="overflow-hidden px-2.5 py-1 whitespace-nowrap tabular-nums text-theme-text-muted">
-                      {summary?.due_date ? formatCivilDate(summary.due_date) : '—'}
+                    <td className="overflow-hidden px-2.5 py-1 tabular-nums">
+                      <button
+                        type="button"
+                        disabled={Boolean(pendingDueDates[row.candidate_id])}
+                        onClick={() => setEditingDueRow({
+                          row, date: effectiveDueDate, baseKey: dueBaseKey,
+                          readOnlyReason: dueDates === null ? 'Edición de vencimientos no disponible en este entorno.' : !row.invoice_id && row.blocked_reason ? row.blocked_reason : null,
+                        })}
+                        title={dueDates === null ? 'Consultar vencimiento en modo lectura' : !row.invoice_id && row.blocked_reason ? row.blocked_reason : 'Editar vencimiento'}
+                        aria-label={`Vencimiento de factura ${row.folio ?? 'sin folio'} de ${row.supplier_name}: ${effectiveDueDate ? formatCivilDate(effectiveDueDate) : 'por confirmar'}`}
+                        className="group flex max-w-full items-start gap-1 rounded-md text-left text-[11px] leading-tight text-theme-text hover:text-theme-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-accent/40 disabled:cursor-default disabled:text-theme-text-muted"
+                      >
+                        <CalendarDays className="mt-0.5 h-3 w-3 shrink-0 text-theme-text-muted group-hover:text-theme-accent" />
+                        <span className="min-w-0">
+                          <span className="block whitespace-nowrap">{effectiveDueDate ? formatCivilDate(effectiveDueDate) : 'Por confirmar'}</span>
+                          {pendingDueDates[row.candidate_id] ? <span role="status" className="block text-[10px] text-theme-text-muted">Guardando…</span> : <>
+                            {(dueSource === 'PURCHASE_ORDER' || dueSource === 'SUPPLIER') && <span className="block text-[10px] font-semibold text-sky-700 dark:text-sky-400">Sugerido</span>}
+                            {dueSource === 'MANUAL' && <span className="block text-[10px] text-theme-text-muted">Corregido</span>}
+                            {dueSource === 'SAVED' && <span className="block text-[10px] text-theme-text-muted">Registrado</span>}
+                          </>}
+                        </span>
+                      </button>
                     </td>
 
                     <td className="overflow-hidden px-2.5 py-1">
@@ -671,20 +787,24 @@ export function InvoiceInbox({
                     </td>
 
                     <td className="overflow-hidden px-2.5 py-1 whitespace-nowrap">
-                      <span className="inline-flex max-w-full items-center gap-1 text-[11px] text-theme-text-muted">
-                        <FileText
-                          className={cn(
-                            'h-3.5 w-3.5 shrink-0',
-                            row.has_document ? 'text-sky-600 dark:text-sky-400' : 'text-theme-text-muted/50',
-                          )}
-                        />
-                        <span className="truncate">{row.has_document ? 'PDF' : 'Sin adj.'}</span>
-                        {row.receipt_ids.length > 1 && (
-                          <span className="shrink-0 rounded bg-theme-bg px-1 text-[10px] font-semibold tabular-nums text-theme-text-muted">
-                            ×{row.receipt_ids.length}
-                          </span>
-                        )}
-                      </span>
+                      {documents === null ? (
+                        <span className="text-[11px] text-theme-text-muted" title="No se pudieron consultar los respaldos">No disponible</span>
+                      ) : documents[row.candidate_id] ? (
+                        <button
+                          type="button"
+                          disabled={loadingDocument}
+                          onClick={() => void openDocuments(row)}
+                          className="inline-flex max-w-full items-center gap-1 rounded-md text-[11px] font-semibold text-sky-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-accent/40 dark:text-sky-400"
+                          aria-label={`Ver respaldo de factura ${row.folio ?? 'sin folio'} de ${row.supplier_name}`}
+                        >
+                          <FileText className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate">Ver PDF</span>
+                        </button>
+                      ) : row.candidate_id in documents ? (
+                        <span className="block whitespace-normal text-[10px] leading-tight text-theme-text-muted" title="Documento registrado sin archivo accesible">Adjunto no disponible</span>
+                      ) : (
+                        <span className="text-[11px] text-theme-text-muted">Sin adjunto</span>
+                      )}
                     </td>
 
                     <td className="overflow-hidden px-2.5 py-1 whitespace-nowrap">
@@ -770,9 +890,34 @@ export function InvoiceInbox({
 
       <InvoiceValidationDrawer
         invoiceId={activeInvoiceId}
+        suggestedDueDate={(() => {
+          const item = enrichedRows.find(entry => entry.row.invoice_id === activeInvoiceId)
+          return item?.dueSource === 'PURCHASE_ORDER' || item?.dueSource === 'SUPPLIER' ? item.effectiveDueDate : null
+        })()}
         onClose={() => setActiveInvoiceId(null)}
         onUpdated={handleValidationUpdated}
       />
+      {editingDueRow && (
+        <InvoiceDueDateEditor
+          key={editingDueRow.row.candidate_id}
+          row={editingDueRow.row}
+          dueDate={editingDueRow.date}
+          readOnlyReason={editingDueRow.readOnlyReason}
+          onClose={() => setEditingDueRow(null)}
+          onSave={date => saveDueDate(editingDueRow, date)}
+        />
+      )}
+      {viewer ? (
+        <PurchaseOrderInvoiceViewerModal
+          key={viewer.row.candidate_id}
+          correlative={`FA ${viewer.row.folio ?? '—'}`}
+          supplierName={viewer.row.supplier_name}
+          documents={viewer.documents}
+          initialDocumentId={viewer.documents.find(doc => doc.has_file)?.id}
+          loadSignedUrl={loadInboxDocument}
+          onClose={() => setViewer(null)}
+        />
+      ) : null}
     </div>
   )
 }

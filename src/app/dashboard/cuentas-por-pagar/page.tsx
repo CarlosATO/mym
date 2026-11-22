@@ -2,6 +2,8 @@ import { AccessDenied } from '@/components/access-denied'
 import { getActiveCompanyId } from '@/app/actions/companies'
 import {
   getInvoiceSummaries,
+  getCxpInboxDocumentStatus,
+  getReceiptInvoiceDueDates,
   getReceiptInvoiceCandidates,
   getServiceInvoices,
 } from '@/app/actions/cuentas-por-pagar'
@@ -16,10 +18,12 @@ export default async function CuentasPorPagarPage() {
     return <AccessDenied />
   }
 
-  const [productCandidates, serviceInvoices, summaries] = await Promise.all([
+  const [productCandidates, serviceInvoices, summaries, documents, dueDates] = await Promise.all([
     getReceiptInvoiceCandidates().catch(() => null),
     getServiceInvoices().catch(() => []),
     getInvoiceSummaries().catch(() => []),
+    getCxpInboxDocumentStatus().catch(() => null),
+    getReceiptInvoiceDueDates().catch(() => null),
   ])
 
   if (!productCandidates) {
@@ -27,5 +31,5 @@ export default async function CuentasPorPagarPage() {
   }
 
   const candidates = mergeInboxCandidates(productCandidates, serviceInvoices)
-  return <InvoiceInbox initialCandidates={candidates} initialSummaries={summaries} />
+  return <InvoiceInbox initialCandidates={candidates} initialSummaries={summaries} documents={documents} dueDates={dueDates} />
 }

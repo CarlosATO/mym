@@ -218,6 +218,7 @@ export function serviceInvoiceToInboxCandidate(row: ServiceInvoiceRow): ReceiptI
     supplier_name: row.supplier_name,
     folio: row.folio,
     issue_date: row.issue_date,
+    due_date: row.due_date,
     purchase_orders: [],
     receipt_ids: [],
     reference_amount: null,

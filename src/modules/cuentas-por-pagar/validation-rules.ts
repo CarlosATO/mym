@@ -81,6 +81,12 @@ export function addDaysToCivilDate(civilDate: string, days: number): string | nu
   return `${yyyy}-${mm}-${dd}`
 }
 
+export function suggestServiceDueDate(issueDate: string, creditDays: number | null | undefined): string {
+  if (typeof creditDays !== 'number' || !Number.isSafeInteger(creditDays) || creditDays <= 0) return ''
+  const suggested = addDaysToCivilDate(issueDate, creditDays) ?? ''
+  return /^\d{4}-\d{2}-\d{2}$/.test(suggested) ? suggested : ''
+}
+
 export interface InvoiceValidationEvaluationInput {
   issueDate: string
   dueDate: string | null

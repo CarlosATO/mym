@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import {
   AlertTriangle,
   Building2,
@@ -41,6 +41,7 @@ import {
 
 interface InvoiceValidationDrawerProps {
   invoiceId: string | null
+  suggestedDueDate?: string | null
   onClose: () => void
   onUpdated: (result: SaveInvoiceValidationResult) => void
 }
@@ -101,14 +102,17 @@ function ReadinessChip({ ok, label }: { ok: boolean; label: string }) {
 
 function InvoiceValidationDrawerContent({
   invoiceId,
+  suggestedDueDate,
   onClose,
   onUpdated,
 }: {
   invoiceId: string
+  suggestedDueDate?: string | null
   onClose: () => void
   onUpdated: (result: SaveInvoiceValidationResult) => void
 }) {
   const [detail, setDetail] = useState<InvoiceDetail | null>(null)
+  const initialDueSuggestion = useRef(suggestedDueDate ?? null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [reloadNonce, setReloadNonce] = useState(0)
@@ -160,6 +164,10 @@ function InvoiceValidationDrawerContent({
         setLoadError(null)
         setDetail(result.data)
         applyInvoiceToForm(result.data)
+        if (!result.data.invoice.due_date && initialDueSuggestion.current) {
+          setDueDate(initialDueSuggestion.current)
+        }
+        initialDueSuggestion.current = null
         setLoading(false)
       })
       .catch(() => {
@@ -566,7 +574,7 @@ function InvoiceValidationDrawerContent({
                     </div>
                     <div>
                       <p className="text-[10px] uppercase tracking-wider opacity-75">Vencimiento</p>
-                      <p className="font-semibold">{formatCivilDate(detail.invoice.due_date) || '—'}</p>
+                      <p className="font-semibold">{formatCivilDate(dueDate) || '—'}</p>
                     </div>
                     <div>
                       <p className="text-[10px] uppercase tracking-wider opacity-75">Pagos anteriores</p>
@@ -1273,12 +1281,13 @@ function InvoiceValidationDrawerContent({
   )
 }
 
-export function InvoiceValidationDrawer({ invoiceId, onClose, onUpdated }: InvoiceValidationDrawerProps) {
+export function InvoiceValidationDrawer({ invoiceId, suggestedDueDate, onClose, onUpdated }: InvoiceValidationDrawerProps) {
   if (!invoiceId) return null
   return (
     <InvoiceValidationDrawerContent
       key={invoiceId}
       invoiceId={invoiceId}
+      suggestedDueDate={suggestedDueDate}
       onClose={onClose}
       onUpdated={onUpdated}
     />

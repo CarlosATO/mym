@@ -68,6 +68,7 @@ export interface ReceiptInvoiceCandidate {
   supplier_name: string
   folio: string | null
   issue_date: string | null
+  due_date?: string | null
   purchase_orders: string[]
   receipt_ids: string[]
   reference_amount: number | null
@@ -228,4 +229,12 @@ export interface ReceiptDocumentSignedLink {
   fileName: string
   mimeType: string
   expiresIn: number
+}
+
+export interface InboxDocument {
+  id: string
+  document_number: string | null
+  file_name: string | null
+  mime_type: string | null
+  has_file: boolean
 }
