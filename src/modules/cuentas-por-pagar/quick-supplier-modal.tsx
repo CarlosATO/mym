@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useState, useTransition } from 'react'
-import { Building2, CheckCircle2, Loader2, X } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { Building2, CheckCircle2, Info, Loader2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { createQuickServiceSupplier } from '@/app/actions/cuentas-por-pagar'
 import { erpErrorInputClass, erpInputClass } from '@/lib/form-styles'
@@ -84,9 +85,9 @@ export function QuickSupplierModal({ open, onClose, onCreated }: QuickSupplierMo
     })
   }
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1px]"
+      className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto bg-slate-950/55 p-4 backdrop-blur-[2px]"
       role="dialog"
       aria-modal="true"
       aria-labelledby="cxp-quick-supplier-title"
@@ -94,28 +95,39 @@ export function QuickSupplierModal({ open, onClose, onCreated }: QuickSupplierMo
         if (e.target === e.currentTarget) handleClose()
       }}
     >
-      <div className="w-full max-w-md overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-xl">
-        <div className="flex items-center justify-between gap-2 border-b border-theme-border px-4 py-3">
-          <div className="flex items-center gap-2 min-w-0">
-            <Building2 className="h-4 w-4 shrink-0 text-theme-accent" />
-            <h2 id="cxp-quick-supplier-title" className="text-sm font-bold text-theme-text truncate">
-              Nuevo proveedor
-            </h2>
+      <div className="my-auto w-full max-w-lg overflow-hidden rounded-2xl border border-theme-border bg-theme-surface shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-theme-border px-5 py-5 sm:px-6">
+          <div className="flex min-w-0 items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-theme-accent/10 text-theme-accent">
+              <Building2 className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <h2 id="cxp-quick-supplier-title" className="text-base font-bold tracking-tight text-theme-text">
+                Nuevo proveedor
+              </h2>
+              <p className="mt-1 text-xs leading-relaxed text-theme-text-muted">
+                Registra los datos del proveedor para asociarlo a la factura.
+              </p>
+            </div>
           </div>
           <button
             type="button"
             disabled={isPending}
             onClick={handleClose}
             aria-label="Cerrar modal"
-            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-theme-text-muted hover:bg-theme-surface-hover hover:text-theme-text disabled:opacity-50"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-theme-text-muted transition-colors hover:bg-theme-surface-hover hover:text-theme-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-accent/30 disabled:opacity-50"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <form onSubmit={handleSave} className="space-y-3 p-4">
+        <form onSubmit={handleSave} className="space-y-5 px-5 py-5 sm:px-6">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-theme-text">Datos del proveedor</h3>
+            <span className="text-[11px] text-theme-text-muted"><span className="text-red-500">*</span> Obligatorio</span>
+          </div>
           <div>
-            <label htmlFor="qs-rut" className="mb-1 block text-xs font-semibold text-theme-text">
+            <label htmlFor="qs-rut" className="mb-1.5 block text-xs font-semibold text-theme-text">
               RUT <span className="text-red-500">*</span>
             </label>
             <input
@@ -134,7 +146,7 @@ export function QuickSupplierModal({ open, onClose, onCreated }: QuickSupplierMo
               placeholder="Ej: 76.123.456-7"
               className={cn(
                 erpInputClass,
-                'h-8.5 w-full px-2.5 font-mono text-xs',
+                'h-10 w-full px-3 font-mono text-sm hover:border-theme-accent/60',
                 showRutError && erpErrorInputClass,
               )}
             />
@@ -146,7 +158,7 @@ export function QuickSupplierModal({ open, onClose, onCreated }: QuickSupplierMo
           </div>
 
           <div>
-            <label htmlFor="qs-business-name" className="mb-1 block text-xs font-semibold text-theme-text">
+            <label htmlFor="qs-business-name" className="mb-1.5 block text-xs font-semibold text-theme-text">
               Razón social <span className="text-red-500">*</span>
             </label>
             <input
@@ -160,13 +172,13 @@ export function QuickSupplierModal({ open, onClose, onCreated }: QuickSupplierMo
                 setSubmitError(null)
               }}
               placeholder="Ej: Servicios Logísticos SpA"
-              className={cn(erpInputClass, 'h-8.5 w-full px-2.5 text-xs')}
+              className={cn(erpInputClass, 'h-10 w-full px-3 text-sm hover:border-theme-accent/60')}
             />
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label htmlFor="qs-email" className="mb-1 block text-xs font-medium text-theme-text">
+              <label htmlFor="qs-email" className="mb-1.5 block text-xs font-semibold text-theme-text">
                 Correo <span className="text-theme-text-muted font-normal">(opcional)</span>
               </label>
               <input
@@ -180,12 +192,12 @@ export function QuickSupplierModal({ open, onClose, onCreated }: QuickSupplierMo
                   setSubmitError(null)
                 }}
                 placeholder="contacto@proveedor.cl"
-                className={cn(erpInputClass, 'h-8.5 w-full px-2.5 text-xs')}
+                className={cn(erpInputClass, 'h-10 w-full px-3 text-sm hover:border-theme-accent/60')}
               />
             </div>
 
             <div>
-              <label htmlFor="qs-phone" className="mb-1 block text-xs font-medium text-theme-text">
+              <label htmlFor="qs-phone" className="mb-1.5 block text-xs font-semibold text-theme-text">
                 Teléfono <span className="text-theme-text-muted font-normal">(opcional)</span>
               </label>
               <input
@@ -199,14 +211,15 @@ export function QuickSupplierModal({ open, onClose, onCreated }: QuickSupplierMo
                   setSubmitError(null)
                 }}
                 placeholder="+56 9 1234 5678"
-                className={cn(erpInputClass, 'h-8.5 w-full px-2.5 text-xs')}
+                className={cn(erpInputClass, 'h-10 w-full px-3 text-sm hover:border-theme-accent/60')}
               />
             </div>
           </div>
 
-          <p className="rounded-lg border border-theme-border bg-theme-bg/50 px-2.5 py-2 text-[11px] text-theme-text-muted">
-            Registro interno en PetGroup (Caylo). No crea ni sincroniza registros en Bsale.
-          </p>
+          <div className="flex items-start gap-2.5 rounded-xl border border-theme-border bg-theme-bg/50 px-3.5 py-3 text-xs leading-relaxed text-theme-text-muted">
+            <Info className="mt-0.5 h-4 w-4 shrink-0 text-theme-accent" />
+            <p>Registro interno en PetGroup (Caylo). No crea ni sincroniza registros en Bsale.</p>
+          </div>
 
           {submitError && (
             <div role="alert" className="rounded-lg border border-red-500/35 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
@@ -214,19 +227,19 @@ export function QuickSupplierModal({ open, onClose, onCreated }: QuickSupplierMo
             </div>
           )}
 
-          <div className="flex items-center justify-end gap-2 border-t border-theme-border pt-3">
+          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-theme-border pt-4">
             <button
               type="button"
               disabled={isPending}
               onClick={handleClose}
-              className="inline-flex h-8 items-center justify-center rounded-lg border border-theme-border bg-theme-surface px-3 text-xs font-semibold text-theme-text hover:bg-theme-surface-hover disabled:opacity-50"
+              className="inline-flex h-10 items-center justify-center rounded-lg border border-theme-border bg-theme-surface px-4 text-xs font-semibold text-theme-text transition-colors hover:bg-theme-surface-hover disabled:opacity-50"
             >
               Cancelar
             </button>
             <button
               type="submit"
               disabled={!canSave}
-              className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-theme-accent px-3.5 text-xs font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-theme-accent px-4 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
               {isPending ? 'Guardando…' : 'Guardar proveedor'}
@@ -234,6 +247,7 @@ export function QuickSupplierModal({ open, onClose, onCreated }: QuickSupplierMo
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

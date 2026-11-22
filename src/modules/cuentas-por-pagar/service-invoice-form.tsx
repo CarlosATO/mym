@@ -24,15 +24,17 @@ import { cn } from '@/lib/utils'
 import type { ServiceDeliveryStatus, ServiceSupplierOption } from './types'
 import {
   addDaysToCivilDate,
-  calculateChileanTaxBreakdown,
-  formatClp,
   formatRut,
-  parseNumericAmount,
 } from './validation-rules'
 import {
+  calculateServiceAmounts,
+  filterServiceSuppliers,
+  formatServiceAmount,
   isValidNormalizedRut,
   upsertSupplierOption,
   validateServiceInvoiceDraft,
+  type ServiceAmountSource,
+  type ServiceTaxType,
 } from './service-rules'
 import { QuickSupplierModal } from './quick-supplier-modal'
 
@@ -51,9 +53,10 @@ export function ServiceInvoiceForm({ suppliers }: { suppliers: ServiceSupplierOp
   const [serviceDescription, setServiceDescription] = useState('')
   const [issueDate, setIssueDate] = useState(() => todayInSantiago())
   const [dueDate, setDueDate] = useState('')
-  const [netText, setNetText] = useState('')
-  const [taxText, setTaxText] = useState('')
-  const [totalText, setTotalText] = useState('')
+  const [amountInput, setAmountInput] = useState<{ source: ServiceAmountSource; text: string }>({ source: 'net', text: '' })
+  const [taxType, setTaxType] = useState<ServiceTaxType>('taxable')
+  const [editingAmount, setEditingAmount] = useState<ServiceAmountSource | null>(null)
+  const [editingText, setEditingText] = useState('')
   const [deliveryStatus, setDeliveryStatus] = useState<ServiceDeliveryStatus>('PENDING')
   const [attachment, setAttachment] = useState<File | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
@@ -68,18 +71,30 @@ export function ServiceInvoiceForm({ suppliers }: { suppliers: ServiceSupplierOp
 
   const supplierOptions = useMemo<ComboboxOption[]>(
     () =>
-      supplierList.map(supplier => ({
+      filterServiceSuppliers(supplierList).map(supplier => ({
         value: supplier.id,
-        label: supplier.rut
-          ? `${supplier.business_name} · ${formatRut(supplier.rut)}`
-          : `${supplier.business_name} · Sin RUT`,
+        label: `${supplier.business_name} · ${formatRut(supplier.rut)}`,
       })),
     [supplierList],
   )
 
-  const parsedNet = useMemo(() => parseNumericAmount(netText), [netText])
-  const parsedTax = useMemo(() => parseNumericAmount(taxText), [taxText])
-  const parsedTotal = useMemo(() => parseNumericAmount(totalText), [totalText])
+  const { netAmount: parsedNet, taxAmount: parsedTax, totalAmount: parsedTotal } = useMemo(
+    () => calculateServiceAmounts(amountInput.text, amountInput.source, taxType),
+    [amountInput, taxType],
+  )
+
+  function amountDisplay(source: ServiceAmountSource, value: number | null) {
+    if (editingAmount === source) return editingText
+    if (value !== null && Number.isFinite(value)) return formatServiceAmount(value)
+    return amountInput.source === source ? amountInput.text : ''
+  }
+
+  function startEditingAmount(source: ServiceAmountSource, value: number | null) {
+    setEditingAmount(source)
+    setEditingText(value !== null && Number.isFinite(value)
+      ? value.toFixed(2).replace('.', ',')
+      : amountInput.source === source ? amountInput.text : '')
+  }
 
   const validationErrors = useMemo(
     () =>
@@ -116,29 +131,6 @@ export function ServiceInvoiceForm({ suppliers }: { suppliers: ServiceSupplierOp
 
   const canSubmit = !isPending && !hasNumericParseError && validationErrors.length === 0
 
-  function handleCalculateFromTotal() {
-    if (parsedTotal === null || Number.isNaN(parsedTotal) || parsedTotal <= 0) {
-      setSubmitError('Ingrese primero un monto total mayor a $0 para calcular neto e IVA.')
-      return
-    }
-    const { netAmount, taxAmount } = calculateChileanTaxBreakdown(parsedTotal)
-    setNetText(String(netAmount))
-    setTaxText(String(taxAmount))
-    setSubmitError(null)
-  }
-
-  function handleCalculateFromNet() {
-    if (parsedNet === null || Number.isNaN(parsedNet) || parsedNet < 0) {
-      setSubmitError('Ingrese un monto neto válido para calcular IVA (19%) y total.')
-      return
-    }
-    const taxAmount = Math.round(parsedNet * 0.19)
-    const totalAmount = Math.round(parsedNet + taxAmount)
-    setTaxText(String(taxAmount))
-    setTotalText(String(totalAmount))
-    setSubmitError(null)
-  }
-
   function handleSuggestDueDate() {
     const days = selectedSupplier?.credit_days ?? 0
     if (!issueDate || days <= 0) return
@@ -155,9 +147,10 @@ export function ServiceInvoiceForm({ suppliers }: { suppliers: ServiceSupplierOp
     setServiceDescription('')
     setIssueDate(todayInSantiago())
     setDueDate('')
-    setNetText('')
-    setTaxText('')
-    setTotalText('')
+    setAmountInput({ source: 'net', text: '' })
+    setTaxType('taxable')
+    setEditingAmount(null)
+    setEditingText('')
     setDeliveryStatus('PENDING')
     setAttachment(null)
     setSubmitError(null)
@@ -236,32 +229,35 @@ export function ServiceInvoiceForm({ suppliers }: { suppliers: ServiceSupplierOp
             {/* Proveedor + RUT */}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-12">
               <div className="sm:col-span-8">
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <label className="block text-xs font-semibold text-theme-text">
-                    Proveedor <span className="text-red-500">*</span>
-                  </label>
+                <label className="mb-1 block text-xs font-semibold text-theme-text">
+                  Proveedor <span className="text-red-500">*</span>
+                </label>
+                <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
+                  <div className="min-w-0 flex-1 basis-48">
+                    <LocalCombobox
+                      value={supplierId}
+                      onChange={nextId => {
+                        setSupplierId(nextId)
+                        setSubmitError(null)
+                      }}
+                      options={supplierOptions}
+                      placeholder="Buscar proveedor por razón social o RUT…"
+                      emptyText="No se encontraron proveedores activos"
+                      clearable
+                      disabled={isPending}
+                      className={cn(erpInputClass, 'h-8.5 w-full px-2.5 pr-8 text-xs font-medium hover:border-theme-accent/60')}
+                    />
+                  </div>
                   <button
                     type="button"
                     disabled={isPending}
                     onClick={() => setQuickSupplierOpen(true)}
-                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-theme-accent transition-colors hover:bg-theme-accent/10 disabled:opacity-50"
+                    className="inline-flex h-8.5 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-2.5 text-xs font-semibold text-theme-text transition-colors hover:bg-theme-surface-hover disabled:opacity-50"
                   >
-                    <Plus className="h-3 w-3" />
+                    <Plus className="h-3.5 w-3.5 text-theme-accent" />
                     Nuevo proveedor
                   </button>
                 </div>
-                <LocalCombobox
-                  value={supplierId}
-                  onChange={nextId => {
-                    setSupplierId(nextId)
-                    setSubmitError(null)
-                  }}
-                  options={supplierOptions}
-                  placeholder="Buscar proveedor por razón social o RUT…"
-                  emptyText="No se encontraron proveedores activos"
-                  clearable
-                  disabled={isPending}
-                />
                 {supplierMissingRut && (
                   <p className="mt-1 text-[11px] text-red-600 dark:text-red-400">
                     Este proveedor no tiene RUT válido en el catálogo; actualice su ficha antes de ingresar la factura.
@@ -409,24 +405,18 @@ export function ServiceInvoiceForm({ suppliers }: { suppliers: ServiceSupplierOp
                 <span className="text-[11px] font-bold uppercase tracking-wider text-theme-text-muted">
                   Importes de la factura (CLP)
                 </span>
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={handleCalculateFromNet}
+                <label className="flex items-center gap-2 text-xs font-semibold text-theme-text">
+                  Tipo tributario
+                  <select
+                    value={taxType}
                     disabled={isPending}
-                    className="text-[11px] font-semibold text-theme-accent hover:underline"
+                    onChange={e => { setTaxType(e.target.value as ServiceTaxType); setSubmitError(null) }}
+                    className={cn(erpInputClass, 'h-8 px-2 text-xs')}
                   >
-                    Calcular IVA desde Neto
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleCalculateFromTotal}
-                    disabled={isPending}
-                    className="text-[11px] font-semibold text-theme-accent hover:underline"
-                  >
-                    Desglosar desde Total (19%)
-                  </button>
-                </div>
+                    <option value="taxable">Afecta a IVA 19%</option>
+                    <option value="exempt">Exenta de IVA</option>
+                  </select>
+                </label>
               </div>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -439,9 +429,11 @@ export function ServiceInvoiceForm({ suppliers }: { suppliers: ServiceSupplierOp
                     type="text"
                     inputMode="decimal"
                     disabled={isPending}
-                    value={netText}
-                    onChange={e => { setNetText(e.target.value); setSubmitError(null) }}
-                    placeholder="Ej: 100000"
+                    value={amountDisplay('net', parsedNet)}
+                    onFocus={e => { startEditingAmount('net', parsedNet); e.currentTarget.select() }}
+                    onBlur={() => setEditingAmount(null)}
+                    onChange={e => { setEditingText(e.target.value); setAmountInput({ source: 'net', text: e.target.value }); setSubmitError(null) }}
+                    placeholder="$100.000,00"
                     className={cn(
                       erpInputClass,
                       'h-8.5 w-full px-2.5 text-xs tabular-nums',
@@ -457,15 +449,13 @@ export function ServiceInvoiceForm({ suppliers }: { suppliers: ServiceSupplierOp
                   <input
                     id="svc-tax"
                     type="text"
-                    inputMode="decimal"
+                    readOnly
                     disabled={isPending}
-                    value={taxText}
-                    onChange={e => { setTaxText(e.target.value); setSubmitError(null) }}
-                    placeholder="Ej: 19000 (0 si exenta)"
+                    value={parsedTax !== null && Number.isFinite(parsedTax) ? formatServiceAmount(parsedTax) : ''}
+                    placeholder="Calculado automáticamente"
                     className={cn(
                       erpInputClass,
-                      'h-8.5 w-full px-2.5 text-xs tabular-nums',
-                      Number.isNaN(parsedTax) && erpErrorInputClass,
+                      'h-8.5 w-full px-2.5 text-xs tabular-nums bg-theme-bg/50 text-theme-text-muted',
                     )}
                   />
                 </div>
@@ -479,9 +469,11 @@ export function ServiceInvoiceForm({ suppliers }: { suppliers: ServiceSupplierOp
                     type="text"
                     inputMode="decimal"
                     disabled={isPending}
-                    value={totalText}
-                    onChange={e => { setTotalText(e.target.value); setSubmitError(null) }}
-                    placeholder="Ej: 119000"
+                    value={amountDisplay('total', parsedTotal)}
+                    onFocus={e => { startEditingAmount('total', parsedTotal); e.currentTarget.select() }}
+                    onBlur={() => setEditingAmount(null)}
+                    onChange={e => { setEditingText(e.target.value); setAmountInput({ source: 'total', text: e.target.value }); setSubmitError(null) }}
+                    placeholder="$119.000,00"
                     className={cn(
                       erpInputClass,
                       'h-8.5 w-full px-2.5 text-xs font-semibold tabular-nums',
@@ -490,6 +482,8 @@ export function ServiceInvoiceForm({ suppliers }: { suppliers: ServiceSupplierOp
                   />
                 </div>
               </div>
+              <p className="text-[11px] text-theme-text-muted">Ingrese el neto o el total; los demás importes se calculan automáticamente. Use coma para los decimales.</p>
+              {hasNumericParseError && <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">Ingrese un monto válido, con hasta dos decimales.</p>}
             </div>
 
             {/* Respaldo PDF o imagen */}
@@ -610,14 +604,14 @@ export function ServiceInvoiceForm({ suppliers }: { suppliers: ServiceSupplierOp
                 <div className="flex justify-between gap-2 border-t border-theme-border pt-2">
                   <dt className="text-theme-text-muted">Neto / IVA</dt>
                   <dd className="tabular-nums text-theme-text-muted">
-                    {parsedNet !== null && !Number.isNaN(parsedNet) ? formatClp(parsedNet, { allowDecimals: true }) : '—'} /{' '}
-                    {parsedTax !== null && !Number.isNaN(parsedTax) ? formatClp(parsedTax, { allowDecimals: true }) : '—'}
+                    {parsedNet !== null && !Number.isNaN(parsedNet) ? formatServiceAmount(parsedNet) : '—'} /{' '}
+                    {parsedTax !== null && !Number.isNaN(parsedTax) ? formatServiceAmount(parsedTax) : '—'}
                   </dd>
                 </div>
                 <div className="flex justify-between gap-2">
                   <dt className="font-semibold text-theme-text">Total factura</dt>
                   <dd className="text-sm font-bold tabular-nums text-theme-accent">
-                    {parsedTotal !== null && !Number.isNaN(parsedTotal) ? formatClp(parsedTotal, { allowDecimals: true }) : '—'}
+                    {parsedTotal !== null && !Number.isNaN(parsedTotal) ? formatServiceAmount(parsedTotal) : '—'}
                   </dd>
                 </div>
               </dl>

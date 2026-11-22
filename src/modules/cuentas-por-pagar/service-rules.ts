@@ -14,6 +14,41 @@ export const ALLOWED_SERVICE_ATTACHMENT_MIME_TYPES = new Set([
 
 export const MAX_SERVICE_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
+export type ServiceAmountSource = 'net' | 'total'
+export type ServiceTaxType = 'taxable' | 'exempt'
+
+const serviceAmountFormatter = new Intl.NumberFormat('es-CL', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+})
+
+export function formatServiceAmount(amount: number): string {
+  return `$${serviceAmountFormatter.format(amount)}`
+}
+
+// Los cálculos se realizan en centavos para mantener exactamente neto + IVA = total.
+export function calculateServiceAmounts(raw: string, source: ServiceAmountSource, taxType: ServiceTaxType): {
+  netAmount: number | null
+  taxAmount: number | null
+  totalAmount: number | null
+} {
+  const empty = { netAmount: null, taxAmount: null, totalAmount: null }
+  const text = raw.trim().replace(/^\$\s*/, '')
+  if (!text) return empty
+  if (!/^(?:\d+|\d{1,3}(?:\.\d{3})+)(?:,\d{0,2})?$/.test(text)) {
+    return { netAmount: NaN, taxAmount: NaN, totalAmount: NaN }
+  }
+  const [whole, fraction = ''] = text.replace(/\./g, '').split(',')
+  const cents = Number(whole) * 100 + Number(fraction.padEnd(2, '0'))
+  if (!Number.isSafeInteger(cents) || cents > Math.floor(Number.MAX_SAFE_INTEGER / 119)) {
+    return { netAmount: NaN, taxAmount: NaN, totalAmount: NaN }
+  }
+  const net = source === 'net' || taxType === 'exempt' ? cents : Math.round(cents * 100 / 119)
+  const tax = taxType === 'exempt' ? 0 : source === 'net' ? Math.round(cents * 19 / 100) : cents - net
+  const total = source === 'total' ? cents : net + tax
+  return { netAmount: net / 100, taxAmount: tax / 100, totalAmount: total / 100 }
+}
+
 export function normalizeChileanRut(rut: string | null | undefined): string {
   if (!rut) return ''
   return rut.replace(/[.-\s]/g, '').toUpperCase()
@@ -37,6 +72,10 @@ export function isValidChileanRut(rut: string | null | undefined): boolean {
   const remainder = 11 - (sum % 11)
   const expected = remainder === 11 ? '0' : remainder === 10 ? 'K' : String(remainder)
   return dv === expected
+}
+
+export function filterServiceSuppliers(suppliers: ServiceSupplierOption[]): ServiceSupplierOption[] {
+  return suppliers.filter(supplier => isValidChileanRut(supplier.rut))
 }
 
 export function formatChileanRut(rut: string | null | undefined): string {
