@@ -274,6 +274,8 @@ export interface InvoicePaymentBalanceSummary {
   company_id: string
   validation_status: InvoiceValidationStatus
   total_amount: number | null
+  credit_note_amount_clp?: number
+  net_payable_amount?: number | null
   prior_payment_status: PriorPaymentStatus
   historical_initial_balance: number | null
   historical_balance_cutoff_date: string | null
