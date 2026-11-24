@@ -54,6 +54,114 @@ function hasAtMostTwoDecimals(value: number): boolean {
   return Math.abs(Math.round(value * 100) - value * 100) < 1e-8
 }
 
+export interface InvoiceFinancialBreakdown {
+  totalAmountClp: number
+  creditNoteAmountClp: number
+  netPayableAmountClp: number
+  initialBalanceClp: number
+  priorPaidAmountClp: number
+  modulePaidAmountClp: number
+  totalPaidAmountClp: number
+  currentBalanceClp: number
+  isFullyPaid: boolean
+  canRegisterPayment: boolean
+}
+
+/**
+ * Calcula el desglose financiero separando monto original, notas de crédito,
+ * pagos anteriores, pagos del módulo y saldo pendiente (espejo exacto de compute_invoice_balance).
+ */
+export function computeInvoiceFinancialBreakdown(params: {
+  totalAmount: number
+  creditNoteAmountClp?: number | null
+  priorPaymentStatus: InvoicePaymentBalanceSummary['prior_payment_status']
+  historicalInitialBalance?: number | null
+  modulePaidAmount?: number | null
+}): { ok: true; data: InvoiceFinancialBreakdown } | { ok: false; error: string } {
+  const totalAmountClp = Math.round(Number(params.totalAmount) * 100) / 100
+  const creditNoteAmountClp =
+    Math.round(Number(params.creditNoteAmountClp ?? 0) * 100) / 100
+  const modulePaidAmountClp =
+    Math.round(Number(params.modulePaidAmount ?? 0) * 100) / 100
+
+  if (!Number.isFinite(totalAmountClp) || totalAmountClp <= 0) {
+    return { ok: false, error: 'El monto original de la factura debe ser mayor a 0.' }
+  }
+  if (!Number.isFinite(creditNoteAmountClp) || creditNoteAmountClp < 0) {
+    return { ok: false, error: 'El monto de nota de crédito no puede ser negativo.' }
+  }
+  if (creditNoteAmountClp > totalAmountClp) {
+    return {
+      ok: false,
+      error: 'La nota de crédito no puede superar el monto original de la factura.',
+    }
+  }
+  if (!Number.isFinite(modulePaidAmountClp) || modulePaidAmountClp < 0) {
+    return { ok: false, error: 'El monto pagado en el módulo no puede ser negativo.' }
+  }
+
+  const netPayableAmountClp =
+    Math.round((totalAmountClp - creditNoteAmountClp) * 100) / 100
+
+  let initialBalanceClp = netPayableAmountClp
+  if (params.priorPaymentStatus === 'NO_PRIOR_PAYMENTS') {
+    initialBalanceClp = netPayableAmountClp
+  } else if (params.priorPaymentStatus === 'PARTIAL_PRIOR_PAYMENTS') {
+    const rawInitial = params.historicalInitialBalance
+    if (rawInitial == null || !Number.isFinite(Number(rawInitial))) {
+      return {
+        ok: false,
+        error: 'Falta el saldo inicial histórico para pagos parciales previos.',
+      }
+    }
+    initialBalanceClp = Math.round(Number(rawInitial) * 100) / 100
+    if (initialBalanceClp <= 0 || initialBalanceClp >= netPayableAmountClp) {
+      return {
+        ok: false,
+        error:
+          'El saldo inicial histórico debe ser mayor a 0 y menor al monto neto tras notas de crédito.',
+      }
+    }
+  } else if (params.priorPaymentStatus === 'FULLY_PAID_PRIOR') {
+    initialBalanceClp = 0
+  } else {
+    return {
+      ok: false,
+      error: 'La situación de pagos anteriores debe estar revisada.',
+    }
+  }
+
+  const priorPaidAmountClp =
+    Math.round(Math.max(0, netPayableAmountClp - initialBalanceClp) * 100) / 100
+  const totalPaidAmountClp =
+    Math.round((priorPaidAmountClp + modulePaidAmountClp) * 100) / 100
+  const currentBalanceClp =
+    Math.round((initialBalanceClp - modulePaidAmountClp) * 100) / 100
+
+  if (currentBalanceClp < 0) {
+    return {
+      ok: false,
+      error: 'Los pagos superan el saldo neto permitido (el saldo no puede ser negativo).',
+    }
+  }
+
+  return {
+    ok: true,
+    data: {
+      totalAmountClp,
+      creditNoteAmountClp,
+      netPayableAmountClp,
+      initialBalanceClp,
+      priorPaidAmountClp,
+      modulePaidAmountClp,
+      totalPaidAmountClp,
+      currentBalanceClp,
+      isFullyPaid: currentBalanceClp === 0,
+      canRegisterPayment: currentBalanceClp > 0,
+    },
+  }
+}
+
 function normalizeReversalRecord(raw: Record<string, unknown>): InvoicePaymentReversal {
   return {
     id: String(raw.id),
@@ -107,6 +215,9 @@ function normalizeBalanceSummary(raw: Record<string, unknown>): InvoicePaymentBa
     company_id: String(raw.company_id),
     validation_status: raw.validation_status as InvoicePaymentBalanceSummary['validation_status'],
     total_amount: raw.total_amount == null ? null : Number(raw.total_amount),
+    credit_note_amount_clp: Number(raw.credit_note_amount_clp ?? 0),
+    net_payable_amount:
+      raw.net_payable_amount == null ? null : Number(raw.net_payable_amount),
     prior_payment_status: raw.prior_payment_status as InvoicePaymentBalanceSummary['prior_payment_status'],
     historical_initial_balance:
       raw.historical_initial_balance == null ? null : Number(raw.historical_initial_balance),
@@ -369,6 +480,87 @@ export async function executeRegisterInvoicePayment(
     }
   }
 }
+
+export type EnableHistoricalPreBodegaResult =
+  | {
+    ok: true
+    idempotentReplay: boolean
+    invoiceId: string
+    validationStatus: 'VALIDATED'
+    origin: 'HISTORICAL_IMPORT'
+    dueDate: string | null
+    balance: InvoicePaymentBalanceSummary
+  }
+  | {
+    ok: false
+    code: PaymentActionErrorCode
+    error: string
+  }
+
+/**
+ * Habilita una factura histórica pre-Bodega (< 01/10/2026) mediante la RPC autorizada,
+ * reutilizando el saldo conciliado Excel ↔ Bsale y separando notas de crédito de pagos.
+ */
+export async function executeEnableHistoricalPreBodegaInvoice(
+  db: CxpRpcClient,
+  bsaleDocumentId: number,
+): Promise<EnableHistoricalPreBodegaResult> {
+  if (!Number.isInteger(bsaleDocumentId) || bsaleDocumentId <= 0) {
+    return {
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      error: 'Identificador de documento Bsale inválido.',
+    }
+  }
+
+  try {
+    const { data, error } = await db.rpc('cxp_enable_historical_pending_invoice', {
+      p_bsale_document_id: bsaleDocumentId,
+    })
+
+    if (error || !data || typeof data !== 'object') {
+      const classified = classifyPaymentRpcError(
+        error,
+        'No se pudo habilitar la factura histórica pre-Bodega.',
+      )
+      return {
+        ok: false,
+        code: classified.code,
+        error: classified.error,
+      }
+    }
+
+    const raw = data as Record<string, unknown>
+    if (!isUuid(raw.invoice_id) || !raw.balance || typeof raw.balance !== 'object') {
+      return {
+        ok: false,
+        code: 'CONNECTION_OR_UNKNOWN_ERROR',
+        error: 'Respuesta incompleta al habilitar la factura histórica.',
+      }
+    }
+
+    return {
+      ok: true,
+      idempotentReplay: Boolean(raw.idempotent_replay),
+      invoiceId: String(raw.invoice_id),
+      validationStatus: 'VALIDATED',
+      origin: 'HISTORICAL_IMPORT',
+      dueDate: raw.due_date == null ? null : String(raw.due_date),
+      balance: normalizeBalanceSummary(raw.balance as Record<string, unknown>),
+    }
+  } catch (err) {
+    const classified = classifyThrownPaymentError(
+      err,
+      'No se pudo habilitar la factura histórica pre-Bodega.',
+    )
+    return {
+      ok: false,
+      code: classified.code,
+      error: classified.error,
+    }
+  }
+}
+
 
 export async function executeReverseInvoicePayment(
   db: CxpRpcClient,
