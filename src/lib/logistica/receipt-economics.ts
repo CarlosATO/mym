@@ -2,6 +2,7 @@ export type PurchaseOrderLineEconomics = {
   quantity: number
   unitPrice: number
   discountPercent?: number | null
+  discountUnitAmount?: number | null
   discountAmount?: number | null
   taxRate?: number | null
 }
@@ -24,7 +25,12 @@ export function calculateReceiptEconomics(
   const fullBase = quantity * unitPrice
   const persistedDiscount = Number(line.discountAmount || 0)
   const percentageDiscount = fullBase * Number(line.discountPercent || 0) / 100
-  const fullDiscount = persistedDiscount > 0 ? persistedDiscount : percentageDiscount
+  const unitDiscount = quantity * Number(line.discountUnitAmount || 0)
+  const fullDiscount = persistedDiscount > 0
+    ? persistedDiscount
+    : percentageDiscount > 0
+      ? percentageDiscount
+      : unitDiscount
   const base = received * unitPrice
   const discount = quantity > 0 ? fullDiscount * received / quantity : 0
   const netAmount = Math.max(0, base - discount)

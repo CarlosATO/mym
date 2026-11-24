@@ -13,6 +13,7 @@ import * as LucideIcons from 'lucide-react'
 import { erpInputClass, erpSelectClass } from '@/lib/form-styles'
 import { cn } from '@/lib/utils'
 import { receiptItemSku } from '@/lib/logistica/receipt-display'
+import { calculateReceiptEconomics } from '@/lib/logistica/receipt-economics'
 import { OperationalPoPdfModal } from './operational-po-pdf-modal'
 import { ReceiptDocumentViewerModal } from './receipt-document-viewer-modal'
 
@@ -37,6 +38,10 @@ const acceptedConditions = new Set(['CONFORME', 'DANADO'])
 
 function countsAsReceived(condition: ItemSplit['condition']) {
   return acceptedConditions.has(condition)
+}
+
+function fmtCurrency(value: number) {
+  return value.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 })
 }
 
 export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewReceiptAmounts }: ReceiptWorksheetProps) {
@@ -360,22 +365,49 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
   }
 
   // Financial calculations are only available to users authorized for purchase-order economics.
+  let grossTotalBeforeDiscount = 0
+  let discountTotal = 0
   let netTotal = 0
+  let taxTotal = 0
   if (canViewReceiptAmounts && poDetail) {
     Object.entries(itemInputs).forEach(([itemId, splits]) => {
       const poItem = poDetail.items.find((it: any) => it.id === itemId)
       if (!poItem) return
       if (Number(poItem.quantity_pending || 0) <= 0) return
+      const quantity = Number(poItem.quantity || 0)
       const price = Number(poItem.unit_price || 0)
       splits.forEach(split => {
         if (countsAsReceived(split.condition)) {
-          netTotal += Number(split.quantity || 0) * price
+          const lineEconomics = calculateReceiptEconomics({
+            quantity,
+            unitPrice: price,
+            discountPercent: poItem.discount_percent,
+            discountUnitAmount: poItem.discount_unit_amount,
+            discountAmount: poItem.discount_amount,
+            taxRate: poItem.tax_rate,
+          }, Number(split.quantity || 0))
+          grossTotalBeforeDiscount += Number(split.quantity || 0) * price
+          netTotal += lineEconomics.netAmount
+          taxTotal += lineEconomics.taxAmount
         }
       })
     })
   }
-  const taxTotal = netTotal * 0.19
+  discountTotal = Math.max(0, grossTotalBeforeDiscount - netTotal)
   const grossTotal = netTotal + taxTotal
+
+  function discountLabel(item: any) {
+    const percent = Number(item.discount_percent || 0)
+    const unit = Number(item.discount_unit_amount || 0)
+    const amount = Number(item.discount_amount || 0)
+    if (percent > 0) return `Dcto. ${percent}%`
+    if (unit > 0) return `Dcto. $${unit.toLocaleString('es-CL')}/un.`
+    if (amount > 0 && Number(item.quantity || 0) > 0) {
+      const effective = amount / Number(item.quantity)
+      return `Dcto. $${effective.toLocaleString('es-CL')}/un.`
+    }
+    return 'Sin descuento'
+  }
 
   // Main saving logic
   async function handleSaveReceipt() {
@@ -1041,8 +1073,28 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                     }
                   })
 
-                  const price = canViewEconomics ? Number(item.unit_price || 0) : 0
-                  const actualMonto = canViewEconomics ? sumActualRec * price : 0
+                  const price = canViewReceiptAmounts ? Number(item.unit_price || 0) : 0
+                  const actualEconomics = canViewReceiptAmounts
+                    ? calculateReceiptEconomics({
+                      quantity: Number(item.quantity || 0),
+                      unitPrice: price,
+                      discountPercent: item.discount_percent,
+                      discountUnitAmount: item.discount_unit_amount,
+                      discountAmount: item.discount_amount,
+                      taxRate: item.tax_rate,
+                    }, sumActualRec)
+                    : null
+                  const actualMonto = actualEconomics?.grossAmount ?? 0
+                  const netUnitCost = canViewReceiptAmounts && Number(item.quantity || 0) > 0
+                    ? calculateReceiptEconomics({
+                      quantity: Number(item.quantity || 0),
+                      unitPrice: price,
+                      discountPercent: item.discount_percent,
+                      discountUnitAmount: item.discount_unit_amount,
+                      discountAmount: item.discount_amount,
+                      taxRate: item.tax_rate,
+                    }, 1).netUnitCost
+                    : 0
                   const exceedsPending = sumQty > Number(item.quantity_pending)
                   const isComplete = Number(item.quantity_pending || 0) <= 0
                   const invoiceNumbers = invoiceNumbersByItemId.get(item.id) ?? []
@@ -1071,6 +1123,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                             <p className="font-semibold text-theme-text text-xs leading-tight">{item.product_description}</p>
                             {isComplete && <span className="shrink-0 rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-700 dark:text-emerald-400">Completa</span>}
                           </div>
+                          {canViewReceiptAmounts && <p className="mt-0.5 text-[10px] text-theme-text-muted">{discountLabel(item)} · Costo neto/un.: {fmtCurrency(netUnitCost)}</p>}
                           {!isComplete && <div className="flex items-center gap-2 mt-1">
                             <select
                               value={split?.condition || 'CONFORME'}
@@ -1123,10 +1176,11 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                         <td className="py-2.5 px-4 text-center font-bold text-theme-text">{originalIndex + 1}</td>
                         <td className="py-2.5 px-4 text-theme-text font-mono">{receiptItemSku(item)}</td>
                         <td className="py-2.5 px-4">
-                           <div className="flex items-center gap-2">
-                             <p className="font-semibold text-theme-text text-xs leading-normal">{item.product_description}</p>
-                             {isComplete && <span className="shrink-0 rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-700 dark:text-emerald-400">Completa</span>}
-                           </div>
+                          <div className="flex items-center gap-2">
+                            <p className="font-semibold text-theme-text text-xs leading-normal">{item.product_description}</p>
+                            {isComplete && <span className="shrink-0 rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-700 dark:text-emerald-400">Completa</span>}
+                          </div>
+                          {canViewReceiptAmounts && <p className="mt-0.5 text-[10px] text-theme-text-muted">{discountLabel(item)} · Costo neto/un.: {fmtCurrency(netUnitCost)}</p>}
                           {exceedsPending && (
                             <p className="text-[10px] text-red-500 font-bold mt-0.5 flex items-center gap-1">
                               <LucideIcons.AlertTriangle className="w-3 h-3 shrink-0" />
@@ -1297,7 +1351,15 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
 
           <div className="w-full md:w-64 space-y-1.5 border-t md:border-t-0 md:border-l border-theme-border/60 pt-2 md:pt-0 md:pl-4 flex flex-col justify-center">
             <div className="flex justify-between items-center text-theme-text-muted">
-              <span>Subtotal Neto:</span>
+              <span>Subtotal antes de descuentos:</span>
+              <span className="font-semibold text-theme-text">${grossTotalBeforeDiscount.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+            </div>
+            <div className="flex justify-between items-center text-theme-text-muted">
+              <span>Descuentos comerciales:</span>
+              <span className="font-semibold text-emerald-600 dark:text-emerald-400">-${discountTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+            </div>
+            <div className="flex justify-between items-center text-theme-text-muted">
+              <span>Subtotal neto:</span>
               <span className="font-semibold text-theme-text">${netTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
             </div>
             <div className="flex justify-between items-center text-theme-text-muted">

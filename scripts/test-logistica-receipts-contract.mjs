@@ -25,6 +25,16 @@ test('receipt economics prorates discount and tax rate', () => {
   })
 
   assert.equal(calculateReceiptEconomics({ quantity: 10, unitPrice: 100, taxRate: 0 }, 5).taxAmount, 0)
+
+  assert.equal(calculateReceiptEconomics({ quantity: 10, unitPrice: 100, discountPercent: 8, taxRate: 19 }, 5).netUnitCost, 92)
+  assert.equal(calculateReceiptEconomics({ quantity: 10, unitPrice: 100, discountPercent: 12, taxRate: 19 }, 5).netUnitCost, 88)
+  assert.equal(calculateReceiptEconomics({ quantity: 10, unitPrice: 100, discountUnitAmount: 15, taxRate: 19 }, 5).netUnitCost, 85)
+  assert.deepEqual(calculateReceiptEconomics({ quantity: 10, unitPrice: 100, discountPercent: 8, discountAmount: 80, taxRate: 19 }, 2), {
+    netAmount: 184,
+    taxAmount: 34.96,
+    grossAmount: 218.96,
+    netUnitCost: 92,
+  })
 })
 
 test('receipt status contract only accepts confirmed and partial orders', () => {
@@ -58,6 +68,13 @@ test('product, service and mixed receipt contracts are wired', () => {
 test('receipt worksheet initializes capture quantities at zero to allow partial receipts', () => {
   assert.doesNotMatch(worksheet, /quantity: Number\(item\.quantity_pending \|\| 0\)/)
   assert.match(worksheet, /quantity: 0,\s*\n\s*condition: 'CONFORME',/)
+})
+
+test('receipt economics projection includes both discount modes for amount-authorized users', () => {
+  assert.match(action, /const PO_ITEM_ECONOMIC_FIELDS = 'unit_price, discount_percent, discount_unit_amount, discount_amount, tax_rate, tax_amount, line_total'/)
+  assert.match(action, /const PO_ITEM_RECEIPT_AMOUNT_FIELDS = 'unit_price, discount_percent, discount_unit_amount, discount_amount, tax_rate'/)
+  assert.match(worksheet, /discountUnitAmount: poItem\.discount_unit_amount/)
+  assert.match(worksheet, /discountAmount: poItem\.discount_amount/)
 })
 
 test('receipt security, idempotency, documents and correlatives are present', () => {
