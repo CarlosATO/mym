@@ -1,4 +1,4 @@
-import { BarChart3, FileText, LayoutDashboard, Route, ShoppingCart, Users, Warehouse, type LucideIcon } from 'lucide-react'
+import { BarChart3, FileText, LayoutDashboard, Route, ShoppingCart, Users, Warehouse, Settings2, type LucideIcon } from 'lucide-react'
 import type { ModuleNavigation, NavigationLocation } from '@/components/layout/module-shell-types'
 
 const basePath = '/dashboard/adquisiciones'
@@ -11,6 +11,7 @@ const routes = {
   replenishment: `${basePath}/reposicion`,
   purchaseOrders: `${basePath}/ordenes-compra`,
   routeSettlements: `${basePath}/rendicion-rutas`,
+  purchaseUnits: `${basePath}/unidades-compra`,
 } as const
 
 const icons: Record<keyof typeof routes, LucideIcon> = {
@@ -21,6 +22,7 @@ const icons: Record<keyof typeof routes, LucideIcon> = {
   replenishment: BarChart3,
   purchaseOrders: ShoppingCart,
   routeSettlements: Route,
+  purchaseUnits: Settings2,
 }
 
 function exact(pathname: string) {
@@ -48,6 +50,7 @@ export const adquisicionesNavigation: ModuleNavigation = {
       items: [
         { id: 'reposicion', label: 'Análisis de reposición', icon: icons.replenishment, target: { href: routes.replenishment }, active: prefix(routes.replenishment) },
         { id: 'ordenes-compra', label: 'Órdenes de compra', icon: icons.purchaseOrders, target: { href: routes.purchaseOrders }, active: prefix(routes.purchaseOrders) },
+        { id: 'unidades-compra', label: 'Unidades de compra', icon: icons.purchaseUnits, target: { href: routes.purchaseUnits }, active: prefix(routes.purchaseUnits), visibility: { anyOf: ['adquisiciones.products.view', 'system.admin'] } },
       ],
     },
     {
@@ -111,6 +114,7 @@ export function getAdquisicionesBreadcrumb({ pathname }: NavigationLocation) {
   if (pathname.startsWith(routes.warehouses)) return ['Adquisiciones', 'Catálogos', 'Bodegas']
   if (pathname.startsWith(routes.replenishment)) return ['Adquisiciones', 'Análisis y Compras', 'Análisis de reposición']
   if (pathname.startsWith(routes.purchaseOrders)) return ['Adquisiciones', 'Análisis y Compras', 'Órdenes de compra']
+  if (pathname.startsWith(routes.purchaseUnits)) return ['Adquisiciones', 'Análisis y Compras', 'Unidades de compra']
   if (pathname.startsWith(routes.routeSettlements)) return ['Adquisiciones', 'Operación', 'Rendición de rutas']
   return ['Adquisiciones']
 }

@@ -135,16 +135,29 @@ export async function syncProductSupplierMappings(
       supplier_id: string
       bsale_variant_id: number | null
       is_preferred: boolean
+      is_active: boolean
+      purchase_unit: string | null
+      purchase_unit_factor: number
     }
-    const existingMappings = await fetchAllRows<ExistingMapping>(() => {
+    const allExistingMappings = await fetchAllRows<ExistingMapping>(() => {
       let query = db
         .from('product_supplier_mappings')
-        .select('id, company_id, sku, product_id, supplier_id, bsale_variant_id, is_active, is_preferred')
+        .select('id, company_id, sku, product_id, supplier_id, bsale_variant_id, is_active, is_preferred, purchase_unit, purchase_unit_factor')
         .eq('company_id', companyId)
-        .eq('is_active', true)
       if (targeted) query = query.in('sku', targetSkus!)
       return query.order('id')
     })
+    const existingMappings = allExistingMappings.filter(mapping => mapping.is_active)
+    const commercialConfigByKey = new Map<string, { purchase_unit: string | null; purchase_unit_factor: number }>()
+    for (const mapping of allExistingMappings) {
+      const key = `${mapping.company_id}|${mapping.supplier_id}|${mapping.sku}`
+      if (!commercialConfigByKey.has(key) || mapping.purchase_unit || Number(mapping.purchase_unit_factor || 1) > 1) {
+        commercialConfigByKey.set(key, {
+          purchase_unit: mapping.purchase_unit || null,
+          purchase_unit_factor: Number(mapping.purchase_unit_factor || 1),
+        })
+      }
+    }
     result.mappingsScanned = existingMappings.length
 
     const productById = new Map(allProducts.map(product => [product.id, product]))
@@ -279,7 +292,7 @@ export async function syncProductSupplierMappings(
               // Continuar con el nuevo supplier
               const sk = newSup
               // Intentar crear mapping
-              await processMapping(db, companyId, product, sk, existingBySku, realSupplierIds, result, dryRun, targetSkus)
+              await processMapping(db, companyId, product, sk, existingBySku, realSupplierIds, commercialConfigByKey, result, dryRun, targetSkus)
             }
           } catch (err: any) {
             result.errors.push(`Error creando supplier ${typeName}: ${err.message}`)
@@ -290,7 +303,7 @@ export async function syncProductSupplierMappings(
         continue
       }
 
-      await processMapping(db, companyId, product, supplier, existingBySku, realSupplierIds, result, dryRun, targetSkus)
+      await processMapping(db, companyId, product, supplier, existingBySku, realSupplierIds, commercialConfigByKey, result, dryRun, targetSkus)
     }
   } catch (err: any) {
     result.errors.push(`Error general en auto-mapping: ${err.message}`)
@@ -409,6 +422,7 @@ async function processMapping(
   supplier: { id: string; business_name: string; parent_supplier_id?: string | null },
   existingBySku: Map<string, { id: string; company_id: string; sku: string; product_id: string | null; supplier_id: string; bsale_variant_id: number | null; is_preferred: boolean }[]>,
   realSupplierIds: Set<string>,
+  commercialConfigByKey: Map<string, { purchase_unit: string | null; purchase_unit_factor: number }>,
   result: AutoMappingResult,
   dryRun: boolean,
   targetSkus?: string[],
@@ -446,6 +460,7 @@ async function processMapping(
 
   if (!dryRun) {
     try {
+      const preservedConfig = commercialConfigByKey.get(`${companyId}|${supplier.id}|${sku}`)
       const { error: insErr } = await db.from('product_supplier_mappings').insert({
         company_id: companyId,
         product_id: product.id,
@@ -454,6 +469,8 @@ async function processMapping(
         sku: sku,
         product_name: null,
         unit_cost: null,
+        purchase_unit: preservedConfig?.purchase_unit ?? null,
+        purchase_unit_factor: preservedConfig?.purchase_unit_factor ?? 1,
         is_preferred: false,
         is_active: true,
       })
