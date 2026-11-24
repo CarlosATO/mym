@@ -238,3 +238,166 @@ export interface InboxDocument {
   mime_type: string | null
   has_file: boolean
 }
+
+export type InvoicePaymentStatus = 'ACTIVE' | 'REVERSED'
+
+export interface InvoicePaymentReversal {
+  id: string
+  company_id?: string
+  invoice_id?: string
+  payment_id?: string
+  reason: string
+  operation_id: string
+  created_at: string
+  created_by: string
+  created_by_name?: string | null
+}
+
+export interface InvoicePaymentRecord {
+  id: string
+  company_id: string
+  invoice_id: string
+  payment_date: string
+  amount: number
+  reference: string | null
+  operation_id: string
+  created_at: string
+  created_by: string
+  created_by_name?: string | null
+  is_reversed: boolean
+  status: InvoicePaymentStatus
+  reversal: InvoicePaymentReversal | null
+}
+
+export interface InvoicePaymentBalanceSummary {
+  invoice_id: string
+  company_id: string
+  validation_status: InvoiceValidationStatus
+  total_amount: number | null
+  prior_payment_status: PriorPaymentStatus
+  historical_initial_balance: number | null
+  historical_balance_cutoff_date: string | null
+  initial_balance: number | null
+  prior_paid_amount: number | null
+  module_paid_amount: number
+  total_paid_amount: number | null
+  current_balance: number | null
+  payment_count: number
+  reversed_payment_count: number
+  reversed_amount: number
+  is_fully_paid: boolean
+  can_register_payment: boolean
+}
+
+export interface InvoicePaymentsHistory extends InvoicePaymentBalanceSummary {
+  payments: InvoicePaymentRecord[]
+}
+
+export interface RegisterInvoicePaymentInput {
+  invoiceId: string
+  paymentDate: string
+  amount: number
+  reference?: string | null
+  operationId: string
+}
+
+export interface ReverseInvoicePaymentInput {
+  paymentId: string
+  operationId: string
+  reason: string
+}
+
+export interface ReopenInvoiceValidationInput {
+  invoiceId: string
+  operationId: string
+  reason: string
+}
+
+export interface InvoiceValidationReopeningRecord {
+  id: string
+  company_id: string
+  invoice_id: string
+  reason: string
+  operation_id: string
+  previous_validation_status: InvoiceValidationStatus
+  previous_prior_payment_status: PriorPaymentStatus
+  previous_total_amount: number | null
+  previous_validated_at: string | null
+  previous_validated_by: string | null
+  created_at: string
+  created_by: string
+}
+
+export type PaymentActionErrorCode =
+  | 'OVERPAYMENT'
+  | 'INVOICE_NOT_VALIDATED'
+  | 'ALREADY_REVERSED'
+  | 'HAS_ACTIVE_PAYMENTS'
+  | 'ACCESS_DENIED'
+  | 'INVALID_DATE'
+  | 'VALIDATION_ERROR'
+  | 'CONNECTION_OR_UNKNOWN_ERROR'
+
+export type GetInvoicePaymentsResult =
+  | {
+      ok: true
+      data: InvoicePaymentsHistory
+    }
+  | {
+      ok: false
+      code: PaymentActionErrorCode
+      error: string
+      uncertainOutcome: boolean
+    }
+
+export type RegisterInvoicePaymentResult =
+  | {
+      ok: true
+      code: 'PAYMENT_REGISTERED' | 'IDEMPOTENT_REPLAY'
+      idempotentReplay: boolean
+      operationId: string
+      payment: InvoicePaymentRecord
+      balance: InvoicePaymentBalanceSummary
+    }
+  | {
+      ok: false
+      code: PaymentActionErrorCode
+      error: string
+      uncertainOutcome: boolean
+      operationId: string
+    }
+
+export type ReverseInvoicePaymentResult =
+  | {
+      ok: true
+      code: 'REVERSAL_REGISTERED' | 'IDEMPOTENT_REPLAY'
+      idempotentReplay: boolean
+      operationId: string
+      reversal: InvoicePaymentReversal
+      payment: InvoicePaymentRecord
+      balance: InvoicePaymentBalanceSummary
+    }
+  | {
+      ok: false
+      code: PaymentActionErrorCode
+      error: string
+      uncertainOutcome: boolean
+      operationId: string
+    }
+
+export type ReopenInvoiceValidationResult =
+  | {
+      ok: true
+      code: 'VALIDATION_REOPENED' | 'IDEMPOTENT_REPLAY'
+      idempotentReplay: boolean
+      operationId: string
+      reopening: InvoiceValidationReopeningRecord
+      balance: InvoicePaymentBalanceSummary
+    }
+  | {
+      ok: false
+      code: PaymentActionErrorCode
+      error: string
+      uncertainOutcome: boolean
+      operationId: string
+    }

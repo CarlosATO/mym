@@ -7,17 +7,36 @@ import { getActiveCompanyId } from '@/app/actions/companies'
 import { createClient } from '@/lib/supabase/server'
 import type {
   CreateServiceInvoiceResult,
+  GetInvoicePaymentsResult,
   InvoiceDetail,
   InvoiceInboxSummary,
   InboxDocument,
   ReceiptDocumentSignedLink,
   ReceiptInvoiceCandidate,
+  RegisterInvoicePaymentInput,
+  RegisterInvoicePaymentResult,
+  ReopenInvoiceValidationInput,
+  ReopenInvoiceValidationResult,
+  ReverseInvoicePaymentInput,
+  ReverseInvoicePaymentResult,
   SaveInvoiceValidationInput,
   SaveInvoiceValidationResult,
   ServiceDeliveryStatus,
   ServiceInvoiceRow,
   ServiceSupplierOption,
 } from '@/modules/cuentas-por-pagar/types'
+import {
+  classifyThrownPaymentError,
+  executeRegisterInvoicePayment,
+  executeReopenInvoiceValidation,
+  executeReverseInvoicePayment,
+  fetchInvoicePayments,
+} from '@/modules/cuentas-por-pagar/payment-service'
+import {
+  executeConfirmInvoiceFromPanel,
+  type ConfirmInvoiceFromPanelInput,
+  type ConfirmInvoiceFromPanelResult,
+} from '@/modules/cuentas-por-pagar/financial-detail-model'
 import {
   classifyAndFilterReceiptCandidates,
   type PurchaseOrderClassificationRow,
@@ -30,6 +49,20 @@ import {
   validateQuickSupplierDraft,
 } from '@/modules/cuentas-por-pagar/service-rules'
 import { inboxDocumentMimeType } from '@/modules/cuentas-por-pagar/document-security'
+import {
+  fetchAndReconcileBsaleBodegaForCaylo,
+  type BsaleBodegaReconciliationReport,
+} from '@/modules/cuentas-por-pagar/bsale-bodega-reconciliation'
+import {
+  buildBsaleBodegaFinancialReconciliationView,
+  type BsaleFinancialSummaryCounts,
+  type HistoricalPaidExcelMatchInput,
+  type HistoricalPendingExcelMatchInput,
+  type InvoiceFinancialStatusOverlay,
+  type PurchaseOrderPaymentTermsInput,
+  type SupplierCreditTermsInput,
+} from '@/modules/cuentas-por-pagar/bsale-financial-balance-resolver'
+import type { InvoicePaymentsHistory } from '@/modules/cuentas-por-pagar/types'
 
 const CAYLO = 'd1000000-0000-0000-0000-000000000001'
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -660,6 +693,564 @@ export async function createServiceInvoice(
     return {
       ok: false,
       error: error instanceof Error ? error.message : 'No se pudo registrar la factura de servicio.',
+    }
+  }
+}
+
+export async function getInvoicePayments(
+  invoiceId: string,
+): Promise<GetInvoicePaymentsResult> {
+  try {
+    const db = await authorizedClient()
+    return await fetchInvoicePayments(db, invoiceId)
+  } catch (error) {
+    const classified = classifyThrownPaymentError(
+      error,
+      'Error de conexión al consultar los pagos de la factura.',
+    )
+    return { ok: false, ...classified }
+  }
+}
+
+export async function registerInvoicePayment(
+  input: RegisterInvoicePaymentInput,
+): Promise<RegisterInvoicePaymentResult> {
+  const operationId = typeof input?.operationId === 'string' ? input.operationId : ''
+  try {
+    const db = await authorizedClient()
+    return await executeRegisterInvoicePayment(db, input)
+  } catch (error) {
+    const classified = classifyThrownPaymentError(
+      error,
+      'Error de conexión o resultado desconocido al registrar el pago. Conserve el mismo operationId si reintenta.',
+    )
+    return {
+      ok: false,
+      ...classified,
+      operationId,
+    }
+  }
+}
+
+export async function reverseInvoicePayment(
+  input: ReverseInvoicePaymentInput,
+): Promise<ReverseInvoicePaymentResult> {
+  const operationId = typeof input?.operationId === 'string' ? input.operationId : ''
+  try {
+    const db = await authorizedClient()
+    const result = await executeReverseInvoicePayment(db, input)
+    if (result.ok) {
+      revalidatePath('/dashboard/cuentas-por-pagar')
+    }
+    return result
+  } catch (error) {
+    const classified = classifyThrownPaymentError(
+      error,
+      'Error de conexión o resultado desconocido al reversar el pago. Conserve el mismo operationId si reintenta.',
+    )
+    return {
+      ok: false,
+      ...classified,
+      operationId,
+    }
+  }
+}
+
+export async function reopenInvoiceValidation(
+  input: ReopenInvoiceValidationInput,
+): Promise<ReopenInvoiceValidationResult> {
+  const operationId =
+    typeof input?.operationId === 'string' ? input.operationId : ''
+  try {
+    const db = await authorizedClient()
+    const result = await executeReopenInvoiceValidation(db, input)
+    if (result.ok) {
+      revalidatePath('/dashboard/cuentas-por-pagar')
+    }
+    return result
+  } catch (error) {
+    const classified = classifyThrownPaymentError(
+      error,
+      'Error de conexión o resultado desconocido al reabrir la validación. Conserve el mismo operationId si reintenta.',
+    )
+    return {
+      ok: false,
+      ...classified,
+      operationId,
+    }
+  }
+}
+
+export async function confirmInvoiceFromFinancialPanel(
+  input: ConfirmInvoiceFromPanelInput,
+): Promise<ConfirmInvoiceFromPanelResult> {
+  if (
+    !input ||
+    (typeof input.candidateId !== 'string' || !input.candidateId.trim()) ||
+    (input.invoiceId !== null && !isUuid(input.invoiceId))
+  ) {
+    return {
+      ok: false,
+      error: 'Identificador de factura o candidato inválido.',
+      incorporatedInvoiceId: null,
+      validationStatus: null,
+    }
+  }
+
+  try {
+    return await executeConfirmInvoiceFromPanel(
+      {
+        incorporateCandidate: async (candidateId: string) => {
+          if (!isUuid(candidateId)) {
+            return { ok: false, error: 'Identificador de candidato de recepción inválido.' }
+          }
+          const db = await authorizedClient()
+          const candidates = await getReceiptInvoiceCandidates()
+          const current = candidates.find(c => c.candidate_id === candidateId)
+          if (!current) {
+            return {
+              ok: false,
+              error: 'El candidato de recepción no se encontró en la bandeja. Actualice la página.',
+            }
+          }
+          if (current.invoice_id && isUuid(current.invoice_id)) {
+            return { ok: true, invoiceId: current.invoice_id, wasIncorporated: false }
+          }
+          if (current.blocked_reason) {
+            return { ok: false, error: current.blocked_reason }
+          }
+
+          const { error: incError } = await db.rpc('cxp_incorporate_receipts', {
+            p_candidate_ids: [candidateId],
+          })
+          if (incError) {
+            return {
+              ok: false,
+              error: extractSafeRpcError(
+                incError,
+                'No se pudo incorporar la factura desde recepciones.',
+              ),
+            }
+          }
+
+          const refreshedCandidates = await getReceiptInvoiceCandidates()
+          const incorporated = refreshedCandidates.find(c => c.candidate_id === candidateId)
+          if (!incorporated?.invoice_id || !isUuid(incorporated.invoice_id)) {
+            return {
+              ok: false,
+              error:
+                'La factura fue incorporada pero no se pudo resolver su identificador. Actualice la bandeja.',
+            }
+          }
+          revalidatePath('/dashboard/cuentas-por-pagar')
+          return { ok: true, invoiceId: incorporated.invoice_id, wasIncorporated: true }
+        },
+        saveValidation: async valInput => saveInvoiceValidation(valInput),
+        loadDetail: async invoiceId => getInvoiceValidationDetail(invoiceId),
+        loadPayments: async invoiceId => getInvoicePayments(invoiceId),
+      },
+      input,
+    )
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : 'No se pudo confirmar la factura.',
+      incorporatedInvoiceId: input.invoiceId,
+      validationStatus: input.invoiceId ? 'PENDING' : null,
+    }
+  }
+}
+
+async function fetchHistoricalPaidExcelExactMatchesForCaylo(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+): Promise<HistoricalPaidExcelMatchInput[]> {
+  try {
+    const { data, error } = await supabase
+      .schema('public')
+      .rpc('cxp_historical_paid_excel_sii_matches')
+
+    if (error || !Array.isArray(data)) {
+      return []
+    }
+    return data as HistoricalPaidExcelMatchInput[]
+  } catch {
+    return []
+  }
+}
+
+async function fetchHistoricalPendingExcelExactMatchesForCaylo(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+): Promise<HistoricalPendingExcelMatchInput[]> {
+  try {
+    const { data, error } = await supabase
+      .schema('public')
+      .rpc('cxp_historical_pending_excel_sii_matches')
+
+    if (error || !Array.isArray(data)) {
+      return []
+    }
+    return data as HistoricalPendingExcelMatchInput[]
+  } catch {
+    return []
+  }
+}
+
+async function verifyCxpCayloUserAccess() {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user || (await getActiveCompanyId(user)) !== CAYLO) {
+    throw new Error('Seleccione Caylo y acceda con un usuario autorizado.')
+  }
+
+  const { error } = await supabase
+    .schema('integraciones')
+    .rpc('get_bsale_third_party_document_signed_links', {
+      p_company_id: CAYLO,
+      p_bsale_document_id: -1,
+    })
+
+  if (error) {
+    throw new Error(
+      extractSafeRpcError(
+        error,
+        'No tiene acceso autorizado a Cuentas por Pagar de Caylo.',
+      ),
+    )
+  }
+
+  return supabase
+}
+
+/**
+ * Obtiene el resultado del motor de conciliación de lectura entre el espejo Bsale
+ * (`integraciones.bsale_third_party_documents`) y las recepciones de Bodega de Caylo,
+ * enriquecido con vencimientos disponibles, saldos acreditados y bloqueos de pago
+ * desde las fuentes existentes de Cuentas por Pagar y Adquisiciones.
+ *
+ * Verifica permisos de Cuentas por Pagar Caylo antes de consultar y nunca expone
+ * `service_role`, `raw_json` ni enlaces firmados (`url_pdf` / `url_xml`) en la respuesta masiva.
+ */
+export async function getCxpBsaleBodegaReconciliation(): Promise<
+  | {
+      ok: true
+      data: BsaleBodegaReconciliationReport
+      financialByKey: Record<string, InvoiceFinancialStatusOverlay>
+      financialCounts: BsaleFinancialSummaryCounts
+    }
+  | { ok: false; error: string }
+> {
+  try {
+    const supabase = await verifyCxpCayloUserAccess()
+    const admin = storageAdminClient()
+
+    const [
+      report,
+      cxpCandidates,
+      cxpSummaries,
+      cxpDueDates,
+      posRes,
+      suppliersRes,
+      historicalPaidExcelMatches,
+      historicalPendingExcelMatches,
+    ] = await Promise.all([
+      fetchAndReconcileBsaleBodegaForCaylo(admin),
+      getReceiptInvoiceCandidates().catch(() => []),
+      getInvoiceSummaries().catch(() => []),
+      getReceiptInvoiceDueDates().catch(() => []),
+      admin
+        .schema('adquisiciones')
+        .from('purchase_orders')
+        .select('id, correlative, payment_terms')
+        .eq('company_id', CAYLO),
+      admin
+        .schema('adquisiciones')
+        .from('suppliers')
+        .select('id, business_name, rut, rut_normalized, payment_terms, credit_days'),
+      fetchHistoricalPaidExcelExactMatchesForCaylo(supabase),
+      fetchHistoricalPendingExcelExactMatchesForCaylo(supabase),
+    ])
+
+    const incorporatedInvoiceIds = cxpSummaries.map(s => s.id)
+
+    const cxpPaymentsByInvoiceId: Record<string, InvoicePaymentsHistory> = {}
+    if (incorporatedInvoiceIds.length > 0) {
+      const paymentResults = await Promise.all(
+        incorporatedInvoiceIds.map(async invoiceId => {
+          const res = await getInvoicePayments(invoiceId)
+          return { invoiceId, res }
+        }),
+      )
+      for (const item of paymentResults) {
+        if (item.res.ok) {
+          cxpPaymentsByInvoiceId[item.invoiceId] = item.res.data
+        }
+      }
+    }
+
+    const financialView = buildBsaleBodegaFinancialReconciliationView({
+      report,
+      cxpCandidates,
+      cxpSummaries,
+      cxpDueDates,
+      cxpPaymentsByInvoiceId,
+      historicalPaidExcelMatches,
+      historicalPendingExcelMatches,
+      purchaseOrders: (posRes.data ?? []) as PurchaseOrderPaymentTermsInput[],
+      suppliers: (suppliersRes.data ?? []) as SupplierCreditTermsInput[],
+    })
+
+    return {
+      ok: true,
+      data: report,
+      financialByKey: financialView.financialByKey,
+      financialCounts: financialView.financialCounts,
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : 'No se pudo cargar la conciliación de facturas Bsale con Bodega.',
+    }
+  }
+}
+
+/**
+ * Resuelve de forma controlada y unitaria el enlace firmado al PDF de Bsale para un
+ * documento tributario específico, respetando `cuentas_por_pagar.can_access(CAYLO)`.
+ */
+export async function getCxpBsaleDocumentSignedUrl(
+  bsaleDocumentId: number,
+): Promise<ReceiptDocumentSignedLink | { error: string }> {
+  if (
+    typeof bsaleDocumentId !== 'number' ||
+    !Number.isSafeInteger(bsaleDocumentId) ||
+    bsaleDocumentId <= 0
+  ) {
+    return { error: 'Identificador de documento Bsale inválido.' }
+  }
+
+  try {
+    const supabase = await verifyCxpCayloUserAccess()
+    const { data, error } = await supabase
+      .schema('integraciones')
+      .rpc('get_bsale_third_party_document_signed_links', {
+        p_company_id: CAYLO,
+        p_bsale_document_id: bsaleDocumentId,
+      })
+
+    if (error) {
+      return {
+        error: extractSafeRpcError(
+          error,
+          'No se pudo obtener el enlace del documento tributario desde Bsale.',
+        ),
+      }
+    }
+
+    const payload = (data ?? null) as {
+      bsale_document_id?: number
+      code_sii?: string
+      document_folio?: string
+      url_pdf?: string | null
+    } | null
+
+    if (!payload) {
+      return { error: 'Documento tributario no encontrado en el espejo de Caylo.' }
+    }
+
+    const urlPdf = typeof payload.url_pdf === 'string' ? payload.url_pdf.trim() : ''
+    if (!urlPdf) {
+      return { error: 'Este documento no cuenta con un PDF disponible en Bsale.' }
+    }
+
+    const codeSii = payload.code_sii || 'DTE'
+    const folio = payload.document_folio || String(bsaleDocumentId)
+    return {
+      signedUrl: urlPdf,
+      downloadUrl: urlPdf,
+      fileName: `Bsale-DTE-${codeSii}-${folio}.pdf`,
+      mimeType: 'application/pdf',
+      expiresIn: 300,
+    }
+  } catch (error) {
+    return {
+      error:
+        error instanceof Error
+          ? error.message
+          : 'No se pudo consultar el PDF de Bsale.',
+    }
+  }
+}
+
+/**
+ * Lista los documentos adjuntos en Bodega (`logistica.receipt_documents`) para un conjunto
+ * de recepciones vinculadas, sin revelar rutas de almacenamiento (`storage_path`).
+ */
+export async function getCxpWarehouseReceiptDocuments(
+  receiptIds: string[],
+): Promise<{ documents: InboxDocument[] } | { error: string }> {
+  if (
+    !Array.isArray(receiptIds) ||
+    receiptIds.length === 0 ||
+    receiptIds.length > 25 ||
+    receiptIds.some(id => !isUuid(id))
+  ) {
+    return { error: 'Identificadores de recepción inválidos.' }
+  }
+
+  try {
+    await verifyCxpCayloUserAccess()
+    const uniqueIds = Array.from(new Set(receiptIds))
+    const admin = storageAdminClient()
+    const { data, error } = await admin
+      .schema('logistica')
+      .from('receipt_documents')
+      .select('id, receipt_id, document_type, document_number, file_name, mime_type, storage_bucket, storage_path')
+      .eq('company_id', CAYLO)
+      .in('receipt_id', uniqueIds)
+      .order('created_at', { ascending: true })
+
+    if (error) {
+      return { error: 'No se pudieron consultar los respaldos de recepción en Bodega.' }
+    }
+
+    const documents: InboxDocument[] = []
+    for (const row of (data ?? []) as Array<{
+      id: string
+      receipt_id: string
+      document_type: string | null
+      document_number: string | null
+      file_name: string | null
+      mime_type: string | null
+      storage_bucket: string | null
+      storage_path: string | null
+    }>) {
+      const storageBucket = row.storage_bucket || RECEIPT_DOCUMENT_BUCKET
+      const storagePath = row.storage_path || ''
+      const mimeType = storagePath
+        ? inboxDocumentMimeType(
+            {
+              file_name: row.file_name,
+              mime_type: row.mime_type,
+              storage_bucket: storageBucket,
+              storage_path: storagePath,
+            },
+            CAYLO,
+          )
+        : null
+      const hasFile = Boolean(mimeType)
+      documents.push({
+        id: row.id,
+        document_number: row.document_number
+          ? `${row.document_type || 'DOC'} ${row.document_number}`
+          : row.document_type || 'Respaldo Bodega',
+        file_name: row.file_name,
+        mime_type: mimeType ?? row.mime_type,
+        has_file: hasFile,
+      })
+    }
+
+    return { documents }
+  } catch (error) {
+    return {
+      error:
+        error instanceof Error
+          ? error.message
+          : 'No se pudieron consultar los respaldos de recepción.',
+    }
+  }
+}
+
+/**
+ * Genera un enlace temporal firmado (300 s) para visualizar un respaldo de recepción
+ * de Bodega (`logistica.receipt_documents`), verificando permisos de Cuentas por Pagar Caylo.
+ */
+export async function getCxpWarehouseReceiptDocumentSignedUrl(
+  receiptIds: string[],
+  documentId: string,
+): Promise<ReceiptDocumentSignedLink | { error: string }> {
+  if (
+    !Array.isArray(receiptIds) ||
+    receiptIds.length === 0 ||
+    receiptIds.length > 25 ||
+    receiptIds.some(id => !isUuid(id)) ||
+    !isUuid(documentId)
+  ) {
+    return { error: 'Identificador de recepción o respaldo inválido.' }
+  }
+
+  try {
+    await verifyCxpCayloUserAccess()
+    const uniqueIds = Array.from(new Set(receiptIds))
+    const admin = storageAdminClient()
+    const { data, error } = await admin
+      .schema('logistica')
+      .from('receipt_documents')
+      .select('id, receipt_id, document_number, file_name, mime_type, storage_bucket, storage_path')
+      .eq('company_id', CAYLO)
+      .in('receipt_id', uniqueIds)
+      .eq('id', documentId)
+      .maybeSingle()
+
+    if (error || !data) {
+      return { error: 'Respaldo de recepción no encontrado o no vinculado.' }
+    }
+
+    const storageBucket = (data.storage_bucket as string | null) || RECEIPT_DOCUMENT_BUCKET
+    const storagePath = (data.storage_path as string | null) || ''
+    if (!storagePath) {
+      return { error: 'Este respaldo no tiene un archivo adjunto disponible.' }
+    }
+
+    const mimeType = inboxDocumentMimeType(
+      {
+        file_name: (data.file_name as string | null) ?? null,
+        mime_type: (data.mime_type as string | null) ?? null,
+        storage_bucket: storageBucket,
+        storage_path: storagePath,
+      },
+      CAYLO,
+    )
+    if (!mimeType) {
+      return { error: 'Ruta o tipo de archivo no permitido para previsualización.' }
+    }
+
+    const storage = admin.storage.from(storageBucket)
+    const expiresIn = 300
+    const [
+      { data: preview, error: previewError },
+      { data: download, error: downloadError },
+    ] = await Promise.all([
+      storage.createSignedUrl(storagePath, expiresIn),
+      storage.createSignedUrl(storagePath, expiresIn, {
+        download: (data.file_name as string | null) || true,
+      }),
+    ])
+
+    if (previewError || downloadError || !preview?.signedUrl || !download?.signedUrl) {
+      return { error: 'No se pudo generar el enlace temporal del respaldo de Bodega.' }
+    }
+
+    return {
+      signedUrl: preview.signedUrl,
+      downloadUrl: download.signedUrl,
+      fileName: (data.file_name as string | null) || `recepcion-${data.id}`,
+      mimeType,
+      expiresIn,
+    }
+  } catch (error) {
+    return {
+      error:
+        error instanceof Error
+          ? error.message
+          : 'No se pudo obtener el respaldo de Bodega.',
     }
   }
 }

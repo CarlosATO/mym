@@ -1,390 +1,315 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react'
-import { useRouter } from 'next/navigation'
-import { AlertTriangle, CalendarDays, CheckCircle2, FileText, RotateCcw, Search, ShieldCheck } from 'lucide-react'
-import { getCxpInboxDocuments, getCxpInboxDocumentSignedUrl, incorporateReceiptInvoices, setInvoiceDueDate } from '@/app/actions/cuentas-por-pagar'
-import { PurchaseOrderInvoiceViewerModal } from '@/modules/adquisiciones/ordenes-compra/purchase-order-invoice-viewer-modal'
+import { useCallback, useMemo, useState } from 'react'
+import {
+  AlertTriangle,
+  CalendarDays,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  Clock,
+  FileText,
+  FilterX,
+  PackageCheck,
+  RotateCcw,
+  Search,
+} from 'lucide-react'
 import {
   OperationalTableResizeHandle,
   OperationalTableSortIndicator,
-  sortOperationalRows,
-  useOperationalTableSort,
   useOperationalTableWidths,
   type OperationalTableColumn,
 } from '@/components/ui/operational-table'
 import { formatCivilDate } from '@/lib/datetime'
 import { erpInputClass, erpSelectClass } from '@/lib/form-styles'
 import { cn } from '@/lib/utils'
-import { InvoiceValidationDrawer } from './invoice-validation-drawer'
-import { InvoiceDueDateEditor } from './invoice-due-date-editor'
-import { resolveInboxDueDate, saveOptimisticDueDate, type InboxDueOverride, type ReceiptDueDate } from './inbox-due-date'
 import type {
-  InvoiceInboxSummary,
-  InboxDocument,
-  ReceiptInvoiceCandidate,
-  SaveInvoiceValidationResult,
-} from './types'
+  BsaleBodegaReconciliationReport,
+  ReconciledInvoiceEntry,
+} from './bsale-bodega-reconciliation'
+import type {
+  BsaleFinancialSummaryCounts,
+  InvoiceFinancialStatusOverlay,
+} from './bsale-financial-balance-resolver'
+import { BsaleReconciliationDetailPanel } from './bsale-reconciliation-detail-panel'
+import {
+  buildBsaleSupplierFilterOptions,
+  extractBodegaIncidentsFromReport,
+  extractSiiInvoicesFromReport,
+  filterAndPaginateBsaleInvoices,
+  formatSignedClpDifference,
+  resolveFinancialAccreditationBadge,
+  resolveFinancialInboxGroup,
+  resolveMonetaryReconciliationBadge,
+  resolvePhysicalReceptionBadge,
+  summarizeFinancialInboxGroups,
+  type BsaleBadgeTone,
+  type BsaleInvoiceSortColumn,
+  type BsaleReconciliationFilterValue,
+  type FinancialPrimaryFilterValue,
+} from './bsale-reconciliation-view-model'
 import { formatClp, formatRut } from './validation-rules'
-import { purchaseTypeLabel, receptionStatusLabel } from './classification'
 
-const TABLE_PREFS_KEY = 'mym:cxp-invoice-inbox:table-v2'
+const TABLE_PREFS_KEY = 'mym:cxp-bsale-reconciliation:table-v3'
 
-const CXP_COLUMNS: OperationalTableColumn[] = [
-  { id: 'select', defaultWidth: 42, minWidth: 38, maxWidth: 64, resizable: false, sortable: true, sortKey: 'selected', sortType: 'number' },
-  { id: 'supplier', defaultWidth: 195, minWidth: 130, maxWidth: 400, sortable: true, sortKey: 'supplier', sortType: 'text' },
-  { id: 'purchaseType', defaultWidth: 86, minWidth: 74, maxWidth: 130, sortable: true, sortKey: 'purchaseType', sortType: 'text' },
-  { id: 'folio', defaultWidth: 88, minWidth: 72, maxWidth: 145, sortable: true, sortKey: 'folio', sortType: 'number' },
-  { id: 'issueDate', defaultWidth: 88, minWidth: 80, maxWidth: 130, sortable: true, sortKey: 'issueDate', sortType: 'date' },
-  { id: 'dueDate', defaultWidth: 120, minWidth: 105, maxWidth: 160, sortable: true, sortKey: 'dueDate', sortType: 'date' },
-  { id: 'po', defaultWidth: 120, minWidth: 92, maxWidth: 230, sortable: true, sortKey: 'po', sortType: 'text' },
-  { id: 'receptionStatus', defaultWidth: 92, minWidth: 78, maxWidth: 140, sortable: true, sortKey: 'receptionStatus', sortType: 'text' },
-  { id: 'referenceAmount', defaultWidth: 106, minWidth: 90, maxWidth: 170, sortable: true, sortKey: 'referenceAmount', sortType: 'number' },
-  { id: 'realAmount', defaultWidth: 108, minWidth: 90, maxWidth: 180, sortable: true, sortKey: 'realAmount', sortType: 'number' },
-  { id: 'document', defaultWidth: 88, minWidth: 72, maxWidth: 145, sortable: true, sortKey: 'document', sortType: 'number' },
-  { id: 'status', defaultWidth: 112, minWidth: 92, maxWidth: 200, sortable: true, sortKey: 'status', sortType: 'text' },
-  { id: 'action', defaultWidth: 86, minWidth: 76, maxWidth: 125, resizable: false, sortable: false },
+const CXP_BSALE_COLUMNS: OperationalTableColumn[] = [
+  {
+    id: 'emissionDate',
+    defaultWidth: 100,
+    minWidth: 88,
+    maxWidth: 140,
+    sortable: true,
+    sortKey: 'emissionDate',
+    sortType: 'date',
+  },
+  {
+    id: 'supplier',
+    defaultWidth: 255,
+    minWidth: 180,
+    maxWidth: 460,
+    sortable: true,
+    sortKey: 'supplier',
+    sortType: 'text',
+  },
+  {
+    id: 'folio',
+    defaultWidth: 112,
+    minWidth: 96,
+    maxWidth: 170,
+    sortable: true,
+    sortKey: 'folio',
+    sortType: 'number',
+  },
+  {
+    id: 'financialStatus',
+    defaultWidth: 196,
+    minWidth: 156,
+    maxWidth: 270,
+    sortable: true,
+    sortKey: 'financialStatus',
+    sortType: 'text',
+  },
+  {
+    id: 'dueDate',
+    defaultWidth: 132,
+    minWidth: 106,
+    maxWidth: 180,
+    sortable: true,
+    sortKey: 'dueDate',
+    sortType: 'date',
+  },
+  {
+    id: 'siiAmount',
+    defaultWidth: 116,
+    minWidth: 100,
+    maxWidth: 175,
+    sortable: true,
+    sortKey: 'siiAmount',
+    sortType: 'number',
+  },
+  {
+    id: 'receivedAmount',
+    defaultWidth: 126,
+    minWidth: 108,
+    maxWidth: 185,
+    sortable: true,
+    sortKey: 'receivedAmount',
+    sortType: 'number',
+  },
+  {
+    id: 'difference',
+    defaultWidth: 112,
+    minWidth: 96,
+    maxWidth: 175,
+    sortable: true,
+    sortKey: 'difference',
+    sortType: 'number',
+  },
+  {
+    id: 'monetaryStatus',
+    defaultWidth: 150,
+    minWidth: 130,
+    maxWidth: 230,
+    sortable: true,
+    sortKey: 'monetaryStatus',
+    sortType: 'text',
+  },
+  {
+    id: 'receptionStatus',
+    defaultWidth: 162,
+    minWidth: 136,
+    maxWidth: 240,
+    sortable: true,
+    sortKey: 'receptionStatus',
+    sortType: 'text',
+  },
 ]
 
-const COLUMN_BY_ID = Object.fromEntries(CXP_COLUMNS.map(col => [col.id, col])) as Record<
-  string,
-  OperationalTableColumn
->
+const COLUMN_BY_ID = Object.fromEntries(
+  CXP_BSALE_COLUMNS.map(col => [col.id, col]),
+) as Record<string, OperationalTableColumn>
 
-type OptimisticEntry = {
-  summary: InvoiceInboxSummary
-  serverKey: string
-}
-
-function serverSummaryKey(summary: InvoiceInboxSummary | undefined): string {
-  if (!summary) return 'NONE'
-  return [
-    summary.validation_status,
-    summary.issue_date,
-    summary.due_date ?? '',
-    summary.total_amount ?? '',
-    summary.prior_payment_status,
-    summary.historical_initial_balance ?? '',
-    summary.discrepancy_status,
-    summary.validated_at ?? '',
-  ].join('|')
-}
-
-function toSummaryFromResult(result: SaveInvoiceValidationResult): InvoiceInboxSummary {
-  return {
-    id: result.id,
-    validation_status: result.validation_status,
-    issue_date: result.issue_date,
-    due_date: result.due_date,
-    net_amount: result.net_amount,
-    tax_amount: result.tax_amount,
-    total_amount: result.total_amount,
-    prior_payment_status: result.prior_payment_status,
-    historical_initial_balance: result.historical_initial_balance,
-    historical_balance_cutoff_date: result.historical_balance_cutoff_date,
-    discrepancy_status: result.discrepancy_status,
-    validated_at: result.validated_at,
+function badgeToneClasses(tone: BsaleBadgeTone): string {
+  switch (tone) {
+    case 'emerald':
+      return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+    case 'amber':
+      return 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+    case 'sky':
+      return 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+    case 'red':
+      return 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300'
+    default:
+      return 'border-theme-border bg-theme-bg text-theme-text-muted'
   }
-}
-
-function statusSortLabel(state: string, effectiveStatus: string | null): string {
-  if (state === 'NEW') return '1_Por incorporar'
-  if (state === 'PENDING') return '2_Pendiente'
-  if (state === 'VALIDATED') return '3_Validada'
-  return `4_${effectiveStatus ?? ''}`
 }
 
 export function InvoiceInbox({
-  initialCandidates,
-  initialSummaries = [],
-  documents,
-  dueDates,
+  report,
+  financialByKey,
+  financialCounts,
 }: {
-  initialCandidates: ReceiptInvoiceCandidate[]
-  initialSummaries?: InvoiceInboxSummary[]
-  documents: Record<string, boolean> | null
-  dueDates: ReceiptDueDate[] | null
+  report: BsaleBodegaReconciliationReport
+  financialByKey?: Record<string, InvoiceFinancialStatusOverlay>
+  financialCounts?: BsaleFinancialSummaryCounts
 }) {
-  const router = useRouter()
-  const [search, setSearch] = useState('')
-  const [status, setStatus] = useState('ALL')
-  const [selected, setSelected] = useState<string[]>([])
-  const [message, setMessage] = useState('')
-  const [activeInvoiceId, setActiveInvoiceId] = useState<string | null>(null)
-  const [editingDueRow, setEditingDueRow] = useState<{ row: ReceiptInvoiceCandidate; date: string | null; baseKey: string; readOnlyReason: string | null } | null>(null)
-  const [dueOverrides, setDueOverrides] = useState<Record<string, InboxDueOverride>>({})
-  const [pendingDueDates, setPendingDueDates] = useState<Record<string, InboxDueOverride>>({})
-  const dueDateLocks = useRef(new Set<string>())
-  const [viewer, setViewer] = useState<{ row: ReceiptInvoiceCandidate; documents: InboxDocument[] } | null>(null)
-  const [loadingDocument, setLoadingDocument] = useState(false)
-  const loadInboxDocument = useCallback((documentId: string) => {
-    if (!viewer) return Promise.resolve({ error: 'Seleccione una factura.' })
-    return getCxpInboxDocumentSignedUrl(viewer.row.candidate_id, documentId)
-  }, [viewer])
+  const [searchQuery, setSearchQuery] = useState('')
+  const [supplierRut, setSupplierRut] = useState('ALL')
+  const [folioQuery, setFolioQuery] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [financialPrimaryFilter, setFinancialPrimaryFilter] =
+    useState<FinancialPrimaryFilterValue>('TO_PAY')
+  const [reconciliationFilter, setReconciliationFilter] =
+    useState<BsaleReconciliationFilterValue>('ALL')
+  const [sortColumn, setSortColumn] =
+    useState<BsaleInvoiceSortColumn>('emissionDate')
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
+  const [showIncidentsSection, setShowIncidentsSection] = useState(true)
+  const [activeDetailKey, setActiveDetailKey] = useState<string | null>(null)
 
-  async function openDocuments(row: ReceiptInvoiceCandidate) {
-    setLoadingDocument(true)
-    try {
-      const result = await getCxpInboxDocuments(row.candidate_id)
-      if ('error' in result) setMessage(result.error)
-      else if (!result.documents.some(doc => doc.has_file)) setMessage('El respaldo ya no está disponible. Actualice la bandeja.')
-      else setViewer({ row, documents: result.documents })
-    } catch {
-      setMessage('No se pudieron consultar los respaldos de la factura.')
-    } finally {
-      setLoadingDocument(false)
-    }
-  }
-  const [optimisticById, setOptimisticById] = useState<Record<string, OptimisticEntry>>({})
-  const [pending, startTransition] = useTransition()
+  const {
+    widths,
+    setColumnWidth,
+    persist: persistWidths,
+    reset: resetWidths,
+  } = useOperationalTableWidths(TABLE_PREFS_KEY, CXP_BSALE_COLUMNS)
 
-  const { widths, setColumnWidth, persist: persistWidths, reset: resetWidths } = useOperationalTableWidths(
-    TABLE_PREFS_KEY,
-    CXP_COLUMNS,
+  // Las 777 facturas SII (33 y 34) precalculadas por el motor, ordenadas desde la más reciente
+  const siiInvoices = useMemo(
+    () => extractSiiInvoicesFromReport(report),
+    [report],
   )
-  const { sort, cycleSort } = useOperationalTableSort(TABLE_PREFS_KEY, CXP_COLUMNS)
 
-  const serverSummaryById = useMemo(() => {
-    const map = new Map<string, InvoiceInboxSummary>()
-    for (const summary of initialSummaries) {
-      map.set(summary.id, summary)
-    }
-    return map
-  }, [initialSummaries])
+  // Las 3 incidencias de Bodega (2 recepciones FA sin SII + 1 GD 147), separadas de las 777 facturas
+  const bodegaIncidents = useMemo(
+    () => extractBodegaIncidentsFromReport(report),
+    [report],
+  )
 
-  const summaryById = useMemo(() => {
-    const map = new Map<string, InvoiceInboxSummary>(serverSummaryById)
-    for (const [id, entry] of Object.entries(optimisticById)) {
-      const server = serverSummaryById.get(id)
-      if (serverSummaryKey(server) === entry.serverKey) {
-        map.set(id, entry.summary)
-      }
-    }
-    return map
-  }, [serverSummaryById, optimisticById])
+  const supplierOptions = useMemo(
+    () => buildBsaleSupplierFilterOptions(siiInvoices),
+    [siiInvoices],
+  )
 
-  const receiptDueById = useMemo(() => new Map((dueDates ?? []).map(item => [item.candidate_id, item])), [dueDates])
+  const financialSummary = useMemo(
+    () => summarizeFinancialInboxGroups(siiInvoices, financialByKey),
+    [siiInvoices, financialByKey],
+  )
 
-  // Mantener la confirmación local hasta observar el mismo resultado en las propiedades del servidor.
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDueOverrides(current => {
-      let next = current
-      for (const row of initialCandidates) {
-        const override = current[row.candidate_id]
-        if (!override?.confirmed) continue
-        const summary = row.invoice_id ? serverSummaryById.get(row.invoice_id) : undefined
-        const receiptDue = row.purchase_type === 'SERVICES' ? undefined : receiptDueById.get(row.candidate_id)
-        const server = resolveInboxDueDate(row, summary, receiptDue, undefined)
-        if (server.date === override.date && server.source === override.source) {
-          if (next === current) next = { ...current }
-          delete next[row.candidate_id]
-        }
-      }
-      return next
-    }), 0)
-    return () => window.clearTimeout(timer)
-  }, [initialCandidates, serverSummaryById, receiptDueById, dueOverrides])
-
-  const enrichedRows = useMemo(() => {
-    return initialCandidates.map(row => {
-      const summary = row.invoice_id ? summaryById.get(row.invoice_id) : undefined
-      const serverSummary = row.invoice_id ? serverSummaryById.get(row.invoice_id) : undefined
-      const receiptDue = row.purchase_type === 'SERVICES' ? undefined : receiptDueById.get(row.candidate_id)
-      const effectiveDue = resolveInboxDueDate(row, serverSummary, receiptDue, pendingDueDates[row.candidate_id] ?? dueOverrides[row.candidate_id])
-      const effectiveStatus = summary?.validation_status ?? row.invoice_status ?? null
-      const state = !row.invoice_id
-        ? 'NEW'
-        : effectiveStatus === 'PENDING'
-          ? 'PENDING'
-          : effectiveStatus === 'VALIDATED'
-            ? 'VALIDATED'
-            : 'OTHER'
-
-      return {
-        row,
-        summary,
-        effectiveStatus,
-        state,
-        effectiveIssueDate: summary?.issue_date ?? row.issue_date,
-        effectiveDueDate: effectiveDue.date,
-        dueSource: effectiveDue.source,
-        dueBaseKey: effectiveDue.baseKey,
-      }
-    })
-  }, [initialCandidates, summaryById, serverSummaryById, receiptDueById, dueOverrides, pendingDueDates])
-
-  const counts = useMemo(() => {
-    let pendingValidation = 0
-    let validated = 0
-    let toIncorporate = 0
-    for (const item of enrichedRows) {
-      if (item.state === 'NEW') toIncorporate += 1
-      else if (item.state === 'PENDING') pendingValidation += 1
-      else if (item.state === 'VALIDATED') validated += 1
-    }
-    return {
-      total: enrichedRows.length,
-      toIncorporate,
-      pendingValidation,
-      validated,
-    }
-  }, [enrichedRows])
-
-  const selectedSet = useMemo(() => new Set(selected), [selected])
-
-  const filteredRows = useMemo(() => {
-    const q = search.toLocaleLowerCase('es-CL').trim()
-    return enrichedRows.filter(item => {
-      if (status !== 'ALL' && item.state !== status) return false
-      if (!q) return true
-      const { row } = item
-      return [
-        row.supplier_name,
-        row.issuer_rut,
-        row.folio,
-        ...row.purchase_orders,
-        row.service_description ?? '',
-        purchaseTypeLabel(row.purchase_type),
-        receptionStatusLabel(row.reception_status, row.purchase_type),
-      ]
-        .join(' ')
-        .toLocaleLowerCase('es-CL')
-        .includes(q)
-    })
-  }, [enrichedRows, search, status])
-
-  const rows = useMemo(() => {
-    return sortOperationalRows(filteredRows, sort, CXP_COLUMNS, (item, sortKey) => {
-      switch (sortKey) {
-        case 'selected':
-          return selectedSet.has(item.row.candidate_id) ? 1 : 0
-        case 'supplier':
-          return item.row.supplier_name
-        case 'purchaseType':
-          return purchaseTypeLabel(item.row.purchase_type)
-        case 'folio':
-          return item.row.folio != null && /^\d+$/.test(item.row.folio) ? Number(item.row.folio) : null
-        case 'issueDate':
-          return item.effectiveIssueDate
-        case 'dueDate':
-          return item.effectiveDueDate
-        case 'po':
-          return item.row.purchase_orders.join(', ')
-        case 'receptionStatus':
-          return receptionStatusLabel(item.row.reception_status, item.row.purchase_type)
-        case 'referenceAmount':
-          return item.row.reference_amount != null ? Number(item.row.reference_amount) : null
-        case 'realAmount':
-          return item.summary?.total_amount != null ? Number(item.summary.total_amount) : null
-        case 'document':
-          return documents?.[item.row.candidate_id] ? 2 : documents && item.row.candidate_id in documents ? 1 : 0
-        case 'status':
-          return statusSortLabel(item.state, item.effectiveStatus)
-        default:
-          return null
-      }
-    })
-  }, [filteredRows, sort, selectedSet, documents])
-
-  const selectableVisibleIds = useMemo(
+  const paginated = useMemo(
     () =>
-      rows
-        .filter(
-          item =>
-            item.row.purchase_type !== 'SERVICES' &&
-            !item.row.blocked_reason &&
-            item.effectiveStatus !== 'VALIDATED',
-        )
-        .map(item => item.row.candidate_id),
-    [rows],
+      filterAndPaginateBsaleInvoices(siiInvoices, {
+        searchQuery,
+        supplierRut,
+        folioQuery,
+        dateFrom,
+        dateTo,
+        financialPrimaryFilter,
+        reconciliationFilter,
+        sortColumn,
+        sortDirection,
+        page,
+        pageSize,
+        financialByKey,
+      }),
+    [
+      siiInvoices,
+      searchQuery,
+      supplierRut,
+      folioQuery,
+      dateFrom,
+      dateTo,
+      financialPrimaryFilter,
+      reconciliationFilter,
+      sortColumn,
+      sortDirection,
+      page,
+      pageSize,
+      financialByKey,
+    ],
   )
 
-  const allVisibleSelected =
-    selectableVisibleIds.length > 0 && selectableVisibleIds.every(id => selectedSet.has(id))
+  const activeEntry = useMemo<ReconciledInvoiceEntry | null>(() => {
+    if (!activeDetailKey) return null
+    return (
+      report.entries.find(e => e.reconciliationKey === activeDetailKey) ?? null
+    )
+  }, [activeDetailKey, report.entries])
 
   const totalTableWidth = useMemo(
-    () => CXP_COLUMNS.reduce((acc, col) => acc + (widths[col.id] ?? col.defaultWidth), 0),
+    () =>
+      CXP_BSALE_COLUMNS.reduce(
+        (acc, col) => acc + (widths[col.id] ?? col.defaultWidth),
+        0,
+      ),
     [widths],
   )
 
-  function toggleSelectAllVisible() {
-    if (allVisibleSelected) {
-      setSelected(current => current.filter(id => !selectableVisibleIds.includes(id)))
-    } else {
-      setSelected(current => Array.from(new Set([...current, ...selectableVisibleIds])))
-    }
-  }
+  const hasActiveFilters =
+    searchQuery.trim() !== '' ||
+    supplierRut !== 'ALL' ||
+    folioQuery.trim() !== '' ||
+    dateFrom !== '' ||
+    dateTo !== '' ||
+    financialPrimaryFilter !== 'TO_PAY' ||
+    reconciliationFilter !== 'ALL'
 
-  function submit() {
-    setMessage('')
-    startTransition(async () => {
-      try {
-        const result = await incorporateReceiptInvoices(selected)
-        setSelected([])
-        setMessage(`${result.count} factura(s) incorporada(s) o ya incorporada(s).`)
-        router.refresh()
-      } catch (error) {
-        setMessage(error instanceof Error ? error.message : 'No fue posible incorporar las facturas.')
+  const resetFilters = useCallback(() => {
+    setSearchQuery('')
+    setSupplierRut('ALL')
+    setFolioQuery('')
+    setDateFrom('')
+    setDateTo('')
+    setFinancialPrimaryFilter('TO_PAY')
+    setReconciliationFilter('ALL')
+    setPage(1)
+  }, [])
+
+  const handleSortColumn = useCallback(
+    (colId: BsaleInvoiceSortColumn) => {
+      if (sortColumn === colId) {
+        setSortDirection(prev => (prev === 'desc' ? 'asc' : 'desc'))
+      } else {
+        setSortColumn(colId)
+        setSortDirection(colId === 'supplier' ? 'asc' : 'desc')
       }
-    })
-  }
-
-  function handleValidationUpdated(result: SaveInvoiceValidationResult) {
-    const currentRow = enrichedRows.find(item => item.row.invoice_id === result.id)
-    if (currentRow) {
-      setDueOverrides(prev => ({ ...prev, [currentRow.row.candidate_id]: { date: result.due_date, baseKey: currentRow.dueBaseKey } }))
-    }
-    const currentServer = serverSummaryById.get(result.id)
-    setOptimisticById(prev => ({
-      ...prev,
-      [result.id]: {
-        summary: toSummaryFromResult(result),
-        serverKey: serverSummaryKey(currentServer),
-      },
-    }))
-    router.refresh()
-  }
-
-  function saveDueDate(editing: NonNullable<typeof editingDueRow>, date: string | null) {
-    const { row, baseKey } = editing
-    const keys = [`candidate:${row.candidate_id}`, ...(row.invoice_id ? [`invoice:${row.invoice_id}`] : [])]
-    void saveOptimisticDueDate({
-      locks: dueDateLocks.current,
-      keys,
-      start: () => {
-        setMessage('')
-        setPendingDueDates(current => ({ ...current, [row.candidate_id]: { date, baseKey, confirmed: true, source: 'MANUAL' } }))
-        setEditingDueRow(null)
-      },
-      request: async () => {
-        const target = row.invoice_id ? { invoiceId: row.invoice_id } : { candidateId: row.candidate_id }
-        const result = await setInvoiceDueDate({ ...target, dueDate: date })
-        if (!result.ok) throw new Error(result.error)
-        return result.data
-      },
-      success: result => {
-        const source = row.purchase_type === 'SERVICES'
-          ? (result.due_date ? 'SAVED' : null)
-          : (result.invoice_id && result.due_date ? 'SAVED' : 'MANUAL')
-        setDueOverrides(current => ({ ...current, [row.candidate_id]: { date: result.due_date, baseKey, confirmed: true, source } }))
-      },
-      failure: error => setMessage(error instanceof Error ? error.message : 'No se pudo guardar el vencimiento. Intente nuevamente.'),
-      finish: () => setPendingDueDates(current => {
-        const next = { ...current }
-        delete next[row.candidate_id]
-        return next
-      }),
-    })
-  }
+      setPage(1)
+    },
+    [sortColumn],
+  )
 
   function renderSortableHeader(
-    colId: string,
+    colId: BsaleInvoiceSortColumn,
     label: string,
     options?: { align?: 'left' | 'right' | 'center' },
   ) {
     const column = COLUMN_BY_ID[colId]
     const align = options?.align ?? 'left'
-    const active = sort?.column === column.id
+    const active = sortColumn === colId
     return (
       <th
         style={{ width: `${widths[colId] ?? column.defaultWidth}px` }}
@@ -396,7 +321,7 @@ export function InvoiceInbox({
       >
         <button
           type="button"
-          onClick={() => cycleSort(column)}
+          onClick={() => handleSortColumn(colId)}
           className={cn(
             'group inline-flex max-w-full items-center gap-1 font-semibold uppercase tracking-wide transition-colors hover:text-theme-text',
             align === 'right' && 'ml-auto justify-end',
@@ -405,7 +330,10 @@ export function InvoiceInbox({
           title={`Ordenar por ${label}`}
         >
           <span className="truncate">{label}</span>
-          <OperationalTableSortIndicator active={active} direction={sort?.direction} />
+          <OperationalTableSortIndicator
+            active={active}
+            direction={active ? sortDirection : undefined}
+          />
         </button>
         <OperationalTableResizeHandle
           column={column}
@@ -417,146 +345,537 @@ export function InvoiceInbox({
     )
   }
 
+  const { counts } = report
+
   return (
-    <div className="flex w-full flex-col gap-2.5 md:h-[calc(100vh-7.75rem)]">
-      {/* Compact module title strip */}
+    <div className="flex w-full flex-col gap-2.5 md:h-[calc(100vh-7.5rem)]">
+      {/* Cabecera compacta enfocada en obligaciones financieras */}
       <header className="shrink-0 flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2 min-w-0">
           <h1 className="text-[16px] font-bold tracking-tight text-theme-text">
             Cuentas por Pagar
           </h1>
           <span className="inline-flex items-center rounded-md border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-sky-700 dark:text-sky-300">
-            Facturas Proveedores · Caylo
+            Caylo · Obligaciones y Conciliación
+          </span>
+          <span className="text-[11px] text-theme-text-muted">
+            {financialSummary.totalInvoices} facturas SII 33/34 ({counts.deferredBsaleNotesTotal} notas 61/56 fuera de deuda)
           </span>
         </div>
-        <p className="hidden sm:block text-[11px] text-theme-text-muted">
-          Recepciones FA, incorporación documental y validación de obligaciones
-        </p>
       </header>
 
-      {/* Compact executive summary bar + horizontal KPI cards */}
-      <div className="shrink-0 grid grid-cols-1 gap-2 lg:grid-cols-12">
-        <div className="lg:col-span-6 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-900 px-3.5 py-2 text-white shadow-xs dark:border dark:border-theme-border dark:bg-slate-900/90">
-          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-xs">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-300">
-              Facturas Caylo
-            </span>
-            <span className="hidden sm:inline text-slate-600">|</span>
-            <span className="text-slate-200">
-              Validadas:{' '}
-              <strong className="text-sm font-bold tabular-nums text-white">{counts.validated}</strong>{' '}
-              de <span className="tabular-nums">{counts.total}</span>
-              <span className="mx-1.5 text-slate-500">·</span>
-              Pendientes:{' '}
-              <strong className="font-semibold tabular-nums text-amber-300">{counts.pendingValidation}</strong>
-            </span>
+      {/* TRES INDICADORES PRINCIPALES: POR PAGAR SEGÚN EXCEL | PAGADAS SEGÚN EXCEL | SIN CLASIFICAR */}
+      <div className="shrink-0 grid grid-cols-1 gap-2 md:grid-cols-3">
+        <button
+          type="button"
+          onClick={() => {
+            setFinancialPrimaryFilter('TO_PAY')
+            setPage(1)
+          }}
+          className={cn(
+            'flex items-center justify-between gap-3 rounded-xl border px-3.5 py-2 text-left transition-colors',
+            financialPrimaryFilter === 'TO_PAY'
+              ? 'border-amber-500 bg-amber-500/15'
+              : 'border-theme-border bg-theme-surface hover:bg-theme-surface-hover',
+          )}
+          title="Saldo pendiente de las 70 facturas según columna K del Excel (descontando notas de crédito). No equivale automáticamente a deuda validada en el ERP."
+        >
+          <div className="min-w-0">
+            <p className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-800 dark:text-amber-300">
+              <Clock className="h-3 w-3 shrink-0" />
+              <span>Por pagar según Excel</span>
+            </p>
+            <p className="mt-0.5 truncate text-[11px] text-theme-text-muted">
+              {financialSummary.historicalExcelPendingCount} facturas ·{' '}
+              {financialSummary.confirmedDebtCount > 0
+                ? `${financialSummary.confirmedDebtCount} validada(s) ERP (${formatClp(financialSummary.confirmedDebtTotalClp)})`
+                : 'Saldo col. K (sin validar ERP)'}
+            </p>
           </div>
+          <span className="shrink-0 text-lg font-bold tabular-nums text-amber-700 dark:text-amber-300">
+            {formatClp(
+              financialSummary.historicalExcelPendingTotalClp +
+                financialSummary.confirmedDebtTotalClp,
+            )}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setFinancialPrimaryFilter('PAID')
+            setPage(1)
+          }}
+          className={cn(
+            'flex items-center justify-between gap-3 rounded-xl border px-3.5 py-2 text-left transition-colors',
+            financialPrimaryFilter === 'PAID'
+              ? 'border-emerald-500 bg-emerald-500/15'
+              : 'border-theme-border bg-theme-surface hover:bg-theme-surface-hover',
+          )}
+          title="700 facturas pagadas según Excel (saldo $0; declaración histórica, no necesariamente egreso bancario comprobado)."
+        >
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 dark:text-emerald-300">
+              Pagadas según Excel
+            </p>
+            <p className="mt-0.5 truncate text-[11px] text-theme-text-muted">
+              Saldo $0 · {financialCounts?.historicalExcelInformedDateCount ?? 0} inf. ·{' '}
+              {financialCounts?.historicalExcelAssumedDateCount ?? 0} asum.
+            </p>
+          </div>
+          <span className="shrink-0 text-lg font-bold tabular-nums text-emerald-700 dark:text-emerald-300">
+            {financialSummary.paidCount}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setFinancialPrimaryFilter('UNCLASSIFIED')
+            setPage(1)
+          }}
+          className={cn(
+            'flex items-center justify-between gap-3 rounded-xl border px-3.5 py-2 text-left transition-colors',
+            financialPrimaryFilter === 'UNCLASSIFIED'
+              ? 'border-slate-500 bg-slate-500/15'
+              : 'border-theme-border bg-theme-surface hover:bg-theme-surface-hover',
+          )}
+          title="Documentos Bsale sin clasificación equivalente en Excel. No deben presumirse impagos ni mostrarse como deuda confirmada."
+        >
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-theme-text-muted">
+              Sin clasificar
+            </p>
+            <p className="mt-0.5 truncate text-[11px] text-theme-text-muted">
+              Sin clasificación en Excel · No presuntos impagos
+            </p>
+          </div>
+          <span className="shrink-0 text-lg font-bold tabular-nums text-theme-text">
+            {financialSummary.unclassifiedCount}
+          </span>
+        </button>
+      </div>
+
+      {/* SECCIÓN SECUNDARIA COMPACTA: INDICADORES TÉCNICOS DE CONCILIACIÓN BSALE ↔ BODEGA */}
+      <div className="shrink-0 flex flex-wrap items-center justify-between gap-1.5 rounded-lg border border-theme-border bg-slate-50/70 px-3 py-1.5 text-[11px] dark:bg-slate-900/40">
+        <span className="font-bold uppercase tracking-wider text-[10px] text-theme-text-muted">
+          Conciliación Bsale ↔ Bodega:
+        </span>
+        <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
-            onClick={submit}
-            disabled={pending || selected.length === 0}
-            className="inline-flex h-7 items-center rounded-lg bg-theme-accent px-2.5 text-xs font-semibold text-white transition-colors hover:bg-theme-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
+            onClick={() => {
+              setReconciliationFilter(prev =>
+                prev === 'MONETARY_EXACT' ? 'ALL' : 'MONETARY_EXACT',
+              )
+              setPage(1)
+            }}
+            className={cn(
+              'rounded border px-2 py-0.5 font-semibold transition-colors',
+              reconciliationFilter === 'MONETARY_EXACT'
+                ? 'border-emerald-500 bg-emerald-500/15 text-emerald-800 dark:text-emerald-200'
+                : 'border-theme-border bg-theme-surface text-theme-text-muted hover:text-theme-text',
+            )}
           >
-            {pending ? 'Incorporando…' : `Incorporar (${selected.length})`}
+            Exactas $0 ({counts.monetaryExactMatchCount})
           </button>
-        </div>
-
-        <div className="lg:col-span-6 grid grid-cols-3 gap-2">
-          <div className="flex items-center justify-between gap-2 rounded-xl border border-theme-border bg-theme-surface px-3 py-2 shadow-2xs">
-            <div className="min-w-0">
-              <p className="truncate text-[10px] font-bold uppercase tracking-wider text-theme-text-muted">
-                Por incorporar
-              </p>
-              <p className="hidden sm:block truncate text-[10.5px] text-theme-text-muted/80">Recepciones FA</p>
-            </div>
-            <span className="text-lg font-bold tabular-nums text-theme-text">{counts.toIncorporate}</span>
-          </div>
-
-          <div className="flex items-center justify-between gap-2 rounded-xl border border-theme-border bg-theme-surface px-3 py-2 shadow-2xs">
-            <div className="min-w-0">
-              <p className="truncate text-[10px] font-bold uppercase tracking-wider text-theme-text-muted">
-                Pendientes
-              </p>
-              <p className="hidden sm:block truncate text-[10.5px] text-theme-text-muted/80">Por validar</p>
-            </div>
-            <span className="text-lg font-bold tabular-nums text-amber-600 dark:text-amber-400">
-              {counts.pendingValidation}
-            </span>
-          </div>
-
-          <div className="flex items-center justify-between gap-2 rounded-xl border border-theme-border bg-theme-surface px-3 py-2 shadow-2xs">
-            <div className="min-w-0">
-              <p className="truncate text-[10px] font-bold uppercase tracking-wider text-theme-text-muted">
-                Validadas
-              </p>
-              <p className="hidden sm:block truncate text-[10.5px] text-theme-text-muted/80">Confirmadas</p>
-            </div>
-            <span className="text-lg font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
-              {counts.validated}
-            </span>
-          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setReconciliationFilter(prev =>
+                prev === 'MONETARY_DIFFERENCE' ? 'ALL' : 'MONETARY_DIFFERENCE',
+              )
+              setPage(1)
+            }}
+            className={cn(
+              'rounded border px-2 py-0.5 font-semibold transition-colors',
+              reconciliationFilter === 'MONETARY_DIFFERENCE'
+                ? 'border-amber-500 bg-amber-500/15 text-amber-800 dark:text-amber-200'
+                : 'border-theme-border bg-theme-surface text-theme-text-muted hover:text-theme-text',
+            )}
+          >
+            Con diferencia ({counts.monetaryAmountDifferenceCount})
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setReconciliationFilter(prev =>
+                prev === 'RECEPTION_PARTIAL' ? 'ALL' : 'RECEPTION_PARTIAL',
+              )
+              setPage(1)
+            }}
+            className={cn(
+              'rounded border px-2 py-0.5 font-semibold transition-colors',
+              reconciliationFilter === 'RECEPTION_PARTIAL'
+                ? 'border-amber-500 bg-amber-500/15 text-amber-800 dark:text-amber-200'
+                : 'border-theme-border bg-theme-surface text-theme-text-muted hover:text-theme-text',
+            )}
+          >
+            Recep. parcial ({counts.receptionPartialCount})
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setReconciliationFilter(prev =>
+                prev === 'NO_RECEIPT_OPERATIONAL'
+                  ? 'ALL'
+                  : 'NO_RECEIPT_OPERATIONAL',
+              )
+              setPage(1)
+            }}
+            className={cn(
+              'rounded border px-2 py-0.5 font-semibold transition-colors',
+              reconciliationFilter === 'NO_RECEIPT_OPERATIONAL'
+                ? 'border-sky-500 bg-sky-500/15 text-sky-800 dark:text-sky-200'
+                : 'border-theme-border bg-theme-surface text-theme-text-muted hover:text-theme-text',
+            )}
+          >
+            Sin recep. op. ({counts.bsaleInvoicesWithoutReceiptOperationalCount})
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setReconciliationFilter(prev =>
+                prev === 'NO_RECEIPT_HISTORICAL'
+                  ? 'ALL'
+                  : 'NO_RECEIPT_HISTORICAL',
+              )
+              setPage(1)
+            }}
+            className={cn(
+              'rounded border px-2 py-0.5 font-semibold transition-colors',
+              reconciliationFilter === 'NO_RECEIPT_HISTORICAL'
+                ? 'border-slate-500 bg-slate-500/15 text-theme-text'
+                : 'border-theme-border bg-theme-surface text-theme-text-muted hover:text-theme-text',
+            )}
+          >
+            Históricas pre-Bodega ({counts.bsaleInvoicesWithoutReceiptHistoricalCount})
+          </button>
         </div>
       </div>
 
-      {message && (
-        <div
-          role="status"
-          className="shrink-0 flex items-center justify-between gap-3 rounded-lg border border-theme-border bg-theme-surface px-3 py-1.5 text-xs text-theme-text shadow-2xs"
+      {/* SECCIÓN SEPARADA DE INCIDENCIAS DE BODEGA (2 FA sin SII + 1 GD 147) */}
+      {bodegaIncidents.length > 0 && (
+        <section
+          aria-label="Incidencias de recepciones de Bodega sin documento SII vinculado"
+          className="shrink-0 rounded-xl border border-amber-500/30 bg-amber-500/[0.05] px-3 py-2 shadow-2xs"
         >
-          <span>{message}</span>
-          <button
-            type="button"
-            onClick={() => setMessage('')}
-            className="text-theme-text-muted hover:text-theme-text"
-            aria-label="Ocultar aviso"
-          >
-            ×
-          </button>
-        </div>
-      )}
-
-      {/* Unified operational table card with integrated search/filter toolbar */}
-      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-xs">
-        <div className="shrink-0 flex flex-wrap items-center justify-between gap-2 border-b border-theme-border px-3.5 py-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <h2 className="text-[11px] font-bold uppercase tracking-wider text-theme-text">
-              Bandeja de facturas
-            </h2>
-            <span className="inline-flex items-center rounded-md bg-theme-bg px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-theme-text-muted">
-              {rows.length} / {counts.total}
-            </span>
-            {selected.length > 0 && (
-              <span className="inline-flex items-center rounded-md bg-sky-500/10 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-sky-700 dark:text-sky-300">
-                {selected.length} sel.
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+              <h2 className="text-[11px] font-bold uppercase tracking-wider text-amber-900 dark:text-amber-200">
+                Incidencias de Bodega sin factura SII vinculada (
+                {bodegaIncidents.length})
+              </h2>
+              <span className="text-[11px] text-amber-800/85 dark:text-amber-300/85">
+                {counts.receiptsWithoutBsaleInvoiceCount} recepciones FA sin documento en Bsale y{' '}
+                {counts.gdReceiptsWithoutLinkedInvoiceCount} recepción con Guía de Despacho (GD 147)
               </span>
-            )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowIncidentsSection(prev => !prev)}
+              className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-theme-surface px-2 py-0.5 text-[10.5px] font-semibold text-theme-text hover:bg-theme-surface-hover"
+            >
+              <span>{showIncidentsSection ? 'Ocultar' : 'Mostrar'}</span>
+              {showIncidentsSection ? (
+                <ChevronUp className="h-3 w-3" />
+              ) : (
+                <ChevronDown className="h-3 w-3" />
+              )}
+            </button>
           </div>
 
-          <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
-            <label className="relative flex-1 sm:flex-none sm:w-60">
-              <span className="sr-only">Buscar proveedor, RUT, folio u OC</span>
+          {showIncidentsSection && (
+            <div className="mt-2 grid grid-cols-1 gap-1.5 md:grid-cols-3">
+              {bodegaIncidents.map(incident => {
+                const isGd =
+                  incident.category === 'GD_RECEIPT_WITHOUT_LINKED_INVOICE'
+                const docLabel = `${incident.bodegaDocumentType ?? 'DOC'} ${incident.documentFolio ?? 'S/F'}`
+                const docDate = incident.dates.receiptDocumentDates[0] ?? null
+                return (
+                  <div
+                    key={incident.reconciliationKey}
+                    onDoubleClick={() =>
+                      setActiveDetailKey(incident.reconciliationKey)
+                    }
+                    onClick={() =>
+                      setActiveDetailKey(incident.reconciliationKey)
+                    }
+                    className="group flex cursor-pointer items-center justify-between gap-2 rounded-lg border border-amber-500/25 bg-theme-surface px-2.5 py-1.5 text-xs transition-colors hover:border-amber-500/50 hover:bg-theme-surface-hover"
+                    title="Doble clic o clic para abrir detalle de la incidencia de Bodega"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[13px] font-bold text-theme-text">
+                          {docLabel}
+                        </span>
+                        <span
+                          className={cn(
+                            'inline-flex items-center rounded border px-1.5 py-0.2 text-[9.5px] font-bold uppercase tracking-wider',
+                            isGd
+                              ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-300'
+                              : 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300',
+                          )}
+                        >
+                          {isGd
+                            ? 'Guía sin factura SII'
+                            : 'FA Bodega sin par SII'}
+                        </span>
+                        <span className="font-mono text-[10.5px] text-theme-text-muted">
+                          {incident.purchaseOrderCorrelatives.join(', ')}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 truncate text-[12px] font-semibold text-theme-text">
+                        {incident.bodegaSupplierName ?? 'Proveedor Bodega'}
+                        {incident.issuerRutNormalized && (
+                          <span className="ml-1.5 font-mono text-[10.5px] font-normal text-theme-text-muted">
+                            {formatRut(incident.issuerRutNormalized)}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className="text-xs font-bold tabular-nums text-theme-text">
+                        {formatClp(incident.monetary.receivedGrossAmountClp)}
+                      </p>
+                      <p className="text-[10px] tabular-nums text-theme-text-muted">
+                        {formatCivilDate(docDate)}
+                      </p>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* TABLA PRINCIPAL: 777 FACTURAS SII 33/34 */}
+      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-xs">
+        {/* Barra de filtros financieros principales + búsqueda, proveedor, folio y fechas */}
+        <div className="shrink-0 flex flex-wrap items-center justify-between gap-2 border-b border-theme-border px-3.5 py-2">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
+            <div
+              role="group"
+              aria-label="Filtro financiero principal"
+              className="inline-flex items-center rounded-lg border border-theme-border bg-theme-bg p-0.5"
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setFinancialPrimaryFilter('TO_PAY')
+                  setPage(1)
+                }}
+                className={cn(
+                  'rounded-md px-2.5 py-1 text-[11px] font-bold transition-colors',
+                  financialPrimaryFilter === 'TO_PAY'
+                    ? 'bg-amber-500 text-white shadow-2xs'
+                    : 'text-theme-text-muted hover:text-theme-text',
+                )}
+              >
+                Por pagar (
+                {financialSummary.historicalExcelPendingCount +
+                  financialSummary.confirmedDebtCount}
+                )
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setFinancialPrimaryFilter('PAID')
+                  setPage(1)
+                }}
+                className={cn(
+                  'rounded-md px-2.5 py-1 text-[11px] font-bold transition-colors',
+                  financialPrimaryFilter === 'PAID'
+                    ? 'bg-emerald-600 text-white shadow-2xs'
+                    : 'text-theme-text-muted hover:text-theme-text',
+                )}
+              >
+                Pagadas ({financialSummary.paidCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setFinancialPrimaryFilter('UNCLASSIFIED')
+                  setPage(1)
+                }}
+                className={cn(
+                  'rounded-md px-2.5 py-1 text-[11px] font-bold transition-colors',
+                  financialPrimaryFilter === 'UNCLASSIFIED'
+                    ? 'bg-slate-600 text-white shadow-2xs'
+                    : 'text-theme-text-muted hover:text-theme-text',
+                )}
+              >
+                Sin clasificar ({financialSummary.unclassifiedCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setFinancialPrimaryFilter('ALL')
+                  setPage(1)
+                }}
+                className={cn(
+                  'rounded-md px-2.5 py-1 text-[11px] font-bold transition-colors',
+                  financialPrimaryFilter === 'ALL'
+                    ? 'bg-slate-900 text-white shadow-2xs dark:bg-sky-600'
+                    : 'text-theme-text-muted hover:text-theme-text',
+                )}
+              >
+                Todas ({financialSummary.totalInvoices})
+              </button>
+            </div>
+            <span className="inline-flex items-center rounded-md bg-theme-bg px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-theme-text-muted">
+              {paginated.totalItems} visibles
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5 w-full xl:w-auto">
+            {/* Búsqueda general */}
+            <label className="relative flex-1 sm:flex-none sm:w-52">
+              <span className="sr-only">
+                Buscar proveedor, RUT, folio u OC
+              </span>
               <Search className="pointer-events-none absolute left-2.5 top-2 h-3.5 w-3.5 text-theme-text-muted" />
               <input
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Buscar proveedor, RUT, folio u OC…"
+                value={searchQuery}
+                onChange={e => {
+                  setSearchQuery(e.target.value)
+                  setPage(1)
+                }}
+                placeholder="Buscar proveedor, RUT u OC…"
                 className={cn(erpInputClass, 'h-7 w-full pl-8 pr-2 text-xs')}
               />
             </label>
 
-            <label>
-              <span className="sr-only">Filtrar por estado</span>
+            {/* Filtro por Proveedor */}
+            <label className="sm:w-52">
+              <span className="sr-only">Filtrar por proveedor</span>
               <select
-                value={status}
-                onChange={e => setStatus(e.target.value)}
-                className={cn(erpSelectClass, 'h-7 px-2 text-xs')}
+                value={supplierRut}
+                onChange={e => {
+                  setSupplierRut(e.target.value)
+                  setPage(1)
+                }}
+                className={cn(erpSelectClass, 'h-7 w-full px-2 text-xs')}
+                aria-label="Filtrar por proveedor"
               >
-                <option value="ALL">Todos</option>
-                <option value="NEW">Por incorporar</option>
-                <option value="PENDING">Pendiente</option>
-                <option value="VALIDATED">Validada</option>
+                <option value="ALL">
+                  Todos los proveedores ({supplierOptions.length})
+                </option>
+                {supplierOptions.map(sup => (
+                  <option key={sup.rutNormalized} value={sup.rutNormalized}>
+                    {sup.supplierName} ({sup.invoiceCount})
+                  </option>
+                ))}
               </select>
             </label>
+
+            {/* Filtro específico por Folio */}
+            <label className="w-28">
+              <span className="sr-only">Filtrar por folio</span>
+              <input
+                value={folioQuery}
+                onChange={e => {
+                  setFolioQuery(e.target.value)
+                  setPage(1)
+                }}
+                placeholder="Folio (ej. 163496)"
+                aria-label="Filtrar por folio"
+                className={cn(erpInputClass, 'h-7 w-full px-2 font-mono text-xs')}
+              />
+            </label>
+
+            {/* Filtro de fecha desde / hasta */}
+            <label className="inline-flex items-center gap-1">
+              <span className="text-[10.5px] font-medium text-theme-text-muted">
+                Desde
+              </span>
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={e => {
+                  setDateFrom(e.target.value)
+                  setPage(1)
+                }}
+                aria-label="Fecha de emisión desde"
+                className={cn(erpInputClass, 'h-7 w-[124px] px-1.5 text-xs')}
+              />
+            </label>
+
+            <label className="inline-flex items-center gap-1">
+              <span className="text-[10.5px] font-medium text-theme-text-muted">
+                Hasta
+              </span>
+              <input
+                type="date"
+                value={dateTo}
+                onChange={e => {
+                  setDateTo(e.target.value)
+                  setPage(1)
+                }}
+                aria-label="Fecha de emisión hasta"
+                className={cn(erpInputClass, 'h-7 w-[124px] px-1.5 text-xs')}
+              />
+            </label>
+
+            {/* Filtro por Estado de Conciliación */}
+            <label>
+              <span className="sr-only">Filtrar por estado de conciliación</span>
+              <select
+                value={reconciliationFilter}
+                onChange={e => {
+                  setReconciliationFilter(
+                    e.target.value as BsaleReconciliationFilterValue,
+                  )
+                  setPage(1)
+                }}
+                aria-label="Filtrar por estado de conciliación"
+                className={cn(erpSelectClass, 'h-7 px-2 text-xs')}
+              >
+                <option value="ALL">
+                  Todos los estados ({counts.totalBsaleInvoices})
+                </option>
+                <option value="MATCHED_ALL">
+                  Conciliadas con Bodega ({counts.matchedInvoicesCount})
+                </option>
+                <option value="MONETARY_EXACT">
+                  ↳ Coincidencia exacta $0 ({counts.monetaryExactMatchCount})
+                </option>
+                <option value="MONETARY_DIFFERENCE">
+                  ↳ Con diferencia de monto ({counts.monetaryAmountDifferenceCount})
+                </option>
+                <option value="RECEPTION_COMPLETE">
+                  ↳ Recepción completa ({counts.byCategory.MATCHED_COMPLETE_EXACT + counts.byCategory.MATCHED_COMPLETE_DIFFERENCE})
+                </option>
+                <option value="RECEPTION_PARTIAL">
+                  ↳ Recepción parcial ({counts.receptionPartialCount})
+                </option>
+                <option value="NO_RECEIPT_OPERATIONAL">
+                  Sin recepción · Período operativo ({counts.bsaleInvoicesWithoutReceiptOperationalCount})
+                </option>
+                <option value="NO_RECEIPT_HISTORICAL">
+                  Sin recepción · Históricas pre-Bodega ({counts.bsaleInvoicesWithoutReceiptHistoricalCount})
+                </option>
+                {financialCounts && financialCounts.historicalExcelPaidCount > 0 && (
+                  <option value="HISTORICAL_EXCEL_PAID">
+                    Pagada históricamente · Excel ({financialCounts.historicalExcelPaidCount})
+                  </option>
+                )}
+              </select>
+            </label>
+
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={resetFilters}
+                title="Limpiar filtros aplicados"
+                className="inline-flex h-7 items-center gap-1 rounded-lg border border-theme-border bg-theme-surface px-2 text-[11px] font-semibold text-theme-text-muted transition-colors hover:bg-theme-surface-hover hover:text-theme-text"
+              >
+                <FilterX className="h-3.5 w-3.5" />
+                <span>Limpiar</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -570,354 +889,421 @@ export function InvoiceInbox({
           </div>
         </div>
 
-        <div className="max-h-[70vh] flex-1 min-h-0 overflow-auto md:max-h-none">
+        {/* Cuerpo de tabla con desplazamiento interno */}
+        <div className="max-h-[68vh] flex-1 min-h-0 overflow-auto md:max-h-none">
           <table
             style={{ width: `${totalTableWidth}px`, minWidth: '100%' }}
             className="table-fixed border-separate border-spacing-0 text-left"
           >
             <colgroup>
-              {CXP_COLUMNS.map(col => (
-                <col key={col.id} style={{ width: `${widths[col.id] ?? col.defaultWidth}px` }} />
+              {CXP_BSALE_COLUMNS.map(col => (
+                <col
+                  key={col.id}
+                  style={{ width: `${widths[col.id] ?? col.defaultWidth}px` }}
+                />
               ))}
             </colgroup>
             <thead className="text-[10.5px] font-semibold uppercase tracking-wide text-slate-500 dark:text-theme-text-muted [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:border-b [&_th]:border-theme-border [&_th]:bg-slate-50 dark:[&_th]:bg-theme-surface">
               <tr>
-                <th
-                  style={{ width: `${widths.select ?? COLUMN_BY_ID.select.defaultWidth}px` }}
-                  className="px-2 py-2 text-center"
-                >
-                  <div className="inline-flex items-center justify-center gap-0.5">
-                    <input
-                      type="checkbox"
-                      aria-label="Seleccionar todas las facturas incorporables visibles"
-                      checked={allVisibleSelected}
-                      disabled={pending || selectableVisibleIds.length === 0}
-                      onChange={toggleSelectAllVisible}
-                      className="h-3.5 w-3.5 rounded border-theme-border align-middle"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => cycleSort(COLUMN_BY_ID.select)}
-                      title="Ordenar por seleccionadas"
-                      aria-label="Ordenar por seleccionadas"
-                      className="group inline-flex items-center text-theme-text-muted hover:text-theme-text"
-                    >
-                      <OperationalTableSortIndicator
-                        active={sort?.column === 'select'}
-                        direction={sort?.direction}
-                      />
-                    </button>
-                  </div>
-                </th>
+                {renderSortableHeader('emissionDate', 'Emisión')}
                 {renderSortableHeader('supplier', 'Proveedor')}
-                {renderSortableHeader('purchaseType', 'Tipo')}
-                {renderSortableHeader('folio', 'Factura')}
-                {renderSortableHeader('issueDate', 'Emisión')}
-                {renderSortableHeader('dueDate', 'Vencim.')}
-                {renderSortableHeader('po', 'OC')}
-                {renderSortableHeader('receptionStatus', 'Recepción')}
-                {renderSortableHeader('referenceAmount', 'Ref. recep.', { align: 'right' })}
-                {renderSortableHeader('realAmount', 'Monto real', { align: 'right' })}
-                {renderSortableHeader('document', 'Respaldo')}
-                {renderSortableHeader('status', 'Estado')}
-                <th
-                  style={{ width: `${widths.action ?? COLUMN_BY_ID.action.defaultWidth}px` }}
-                  className="px-2.5 py-2 text-right whitespace-nowrap"
-                >
-                  Acción
-                </th>
+                {renderSortableHeader('folio', 'Folio')}
+                {renderSortableHeader('financialStatus', 'Estado financiero / Saldo')}
+                {renderSortableHeader('dueDate', 'Vencimiento')}
+                {renderSortableHeader('siiAmount', 'Monto SII', {
+                  align: 'right',
+                })}
+                {renderSortableHeader(
+                  'receivedAmount',
+                  'Monto Recibido Bodega',
+                  { align: 'right' },
+                )}
+                {renderSortableHeader('difference', 'Diferencia', {
+                  align: 'right',
+                })}
+                {renderSortableHeader(
+                  'monetaryStatus',
+                  'Estado Conciliación',
+                )}
+                {renderSortableHeader('receptionStatus', 'Estado Recepción')}
               </tr>
             </thead>
             <tbody className="text-xs [&_td]:border-b [&_td]:border-theme-border [&_tr:last-child_td]:border-b-0">
-              {rows.map(({ row, summary, effectiveStatus, state, effectiveIssueDate, effectiveDueDate, dueSource, dueBaseKey }) => {
-                const isValidated = effectiveStatus === 'VALIDATED'
-                const isPending = effectiveStatus === 'PENDING'
-                const hasUnresolvedDiscrepancy = isPending && summary?.discrepancy_status === 'UNRESOLVED'
-                const isSelected = selectedSet.has(row.candidate_id)
-
-                return (
-                  <tr
-                    key={row.candidate_id}
-                    className={cn(
-                      'h-10 transition-colors hover:bg-theme-surface-hover/80',
-                      row.invoice_id && 'cursor-pointer',
-                      isSelected && 'bg-sky-500/[0.05]',
-                    )}
-                    onClick={event => {
-                      const target = event.target as HTMLElement
-                      if (target.closest('input, button, a')) return
-                      if (row.invoice_id) setActiveInvoiceId(row.invoice_id)
-                    }}
+              {paginated.items.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={CXP_BSALE_COLUMNS.length}
+                    className="px-4 py-8 text-center text-sm text-theme-text-muted"
                   >
-                    <td className="px-2 py-1 text-center">
-                      <input
-                        type="checkbox"
-                        aria-label={`Seleccionar factura ${row.folio ?? 'sin folio'} de ${row.supplier_name}`}
-                        checked={isSelected}
-                        disabled={pending || row.purchase_type === 'SERVICES' || !!row.blocked_reason || isValidated}
-                        onChange={e =>
-                          setSelected(current =>
-                            e.target.checked
-                              ? [...current, row.candidate_id]
-                              : current.filter(id => id !== row.candidate_id),
-                          )
-                        }
-                        className="h-3.5 w-3.5 rounded border-theme-border align-middle"
-                      />
-                    </td>
+                    No se encontraron facturas SII con los filtros seleccionados.
+                  </td>
+                </tr>
+              ) : (
+                paginated.items.map(entry => {
+                  const financialOverlay =
+                    financialByKey?.[entry.reconciliationKey]
+                  const financialGroup =
+                    resolveFinancialInboxGroup(financialOverlay)
+                  const monetaryBadge = resolveMonetaryReconciliationBadge(entry)
+                  const receptionBadge = resolvePhysicalReceptionBadge(entry)
+                  const financialBadge =
+                    resolveFinancialAccreditationBadge(financialOverlay)
+                  const dueDateInfo = financialOverlay?.dueDateInfo
+                  const supplierName =
+                    entry.bodegaSupplierName ||
+                    entry.bsaleSupplierName ||
+                    'Proveedor sin nombre'
+                  const isActiveRow =
+                    activeDetailKey === entry.reconciliationKey
 
-                    <td className="overflow-hidden px-2.5 py-1">
-                      <div
-                        className="truncate font-semibold leading-tight text-theme-text"
-                        title={row.supplier_name}
-                      >
-                        {row.supplier_name}
-                      </div>
-                      <div className="truncate font-mono text-[10.5px] leading-tight text-theme-text-muted">
-                        {row.issuer_rut ? formatRut(row.issuer_rut) : 'Sin RUT'}
-                      </div>
-                    </td>
-
-                    <td className="overflow-hidden px-2.5 py-1 whitespace-nowrap">
-                      <span
-                        className={cn(
-                          'inline-flex truncate rounded-md border px-1.5 py-0.5 text-[10.5px] font-medium',
-                          row.purchase_type === 'SERVICES'
-                            ? 'border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300'
-                            : 'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300',
-                        )}
-                      >
-                        {purchaseTypeLabel(row.purchase_type)}
-                      </span>
-                    </td>
-
-                    <td className="overflow-hidden px-2.5 py-1 whitespace-nowrap font-semibold tabular-nums text-theme-text">
-                      <span className="block truncate" title={`FA ${row.folio ?? '—'}`}>
-                        FA {row.folio ?? '—'}
-                      </span>
-                    </td>
-
-                    <td className="overflow-hidden px-2.5 py-1 whitespace-nowrap tabular-nums text-theme-text-muted">
-                      {formatCivilDate(effectiveIssueDate) || '—'}
-                    </td>
-
-                    <td className="overflow-hidden px-2.5 py-1 tabular-nums">
-                      <button
-                        type="button"
-                        disabled={Boolean(pendingDueDates[row.candidate_id])}
-                        onClick={() => setEditingDueRow({
-                          row, date: effectiveDueDate, baseKey: dueBaseKey,
-                          readOnlyReason: dueDates === null ? 'Edición de vencimientos no disponible en este entorno.' : !row.invoice_id && row.blocked_reason ? row.blocked_reason : null,
-                        })}
-                        title={dueDates === null ? 'Consultar vencimiento en modo lectura' : !row.invoice_id && row.blocked_reason ? row.blocked_reason : 'Editar vencimiento'}
-                        aria-label={`Vencimiento de factura ${row.folio ?? 'sin folio'} de ${row.supplier_name}: ${effectiveDueDate ? formatCivilDate(effectiveDueDate) : 'por confirmar'}`}
-                        className="group flex max-w-full items-start gap-1 rounded-md text-left text-[11px] leading-tight text-theme-text hover:text-theme-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-accent/40 disabled:cursor-default disabled:text-theme-text-muted"
-                      >
-                        <CalendarDays className="mt-0.5 h-3 w-3 shrink-0 text-theme-text-muted group-hover:text-theme-accent" />
-                        <span className="min-w-0">
-                          <span className="block whitespace-nowrap">{effectiveDueDate ? formatCivilDate(effectiveDueDate) : 'Por confirmar'}</span>
-                          {pendingDueDates[row.candidate_id] ? <span role="status" className="block text-[10px] text-theme-text-muted">Guardando…</span> : <>
-                            {(dueSource === 'PURCHASE_ORDER' || dueSource === 'SUPPLIER') && <span className="block text-[10px] font-semibold text-sky-700 dark:text-sky-400">Sugerido</span>}
-                            {dueSource === 'MANUAL' && <span className="block text-[10px] text-theme-text-muted">Corregido</span>}
-                            {dueSource === 'SAVED' && <span className="block text-[10px] text-theme-text-muted">Registrado</span>}
-                          </>}
-                        </span>
-                      </button>
-                    </td>
-
-                    <td className="overflow-hidden px-2.5 py-1">
-                      {row.purchase_type === 'SERVICES' ? (
-                        <span
-                          className="block truncate text-[11px] text-theme-text-muted"
-                          title={row.service_description || 'Sin OC (Servicio)'}
-                        >
-                          {row.service_description || 'Sin OC'}
-                        </span>
-                      ) : (
-                        <span
-                          className="block truncate font-mono text-[11px] text-theme-text"
-                          title={row.purchase_orders.join(', ')}
-                        >
-                          {row.purchase_orders.join(', ') || '—'}
-                        </span>
+                  return (
+                    <tr
+                      key={entry.reconciliationKey}
+                      onDoubleClick={event => {
+                        const target = event.target as HTMLElement
+                        if (target.closest('button, a, input')) return
+                        setActiveDetailKey(entry.reconciliationKey)
+                      }}
+                      className={cn(
+                        'h-11 cursor-pointer transition-colors hover:bg-theme-surface-hover/80',
+                        entry.isHistoricalPreErpReceipts && 'opacity-85',
+                        isActiveRow && 'bg-sky-500/[0.08]',
                       )}
-                    </td>
-
-                    <td className="overflow-hidden px-2.5 py-1 whitespace-nowrap">
-                      <span
-                        className={cn(
-                          'inline-flex truncate rounded-md border px-1.5 py-0.5 text-[10.5px] font-semibold',
-                          row.reception_status === 'RECEIVED'
-                            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-                            : row.reception_status === 'PARTIAL' ||
-                                (row.purchase_type === 'SERVICES' && row.reception_status === 'PENDING')
-                              ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
-                              : 'border-theme-border bg-theme-bg/70 text-theme-text-muted',
-                        )}
-                      >
-                        {receptionStatusLabel(row.reception_status, row.purchase_type)}
-                      </span>
-                    </td>
-
-                    <td className="overflow-hidden px-2.5 py-1 text-right whitespace-nowrap font-medium tabular-nums text-theme-text">
-                      <span className="block truncate" title={formatClp(row.reference_amount)}>
-                        {formatClp(row.reference_amount)}
-                      </span>
-                    </td>
-
-                    <td className="overflow-hidden px-2.5 py-1 text-right whitespace-nowrap tabular-nums">
-                      {summary?.total_amount != null ? (
-                        <div className="leading-tight">
-                          <span className="block truncate font-semibold text-theme-text">
-                            {formatClp(summary.total_amount, { allowDecimals: true })}
+                      title="Doble clic para abrir el panel lateral de conciliación y respaldos"
+                    >
+                      {/* 1. Fecha de emisión */}
+                      <td className="px-2.5 py-1.5 whitespace-nowrap">
+                        <div className="flex items-center gap-1 font-medium tabular-nums text-theme-text">
+                          <CalendarDays className="h-3 w-3 shrink-0 text-theme-text-muted" />
+                          <span>
+                            {formatCivilDate(entry.dates.siiEmissionDate)}
                           </span>
-                          {summary.prior_payment_status === 'PARTIAL_PRIOR_PAYMENTS' &&
-                            summary.historical_initial_balance != null && (
-                              <div className="truncate text-[10px] text-theme-text-muted">
-                                Saldo: {formatClp(summary.historical_initial_balance, { allowDecimals: true })}
-                              </div>
-                            )}
-                          {summary.prior_payment_status === 'FULLY_PAID_PRIOR' && (
-                            <div className="truncate text-[10px] text-theme-text-muted">Pagada ($0)</div>
+                        </div>
+                        {entry.dates.hasDocumentDateMismatch &&
+                          entry.receiptCount > 0 && (
+                            <span
+                              className="mt-0.5 block truncate text-[10px] font-medium text-amber-600 dark:text-amber-400"
+                              title={`Fecha documento digitada en Bodega: ${entry.dates.receiptDocumentDates.join(', ')}`}
+                            >
+                              Doc. Bodega:{' '}
+                              {formatCivilDate(
+                                entry.dates.receiptDocumentDates[0],
+                              )}
+                            </span>
+                          )}
+                      </td>
+
+                      {/* 2. Proveedor (tamaño destacado) */}
+                      <td className="px-2.5 py-1.5">
+                        <p
+                          className="truncate text-[13.5px] font-bold leading-snug text-theme-text"
+                          title={supplierName}
+                        >
+                          {supplierName}
+                        </p>
+                        <div className="flex items-center gap-1.5 text-[11px] text-theme-text-muted">
+                          <span className="font-mono">
+                            {formatRut(entry.issuerRutNormalized)}
+                          </span>
+                          {(entry.hasBsalePdf || entry.hasBodegaAttachment) && (
+                            <span
+                              className="inline-flex items-center gap-0.5 rounded bg-theme-bg px-1 py-0.2 text-[9.5px] font-semibold text-theme-text-muted"
+                              title={
+                                entry.hasBsalePdf && entry.hasBodegaAttachment
+                                  ? 'PDF disponible en Bsale y Bodega'
+                                  : entry.hasBsalePdf
+                                    ? 'PDF disponible en Bsale'
+                                    : 'PDF disponible en Bodega'
+                              }
+                            >
+                              <FileText className="h-2.5 w-2.5 text-theme-accent" />
+                              {entry.hasBsalePdf && entry.hasBodegaAttachment
+                                ? 'Bsale+Bodega'
+                                : entry.hasBsalePdf
+                                  ? 'PDF Bsale'
+                                  : 'PDF Bodega'}
+                            </span>
                           )}
                         </div>
-                      ) : (
-                        <span className="text-[11px] text-theme-text-muted/75">Por confirmar</span>
-                      )}
-                    </td>
+                      </td>
 
-                    <td className="overflow-hidden px-2.5 py-1 whitespace-nowrap">
-                      {documents === null ? (
-                        <span className="text-[11px] text-theme-text-muted" title="No se pudieron consultar los respaldos">No disponible</span>
-                      ) : documents[row.candidate_id] ? (
-                        <button
-                          type="button"
-                          disabled={loadingDocument}
-                          onClick={() => void openDocuments(row)}
-                          className="inline-flex max-w-full items-center gap-1 rounded-md text-[11px] font-semibold text-sky-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-accent/40 dark:text-sky-400"
-                          aria-label={`Ver respaldo de factura ${row.folio ?? 'sin folio'} de ${row.supplier_name}`}
-                        >
-                          <FileText className="h-3.5 w-3.5 shrink-0" />
-                          <span className="truncate">Ver PDF</span>
-                        </button>
-                      ) : row.candidate_id in documents ? (
-                        <span className="block whitespace-normal text-[10px] leading-tight text-theme-text-muted" title="Documento registrado sin archivo accesible">Adjunto no disponible</span>
-                      ) : (
-                        <span className="text-[11px] text-theme-text-muted">Sin adjunto</span>
-                      )}
-                    </td>
-
-                    <td className="overflow-hidden px-2.5 py-1 whitespace-nowrap">
-                      <div className="flex items-center gap-1 overflow-hidden">
-                        {state === 'NEW' && (
-                          <span className="inline-flex truncate rounded-md border border-theme-border bg-theme-bg/70 px-1.5 py-0.5 text-[10.5px] font-medium text-theme-text-muted">
-                            Por incorporar
+                      {/* 3. Folio (tamaño destacado + tipo SII 33/34) */}
+                      <td className="px-2.5 py-1.5 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono text-[13.5px] font-bold tabular-nums text-theme-text">
+                            FA {entry.documentFolio}
                           </span>
-                        )}
-                        {isPending && (
-                          <span className="inline-flex truncate rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-amber-700 dark:text-amber-300">
-                            Pendiente
-                          </span>
-                        )}
-                        {isValidated && (
-                          <span className="inline-flex items-center gap-1 truncate rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-emerald-700 dark:text-emerald-300">
-                            <CheckCircle2 className="h-3 w-3 shrink-0" /> Validada
-                          </span>
-                        )}
-                        {!isPending && !isValidated && state === 'OTHER' && (
-                          <span className="truncate text-[11px] text-theme-text">{effectiveStatus}</span>
-                        )}
-                        {hasUnresolvedDiscrepancy && (
                           <span
-                            title="Existen diferencias sin resolver respecto a las recepciones"
-                            className="inline-flex shrink-0 items-center gap-0.5 rounded-md border border-amber-500/35 bg-amber-500/10 px-1 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
+                            className={cn(
+                              'inline-flex items-center rounded border px-1 py-0.2 text-[9.5px] font-bold uppercase',
+                              entry.codeSii === '34'
+                                ? 'border-purple-500/30 bg-purple-500/10 text-purple-700 dark:text-purple-300'
+                                : 'border-theme-border bg-theme-bg text-theme-text-muted',
+                            )}
+                            title={
+                              entry.codeSii === '34'
+                                ? 'Factura Exenta Electrónica (SII 34)'
+                                : 'Factura Electrónica Afecta (SII 33)'
+                            }
+                          >
+                            {entry.codeSii}
+                          </span>
+                        </div>
+                        {entry.hasCrossSupplierFolioCollision && (
+                          <span
+                            className="mt-0.5 inline-flex items-center gap-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400"
+                            title="Folio repetido en otro proveedor; desambiguado por RUT"
                           >
                             <AlertTriangle className="h-2.5 w-2.5" />
+                            Folio compartido
                           </span>
                         )}
-                      </div>
-                      {row.blocked_reason && !isValidated && (
-                        <p
-                          className="mt-0.5 truncate text-[10px] text-red-600/90 dark:text-red-400"
-                          title={row.blocked_reason}
-                        >
-                          {row.blocked_reason}
-                        </p>
-                      )}
-                    </td>
+                      </td>
 
-                    <td className="px-2.5 py-1 text-right whitespace-nowrap">
-                      {row.invoice_id ? (
-                        <button
-                          type="button"
-                          onClick={() => setActiveInvoiceId(row.invoice_id)}
+                      {/* 4. Estado financiero / Saldo pendiente confirmado (priorizado) */}
+                      <td className="px-2.5 py-1.5 whitespace-nowrap">
+                        <span
                           className={cn(
-                            'inline-flex h-6.5 items-center gap-1 rounded-md px-2 text-[11px] font-semibold transition-colors',
-                            isValidated
-                              ? 'border border-theme-border bg-theme-surface text-theme-text hover:bg-theme-surface-hover'
-                              : 'border border-sky-600/30 bg-sky-600/10 text-sky-700 hover:bg-sky-600/20 dark:border-sky-400/30 dark:bg-sky-400/15 dark:text-sky-300',
+                            'inline-flex items-center rounded-md border px-2 py-0.5 text-[10.5px] font-bold',
+                            badgeToneClasses(financialBadge.tone),
                           )}
                         >
-                          {isValidated ? (
-                            'Detalle'
-                          ) : (
-                            <>
-                              <ShieldCheck className="h-3 w-3" /> Validar
-                            </>
+                          {financialBadge.label}
+                        </span>
+                        {financialBadge.detail && (
+                          <span
+                            className="mt-0.5 block truncate text-[10px] text-theme-text-muted"
+                            title={financialBadge.detail}
+                          >
+                            {financialBadge.detail}
+                          </span>
+                        )}
+                      </td>
+
+                      {/* 5. Vencimiento: solo como obligación pendiente cuando existe deuda validada */}
+                      <td className="px-2.5 py-1.5 whitespace-nowrap">
+                        {financialGroup === 'CONFIRMED_DEBT' &&
+                        dueDateInfo?.dueDate ? (
+                          <div>
+                            <span className="font-bold tabular-nums text-sky-700 dark:text-sky-300">
+                              {formatCivilDate(dueDateInfo.dueDate)}
+                            </span>
+                            <span className="mt-0.5 block truncate text-[10px] font-medium text-emerald-700 dark:text-emerald-400">
+                              Obligación confirmada
+                            </span>
+                          </div>
+                        ) : financialGroup === 'PAID' ? (
+                          <span className="text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+                            Sin obligación ($0)
+                          </span>
+                        ) : financialGroup === 'TO_PAY_EXCEL' ? (
+                          <span
+                            className="text-[11px] font-medium text-theme-text-muted"
+                            title="El Excel no informa vencimiento para estas facturas (columna G vacía; no se usa columna H)."
+                          >
+                            Por confirmar
+                          </span>
+                        ) : (
+                          <div>
+                            <span className="text-[11px] font-medium text-theme-text-muted">
+                              Sin acreditar
+                            </span>
+                            {dueDateInfo?.dueDate && (
+                              <span
+                                className="mt-0.5 block truncate text-[9.5px] text-theme-text-muted/80"
+                                title={`Estimación referencial (${dueDateInfo.sourceLabel}): no constituye cuenta por pagar confirmada`}
+                              >
+                                Ref. {formatCivilDate(dueDateInfo.dueDate)}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* 4. Monto SII */}
+                      <td className="px-2.5 py-1.5 text-right whitespace-nowrap">
+                        <span className="font-bold tabular-nums text-theme-text">
+                          {formatClp(entry.monetary.siiTotalAmountClp)}
+                        </span>
+                        {entry.monetary.siiSpecificTaxAmount !== null &&
+                          entry.monetary.siiSpecificTaxAmount > 0 && (
+                            <span
+                              className="block text-[10px] tabular-nums text-theme-text-muted"
+                              title={`Incluye impuesto específico por ${formatClp(entry.monetary.siiSpecificTaxAmount)}`}
+                            >
+                              +Imp. esp.{' '}
+                              {formatClp(entry.monetary.siiSpecificTaxAmount)}
+                            </span>
                           )}
-                        </button>
-                      ) : (
-                        <span className="text-xs text-theme-text-muted/60">—</span>
-                      )}
-                    </td>
-                  </tr>
-                )
-              })}
+                      </td>
+
+                      {/* 5. Monto recibido de Bodega */}
+                      <td className="px-2.5 py-1.5 text-right whitespace-nowrap">
+                        {entry.monetary.receivedGrossAmountClp !== null ? (
+                          <div>
+                            <span className="font-bold tabular-nums text-theme-text">
+                              {formatClp(entry.monetary.receivedGrossAmountClp)}
+                            </span>
+                            {entry.receiptCount > 1 && (
+                              <span className="block text-[10px] font-medium text-sky-700 dark:text-sky-300">
+                                {entry.receiptCount} recep. ·{' '}
+                                {entry.purchaseOrderCount} OC
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-theme-text-muted">—</span>
+                        )}
+                      </td>
+
+                      {/* 6. Diferencia */}
+                      <td className="px-2.5 py-1.5 text-right whitespace-nowrap">
+                        {entry.monetary.differenceClp !== null ? (
+                          <div>
+                            <span
+                              className={cn(
+                                'font-bold tabular-nums',
+                                entry.monetary.differenceClp === 0
+                                  ? 'text-emerald-700 dark:text-emerald-300'
+                                  : 'text-amber-700 dark:text-amber-300',
+                              )}
+                            >
+                              {formatSignedClpDifference(
+                                entry.monetary.differenceClp,
+                              )}
+                            </span>
+                            {entry.monetary.hasSubPesoRoundingOnly && (
+                              <span className="block text-[9.5px] text-theme-text-muted">
+                                Redondeo CLP
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-theme-text-muted">—</span>
+                        )}
+                      </td>
+
+                      {/* 7. Estado de conciliación (Monetario / Documental) */}
+                      <td className="px-2.5 py-1.5 whitespace-nowrap">
+                        <span
+                          className={cn(
+                            'inline-flex items-center rounded-md border px-2 py-0.5 text-[10.5px] font-bold',
+                            badgeToneClasses(monetaryBadge.tone),
+                          )}
+                        >
+                          {monetaryBadge.label}
+                        </span>
+                        {monetaryBadge.detail && (
+                          <span className="mt-0.5 block truncate text-[10px] text-theme-text-muted">
+                            {monetaryBadge.detail}
+                          </span>
+                        )}
+                      </td>
+
+                      {/* 10. Estado de recepción (Físico en Bodega) */}
+                      <td className="px-2.5 py-1.5 whitespace-nowrap">
+                        <span
+                          className={cn(
+                            'inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10.5px] font-bold',
+                            badgeToneClasses(receptionBadge.tone),
+                          )}
+                        >
+                          {entry.receptionStatus === 'COMPLETE' && (
+                            <PackageCheck className="h-3 w-3 shrink-0" />
+                          )}
+                          <span>{receptionBadge.label}</span>
+                        </span>
+                        {receptionBadge.detail && (
+                          <span
+                            className="mt-0.5 block truncate font-mono text-[10px] text-theme-text-muted"
+                            title={receptionBadge.detail}
+                          >
+                            {receptionBadge.detail}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })
+              )}
             </tbody>
           </table>
-
-          {rows.length === 0 && (
-            <p className="p-6 text-center text-xs text-theme-text-muted">
-              No hay facturas para los filtros seleccionados.
-            </p>
-          )}
         </div>
+
+        {/* Pie de tabla con paginación y recordatorio de doble clic */}
+        <footer className="shrink-0 flex flex-wrap items-center justify-between gap-2 border-t border-theme-border bg-slate-50/70 px-3.5 py-2 text-xs text-theme-text-muted dark:bg-slate-900/40">
+          <div className="flex flex-wrap items-center gap-2">
+            <span>
+              Mostrando{' '}
+              <strong className="font-semibold tabular-nums text-theme-text">
+                {paginated.startIndex}–{paginated.endIndex}
+              </strong>{' '}
+              de{' '}
+              <strong className="font-semibold tabular-nums text-theme-text">
+                {paginated.totalItems}
+              </strong>{' '}
+              facturas SII
+            </span>
+            <span className="hidden md:inline text-theme-border">|</span>
+            <span className="hidden md:inline text-[11px]">
+              Doble clic en cualquier fila para abrir el panel lateral de conciliación y PDF.
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <label className="inline-flex items-center gap-1 text-[11px]">
+              <span>Filas:</span>
+              <select
+                value={pageSize}
+                onChange={e => {
+                  setPageSize(Number(e.target.value))
+                  setPage(1)
+                }}
+                aria-label="Cantidad de filas por página"
+                className={cn(erpSelectClass, 'h-6 px-1.5 text-[11px]')}
+              >
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </label>
+
+            <button
+              type="button"
+              disabled={paginated.currentPage <= 1}
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              className="inline-flex h-6 items-center gap-0.5 rounded border border-theme-border bg-theme-surface px-2 text-[11px] font-semibold text-theme-text transition-colors hover:bg-theme-surface-hover disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+              <span>Anterior</span>
+            </button>
+
+            <span className="px-1.5 text-[11px] font-semibold tabular-nums text-theme-text">
+              Pág. {paginated.currentPage} / {paginated.totalPages}
+            </span>
+
+            <button
+              type="button"
+              disabled={paginated.currentPage >= paginated.totalPages}
+              onClick={() =>
+                setPage(p => Math.min(paginated.totalPages, p + 1))
+              }
+              className="inline-flex h-6 items-center gap-0.5 rounded border border-theme-border bg-theme-surface px-2 text-[11px] font-semibold text-theme-text transition-colors hover:bg-theme-surface-hover disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <span>Siguiente</span>
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </footer>
       </section>
 
-      <p className="shrink-0 text-[11px] text-theme-text-muted">
-        El monto de recepción es una referencia calculada; valide cada factura incorporada para confirmar su importe real, vencimiento y saldo inicial.
-      </p>
-
-      <InvoiceValidationDrawer
-        invoiceId={activeInvoiceId}
-        suggestedDueDate={(() => {
-          const item = enrichedRows.find(entry => entry.row.invoice_id === activeInvoiceId)
-          return item?.dueSource === 'PURCHASE_ORDER' || item?.dueSource === 'SUPPLIER' ? item.effectiveDueDate : null
-        })()}
-        onClose={() => setActiveInvoiceId(null)}
-        onUpdated={handleValidationUpdated}
+      <BsaleReconciliationDetailPanel
+        entry={activeEntry}
+        financial={
+          activeEntry ? (financialByKey?.[activeEntry.reconciliationKey] ?? null) : null
+        }
+        onClose={() => setActiveDetailKey(null)}
       />
-      {editingDueRow && (
-        <InvoiceDueDateEditor
-          key={editingDueRow.row.candidate_id}
-          row={editingDueRow.row}
-          dueDate={editingDueRow.date}
-          readOnlyReason={editingDueRow.readOnlyReason}
-          onClose={() => setEditingDueRow(null)}
-          onSave={date => saveDueDate(editingDueRow, date)}
-        />
-      )}
-      {viewer ? (
-        <PurchaseOrderInvoiceViewerModal
-          key={viewer.row.candidate_id}
-          correlative={`FA ${viewer.row.folio ?? '—'}`}
-          supplierName={viewer.row.supplier_name}
-          documents={viewer.documents}
-          initialDocumentId={viewer.documents.find(doc => doc.has_file)?.id}
-          loadSignedUrl={loadInboxDocument}
-          onClose={() => setViewer(null)}
-        />
-      ) : null}
     </div>
   )
 }
