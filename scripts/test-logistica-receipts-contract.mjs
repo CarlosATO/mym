@@ -77,6 +77,19 @@ test('receipt economics projection includes both discount modes for amount-autho
   assert.match(worksheet, /discountAmount: poItem\.discount_amount/)
 })
 
+test('existing receipt document attachment is authorized, private and cleaned up on insert failure', () => {
+  assert.match(action, /export async function attachReceiptDocument\(formData: FormData\)/)
+  assert.match(action, /requireWmsPermission\('logistica\.receptions\.create'\)/)
+  assert.match(action, /\.eq\('company_id', authorization\.companyId\)/)
+  assert.match(action, /storage\.upload\(storagePath, Buffer\.from\(await file\.arrayBuffer\(\)\)/)
+  assert.match(action, /storage\.remove\(\[storagePath\]\)/)
+  assert.match(action, /document_type: documentType/)
+  assert.match(action, /document_number: receipt\.document_number/)
+  assert.match(panel, /Adjuntar documento/)
+  assert.match(panel, /attachReceiptDocument\(formData\)/)
+  assert.match(panel, /receipt_documents: \[\.\.\.\(receipt\.receipt_documents \?\? \[\]\), result\.document\]/)
+})
+
 test('receipt security, idempotency, documents and correlatives are present', () => {
   assert.match(migration, /SECURITY DEFINER/)
   assert.match(migration, /SET search_path = pg_catalog, public, auth, core, portal, logistica, adquisiciones/)

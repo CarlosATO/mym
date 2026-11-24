@@ -8,6 +8,7 @@ import { useRouter } from 'next/navigation'
 import {
   getPendingReceivablePOs,
   getPurchaseOrderReceiptDetails,
+  attachReceiptDocument,
   syncPurchaseReceiptBsale,
   reconcilePurchaseReceiptBsale,
   type PurchaseOrderPending,
@@ -22,6 +23,7 @@ import { erpInputClass } from '@/lib/form-styles'
 import { cn } from '@/lib/utils'
 import { formatCivilDate } from '@/lib/datetime'
 import { receiptItemSku } from '@/lib/logistica/receipt-display'
+import { toast } from 'sonner'
 import { OperationalTableResizeHandle, useOperationalTableWidths, type OperationalTableColumn } from '@/components/ui/operational-table'
 import { OperationalPoPdfModal } from './operational-po-pdf-modal'
 import { ReceiptDocumentViewerModal } from './receipt-document-viewer-modal'
@@ -167,6 +169,10 @@ function DetailPanel({
   const [loadingDetail, setLoadingDetail] = useState(!cachedDetail)
   const [successReceipt, setSuccessReceipt] = useState<string | null>(null)
   const [documentToView, setDocumentToView] = useState<{ id: string; document_type: string | null; document_number: string | null; file_name: string | null } | null>(null)
+  const [documentReceiptId, setDocumentReceiptId] = useState<string | null>(null)
+  const [documentFile, setDocumentFile] = useState<File | null>(null)
+  const [documentNotes, setDocumentNotes] = useState('')
+  const [uploadingDocument, setUploadingDocument] = useState(false)
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -207,6 +213,43 @@ function DetailPanel({
 
   const isTotal = summary.status === 'RECEPCION_TOTAL'
   const isPartial = summary.status === 'RECEPCION_PARCIAL'
+
+  async function handleAttachDocument() {
+    if (!documentReceiptId || !documentFile || uploadingDocument) return
+    const formData = new FormData()
+    formData.set('receipt_id', documentReceiptId)
+    formData.set('notes', documentNotes)
+    formData.set('file', documentFile)
+    setUploadingDocument(true)
+    try {
+      const result = await attachReceiptDocument(formData)
+      if ('error' in result) {
+        toast.error(result.error)
+        return
+      }
+      const nextDetail = detail
+        ? {
+            ...detail,
+            receipts: detail.receipts.map((receipt: any) => receipt.id === documentReceiptId
+              ? { ...receipt, receipt_documents: [...(receipt.receipt_documents ?? []), result.document] }
+              : receipt),
+          }
+        : null
+      if (nextDetail) {
+        setDetail(nextDetail)
+        onDetailLoaded(summary.id, nextDetail)
+      }
+      setDocumentReceiptId(null)
+      setDocumentFile(null)
+      setDocumentNotes('')
+      toast.success('Documento adjuntado correctamente.')
+    } catch (error) {
+      console.error('Error attaching receipt document:', error)
+      toast.error('No se pudo adjuntar el documento.')
+    } finally {
+      setUploadingDocument(false)
+    }
+  }
 
   return (
     <div className="h-full flex flex-col bg-theme-surface border-l border-theme-border">
@@ -356,6 +399,34 @@ function DetailPanel({
                               </div>
                             ))}
                           </div>}
+                          {documentReceiptId === rec.id ? (
+                            <div className="mt-2 space-y-1.5 rounded-md border border-theme-accent/30 bg-theme-accent/[0.03] p-2">
+                              <input
+                                type="file"
+                                accept="application/pdf,image/jpeg,image/png,image/webp"
+                                onChange={event => setDocumentFile(event.target.files?.[0] ?? null)}
+                                className="block w-full text-[10px] text-theme-text-muted file:mr-2 file:rounded file:border-0 file:bg-theme-accent/10 file:px-2 file:py-1 file:text-[10px] file:font-semibold file:text-theme-accent"
+                              />
+                              <textarea
+                                value={documentNotes}
+                                onChange={event => setDocumentNotes(event.target.value)}
+                                placeholder="Observación opcional"
+                                rows={2}
+                                maxLength={2000}
+                                className={cn(erpInputClass, 'w-full resize-none text-[10px]')}
+                              />
+                              <div className="flex items-center gap-2">
+                                <button type="button" onClick={handleAttachDocument} disabled={!documentFile || uploadingDocument} className="rounded bg-theme-accent px-2 py-1 text-[10px] font-semibold text-white disabled:opacity-50">
+                                  {uploadingDocument ? 'Guardando...' : 'Guardar documento'}
+                                </button>
+                                <button type="button" onClick={() => { setDocumentReceiptId(null); setDocumentFile(null); setDocumentNotes('') }} className="text-[10px] font-semibold text-theme-text-muted hover:text-theme-text">Cancelar</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button type="button" onClick={() => setDocumentReceiptId(rec.id)} className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-semibold text-theme-accent hover:underline">
+                              <Paperclip className="h-2.5 w-2.5" /> Adjuntar documento
+                            </button>
+                          )}
                         </div>
                         {canViewEconomics && <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 shrink-0">
                           {fmt(Number(rec.receipt_total_gross || 0))}

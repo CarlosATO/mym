@@ -56,6 +56,15 @@ export interface ReceiptDocumentSummary {
   file_name: string | null
 }
 
+export interface ReceiptDocumentAttachment {
+  id: string
+  document_type: string
+  document_number: string | null
+  file_name: string | null
+  mime_type: string | null
+  has_file: boolean
+}
+
 export interface ReceiptInvoiceSummary {
   id: string
   document_type: 'FA'
@@ -82,7 +91,7 @@ const PO_ECONOMIC_FIELDS = 'net_total, discount_total, tax_total, exempt_total, 
 const PO_ITEM_OPERATIONAL_FIELDS = 'id, po_id, line_number, item_type, product_id, product_description, unit, quantity, warehouse_id, required_date, notes, quantity_received, lot_number, expiration_date'
 const PO_ITEM_ECONOMIC_FIELDS = 'unit_price, discount_percent, discount_unit_amount, discount_amount, tax_rate, tax_amount, line_total'
 const PO_ITEM_RECEIPT_AMOUNT_FIELDS = 'unit_price, discount_percent, discount_unit_amount, discount_amount, tax_rate'
-const RECEIPT_OPERATIONAL_FIELDS = 'id, company_id, purchase_order_id, receipt_number, receiving_type, warehouse_id, status, received_at, received_by, notes, created_by, created_at'
+const RECEIPT_OPERATIONAL_FIELDS = 'id, company_id, purchase_order_id, receipt_number, receiving_type, warehouse_id, status, document_type, document_number, received_at, received_by, notes, created_by, created_at'
 const RECEIPT_ECONOMIC_FIELDS = 'receipt_total_gross'
 const RECEIPT_DOCUMENT_BUCKET = 'recepciones'
 const RECEIPT_DOCUMENT_MIME_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp'])
@@ -1052,5 +1061,75 @@ export async function getReceiptDocumentSignedUrl(documentId: string) {
     fileName: document.file_name || `documento-${document.id}`,
     mimeType,
     expiresIn
+  }
+}
+
+export async function attachReceiptDocument(formData: FormData): Promise<{ success: true; document: ReceiptDocumentAttachment } | { error: string }> {
+  const authorization = await requireWmsPermission('logistica.receptions.create')
+  const receiptId = String(formData.get('receipt_id') || '')
+  const notes = String(formData.get('notes') || '').trim().slice(0, 2000)
+  const file = formData.get('file')
+
+  if (!receiptId || !/^[0-9a-f-]{36}$/i.test(receiptId)) return { error: 'Recepción inválida.' }
+  if (!(file instanceof File) || file.size <= 0) return { error: 'Seleccione un archivo.' }
+  if (file.size > 20 * 1024 * 1024) return { error: 'El archivo supera el límite permitido de 20 MB.' }
+  if (!RECEIPT_DOCUMENT_MIME_TYPES.has(file.type)) return { error: 'Tipo de archivo no permitido. Solo se aceptan PDF, JPEG, PNG y WebP.' }
+
+  const db = logDb()
+  const { data: receipt, error: receiptError } = await db
+    .from('purchase_receipts')
+    .select('id, company_id, document_type, document_number')
+    .eq('id', receiptId)
+    .eq('company_id', authorization.companyId)
+    .maybeSingle()
+  if (receiptError || !receipt) return { error: 'Recepción no encontrada o no autorizada.' }
+
+  const documentType = ['GD', 'FA'].includes(receipt.document_type) ? receipt.document_type : 'OTRO'
+  const safeName = file.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9.-]/g, '_').slice(-160) || 'documento'
+  const storagePath = `${authorization.companyId}/purchase-receipts/${receiptId}/${Date.now()}-${safeName}`
+  const storage = db.storage.from(RECEIPT_DOCUMENT_BUCKET)
+  const { error: uploadError } = await storage.upload(storagePath, Buffer.from(await file.arrayBuffer()), {
+    cacheControl: '3600',
+    contentType: file.type,
+    upsert: false,
+  })
+  if (uploadError) return { error: 'No se pudo guardar el archivo.' }
+
+  const { data: document, error: documentError } = await db
+    .from('receipt_documents')
+    .insert({
+      company_id: authorization.companyId,
+      receipt_id: receiptId,
+      document_type: documentType,
+      document_number: receipt.document_number || null,
+      file_url: null,
+      storage_bucket: RECEIPT_DOCUMENT_BUCKET,
+      storage_path: storagePath,
+      file_name: file.name,
+      file_size: file.size,
+      mime_type: file.type,
+      notes: notes || null,
+      created_by: authorization.user.id,
+    })
+    .select('id, document_type, document_number, file_name, mime_type, storage_path')
+    .single()
+
+  if (documentError || !document) {
+    const { error: cleanupError } = await storage.remove([storagePath])
+    if (cleanupError) console.error('attachReceiptDocument cleanup error:', cleanupError)
+    console.error('attachReceiptDocument insert error:', documentError)
+    return { error: 'No se pudo registrar el documento. El archivo no fue conservado.' }
+  }
+
+  return {
+    success: true,
+    document: {
+      id: document.id,
+      document_type: document.document_type,
+      document_number: document.document_number,
+      file_name: document.file_name,
+      mime_type: document.mime_type,
+      has_file: Boolean(document.storage_path),
+    },
   }
 }
