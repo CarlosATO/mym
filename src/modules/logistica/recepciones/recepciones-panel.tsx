@@ -23,6 +23,7 @@ import { erpInputClass } from '@/lib/form-styles'
 import { cn } from '@/lib/utils'
 import { formatCivilDate } from '@/lib/datetime'
 import { receiptItemSku } from '@/lib/logistica/receipt-display'
+import { formatCommercialPrice, formatReceiptMoney } from '@/lib/logistica/receipt-economics'
 import { toast } from 'sonner'
 import { OperationalTableResizeHandle, useOperationalTableWidths, type OperationalTableColumn } from '@/components/ui/operational-table'
 import { OperationalPoPdfModal } from './operational-po-pdf-modal'
@@ -43,7 +44,7 @@ function classifyReceptionStatus(status: string): ReceptionCategory {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function fmt(n: number) {
-  return n.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 })
+  return formatReceiptMoney(n)
 }
 
 const RECEPCIONES_TABLE_KEY = 'mym:table:logistica:recepciones:compact-v1'
@@ -279,6 +280,11 @@ function DetailPanel({
               <div className="flex items-center gap-2">
                 <span className="font-mono text-sm font-bold text-theme-accent">{summary.correlative}</span>
                 <StatusBadge status={summary.status} />
+                {detail?.po?.is_commercial && (
+                  <span className="rounded border border-theme-accent/30 bg-theme-accent/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-theme-accent">
+                    Comercial
+                  </span>
+                )}
               </div>
               <p className="text-xs text-theme-text-muted truncate">{summary.supplier_name}</p>
             </div>
@@ -448,7 +454,7 @@ function DetailPanel({
                   <thead>
                     <tr className="bg-theme-text/[0.04] border-b border-theme-border text-[10px] font-semibold uppercase tracking-wider text-theme-text-muted">
                       <th className="text-left px-3 py-2">Producto</th>
-                      {canViewEconomics && <th className="text-right px-3 py-2">P.Un.</th>}
+                      {canViewEconomics && <th className="text-right px-3 py-2">{detail?.po?.is_commercial ? 'P. Comercial' : 'P.Un.'}</th>}
                       <th className="text-right px-3 py-2">Pedida</th>
                       <th className="text-right px-3 py-2">Recibida</th>
                       <th className="text-right px-3 py-2">Pendiente</th>
@@ -457,15 +463,30 @@ function DetailPanel({
                   <tbody>
                     {detail.items?.map((item: any) => {
                       const qOrd = Number(item.quantity || 0)
-                      const qRec = Number(item.quantity_received || 0)
+                      const qRec = Number(item.accounted_quantity_before ?? item.quantity_received ?? 0)
                       const qPen = Math.max(0, qOrd - qRec)
+                      const isCommProd = Boolean(detail?.po?.is_commercial && item.item_type === 'PRODUCT' && item.purchase_unit_factor_snapshot != null)
+                      const commUnit = item.purchase_unit_snapshot || 'UNIDAD'
                       return (
                         <tr key={item.id} className="border-b border-theme-border/40 hover:bg-theme-text/[0.02]">
                           <td className="px-3 py-2">
                             <p className="font-medium text-theme-text truncate max-w-[200px]" title={item.product_description}>{item.product_description}</p>
                             {item.item_type === 'PRODUCT' && <p className="font-mono text-[10px] text-theme-text-muted">SKU {receiptItemSku(item)}</p>}
+                            {isCommProd && (
+                              <p className="text-[10px] text-theme-accent font-medium">
+                                {item.commercial_quantity} {commUnit} × {item.purchase_unit_factor_snapshot} un.
+                              </p>
+                            )}
                           </td>
-                          {canViewEconomics && <td className="px-3 py-2 text-right text-theme-text-muted">{fmt(Number(item.unit_price || 0))}</td>}
+                          {canViewEconomics && (
+                            <td className="px-3 py-2 text-right text-theme-text-muted">
+                              {isCommProd && item.commercial_unit_price_snapshot != null
+                                ? `${formatCommercialPrice(Number(item.commercial_unit_price_snapshot))}/${commUnit}`
+                                : detail?.po?.is_commercial && item.item_type === 'SERVICE'
+                                  ? `${formatCommercialPrice(Number(item.unit_price || 0))}/serv.`
+                                  : fmt(Number(item.unit_price || 0))}
+                            </td>
+                          )}
                           <td className="px-3 py-2 text-right">{qOrd}</td>
                           <td className="px-3 py-2 text-right text-emerald-600 dark:text-emerald-400 font-semibold">{qRec}</td>
                           <td className={cn('px-3 py-2 text-right font-bold', qPen > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-theme-text-muted/40')}>{qPen}</td>

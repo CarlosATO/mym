@@ -188,6 +188,7 @@ export function PurchaseOrderSupplierReview({ poId, commercial, onBack, onSaved,
   const newItemSequence = useRef(0)
   const saveInFlight = useRef(false)
   const [revision, setRevision] = useState<number | null>(null)
+  const [commercialReceiptEnabled, setCommercialReceiptEnabled] = useState<boolean | null>(null)
   const [savedFingerprint, setSavedFingerprint] = useState('')
   const [pendingRequest, setPendingRequest] = useState<{ poId: string; requestId: string; revision: number; items: CommercialDraftLine[] } | null>(null)
   const [conflict, setConflict] = useState(false)
@@ -216,6 +217,7 @@ export function PurchaseOrderSupplierReview({ poId, commercial, onBack, onSaved,
           if (byId.size !== after.data.items.length || after.data.items.some(item => !byId.has(item.item_id))) throw new Error('La revisión cambió durante la lectura. Vuelve a cargarla.')
           result.data.current.items = after.data.items.map(item => ({ ...byId.get(item.item_id)!, ...item }))
           setRevision(after.data.revision)
+          setCommercialReceiptEnabled(after.data.commercial_receipt_enabled ?? null)
         }
       }
     } catch (reason) {
@@ -1151,7 +1153,7 @@ export function PurchaseOrderSupplierReview({ poId, commercial, onBack, onSaved,
                 <p>Eliminadas: {commercial ? removedLines.length : summary.removed_count}</p>
                 <p>Agregadas: {commercial ? commercialStatuses.filter(s => s === 'AGREGADA').length : summary.added_count}</p>
               </div>
-              <p className="mt-3 text-xs text-[#6D625B]">Esta acción cerrará la revisión del proveedor y dejará esta versión como definitiva. Después de confirmar, la OC ya no podrá editarse desde esta pantalla.{commercial && ' La recepción comercial aún no está disponible.'}</p>
+              <p className="mt-3 text-xs text-[#6D625B]">Esta acción cerrará la revisión del proveedor y dejará esta versión como definitiva. Después de confirmar, la OC ya no podrá editarse desde esta pantalla.{commercial && commercialReceiptEnabled === false && ' La recepción comercial aún no está disponible.'}</p>
               {error && <p className="mt-3 border border-[#72383D]/30 bg-[#F5EDEE] px-3 py-2 text-xs text-[#72383D]">{error}</p>}
               <div className="mt-4 flex justify-end gap-2">
                 <button type="button" onClick={() => setConfirmDialogOpen(false)} disabled={confirming || confirmationUncertain} className="rounded-md border border-[#D1C7BD] px-3 py-2 text-xs font-semibold text-[#6D625B] disabled:opacity-50">

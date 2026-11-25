@@ -13,7 +13,15 @@ import * as LucideIcons from 'lucide-react'
 import { erpInputClass, erpSelectClass } from '@/lib/form-styles'
 import { cn } from '@/lib/utils'
 import { receiptItemSku } from '@/lib/logistica/receipt-display'
-import { calculateReceiptEconomics } from '@/lib/logistica/receipt-economics'
+import {
+  calculateReceiptEconomics,
+  calculateWorksheetLinePreview,
+  findWorksheetOverflowItems,
+  formatCommercialPrice,
+  formatReceiptMoney,
+  isCommercialPurchaseOrder,
+  roundCurrencyCents,
+} from '@/lib/logistica/receipt-economics'
 import { OperationalPoPdfModal } from './operational-po-pdf-modal'
 import { ReceiptDocumentViewerModal } from './receipt-document-viewer-modal'
 
@@ -41,7 +49,12 @@ function countsAsReceived(condition: ItemSplit['condition']) {
 }
 
 function fmtCurrency(value: number) {
-  return value.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 })
+  return formatReceiptMoney(value)
+}
+
+function fmtQuantity(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(Number(value))) return '—'
+  return Number(value).toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 4 })
 }
 
 export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewReceiptAmounts }: ReceiptWorksheetProps) {
@@ -138,10 +151,12 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
       && Number.isFinite(selectedInvoice.receipt_total_gross),
   )
 
-  function formatHistoricalAmount(value: number | null | undefined) {
-    return value == null
-      ? '—'
-      : value.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+  function formatHistoricalAmount(value: number | null | undefined, alwaysShowCents = false) {
+    if (value == null || !Number.isFinite(value)) return '—'
+    const rounded = roundCurrencyCents(value)
+    const hasCents = Math.abs(rounded - Math.round(rounded)) > 1e-6
+    const digits = alwaysShowCents || hasCents ? 2 : 0
+    return rounded.toLocaleString('es-CL', { minimumFractionDigits: digits, maximumFractionDigits: digits })
   }
 
   useEffect(() => {
@@ -364,16 +379,33 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
     }
   }
 
+  const isCommercialOrder = Boolean(poDetail && isCommercialPurchaseOrder(poDetail.po, poDetail.items))
+  const confirmedSnapshotMissing = Boolean(isCommercialOrder && poDetail?.po?.confirmed_snapshot_available === false)
+  const overflowItems = useMemo(
+    () => findWorksheetOverflowItems(poDetail?.items, itemInputs),
+    [poDetail, itemInputs],
+  )
+  const hasPendingOverflow = overflowItems.length > 0
+
   // Financial calculations are only available to users authorized for purchase-order economics.
   let grossTotalBeforeDiscount = 0
   let discountTotal = 0
   let netTotal = 0
   let taxTotal = 0
+  let grossTotal = 0
   if (canViewReceiptAmounts && poDetail) {
     Object.entries(itemInputs).forEach(([itemId, splits]) => {
       const poItem = poDetail.items.find((it: any) => it.id === itemId)
       if (!poItem) return
       if (Number(poItem.quantity_pending || 0) <= 0) return
+      if (isCommercialOrder && poItem.confirmed_commercial_economics) {
+        const preview = calculateWorksheetLinePreview(poItem, splits, true)
+        grossTotalBeforeDiscount = roundCurrencyCents(grossTotalBeforeDiscount + preview.grossBeforeDiscount)
+        discountTotal = roundCurrencyCents(discountTotal + preview.discountAmount)
+        netTotal = roundCurrencyCents(netTotal + preview.netAmount)
+        taxTotal = roundCurrencyCents(taxTotal + preview.taxAmount)
+        return
+      }
       const quantity = Number(poItem.quantity || 0)
       const price = Number(poItem.unit_price || 0)
       splits.forEach(split => {
@@ -393,13 +425,26 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
       })
     })
   }
-  discountTotal = Math.max(0, grossTotalBeforeDiscount - netTotal)
-  const grossTotal = netTotal + taxTotal
+  if (!isCommercialOrder) {
+    discountTotal = Math.max(0, grossTotalBeforeDiscount - netTotal)
+    grossTotal = netTotal + taxTotal
+  } else {
+    grossTotal = roundCurrencyCents(netTotal + taxTotal)
+  }
 
   function discountLabel(item: any) {
     const percent = Number(item.discount_percent || 0)
     const unit = Number(item.discount_unit_amount || 0)
     const amount = Number(item.discount_amount || 0)
+    if (isCommercialOrder) {
+      if (amount > 0 && percent > 0) {
+        return `Dcto. ${percent}% (-${formatReceiptMoney(amount, { alwaysShowCents: true })})`
+      }
+      if (amount > 0) {
+        return `Dcto. confirmado -${formatReceiptMoney(amount, { alwaysShowCents: true })}`
+      }
+      return 'Sin descuento'
+    }
     if (percent > 0) return `Dcto. ${percent}%`
     if (unit > 0) return `Dcto. $${unit.toLocaleString('es-CL')}/un.`
     if (amount > 0 && Number(item.quantity || 0) > 0) {
@@ -425,6 +470,17 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
           duration: 6000,
         }
       )
+      return
+    }
+
+    // Prevent submission if commercial PO lacks its CONFIRMED snapshot
+    if (confirmedSnapshotMissing) {
+      toast.error('Falta el snapshot comercial confirmado de esta Orden de Compra.')
+      return
+    }
+
+    if (hasPendingOverflow) {
+      toast.error('Existen líneas cuya cantidad aceptada supera el saldo pendiente. Corrija el exceso antes de registrar la recepción.')
       return
     }
 
@@ -582,15 +638,19 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
   const operationalHelp = isServiceOnly
     ? 'Recepción administrativa: confirme la prestación del servicio y su documento de respaldo.'
     : isMixed
-      ? 'Productos: recepción física. Servicios: conformidad administrativa.'
-      : 'Conforme: se recibe e ingresa a stock. Dañado: se recibe e ingresa a stock y posteriormente puede procesarse mediante Mermas. Rechazado o faltante: no se considera recibido.'
+      ? `Productos: recepción física${isCommercialOrder ? ' en unidades internas' : ''}. Servicios: conformidad administrativa.`
+      : isCommercialOrder
+        ? 'OC Comercial: ingrese las cantidades físicas siempre en unidades internas (incluso si no son múltiplos del factor comercial). Conforme y Dañado ingresan a stock; Rechazado y Faltante no se consideran recibidos.'
+        : 'Conforme: se recibe e ingresa a stock. Dañado: se recibe e ingresa a stock y posteriormente puede procesarse mediante Mermas. Rechazado o faltante: no se considera recibido.'
    const totalsHelp = !canViewReceiptAmounts
     ? 'Resumen operativo de cantidades recibidas, faltantes y rechazadas.'
-    : isServiceOnly
-      ? 'Totales calculados según los servicios conformados en esta recepción.'
-      : isMixed
-        ? 'Totales calculados según productos recibidos y servicios conformados.'
-        : 'Totales calculados según las cantidades recibidas.'
+    : isCommercialOrder
+      ? 'Vista previa económica calculada por diferencias acumuladas sobre el snapshot confirmado (CONFIRMED) de la OC.'
+      : isServiceOnly
+        ? 'Totales calculados según los servicios conformados en esta recepción.'
+        : isMixed
+          ? 'Totales calculados según productos recibidos y servicios conformados.'
+          : 'Totales calculados según las cantidades recibidas.'
 
   return (
     <div className="w-full max-w-7xl mx-auto space-y-3 px-3 py-2 animate-in fade-in duration-200">
@@ -612,8 +672,14 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
             <LucideIcons.ArrowLeft className="w-4 h-4 text-theme-accent" />
           </button>
           <div>
-            <h1 className="text-lg font-bold text-theme-text flex items-center gap-2">
-              Registrar Recepción <span className="text-theme-accent">{poDetail.po.correlative}</span>
+            <h1 className="text-lg font-bold text-theme-text flex flex-wrap items-center gap-2">
+              <span>Registrar Recepción</span>
+              <span className="text-theme-accent">{poDetail.po.correlative}</span>
+              {isCommercialOrder && (
+                <span className="rounded border border-theme-accent/30 bg-theme-accent/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-theme-accent">
+                  OC Comercial
+                </span>
+              )}
             </h1>
             <p className="text-[11px] text-theme-text-muted">Responsable: {profile.nombre} {profile.apellido}</p>
           </div>
@@ -628,7 +694,8 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
           </button>
           <button 
             onClick={handleSaveReceipt} 
-            disabled={saving}
+            disabled={saving || confirmedSnapshotMissing || hasPendingOverflow}
+            title={hasPendingOverflow ? 'Corrija las cantidades aceptadas que superan el saldo pendiente antes de registrar' : undefined}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-theme-accent hover:bg-theme-accent-hover text-white text-[11px] font-bold transition-all shadow-md shadow-theme-accent/20 disabled:opacity-50"
           >
             {saving ? (
@@ -646,6 +713,13 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
         <LucideIcons.Info className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
         <p className="text-theme-text-muted">{operationalHelp}</p>
       </div>
+
+      {confirmedSnapshotMissing && (
+        <div role="alert" className="px-3 py-2 rounded-lg border border-red-500/30 bg-red-500/10 text-[11px] text-red-700 dark:text-red-300 flex items-center gap-2">
+          <LucideIcons.AlertTriangle className="w-4 h-4 shrink-0" />
+          <p className="font-semibold">Falta el snapshot comercial confirmado (CONFIRMED) de esta orden; no se puede registrar recepción.</p>
+        </div>
+      )}
 
       {/* Metadata layout grid: Supplier and documents */}
       <div className="grid grid-cols-1 items-start gap-3 lg:items-stretch lg:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]">
@@ -1054,7 +1128,7 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                     </th>
                    <th className="py-3 px-4 text-right w-20">Pendiente OC</th>
                    <th className="py-3 px-4 text-right w-28 text-theme-accent">Rec. Actual</th>
-                   {canViewEconomics && <th className="py-3 px-4 text-right w-28">P. Unitario</th>}
+                   {canViewEconomics && <th className="py-3 px-4 text-right w-28">{isCommercialOrder ? 'P. Comercial' : 'P. Unitario'}</th>}
                     {canViewEconomics && <th className="py-3 px-4 text-right w-32 font-bold text-theme-text">{selectedInvoice ? 'Monto FA c/IVA' : 'Monto Rec.'}</th>}
                    <th className="py-3 px-4 text-right w-32">Facturas</th>
                 </tr>
@@ -1073,146 +1147,258 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
                     }
                   })
 
-                  const price = canViewReceiptAmounts ? Number(item.unit_price || 0) : 0
-                  const actualEconomics = canViewReceiptAmounts
-                    ? calculateReceiptEconomics({
-                      quantity: Number(item.quantity || 0),
-                      unitPrice: price,
-                      discountPercent: item.discount_percent,
-                      discountUnitAmount: item.discount_unit_amount,
-                      discountAmount: item.discount_amount,
-                      taxRate: item.tax_rate,
-                    }, sumActualRec)
-                    : null
-                  const actualMonto = actualEconomics?.grossAmount ?? 0
-                  const netUnitCost = canViewReceiptAmounts && Number(item.quantity || 0) > 0
-                    ? calculateReceiptEconomics({
-                      quantity: Number(item.quantity || 0),
-                      unitPrice: price,
-                      discountPercent: item.discount_percent,
-                      discountUnitAmount: item.discount_unit_amount,
-                      discountAmount: item.discount_amount,
-                      taxRate: item.tax_rate,
-                    }, 1).netUnitCost
-                    : 0
-                  const exceedsPending = sumQty > Number(item.quantity_pending)
-                  const isComplete = Number(item.quantity_pending || 0) <= 0
-                  const invoiceNumbers = invoiceNumbersByItemId.get(item.id) ?? []
-                  const historicalReceivedQuantity = selectedInvoice
-                    ? selectedInvoice.received_quantities[item.id] ?? 0
-                    : item.quantity_received
-                  const historicalReceivedAmount = selectedInvoice
-                    ? selectedInvoice.received_amounts?.[item.id]
-                    : null
+                    const price = canViewEconomics ? Number(item.unit_price || 0) : 0
+                    const commercialUnitPrice = canViewEconomics && item.commercial_unit_price_snapshot != null
+                      ? Number(item.commercial_unit_price_snapshot)
+                      : null
+                    const linePreview = canViewEconomics
+                      ? calculateWorksheetLinePreview(item, splits, isCommercialOrder)
+                      : null
+                    const actualMonto = linePreview?.grossAmount ?? 0
+                    const netUnitCost = linePreview?.netUnitCost ?? 0
+                    const isCommercialProduct = isCommercialOrder && item.item_type === 'PRODUCT' && item.purchase_unit_factor_snapshot != null
+                    const commercialUnitLabel = item.purchase_unit_snapshot || 'UNIDAD'
+                    const commercialFactor = item.purchase_unit_factor_snapshot != null ? Number(item.purchase_unit_factor_snapshot) : null
+                    const confirmedCommercialQty = item.commercial_quantity != null
+                      ? Number(item.commercial_quantity)
+                      : (commercialFactor && commercialFactor > 0 ? Number(item.quantity || 0) / commercialFactor : null)
+                    const accountedBefore = Number(item.accounted_quantity_before ?? item.quantity_received ?? 0)
+                    const confirmedLineNet = canViewEconomics && item.confirmed_commercial_economics
+                      ? roundCurrencyCents(Number(item.confirmed_commercial_economics.commercialGrossAmount || 0) - Number(item.confirmed_commercial_economics.discountAmount || 0))
+                      : null
+                    const exceedsPending = sumQty > Number(item.quantity_pending)
+                    const isComplete = Number(item.quantity_pending || 0) <= 0
+                    const invoiceNumbers = invoiceNumbersByItemId.get(item.id) ?? []
+                    const historicalReceivedQuantity = selectedInvoice
+                      ? selectedInvoice.received_quantities[item.id] ?? 0
+                      : accountedBefore
+                    const historicalReceivedAmount = selectedInvoice
+                      ? selectedInvoice.received_amounts?.[item.id]
+                      : null
 
-                  const itemWh = item.warehouse_id || mainWarehouseId
-                  const whLocs = locations.filter(l => l.warehouse_id === itemWh)
+                    const itemWh = item.warehouse_id || mainWarehouseId
+                    const whLocs = locations.filter(l => l.warehouse_id === itemWh)
 
-                  if (item.item_type === 'SERVICE') {
-                    const split = splits[0]
+                    if (item.item_type === 'SERVICE') {
+                      const split = splits[0]
+                      return (
+                        <tr key={item.id} className={cn(
+                          'border-b border-theme-border transition-colors',
+                          isComplete ? 'bg-emerald-500/[0.06]' : 'bg-theme-text/[0.02] hover:bg-theme-text/[0.04]',
+                          exceedsPending && 'bg-red-500/[0.02]'
+                        )}>
+                          <td className="py-1.5 px-2 text-center font-bold text-theme-text">{originalIndex + 1}</td>
+                          <td className="py-1.5 px-2 text-theme-text-muted">—</td>
+                          <td className="py-1.5 px-2 min-w-[240px]">
+                            <div className="flex items-center gap-2">
+                              <p className="font-semibold text-theme-text text-xs leading-tight">{item.product_description}</p>
+                              {isCommercialOrder && <span className="shrink-0 rounded border border-theme-border bg-theme-text/[0.04] px-1.5 py-0.5 text-[9px] font-semibold text-theme-text-muted">Servicio</span>}
+                              {isComplete && <span className="shrink-0 rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-700 dark:text-emerald-400">Completa</span>}
+                            </div>
+                            {canViewEconomics && (
+                              isCommercialOrder ? (
+                                <p className="mt-0.5 text-[10px] text-theme-text-muted">
+                                  {discountLabel(item)}
+                                  {confirmedLineNet != null ? ` · Neto confirmado: ${formatReceiptMoney(confirmedLineNet, { alwaysShowCents: true })}` : ''}
+                                  {!exceedsPending && sumActualRec > 0 && linePreview ? ` · Neto rec.: ${formatReceiptMoney(linePreview.netAmount, { alwaysShowCents: true })} · IVA rec.: ${formatReceiptMoney(linePreview.taxAmount, { alwaysShowCents: true })}` : ''}
+                                </p>
+                              ) : (
+                                <p className="mt-0.5 text-[10px] text-theme-text-muted">{discountLabel(item)} · Costo neto/un.: {fmtCurrency(netUnitCost)}</p>
+                              )
+                            )}
+                            {exceedsPending && (
+                              <p className="text-[10px] text-red-500 font-bold mt-0.5 flex items-center gap-1">
+                                <LucideIcons.AlertTriangle className="w-3 h-3 shrink-0" />
+                                Suma ({sumQty}) supera pendiente ({item.quantity_pending})
+                              </p>
+                            )}
+                            {!isComplete && <div className="flex items-center gap-2 mt-1">
+                              <select
+                                value={split?.condition || 'CONFORME'}
+                                onChange={e => split && updateSplitField(item.id, split.id, 'condition', e.target.value)}
+                                className={cn(erpSelectClass, 'h-6 rounded px-1.5 text-[10px] font-bold')}
+                              >
+                                <option value="CONFORME">Conforme</option>
+                                <option value="DANADO">Dañado</option>
+                                <option value="RECHAZADO">Rechazado</option>
+                                <option value="FALTANTE">Faltante</option>
+                              </select>
+                              <input
+                                type="text"
+                                value={split?.notes || ''}
+                                onChange={e => split && updateSplitField(item.id, split.id, 'notes', e.target.value)}
+                                placeholder="Observación"
+                                className={cn(erpInputClass, 'h-6 min-w-0 flex-1 rounded px-2 text-[10px]')}
+                              />
+                            </div>}
+                          </td>
+                          <td className="py-1.5 px-2 text-right text-theme-text font-semibold">{item.quantity}</td>
+                           <td className="py-1.5 px-2 text-right text-emerald-600 dark:text-emerald-400 font-semibold">{historicalReceivedQuantity}</td>
+                          <td className="py-1.5 px-2 text-right text-theme-text-accent font-semibold">{item.quantity_pending}</td>
+                           <td className="py-1.5 px-2 text-right">
+                             {isComplete ? <span className="font-bold text-theme-text-muted">0</span> : <input
+                               type="number"
+                               min="0"
+                               max={item.quantity_pending}
+                               step="0.001"
+                               value={split?.quantity || 0}
+                               onChange={e => split && updateSplitField(item.id, split.id, 'quantity', Math.max(0, parseFloat(e.target.value) || 0))}
+                               className={cn(erpInputClass, 'w-16 h-6 rounded px-1.5 text-right font-bold text-[10px]')}
+                             />}
+                           </td>
+                           {canViewEconomics && (
+                             <td className="py-1.5 px-2 text-right font-semibold text-theme-text">
+                               {isCommercialOrder ? (
+                                 <div>
+                                   <div>{formatCommercialPrice(price)}</div>
+                                   <div className="text-[9px] font-normal text-theme-text-muted">unitario (servicio)</div>
+                                 </div>
+                               ) : (
+                                 `$${price.toLocaleString('es-CL')}`
+                               )}
+                             </td>
+                           )}
+                           {canViewEconomics && (
+                             <td className="py-1.5 px-2 text-right font-bold text-theme-text">
+                               {selectedInvoice
+                                 ? (historicalReceivedAmount == null ? '—' : `$${formatHistoricalAmount(historicalReceivedAmount, isCommercialOrder)}`)
+                                 : exceedsPending
+                                   ? <span className="text-[10px] font-bold text-red-600 dark:text-red-400">Inválido</span>
+                                   : formatReceiptMoney(actualMonto, { alwaysShowCents: isCommercialOrder })}
+                             </td>
+                           )}
+                           <td className="py-1.5 px-2 text-right font-mono text-[10px] text-theme-accent">{invoiceNumbers.length > 0 ? invoiceNumbers.join(', ') : '—'}</td>
+                        </tr>
+                      )
+                    }
+
                     return (
-                      <tr key={item.id} className={cn(
-                        'border-b border-theme-border transition-colors',
-                        isComplete ? 'bg-emerald-500/[0.06]' : 'bg-theme-text/[0.02] hover:bg-theme-text/[0.04]',
-                        exceedsPending && 'bg-red-500/[0.02]'
-                      )}>
-                        <td className="py-1.5 px-2 text-center font-bold text-theme-text">{originalIndex + 1}</td>
-                        <td className="py-1.5 px-2 text-theme-text-muted">—</td>
-                        <td className="py-1.5 px-2 min-w-[240px]">
-                          <div className="flex items-center gap-2">
-                            <p className="font-semibold text-theme-text text-xs leading-tight">{item.product_description}</p>
-                            {isComplete && <span className="shrink-0 rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-700 dark:text-emerald-400">Completa</span>}
-                          </div>
-                          {canViewReceiptAmounts && <p className="mt-0.5 text-[10px] text-theme-text-muted">{discountLabel(item)} · Costo neto/un.: {fmtCurrency(netUnitCost)}</p>}
-                          {!isComplete && <div className="flex items-center gap-2 mt-1">
-                            <select
-                              value={split?.condition || 'CONFORME'}
-                              onChange={e => split && updateSplitField(item.id, split.id, 'condition', e.target.value)}
-                              className={cn(erpSelectClass, 'h-6 rounded px-1.5 text-[10px] font-bold')}
-                            >
-                              <option value="CONFORME">Conforme</option>
-                              <option value="DANADO">Dañado</option>
-                              <option value="RECHAZADO">Rechazado</option>
-                              <option value="FALTANTE">Faltante</option>
-                            </select>
-                            <input
-                              type="text"
-                              value={split?.notes || ''}
-                              onChange={e => split && updateSplitField(item.id, split.id, 'notes', e.target.value)}
-                              placeholder="Observación"
-                              className={cn(erpInputClass, 'h-6 min-w-0 flex-1 rounded px-2 text-[10px]')}
-                            />
-                          </div>}
-                        </td>
-                        <td className="py-1.5 px-2 text-right text-theme-text font-semibold">{item.quantity}</td>
-                         <td className="py-1.5 px-2 text-right text-emerald-600 dark:text-emerald-400 font-semibold">{historicalReceivedQuantity}</td>
-                        <td className="py-1.5 px-2 text-right text-theme-text-accent font-semibold">{item.quantity_pending}</td>
-                         <td className="py-1.5 px-2 text-right">
-                           {isComplete ? <span className="font-bold text-theme-text-muted">0</span> : <input
-                             type="number"
-                             min="0"
-                             max={item.quantity_pending}
-                             step="0.001"
-                             value={split?.quantity || 0}
-                             onChange={e => split && updateSplitField(item.id, split.id, 'quantity', Math.max(0, parseFloat(e.target.value) || 0))}
-                             className={cn(erpInputClass, 'w-16 h-6 rounded px-1.5 text-right font-bold text-[10px]')}
-                           />}
-                         </td>
-                         {canViewEconomics && <td className="py-1.5 px-2 text-right font-semibold text-theme-text">${price.toLocaleString('es-CL')}</td>}
-                         {canViewEconomics && <td className="py-1.5 px-2 text-right font-bold text-theme-text">{selectedInvoice ? (historicalReceivedAmount == null ? '—' : `$${formatHistoricalAmount(historicalReceivedAmount)}`) : `$${actualMonto.toLocaleString('es-CL')}`}</td>}
-                         <td className="py-1.5 px-2 text-right font-mono text-[10px] text-theme-accent">{invoiceNumbers.length > 0 ? invoiceNumbers.join(', ') : '—'}</td>
-                      </tr>
-                    )
-                  }
+                      <Fragment key={item.id}>
+                        {/* Product Main Row */}
+                        <tr className={cn(
+                          'border-b border-theme-border transition-colors font-medium',
+                          isComplete ? 'bg-emerald-500/[0.06]' : 'bg-theme-text/[0.02] hover:bg-theme-text/[0.04]',
+                          exceedsPending && "bg-red-500/[0.02]"
+                        )}>
+                          <td className="py-2.5 px-4 text-center font-bold text-theme-text">{originalIndex + 1}</td>
+                          <td className="py-2.5 px-4 text-theme-text font-mono">{receiptItemSku(item)}</td>
+                          <td className="py-2.5 px-4">
+                            <div className="flex items-center gap-2">
+                              <p className="font-semibold text-theme-text text-xs leading-normal">{item.product_description}</p>
+                              {isComplete && <span className="shrink-0 rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-700 dark:text-emerald-400">Completa</span>}
+                            </div>
+                            {isCommercialProduct && (
+                              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
+                                <span className="rounded border border-theme-accent/25 bg-theme-accent/[0.07] px-1.5 py-0.5 font-semibold text-theme-accent">
+                                  Presentación: {commercialUnitLabel}
+                                </span>
+                                <span className="rounded border border-theme-border bg-theme-text/[0.03] px-1.5 py-0.5 font-semibold text-theme-text">
+                                  Factor: {fmtQuantity(commercialFactor)} un./{commercialUnitLabel}
+                                </span>
+                                <span className="rounded border border-theme-border bg-theme-text/[0.03] px-1.5 py-0.5 font-semibold text-theme-text-muted">
+                                  Confirmado: {fmtQuantity(confirmedCommercialQty)} {commercialUnitLabel}
+                                </span>
+                              </div>
+                            )}
+                            {canViewEconomics && (
+                              isCommercialOrder ? (
+                                <div className="mt-1 space-y-0.5 text-[10px] text-theme-text-muted">
+                                  <p>
+                                    {discountLabel(item)}
+                                    {confirmedLineNet != null ? ` · Neto OC línea: ${formatReceiptMoney(confirmedLineNet, { alwaysShowCents: true })}` : ''}
+                                  </p>
+                                  {!exceedsPending && sumActualRec > 0 && linePreview && (
+                                    <p className="text-theme-text">
+                                      Rec. [{fmtQuantity(accountedBefore)} → {fmtQuantity(accountedBefore + sumActualRec)} un.]: Bruto {formatReceiptMoney(linePreview.grossBeforeDiscount, { alwaysShowCents: true })}
+                                      {' · '}Dcto. -{formatReceiptMoney(linePreview.discountAmount, { alwaysShowCents: true })}
+                                      {' · '}Neto {formatReceiptMoney(linePreview.netAmount, { alwaysShowCents: true })}
+                                      {' · '}IVA {formatReceiptMoney(linePreview.taxAmount, { alwaysShowCents: true })}
+                                    </p>
+                                  )}
+                                </div>
+                              ) : (
+                                <p className="mt-0.5 text-[10px] text-theme-text-muted">{discountLabel(item)} · Costo neto/un.: {fmtCurrency(netUnitCost)}</p>
+                              )
+                            )}
+                            {exceedsPending && (
+                              <p className="text-[10px] text-red-500 font-bold mt-0.5 flex items-center gap-1">
+                                <LucideIcons.AlertTriangle className="w-3 h-3 shrink-0" />
+                                Suma ({sumQty}) supera pendiente ({item.quantity_pending})
+                              </p>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-4 text-right text-theme-text font-semibold">
+                            <div>{item.quantity}</div>
+                            {isCommercialProduct && <div className="text-[9px] font-normal text-theme-text-muted">un. int.</div>}
+                          </td>
+                           <td className="py-2.5 px-4 text-right text-emerald-600 dark:text-emerald-400 font-semibold">
+                             <div>{historicalReceivedQuantity}</div>
+                             {isCommercialProduct && <div className="text-[9px] font-normal text-theme-text-muted">un. int.</div>}
+                           </td>
+                          <td className="py-2.5 px-4 text-right text-theme-text-accent font-semibold">
+                            <div>{item.quantity_pending}</div>
+                            {isCommercialProduct && <div className="text-[9px] font-normal text-theme-text-muted">un. int.</div>}
+                          </td>
+                          <td className="py-2.5 px-4 text-right font-bold text-theme-accent bg-theme-accent/[0.02]">
+                            <div>{sumActualRec}</div>
+                            {isCommercialProduct && <div className="text-[9px] font-normal text-theme-text-muted">un. int.</div>}
+                          </td>
+                           {canViewEconomics && (
+                             <td className="py-2.5 px-4 text-right font-semibold text-theme-text">
+                               {isCommercialProduct && commercialUnitPrice != null ? (
+                                 <div>
+                                   <div>{formatCommercialPrice(commercialUnitPrice)}</div>
+                                   <div className="text-[9px] font-normal text-theme-text-muted">por {commercialUnitLabel}</div>
+                                 </div>
+                               ) : isCommercialOrder ? (
+                                 <div>
+                                   <div>{formatCommercialPrice(price)}</div>
+                                   <div className="text-[9px] font-normal text-theme-text-muted">unitario (un. int.)</div>
+                                 </div>
+                               ) : (
+                                 `$${price.toLocaleString('es-CL')}`
+                               )}
+                             </td>
+                           )}
+                           {canViewEconomics && (
+                             <td className="py-2.5 px-4 text-right font-bold text-theme-text bg-theme-text/[0.02]">
+                               {selectedInvoice
+                                 ? (historicalReceivedAmount == null ? '—' : `$${formatHistoricalAmount(historicalReceivedAmount, isCommercialOrder)}`)
+                                 : exceedsPending
+                                   ? <span className="text-[10px] font-bold text-red-600 dark:text-red-400">Inválido</span>
+                                   : formatReceiptMoney(actualMonto, { alwaysShowCents: isCommercialOrder })}
+                             </td>
+                           )}
+                           <td className="py-2.5 px-4 text-right font-mono text-[10px] text-theme-accent">{invoiceNumbers.length > 0 ? invoiceNumbers.join(', ') : '—'}</td>
+                        </tr>
 
-                  return (
-                    <Fragment key={item.id}>
-                      {/* Product Main Row */}
-                      <tr className={cn(
-                        'border-b border-theme-border transition-colors font-medium',
-                        isComplete ? 'bg-emerald-500/[0.06]' : 'bg-theme-text/[0.02] hover:bg-theme-text/[0.04]',
-                        exceedsPending && "bg-red-500/[0.02]"
-                      )}>
-                        <td className="py-2.5 px-4 text-center font-bold text-theme-text">{originalIndex + 1}</td>
-                        <td className="py-2.5 px-4 text-theme-text font-mono">{receiptItemSku(item)}</td>
-                        <td className="py-2.5 px-4">
-                          <div className="flex items-center gap-2">
-                            <p className="font-semibold text-theme-text text-xs leading-normal">{item.product_description}</p>
-                            {isComplete && <span className="shrink-0 rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-700 dark:text-emerald-400">Completa</span>}
-                          </div>
-                          {canViewReceiptAmounts && <p className="mt-0.5 text-[10px] text-theme-text-muted">{discountLabel(item)} · Costo neto/un.: {fmtCurrency(netUnitCost)}</p>}
-                          {exceedsPending && (
-                            <p className="text-[10px] text-red-500 font-bold mt-0.5 flex items-center gap-1">
-                              <LucideIcons.AlertTriangle className="w-3 h-3 shrink-0" />
-                              Suma ({sumQty}) supera pendiente ({item.quantity_pending})
-                            </p>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-4 text-right text-theme-text font-semibold">{item.quantity}</td>
-                         <td className="py-2.5 px-4 text-right text-emerald-600 dark:text-emerald-400 font-semibold">{historicalReceivedQuantity}</td>
-                        <td className="py-2.5 px-4 text-right text-theme-text-accent font-semibold">{item.quantity_pending}</td>
-                        <td className="py-2.5 px-4 text-right font-bold text-theme-accent bg-theme-accent/[0.02]">{sumActualRec}</td>
-                         {canViewEconomics && <td className="py-2.5 px-4 text-right font-semibold text-theme-text">${price.toLocaleString('es-CL')}</td>}
-                         {canViewEconomics && <td className="py-2.5 px-4 text-right font-bold text-theme-text bg-theme-text/[0.02]">{selectedInvoice ? (historicalReceivedAmount == null ? '—' : `$${formatHistoricalAmount(historicalReceivedAmount)}`) : `$${actualMonto.toLocaleString('es-CL')}`}</td>}
-                         <td className="py-2.5 px-4 text-right font-mono text-[10px] text-theme-accent">{invoiceNumbers.length > 0 ? invoiceNumbers.join(', ') : '—'}</td>
-                      </tr>
+                        {/* Sub-rows for Splits (Lotes / Partidas) */}
+                        {!isComplete && splits.map((split, sIdx) => {
+                           const requiresLocation = receivingType === 'WAREHOUSE' && item.item_type === 'PRODUCT'
+                             && (split.condition === 'CONFORME' || split.condition === 'DANADO')
+                           const splitSlice = linePreview?.splitSlices[sIdx] ?? null
 
-                      {/* Sub-rows for Splits (Lotes / Partidas) */}
-                      {!isComplete && splits.map((split, sIdx) => {
-                         const requiresLocation = receivingType === 'WAREHOUSE' && item.item_type === 'PRODUCT'
-                           && (split.condition === 'CONFORME' || split.condition === 'DANADO')
+                          return (
+                            <tr key={split.id} className="border-b border-theme-border/40 hover:bg-theme-text/[0.01] transition-colors bg-theme-text/[0.005]">
+                              {/* Indentation Symbol Column */}
+                              <td className="py-1.5 px-4 text-center font-bold text-theme-accent text-sm">
+                                ↳
+                              </td>
 
-                        return (
-                          <tr key={split.id} className="border-b border-theme-border/40 hover:bg-theme-text/[0.01] transition-colors bg-theme-text/[0.005]">
-                            {/* Indentation Symbol Column */}
-                            <td className="py-1.5 px-4 text-center font-bold text-theme-accent text-sm">
-                              ↳
-                            </td>
-
-                            {/* Info */}
-                            <td colSpan={2} className="py-1.5 px-4">
-                              <span className="text-[10px] text-theme-text-muted font-bold tracking-wider uppercase">Partida {sIdx + 1}</span>
-                            </td>
+                              {/* Info */}
+                              <td colSpan={2} className="py-1.5 px-4">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="text-[10px] text-theme-text-muted font-bold tracking-wider uppercase">Partida {sIdx + 1}</span>
+                                  {isCommercialProduct && (
+                                    <span className="text-[10px] text-theme-text-muted">Ingreso en un. internas</span>
+                                  )}
+                                  {canViewEconomics && isCommercialOrder && splits.length > 1 && splitSlice && countsAsReceived(split.condition) && Number(split.quantity || 0) > 0 && (
+                                    <span className="rounded border border-theme-border bg-theme-surface px-1.5 py-0.5 text-[10px] text-theme-text-muted">
+                                      Neto {formatReceiptMoney(splitSlice.netAmount, { alwaysShowCents: true })} · c/IVA {formatReceiptMoney(splitSlice.grossAmount, { alwaysShowCents: true })}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
 
                             {/* Quantity Input column */}
                             <td className="py-1.5 px-4 text-right">
@@ -1343,32 +1529,59 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
 
       <div className="flex flex-col gap-3 md:flex-row md:items-stretch">
         {/* Dynamic financial totals block: operational values for the new receipt. */}
-        {canViewReceiptAmounts && <div className="flex min-w-0 flex-1 flex-col md:flex-row items-stretch justify-between gap-3 p-3 rounded-xl border border-theme-border bg-theme-surface/50 shadow-sm text-xs">
+        {canViewReceiptAmounts && <div className={cn(
+          'flex min-w-0 flex-1 flex-col md:flex-row items-stretch justify-between gap-3 p-3 rounded-xl border shadow-sm text-xs transition-colors',
+          hasPendingOverflow
+            ? 'border-red-500/40 bg-red-500/[0.04]'
+            : 'border-theme-border bg-theme-surface/50',
+        )}>
           <div className="max-w-md space-y-1.5 flex flex-col justify-center">
-            <h4 className="font-bold text-theme-text text-sm">Resumen de Recepción</h4>
-            <p className="text-theme-text-muted leading-relaxed">{totalsHelp}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <h4 className="font-bold text-theme-text text-sm">Resumen de Recepción</h4>
+              {hasPendingOverflow && (
+                <span className="inline-flex items-center gap-1 rounded border border-red-500/35 bg-red-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-red-600 dark:text-red-400">
+                  <LucideIcons.AlertTriangle className="h-3 w-3 shrink-0" />
+                  Resumen económico inválido
+                </span>
+              )}
+            </div>
+            <p className={cn('leading-relaxed', hasPendingOverflow ? 'text-red-700 dark:text-red-300 font-medium' : 'text-theme-text-muted')}>
+              {hasPendingOverflow
+                ? 'Las cantidades aceptadas superan el saldo pendiente en una o más líneas. Ajuste las cantidades al saldo disponible para recalcular un resumen válido y habilitar el registro.'
+                : totalsHelp}
+            </p>
           </div>
 
-          <div className="w-full md:w-64 space-y-1.5 border-t md:border-t-0 md:border-l border-theme-border/60 pt-2 md:pt-0 md:pl-4 flex flex-col justify-center">
+          <div className="w-full md:w-72 space-y-1.5 border-t md:border-t-0 md:border-l border-theme-border/60 pt-2 md:pt-0 md:pl-4 flex flex-col justify-center">
             <div className="flex justify-between items-center text-theme-text-muted">
               <span>Subtotal antes de descuentos:</span>
-              <span className="font-semibold text-theme-text">${grossTotalBeforeDiscount.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+              <span className={cn('font-semibold', hasPendingOverflow ? 'text-red-600 dark:text-red-400' : 'text-theme-text')}>
+                {hasPendingOverflow ? 'Inválido (excede pendiente)' : formatReceiptMoney(grossTotalBeforeDiscount, { alwaysShowCents: isCommercialOrder })}
+              </span>
             </div>
             <div className="flex justify-between items-center text-theme-text-muted">
               <span>Descuentos comerciales:</span>
-              <span className="font-semibold text-emerald-600 dark:text-emerald-400">-${discountTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+              <span className={cn('font-semibold', hasPendingOverflow ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400')}>
+                {hasPendingOverflow ? 'Inválido (excede pendiente)' : `-${formatReceiptMoney(discountTotal, { alwaysShowCents: isCommercialOrder })}`}
+              </span>
             </div>
             <div className="flex justify-between items-center text-theme-text-muted">
               <span>Subtotal neto:</span>
-              <span className="font-semibold text-theme-text">${netTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+              <span className={cn('font-semibold', hasPendingOverflow ? 'text-red-600 dark:text-red-400' : 'text-theme-text')}>
+                {hasPendingOverflow ? 'Inválido (excede pendiente)' : formatReceiptMoney(netTotal, { alwaysShowCents: isCommercialOrder })}
+              </span>
             </div>
             <div className="flex justify-between items-center text-theme-text-muted">
-              <span>IVA (19%):</span>
-              <span className="font-semibold text-theme-text">${taxTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+              <span>IVA:</span>
+              <span className={cn('font-semibold', hasPendingOverflow ? 'text-red-600 dark:text-red-400' : 'text-theme-text')}>
+                {hasPendingOverflow ? 'Inválido (excede pendiente)' : formatReceiptMoney(taxTotal, { alwaysShowCents: isCommercialOrder })}
+              </span>
             </div>
             <div className="flex justify-between items-center border-t border-theme-border/40 pt-2 text-sm font-bold text-theme-text">
               <span>Total Recibido:</span>
-              <span className="text-theme-accent">${grossTotal.toLocaleString('es-CL', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+              <span className={cn(hasPendingOverflow ? 'text-red-600 dark:text-red-400 text-xs' : 'text-theme-accent')}>
+                {hasPendingOverflow ? 'Inválido (excede pendiente)' : formatReceiptMoney(grossTotal, { alwaysShowCents: isCommercialOrder })}
+              </span>
             </div>
           </div>
         </div>}
@@ -1385,15 +1598,15 @@ export function ReceiptWorksheet({ poId, profile, canViewEconomics, canViewRecei
             <div className="mt-2 grid grid-cols-3 gap-2">
               <div>
                 <p className="text-[9px] font-bold uppercase tracking-wider text-theme-text-muted">Neto</p>
-                <p className="mt-0.5 font-semibold text-theme-text">${formatHistoricalAmount(selectedInvoice.receipt_total_net)}</p>
+                <p className="mt-0.5 font-semibold text-theme-text">${formatHistoricalAmount(selectedInvoice.receipt_total_net, isCommercialOrder)}</p>
               </div>
               <div>
                 <p className="text-[9px] font-bold uppercase tracking-wider text-theme-text-muted">IVA</p>
-                <p className="mt-0.5 font-semibold text-theme-text">${formatHistoricalAmount(selectedInvoice.receipt_total_tax)}</p>
+                <p className="mt-0.5 font-semibold text-theme-text">${formatHistoricalAmount(selectedInvoice.receipt_total_tax, isCommercialOrder)}</p>
               </div>
               <div>
                 <p className="text-[9px] font-bold uppercase tracking-wider text-theme-text-muted">Total</p>
-                <p className="mt-0.5 font-bold text-theme-accent">${formatHistoricalAmount(selectedInvoice.receipt_total_gross)}</p>
+                <p className="mt-0.5 font-bold text-theme-accent">${formatHistoricalAmount(selectedInvoice.receipt_total_gross, isCommercialOrder)}</p>
               </div>
             </div>
           </aside>

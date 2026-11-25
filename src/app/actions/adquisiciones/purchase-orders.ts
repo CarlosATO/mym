@@ -26,6 +26,18 @@ function logisticaAdmin() {
   })
 }
 
+async function isCommercialReceiptsBackendEnabled(): Promise<boolean> {
+  try {
+    const { error } = await logisticaAdmin()
+      .from('purchase_receipt_items')
+      .select('commercial_confirmed_snapshot_id')
+      .limit(0)
+    return !error
+  } catch {
+    return false
+  }
+}
+
 export interface PurchaseOrder {
   id: string
   correlative: string
@@ -160,6 +172,7 @@ export interface PurchaseOrderDetail {
     grand_total: number
     status: string
     commercial_managed?: boolean | null
+    commercial_receipt_enabled?: boolean | null
     receipt_status: string | null
     invoice_status: string | null
     cancel_reason: string | null
@@ -672,6 +685,7 @@ export async function getPurchaseOrderDetail(poId: string) {
     const commercialLines = new Map((lines.data ?? []).map(line => [line.id, line]))
     if (detail.items.some(item => !commercialLines.has(item.id))) return null
     detail.items = detail.items.map(item => ({ ...item, ...commercialLines.get(item.id)! }))
+    detail.po.commercial_receipt_enabled = await isCommercialReceiptsBackendEnabled()
   }
   return detail
 }
@@ -931,11 +945,14 @@ export async function getCommercialSupplierReviewState(poId: string) {
   if (!user) return { error: 'No autorizado' }
   const companyId = await getActiveCompanyId(user)
   if (!companyId) return { error: 'No hay empresa activa' }
-  const { data, error } = await adqAdmin().rpc('get_commercial_supplier_review_state', {
-    p_po_id: poId, p_user_id: user.id, p_company_id: companyId,
-  })
+  const [{ data, error }, commercialReceiptEnabled] = await Promise.all([
+    adqAdmin().rpc('get_commercial_supplier_review_state', {
+      p_po_id: poId, p_user_id: user.id, p_company_id: companyId,
+    }),
+    isCommercialReceiptsBackendEnabled(),
+  ])
   if (error) return { error: error.message }
-  return { data: data as { revision: number; items: CommercialSupplierReviewItem[] } }
+  return { data: { ...(data as { revision: number; items: CommercialSupplierReviewItem[] }), commercial_receipt_enabled: commercialReceiptEnabled } }
 }
 
 export async function saveCommercialSupplierReview(request: { poId: string; requestId: string; revision: number; items: CommercialDraftLine[] }) {

@@ -3264,7 +3264,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
             </div>
           </div>
           <div className="p-6 lg:p-8 space-y-8">
-            {detail.po.status === 'CONFIRMADA' && detail.po.commercial_managed && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-700">La recepción de órdenes comerciales aún no está disponible.</div>}
+            {detail.po.status === 'CONFIRMADA' && detail.po.commercial_managed && detail.po.commercial_receipt_enabled === false && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-700">La recepción de órdenes comerciales aún no está disponible.</div>}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-5">
               <div>
                 <p className="text-xs text-theme-text-muted/70 mb-0.5">Proveedor</p>
@@ -3615,7 +3615,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
              <div className="flex-1 overflow-auto p-6 lg:p-8">
                {detail ? (
                   <div className="space-y-8">
-                    {detail.po.status === 'CONFIRMADA' && detail.po.commercial_managed && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-700">La recepción de órdenes comerciales aún no está disponible.</div>}
+                    {detail.po.status === 'CONFIRMADA' && detail.po.commercial_managed && detail.po.commercial_receipt_enabled === false && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-700">La recepción de órdenes comerciales aún no está disponible.</div>}
                     <div className="flex gap-2">
                        <button onClick={() => void handleDownloadPDF()} disabled={downloadingPdf} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"><Download className="w-3.5 h-3.5" /> {downloadingPdf ? 'PDF...' : 'PDF'}</button>
                         <button onClick={() => void handleDownloadExcel()} disabled={downloadingExcel} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"><FileSpreadsheet className="w-3.5 h-3.5" /> {downloadingExcel ? 'Excel...' : 'Excel'}</button>

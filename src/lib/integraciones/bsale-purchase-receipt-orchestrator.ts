@@ -1,6 +1,12 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createBsalePurchaseReceiptDependencies } from './bsale-purchase-receipt-adapter'
-import { chooseUniqueReconciliationCandidate, purchaseReceiptPayloadError, reconcilePurchaseReceipt, sendPurchaseReceipt, type PurchaseReceiptPayload } from './bsale-purchase-receipt-core'
+import {
+  purchaseReceiptPayloadError,
+  reconcileOperationWorkflow,
+  sendPurchaseReceipt,
+  type PurchaseReceiptPayload,
+  type StoredBsaleReceiptOperationRow,
+} from './bsale-purchase-receipt-core'
 
 type Operation = { operation_id: string; status: 'PREPARED' | 'SENDING' | 'CONFIRMED' | 'FAILED' | 'RECONCILIATION_REQUIRED'; reception_id: number | null; error: string | null; payload: PurchaseReceiptPayload | null }
 function parse(value: unknown): Operation { return value as Operation }
@@ -49,30 +55,33 @@ export async function syncPurchaseReceipt(companyId: string, userId: string, rec
 
 export async function reconcilePurchaseReceiptOperation(companyId: string, userId: string, operationId: string) {
   const db = createAdminClient()
-  const { data: row, error } = await db.schema('integraciones').from('bsale_purchase_receipt_operations').select('id,status,bsale_reception_id,payload_snapshot,purchase_receipt_id,company_id').eq('id', operationId).eq('company_id', companyId).single()
-  if (error || !row) return { status: 'RECONCILIATION_REQUIRED' as const, operationId, receptionId: null, error: error?.message ?? 'Operación no encontrada.', payload: null }
-  const snapshot = row.payload_snapshot as PurchaseReceiptPayload
-  const remote = createBsalePurchaseReceiptDependencies(companyId)
-  let result
-  if (row.bsale_reception_id != null) {
-    result = await reconcilePurchaseReceipt(snapshot, remote, Number(row.bsale_reception_id))
-  } else {
-    const candidates = await remote.findReceptions(snapshot.documentNumber, snapshot.officeId)
-    const compatible: number[] = []
-    for (const candidate of candidates) {
-      const id = Number(candidate.id)
-      if (!Number.isSafeInteger(id)) continue
-      const checked = await reconcilePurchaseReceipt(snapshot, remote, id)
-      if (checked.status === 'CONFIRMED') compatible.push(id)
-    }
-    const uniqueCandidate = chooseUniqueReconciliationCandidate(compatible)
-    result = uniqueCandidate !== null
-      ? { status: 'CONFIRMED' as const, receptionId: uniqueCandidate, error: null }
-      : { status: 'RECONCILIATION_REQUIRED' as const, receptionId: null, error: compatible.length > 1 ? 'Existen múltiples candidatos BSale compatibles.' : 'No existe un candidato BSale compatible; se requiere reintento explícito.', }
-  }
-  if (result.status !== 'CONFIRMED') return { status: 'RECONCILIATION_REQUIRED' as const, operationId, receptionId: result.receptionId, error: result.error, payload: snapshot }
-  const completed = await finish(db, operationId, result)
-  return { status: 'CONFIRMED' as const, operationId, receptionId: completed.reception_id, error: null, payload: snapshot }
+  return reconcileOperationWorkflow({
+    companyId,
+    userId,
+    operationId,
+    loadOperation: async (opId, compId) => {
+      const { data, error } = await db.schema('integraciones')
+        .from('bsale_purchase_receipt_operations')
+        .select('id,status,bsale_reception_id,payload_snapshot,purchase_receipt_id,company_id,error_message')
+        .eq('id', opId)
+        .eq('company_id', compId)
+        .single()
+      return { row: (data as StoredBsaleReceiptOperationRow | null) ?? null, error: error?.message ?? null }
+    },
+    confirmReconciled: async ({ operationId: opId, companyId: compId, userId: usrId, receptionId }) => {
+      const { data, error } = await db.schema('integraciones').rpc(
+        'confirm_reconciled_bsale_purchase_receipt_operation',
+        {
+          p_operation_id: opId,
+          p_company_id: compId,
+          p_user_id: usrId,
+          p_reception_id: receptionId,
+        },
+      )
+      return { data: data ? parse(data) : null, error: error?.message ?? null }
+    },
+    remote: createBsalePurchaseReceiptDependencies(companyId),
+  })
 }
 
 export async function getPurchaseReceiptOperation(companyId: string, receiptId: string, userId?: string) {

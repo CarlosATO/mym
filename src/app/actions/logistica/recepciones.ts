@@ -8,6 +8,7 @@ import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { hasWmsPermission, requireWmsPermission, type WmsAuthorization } from './authorization'
 import { getPurchaseReceiptOperation, getPurchaseReceiptSyncSettings, reconcilePurchaseReceiptOperation, syncPurchaseReceipt } from '@/lib/integraciones/bsale-purchase-receipt-orchestrator'
 import { enrichReceiptItemsWithProducts } from '@/lib/logistica/receipt-display'
+import { isCommercialPurchaseOrder, projectPurchaseOrderReceiptData } from '@/lib/logistica/receipt-economics'
 
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
@@ -86,13 +87,14 @@ export interface ReceiptWarehouseOption {
   name: string
 }
 
-const PO_OPERATIONAL_FIELDS = 'id, company_id, correlative, issue_date, required_date, supplier_id, source_type, warehouse_id, po_type, requested_by, notes, status, receipt_status, invoice_status, cancel_reason, created_at, updated_at'
+const PO_OPERATIONAL_FIELDS = 'id, company_id, correlative, issue_date, required_date, supplier_id, source_type, warehouse_id, po_type, requested_by, notes, status, receipt_status, invoice_status, cancel_reason, commercial_draft_revision, created_at, updated_at'
 const PO_ECONOMIC_FIELDS = 'net_total, discount_total, tax_total, exempt_total, grand_total'
-const PO_ITEM_OPERATIONAL_FIELDS = 'id, po_id, line_number, item_type, product_id, product_description, unit, quantity, warehouse_id, required_date, notes, quantity_received, lot_number, expiration_date'
+const PO_ITEM_OPERATIONAL_FIELDS = 'id, po_id, line_number, item_type, product_id, product_description, unit, quantity, warehouse_id, required_date, notes, quantity_received, lot_number, expiration_date, purchase_unit_snapshot, purchase_unit_factor_snapshot'
 const PO_ITEM_ECONOMIC_FIELDS = 'unit_price, discount_percent, discount_unit_amount, discount_amount, tax_rate, tax_amount, line_total'
 const PO_ITEM_RECEIPT_AMOUNT_FIELDS = 'unit_price, discount_percent, discount_unit_amount, discount_amount, tax_rate'
+const PO_ITEM_COMMERCIAL_ECONOMIC_FIELDS = 'commercial_unit_price_snapshot, commercial_gross_amount_snapshot'
 const RECEIPT_OPERATIONAL_FIELDS = 'id, company_id, purchase_order_id, receipt_number, receiving_type, warehouse_id, status, document_type, document_number, received_at, received_by, notes, created_by, created_at'
-const RECEIPT_ECONOMIC_FIELDS = 'receipt_total_gross'
+const RECEIPT_ECONOMIC_FIELDS = 'receipt_total_net, receipt_total_tax, receipt_total_gross'
 const RECEIPT_DOCUMENT_BUCKET = 'recepciones'
 const RECEIPT_DOCUMENT_MIME_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp'])
 
@@ -478,9 +480,16 @@ async function getPurchaseOrderForReceiptAuthorized(poId: string, authorization:
   }
 
   // 2. Fetch dependencies in parallel
+  const itemsSelect = `${PO_ITEM_OPERATIONAL_FIELDS}${
+    canViewEconomics
+      ? `, ${PO_ITEM_ECONOMIC_FIELDS}, ${PO_ITEM_COMMERCIAL_ECONOMIC_FIELDS}`
+      : canViewReceiptAmounts
+        ? `, ${PO_ITEM_RECEIPT_AMOUNT_FIELDS}`
+        : ''
+  }`
   const itemsQuery: any = db
     .from('purchase_order_items')
-    .select(`${PO_ITEM_OPERATIONAL_FIELDS}${canViewEconomics ? `, ${PO_ITEM_ECONOMIC_FIELDS}` : canViewReceiptAmounts ? `, ${PO_ITEM_RECEIPT_AMOUNT_FIELDS}` : ''}`)
+    .select(itemsSelect)
     .eq('po_id', poId)
     .eq('company_id', companyId)
     .order('line_number')
@@ -502,11 +511,25 @@ async function getPurchaseOrderForReceiptAuthorized(poId: string, authorization:
     return null
   }
 
+  const isCommercial = isCommercialPurchaseOrder(po, items)
   const productIds = Array.from(new Set(items.map((item: any) => item.product_id).filter(Boolean)))
-  const { data: products, error: productsError } = productIds.length
-    ? await db.from('products').select('id, sku').in('id', productIds)
-    : { data: [], error: null }
-  if (productsError) console.error('getPurchaseOrderForReceipt Products error:', productsError)
+  const [productsRes, confirmedSnapshotRes] = await Promise.all([
+    productIds.length
+      ? db.from('products').select('id, sku').in('id', productIds)
+      : Promise.resolve({ data: [], error: null }),
+    isCommercial
+      ? db
+          .from('purchase_order_snapshots')
+          .select('id, snapshot_type, items_snapshot')
+          .eq('po_id', poId)
+          .eq('company_id', companyId)
+          .eq('snapshot_type', 'CONFIRMED')
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+  ])
+  const products = productsRes.data
+  if (productsRes.error) console.error('getPurchaseOrderForReceipt Products error:', productsRes.error)
+  if (confirmedSnapshotRes.error) console.error('getPurchaseOrderForReceipt Snapshot error:', confirmedSnapshotRes.error)
 
   const receiptDb = logDb()
   const { data: priorReceipts } = await receiptDb
@@ -519,11 +542,12 @@ async function getPurchaseOrderForReceiptAuthorized(poId: string, authorization:
   const { data: priorItems } = receiptIds.length
     ? await receiptDb
       .from('purchase_receipt_items')
-      .select('purchase_order_item_id, quantity_received, quantity_rejected, quantity_missing')
+      .select('purchase_order_item_id, condition, quantity_received, quantity_rejected, quantity_missing')
       .in('receipt_id', receiptIds)
-    : { data: [] as Array<{ purchase_order_item_id: string; quantity_received: number; quantity_rejected: number; quantity_missing: number }> }
+    : { data: [] as Array<{ purchase_order_item_id: string; condition?: string | null; quantity_received: number; quantity_rejected: number; quantity_missing: number }> }
   const accountedByItem = new Map<string, number>()
   for (const receiptItem of priorItems ?? []) {
+    if (receiptItem.condition && !['CONFORME', 'DANADO'].includes(receiptItem.condition)) continue
     accountedByItem.set(
       receiptItem.purchase_order_item_id,
       (accountedByItem.get(receiptItem.purchase_order_item_id) ?? 0)
@@ -531,7 +555,8 @@ async function getPurchaseOrderForReceiptAuthorized(poId: string, authorization:
     )
   }
 
-  return {
+  const enrichedItems = enrichReceiptItemsWithProducts(items, products ?? []) as Array<Record<string, unknown> & { id: string }>
+  const projected = projectPurchaseOrderReceiptData({
     po: {
       ...po,
       supplier_name: supplier?.business_name || 'Proveedor Desconocido',
@@ -543,12 +568,14 @@ async function getPurchaseOrderForReceiptAuthorized(poId: string, authorization:
       warehouse_name: warehouseName,
       requester_name: requester ? `${requester.nombre} ${requester.apellido}` : 'Usuario'
     },
-     items: enrichReceiptItemsWithProducts(items, products ?? []).map((item: any) => ({
-      ...item,
-      quantity_received: Number(item.quantity_received || 0),
-      quantity_pending: Math.max(0, Number(item.quantity || 0) - (accountedByItem.get(item.id) ?? Number(item.quantity_received || 0)))
-    }))
-  }
+    items: enrichedItems,
+    confirmedSnapshot: confirmedSnapshotRes.data,
+    accountedByItem,
+    canViewEconomics,
+    canViewReceiptAmounts,
+  })
+
+  return projected
 }
 
 export async function getPurchaseOrderReceiptDetails(poId: string) {
@@ -563,9 +590,10 @@ export async function getPurchaseOrderReceiptDetails(poId: string) {
     global: { headers: { Authorization: `Bearer ${session?.access_token}` } }
   })
 
+  const receiptDetailItemFields = `id, receipt_id, purchase_order_item_id, product_id, service_description, condition, quantity_ordered, quantity_previously_received, quantity_received, quantity_rejected, quantity_missing, quantity_pending_after, warehouse_id, location_id, lot_number, expiration_date, notes${canViewEconomics ? ', unit_cost, net_amount, tax_amount, gross_amount' : ''}, locations(name, code)`
   const receiptsQuery: any = logDbClient
     .from('purchase_receipts')
-    .select(`${RECEIPT_OPERATIONAL_FIELDS}${canViewEconomics ? `, ${RECEIPT_ECONOMIC_FIELDS}` : ''}, receipt_documents(id, document_type, document_number, file_name, mime_type, storage_path), purchase_receipt_items(id, receipt_id, purchase_order_item_id, product_id, service_description, quantity_ordered, quantity_previously_received, quantity_received, quantity_pending_after, warehouse_id, location_id, lot_number, expiration_date, notes, locations(name, code))`)
+    .select(`${RECEIPT_OPERATIONAL_FIELDS}${canViewEconomics ? `, ${RECEIPT_ECONOMIC_FIELDS}` : ''}, receipt_documents(id, document_type, document_number, file_name, mime_type, storage_path), purchase_receipt_items(${receiptDetailItemFields})`)
     .eq('purchase_order_id', poId)
     .eq('company_id', authorization.companyId)
     .order('received_at', { ascending: false })

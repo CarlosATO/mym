@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { reconcilePurchaseReceipt, autoSyncIsAllowed, buildPurchaseReceiptNote, buildPurchaseReceiptPayload, chooseUniqueReconciliationCandidate, numericDocumentNumber, purchaseReceiptPayloadError, sendPurchaseReceipt, syncAfterLocalReceipt, verifyPurchaseReceipt, isLegitimateBonusLine } from '../src/lib/integraciones/bsale-purchase-receipt-core.ts'
+import { reconcilePurchaseReceipt, reconcileOperationWorkflow, autoSyncIsAllowed, buildPurchaseReceiptNote, buildPurchaseReceiptPayload, chooseUniqueReconciliationCandidate, numericDocumentNumber, purchaseReceiptPayloadError, sendPurchaseReceipt, syncAfterLocalReceipt, verifyPurchaseReceipt, isLegitimateBonusLine, isLegitimateCommercialRoundingZeroLine, classifyReceiptLineCostOrigin, requiresExplicitBsaleReconciliation, commercialReceiptAmount } from '../src/lib/integraciones/bsale-purchase-receipt-core.ts'
 
 const base = { documentType: 'FA', documentNumber: '4545', officeId: 1, receiptNumber: 'REC-000001', poCorrelative: 'OC-2026-000031', serviceVariantId: 4554 }
 test('note preserves identifiers and truncates unicode observation to 100 chars', () => {
@@ -351,3 +351,235 @@ test('non-stock-control product migration contract enforces Kardex exclusion and
 })
 
 
+
+test('commercial cumulative rounding zero is explicitly distinguished from bonus and invalid zero cost', () => {
+  const commercialRoundingLine = {
+    itemType: 'PRODUCT',
+    condition: 'CONFORME',
+    variantId: 9001,
+    quantity: 1,
+    netAmount: 0,
+    controlsStock: true,
+    commercialRounding: {
+      confirmedSnapshotId: 'snap-confirmed-001',
+      orderedQuantity: 600,
+      confirmedGrossAmount: 2.00,
+      confirmedDiscountAmount: 0,
+      confirmedTaxAmount: 0.38,
+      confirmedLineTotal: 2.38,
+      commercialUnitPrice: 0.02,
+      cumulativeQuantityBefore: 0,
+      cumulativeQuantityAfter: 1,
+    },
+  }
+
+  // Must NOT be artificially identified as a supplier bonification
+  assert.equal(isLegitimateBonusLine(commercialRoundingLine), false)
+  assert.equal(isLegitimateCommercialRoundingZeroLine(commercialRoundingLine), true)
+  assert.equal(classifyReceiptLineCostOrigin(commercialRoundingLine), 'COMMERCIAL_CUMULATIVE_ROUNDING_ZERO')
+  assert.equal(requiresExplicitBsaleReconciliation([commercialRoundingLine]), true)
+
+  const payload = buildPurchaseReceiptPayload({
+    ...base,
+    lines: [commercialRoundingLine],
+  })
+  assert.deepEqual(payload.details, [{ variantId: 9001, quantity: 1, cost: 0 }])
+  assert.equal(purchaseReceiptPayloadError(payload), null)
+
+  // Remaining 599 units telescope to exact 2.00 net and do not require reconciliation
+  const remainingLine = {
+    ...commercialRoundingLine,
+    quantity: 599,
+    netAmount: commercialReceiptAmount(2.00, 1, 600, 600),
+    commercialRounding: {
+      ...commercialRoundingLine.commercialRounding,
+      cumulativeQuantityBefore: 1,
+      cumulativeQuantityAfter: 600,
+    },
+  }
+  assert.equal(remainingLine.netAmount, 2.00)
+  assert.equal(classifyReceiptLineCostOrigin(remainingLine), 'POSITIVE_COST')
+  assert.equal(requiresExplicitBsaleReconciliation([remainingLine]), false)
+
+  // Commercial 100% supplier bonus is classified as LEGITIMATE_BONUS, not rounding zero, and does not force reconciliation
+  const commercialBonusLine = {
+    itemType: 'PRODUCT',
+    condition: 'CONFORME',
+    variantId: 9002,
+    quantity: 6,
+    netAmount: 0,
+    controlsStock: true,
+    commercialRounding: {
+      confirmedSnapshotId: 'snap-confirmed-002',
+      orderedQuantity: 6,
+      confirmedGrossAmount: 9500,
+      confirmedDiscountAmount: 9500,
+      confirmedTaxAmount: 0,
+      confirmedLineTotal: 0,
+      commercialUnitPrice: 9500,
+      cumulativeQuantityBefore: 0,
+      cumulativeQuantityAfter: 6,
+    },
+  }
+  assert.equal(isLegitimateBonusLine(commercialBonusLine), true)
+  assert.equal(isLegitimateCommercialRoundingZeroLine(commercialBonusLine), false)
+  assert.equal(classifyReceiptLineCostOrigin(commercialBonusLine), 'LEGITIMATE_BONUS')
+  assert.equal(requiresExplicitBsaleReconciliation([commercialBonusLine]), false)
+
+  // Inconsistent commercial zero (e.g. confirmed net = 1335000 on 900 units where 1 unit = 1483.33, tampered to 0) is rejected
+  const tamperedCommercialZero = {
+    itemType: 'PRODUCT',
+    condition: 'CONFORME',
+    variantId: 9003,
+    quantity: 1,
+    netAmount: 0,
+    controlsStock: true,
+    commercialRounding: {
+      confirmedSnapshotId: 'snap-confirmed-003',
+      orderedQuantity: 900,
+      confirmedGrossAmount: 1425000,
+      confirmedDiscountAmount: 90000,
+      confirmedTaxAmount: 253650,
+      confirmedLineTotal: 1588650,
+      commercialUnitPrice: 9500,
+      cumulativeQuantityBefore: 0,
+      cumulativeQuantityAfter: 1,
+    },
+  }
+  assert.equal(classifyReceiptLineCostOrigin(tamperedCommercialZero), 'INVALID')
+  assert.throws(
+    () => buildPurchaseReceiptPayload({ ...base, lines: [tamperedCommercialZero] }),
+    /La línea PRODUCT requiere cantidad y costo neto válidos/,
+  )
+})
+
+test('reconcileOperationWorkflow confirms RECONCILIATION_REQUIRED via controlled confirmation without POST or finish_bsale_purchase_receipt_operation', async () => {
+  const zeroCostSnapshot = buildPurchaseReceiptPayload({
+    ...base,
+    receiptNumber: 'REC-000091',
+    poCorrelative: 'OC-2026-000999',
+    documentNumber: '77001',
+    lines: [
+      {
+        itemType: 'PRODUCT',
+        condition: 'CONFORME',
+        variantId: 9001,
+        quantity: 1,
+        netAmount: 0,
+        controlsStock: true,
+        commercialRounding: {
+          confirmedSnapshotId: 'snap-confirmed-999',
+          orderedQuantity: 600,
+          confirmedGrossAmount: 2.00,
+          confirmedDiscountAmount: 0,
+          confirmedTaxAmount: 0.38,
+          confirmedLineTotal: 2.38,
+          commercialUnitPrice: 0.02,
+          cumulativeQuantityBefore: 0,
+          cumulativeQuantityAfter: 1,
+        },
+      },
+    ],
+  })
+
+  let postCalls = 0
+  let confirmRpcCalls = 0
+  let storedRow = {
+    id: 'op-001',
+    company_id: 'comp-001',
+    purchase_receipt_id: 'rec-001',
+    status: 'RECONCILIATION_REQUIRED',
+    bsale_reception_id: null,
+    payload_snapshot: zeroCostSnapshot,
+    error_message: 'Costo neto cero legítimo por distribución económica acumulada; compatibilidad BSale pendiente de conciliación explícita.',
+  }
+
+  // 1. No remote candidate yet -> stays RECONCILIATION_REQUIRED, preserves explicit error, 0 POSTs, 0 confirmations
+  const pendingResult = await reconcileOperationWorkflow({
+    companyId: 'comp-001',
+    userId: 'user-001',
+    operationId: 'op-001',
+    loadOperation: async () => ({ row: storedRow }),
+    confirmReconciled: async () => { confirmRpcCalls += 1; return { data: null, error: 'should not be called' } },
+    remote: {
+      createReception: async () => { postCalls += 1; return { id: 1 } },
+      getReception: async () => ({}),
+      getDetails: async () => [],
+      findReceptions: async () => [],
+    },
+  })
+  assert.equal(pendingResult.status, 'RECONCILIATION_REQUIRED')
+  assert.match(pendingResult.error ?? '', /distribución económica acumulada/)
+  assert.equal(postCalls, 0)
+  assert.equal(confirmRpcCalls, 0)
+
+  // 2. Mismatched remote candidate (quantity 2 instead of 1) -> stays RECONCILIATION_REQUIRED
+  const mismatchResult = await reconcileOperationWorkflow({
+    companyId: 'comp-001',
+    userId: 'user-001',
+    operationId: 'op-001',
+    loadOperation: async () => ({ row: storedRow }),
+    confirmReconciled: async () => { confirmRpcCalls += 1; return { data: null, error: 'should not be called' } },
+    remote: {
+      createReception: async () => { postCalls += 1; return { id: 1 } },
+      getReception: async () => ({ id: 8810, office: { id: 1 }, document: 'FACTURA', documentNumber: 77001, note: zeroCostSnapshot.note }),
+      getDetails: async () => [{ variant: { id: 9001 }, quantity: 2, cost: 0 }],
+      findReceptions: async () => [{ id: 8810 }],
+    },
+  })
+  assert.equal(mismatchResult.status, 'RECONCILIATION_REQUIRED')
+  assert.equal(confirmRpcCalls, 0)
+
+  // 3. Non-RECONCILIATION_REQUIRED operation (e.g. FAILED) cannot be confirmed via reconcileOperationWorkflow
+  const failedGuardResult = await reconcileOperationWorkflow({
+    companyId: 'comp-001',
+    userId: 'user-001',
+    operationId: 'op-001',
+    loadOperation: async () => ({ row: { ...storedRow, status: 'FAILED', error_message: 'Documento inválido' } }),
+    confirmReconciled: async () => { confirmRpcCalls += 1; return { data: null } },
+    remote: {
+      createReception: async () => { postCalls += 1; return { id: 1 } },
+      getReception: async () => ({ id: 8811, office: { id: 1 }, document: 'FACTURA', documentNumber: 77001, note: zeroCostSnapshot.note }),
+      getDetails: async () => [{ variant: { id: 9001 }, quantity: 1, cost: 0 }],
+      findReceptions: async () => [{ id: 8811 }],
+    },
+  })
+  assert.equal(failedGuardResult.status, 'FAILED')
+  assert.equal(confirmRpcCalls, 0)
+
+  // 4. Unique matching remote candidate -> invokes confirmReconciled and transitions RECONCILIATION_REQUIRED -> CONFIRMED with 0 POSTs
+  const confirmedResult = await reconcileOperationWorkflow({
+    companyId: 'comp-001',
+    userId: 'user-001',
+    operationId: 'op-001',
+    loadOperation: async () => ({ row: storedRow }),
+    confirmReconciled: async ({ operationId, companyId, userId, receptionId }) => {
+      confirmRpcCalls += 1
+      assert.equal(operationId, 'op-001')
+      assert.equal(companyId, 'comp-001')
+      assert.equal(userId, 'user-001')
+      assert.equal(receptionId, 8812)
+      storedRow = { ...storedRow, status: 'CONFIRMED', bsale_reception_id: 8812, error_message: null }
+      return {
+        data: {
+          operation_id: storedRow.id,
+          status: 'CONFIRMED',
+          reception_id: 8812,
+          error: null,
+          payload: zeroCostSnapshot,
+        },
+      }
+    },
+    remote: {
+      createReception: async () => { postCalls += 1; return { id: 1 } },
+      getReception: async () => ({ id: 8812, office: { id: 1 }, document: 'FACTURA', documentNumber: 77001, note: zeroCostSnapshot.note }),
+      getDetails: async () => [{ variant: { id: 9001 }, quantity: 1, cost: 0 }],
+      findReceptions: async () => [{ id: 8812 }],
+    },
+  })
+  assert.equal(confirmedResult.status, 'CONFIRMED')
+  assert.equal(confirmedResult.receptionId, 8812)
+  assert.equal(confirmedResult.error, null)
+  assert.equal(postCalls, 0)
+  assert.equal(confirmRpcCalls, 1)
+})
