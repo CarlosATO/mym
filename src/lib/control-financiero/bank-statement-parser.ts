@@ -188,8 +188,8 @@ function normalizedItauText(value: string) {
 }
 
 function itauMetadataAmount(text: string, label: RegExp) {
-  const amountPattern = '([($+-]?\\$?[0-9][0-9.]*[,]?[0-9]*[)]?)'
-  const match = text.match(new RegExp(`(?:${label.source})\\s*[:\\-]?\\s*${amountPattern}`, 'i'))
+  const amountPattern = '(\\(?[+-]?\\$?[+-]?\\s*[0-9][0-9.]*[,]?[0-9]*\\)?)'
+  const match = text.match(new RegExp(`(?:${label.source})\\s*(?::|-(?=\\s))?\\s*${amountPattern}`, 'i'))
   return match ? parseSignedAmount(match[1]) : null
 }
 
@@ -198,7 +198,7 @@ function itauHeaderRowAmounts(text: string, header: RegExp) {
   const headerIndex = lines.findIndex(line => header.test(normalizedItauText(line)))
   if (headerIndex < 0) return []
   for (const line of lines.slice(headerIndex + 1, headerIndex + 4)) {
-    const values = line.match(/\$?-?[0-9][0-9.]*/g)
+    const values = line.match(/\(?[+-]?\$?[+-]?\s*[0-9][0-9.]*[,]?[0-9]*\)?/g)
     if (values?.length) return values.map(parseSignedAmount)
   }
   return []

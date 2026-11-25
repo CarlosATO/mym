@@ -36,6 +36,31 @@ test('parsea columnas Itaú, cuenta, período y línea de crédito', () => {
   assert.equal(parsed.totalDebits, 204757601)
 })
 
+test('cartola histórica conserva signo del saldo inicial en encabezado y metadatos', () => {
+  const movements = [
+    '01/10/2026 1001 001 Abono 18.312.002 - 15.708.735',
+    '02/10/2026 1002 001 Cargo - 15.719.721 -10.986',
+    ...Array.from({ length: 22 }, (_, index) => `${String(index + 3).padStart(2, '0')}/10/2026 ${index + 1003} 001 Sin cambio - - -10.986`),
+  ].join('\n')
+  const base = `Banco Itaú\nCartola Histórica\nPeríodo: 01/10/2026 - 31/10/2026\nSALDO_INICIAL\n${movements}`
+  for (const amount of ['-$2.603.267', '$-2.603.267', '-2.603.267']) {
+    for (const header of [
+      `Monto disponible Saldo anterior cuenta corriente\n$1.000 ${amount}`,
+      `Saldo anterior cuenta corriente: ${amount}`,
+      `Saldo anterior cuenta corriente ${amount}`,
+    ]) {
+      const parsed = parseItauStatementText(base.replace('SALDO_INICIAL', header))
+      assert.equal(parsed.openingBalance, -2603267, header)
+      assert.equal(parsed.totalCredits, 18312002)
+      assert.equal(parsed.totalDebits, 15719721)
+      assert.equal(parsed.closingBalance, -10986)
+      assert.equal(parsed.rowCount, 24)
+      assert.equal(parsed.validations.globalDifference, 0)
+      assert.equal(parsed.validations.rowBalanceValidated, true)
+    }
+  }
+})
+
 test('rechaza una cartola Itaú con más de un período mensual', () => {
   assert.throws(
     () => parseItauStatementText(fixture.replace('03/02/2026', '03/03/2026')),
