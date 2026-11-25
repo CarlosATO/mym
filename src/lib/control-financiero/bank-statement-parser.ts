@@ -157,13 +157,17 @@ export function parseDefinitiveBankStatement(input: string): ParsedBankStatement
   return parsed
 }
 
-function parseCurrentAmount(value: unknown): number {
-  if (typeof value === 'number') return Math.abs(Math.round(value))
+function parseCurrentSignedAmount(value: unknown): number {
+  if (typeof value === 'number') return Math.round(value)
   const compact = String(value ?? '').trim().replace(/\s/g, '').replace(/\./g, '').replace(',', '.')
   if (!compact) return 0
   const amount = Number(compact.replace(/^[+]/, ''))
   if (!Number.isFinite(amount)) throw new Error(`Monto inválido: ${value}`)
-  return Math.abs(Math.round(amount))
+  return Math.round(amount)
+}
+
+function parseCurrentAmount(value: unknown): number {
+  return Math.abs(parseCurrentSignedAmount(value))
 }
 
 function parseSpreadsheetDate(value: unknown): string {
@@ -598,7 +602,7 @@ export function parseCurrentBankStatementXls(input: Uint8Array): ParsedBankState
   if (!dataRows.length) throw new Error('La cartola de mes actual no contiene movimientos.')
   const rawMovements = dataRows.map((row, index) => ({
     date: parseSpreadsheetDate(row[dateIndex]), description: String(row[descriptionIndex] ?? '').trim(),
-    debit: parseCurrentAmount(row[debitIndex]), credit: parseCurrentAmount(row[creditIndex]), balance: parseCurrentAmount(row[balanceIndex]),
+    debit: parseCurrentAmount(row[debitIndex]), credit: parseCurrentAmount(row[creditIndex]), balance: parseCurrentSignedAmount(row[balanceIndex]),
     documentNumber: String(row[documentIndex] ?? '').trim() || null, transactionNumber: null, cashier: null,
     branch: String(row[branchIndex] ?? '').trim() || null, sourceRowNumber: headerIndex + index + 2,
     sequenceNumber: index + 1, raw: Object.fromEntries(header.map((key, column) => [key || `column_${column}`, String(row[column] ?? '')])),
