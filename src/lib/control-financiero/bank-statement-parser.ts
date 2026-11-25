@@ -305,6 +305,13 @@ function parseCurrentPdfBlock(
 ): ParsedBankMovement | null {
   const dateValue = currentPdfDateLine(block[0] ?? '')
   if (!dateValue) return null
+  // PDF extraction can wrap an inline movement's description and amounts onto
+  // subsequent lines. Rejoin only this inline layout, not labelled blocks.
+  if (/^\s*\d{2}[/-]\d{2}[/-]\d{4}\s+(?:\d+\s+)+\D/.test(block[0]) &&
+      !block[0].includes('$') && block.slice(1).every(line => !/^(?:documento|sucursal|saldo|dep[oó]sitos?|giros?)\b/i.test(line.trim())) &&
+      (block.join(' ').match(/\$\s*[+-]?\s*[\d.]+/g)?.length ?? 0) >= 2) {
+    return parseCurrentPdfBlock([block.join(' ')], sourceRowNumber)
+  }
   const date = parseDate(dateValue)
   const tabbed = block[0].split('\t').map(value => value.trim())
   let documentNumber: string | null = null

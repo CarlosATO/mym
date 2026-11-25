@@ -127,6 +127,30 @@ test('parsea el reflujo PDF con documento y sucursal en líneas separadas', () =
   assert.equal(salary?.balance, 0)
 })
 
+test('reconstruye descripción partida y resuelve cargos consecutivos por saldos', () => {
+  const text = `Itaú Empresas
+Cuenta corriente
+Consulta Saldos y Últimos movimientos
+Fecha Documentos Sucursal Movimientos Depósitos o abonos Giros o cargos Saldos
+24/11/2026 0029 Abono Desde Linea De Credito $ 24.435 $ 0
+24/11/2026 0029 Impuesto Al Valor Agregado $ 3.901 $ -24.435
+24/11/2026 0029 Com Mantencion Plan Cuenta
+E
+$ 20.534 $ -20.534
+16/11/2026 1980 Abono Desde Linea De Credito $ 1.000 $ 0`
+  const parsed = parseItauStatementText(text)
+  const maintenance = parsed.movements.find(row => row.description === 'Com Mantencion Plan Cuenta E')
+  const tax = parsed.movements.find(row => row.description === 'Impuesto Al Valor Agregado')
+  assert.deepEqual({ debit: maintenance?.debit, credit: maintenance?.credit, balance: maintenance?.balance, branch: maintenance?.branch },
+    { debit: 20534, credit: 0, balance: -20534, branch: '0029' })
+  assert.deepEqual({ debit: tax?.debit, credit: tax?.credit, balance: tax?.balance },
+    { debit: 3901, credit: 0, balance: -24435 })
+  assert.equal(parsed.validations.globalDifference, 0)
+  assert.equal(parsed.validations.rowBalanceValidated, true)
+  const invalid = parseItauStatementText(text.replace('$ 3.901 $ -24.435', '$ 3.902 $ -24.435'))
+  assert.equal(invalid.validations.rowBalanceValidated, false)
+})
+
 test('rechaza una consulta Itaú de múltiples meses', () => {
   assert.throws(
     () => parseItauStatementText(currentFixture.replace('07/10/2026 0011', '30/09/2026 0011')),
