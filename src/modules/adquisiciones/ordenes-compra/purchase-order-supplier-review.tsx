@@ -2,10 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ClipboardCheck, Loader2, Plus, Save, Search, Trash2 } from 'lucide-react'
-import { confirmPurchaseOrderSupplierReview, getPurchaseOrderSupplierReviewComparison, updateSentPurchaseOrderReview, type PurchaseOrderReviewChangedField, type PurchaseOrderReviewComparisonLine, type PurchaseOrderReviewItem, type PurchaseOrderSupplierReviewComparison, type SupplierReviewData } from '@/app/actions/adquisiciones/purchase-orders'
+import { confirmCommercialPurchaseOrder, confirmPurchaseOrderSupplierReview, getPurchaseOrderSupplierReviewComparison, updateSentPurchaseOrderReview, getCommercialSupplierReviewState, saveCommercialSupplierReview, type CommercialDraftLine, type PurchaseOrderReviewChangedField, type PurchaseOrderReviewComparisonLine, type PurchaseOrderReviewItem, type PurchaseOrderSupplierReviewComparison, type SupplierReviewData } from '@/app/actions/adquisiciones/purchase-orders'
+import { getPurchaseCommercialForManualOrder } from '@/app/actions/adquisiciones/purchase-units'
+import { calculateCommercialDraftLineTotals, calculateCommercialDraftTotals } from '@/lib/adquisiciones/purchase-commercial-totals'
+import { commercialReviewChangedFields, commercialReviewConvert, commercialReviewFingerprint, commercialReviewValidQuantity } from '@/lib/adquisiciones/commercial-supplier-review'
 import { getPurchaseOrderProductCatalogCached } from './purchase-order-product-cache'
 import type { PurchaseOrderCatalogProduct } from '@/app/actions/adquisiciones/products'
 import { PurchaseOrderNewProductModal } from './purchase-order-new-product-modal'
+import { PurchaseCommercialPresentation, PurchaseCommercialQuantity, PurchaseCommercialPrice } from './purchase-order-commercial-fields'
+import { PurchaseOrderCommercialProductForm, type CommercialProductAddition } from './purchase-order-commercial-product-form'
 import type { LocalCreatedProduct } from '@/lib/integraciones/bsale-product-creation-core'
 import { calculatePurchaseOrderLineTotals, calculatePurchaseOrderTotals } from '@/lib/adquisiciones/purchase-order-totals'
 import { getPurchaseOrderDiscountDisplayValues, getPurchaseOrderDiscountPayload, resolvePurchaseOrderDiscountMode, type PurchaseOrderDiscountMode } from '@/lib/adquisiciones/purchase-order-discounts'
@@ -15,10 +20,18 @@ type EditableReviewItem = Omit<PurchaseOrderReviewItem, 'item_id'> & {
   client_id: string
   discount_unit_amount: number
   discount_mode: PurchaseOrderDiscountMode
+  commercial_factor?: number
+  commercial_unit?: string | null
+  commercial_mapping_id?: string | null
+  commercial_price_raw?: string
+  commercial_quantity_raw?: string
+  internal_price_raw?: string
+  restore_pending?: boolean
 }
 
 interface PurchaseOrderSupplierReviewProps {
   poId: string
+  commercial: boolean
   onBack: () => void
   onSaved?: () => void | Promise<void>
   onConfirmed?: () => void | Promise<void>
@@ -26,15 +39,16 @@ interface PurchaseOrderSupplierReviewProps {
 
 const inputClass = 'h-8 w-full rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15'
 
-function currency(value: number | null | undefined, code: string) {
+function currency(value: number | null | undefined, code: string, cents = false) {
   return Number(value ?? 0).toLocaleString('es-CL', {
     style: 'currency',
     currency: code,
+    ...(cents ? { minimumFractionDigits: 2, maximumFractionDigits: 2 } : {}),
   })
 }
 
-function signedCurrency(value: number, code: string) {
-  return value > 0 ? `+${currency(value, code)}` : currency(value, code)
+function signedCurrency(value: number, code: string, cents = false) {
+  return value > 0 ? `+${currency(value, code, cents)}` : currency(value, code, cents)
 }
 
 function dateValue(value: string | null | undefined) {
@@ -57,10 +71,19 @@ function changedValue(changes: PurchaseOrderReviewChangedField[], field: string)
   return changes.find((change) => change.field === field)?.original
 }
 
-function displayValue(value: unknown, field: string, code: string) {
+function changedFieldLabel(field: string) {
+  const labels: Record<string, string> = {
+    item_type: 'Tipo de línea', product_id: 'Producto', product_description: 'Descripción', unit: 'Unidad',
+    quantity: 'Cantidad', unit_price: 'Precio unitario', commercial_unit_price: 'Precio comercial',
+    discount_percent: 'Descuento porcentual', discount_unit_amount: 'Descuento por unidad',
+    tax_rate: 'IVA', notes: 'Observaciones',
+  }
+  return labels[field] ?? field
+}
+
+function displayValue(value: unknown, field: string, code: string, precise = false) {
   if (value === null || value === undefined || value === '') return '—'
-  if (field === 'unit_price') return currency(Number(value), code)
-  if (field === 'discount_unit_amount') return currency(Number(value), code)
+  if (field === 'unit_price' || field === 'commercial_unit_price' || field === 'discount_unit_amount') return precise ? Number(value).toLocaleString('es-CL', { maximumFractionDigits: 4 }) : currency(Number(value), code)
   if (field === 'quantity') return Number(value).toLocaleString('es-CL')
   if (field.endsWith('_percent')) return `${value}%`
   return String(value)
@@ -73,7 +96,7 @@ function reviewLineMap(comparison: PurchaseOrderReviewComparisonLine[]) {
 function toEditable(item: PurchaseOrderReviewItem, index: number): EditableReviewItem {
   const qty = Number(item.quantity) || 0
   const unitPrice = Number(item.unit_price) || 0
-  const taxRate = Number(item.tax_rate) || 19
+  const taxRate = Number(item.tax_rate ?? 19)
   const discountPercent = Number(item.discount_percent) || 0
   let discountUnitAmount = Number(item.discount_unit_amount) || 0
   const discountAmount = Number(item.discount_amount) || 0
@@ -84,6 +107,9 @@ function toEditable(item: PurchaseOrderReviewItem, index: number): EditableRevie
 
   const mode = resolvePurchaseOrderDiscountMode(discountPercent, discountUnitAmount)
 
+  const historical = item as PurchaseOrderReviewItem & { purchase_unit_factor_snapshot?: number | null; purchase_unit_snapshot?: string | null; product_supplier_mapping_id?: string | null; commercial_unit_price?: string | null; commercial_unit_price_snapshot?: string | number | null }
+  const factor = historical.purchase_unit_factor_snapshot
+  const price = historical.commercial_unit_price ?? historical.commercial_unit_price_snapshot
   return {
     ...item,
     quantity: qty,
@@ -95,6 +121,7 @@ function toEditable(item: PurchaseOrderReviewItem, index: number): EditableRevie
     discount_unit_amount: discountUnitAmount,
     discount_amount: discountAmount,
     discount_mode: mode,
+    ...(factor != null ? { commercial_factor: factor, commercial_unit: historical.purchase_unit_snapshot, commercial_mapping_id: historical.product_supplier_mapping_id, commercial_price_raw: String(price ?? ''), commercial_quantity_raw: commercialReviewConvert(String(qty), factor, 'divide', false), internal_price_raw: String(unitPrice) } : {}),
   }
 }
 
@@ -127,13 +154,15 @@ function matchesOriginal(line: EditableReviewItem, original: PurchaseOrderReview
   )
 }
 
-export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed }: PurchaseOrderSupplierReviewProps) {
+export function PurchaseOrderSupplierReview({ poId, commercial, onBack, onSaved, onConfirmed }: PurchaseOrderSupplierReviewProps) {
   const [comparison, setComparison] = useState<PurchaseOrderSupplierReviewComparison | null>(null)
   const [lines, setLines] = useState<EditableReviewItem[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  const confirmInFlight = useRef(false)
+  const [confirmationUncertain, setConfirmationUncertain] = useState(false)
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [catalogCache, setCatalogCache] = useState<PurchaseOrderCatalogProduct[]>([])
   const [catalogQuery, setCatalogQuery] = useState('')
@@ -157,13 +186,38 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const newItemSequence = useRef(0)
+  const saveInFlight = useRef(false)
+  const [revision, setRevision] = useState<number | null>(null)
+  const [savedFingerprint, setSavedFingerprint] = useState('')
+  const [pendingRequest, setPendingRequest] = useState<{ poId: string; requestId: string; revision: number; items: CommercialDraftLine[] } | null>(null)
+  const [conflict, setConflict] = useState(false)
+  const [resolvingProduct, setResolvingProduct] = useState(false)
+  const [productCommercial, setProductCommercial] = useState<Extract<Awaited<ReturnType<typeof getPurchaseCommercialForManualOrder>>, { success: true }> | null>(null)
+  const requestKey = `commercial-review-request:${poId}`
+
+  function payloadItems(value: EditableReviewItem[]): CommercialDraftLine[] {
+    return value.map(line => ({ item_id: line.item_id?.startsWith('new-') ? null : line.item_id, item_type: line.item_type, product_id: line.product_id, product_description: line.product_description, unit: line.unit, quantity: line.quantity, unit_price: line.unit_price, commercial_unit_price: line.commercial_factor !== undefined ? (line.commercial_price_raw ?? '').replace(',', '.') : null, purchase_unit_snapshot: line.commercial_unit ?? null, purchase_unit_factor_snapshot: line.commercial_factor ?? null, product_supplier_mapping_id: line.commercial_mapping_id ?? null, ...getPurchaseOrderDiscountPayload(line), tax_rate: line.tax_rate, notes: line.notes }))
+  }
 
   async function loadComparison() {
     setLoading(true)
     setError('')
     let result: Awaited<ReturnType<typeof getPurchaseOrderSupplierReviewComparison>>
     try {
+      const before = commercial ? await getCommercialSupplierReviewState(poId) : null
+      if (before && (!('data' in before) || !before.data)) throw new Error(before.error || 'No se pudo cargar la revisión comercial.')
       result = await getPurchaseOrderSupplierReviewComparison(poId)
+      if (commercial && before && 'data' in before && before.data) {
+        const after = await getCommercialSupplierReviewState(poId)
+        if (!('data' in after) || !after.data) throw new Error(after.error || 'No se pudo cargar la revisión comercial.')
+        if (before.data.revision !== after.data.revision) throw new Error('La revisión cambió durante la lectura. Vuelve a cargarla.')
+        if ('data' in result && result.data) {
+          const byId = new Map(result.data.current.items.map(item => [item.item_id, item]))
+          if (byId.size !== after.data.items.length || after.data.items.some(item => !byId.has(item.item_id))) throw new Error('La revisión cambió durante la lectura. Vuelve a cargarla.')
+          result.data.current.items = after.data.items.map(item => ({ ...byId.get(item.item_id)!, ...item }))
+          setRevision(after.data.revision)
+        }
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'No se pudo cargar la comparación de la OC.')
       setLoading(false)
@@ -178,6 +232,8 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
       setComparison(result.data)
       const editableItems = result.data.current.items.map(toEditable)
       setLines(editableItems)
+      setSavedFingerprint(commercialReviewFingerprint(payloadItems(editableItems)))
+      setConflict(false)
       const hasAnyDiscount = editableItems.some(
         (it) => it.discount_percent > 0 || it.discount_unit_amount > 0 || (it.discount_amount ?? 0) > 0,
       )
@@ -190,14 +246,29 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
   }
 
   useEffect(() => {
+    if (commercial) {
+      try {
+        const stored = sessionStorage.getItem(requestKey)
+        if (stored) setPendingRequest(JSON.parse(stored))
+      } catch { setError('No se pudo recuperar el guardado pendiente de esta sesión.') }
+    }
     void loadComparison()
   }, [poId])
+
+  const changesPending = commercial ? commercialReviewFingerprint(payloadItems(lines)) !== savedFingerprint : dirty
+  useEffect(() => {
+    if (!changesPending && !pendingRequest) return
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault() }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [changesPending, pendingRequest])
   function closeProductPicker() {
     setProductPickerOpen(false)
     setSelectedProduct(null)
     setCatalogQuery('')
     setNewQuantity('1')
     setNewUnitPrice('0')
+    setProductCommercial(null)
   }
 
   useEffect(() => {
@@ -208,7 +279,9 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
   }, [poId])
 
   const statuses = useMemo(() => reviewLineMap(comparison?.comparison ?? []), [comparison])
-  const removedLines = comparison?.comparison.filter((line) => line.comparison_status === 'ELIMINADA' && !lines.some((item) => item.item_id === line.item_id)) ?? []
+  const removedLines = commercial
+    ? (comparison?.original.items ?? []).filter(original => !lines.some(item => item.item_id === original.item_id)).map(original => ({ item_id: original.item_id, original_item: original }))
+    : comparison?.comparison.filter((line) => line.comparison_status === 'ELIMINADA' && !lines.some(item => item.item_id === line.item_id)) ?? []
   const catalog = productPickerOpen ? catalogCache : []
   const visibleProducts = useMemo(() => {
     const query = catalogQuery.trim().toLocaleLowerCase('es-CL')
@@ -216,7 +289,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
     return catalog.filter((product) => [product.sku, product.description, product.barcode ?? ''].some((value) => value.toLocaleLowerCase('es-CL').includes(query))).slice(0, 8)
   }, [catalog, catalogQuery])
 
-  const preview = useMemo(() => calculatePurchaseOrderTotals(lines), [lines])
+  const preview = useMemo(() => commercial ? calculateCommercialDraftTotals(lines) : calculatePurchaseOrderTotals(lines), [lines, commercial])
 
   const visibleLines = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase('es-CL')
@@ -226,14 +299,28 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
 
   const hasPendingPrice = lines.some((line) => !Number.isFinite(line.unit_price) || line.unit_price <= 0)
   const hasInvalidQuantity = lines.some((line) => !Number.isFinite(line.quantity) || line.quantity <= 0)
-  const confirmDisabledReason = dirty ? 'Guarda la revisión antes de confirmar la OC.' : hasPendingPrice ? 'Existen líneas con precio pendiente.' : hasInvalidQuantity ? 'Existen líneas con cantidad inválida.' : ''
+  const confirmDisabledReason = changesPending ? 'Guarda la revisión antes de confirmar la OC.' : pendingRequest ? 'Verifica el guardado pendiente antes de confirmar.' : conflict ? 'Recarga la revisión antes de confirmar.' : commercial && revision === null ? 'No se pudo verificar la revisión comercial.' : hasPendingPrice ? 'Existen líneas con precio pendiente.' : hasInvalidQuantity ? 'Existen líneas con cantidad inválida.' : ''
 
-  function updateLine(itemId: string | null, field: 'quantity' | 'unit_price' | 'discount_percent' | 'discount_unit_amount' | 'tax_rate', value: string) {
+  function updateLine(itemId: string | null, field: 'quantity' | 'unit_price' | 'commercial_quantity_raw' | 'commercial_price_raw' | 'discount_percent' | 'discount_unit_amount' | 'tax_rate', value: string) {
     const numeric = Number(value)
     setLines((current) =>
       current.map((line) => {
         if (line.item_id !== itemId && line.client_id !== itemId) return line
         const nextValue = Number.isFinite(numeric) ? numeric : 0
+        if (commercial && line.commercial_factor !== undefined) {
+          const factor = line.commercial_factor
+          if (field === 'quantity') return { ...line, quantity: nextValue, commercial_quantity_raw: commercialReviewConvert(value, factor, 'divide', false) }
+          if (field === 'commercial_quantity_raw') {
+            const internal = commercialReviewConvert(value, factor, 'multiply', true)
+            return { ...line, commercial_quantity_raw: value, quantity: internal ? Number(internal) : 0 }
+          }
+          if (field === 'unit_price') return { ...line, internal_price_raw: value, unit_price: nextValue, commercial_price_raw: commercialReviewConvert(value, factor, 'multiply', false) }
+          if (field === 'commercial_price_raw') {
+            const valid = /^\d+(?:[.,]\d{0,4})?$/.test(value)
+            const price = valid ? Number(value.replace(',', '.')) / factor : 0
+            return { ...line, commercial_price_raw: value, unit_price: Number(price.toFixed(4)), internal_price_raw: valid ? String(Number(price.toFixed(4))) : '' }
+          }
+        }
         if (field === 'discount_percent') {
           const discountPercent = Math.min(Math.max(nextValue, 0), 100)
           return {
@@ -275,7 +362,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
 
   function restoreLine(line: PurchaseOrderReviewItem | null) {
     if (!line) return
-    setLines((current) => (current.some((item) => item.item_id === line.item_id) ? current : [...current, toEditable(line, current.length)]))
+    setLines((current) => (current.some((item) => item.item_id === line.item_id) ? current : [...current, { ...toEditable(line, current.length), restore_pending: commercial && !comparison?.current.items.some(item => item.item_id === line.item_id) }]))
     setDirty(true)
     setMessage('Línea restaurada; guarda la revisión para confirmar.')
   }
@@ -299,8 +386,24 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
     }
   }
 
+  async function selectProduct(product: PurchaseOrderCatalogProduct) {
+    if (!commercial) { setSelectedProduct(product); return }
+    if (!comparison?.po.supplier_id || resolvingProduct) return
+    setResolvingProduct(true)
+    setError('')
+    try {
+      const result = await getPurchaseCommercialForManualOrder(product.id, comparison.po.supplier_id)
+      if (!result.success) { setError(result.message || 'No se pudo resolver la presentación comercial.'); return }
+      setProductCommercial(result)
+      setNewQuantity(String(result.purchase_unit_factor))
+      setSelectedProduct(product)
+    } catch { setError('No se pudo resolver la presentación comercial.') }
+    finally { setResolvingProduct(false) }
+  }
+
   function addProduct() {
     if (!selectedProduct) return
+    if (commercial && !productCommercial) { setError('Selecciona nuevamente el producto para resolver su presentación.'); return }
     const quantity = Number(newQuantity)
     const unitPrice = Number(newUnitPrice)
     if (!Number.isFinite(quantity) || quantity <= 0) {
@@ -332,11 +435,29 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
         tax_amount: 0,
         line_total: 0,
         notes: null,
+        ...(commercial && productCommercial ? { commercial_unit: productCommercial.purchase_unit, commercial_factor: productCommercial.purchase_unit_factor, commercial_mapping_id: productCommercial.mapping_id, commercial_price_raw: commercialReviewConvert(newUnitPrice, productCommercial.purchase_unit_factor, 'multiply', false), commercial_quantity_raw: commercialReviewConvert(newQuantity, productCommercial.purchase_unit_factor, 'divide', false), internal_price_raw: newUnitPrice } : {}),
       },
     ])
     closeProductPicker()
     setDirty(true)
     setError('')
+  }
+
+  function addCommercialProduct(value: CommercialProductAddition) {
+    if (!selectedProduct) return
+    if (lines.some(line => line.product_id === selectedProduct.id)) { setError('Este producto ya está en la orden.'); return }
+    const clientId = `new-${++newItemSequence.current}`
+    setLines(current => [...current, {
+      item_id: clientId, client_id: clientId, line_number: current.length + 1, item_type: 'PRODUCT',
+      product_id: selectedProduct.id, sku: selectedProduct.sku, product_description: selectedProduct.description,
+      unit: selectedProduct.unit_of_measure, quantity: value.quantity, unit_price: value.unitPrice,
+      discount_percent: value.discountPercent, discount_unit_amount: value.discountUnitAmount, discount_mode: value.discountMode,
+      discount_amount: 0, tax_rate: selectedProduct.tax_rate ?? 19, tax_amount: 0, line_total: 0, notes: null,
+      commercial_unit: value.configuration.unit, commercial_factor: value.configuration.factor,
+      commercial_mapping_id: value.configuration.mappingId, commercial_price_raw: value.commercialPrice,
+      commercial_quantity_raw: value.commercialQuantity, internal_price_raw: value.internalPrice,
+    }])
+    closeProductPicker(); setDirty(true); setError('')
   }
 
   function addService() {
@@ -450,7 +571,42 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
   }
 
   async function saveReview() {
-    if (saving) return
+    if (saving || saveInFlight.current || confirming || confirmationUncertain) return
+    if (commercial) {
+      if (conflict && !pendingRequest) { setError('Recarga la revisión antes de volver a guardar.'); return }
+      if (!pendingRequest && !changesPending) { setMessage('No hay cambios pendientes de guardar.'); return }
+      if (!pendingRequest && (revision === null || lines.length === 0 || lines.some(line => !commercialReviewValidQuantity(line.quantity, line.commercial_factor) || (line.commercial_factor !== undefined && !/^\d+(?:[.,]\d{0,4})?$/.test(line.commercial_price_raw ?? ''))))) {
+        setError('Revisa las cantidades, los múltiplos de la presentación y los precios comerciales (máximo cuatro decimales).')
+        return
+      }
+      const request = pendingRequest ?? { poId, requestId: crypto.randomUUID(), revision: revision!, items: payloadItems(lines) }
+      try { sessionStorage.setItem(requestKey, JSON.stringify(request)) } catch { setError('No se pudo conservar la clave de guardado. Revisa el almacenamiento del navegador.'); return }
+      saveInFlight.current = true
+      setPendingRequest(request)
+      setSaving(true)
+      setError('')
+      try {
+        const result = await saveCommercialSupplierReview(request)
+        if ('error' in result && result.error) {
+          if (result.definite) {
+            sessionStorage.removeItem(requestKey)
+            setPendingRequest(null)
+            if (result.error.includes('La revisión cambió')) setConflict(true)
+          }
+          setError(result.definite ? result.error : `${result.error}. El resultado es incierto; vuelve a intentar el mismo guardado.`)
+          return
+        }
+        if (!('data' in result) || !result.data?.success) { setError('No se pudo verificar el guardado; vuelve a intentar.'); return }
+        sessionStorage.removeItem(requestKey)
+        setPendingRequest(null)
+        await loadComparison()
+        try { await onSaved?.() } catch { setError('La revisión se guardó, pero no se pudo actualizar el listado. Vuelve a abrir la orden.') }
+        setMessage('Revisión guardada')
+      } catch {
+        setError('No se pudo verificar el resultado. Vuelve a intentar el mismo guardado para recuperarlo sin duplicar cambios.')
+      } finally { saveInFlight.current = false; setSaving(false) }
+      return
+    }
     if (lines.length === 0) {
       setError('La orden debe conservar al menos una línea. Si el proveedor rechazó todo el pedido, cancela la OC.')
       return
@@ -483,36 +639,51 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
   }
 
   function openConfirmDialog() {
-    if (confirmDialogOpen || confirming || confirmDisabledReason) return
+    if (confirmDialogOpen || confirming || saving || confirmDisabledReason) return
     setError('')
     setConfirmDialogOpen(true)
   }
 
   async function confirmReview() {
-    if (confirming || confirmDisabledReason) return
+    if (confirmInFlight.current || confirming || saving || confirmDisabledReason) return
+    confirmInFlight.current = true
     setConfirming(true)
     setError('')
     try {
-      const result = await confirmPurchaseOrderSupplierReview(poId)
+      const result = commercial ? await confirmCommercialPurchaseOrder(poId, revision!) : await confirmPurchaseOrderSupplierReview(poId)
       if ('error' in result) {
-        if (result.error) setError(result.error)
+        if (result.error) {
+          if (commercial && result.error.includes('La revisión cambió')) {
+            setConflict(true)
+            setConfirmationUncertain(false)
+            setConfirmDialogOpen(false)
+          } else if (commercial && /fetch|network|timeout|timed out|conexi[oó]n/i.test(result.error)) {
+            setConfirmationUncertain(true)
+            setError('No se pudo verificar el resultado. Reintenta la confirmación para recuperarlo.')
+            return
+          }
+          setError(result.error)
+        }
         return
       }
       if (result.success && result.status === 'CONFIRMADA') {
         setConfirmDialogOpen(false)
-        await onConfirmed?.()
+        try { await onConfirmed?.() } catch { setError('La OC se confirmó, pero no se pudo actualizar la interfaz. Reintenta la confirmación para recuperar el resultado.') ; setConfirmationUncertain(commercial); setConfirmDialogOpen(true) }
       } else {
         setError('No se pudo confirmar la OC.')
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'No se pudo confirmar la OC.')
+      if (commercial) setConfirmationUncertain(true)
+      setError(commercial ? 'No se pudo verificar el resultado. Reintenta la confirmación para recuperarlo.' : reason instanceof Error ? reason.message : 'No se pudo confirmar la OC.')
     } finally {
+      confirmInFlight.current = false
       setConfirming(false)
     }
   }
 
   function leave() {
-    if (dirty && !confirm('Hay cambios sin guardar. ¿Deseas salir sin guardarlos?')) return
+    if (saving || confirming) return
+    if ((changesPending || pendingRequest) && !confirm('Hay cambios sin guardar o un guardado pendiente. ¿Deseas salir?')) return
     onBack()
   }
 
@@ -528,6 +699,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 bg-[#EFE9E1] p-6 text-center">
         <p className="text-sm text-[#72383D]">{error}</p>
+        <button onClick={() => void loadComparison()} className="rounded-md border border-[#72383D] px-3 py-2 text-xs font-semibold text-[#72383D]">Reintentar carga</button>
         <button onClick={leave} className="rounded-md border border-[#D1C7BD] px-3 py-2 text-xs font-semibold text-[#322D29]">
           Volver
         </button>
@@ -537,16 +709,20 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
 
   if (!comparison) return null
   const { po, summary } = comparison
-  const displayCurrentTotal = dirty ? preview.grand_total : summary.current_grand_total
+  const displayCurrentTotal = changesPending ? preview.grand_total : summary.current_grand_total
   const displayDifference = displayCurrentTotal - summary.original_grand_total
+  const commercialStatuses = lines.map(line => {
+    const original = comparison.original.items.find(item => item.item_id === line.item_id)
+    return !original ? 'AGREGADA' : commercialReviewChangedFields(original as unknown as Record<string, unknown>, { ...line, commercial_unit_price: line.commercial_price_raw ?? null }).length ? 'MODIFICADA' : 'SIN_CAMBIOS'
+  })
   const summaryCards = [
-    ['Sin cambios', summary.unchanged_count, false],
-    ['Modificadas', summary.modified_count, false],
-    ['Eliminadas', summary.removed_count, false],
-    ['Agregadas', summary.added_count, false],
-    ['Total original', currency(summary.original_grand_total, po.currency), false],
-    ['Total actual', currency(displayCurrentTotal, po.currency), dirty],
-    ['Diferencia', signedCurrency(displayDifference, po.currency), dirty],
+    ['Sin cambios', commercial ? commercialStatuses.filter(s => s === 'SIN_CAMBIOS').length : summary.unchanged_count, false],
+    ['Modificadas', commercial ? commercialStatuses.filter(s => s === 'MODIFICADA').length : summary.modified_count, false],
+    ['Eliminadas', commercial ? removedLines.length : summary.removed_count, false],
+    ['Agregadas', commercial ? commercialStatuses.filter(s => s === 'AGREGADA').length : summary.added_count, false],
+    ['Total original', currency(summary.original_grand_total, po.currency, commercial), false],
+    ['Total actual', currency(displayCurrentTotal, po.currency, commercial), changesPending],
+    ['Diferencia', signedCurrency(displayDifference, po.currency, commercial), changesPending],
   ] as const
 
   return (
@@ -566,9 +742,9 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-[11px] text-[#D1C7BD]">{dirty ? 'Cambios sin guardar' : message}</span>
-          <button onClick={() => void saveReview()} disabled={saving || confirming} className="inline-flex items-center gap-1.5 rounded-md bg-[#EFE9E1] px-3 py-2 text-xs font-bold text-[#72383D] disabled:opacity-50">
-            <Save className="h-3.5 w-3.5" /> {saving ? 'Guardando...' : 'Guardar revisión'}
+          <span className="text-[11px] text-[#D1C7BD]">{pendingRequest ? 'Guardado pendiente de verificar' : changesPending ? 'Cambios sin guardar' : message}</span>
+          <button onClick={() => void saveReview()} disabled={saving || confirming || confirmationUncertain || (commercial && !pendingRequest && (!changesPending || conflict))} className="inline-flex items-center gap-1.5 rounded-md bg-[#EFE9E1] px-3 py-2 text-xs font-bold text-[#72383D] disabled:opacity-50">
+            <Save className="h-3.5 w-3.5" /> {saving ? 'Guardando...' : pendingRequest ? 'Reintentar guardado' : 'Guardar revisión'}
           </button>
           <button type="button" onClick={openConfirmDialog} disabled={Boolean(confirmDisabledReason) || saving || confirming} title={confirmDisabledReason || 'Confirmar la orden de compra'} className="inline-flex items-center gap-1.5 rounded-md border border-[#D1C7BD] px-3 py-2 text-xs font-bold text-[#EFE9E1] hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50">
             Confirmar OC
@@ -578,6 +754,9 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
 
       <main className="min-w-0 flex-1 overflow-auto p-4 lg:p-6">
         {error && <div className="mb-3 border border-[#72383D]/30 bg-[#F5EDEE] px-3 py-2 text-xs text-[#72383D]">{error}</div>}
+        {conflict && <button type="button" onClick={() => { if (confirm('Se descartarán los cambios locales. ¿Recargar la revisión?')) void loadComparison() }} className="mb-3 rounded border border-[#72383D] px-3 py-2 text-xs font-semibold text-[#72383D]">Recargar revisión</button>}
+        {commercial && <p className="mb-3 text-xs text-[#6D625B]">Revisión comercial · versión {revision} · Las diferencias se comparan con ORIGINAL_SENT.</p>}
+        <fieldset disabled={saving || confirming || confirmationUncertain || Boolean(pendingRequest) || conflict}>
         <section className="mb-4 grid grid-cols-2 gap-3 border border-[#D1C7BD] bg-white/60 p-3 text-xs md:grid-cols-4 xl:grid-cols-7">
           {[
             ['Proveedor', po.supplier_name],
@@ -632,8 +811,10 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
                 <th className="px-3 py-2 text-left">SKU</th>
                 <th className="px-3 py-2 text-left">Producto</th>
                 <th className="px-3 py-2 text-left">Unidad</th>
-                <th className="px-3 py-2 text-right">Cantidad</th>
+                <th className="px-3 py-2 text-right">{commercial ? 'Cantidad interna' : 'Cantidad'}</th>
+                {commercial && <><th className="px-3 py-2 text-center">Unidad de compra</th><th className="px-3 py-2 text-center">Cantidad comercial</th></>}
                 <th className="px-3 py-2 text-right">P. unitario</th>
+                {commercial && <th className="px-3 py-2 text-center">Precio comercial</th>}
                 {showDiscountColumns && (
                   <>
                     <th className="px-3 py-2 text-right">Dcto %</th>
@@ -649,8 +830,10 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
             <tbody>
               {visibleLines.map((line) => {
                 const persisted = line.item_id ? statuses.get(line.item_id) : undefined
-                const status = persisted?.comparison_status === 'ELIMINADA' && persisted.original_item ? (matchesOriginal(line, persisted.original_item) ? 'SIN_CAMBIOS' : 'MODIFICADA') : (persisted?.comparison_status ?? 'AGREGADA')
-                const lineTotals = calculatePurchaseOrderLineTotals(line)
+                const original = commercial ? comparison.original.items.find(item => item.item_id === line.item_id) : undefined
+                const changes = original ? commercialReviewChangedFields(original as unknown as Record<string, unknown>, { ...line, commercial_unit_price: line.commercial_price_raw ?? null }) : []
+                const status = commercial ? !original ? 'AGREGADA' : changes.length ? 'MODIFICADA' : 'SIN_CAMBIOS' : persisted?.comparison_status === 'ELIMINADA' && persisted.original_item ? (matchesOriginal(line, persisted.original_item) ? 'SIN_CAMBIOS' : 'MODIFICADA') : (persisted?.comparison_status ?? 'AGREGADA')
+                const lineTotals = commercial ? calculateCommercialDraftLineTotals(line) : calculatePurchaseOrderLineTotals(line)
                 return (
                   <tr key={line.item_id ?? `${line.product_id}-${line.line_number}`} className="border-b border-[#E5DDD4] align-top">
                     <td className="px-3 py-2">
@@ -659,12 +842,14 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
                     <td className="px-3 py-2 font-mono text-[#72383D]">{line.sku || '—'}</td>
                     <td className="px-3 py-2 font-medium">
                       {line.product_description}
+                      {line.restore_pending && <p className="text-[10px] text-[#72383D]">Guarda la restauración original antes de editarla.</p>}
+                      {commercial && changes.length > 0 && <div className="mt-1 space-y-0.5 text-[10px] text-[#72383D]">{changes.map(change => <div key={change.field}>Original {changedFieldLabel(change.field)}: {displayValue(change.original, change.field, po.currency, true)} → {displayValue(change.current, change.field, po.currency, true)}</div>)}</div>}
                       {line.unit_price === 0 && <span className="ml-2 text-[10px] text-[#AC9C8D]">Precio pendiente</span>}
-                      {persisted?.comparison_status === 'MODIFICADA' && (
+                      {!commercial && persisted?.comparison_status === 'MODIFICADA' && (
                         <div className="mt-1 space-y-0.5 text-[10px] text-[#AC9C8D]">
                           {persisted.changed_fields.map((change) => (
                             <div key={change.field}>
-                              Antes {change.field}: {displayValue(change.original, change.field, po.currency)}
+                              Antes {changedFieldLabel(change.field)}: {displayValue(change.original, change.field, po.currency)}
                             </div>
                           ))}
                         </div>
@@ -672,26 +857,30 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
                     </td>
                     <td className="px-3 py-2">{line.unit || '—'}</td>
                     <td className="px-3 py-2">
-                      <input aria-label={`Cantidad ${line.product_description}`} type="number" min="0" step="0.01" value={line.quantity} onChange={(event) => updateLine(line.item_id, 'quantity', event.target.value)} className={`${inputClass} w-24 text-right`} />
+                      <input disabled={line.restore_pending} aria-label={`Cantidad ${line.product_description}`} type="number" min="0" step="0.0001" value={line.quantity} onChange={(event) => updateLine(line.item_id, 'quantity', event.target.value)} className={`${inputClass} w-24 text-right`} />
+                      {commercial && <span className="block text-[10px] text-[#6D625B]">Total unidades</span>}
+                      {commercial && line.commercial_factor !== undefined && !commercialReviewValidQuantity(line.quantity, line.commercial_factor) && <div className="text-[10px] text-[#72383D]">Debe ser múltiplo de {line.commercial_factor}</div>}
                     </td>
+                    {commercial && <><td className="px-2 py-1.5 text-center"><PurchaseCommercialPresentation unit={line.commercial_unit} factor={line.commercial_factor} /></td><td className="px-2 py-1.5 text-center">{line.commercial_factor !== undefined ? <PurchaseCommercialQuantity description={line.product_description} unit={line.commercial_unit} value={line.commercial_quantity_raw ?? ''} disabled={line.restore_pending} onChange={value => updateLine(line.item_id, 'commercial_quantity_raw', value)} /> : '—'}</td></>}
                     <td className="px-3 py-2">
-                      <input aria-label={`Precio ${line.product_description}`} type="number" min="0" step="0.01" value={line.unit_price} onChange={(event) => updateLine(line.item_id, 'unit_price', event.target.value)} className={`${inputClass} w-28 text-right`} />
+                      <input disabled={line.restore_pending} aria-label={`Precio ${line.product_description}`} type="number" min="0" step="0.0001" value={commercial ? line.internal_price_raw ?? line.unit_price : line.unit_price} onChange={(event) => updateLine(line.item_id, 'unit_price', event.target.value)} className={`${inputClass} w-28 text-right`} />
                     </td>
+                    {commercial && <td className="px-2 py-1.5 text-center">{line.commercial_factor !== undefined ? <PurchaseCommercialPrice description={line.product_description} unit={line.commercial_unit} value={line.commercial_price_raw ?? ''} disabled={line.restore_pending} onChange={value => updateLine(line.item_id, 'commercial_price_raw', value)} /> : '—'}</td>}
                     {showDiscountColumns && (
                       <>
                         <td className="px-3 py-2">
-                          <input aria-label={`Dcto % ${line.product_description}`} type="number" min="0" max="100" step="0.01" value={discountPercentDisplay(line) > 0 ? discountPercentDisplay(line) : ''} placeholder="0" onChange={(event) => updateLine(line.item_id, 'discount_percent', event.target.value)} className={`${inputClass} w-20 text-right`} />
+                          <input disabled={line.restore_pending} aria-label={`Dcto % ${line.product_description}`} type="number" min="0" max="100" step="0.01" value={discountPercentDisplay(line) > 0 ? discountPercentDisplay(line) : ''} placeholder="0" onChange={(event) => updateLine(line.item_id, 'discount_percent', event.target.value)} className={`${inputClass} w-20 text-right`} />
                         </td>
                         <td className="px-3 py-2">
-                          <input aria-label={`Dcto/U Neto ${line.product_description}`} type="number" min="0" max={line.unit_price} step="0.01" value={discountUnitAmountDisplay(line) > 0 ? discountUnitAmountDisplay(line) : ''} placeholder="0" onChange={(event) => updateLine(line.item_id, 'discount_unit_amount', event.target.value)} className={`${inputClass} w-28 text-right`} />
+                          <input disabled={line.restore_pending} aria-label={`Dcto/U Neto ${line.product_description}`} type="number" min="0" max={line.unit_price} step="0.0001" value={discountUnitAmountDisplay(line) > 0 ? discountUnitAmountDisplay(line) : ''} placeholder="0" onChange={(event) => updateLine(line.item_id, 'discount_unit_amount', event.target.value)} className={`${inputClass} w-28 text-right`} />
                         </td>
                       </>
                     )}
                     <td className="px-3 py-2">
-                      <input aria-label={`IVA ${line.product_description}`} type="number" min="0" max="100" step="0.01" value={line.tax_rate} onChange={(event) => updateLine(line.item_id, 'tax_rate', event.target.value)} className={`${inputClass} w-20 text-right`} />
+                      <input disabled={line.restore_pending} aria-label={`IVA ${line.product_description}`} type="number" min="0" max="100" step="0.01" value={line.tax_rate} onChange={(event) => updateLine(line.item_id, 'tax_rate', event.target.value)} className={`${inputClass} w-20 text-right`} />
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums">{currency(lineTotals.net_amount, po.currency)}</td>
-                    <td className="px-3 py-2 text-right font-semibold tabular-nums">{currency(lineTotals.line_total, po.currency)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{currency(lineTotals.net_amount, po.currency, commercial)}</td>
+                    <td className="px-3 py-2 text-right font-semibold tabular-nums">{currency(lineTotals.line_total, po.currency, commercial)}</td>
                     <td className="px-3 py-2 text-right">
                       <button onClick={() => removeLine(line.item_id)} className="rounded p-1.5 text-[#6D625B] hover:bg-[#F5EDEE] hover:text-[#72383D]" title="Eliminar línea">
                         <Trash2 className="h-3.5 w-3.5" />
@@ -838,27 +1027,29 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
             </div>
             <div className="mt-2 max-h-[220px] overflow-y-auto divide-y divide-[#E5DDD4] border border-[#D1C7BD]">
               {visibleProducts.map((product) => (
-                <button type="button" key={product.id} onClick={() => setSelectedProduct(product)} className="block w-full px-2 py-1.5 text-left text-xs hover:bg-[#EFE9E1]">
+                <button type="button" key={product.id} disabled={resolvingProduct} onClick={() => void selectProduct(product)} className="block w-full px-2 py-1.5 text-left text-xs hover:bg-[#EFE9E1]">
                   <span className="font-mono text-[#72383D]">{product.sku}</span> · {product.description} <span className="text-[#AC9C8D]">({product.barcode || 'sin código'})</span>
                 </button>
               ))}
               {visibleProducts.length === 0 && (
                 <div className="flex items-center justify-between gap-3 px-2 py-3 text-xs">
                   <span className="text-[#AC9C8D]">No encontramos el producto en el catálogo.</span>
-                  <button type="button" onClick={() => setNewProductModalOpen(true)} className="whitespace-nowrap rounded-md bg-[#72383D] px-2.5 py-1.5 font-semibold text-white">
+                  {!commercial && <button type="button" onClick={() => setNewProductModalOpen(true)} className="whitespace-nowrap rounded-md bg-[#72383D] px-2.5 py-1.5 font-semibold text-white">
                     + Crear producto nuevo
-                  </button>
+                  </button>}
                 </div>
               )}
             </div>
           </section>
         )}
-        {productPickerOpen && selectedProduct && (
+        {productPickerOpen && selectedProduct && commercial && <PurchaseOrderCommercialProductForm key={selectedProduct.id} product={selectedProduct} configuration={productCommercial ? { unit: productCommercial.purchase_unit, factor: productCommercial.purchase_unit_factor, mappingId: productCommercial.mapping_id } : null} loading={resolvingProduct} showDiscounts={showDiscountColumns} currency={po.currency} onAdd={addCommercialProduct} onCancel={closeProductPicker} />}
+        {productPickerOpen && selectedProduct && !commercial && (
           <section className="mb-4 border border-[#D1C7BD] bg-white/70 p-3">
             <div className="flex flex-wrap items-center gap-2">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-xs font-semibold">{selectedProduct.description}</p>
                 <p className="font-mono text-[11px] text-[#72383D]">{selectedProduct.sku}</p>
+                {commercial && productCommercial && <p className="text-[11px]">{productCommercial.purchase_unit || 'Unidad'} × {productCommercial.purchase_unit_factor} {selectedProduct.unit_of_measure || 'unid.'}; ingresa cantidad y precio internos.</p>}
               </div>
               <input aria-label="Cantidad nuevo producto" type="number" min="0" step="0.01" value={newQuantity} onChange={(event) => setNewQuantity(event.target.value)} className={`${inputClass} w-24`} />
               <input aria-label="Precio nuevo producto" type="number" min="0" step="0.01" value={newUnitPrice} onChange={(event) => setNewUnitPrice(event.target.value)} className={`${inputClass} w-28`} />
@@ -898,7 +1089,7 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
                       <td>{line.original_item?.product_description || '—'}</td>
                       <td className="text-right">{line.original_item?.quantity ?? '—'}</td>
                       <td className="text-right">{currency(line.original_item?.unit_price, po.currency)}</td>
-                      <td className="text-right font-semibold">{currency(line.original_item?.line_total, po.currency)}</td>
+                      <td className="text-right font-semibold">{currency(line.original_item?.line_total, po.currency, commercial)}</td>
                       <td className="text-right">
                         <button type="button" onClick={() => restoreLine(line.original_item)} className="rounded border border-[#72383D]/40 px-2 py-1 text-[11px] font-semibold text-[#72383D] hover:bg-[#72383D]/10">
                           Restaurar
@@ -916,26 +1107,27 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
           <div className="w-72 space-y-1 text-xs">
             <div className="flex justify-between">
               <span className="text-[#AC9C8D]">Subtotal bruto</span>
-              <span>{currency(preview.gross_total, po.currency)}</span>
+              <span>{currency(preview.gross_total, po.currency, commercial)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-[#AC9C8D]">Descuentos</span>
-              <span>{currency(preview.discount_total, po.currency)}</span>
+              <span>{currency(preview.discount_total, po.currency, commercial)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-[#AC9C8D]">Neto final</span>
-              <span>{currency(preview.net_total, po.currency)}</span>
+              <span>{currency(preview.net_total, po.currency, commercial)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-[#AC9C8D]">IVA</span>
-              <span>{currency(preview.tax_total, po.currency)}</span>
+              <span>{currency(preview.tax_total, po.currency, commercial)}</span>
             </div>
             <div className="flex justify-between border-t border-[#D1C7BD] pt-1 font-bold text-[#72383D]">
               <span>Total OC</span>
-              <span>{currency(preview.grand_total, po.currency)}</span>
+              <span>{currency(preview.grand_total, po.currency, commercial)}</span>
             </div>
           </div>
         </section>
+        </fieldset>
         {confirmDialogOpen && (
           <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#322D29]/60 p-4">
             <section role="dialog" aria-modal="true" aria-labelledby="confirm-purchase-order-title" className="w-full max-w-md border border-[#D1C7BD] bg-[#EFE9E1] p-5 text-[#322D29] shadow-xl">
@@ -950,22 +1142,22 @@ export function PurchaseOrderSupplierReview({ poId, onBack, onSaved, onConfirmed
                   <span className="font-semibold">Proveedor:</span> {po.supplier_name || '—'}
                 </p>
                 <p>
-                  <span className="font-semibold">Total definitivo:</span> {currency(displayCurrentTotal, po.currency)}
+                  <span className="font-semibold">Total definitivo:</span> {currency(displayCurrentTotal, po.currency, commercial)}
                 </p>
               </div>
               <div className="mt-3 border-y border-[#D1C7BD] py-3 text-xs">
                 <p className="font-semibold">Resumen</p>
-                <p>Modificadas: {summary.modified_count}</p>
-                <p>Eliminadas: {summary.removed_count}</p>
-                <p>Agregadas: {summary.added_count}</p>
+                <p>Modificadas: {commercial ? commercialStatuses.filter(s => s === 'MODIFICADA').length : summary.modified_count}</p>
+                <p>Eliminadas: {commercial ? removedLines.length : summary.removed_count}</p>
+                <p>Agregadas: {commercial ? commercialStatuses.filter(s => s === 'AGREGADA').length : summary.added_count}</p>
               </div>
-              <p className="mt-3 text-xs text-[#6D625B]">Esta acción cerrará la revisión del proveedor y dejará esta versión como definitiva para recepción. Después de confirmar, la OC ya no podrá editarse desde esta pantalla.</p>
+              <p className="mt-3 text-xs text-[#6D625B]">Esta acción cerrará la revisión del proveedor y dejará esta versión como definitiva. Después de confirmar, la OC ya no podrá editarse desde esta pantalla.{commercial && ' La recepción comercial aún no está disponible.'}</p>
               {error && <p className="mt-3 border border-[#72383D]/30 bg-[#F5EDEE] px-3 py-2 text-xs text-[#72383D]">{error}</p>}
               <div className="mt-4 flex justify-end gap-2">
-                <button type="button" onClick={() => setConfirmDialogOpen(false)} disabled={confirming} className="rounded-md border border-[#D1C7BD] px-3 py-2 text-xs font-semibold text-[#6D625B] disabled:opacity-50">
+                <button type="button" onClick={() => setConfirmDialogOpen(false)} disabled={confirming || confirmationUncertain} className="rounded-md border border-[#D1C7BD] px-3 py-2 text-xs font-semibold text-[#6D625B] disabled:opacity-50">
                   Cancelar
                 </button>
-                <button type="button" onClick={() => void confirmReview()} disabled={confirming} className="rounded-md bg-[#72383D] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">
+                <button type="button" onClick={() => void confirmReview()} disabled={confirming || Boolean(confirmDisabledReason)} className="rounded-md bg-[#72383D] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">
                   {confirming ? 'Confirmando...' : 'Confirmar definitivamente'}
                 </button>
               </div>

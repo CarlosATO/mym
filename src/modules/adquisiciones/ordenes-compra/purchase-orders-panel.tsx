@@ -6,9 +6,9 @@ import { AuthorizedPersonnelCombobox } from '@/components/ui/authorized-personne
 import {
   getPurchaseOrders, getPurchaseOrderIndicators, getPurchaseOrderDetail, createPurchaseOrder, updateDraftPurchaseOrder,
   updatePurchaseOrderStatus, cancelPurchaseOrder, closePurchaseOrderWithPending, getAuthorizedPersonnel, createAuthorizedPersonnel,
-  getNextCorrelative, getPurchaseOrderDocumentDetail, getPurchaseOrderInvoiceSummaries,
+  getNextCorrelative, getPurchaseOrderDocumentDetail, getPurchaseOrderInvoiceSummaries, saveCommercialDraft, getCommercialDraftDetail, emitCommercialDraft, markCommercialOrderSent,
   type PurchaseOrder, type PurchaseOrderDetail, type PurchaseOrderFilters, type PurchaseOrderOperationalView, type PurchaseOrderInvoiceDocument, type PurchaseOrderInvoiceSummaries, type PurchaseOrderIndicators,
-  type AuthorizedPersonnel
+  type AuthorizedPersonnel, type CommercialDraftRequest
 } from '@/app/actions/adquisiciones/purchase-orders'
 import { getSuppliers, type Supplier } from '@/app/actions/adquisiciones/suppliers'
 import { searchPurchaseOrderProducts } from '@/app/actions/adquisiciones/products'
@@ -26,12 +26,17 @@ import { ReplenishmentAnalysisPanel } from './replenishment-analysis-panel'
 import { buildReplenishmentExcelPreparation, parseReplenishmentExcel, type ReplenishmentExcelImportPreview } from './replenishment-excel-import'
 import { ReplenishmentExcelImportDialog } from './replenishment-excel-import-dialog'
 import { PurchaseOrderSupplierReview } from './purchase-order-supplier-review'
+import { PurchaseOrderCommercialProductForm, type CommercialProductAddition } from './purchase-order-commercial-product-form'
+import { PurchaseCommercialPresentation, PurchaseCommercialQuantity, PurchaseCommercialPrice } from './purchase-order-commercial-fields'
 import { PurchaseOrderInvoiceViewerModal } from './purchase-order-invoice-viewer-modal'
 import { createClient as createBrowserClient } from '@/lib/supabase/client'
 import { formatCivilDate, todayInSantiago } from '@/lib/datetime'
 import { calculatePurchaseOrderLineTotals, calculatePurchaseOrderTotals } from '@/lib/adquisiciones/purchase-order-totals'
+import { calculateCommercialDraftLineTotals, calculateCommercialDraftTotals } from '@/lib/adquisiciones/purchase-commercial-totals'
 import { getPurchaseOrderDiscountDisplayValues, getPurchaseOrderDiscountPayload, resolvePurchaseOrderDiscountMode, type PurchaseOrderDiscountMode } from '@/lib/adquisiciones/purchase-order-discounts'
 import { validatePriceDecimal, parseCurrencyDecimal } from '@/lib/adquisiciones/purchase-order-decimal'
+import { convertPurchaseDecimal, isPurchaseMultiple } from '@/lib/adquisiciones/purchase-commercial-decimal'
+import { getPurchaseCommercialForManualOrder } from '@/app/actions/adquisiciones/purchase-units'
 import { clearPendingPurchaseOrdersReportCache, discardPendingPurchaseOrdersReportRequest, getCachedPendingPurchaseOrdersReport, invalidatePendingPurchaseOrdersReportCache } from '@/lib/adquisiciones/pending-purchase-orders-report-cache'
 
 const STATUS_BADGES: Record<string, { bg: string; text: string; border: string }> = {
@@ -213,10 +218,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const [initialLoading, setInitialLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [message, setMessage] = useState('')
+  const [commercialSaveError, setCommercialSaveError] = useState('')
   const [filters, setFilters] = useState<PurchaseOrderFilters>({ operational_view: 'PENDING', page: 1, pageSize: 50 })
   const [searchInput, setSearchInput] = useState('')
   const [detail, setDetail] = useState<PurchaseOrderDetail | null>(null)
-  const [supplierReviewPoId, setSupplierReviewPoId] = useState<string | null>(null)
+  const [supplierReview, setSupplierReview] = useState<{ poId: string; commercial: boolean } | null>(null)
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [authorizedPersonnel, setAuthorizedPersonnel] = useState<AuthorizedPersonnel[]>([])
@@ -308,6 +314,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
 
   interface LineItem {
     tempId: string
+    persistedId?: string
     item_type: 'PRODUCT' | 'SERVICE'
     product_id: string
     sku: string
@@ -315,6 +322,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     unit: string
     quantity: number
     unit_price: number
+    commercial_unit?: string | null
+    commercial_factor?: number
+    commercial_mapping_id?: string | null
+    commercial_price_raw?: string
+    commercial_quantity_raw?: string
     raw_unit_price?: string
     reference_unit_cost?: number
     discount_percent: number
@@ -323,10 +335,44 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     discount_mode: PurchaseOrderDiscountMode
     tax_rate: number
     warehouse_id: string
+    cost_center?: string | null
+    required_date?: string | null
     notes: string
   }
 
+  function commercialSnapshot(value: { form: typeof form; items: LineItem[] }) {
+    const decimal = (raw: string | undefined) => {
+      const text = (raw ?? '').trim().replace(',', '.')
+      if (!/^\d+(?:\.\d*)?$/.test(text)) return text
+      const [whole, fraction = ''] = text.split('.')
+      return `${whole.replace(/^0+(?=\d)/, '')}${fraction.replace(/0+$/, '') ? `.${fraction.replace(/0+$/, '')}` : ''}`
+    }
+    const f = value.form
+    return JSON.stringify({
+      form: [f.issue_date, f.required_date || null, f.supplier_id, f.warehouse_id || null, f.currency, f.payment_terms || null, f.authorized_by || null, f.notes || null],
+      items: value.items.map(item => ({
+        item_id: item.persistedId ?? null, item_type: item.item_type, product_id: item.product_id || null,
+        description: item.description, unit: item.unit || null, warehouse_id: item.warehouse_id || null,
+        cost_center: item.cost_center || null, required_date: item.required_date || null, quantity: item.quantity,
+        unit_price: item.commercial_factor === undefined ? item.unit_price : null,
+        commercial_price: item.commercial_factor === undefined ? null : decimal(item.commercial_price_raw),
+        ...getPurchaseOrderDiscountPayload(item), tax_rate: item.tax_rate, notes: item.notes || null,
+      })),
+    })
+  }
+
+  function hasCommercialChanges(snapshot: string | null, currentForm: typeof form, currentItems: LineItem[]) {
+    if (!snapshot) return true
+    try { return commercialSnapshot(JSON.parse(snapshot)) !== commercialSnapshot({ form: currentForm, items: currentItems }) }
+    catch { return true }
+  }
+
   const [items, setItems] = useState<LineItem[]>([])
+  const [isCommercialDraft, setIsCommercialDraft] = useState(false)
+  const [manualOrderMode, setManualOrderMode] = useState<'commercial' | 'traditional'>('commercial')
+  const [commercialRevision, setCommercialRevision] = useState<number | null>(null)
+  const [savedCommercialSnapshot, setSavedCommercialSnapshot] = useState<string | null>(null)
+  const captureCommercialSnapshotRef = useRef(false)
   const [showDiscountColumns, setShowDiscountColumns] = useState(false)
   const [editingItem, setEditingItem] = useState<string | null>(null)
   const [invalidPriceItemIds, setInvalidPriceItemIds] = useState<Set<string>>(new Set())
@@ -334,6 +380,12 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const [pendingProduct, setPendingProduct] = useState<PurchaseOrderCatalogProduct | null>(null)
   const [pendingQuantity, setPendingQuantity] = useState('')
   const [pendingUnitPrice, setPendingUnitPrice] = useState('')
+  const [pendingCommercial, setPendingCommercial] = useState<{ unit: string | null; factor: number; mappingId: string | null } | null>(null)
+  const [pendingCommercialError, setPendingCommercialError] = useState('')
+  const [pendingCommercialLoading, setPendingCommercialLoading] = useState(false)
+  const [pendingCommercialQuantity, setPendingCommercialQuantity] = useState('')
+  const [pendingCommercialPrice, setPendingCommercialPrice] = useState('')
+  const commercialRequestRef = useRef(0)
   const [pendingDiscountPercent, setPendingDiscountPercent] = useState(0)
   const [pendingDiscountUnitAmount, setPendingDiscountUnitAmount] = useState(0)
   const [pendingDiscountUnitRaw, setPendingDiscountUnitRaw] = useState<string | null>(null)
@@ -369,6 +421,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         notes: string
       }
       items: LineItem[]
+      commercialPoId?: string | null
+      commercialRevision?: number | null
+      commercialCorrelative?: string | null
+      savedCommercialSnapshot?: string | null
+      manualOrderMode?: 'commercial' | 'traditional'
       isReplenishmentPreparation?: boolean
       replenishmentSupplierName?: string
     }
@@ -379,6 +436,12 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   const [draftPrompt, setDraftPrompt] = useState<DraftPrompt | null>(null)
   const justEmittedRef = useRef(false)
   const draftHandledRef = useRef(false)
+
+  useEffect(() => {
+    if (!captureCommercialSnapshotRef.current) return
+    captureCommercialSnapshotRef.current = false
+    setSavedCommercialSnapshot(JSON.stringify({ form, items }))
+  }, [form, items])
 
   useEffect(() => {
     const supabase = createBrowserClient()
@@ -421,20 +484,24 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
 
       return {
         tempId: i.id,
+        persistedId: i.id,
         item_type: (i.item_type === 'SERVICE' ? 'SERVICE' : 'PRODUCT') as 'PRODUCT' | 'SERVICE',
         product_id: i.product_id || '',
         sku: i.item_type === 'SERVICE' ? '' : productsById.get(i.product_id || '')?.sku || '',
         description: i.product_description || '',
-        unit: i.unit || 'UNIDAD',
+        unit: i.unit ?? '',
         quantity: qty,
-        unit_price: unitPrice,
+        unit_price: i.purchase_unit_factor_snapshot && i.commercial_unit_price_snapshot != null ? Number(i.commercial_unit_price_snapshot) / i.purchase_unit_factor_snapshot : unitPrice,
+        ...(i.purchase_unit_factor_snapshot != null ? { commercial_unit: i.purchase_unit_snapshot ?? null, commercial_factor: i.purchase_unit_factor_snapshot, commercial_mapping_id: i.product_supplier_mapping_id ?? null, commercial_price_raw: i.commercial_unit_price_snapshot == null ? '' : String(i.commercial_unit_price_snapshot), commercial_quantity_raw: convertedDisplay(String(qty), i.purchase_unit_factor_snapshot, 'divide') } : {}),
         raw_unit_price: unitPrice > 0 ? String(unitPrice) : '',
         discount_percent: discPct,
         discount_unit_amount: discUnit,
         raw_discount_unit_amount: discUnit > 0 ? String(discUnit) : '',
         discount_mode: resolvePurchaseOrderDiscountMode(discPct, discUnit),
-        tax_rate: Number(i.tax_rate) || 19,
+        tax_rate: Number(i.tax_rate ?? 19),
         warehouse_id: i.warehouse_id || '',
+        cost_center: i.cost_center,
+        required_date: i.required_date,
         notes: i.notes || '',
       }
     })
@@ -571,6 +638,36 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       void fetchCachedPurchaseOrderIndicators(true).then(result => setIndicators(result)).finally(() => setIndicatorsLoading(false))
     }
   }, [activeCompany?.id, currentUserId, fetchCachedPurchaseOrderIndicators])
+
+  async function syncCommercialOrder(poId: string) {
+    // List filters and indicator counts can change, but invoice documents cannot.
+    purchaseOrderCacheGenerationRef.current += 1
+    purchaseOrderListCacheRef.current.clear()
+    purchaseOrderListRequestsRef.current.clear()
+    purchaseOrderIndicatorsCacheRef.current.clear()
+    purchaseOrderIndicatorsRequestsRef.current.clear()
+    if (currentUserId && activeCompany?.id) invalidatePendingPurchaseOrdersReportCache(currentUserId, activeCompany.id)
+    delete detailCacheRef.current[poId]
+    delete pendingRequestsRef.current[poId]
+    const requestId = ++requestSequence.current
+    const key = purchaseOrderListCacheKey(purchaseOrderCacheScope, filters)
+    const [listResult, detailResult, indicatorResult] = await Promise.allSettled([
+      fetchCachedPurchaseOrders(filters, true), getPurchaseOrderDetail(poId), fetchCachedPurchaseOrderIndicators(true),
+    ])
+    if (requestId === requestSequence.current && listResult.status === 'fulfilled') {
+      setData(listResult.value.data)
+      setTotal(listResult.value.total)
+      setDataKey(key)
+    }
+    if (detailResult.status === 'fulfilled' && detailResult.value) {
+      const fresh = detailResult.value
+      detailCacheRef.current[poId] = fresh
+      setDetail(current => current?.po.id === poId ? fresh : current)
+      setSelectedPo(current => current?.id === poId ? { ...current, ...fresh.po } : current)
+    }
+    if (indicatorResult.status === 'fulfilled') setIndicators(indicatorResult.value)
+    return detailResult.status === 'fulfilled' ? detailResult.value : null
+  }
 
   const load = useCallback(async ({ force = false } = {}) => {
     const requestId = ++requestSequence.current
@@ -760,7 +857,15 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     // Lo más seguro es mantener la vista y esperar a tener datos.
     if (mode === 'detail') setDetail(null);
     
-    const d = await getPurchaseOrderDetail(poId);
+    let d = await getPurchaseOrderDetail(poId);
+    let revision: number | null = null
+    const commercial = mode === 'edit' && d?.po.status === 'BORRADOR' && d.po.source_type === 'MANUAL'
+    if (commercial) {
+      const loaded = await getCommercialDraftDetail(poId)
+      if (!loaded.data) { msg(loaded.error || 'No se pudo cargar el borrador comercial.'); return }
+      d = loaded.data.detail
+      revision = loaded.data.revision
+    }
     if (d) {
       if (mode === 'detail') {
         setSelectedPo(d.po as PurchaseOrder);
@@ -768,6 +873,9 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         detailCacheRef.current[poId] = d;
         setView('list');
       } else {
+        draftHandledRef.current = true
+        setIsCommercialDraft(Boolean(commercial))
+        setCommercialRevision(revision)
         setForm({
           issue_date: d.po.issue_date?.slice(0, 10) || '',
           required_date: d.po.required_date?.slice(0, 10) || '',
@@ -837,7 +945,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     prefetchPurchaseOrderProductCatalog()
     const supplier = suppliers.find(s => s.id === form.supplier_id)
     if (!supplier) return
-    if (!isReplenishmentPreparation && supplier.discount_percent > 0) {
+    if (!editId && !draftHandledRef.current && !isReplenishmentPreparation && supplier.discount_percent > 0) {
       setItems(prev => prev.map(it => ({
         ...it,
         discount_percent: supplier.discount_percent,
@@ -845,12 +953,21 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         discount_mode: 'percent',
       })))
     }
-    if (supplier.payment_terms) {
+    if (!editId && !draftHandledRef.current && supplier.payment_terms) {
       setForm(p => ({ ...p, payment_terms: supplier.payment_terms || p.payment_terms }))
     }
-  }, [form.supplier_id, isReplenishmentPreparation, suppliers])
+  }, [form.supplier_id, editId, isReplenishmentPreparation, suppliers])
 
   function msg(text: string) { setMessage(text); setTimeout(() => setMessage(''), 3500) }
+
+  function convertedDisplay(value: string, factor: number, direction: 'multiply' | 'divide') {
+    const converted = convertPurchaseDecimal(value, factor, direction, false)
+    if (converted.ok) return converted.value
+    const number = Number(value.replace(',', '.'))
+    if (!value.trim() || !Number.isFinite(number) || number < 0) return ''
+    const result = direction === 'divide' ? number / factor : number * factor
+    return Number(result.toFixed(4)).toString()
+  }
 
   function applyReplenishmentPreparation(payload: ReplenishmentPreparationPayload) {
     sessionStorage.removeItem(REPLENISHMENT_PO_PREPARATION_KEY)
@@ -1010,6 +1127,17 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     if (!draftPrompt) return
     const d = draftPrompt.draftData
     setForm(d.form)
+    setEditId(d.commercialPoId ?? null)
+    setIsCommercialDraft(Boolean(d.commercialPoId))
+    setManualOrderMode(d.manualOrderMode ?? 'commercial')
+    setCommercialRevision(d.commercialRevision ?? null)
+    setSavedCommercialSnapshot(d.savedCommercialSnapshot ?? null)
+    setEditingPoCorrelative(d.commercialCorrelative ?? null)
+    if (d.commercialPoId && !d.commercialCorrelative) {
+      void getPurchaseOrderDetail(d.commercialPoId).then(detail => {
+        if (detail?.po.correlative) setEditingPoCorrelative(detail.po.correlative)
+      }).catch(() => {})
+    }
     setItems(d.items.map(item => ({
       ...item,
       discount_percent: item.discount_percent ?? 0,
@@ -1024,6 +1152,10 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   }
 
   function handleDiscardDraft() {
+    if (draftStorageKey && localStorage.getItem(`${draftStorageKey}:commercial-request`)) {
+      msg('Hay un guardado pendiente de confirmar. Continúa el borrador y vuelve a guardar antes de descartarlo.')
+      return
+    }
     if (draftStorageKey) {
       try { localStorage.removeItem(draftStorageKey) } catch {}
     }
@@ -1036,7 +1168,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   useEffect(() => {
     if (
       view !== 'form' ||
-      editId !== null ||
+      (editId !== null && !isCommercialDraft) ||
       !draftStorageKey ||
       draftPrompt !== null ||
       isSubmitting ||
@@ -1063,16 +1195,26 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         savedAt: nowIso,
         form,
         items,
+        commercialPoId: isCommercialDraft ? editId : null,
+        commercialRevision: isCommercialDraft ? commercialRevision : null,
+        commercialCorrelative: isCommercialDraft ? editingPoCorrelative : null,
+        savedCommercialSnapshot: isCommercialDraft ? savedCommercialSnapshot : null,
+        manualOrderMode,
         isReplenishmentPreparation,
         replenishmentSupplierName: replenishmentSupplierName || undefined,
       }
-      try {
-        localStorage.setItem(draftStorageKey, JSON.stringify(draftPayload))
-        const timeStr = new Date(nowIso).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })
-        setLastSavedAt(timeStr)
-      } catch (err) {
-        console.error('Error auto-saving purchase order draft:', err)
+      const write = () => {
+        try {
+          const current = localStorage.getItem(draftStorageKey)
+          const existing = current ? JSON.parse(current) as { commercialPoId?: string | null; commercialRevision?: number | null } : null
+          if (existing?.commercialPoId && (existing.commercialPoId !== draftPayload.commercialPoId || (existing.commercialRevision ?? 0) > (draftPayload.commercialRevision ?? 0))) return
+          localStorage.setItem(draftStorageKey, JSON.stringify(draftPayload))
+          const timeStr = new Date(nowIso).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })
+          setLastSavedAt(timeStr)
+        } catch (err) { console.error('Error auto-saving purchase order draft:', err) }
       }
+      if (navigator.locks) void navigator.locks.request(`${draftStorageKey}:commercial-save`, write)
+      else write()
     }, 1000)
 
     return () => clearTimeout(timer)
@@ -1083,12 +1225,27 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     replenishmentSupplierName,
     view,
     editId,
+    isCommercialDraft,
+    manualOrderMode,
+    commercialRevision,
+    editingPoCorrelative,
+    savedCommercialSnapshot,
     draftStorageKey,
     draftPrompt,
     isSubmitting
   ])
 
   function resetForm() {
+    setManualOrderMode('commercial')
+    setCommercialSaveError('')
+    captureCommercialSnapshotRef.current = false
+    setSavedCommercialSnapshot(null)
+    commercialRequestRef.current += 1
+    setPendingCommercial(null)
+    setPendingCommercialError('')
+    setPendingCommercialLoading(false)
+    setPendingCommercialQuantity('')
+    setPendingCommercialPrice('')
     setForm({
       issue_date: new Date().toISOString().slice(0, 10),
       required_date: '',
@@ -1106,6 +1263,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     setInvalidPriceItemIds(new Set())
     linePriceInputRefs.current = {}
     setEditId(null)
+    setIsCommercialDraft(false)
+    setCommercialRevision(null)
     setEditingPoCorrelative(null)
     setConfirmSubmitOpen(false)
     setProductSearch('')
@@ -1136,6 +1295,12 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   }
 
   function editPO(po: PurchaseOrder) {
+    captureCommercialSnapshotRef.current = false
+    setSavedCommercialSnapshot(null)
+    draftHandledRef.current = true
+    setItems([])
+    setIsCommercialDraft(po.status === 'BORRADOR' && po.source_type === 'MANUAL')
+    setCommercialRevision(null)
     setForm({
       issue_date: po.issue_date?.slice(0, 10) || '',
       required_date: po.required_date?.slice(0, 10) || '',
@@ -1154,7 +1319,14 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   }
 
   async function loadDetailItems(poId: string) {
-    const d = await getPurchaseOrderDetail(poId)
+    let d = await getPurchaseOrderDetail(poId)
+    if (d?.po.status === 'BORRADOR' && d.po.source_type === 'MANUAL') {
+      const loaded = await getCommercialDraftDetail(poId)
+      if (!loaded.data) { msg(loaded.error || 'No se pudo cargar el borrador comercial.'); return }
+      d = loaded.data.detail
+      setIsCommercialDraft(loaded.data.managed)
+      setCommercialRevision(loaded.data.managed ? loaded.data.revision : null)
+    }
     if (d) {
       if (d.po) {
         setForm(prev => ({
@@ -1174,6 +1346,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         }
       }
       const builtItems = await buildLineItems(d.items)
+      if (d.po.status === 'BORRADOR' && d.po.source_type === 'MANUAL') captureCommercialSnapshotRef.current = true
       setItems(builtItems)
       const hasAnyDiscount = builtItems.some(
         (it) => it.discount_percent > 0 || it.discount_unit_amount > 0,
@@ -1194,20 +1367,19 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       return
     }
     
-    if (!pendingRequestsRef.current[po.id]) {
-      pendingRequestsRef.current[po.id] = getPurchaseOrderDetail(po.id)
-    }
-    
-    pendingRequestsRef.current[po.id].then(d => {
-      if (d) {
+    if (!pendingRequestsRef.current[po.id]) pendingRequestsRef.current[po.id] = getPurchaseOrderDetail(po.id)
+    const request = pendingRequestsRef.current[po.id]
+    request.then(d => {
+      if (d && (pendingRequestsRef.current[po.id] === request || detailCacheRef.current[po.id] === d)) {
         detailCacheRef.current[po.id] = d
-        setDetail(prev => d)
+        setDetail(d)
       }
-    })
+    }).finally(() => { if (pendingRequestsRef.current[po.id] === request) delete pendingRequestsRef.current[po.id] })
   }
 
   function openSupplierReview(poId: string) {
-    setSupplierReviewPoId(poId)
+    if (!detail || detail.po.id !== poId || detail.po.commercial_managed == null || detail.po.status !== 'ENVIADA_PROVEEDOR') { msg('No se pudo verificar la orden enviada.'); return }
+    setSupplierReview({ poId, commercial: detail.po.commercial_managed })
     setSelectedPo(null)
     setDetail(null)
     setView('supplier-review')
@@ -1216,16 +1388,24 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   function prefetchDetail(poId: string) {
     if (detailCacheRef.current[poId]) return
     if (!pendingRequestsRef.current[poId]) {
-      pendingRequestsRef.current[poId] = getPurchaseOrderDetail(poId).then(d => {
-        if (d) detailCacheRef.current[poId] = d
+      const request = getPurchaseOrderDetail(poId).then(d => {
+        if (d && pendingRequestsRef.current[poId] === request) detailCacheRef.current[poId] = d
         return d
-      })
+      }).finally(() => { if (pendingRequestsRef.current[poId] === request) delete pendingRequestsRef.current[poId] })
+      pendingRequestsRef.current[poId] = request
     }
   }
 
 
   function handlePromptSubmit() {
     if (submittingRef.current) return
+    if (isCommercialDraft) {
+      if (!editId || commercialRevision === null || commercialChangesPending || (draftStorageKey && localStorage.getItem(`${draftStorageKey}:commercial-request`))) { setCommercialSaveError('Guarda los cambios pendientes antes de emitir la OC.'); return }
+      setCommercialSaveError('')
+      setConfirmSubmitOpen(true)
+      return
+    }
+    if (items.some(item => item.commercial_factor !== undefined)) { msg('Guarda el borrador comercial antes de emitir.'); return }
     if (items.length === 0) { msg('Agrega al menos una línea a la orden'); return }
     if (!form.supplier_id) { msg('Selecciona un proveedor'); return }
     if (!form.warehouse_id) { msg('Selecciona una bodega de destino'); return }
@@ -1267,6 +1447,28 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
 
   async function executeSubmit() {
     if (submittingRef.current) return
+    if (isCommercialDraft) {
+      if (!editId || commercialRevision === null || commercialChangesPending || (draftStorageKey && localStorage.getItem(`${draftStorageKey}:commercial-request`))) { setConfirmSubmitOpen(false); setCommercialSaveError('Guarda los cambios pendientes antes de emitir la OC.'); return }
+      submittingRef.current = true
+      setIsSubmitting(true)
+      try {
+        const result = await emitCommercialDraft(editId, commercialRevision)
+        if (result.error || !result.data?.success) throw new Error(result.error || 'No se pudo emitir la OC.')
+        justEmittedRef.current = true
+        if (draftStorageKey) { try { localStorage.removeItem(draftStorageKey) } catch {} }
+        setConfirmSubmitOpen(false)
+        msg('Orden de compra emitida. El envío a proveedor permanece bloqueado.')
+        void syncCommercialOrder(editId)
+        setView('list'); resetForm()
+      } catch (error) {
+        setConfirmSubmitOpen(false)
+        setCommercialSaveError(error instanceof Error ? error.message : 'No se pudo emitir la OC.')
+        submittingRef.current = false
+        setIsSubmitting(false)
+      }
+      return
+    }
+    if (items.some(item => item.commercial_factor !== undefined)) { setConfirmSubmitOpen(false); msg('Guarda el borrador comercial antes de emitir.'); return }
     submittingRef.current = true
     setIsSubmitting(true)
     try {
@@ -1314,6 +1516,84 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       setIsSubmitting(false)
       setConfirmSubmitOpen(false)
       msg(error instanceof Error ? error.message : 'Error al guardar la orden de compra')
+    }
+  }
+
+  async function handleSaveCommercialDraft() {
+    if (submittingRef.current) return
+    setMessage('')
+    setCommercialSaveError('')
+    if (!draftStorageKey || !navigator.locks) { setCommercialSaveError('No se pudo guardar la OC. El guardado requiere almacenamiento local y bloqueo entre pestañas.'); return }
+    if (!form.supplier_id || !items.length) { setCommercialSaveError('No se pudo guardar la OC. Selecciona un proveedor y agrega al menos una línea.'); return }
+    if (editId && (!isCommercialDraft || commercialRevision === null)) { setCommercialSaveError('No se pudo guardar la OC. Recarga el borrador antes de guardar.'); return }
+    if (items.some(item => item.commercial_factor !== undefined && !isPurchaseMultiple(String(item.quantity), item.commercial_factor))) {
+      setCommercialSaveError('No se pudo guardar la OC. Existen cantidades que no respetan las unidades de compra')
+      return
+    }
+    const invalid = items.find(item => !item.description.trim() || !Number.isFinite(item.quantity) || item.quantity <= 0 ||
+      (item.commercial_factor !== undefined && (!isPurchaseMultiple(String(item.quantity), item.commercial_factor) || !validatePriceDecimal(item.commercial_price_raw, 4).isValid)) ||
+      (item.item_type === 'PRODUCT' && !item.product_id))
+    if (invalid) { setCommercialSaveError('No se pudo guardar la OC. Revisa la descripción, cantidad, precio y producto de las líneas.'); return }
+    submittingRef.current = true
+    setIsSubmitting(true)
+    try {
+      await navigator.locks.request(`${draftStorageKey}:commercial-save`, async () => {
+        const pendingKey = `${draftStorageKey}:commercial-request`
+        const previous = localStorage.getItem(pendingKey)
+        const storedDraft = localStorage.getItem(draftStorageKey)
+        if (!previous && storedDraft) {
+          const existing = JSON.parse(storedDraft) as { commercialPoId?: string | null }
+          if (existing.commercialPoId && existing.commercialPoId !== editId) throw new Error('Este borrador se guardó en otra pestaña. Recupérelo antes de continuar.')
+        }
+        let attempt: { request: CommercialDraftRequest; tempIds: string[] }
+        if (previous) {
+          attempt = JSON.parse(previous) as typeof attempt
+          if (attempt.request.data.supplier_id !== form.supplier_id || (editId && attempt.request.poId && editId !== attempt.request.poId)) throw new Error('Hay un guardado pendiente de otro borrador. Recupere ese borrador antes de continuar.')
+        } else {
+          if (isCommercialDraft && !commercialChangesPending) { msg('No hay cambios pendientes de guardar.'); return }
+          const request: CommercialDraftRequest = {
+            poId: editId, requestId: crypto.randomUUID(), revision: commercialRevision,
+            data: { issue_date: form.issue_date, required_date: form.required_date, supplier_id: form.supplier_id, source_type: 'MANUAL', status: 'BORRADOR', warehouse_id: form.warehouse_id || null, currency: form.currency, payment_terms: form.payment_terms || undefined, authorized_by: form.authorized_by || null, notes: form.notes || undefined,
+              items: items.map(item => ({ item_id: item.persistedId ?? null, item_type: item.item_type, product_id: item.product_id || null, product_description: item.description, unit: item.unit || null, warehouse_id: item.warehouse_id || null, cost_center: item.cost_center ?? null, required_date: item.required_date ?? null, quantity: item.quantity, unit_price: item.unit_price, purchase_unit_snapshot: item.commercial_unit ?? null, purchase_unit_factor_snapshot: item.commercial_factor ?? null, product_supplier_mapping_id: item.commercial_mapping_id ?? null, commercial_unit_price: item.commercial_factor !== undefined ? (item.commercial_price_raw ?? '').replace(',', '.') : null, ...getPurchaseOrderDiscountPayload(item), tax_rate: item.tax_rate, notes: item.notes || null })) },
+          }
+          attempt = { request, tempIds: items.map(item => item.tempId) }
+          localStorage.setItem(draftStorageKey, JSON.stringify({ version: 1, savedAt: new Date().toISOString(), form, items, commercialPoId: isCommercialDraft ? editId : null, commercialRevision: isCommercialDraft ? commercialRevision : null }))
+          localStorage.setItem(pendingKey, JSON.stringify(attempt))
+        }
+        const result = await saveCommercialDraft(attempt.request)
+        if (!result.data) {
+          if ('definite' in result && result.definite) localStorage.removeItem(pendingKey)
+          throw new Error(result.error || 'No se pudo guardar el borrador.')
+        }
+        if (result.data.lines.length !== attempt.tempIds.length) throw new Error('Respuesta de guardado incompleta; vuelva a intentarlo.')
+        const savedByTempId = new Map(attempt.tempIds.map((id, index) => [id, result.data.lines[index]]))
+        const savedItems = items.map(item => {
+          const saved = savedByTempId.get(item.tempId)
+          if (!saved) return item
+          return { ...item, persistedId: saved.id, ...(saved.purchase_unit_factor_snapshot !== null ? { commercial_unit: saved.purchase_unit_snapshot, commercial_factor: saved.purchase_unit_factor_snapshot, commercial_mapping_id: saved.product_supplier_mapping_id, commercial_price_raw: item.commercial_price_raw ?? saved.commercial_unit_price_snapshot ?? '', commercial_quantity_raw: convertedDisplay(String(item.quantity), saved.purchase_unit_factor_snapshot, 'divide') } : {}) }
+        })
+        const savedSnapshot = previous ? null : JSON.stringify({ form, items: savedItems })
+        localStorage.setItem(draftStorageKey, JSON.stringify({ version: 1, savedAt: new Date().toISOString(), form, items: savedItems, commercialPoId: result.data.po_id, commercialRevision: result.data.revision, commercialCorrelative: editingPoCorrelative, savedCommercialSnapshot: savedSnapshot }))
+        localStorage.removeItem(pendingKey)
+        setItems(savedItems)
+        setEditId(result.data.po_id)
+        setIsCommercialDraft(true)
+        setCommercialRevision(result.data.revision)
+        setSavedCommercialSnapshot(savedSnapshot)
+        draftHandledRef.current = true
+        const refreshedDetail = await syncCommercialOrder(result.data.po_id)
+        let correlativeUnavailable = false
+        if (!editingPoCorrelative) {
+          if (refreshedDetail?.po.correlative) setEditingPoCorrelative(refreshedDetail.po.correlative)
+          else correlativeUnavailable = true
+        }
+        msg(previous ? 'Guardado anterior recuperado; guarda nuevamente los cambios posteriores.' : correlativeUnavailable ? 'Borrador guardado; no se pudo cargar el correlativo.' : 'Borrador guardado.')
+      })
+    } catch (error) {
+      setCommercialSaveError(`No se pudo guardar la OC. ${error instanceof Error && error.message ? error.message : 'Ocurrió un error al guardar el borrador.'}`)
+    } finally {
+      submittingRef.current = false
+      setIsSubmitting(false)
     }
   }
 
@@ -1444,13 +1724,21 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
 
   async function handleMarkSentToSupplier(poId: string) {
     if (isMarkingSent) return
+    if (!detail || detail.po.id !== poId || detail.po.commercial_managed == null) { msg('No se pudo verificar la configuración comercial de la orden.'); return }
     if (!confirm('¿Confirmas que esta orden de compra ya fue enviada al proveedor?\n\nAl continuar se guardará una copia histórica de la versión enviada.')) return
 
     setIsMarkingSent(true)
     try {
-      const res = await updatePurchaseOrderStatus(poId, 'ENVIADA_PROVEEDOR')
+      const res = detail.po.commercial_managed ? await markCommercialOrderSent(poId) : await updatePurchaseOrderStatus(poId, 'ENVIADA_PROVEEDOR')
       if ('error' in res && res.error) {
         msg(res.error)
+        return
+      }
+      if (detail.po.commercial_managed && (!('data' in res) || !res.data?.success)) { msg('No se pudo marcar la OC como enviada.'); return }
+
+      if (detail.po.commercial_managed) {
+        await syncCommercialOrder(poId)
+        msg('OC marcada como enviada al proveedor')
         return
       }
 
@@ -1476,27 +1764,47 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     delete pendingRequestsRef.current[poId]
     invalidatePurchaseOrderListCache()
     await load()
+    const updated = await getPurchaseOrderDetail(poId)
+    if (updated) { setDetail(updated); setSelectedPo(updated.po as PurchaseOrder) }
   }
 
-  async function handleSupplierReviewConfirmed(poId: string) {
+  async function handleSupplierReviewConfirmed(poId: string, commercial: boolean) {
     delete detailCacheRef.current[poId]
     delete pendingRequestsRef.current[poId]
     invalidatePurchaseOrderListCache()
+    if (!commercial) {
+      await load()
+      setSupplierReview(null)
+      setView('list')
+      setDetail(null)
+      setSelectedPo(null)
+      msg('Orden de compra confirmada.')
+      return
+    }
+    const updated = await getPurchaseOrderDetail(poId)
+    if (!updated || updated.po.status !== 'CONFIRMADA') throw new Error('No se pudo actualizar el detalle confirmado.')
+    detailCacheRef.current[poId] = updated
     await load()
-    setSupplierReviewPoId(null)
+    setSupplierReview(null)
     setView('list')
-    setDetail(null)
-    setSelectedPo(null)
+    setDetail(updated)
+    setSelectedPo(updated.po as PurchaseOrder)
     msg('Orden de compra confirmada.')
   }
 
   function handleSupplierChange(supplierId: string) {
+    if (isCommercialDraft && supplierId !== form.supplier_id) { msg('No se puede cambiar el proveedor de un borrador guardado.'); return }
     if (supplierId !== form.supplier_id && form.supplier_id && items.length > 0) {
       const confirmed = confirm('Cambiar el proveedor eliminará los productos agregados a esta orden.\n¿Deseas continuar?')
       if (!confirmed) return
       setItems([])
     }
     if (supplierId !== form.supplier_id) {
+      commercialRequestRef.current += 1
+      setPendingProduct(null)
+      setPendingCommercial(null)
+      setPendingCommercialError('')
+      setPendingCommercialLoading(false)
       setProductSearch('')
       setProductResults([])
       setProductDropdownOpen(false)
@@ -1654,9 +1962,15 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     void loadProductPage(form.supplier_id, productSearch.trim().toLowerCase(), productPage + 1, requestId, true)
   }
 
-  function selectProductForAddition(p: PurchaseOrderCatalogProduct) {
+  async function selectProductForAddition(p: PurchaseOrderCatalogProduct) {
     if (items.some(it => it.product_id === p.id)) { msg('Este producto ya está en la orden'); return }
+    const request = ++commercialRequestRef.current
     setPendingProduct(p)
+    setPendingCommercial(null)
+    setPendingCommercialError('')
+    setPendingCommercialLoading(((!editId && manualOrderMode === 'commercial') || isCommercialDraft) && !isReplenishmentPreparation)
+    setPendingCommercialQuantity('')
+    setPendingCommercialPrice('')
     setPendingQuantity('')
     setPendingUnitPrice(p.last_purchase_unit_cost === null ? '' : String(p.last_purchase_unit_cost))
     setPendingDiscountPercent(0)
@@ -1664,6 +1978,24 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     setPendingDiscountUnitRaw(null)
     setPendingDiscountMode(null)
     setProductDropdownOpen(false)
+    if (((!editId && manualOrderMode === 'commercial') || isCommercialDraft) && !isReplenishmentPreparation) {
+      try {
+        const result = await getPurchaseCommercialForManualOrder(p.id, form.supplier_id)
+        if (request !== commercialRequestRef.current) return
+        if (!result.success) setPendingCommercialError(result.message || 'No se pudo resolver la configuración comercial.')
+        else {
+          setPendingCommercial({ unit: result.purchase_unit, factor: result.purchase_unit_factor, mappingId: result.mapping_id })
+          if (p.last_purchase_unit_cost !== null) {
+            const converted = convertPurchaseDecimal(String(p.last_purchase_unit_cost), result.purchase_unit_factor, 'multiply', false)
+            setPendingCommercialPrice(converted.ok ? converted.value : '')
+          }
+        }
+      } catch {
+        if (request === commercialRequestRef.current) setPendingCommercialError('No se pudo resolver la configuración comercial.')
+      } finally {
+        if (request === commercialRequestRef.current) setPendingCommercialLoading(false)
+      }
+    }
     setTimeout(() => {
       pendingQuantityInputRef.current?.focus()
     }, 50)
@@ -1681,7 +2013,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       return
     }
     const parsed = validatePriceDecimal(value, 2)
-    const unitPriceValidation = validatePriceDecimal(pendingUnitPrice, 2)
+    const unitPriceValidation = validatePriceDecimal(pendingUnitPrice, pendingCommercial ? 4 : 2)
     const unitPrice = unitPriceValidation.isValid && unitPriceValidation.value !== null ? unitPriceValidation.value : 0
     if (parsed.isValid && parsed.value !== null) {
       const unitAmount = Math.min(parsed.value, unitPrice)
@@ -1697,7 +2029,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
 
   function updatePendingUnitPrice(value: string) {
     setPendingUnitPrice(value)
-    const parsed = validatePriceDecimal(value, 2)
+    if (pendingCommercial) {
+      const converted = convertPurchaseDecimal(value, pendingCommercial.factor, 'multiply', false)
+      setPendingCommercialPrice(converted.ok ? converted.value : '')
+    }
+    const parsed = validatePriceDecimal(value, pendingCommercial ? 4 : 2)
     if (parsed.isValid && parsed.value !== null) {
       const unitPrice = parsed.value
       if (pendingDiscountMode === 'unit') {
@@ -1708,20 +2044,24 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
 
   function addProductToItems() {
     if (!pendingProduct) return
+    if (((!editId && manualOrderMode === 'commercial') || isCommercialDraft) && !isReplenishmentPreparation && !pendingCommercial) { msg(pendingCommercialError || 'Espere la resolución comercial del producto.'); return }
     if (items.some(it => it.product_id === pendingProduct.id)) { msg('Este producto ya está en la orden'); setPendingProduct(null); return }
     const quantity = Number(pendingQuantity)
     if (!Number.isFinite(quantity) || quantity <= 0) { msg('Ingresa una cantidad mayor a 0.'); return }
+    if (pendingCommercial && !isPurchaseMultiple(pendingQuantity, pendingCommercial.factor)) { msg(`Debe ser múltiplo de ${pendingCommercial.factor}`); return }
 
-    const priceVal = validatePriceDecimal(pendingUnitPrice, 2)
+    const priceVal = validatePriceDecimal(pendingUnitPrice, pendingCommercial ? 4 : 2)
+    if (pendingCommercial && !validatePriceDecimal(pendingCommercialPrice, 4).isValid) { msg('Ingresa un precio comercial válido de hasta 4 decimales.'); return }
     if (!priceVal.isValid || priceVal.value === null) {
       if (priceVal.error === 'EXCEEDS_MAX_DECIMALS') {
-        msg('El precio unitario no puede tener más de 2 decimales.')
+        msg(`El precio unitario no puede tener más de ${pendingCommercial ? 4 : 2} decimales.`)
       } else {
         msg('Ingresa un precio unitario válido.')
       }
       return
     }
-    const unitPrice = priceVal.value
+    const commercialPriceValue = pendingCommercial ? Number(pendingCommercialPrice.replace(',', '.')) : null
+    const unitPrice = pendingCommercial && Number.isFinite(commercialPriceValue) ? commercialPriceValue! / pendingCommercial.factor : priceVal.value
 
     let discountUnitAmount = pendingDiscountUnitAmount
     if (pendingDiscountMode === 'unit' && pendingDiscountUnitRaw !== null) {
@@ -1752,6 +2092,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       unit: pendingProduct.unit_of_measure || 'UNIDAD',
       quantity,
       unit_price: unitPrice,
+      ...(pendingCommercial ? { commercial_unit: pendingCommercial.unit, commercial_factor: pendingCommercial.factor, commercial_mapping_id: pendingCommercial.mappingId, commercial_price_raw: pendingCommercialPrice, commercial_quantity_raw: pendingCommercialQuantity } : {}),
       raw_unit_price: pendingUnitPrice,
       ...discountPayload,
       raw_discount_unit_amount: pendingDiscountMode === 'unit' && pendingDiscountUnitRaw ? pendingDiscountUnitRaw : (discountPayload.discount_unit_amount ? String(discountPayload.discount_unit_amount) : ''),
@@ -1778,6 +2119,27 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     }, 50)
     if (productSearchTimerRef.current !== null) window.clearTimeout(productSearchTimerRef.current)
     productSearchRequestSequence.current += 1
+  }
+
+  function addCommercialProduct(value: CommercialProductAddition) {
+    if (!pendingProduct) return
+    if (items.some(item => item.product_id === pendingProduct.id)) { msg('Este producto ya está en la orden'); return }
+    setItems(current => [...current, {
+      tempId: newTempId(), item_type: 'PRODUCT', product_id: pendingProduct.id, sku: pendingProduct.sku,
+      description: pendingProduct.description, unit: pendingProduct.unit_of_measure || 'UNIDAD',
+      quantity: value.quantity, unit_price: value.unitPrice, raw_unit_price: value.internalPrice,
+      commercial_unit: value.configuration.unit, commercial_factor: value.configuration.factor,
+      commercial_mapping_id: value.configuration.mappingId, commercial_price_raw: value.commercialPrice,
+      commercial_quantity_raw: value.commercialQuantity, discount_percent: value.discountPercent,
+      discount_unit_amount: value.discountUnitAmount, discount_mode: value.discountMode,
+      raw_discount_unit_amount: value.discountUnitAmount ? String(value.discountUnitAmount) : '',
+      tax_rate: pendingProduct.tax_rate ?? 19, warehouse_id: form.warehouse_id, notes: '',
+    }])
+    setPendingProduct(null)
+    setProductSearch(''); setProductResults([]); setProductDropdownOpen(false); setProductPage(0); setProductHasMore(false); setProductSearchLoading(false)
+    if (productSearchTimerRef.current !== null) window.clearTimeout(productSearchTimerRef.current)
+    productSearchRequestSequence.current += 1
+    setTimeout(() => productInputRef.current?.focus(), 50)
   }
 
   function addServiceToItems() {
@@ -1819,8 +2181,24 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
   }
 
   function updateItem(tempId: string, field: keyof LineItem, value: unknown) {
+    if (field === 'quantity' || field === 'commercial_quantity_raw') setCommercialSaveError('')
     setItems(prev => prev.map(it => {
       if (it.tempId !== tempId) return it
+      if (it.commercial_factor && field === 'quantity') {
+        return { ...it, quantity: Number(value) || 0, commercial_quantity_raw: convertedDisplay(String(value), it.commercial_factor, 'divide') }
+      }
+      if (it.commercial_factor && field === 'commercial_quantity_raw') {
+        const raw = String(value)
+        const converted = convertPurchaseDecimal(raw, it.commercial_factor, 'multiply', true)
+        return { ...it, commercial_quantity_raw: raw, quantity: converted.ok ? Number(converted.value) : 0 }
+      }
+      if (it.commercial_factor && field === 'commercial_price_raw') {
+        const raw = String(value)
+        const number = Number(raw.replace(',', '.'))
+        if (!raw.trim() || !Number.isFinite(number) || number < 0) return { ...it, commercial_price_raw: raw }
+        const unitPrice = number / it.commercial_factor
+        return { ...it, commercial_price_raw: raw, unit_price: unitPrice, raw_unit_price: convertedDisplay(raw, it.commercial_factor, 'divide'), discount_unit_amount: Math.min(it.discount_unit_amount, unitPrice) }
+      }
       if (field === 'discount_percent') {
         const percent = Math.min(Math.max(Number(value) || 0, 0), 100)
         return { ...it, discount_percent: percent, discount_unit_amount: 0, raw_discount_unit_amount: '', discount_mode: percent > 0 ? 'percent' : null }
@@ -1836,11 +2214,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
       }
       if (field === 'unit_price') {
         const rawValue = String(value)
-        const parsed = validatePriceDecimal(rawValue, 2)
+        const parsed = validatePriceDecimal(rawValue, it.commercial_factor ? 4 : 2)
         if (parsed.isValid && parsed.value !== null) {
           const unitPrice = parsed.value
           const unitAmount = Math.min(it.discount_unit_amount, unitPrice)
-          return { ...it, raw_unit_price: rawValue, unit_price: unitPrice, discount_unit_amount: unitAmount, discount_mode: unitAmount > 0 ? 'unit' : null }
+          return { ...it, raw_unit_price: rawValue, unit_price: unitPrice, ...(it.commercial_factor ? { commercial_price_raw: convertedDisplay(rawValue, it.commercial_factor, 'multiply') } : {}), discount_unit_amount: unitAmount, discount_mode: it.discount_mode === 'percent' ? 'percent' : unitAmount > 0 ? 'unit' : null }
         }
         return { ...it, raw_unit_price: rawValue }
       }
@@ -1861,7 +2239,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     if (editingItem === tempId) setEditingItem(null)
   }
 
-  const orderTotals = calculatePurchaseOrderTotals(items)
+  const showCommercialColumns = ((!editId && manualOrderMode === 'commercial') || isCommercialDraft) && !isReplenishmentPreparation
+  const hasCommercialPreview = isCommercialDraft || items.some(item => item.commercial_factor !== undefined)
+  const commercialChangesPending = isCommercialDraft && hasCommercialChanges(savedCommercialSnapshot, form, items)
+  const newDraftHasChanges = !editId && !isReplenishmentPreparation && (Boolean(form.supplier_id || form.warehouse_id || form.required_date || form.authorized_by || form.notes.trim()) || items.length > 0)
+  const orderTotals = showCommercialColumns ? calculateCommercialDraftTotals(items) : calculatePurchaseOrderTotals(items)
   const {
     gross_total: grossTotal,
     discount_total: discountTotal,
@@ -1870,7 +2252,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     grand_total: grandTotal,
   } = orderTotals
   const pendingDiscountDisplay = getPurchaseOrderDiscountDisplayValues({
-    unit_price: (validatePriceDecimal(pendingUnitPrice, 2).value ?? Number(pendingUnitPrice)) || 0,
+    unit_price: (validatePriceDecimal(pendingUnitPrice, pendingCommercial ? 4 : 2).value ?? Number(pendingUnitPrice)) || 0,
     discount_percent: pendingDiscountPercent,
     discount_unit_amount: pendingDiscountUnitAmount,
     discount_mode: pendingDiscountMode,
@@ -1892,10 +2274,10 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
               </div>
               <div>
                 <h2 id="confirm-submit-title" className="text-base font-bold text-[#322D29]">
-                  {editId ? 'Confirmar actualización' : 'Confirmar emisión de OC'}
+                  {editId && !isCommercialDraft ? 'Confirmar actualización' : 'Confirmar emisión de OC'}
                 </h2>
                 <p className="mt-0.5 text-xs text-[#6D625B]">
-                  {editId ? 'Verifique los datos antes de guardar.' : 'Verifique los datos antes de emitir la orden formalmente.'}
+                  {editId && !isCommercialDraft ? 'Verifique los datos antes de guardar.' : 'Verifique los datos antes de emitir la orden formalmente.'}
                 </p>
               </div>
             </div>
@@ -1913,7 +2295,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
             )}
             <div className="flex justify-between">
               <span className="text-[#6D625B]">Proveedor:</span>
-              <span className="font-semibold text-right truncate max-w-[230px] text-[#322D29]">
+              <span className="min-w-0 max-w-[230px] whitespace-normal break-words font-semibold text-right text-[#322D29]">
                 {supplierDisplayName}
               </span>
             </div>
@@ -1934,7 +2316,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
           </div>
 
           <p className="mb-4 text-[11px] text-[#6D625B]">
-            {editId
+            {editId && !isCommercialDraft
               ? 'Al confirmar, se actualizarán los productos, cantidades y precios de la orden de compra.'
               : 'Al emitir la orden de compra, quedará registrada formalmente en el sistema.'}
           </p>
@@ -1955,7 +2337,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
               className="inline-flex items-center gap-1.5 rounded-xl bg-[#72383D] px-4 py-2 text-xs font-bold text-[#EFE9E1] hover:bg-[#5D2E32] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              {isSubmitting ? (editId ? 'Guardando...' : 'Emitiendo...') : (editId ? 'Confirmar y guardar' : 'Confirmar y emitir')}
+              {isSubmitting ? (editId && !isCommercialDraft ? 'Guardando...' : 'Emitiendo...') : (editId && !isCommercialDraft ? 'Confirmar y guardar' : 'Confirmar y emitir')}
             </button>
           </div>
         </div>
@@ -1992,14 +2374,14 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     }
   }
 
-  async function handleDownloadPDF() {
+  async function handleDownloadPDF(source?: 'ORIGINAL_SENT') {
     if (!detail || downloadingPdf) return
     setDownloadingPdf(true)
     try {
-      const result = await getPurchaseOrderDocumentDetail(detail.po.id)
+      const result = await getPurchaseOrderDocumentDetail(detail.po.id, source)
       if ('error' in result) throw new Error(result.error)
       const document = result.data
-      await downloadPOBooklet(document, `${buildPurchaseOrderFileNameBase(document.po.supplier_name, document.po.correlative)}.pdf`, undefined)
+      await downloadPOBooklet(document, `${buildPurchaseOrderFileNameBase(document.po.supplier_name, document.po.correlative)}${source === 'ORIGINAL_SENT' ? '_Original_Enviada' : ''}.pdf`, undefined)
     } catch (error) {
       msg(error instanceof Error ? error.message : 'No se pudo generar el PDF.')
     } finally {
@@ -2037,11 +2419,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     }
   }
 
-  async function handleDownloadExcel() {
+  async function handleDownloadExcel(source?: 'ORIGINAL_SENT') {
     if (!detail || downloadingExcel) return
     setDownloadingExcel(true)
     try {
-      const result = await getPurchaseOrderDocumentDetail(detail.po.id)
+      const result = await getPurchaseOrderDocumentDetail(detail.po.id, source)
       if ('error' in result) throw new Error(result.error)
       generatePurchaseOrderExcel(result.data)
     } catch (error) {
@@ -2085,7 +2467,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         tax_total: taxTotal,
         exempt_total: 0,
         grand_total: grandTotal,
-        status: 'EMITIDA',
+         status: 'EMITIDA',
+         commercial_managed: isCommercialDraft || items.some(item => item.commercial_factor !== undefined),
         created_at: new Date().toISOString(),
         company_name: activeCompany?.business_name,
         company_rut: activeCompany?.rut,
@@ -2095,7 +2478,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         company_address: activeCompany?.address
       },
          items: items.map((it, idx) => {
-             const lineTotals = calculatePurchaseOrderLineTotals(it)
+              const lineTotals = it.commercial_factor !== undefined ? calculateCommercialDraftLineTotals(it) : calculatePurchaseOrderLineTotals(it)
              const discountPayload = getPurchaseOrderDiscountPayload(it)
             return {
          line_number: idx + 1,
@@ -2105,7 +2488,11 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
         product_description: it.description,
         unit: it.unit || undefined,
         quantity: it.quantity,
-        unit_price: it.unit_price,
+         unit_price: it.unit_price,
+         purchase_unit_snapshot: it.commercial_unit,
+         purchase_unit_factor_snapshot: it.commercial_factor,
+         commercial_unit_price_snapshot: it.commercial_price_raw,
+         commercial_gross_amount_snapshot: it.commercial_factor !== undefined ? lineTotals.gross_amount : null,
          ...discountPayload,
          discount_unit_amount: discountPayload.discount_unit_amount,
          discount_amount: lineTotals.discount_amount,
@@ -2171,6 +2558,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
     return (
        <div className="flex h-full flex-col overflow-hidden bg-[#EFE9E1] animate-in fade-in zoom-in-95 duration-200">
         {message && <div className="shrink-0 bg-theme-accent-hover/10 border-b border-theme-accent/20 px-4 py-2.5 text-sm text-theme-text-accent">{message}</div>}
+        {commercialSaveError && <div role="alert" className="shrink-0 border-b border-red-300 bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-800">{commercialSaveError}</div>}
         <form
           onSubmit={handleSubmit}
           onKeyDown={e => {
@@ -2180,6 +2568,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
           }}
           className="flex-1 overflow-auto"
         >
+          <fieldset disabled={isSubmitting} className="min-w-0 w-full border-0 p-0 m-0">
            <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-[#AC9C8D]/35 bg-[#322D29] px-4 py-2 sm:px-6">
             <div className="flex items-center gap-3 min-w-0">
                <button type="button" onClick={() => { setView('list'); resetForm() }} className="rounded-md p-1.5 text-[#D1C7BD] transition-colors hover:bg-white/10 hover:text-[#EFE9E1]">
@@ -2191,6 +2580,9 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                     <h2 className="truncate text-base font-bold uppercase tracking-wide text-[#EFE9E1]">
                       {editId ? (editingPoCorrelative ? `Editar orden de compra · ${editingPoCorrelative}` : 'Editar orden de compra') : 'Nueva orden de compra'}
                     </h2>
+                    {isCommercialDraft && <span className="rounded border border-[#AC9C8D]/50 px-2 py-0.5 text-[10px] font-semibold text-[#EFE9E1]">Borrador</span>}
+                    {isCommercialDraft && <span role="status" className="text-[11px] text-[#D1C7BD]">{commercialChangesPending ? 'Cambios pendientes de guardar' : 'Cambios guardados'}</span>}
+                    {newDraftHasChanges && <span role="status" className="text-[11px] text-[#D1C7BD]">Cambios pendientes de guardar</span>}
                    {!editId && lastSavedAt && (
                      <span className="text-[11px] font-normal text-[#AC9C8D] flex items-center gap-1 shrink-0">
                        • Guardado automáticamente · {lastSavedAt}
@@ -2213,23 +2605,27 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                 Cancelar
               </button>
                <button type="button" onClick={handlePreviewPDF} className="flex-1 rounded-md border border-[#AC9C8D]/55 px-3 py-1.5 text-xs font-semibold text-[#EFE9E1] transition-colors hover:border-[#D1C7BD] hover:bg-white/10 sm:flex-none">
-                Vista previa PDF
-              </button>
+                 Vista previa PDF
+               </button>
+               {showCommercialColumns && <button type="button" onClick={() => void handleSaveCommercialDraft()} disabled={isSubmitting} className="flex-1 rounded-md border border-[#AC9C8D]/55 px-3 py-1.5 text-xs font-semibold text-[#EFE9E1] hover:bg-white/10 disabled:opacity-60 sm:flex-none">{isSubmitting ? 'Guardando...' : isCommercialDraft ? 'Guardar cambios' : 'Guardar borrador'}</button>}
                 <button
                   type="button"
                   onClick={handlePromptSubmit}
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || (hasCommercialPreview && !isCommercialDraft) || (!editId && showCommercialColumns) || (isCommercialDraft && (commercialRevision === null || commercialChangesPending))}
+                  title={isCommercialDraft && commercialChangesPending ? 'Guarda los cambios antes de emitir.' : undefined}
                   className="flex-1 rounded-md bg-[#72383D] px-4 py-1.5 text-xs font-bold text-[#EFE9E1] transition-colors hover:bg-[#5D2E32] disabled:cursor-not-allowed disabled:opacity-60 sm:flex-none"
                 >
                   {isSubmitting ? (
                     <><Loader2 className="mr-1 inline-block h-3 w-3 animate-spin" />{editId ? 'Guardando...' : 'Emitiendo...'}</>
                   ) : (
-                    editId ? 'Guardar cambios' : 'Emitir OC'
+                    editId && !isCommercialDraft ? 'Guardar cambios' : 'Emitir OC'
                   )}
                 </button>
             </div>
           </div>
-            <div className="min-w-0 space-y-4 px-4 py-4 sm:px-6 sm:py-5">
+             <div className="min-w-0 space-y-4 px-4 py-4 sm:px-6 sm:py-5">
+              {!editId && !isReplenishmentPreparation && <div className="flex items-center gap-2 text-xs"><span>Tipo de orden:</span><button type="button" aria-pressed={manualOrderMode === 'commercial'} disabled={items.length > 0 || Boolean(pendingProduct)} onClick={() => setManualOrderMode('commercial')} className="rounded border px-2 py-1 disabled:opacity-50">Comercial</button><button type="button" aria-pressed={manualOrderMode === 'traditional'} disabled={items.length > 0 || Boolean(pendingProduct)} onClick={() => setManualOrderMode('traditional')} className="rounded border px-2 py-1 disabled:opacity-50">Tradicional</button></div>}
+              {hasCommercialPreview && <p className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800">Guarda el borrador antes de emitir. El envío a proveedor permanece bloqueado.</p>}
              {!editId && draftPrompt && (
                <div className="rounded-lg border border-[#AC9C8D]/40 bg-[#F7F4F0] p-3.5 shadow-sm text-[#322D29] animate-in fade-in duration-150">
                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -2287,15 +2683,15 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                        ? (suppliers.find(s => s.id === form.supplier_id)?.business_name ?? replenishmentSupplierName)
                       : supplierSearch
                   }
-                   onChange={e => { if (isReplenishmentPreparation) return; setSupplierSearch(e.target.value); setSupplierOpen(true) }}
-                   onFocus={() => { if (!isReplenishmentPreparation) setSupplierOpen(true) }}
+                   onChange={e => { if (isReplenishmentPreparation || isCommercialDraft) return; setSupplierSearch(e.target.value); setSupplierOpen(true) }}
+                   onFocus={() => { if (!isReplenishmentPreparation && !isCommercialDraft) setSupplierOpen(true) }}
                    placeholder="Buscar proveedor..."
                    required
-                   readOnly={isReplenishmentPreparation}
+                   readOnly={isReplenishmentPreparation || isCommercialDraft}
                      className="w-full h-8.5 rounded-lg border border-[#D1C7BD] bg-white px-3 text-xs text-[#322D29] placeholder:text-[#AC9C8D] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/20 shadow-xs transition-colors"
                  />
                  {isReplenishmentPreparation && <p className="mt-1 text-[10px] text-theme-text-muted">Proveedor definido por los productos seleccionados en Reposición.</p>}
-                 {!isReplenishmentPreparation && supplierOpen && (
+                  {!isReplenishmentPreparation && !isCommercialDraft && supplierOpen && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setSupplierOpen(false)} />
                     <div className="absolute left-0 top-full mt-1 w-full max-h-48 overflow-y-auto bg-theme-surface border border-theme-border rounded-xl shadow-xl z-50 p-1 space-y-0.5">
@@ -2508,35 +2904,39 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                    )}
                </div>
 
-               {pendingProduct && (() => {
-                  const pendingPriceVal = validatePriceDecimal(pendingUnitPrice, 2)
+               {pendingProduct && showCommercialColumns && <PurchaseOrderCommercialProductForm key={pendingProduct.id} product={pendingProduct} configuration={pendingCommercial} loading={pendingCommercialLoading} configurationError={pendingCommercialError} currency={form.currency} showDiscounts={showDiscountColumns} onAdd={addCommercialProduct} />}
+               {pendingProduct && !showCommercialColumns && (() => {
+                   const pendingPriceVal = validatePriceDecimal(pendingUnitPrice, pendingCommercial ? 4 : 2)
                   const pendingDiscountUnitVal = pendingDiscountUnitRaw !== null ? validatePriceDecimal(pendingDiscountUnitRaw, 2) : { isValid: true, value: null, raw: '', decimals: 0, isEmpty: true }
                   const pendingLineTotals = calculatePurchaseOrderLineTotals({
                     quantity: Number(pendingQuantity) || 0,
-                    unit_price: (pendingPriceVal.value ?? Number(pendingUnitPrice)) || 0,
+                    unit_price: pendingCommercial && pendingCommercialPrice ? Number(pendingCommercialPrice.replace(',', '.')) / pendingCommercial.factor : (pendingPriceVal.value ?? Number(pendingUnitPrice)) || 0,
                     discount_percent: Number(pendingDiscountDisplay.discount_percent) || 0,
                     discount_unit_amount: Number(pendingDiscountDisplay.discount_unit_amount) || 0,
                     tax_rate: Number(pendingProduct.tax_rate) || 19,
                   })
                   return (
-                    <div className="mb-3 min-w-0 rounded-xl border border-[#72383D]/30 bg-white p-3.5 shadow-sm border-l-4 border-l-[#72383D]">
-                      <div className={`grid min-w-0 grid-cols-1 gap-2 sm:items-end ${showDiscountColumns ? 'sm:grid-cols-[minmax(0,1.25fr)_minmax(82px,.55fr)_minmax(108px,.7fr)_minmax(82px,.55fr)_minmax(108px,.7fr)_minmax(60px,.45fr)_minmax(96px,.65fr)_auto]' : 'sm:grid-cols-[minmax(0,1.5fr)_minmax(95px,.65fr)_minmax(120px,.8fr)_minmax(64px,.45fr)_minmax(104px,.7fr)_auto]'}`}>
-                        <div className="min-w-0">
+                    <div className="mb-3 min-w-0 overflow-x-auto rounded-xl border border-[#72383D]/30 bg-white p-3.5 shadow-sm border-l-4 border-l-[#72383D]">
+                      <div className="flex min-w-0 flex-wrap items-end gap-x-2 gap-y-3 lg:min-w-[1050px] lg:flex-nowrap">
+                        <div className="w-full min-w-0 lg:min-w-[200px] lg:flex-1">
                           <div className="flex items-center gap-1.5">
                             <span className="rounded bg-[#72383D]/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[#72383D]">Producto</span>
                             <span className="font-mono text-[10px] font-semibold text-[#72383D]">SKU {pendingProduct.sku}</span>
                           </div>
                           <p className="mt-1 line-clamp-2 text-xs font-bold text-[#322D29]" title={pendingProduct.description}>{pendingProduct.description}</p>
-                          <p className="mt-0.5 text-[10px] text-[#6D625B]">Último costo Bsale: <span className="font-mono font-medium text-[#322D29]">{pendingProduct.last_purchase_unit_cost === null ? 'Sin precio disponible' : formatCurrency(pendingProduct.last_purchase_unit_cost, 'CLP')}</span></p>
+                           <p className="mt-0.5 text-[10px] text-[#6D625B]">Último costo Bsale: <span className="font-mono font-medium text-[#322D29]">{pendingProduct.last_purchase_unit_cost === null ? 'Sin precio disponible' : formatCurrency(pendingProduct.last_purchase_unit_cost, 'CLP')}</span></p>
+                           {pendingCommercialLoading && <p className="text-[10px] text-[#6D625B]">Consultando presentación...</p>}
+                           {pendingCommercialError && <p className="text-[10px] text-red-700">{pendingCommercialError}</p>}
+                           {pendingCommercial && (pendingCommercial.unit ? <p className="text-[10px] font-semibold text-blue-700">Se compra por {pendingCommercial.unit} de {pendingCommercial.factor} unidades</p> : <p className="text-[10px] font-semibold text-orange-600">Presentación de compra pendiente de configurar</p>)}
                         </div>
-                        <label className="text-[10px] font-semibold text-[#6D625B]">Cantidad
+                        <label className="relative w-[68px] shrink-0 whitespace-nowrap text-[10px] font-semibold text-[#6D625B]">Cantidad
                           <input
                             ref={pendingQuantityInputRef}
                             type="number"
                             min="0.001"
                             step="0.001"
                             value={pendingQuantity}
-                            onChange={event => setPendingQuantity(event.target.value)}
+                            onChange={event => { const value = event.target.value; setPendingQuantity(value); if (pendingCommercial) setPendingCommercialQuantity(convertedDisplay(value, pendingCommercial.factor, 'divide')) }}
                             onFocus={handleSelectInputContent}
                             onClick={handleSelectInputContent}
                             onKeyDown={event => {
@@ -2549,8 +2949,12 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                             placeholder="0"
                             className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs font-mono text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15"
                           />
+                          {pendingCommercial && pendingQuantity && Number(pendingQuantity) > 0 && !isPurchaseMultiple(pendingQuantity, pendingCommercial.factor) && <span className="block text-[10px] text-red-600 lg:absolute lg:left-0 lg:top-full lg:z-10 lg:bg-white">Debe ser múltiplo de {pendingCommercial.factor}</span>}
                         </label>
-                        <label className="text-[10px] font-semibold text-[#6D625B]">Precio unitario
+                        {pendingCommercial && <label className="w-[78px] shrink-0 whitespace-nowrap text-[10px] font-semibold text-[#6D625B]">Total {pendingCommercial.unit || 'unidad'}
+                          <input aria-label="Cantidad comercial" type="number" min="0" step="any" value={pendingCommercialQuantity} onChange={event => { const raw = event.target.value; setPendingCommercialQuantity(raw); const converted = convertPurchaseDecimal(raw, pendingCommercial.factor, 'multiply', true); setPendingQuantity(converted.ok ? converted.value : '') }} className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs" />
+                        </label>}
+                        <label className="relative w-[86px] shrink-0 whitespace-nowrap text-[10px] font-semibold text-[#6D625B]">Precio unitario
                           <input
                             ref={pendingUnitPriceInputRef}
                             type="text"
@@ -2575,11 +2979,15 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                             placeholder="0,00"
                             className={`mt-1 block h-8 w-full rounded-md border bg-white px-2 text-right text-xs font-mono text-[#322D29] focus:outline-none focus:ring-2 ${pendingPriceVal.error === 'EXCEEDS_MAX_DECIMALS' ? 'border-amber-500 focus:ring-amber-300' : !pendingPriceVal.isValid && !pendingPriceVal.isEmpty ? 'border-red-500 focus:ring-red-300' : 'border-[#D1C7BD] focus:border-[#72383D] focus:ring-[#72383D]/15'}`}
                           />
-                          {pendingPriceVal.error === 'EXCEEDS_MAX_DECIMALS' && <span className="block mt-0.5 text-[10px] font-semibold text-amber-600">Máx. 2 decimales</span>}
-                          {!pendingPriceVal.isValid && !pendingPriceVal.isEmpty && pendingPriceVal.error !== 'EXCEEDS_MAX_DECIMALS' && <span className="block mt-0.5 text-[10px] font-semibold text-red-600">Precio inválido</span>}
+                          {pendingPriceVal.error === 'EXCEEDS_MAX_DECIMALS' && <span className="block mt-0.5 text-[10px] font-semibold text-amber-600 lg:absolute lg:left-0 lg:top-full lg:z-10 lg:bg-white">Máx. {pendingCommercial ? 4 : 2} decimales</span>}
+                          {!pendingPriceVal.isValid && !pendingPriceVal.isEmpty && pendingPriceVal.error !== 'EXCEEDS_MAX_DECIMALS' && <span className="block mt-0.5 text-[10px] font-semibold text-red-600 lg:absolute lg:left-0 lg:top-full lg:z-10 lg:bg-white">Precio inválido</span>}
                         </label>
+                        {pendingCommercial && <label className="relative w-[88px] shrink-0 whitespace-nowrap text-[10px] font-semibold text-[#6D625B]">Precio {pendingCommercial.unit || 'unidad'}
+                          <input aria-label="Precio comercial" type="text" inputMode="decimal" value={pendingCommercialPrice} onChange={event => { const raw = event.target.value; setPendingCommercialPrice(raw); setPendingUnitPrice(convertedDisplay(raw, pendingCommercial.factor, 'divide')) }} className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs" />
+                          {pendingCommercialPrice && convertPurchaseDecimal(pendingCommercialPrice, pendingCommercial.factor, 'divide', true).ok === false && <span className="block whitespace-normal text-[10px] text-amber-700 lg:absolute lg:left-0 lg:top-full lg:z-10 lg:w-48 lg:bg-white">Precio unitario aproximado; precio comercial exacto.</span>}
+                        </label>}
                         {showDiscountColumns && <>
-                          <label className="text-[10px] font-semibold text-[#6D625B]">Dcto %
+                          <label className="w-[58px] shrink-0 whitespace-nowrap text-[10px] font-semibold text-[#6D625B]">Dcto %
                             <input
                               ref={pendingDiscountPercentInputRef}
                               type="number"
@@ -2600,7 +3008,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                               className="mt-1 block h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-right text-xs font-mono text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15"
                             />
                           </label>
-                          <label className="text-[10px] font-semibold text-[#6D625B]">Dcto por unidad
+                          <label className="relative w-[86px] shrink-0 whitespace-nowrap text-[10px] font-semibold text-[#6D625B]">Dcto por unidad
                             <input
                               ref={pendingDiscountUnitInputRef}
                               type="text"
@@ -2619,29 +3027,31 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                               placeholder="0,00"
                               className={`mt-1 block h-8 w-full rounded-md border bg-white px-2 text-right text-xs font-mono text-[#322D29] focus:outline-none focus:ring-2 ${pendingDiscountUnitVal.error === 'EXCEEDS_MAX_DECIMALS' ? 'border-amber-500 focus:ring-amber-300' : 'border-[#D1C7BD] focus:border-[#72383D] focus:ring-[#72383D]/15'}`}
                             />
-                            {pendingDiscountUnitVal.error === 'EXCEEDS_MAX_DECIMALS' && <span className="block mt-0.5 text-[10px] font-semibold text-amber-600">Máx. 2 decimales</span>}
+                            {pendingDiscountUnitVal.error === 'EXCEEDS_MAX_DECIMALS' && <span className="block mt-0.5 text-[10px] font-semibold text-amber-600 lg:absolute lg:left-0 lg:top-full lg:z-10 lg:bg-white">Máx. 2 decimales</span>}
                           </label>
                         </>}
-                        <div className="text-[10px] font-semibold text-[#6D625B]">IVA
+                        <div className="w-[45px] shrink-0 whitespace-nowrap text-[10px] font-semibold text-[#6D625B]">IVA
                           <div className="mt-1 flex h-8 items-center justify-end rounded-md border border-[#D1C7BD] bg-[#F7F4F0] px-2 text-xs font-mono text-[#6D625B]">{pendingProduct.tax_rate || 19}%</div>
                         </div>
-                        <div className="text-[10px] font-semibold text-[#6D625B]">Neto
+                        <div className="w-[108px] shrink-0 whitespace-nowrap text-[10px] font-semibold text-[#6D625B]">Neto
                           <div className="mt-1 flex h-8 items-center justify-end rounded-md border border-[#72383D]/25 bg-[#FAF7F4] px-2 font-mono text-xs font-bold text-[#72383D]">
                             {pendingLineTotals.net_amount.toLocaleString('es-CL', { style: 'currency', currency: form.currency, minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </div>
                         </div>
-                        <button type="button" onClick={addProductToItems} className="h-8 whitespace-nowrap rounded-md border border-[#72383D]/40 bg-[#EFE9E1] px-2.5 text-[11px] font-bold text-[#72383D] hover:bg-[#F5EDEE]">Agregar producto</button>
+                        <button type="button" disabled={pendingCommercialLoading || Boolean(pendingCommercialError)} onClick={addProductToItems} className="h-8 shrink-0 whitespace-nowrap rounded-md border border-[#72383D]/40 bg-[#EFE9E1] px-2.5 text-[11px] font-bold text-[#72383D] hover:bg-[#F5EDEE] disabled:opacity-50">Agregar producto</button>
                       </div>
                     </div>
                   )
                 })()}
 
                   <div className="min-w-0 overflow-x-auto border border-[#D1C7BD] bg-white">
-                   <table className="w-full min-w-[760px] table-fixed text-sm">
+                   <table className="w-full min-w-[1050px] table-fixed text-sm">
                     <colgroup>
                       <col />
-                      <col className="w-20" />
-                      <col className="w-28" />
+                       <col className="w-20" />
+                       {showCommercialColumns && <><col className="w-24" /><col className="w-28" /></>}
+                       <col className="w-28" />
+                       {showCommercialColumns && <col className="w-28" />}
                       {showDiscountColumns && <><col className="w-20" /><col className="w-24" /></>}
                       <col className="w-16" />
                       <col className="w-28" />
@@ -2651,8 +3061,10 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                     <thead className="bg-[#322D29]">
                       <tr className="border-b border-[#AC9C8D]/35 text-[9px] uppercase tracking-[0.08em] text-[#EFE9E1]">
                          <th className="px-2.5 py-1.5 text-left font-semibold">Producto / Servicio</th>
-                         <th className="px-2 py-1.5 text-center font-semibold">Cantidad</th>
+                         <th className="px-2 py-1.5 text-center font-semibold">Cantidad interna</th>
+                         {showCommercialColumns && <><th className="px-2 py-1.5 text-center font-semibold">Unidad de compra</th><th className="px-2 py-1.5 text-center font-semibold">Cantidad comercial</th></>}
                          <th className="px-2 py-1.5 text-center font-semibold">P. unitario</th>
+                         {showCommercialColumns && <th className="px-2 py-1.5 text-center font-semibold">Precio comercial</th>}
                           {showDiscountColumns && <><th className="px-2 py-1.5 text-center font-semibold">Dcto %</th><th className="px-2 py-1.5 text-center font-semibold" title="Descuento por unidad">Dcto/u</th></>}
                          <th className="px-2 py-1.5 text-center font-semibold">IVA %</th>
                          <th className="px-2 py-1.5 text-right font-semibold">Neto</th>
@@ -2663,10 +3075,10 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                   <tbody>
                     {items.length === 0 ? (
                       <tr>
-                          <td colSpan={showDiscountColumns ? 9 : 7} className="py-6 text-center text-xs text-[#AC9C8D]">No hay líneas agregadas</td>
+                          <td colSpan={(showDiscountColumns ? 9 : 7) + (showCommercialColumns ? 3 : 0)} className="py-6 text-center text-xs text-[#AC9C8D]">No hay líneas agregadas</td>
                       </tr>
                     ) : items.map(it => (
-                         <tr key={it.tempId} className={`border-b border-[#E5DDD4] odd:bg-white even:bg-[#FBFAF8] hover:bg-[#F3EFE9] transition-colors ${invalidPriceItemIds.has(it.tempId) ? 'bg-red-50 ring-1 ring-inset ring-red-300' : ''}`}>
+                         <tr key={it.tempId} className={`border-b border-[#E5DDD4] odd:bg-white even:bg-[#FBFAF8] hover:bg-[#F3EFE9] transition-colors [&>td]:align-top ${invalidPriceItemIds.has(it.tempId) ? 'bg-red-50 ring-1 ring-inset ring-red-300' : ''}`}>
                            <td className="min-w-0 px-2.5 py-1.5 text-xs text-[#322D29]">
                            {editingItem === it.tempId ? (
                                <input type="text" value={it.description} onChange={e => updateItem(it.tempId, 'description', e.target.value)} className="h-8 w-full rounded-md border border-[#D1C7BD] bg-white px-2 text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
@@ -2681,19 +3093,24 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                            </div>
                          </td>
                            <td className="px-2 py-1.5 text-center">
-                             <input type="number" min="0" step="0.001" value={it.quantity} onChange={e => updateItem(it.tempId, 'quantity', parseFloat(e.target.value) || 0)} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} className="mx-auto block h-8 w-[4.5rem] rounded-md border border-[#D1C7BD] bg-white px-1.5 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
-                         </td>
+                              <input type="number" min="0" step="0.001" value={it.quantity} aria-invalid={Boolean(it.commercial_factor && it.quantity > 0 && !isPurchaseMultiple(String(it.quantity), it.commercial_factor))} onChange={e => updateItem(it.tempId, 'quantity', parseFloat(e.target.value) || 0)} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} className={`mx-auto block h-8 w-[4.5rem] rounded-md border bg-white px-1.5 text-right text-xs text-[#322D29] focus:outline-none focus:ring-2 ${it.commercial_factor && it.quantity > 0 && !isPurchaseMultiple(String(it.quantity), it.commercial_factor) ? 'border-red-600 ring-2 ring-red-200 focus:ring-red-300' : 'border-[#D1C7BD] focus:border-[#72383D] focus:ring-[#72383D]/15'}`} />
+                              {it.commercial_factor && it.quantity > 0 && !isPurchaseMultiple(String(it.quantity), it.commercial_factor) ? <span className="text-[10px] text-red-600">Debe ser múltiplo de {it.commercial_factor}</span> : null}
+                          </td>
+                          {showCommercialColumns && <>
+                            <td className="px-2 py-1.5 text-center text-xs"><PurchaseCommercialPresentation unit={it.commercial_unit} factor={it.commercial_factor} /></td>
+                            <td className="px-2 py-1.5 text-center">{it.commercial_factor ? <PurchaseCommercialQuantity description={it.description} unit={it.commercial_unit} value={it.commercial_quantity_raw ?? ''} onChange={value => updateItem(it.tempId, 'commercial_quantity_raw', value)} /> : <div className="flex h-8 items-center justify-center">—</div>}</td>
+                          </>}
                            <td className="px-2 py-1.5 text-center">
                              {(() => {
                                const rawVal = it.raw_unit_price !== undefined ? it.raw_unit_price : String(it.unit_price)
-                               const val = validatePriceDecimal(rawVal, 2)
+                               const val = validatePriceDecimal(rawVal, it.commercial_factor ? 4 : 2)
                                const isExceeded = val.error === 'EXCEEDS_MAX_DECIMALS'
                                const isInvalid = !val.isValid && !isExceeded
                                const hasError = isExceeded || isInvalid || invalidPriceItemIds.has(it.tempId)
                                return (
                                  <>
                                    <input ref={input => { linePriceInputRefs.current[it.tempId] = input }} aria-invalid={hasError} type="text" inputMode="decimal" step="0.01" value={rawVal} onChange={e => updateItem(it.tempId, 'unit_price', e.target.value)} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} className={`mx-auto block h-8 w-[6.5rem] rounded-md border bg-white px-1.5 text-right text-xs text-[#322D29] focus:outline-none focus:ring-2 ${hasError ? (isExceeded ? 'border-amber-500 focus:ring-amber-300' : 'border-red-500 focus:ring-red-300') : 'border-[#D1C7BD] focus:border-[#72383D] focus:ring-[#72383D]/15'}`} />
-                                   {isExceeded && <span className="block mt-0.5 text-[10px] font-semibold text-amber-600">Máx. 2 decimales</span>}
+                                   {isExceeded && <span className="block mt-0.5 text-[10px] font-semibold text-amber-600">Máx. {it.commercial_factor ? 4 : 2} decimales</span>}
                                    {isInvalid && val.isEmpty && <span className="block mt-0.5 text-[10px] font-semibold text-red-600">Complete el precio</span>}
                                    {isInvalid && !val.isEmpty && <span className="block mt-0.5 text-[10px] font-semibold text-red-600">Precio inválido</span>}
                                    {!hasError && invalidPriceItemIds.has(it.tempId) && <span className="block mt-0.5 text-[10px] font-semibold text-red-600">Complete el precio</span>}
@@ -2701,7 +3118,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                                  </>
                                )
                              })()}
-                        </td>
+                         </td>
+                          {showCommercialColumns && <td className="px-2 py-1.5 text-center">{it.commercial_factor ? <PurchaseCommercialPrice description={it.description} unit={it.commercial_unit} value={it.commercial_price_raw ?? ''} onChange={value => updateItem(it.tempId, 'commercial_price_raw', value)} /> : <div className="flex h-8 items-center justify-center">—</div>}</td>}
                            {showDiscountColumns && (() => {
                              const discountDisplay = getPurchaseOrderDiscountDisplayValues(it)
                              const rawDiscVal = it.raw_discount_unit_amount !== undefined ? it.raw_discount_unit_amount : (discountDisplay.discount_unit_amount > 0 ? String(discountDisplay.discount_unit_amount) : '')
@@ -2721,21 +3139,21 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                              <input type="number" min="0" max="100" step="0.01" value={it.tax_rate} onChange={e => updateItem(it.tempId, 'tax_rate', parseFloat(e.target.value) || 0)} onFocus={handleSelectInputContent} onClick={handleSelectInputContent} className="mx-auto block h-8 w-[4rem] rounded-md border border-[#D1C7BD] bg-white px-1.5 text-right text-xs text-[#322D29] focus:border-[#72383D] focus:outline-none focus:ring-2 focus:ring-[#72383D]/15" />
                         </td>
                           {(() => {
-                            const lineTotals = calculatePurchaseOrderLineTotals(it)
+                            const lineTotals = showCommercialColumns ? calculateCommercialDraftLineTotals(it) : calculatePurchaseOrderLineTotals(it)
                             return <>
                               <td className="px-2 py-1.5 text-right text-xs font-mono text-[#6D625B]">
-                                {lineTotals.net_amount.toLocaleString('es-CL', { style: 'currency', currency: form.currency, minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                <div className="flex h-8 items-center justify-end">{lineTotals.net_amount.toLocaleString('es-CL', { style: 'currency', currency: form.currency, minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
                               </td>
                               <td className="px-2 py-1.5 text-right text-xs font-mono font-semibold text-[#322D29]">
-                                {lineTotals.line_total.toLocaleString('es-CL', { style: 'currency', currency: form.currency, minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                <div className="flex h-8 items-center justify-end">{lineTotals.line_total.toLocaleString('es-CL', { style: 'currency', currency: form.currency, minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
                               </td>
                             </>
                           })()}
-                          <td className="px-2 py-1.5 text-center">
+                           <td className="px-2 py-1.5 text-center"><div className="flex h-8 items-center justify-center">
                            <button type="button" onClick={() => removeItem(it.tempId)} className="rounded-md p-1 text-[#AC9C8D] transition-colors hover:bg-red-500/10 hover:text-red-500">
                             <X className="w-3.5 h-3.5" />
                           </button>
-                        </td>
+                         </div></td>
                       </tr>
                     ))}
                   </tbody>
@@ -2775,19 +3193,21 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                </div>
                </section>
              </div>
+          </fieldset>
          </form>
          {confirmSubmitModal}
        </div>
     )
   }
 
-   if (view === 'supplier-review' && supplierReviewPoId) {
+   if (view === 'supplier-review' && supplierReview) {
      return (
        <PurchaseOrderSupplierReview
-          poId={supplierReviewPoId}
-          onBack={() => { setSupplierReviewPoId(null); setView('list'); setDetail(null); setSelectedPo(null) }}
-          onSaved={() => handleSupplierReviewSaved(supplierReviewPoId)}
-          onConfirmed={() => handleSupplierReviewConfirmed(supplierReviewPoId)}
+          poId={supplierReview.poId}
+          commercial={supplierReview.commercial}
+          onBack={() => { setSupplierReview(null); setView('list'); setDetail(null); setSelectedPo(null) }}
+          onSaved={() => handleSupplierReviewSaved(supplierReview.poId)}
+          onConfirmed={() => handleSupplierReviewConfirmed(supplierReview.poId, supplierReview.commercial)}
         />
      )
    }
@@ -2814,13 +3234,13 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                 </button>
               )}
               {detail.po.status === 'EMITIDA' && (
-                <button onClick={() => void handleMarkSentToSupplier(detail.po.id)} disabled={isMarkingSent} className="px-4 py-2 rounded-xl border border-[#72383D]/35 text-[#72383D] hover:bg-[#72383D]/10 text-xs font-semibold transition-colors flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50">
+                <button onClick={() => void handleMarkSentToSupplier(detail.po.id)} disabled={isMarkingSent || detail.po.commercial_managed == null} title={detail.po.commercial_managed == null ? 'No se pudo verificar la configuración comercial' : undefined} className="px-4 py-2 rounded-xl border border-[#72383D]/35 text-[#72383D] hover:bg-[#72383D]/10 text-xs font-semibold transition-colors flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50">
                   {isMarkingSent ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                   {isMarkingSent ? 'Marcando...' : 'Marcar enviada al proveedor'}
                 </button>
               )}
               {detail.po.status === 'ENVIADA_PROVEEDOR' && (
-                <button onClick={() => openSupplierReview(detail.po.id)} className="px-4 py-2 rounded-xl bg-[#72383D] text-[#EFE9E1] hover:bg-[#5D2E32] text-xs font-semibold transition-colors flex items-center gap-1.5">
+                <button onClick={() => openSupplierReview(detail.po.id)} disabled={detail.po.commercial_managed == null} title={detail.po.commercial_managed == null ? 'No se pudo verificar la configuración comercial' : undefined} className="px-4 py-2 rounded-xl bg-[#72383D] text-[#EFE9E1] hover:bg-[#5D2E32] text-xs font-semibold transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed">
                   <ClipboardCheck className="w-3.5 h-3.5" /> Revisar confirmación
                 </button>
               )}
@@ -2835,6 +3255,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
               <button onClick={() => void handleDownloadExcel()} disabled={downloadingExcel} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50">
                 <FileSpreadsheet className="w-3.5 h-3.5" /> {downloadingExcel ? 'Excel...' : 'Excel'}
               </button>
+              {['ENVIADA_PROVEEDOR', 'CONFIRMADA'].includes(detail.po.status) && <><button onClick={() => void handleDownloadPDF('ORIGINAL_SENT')} disabled={downloadingPdf} className="px-3 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted disabled:opacity-50">PDF original</button><button onClick={() => void handleDownloadExcel('ORIGINAL_SENT')} disabled={downloadingExcel} className="px-3 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted disabled:opacity-50">Excel original</button></>}
                {['BORRADOR', 'EMITIDA', 'PENDIENTE_APROBACION', 'APROBADA', 'ENVIADA_PROVEEDOR', 'CONFIRMADA'].includes(detail.po.status) && (
                  <button onClick={() => requestCancellation(detail.po as PurchaseOrder)} className="px-4 py-2 rounded-xl border border-red-500/30 text-red-500 hover:bg-red-500/10 text-xs font-semibold transition-colors flex items-center gap-1.5">
                   <Ban className="w-3.5 h-3.5" /> Cancelar
@@ -2843,6 +3264,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
             </div>
           </div>
           <div className="p-6 lg:p-8 space-y-8">
+            {detail.po.status === 'CONFIRMADA' && detail.po.commercial_managed && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-700">La recepción de órdenes comerciales aún no está disponible.</div>}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-5">
               <div>
                 <p className="text-xs text-theme-text-muted/70 mb-0.5">Proveedor</p>
@@ -2900,6 +3322,7 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                       <th className="text-left py-3 px-4 font-medium">Producto/Servicio</th>
                       <th className="text-left py-3 px-4 font-medium">Descripción</th>
                       <th className="text-right py-3 px-4 font-medium">Cantidad</th>
+                      {detail.po.commercial_managed && detail.po.status === 'CONFIRMADA' && <><th className="text-left py-3 px-4 font-medium">Presentación</th><th className="text-right py-3 px-4 font-medium">Cantidad comercial</th><th className="text-right py-3 px-4 font-medium">Precio comercial</th></>}
                       <th className="text-right py-3 px-4 font-medium">P.Unitario</th>
                       <th className="text-right py-3 px-4 font-medium">Descuento</th>
                       <th className="text-right py-3 px-4 font-medium">IVA%</th>
@@ -2913,7 +3336,8 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                         <td className="py-3 px-4 text-xs font-mono text-theme-text">{it.item_type === 'PRODUCT' ? 'Producto' : 'Servicio'}</td>
                         <td className="py-3 px-4 text-xs text-theme-text">{it.product_description}</td>
                         <td className="py-3 px-4 text-xs text-theme-text text-right">{it.quantity}</td>
-                        <td className="py-3 px-4 text-xs text-theme-text text-right">{formatCurrency(it.unit_price, detail.po.currency)}</td>
+                        {detail.po.commercial_managed && detail.po.status === 'CONFIRMADA' && <><td className="py-3 px-4 text-xs">{it.purchase_unit_factor_snapshot != null ? `${it.purchase_unit_snapshot || 'Unidad'} de ${it.purchase_unit_factor_snapshot} unidades` : '—'}</td><td className="py-3 px-4 text-xs text-right">{it.purchase_unit_factor_snapshot ? convertedDisplay(String(it.quantity), it.purchase_unit_factor_snapshot, 'divide') : '—'}</td><td className="py-3 px-4 text-xs text-right">{it.commercial_unit_price_snapshot != null ? Number(it.commercial_unit_price_snapshot).toLocaleString('es-CL', { maximumFractionDigits: 4 }) : '—'}</td></>}
+                        <td className="py-3 px-4 text-xs text-theme-text text-right">{detail.po.commercial_managed && detail.po.status === 'CONFIRMADA' ? Number(it.unit_price).toLocaleString('es-CL', { maximumFractionDigits: 4 }) : formatCurrency(it.unit_price, detail.po.currency)}</td>
                         <td className="py-3 px-4 text-xs text-theme-text text-right">
                           {it.discount_percent > 0
                             ? `${it.discount_percent}%`
@@ -3190,17 +3614,19 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
              </div>
              <div className="flex-1 overflow-auto p-6 lg:p-8">
                {detail ? (
-                 <div className="space-y-8">
+                  <div className="space-y-8">
+                    {detail.po.status === 'CONFIRMADA' && detail.po.commercial_managed && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-700">La recepción de órdenes comerciales aún no está disponible.</div>}
                     <div className="flex gap-2">
                        <button onClick={() => void handleDownloadPDF()} disabled={downloadingPdf} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"><Download className="w-3.5 h-3.5" /> {downloadingPdf ? 'PDF...' : 'PDF'}</button>
-                       <button onClick={() => void handleDownloadExcel()} disabled={downloadingExcel} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"><FileSpreadsheet className="w-3.5 h-3.5" /> {downloadingExcel ? 'Excel...' : 'Excel'}</button>
+                        <button onClick={() => void handleDownloadExcel()} disabled={downloadingExcel} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"><FileSpreadsheet className="w-3.5 h-3.5" /> {downloadingExcel ? 'Excel...' : 'Excel'}</button>
+                       {['ENVIADA_PROVEEDOR', 'CONFIRMADA'].includes(detail.po.status) && <><button onClick={() => void handleDownloadPDF('ORIGINAL_SENT')} disabled={downloadingPdf} className="px-3 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted disabled:opacity-50">PDF original</button><button onClick={() => void handleDownloadExcel('ORIGINAL_SENT')} disabled={downloadingExcel} className="px-3 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted disabled:opacity-50">Excel original</button></>}
                        {canEditPurchaseOrder(detail.po as PurchaseOrder) && (
                          <button onClick={() => editPO(detail.po as PurchaseOrder)} className="px-4 py-2 rounded-xl border border-[#72383D]/35 text-[#72383D] hover:bg-[#72383D]/10 text-xs font-semibold transition-colors flex items-center gap-1.5">
                            <Edit className="w-3.5 h-3.5" /> Editar OC
                          </button>
                        )}
-                      {detail.po.status === 'EMITIDA' && <button onClick={() => void handleMarkSentToSupplier(detail.po.id)} disabled={isMarkingSent} className="px-4 py-2 rounded-xl border border-[#72383D]/35 text-[#72383D] hover:bg-[#72383D]/10 text-xs font-semibold transition-colors flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50">{isMarkingSent ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}{isMarkingSent ? 'Marcando...' : 'Marcar enviada al proveedor'}</button>}
-                       {detail.po.status === 'ENVIADA_PROVEEDOR' && <button onClick={() => openSupplierReview(detail.po.id)} className="px-4 py-2 rounded-xl bg-[#72383D] text-[#EFE9E1] hover:bg-[#5D2E32] text-xs font-semibold transition-colors flex items-center gap-1.5"><ClipboardCheck className="w-3.5 h-3.5" /> Revisar confirmación</button>}
+                      {detail.po.status === 'EMITIDA' && <button onClick={() => void handleMarkSentToSupplier(detail.po.id)} disabled={isMarkingSent || detail.po.commercial_managed == null} title={detail.po.commercial_managed == null ? 'No se pudo verificar la configuración comercial' : undefined} className="px-4 py-2 rounded-xl border border-[#72383D]/35 text-[#72383D] hover:bg-[#72383D]/10 text-xs font-semibold transition-colors flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50">{isMarkingSent ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}{isMarkingSent ? 'Marcando...' : 'Marcar enviada al proveedor'}</button>}
+                       {detail.po.status === 'ENVIADA_PROVEEDOR' && <button onClick={() => openSupplierReview(detail.po.id)} disabled={detail.po.commercial_managed == null} title={detail.po.commercial_managed == null ? 'No se pudo verificar la configuración comercial' : undefined} className="px-4 py-2 rounded-xl bg-[#72383D] text-[#EFE9E1] hover:bg-[#5D2E32] text-xs font-semibold transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"><ClipboardCheck className="w-3.5 h-3.5" /> Revisar confirmación</button>}
                        {detail.po.status === 'RECEPCION_PARCIAL' && <button onClick={() => requestCloseWithPending(detail.po as PurchaseOrder)} className="px-4 py-2 rounded-xl border border-theme-border text-xs text-theme-text-muted hover:text-theme-text hover:bg-theme-text/5 transition-colors font-semibold flex items-center gap-1.5"><Lock className="w-3.5 h-3.5" /> Cerrar OC</button>}
                        {['BORRADOR', 'EMITIDA', 'PENDIENTE_APROBACION', 'APROBADA', 'ENVIADA_PROVEEDOR', 'CONFIRMADA'].includes(detail.po.status) && <button onClick={() => requestCancellation(detail.po as PurchaseOrder)} className="px-4 py-2 rounded-xl border border-red-500/30 text-red-500 hover:bg-red-500/10 text-xs font-semibold transition-colors flex items-center gap-1.5"><Ban className="w-3.5 h-3.5" /> Anular</button>}
                     </div>
@@ -3220,13 +3646,14 @@ export function PurchaseOrdersPanel({ initialOpenPoId, onInitialOpenConsumed, pr
                    </div>
                    <h3 className="text-sm font-bold text-theme-text mb-4 mt-8">Líneas de la orden</h3>
                    <div className="overflow-x-auto rounded-xl border border-theme-border">
-                     <table className="w-full text-sm">
-                       <thead><tr className="border-b border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider"><th className="text-left py-3 px-4">Producto/Servicio</th><th className="text-right py-3 px-4">Cantidad</th><th className="text-right py-3 px-4">Total</th></tr></thead>
+                      <table className="w-full text-sm">
+                        <thead><tr className="border-b border-theme-border text-xs text-theme-text-muted/70 uppercase tracking-wider"><th className="text-left py-3 px-4">Producto/Servicio</th><th className="text-right py-3 px-4">Cantidad</th>{detail.po.commercial_managed && detail.po.status === 'CONFIRMADA' && <><th className="text-left py-3 px-4">Presentación</th><th className="text-right py-3 px-4">Cantidad comercial</th><th className="text-right py-3 px-4">Precio unitario</th><th className="text-right py-3 px-4">Precio comercial</th><th className="text-right py-3 px-4">Descuento</th><th className="text-right py-3 px-4">IVA</th></>}<th className="text-right py-3 px-4">Total</th></tr></thead>
                        <tbody>
                          {detail.items.map(it => (
                            <tr key={it.id} className="border-b border-theme-border hover:bg-theme-text/5 transition-colors">
                              <td className="py-3 px-4 text-xs text-theme-text">{it.product_description}</td>
-                             <td className="py-3 px-4 text-xs text-theme-text text-right">{it.quantity}</td>
+                              <td className="py-3 px-4 text-xs text-theme-text text-right">{it.quantity}</td>
+                              {detail.po.commercial_managed && detail.po.status === 'CONFIRMADA' && <><td className="py-3 px-4 text-xs">{it.purchase_unit_factor_snapshot != null ? `${it.purchase_unit_snapshot || 'Unidad'} de ${it.purchase_unit_factor_snapshot} unidades` : '—'}</td><td className="py-3 px-4 text-xs text-right">{it.purchase_unit_factor_snapshot ? convertedDisplay(String(it.quantity), it.purchase_unit_factor_snapshot, 'divide') : '—'}</td><td className="py-3 px-4 text-xs text-right">{Number(it.unit_price).toLocaleString('es-CL', { maximumFractionDigits: 4 })}</td><td className="py-3 px-4 text-xs text-right">{it.commercial_unit_price_snapshot != null ? Number(it.commercial_unit_price_snapshot).toLocaleString('es-CL', { maximumFractionDigits: 4 }) : '—'}</td><td className="py-3 px-4 text-xs text-right">{it.discount_percent > 0 ? `${it.discount_percent}%` : (it.discount_unit_amount ?? 0) > 0 ? `${it.discount_unit_amount}/u` : '—'}</td><td className="py-3 px-4 text-xs text-right">{it.tax_rate}%</td></>}
                              <td className="py-3 px-4 text-xs text-theme-text font-semibold text-right">{formatCurrency(it.line_total, detail.po.currency)}</td>
                            </tr>
                          ))}

@@ -20,20 +20,21 @@ test('1. preparador con descuentos: orden IVA -> NETO -> Agregar producto', () =
   assert.ok(buttonIndex > netoIndex, 'Agregar producto must appear after Neto in pending block')
 })
 
-test('2. preparador sin descuentos: orden IVA -> NETO -> Agregar producto y grilla de 6 columnas', () => {
-  // Grid definition without discounts has 6 explicit tracks
+test('2. preparador sin descuentos mantiene el orden y diseño adaptable comercial', () => {
   assert.match(
     panel,
-    /sm:grid-cols-\[minmax\(0,1\.5fr\)_minmax\(95px,\.65fr\)_minmax\(120px,\.8fr\)_minmax\(64px,\.45fr\)_minmax\(104px,\.7fr\)_auto\]/,
-    'Grid without discounts must define 6 explicit tracks: Producto, Cantidad, P.Unit, IVA, Neto, Agregar'
+    /overflow-x-auto rounded-xl[\s\S]*?flex min-w-0 flex-wrap items-end gap-x-2 gap-y-3 lg:min-w-\[1050px\] lg:flex-nowrap[\s\S]*?>Producto<\/[\s\S]*?>Cantidad[\s\S]*?>Precio unitario[\s\S]*?>IVA[\s\S]*?>Neto[\s\S]*?>Agregar producto<\/button>/,
+    'Pending editor must retain horizontal overflow, responsive layout and field order'
   )
+  assert.match(panel, /pendingCommercial && <label[^>]*>Total \{pendingCommercial\.unit/)
+  assert.match(panel, /pendingCommercial && <label[^>]*>Precio \{pendingCommercial\.unit/)
 })
 
-test('preparador con descuentos tiene grilla de 8 columnas explícitas', () => {
+test('preparador con descuentos conserva campos y orden operativos', () => {
   assert.match(
     panel,
-    /sm:grid-cols-\[minmax\(0,1\.25fr\)_minmax\(82px,\.55fr\)_minmax\(108px,\.7fr\)_minmax\(82px,\.55fr\)_minmax\(108px,\.7fr\)_minmax\(60px,\.45fr\)_minmax\(96px,\.65fr\)_auto\]/,
-    'Grid with discounts must define 8 explicit tracks: Producto, Cantidad, P.Unit, Dcto%, Dcto/U, IVA, Neto, Agregar'
+    /showDiscountColumns && <>[\s\S]*?>Dcto %[\s\S]*?>Dcto por unidad[\s\S]*?<\/>[\s\S]*?>IVA[\s\S]*?>Neto[\s\S]*?>Agregar producto<\/button>/,
+    'Discount inputs must precede IVA, Neto and the add button'
   )
 })
 
@@ -157,11 +158,11 @@ test('8. tabla muestra NETO antes de TOTAL en colgroup, thead y tbody', () => {
     'tbody must render net_amount td before line_total td'
   )
 
-  // colSpan: 9 when showDiscountColumns, 7 when false
+  // Commercial presentation adds exactly three columns to either variant.
   assert.match(
     panel,
-    /colSpan=\{showDiscountColumns \? 9 : 7\}/,
-    'empty table row must span 9 or 7 columns'
+    /colSpan=\{\(showDiscountColumns \? 9 : 7\) \+ \(showCommercialColumns \? 3 : 0\)\}/,
+    'empty table row must span all traditional and commercial columns'
   )
 })
 
@@ -183,7 +184,7 @@ test('9. TOTAL mantiene semántica: neto + IVA', () => {
 test('10. botón Agregar producto continúa visible en el mismo bloque operativo', () => {
   assert.match(
     panel,
-    /<button type="button" onClick=\{addProductToItems\} className="h-8 whitespace-nowrap rounded-md border border-\[#72383D\]\/40 bg-\[#EFE9E1\] px-2\.5 text-\[11px\] font-bold text-\[#72383D\] hover:bg-\[#F5EDEE\]">Agregar producto<\/button>/,
-    'Agregar producto button is intact inside pendingProduct block'
+    /<button type="button" disabled=\{pendingCommercialLoading \|\| Boolean\(pendingCommercialError\)\} onClick=\{addProductToItems\} className="[^"]*whitespace-nowrap[^"]*">Agregar producto<\/button>/,
+    'Adding is visible and blocked while the commercial resolution is pending or failed'
   )
 })

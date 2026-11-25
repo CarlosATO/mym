@@ -1,8 +1,8 @@
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { formatCivilDate, todayInSantiago } from '@/lib/datetime'
-import { calculatePurchaseOrderLineTotals } from '@/lib/adquisiciones/purchase-order-totals'
 import { getPurchaseOrderDiscountDisplayValues, resolvePurchaseOrderDiscountMode } from '@/lib/adquisiciones/purchase-order-discounts'
+import { documentLineValues } from '@/lib/adquisiciones/purchase-order-document'
 
 export interface POItem {
   line_number: number
@@ -22,6 +22,11 @@ export interface POItem {
   cost_center?: string | null
   notes?: string | null
   sku?: string | null
+  purchase_unit_snapshot?: string | null
+  purchase_unit_factor_snapshot?: number | null
+  commercial_quantity?: number | null
+  commercial_unit_price_snapshot?: number | string | null
+  commercial_gross_amount_snapshot?: number | string | null
 }
 
 export interface PODetail {
@@ -49,6 +54,7 @@ export interface PODetail {
     exempt_total: number
     grand_total: number
     status: string
+    commercial_managed?: boolean | null
     receipt_status?: string | null
     invoice_status?: string | null
     created_at: string
@@ -66,6 +72,7 @@ export interface PODetail {
     company_document_footer?: string | null
   }
   items: POItem[]
+  document_source?: 'CURRENT' | 'ORIGINAL_SENT' | 'CONFIRMED'
 }
 
 const DARK_HEADER: [number, number, number] = [30, 58, 95]
@@ -85,7 +92,11 @@ const OFFICIAL_PURCHASE_EMAIL = 'Compras@mympremium.cl'
 const OFFICIAL_CONTACT_EMAIL = 'Contacto@mympremium.cl'
 
 function formatCurrency(amount: number): string {
-  return `$ ${Math.round(amount).toLocaleString('es-CL')}`
+  return `$ ${Number(amount).toLocaleString('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function formatNumber(amount: number): string {
+  return Number(amount).toLocaleString('es-CL', { maximumFractionDigits: 4 })
 }
 
 function formatPdfCivilDate(value?: string | null): string {
@@ -193,13 +204,8 @@ function getImageSizeFromBase64(base64: string): { width: number; height: number
 }
 
 export function buildPOItemPdfRow(item: POItem) {
-  const lineTotals = calculatePurchaseOrderLineTotals({
-    quantity: Number(item.quantity) || 0,
-    unit_price: Number(item.unit_price) || 0,
-    discount_percent: Number(item.discount_percent) || 0,
-    discount_unit_amount: Number(item.discount_unit_amount) || 0,
-    tax_rate: Number(item.tax_rate) || 0,
-  })
+  const values = documentLineValues(item)
+  const lineTotals = { gross_amount: values.gross, discount_amount: values.discount, net_amount: values.net, tax_amount: values.tax, line_total: values.total }
 
   const discountMode = resolvePurchaseOrderDiscountMode(item.discount_percent, item.discount_unit_amount)
   const discountDisplay = getPurchaseOrderDiscountDisplayValues({
@@ -249,6 +255,16 @@ export function buildPOItemPdfRow(item: POItem) {
       formatCurrency(lineTotals.line_total),
     ],
   }
+}
+
+export function buildCommercialPOItemPdfRow(item: POItem) {
+  const line = documentLineValues(item)
+  const presentation = line.factor === null
+    ? item.item_type === 'SERVICE' ? `${formatNumber(item.quantity)} ${item.unit || 'servicio'}` : `Presentación pendiente\n${formatNumber(item.quantity)} ${item.unit || 'unidades'}`
+    : `${formatNumber(line.commercialQuantity!)} ${line.commercialUnit}\n${line.commercialUnit} de ${line.factor}\n${formatNumber(item.quantity)} ${item.unit || 'unidades'} internas`
+  return [item.sku || '-', item.product_description, presentation,
+    line.commercialPrice === null ? (line.factor === null ? formatCurrency(item.unit_price) : 'Pendiente') : `$ ${formatNumber(line.commercialPrice)}`,
+    formatCurrency(line.gross), formatCurrency(line.discount), formatCurrency(line.net), formatCurrency(line.tax), formatCurrency(line.total)]
 }
 
 export function generatePdfBlob(detail: PODetail, logoBase64?: string): Blob {
@@ -353,6 +369,7 @@ export function generatePdfBlob(detail: PODetail, logoBase64?: string): Blob {
   doc.setFontSize(9)
   doc.setTextColor(...MID_GRAY)
   doc.text(`N° ${detail.po.correlative || ''}`, margin, cursorY + 5.5)
+  if (detail.document_source) doc.text(detail.document_source === 'ORIGINAL_SENT' ? 'Original enviada' : detail.document_source === 'CONFIRMED' ? 'Versión confirmada' : 'Versión actual', margin + 58, cursorY + 5.5)
 
   // Status badge
   const statusText = getStatusText(detail.po.status)
@@ -443,7 +460,8 @@ export function generatePdfBlob(detail: PODetail, logoBase64?: string): Blob {
   cursorY = Math.max(leftY, rightY) + 6
 
   // ── ITEMS TABLE ──
-  const tableHeaders = [
+  const commercial = detail.po.commercial_managed || detail.items.some(item => item.purchase_unit_factor_snapshot != null || item.commercial_unit_price_snapshot != null)
+  const tableHeaders = commercial ? ['SKU', 'Producto / Servicio', 'Compra y equivalencia', 'Precio compra', 'Bruto', 'Descuento', 'Neto', 'IVA', 'Total'] : [
     'SKU',
     'Producto / Servicio',
     'Unidad',
@@ -456,7 +474,7 @@ export function generatePdfBlob(detail: PODetail, logoBase64?: string): Blob {
     'Total Línea',
   ]
 
-  const tableBody = detail.items.map((item) => buildPOItemPdfRow(item).rawRow)
+  const tableBody = detail.items.map((item) => commercial ? buildCommercialPOItemPdfRow(item) : buildPOItemPdfRow(item).rawRow)
 
   autoTable(doc, {
     head: [tableHeaders],
@@ -478,7 +496,12 @@ export function generatePdfBlob(detail: PODetail, logoBase64?: string): Blob {
       fontSize: 6.5,
       halign: 'center',
     },
-    columnStyles: {
+    columnStyles: commercial ? {
+      0: { cellWidth: 15 }, 1: { cellWidth: 32 }, 2: { cellWidth: 29 },
+      3: { halign: 'right', cellWidth: 18 }, 4: { halign: 'right', cellWidth: 18 },
+      5: { halign: 'right', cellWidth: 17 }, 6: { halign: 'right', cellWidth: 18 },
+      7: { halign: 'right', cellWidth: 15 }, 8: { halign: 'right', cellWidth: 18 },
+    } : {
       0: { halign: 'left', cellWidth: 18 },
       1: { cellWidth: 46 },
       2: { halign: 'center', cellWidth: 11 },

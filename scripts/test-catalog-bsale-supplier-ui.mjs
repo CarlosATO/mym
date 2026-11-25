@@ -4,16 +4,18 @@ import test from 'node:test'
 
 const actionPath = new URL('../src/app/actions/adquisiciones/products.ts', import.meta.url)
 const panelPath = new URL('../src/modules/adquisiciones/catalogo/catalog-panel.tsx', import.meta.url)
-const [action, panel] = await Promise.all([
+const [action, panel, brandResolver] = await Promise.all([
   readFile(actionPath, 'utf8'),
   readFile(panelPath, 'utf8'),
+  readFile(new URL('../src/modules/adquisiciones/lib/bsale-brand-suppliers.ts', import.meta.url), 'utf8'),
 ])
 
 test('el contrato resuelve Brand a supplier aprobado en lote y por empresa', () => {
-  assert.match(action, /schema\('integraciones'\)\.from\('bsale_brand_supplier_links'\)/)
-  assert.match(action, /\.eq\('company_id', companyId\)/)
-  assert.match(action, /\.in\('bsale_brand_id', bsaleBrandIds\)/)
-  assert.match(action, /\.eq\('supplier_kind', 'REAL'\)/)
+  assert.match(action, /loadBsaleBrandSuppliers\(db, companyId, bsaleBrandIds\)/)
+  assert.match(brandResolver, /schema\('integraciones'\)\.from\('bsale_brand_supplier_links'\)/)
+  assert.match(brandResolver, /\.eq\('company_id', companyId\)/)
+  assert.match(brandResolver, /\.in\('bsale_brand_id', chunk\)/)
+  assert.match(brandResolver, /\.eq\('supplier_kind', 'REAL'\)/)
   assert.match(action, /bsale_supplier_name/)
   assert.doesNotMatch(panel, /getProducts\([^)]*p\.id/)
 })

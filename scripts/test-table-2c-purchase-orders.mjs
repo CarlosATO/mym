@@ -164,10 +164,11 @@ test('las líneas del formulario muestran SKU sin hacerlo editable y lo resuelve
 
 test('Nueva OC mantiene el overflow dentro de la tabla y compacta la metadata operativa', () => {
   assert.match(panel, /<div className="min-w-0 overflow-x-auto border border-\[#D1C7BD\] bg-white">/)
-  assert.match(panel, /<table className="w-full min-w-\[760px\] table-fixed text-sm">/)
+  assert.match(panel, /<table className="w-full min-w-\[1050px\] table-fixed text-sm">/)
   assert.match(panel, /Producto \/ Servicio/)
   assert.match(panel, /title="Descuento por unidad">Dcto\/u/)
-  assert.match(panel, /sm:grid-cols-\[minmax\(0,1\.25fr\)_minmax\(82px,\.55fr\)/)
+  assert.match(panel, /flex min-w-0 flex-wrap items-end gap-x-2 gap-y-3 lg:min-w-\[1050px\] lg:flex-nowrap/)
+  assert.match(panel, /showCommercialColumns && <><th[^>]*>Unidad de compra<\/th><th[^>]*>Cantidad comercial<\/th><\/>/)
   assert.match(panel, /showDiscountColumns && <><th[\s\S]*Dcto %/)
   assert.match(panel, /className="min-w-0 space-y-4/)
 })

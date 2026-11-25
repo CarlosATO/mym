@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { getActiveCompanyId } from '@/app/actions/companies'
+import { loadBsaleBrandSuppliers } from '@/modules/adquisiciones/lib/bsale-brand-suppliers'
 
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
@@ -138,13 +139,6 @@ const PRODUCT_SORT_COLUMNS: Record<ProductSortKey, string> = {
   min_stock: 'min_stock',
   reorder_point: 'reorder_point',
   is_active: 'is_active',
-}
-
-type BsaleBrandSupplierLink = {
-  company_id: string
-  bsale_brand_id: number
-  supplier_id: string
-  supplier?: { id: string; business_name: string; rut: string | null; supplier_kind: string; is_active: boolean; status: string } | null
 }
 
 export interface ProductCatalogLookup {
@@ -454,30 +448,7 @@ export async function getProducts(filters: ProductFilters = {}): Promise<{ data:
     const bsaleBrandIds = Array.from(new Set(products
       .filter(p => p.source === 'BSALE' && p.bsale_brand_id != null)
       .map(p => p.bsale_brand_id as number)))
-    const bsaleLinks = new Map<number, BsaleBrandSupplierLink>()
-    if (bsaleBrandIds.length > 0) {
-      const { data: links } = await db.schema('integraciones').from('bsale_brand_supplier_links')
-        .select('company_id, bsale_brand_id, supplier_id')
-        .eq('company_id', companyId)
-        .in('bsale_brand_id', bsaleBrandIds)
-      const supplierIds = Array.from(new Set((links ?? []).map(l => l.supplier_id)))
-      let suppliers: BsaleBrandSupplierLink['supplier'][] = []
-      if (supplierIds.length > 0) {
-        const { data: supplierRows } = await db.from('suppliers')
-          .select('id, business_name, rut, supplier_kind, is_active, status')
-          .eq('company_id', companyId)
-          .eq('supplier_kind', 'REAL')
-          .eq('is_active', true)
-          .eq('status', 'ACTIVE')
-          .in('id', supplierIds)
-        suppliers = supplierRows ?? []
-      }
-      const supplierMap = new Map((suppliers ?? []).map(s => [s?.id, s]))
-      for (const link of links ?? []) {
-        const supplier = supplierMap.get(link.supplier_id)
-        if (supplier) bsaleLinks.set(link.bsale_brand_id, { ...link, supplier })
-      }
-    }
+    const bsaleLinks = await loadBsaleBrandSuppliers(db, companyId, bsaleBrandIds).catch(() => new Map())
     for (const p of products) {
       if (p.source !== 'BSALE') {
         p.bsale_supplier_link_status = 'NOT_APPLICABLE'
@@ -486,9 +457,9 @@ export async function getProducts(filters: ProductFilters = {}): Promise<{ data:
       } else {
         const link = bsaleLinks.get(p.bsale_brand_id)
         p.bsale_supplier_link_status = link ? 'LINKED' : 'PENDING'
-        p.bsale_supplier_id = link?.supplier_id ?? null
-        p.bsale_supplier_name = link?.supplier?.business_name ?? null
-        p.bsale_supplier_rut = link?.supplier?.rut ?? null
+        p.bsale_supplier_id = link?.id ?? null
+        p.bsale_supplier_name = link?.business_name ?? null
+        p.bsale_supplier_rut = link?.rut ?? null
       }
     }
     const productIds = products.map(p => p.id)
@@ -498,11 +469,11 @@ export async function getProducts(filters: ProductFilters = {}): Promise<{ data:
 
     if (mappings && mappings.length > 0) {
       // Preferred mapping (active first, or first encountered)
-      const mappingByProduct = new Map<string, any>()
+      const mappingByProduct = new Map<string, { id: string; product_id: string; supplier_id: string; is_active: boolean }>()
       for (const m of mappings) {
         if (!mappingByProduct.has(m.product_id)) {
           mappingByProduct.set(m.product_id, m)
-        } else if (m.is_active && !mappingByProduct.get(m.product_id).is_active) {
+        } else if (m.is_active && !mappingByProduct.get(m.product_id)?.is_active) {
           mappingByProduct.set(m.product_id, m)
         }
       }

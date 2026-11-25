@@ -101,6 +101,13 @@ export interface PurchaseOrderItem {
   product_description: string
   unit: string | null
   quantity: number
+  // Optional until the detail RPC exposes the new columns. NULL factor is historical/unknown.
+  purchase_unit_snapshot?: string | null
+  purchase_unit_factor_snapshot?: number | null
+  product_supplier_mapping_id?: string | null
+  commercial_unit_price_snapshot?: number | string | null
+  commercial_gross_amount_snapshot?: number | string | null
+  commercial_quantity?: number | null
   unit_price: number
   discount_percent: number
   discount_unit_amount?: number
@@ -152,6 +159,7 @@ export interface PurchaseOrderDetail {
     exempt_total: number
     grand_total: number
     status: string
+    commercial_managed?: boolean | null
     receipt_status: string | null
     invoice_status: string | null
     cancel_reason: string | null
@@ -180,7 +188,7 @@ export interface PurchaseOrderDetail {
   items: PurchaseOrderItem[]
 }
 
-export type PurchaseOrderDocumentSource = 'CURRENT' | 'CONFIRMED'
+export type PurchaseOrderDocumentSource = 'CURRENT' | 'ORIGINAL_SENT' | 'CONFIRMED'
 
 export interface PurchaseOrderDocumentDetail extends PurchaseOrderDetail {
   items: (PurchaseOrderItem & { sku: string | null })[]
@@ -651,7 +659,21 @@ export async function getPurchaseOrderDetail(poId: string) {
     console.error('get_purchase_order_detail error:', error)
     return null
   }
-  return data as PurchaseOrderDetail | null
+  const detail = data as PurchaseOrderDetail | null
+  if (!detail || !['EMITIDA', 'ENVIADA_PROVEEDOR', 'CONFIRMADA'].includes(detail.po.status)) return detail
+  // The detail RPC predates commercial snapshots. Fail closed if the managed
+  // state cannot be established, so downstream actions are never exposed.
+  const [header, lines] = await Promise.all([
+    db.from('purchase_orders').select('commercial_draft_revision').eq('id', poId).eq('company_id', companyId).maybeSingle(),
+    db.from('purchase_order_items').select('id, purchase_unit_snapshot, purchase_unit_factor_snapshot, product_supplier_mapping_id, commercial_unit_price_snapshot').eq('po_id', poId).eq('company_id', companyId),
+  ])
+  detail.po.commercial_managed = header.error || lines.error || !header.data ? null : Number(header.data.commercial_draft_revision) > 0 || (lines.data ?? []).some(line => line.purchase_unit_factor_snapshot != null)
+  if (detail.po.status === 'CONFIRMADA' && detail.po.commercial_managed) {
+    const commercialLines = new Map((lines.data ?? []).map(line => [line.id, line]))
+    if (detail.items.some(item => !commercialLines.has(item.id))) return null
+    detail.items = detail.items.map(item => ({ ...item, ...commercialLines.get(item.id)! }))
+  }
+  return detail
 }
 
 function snapshotText(value: unknown): string | null {
@@ -665,7 +687,7 @@ function snapshotNumber(value: unknown): number | null {
   return Number.isFinite(number) ? number : null
 }
 
-export async function getPurchaseOrderDocumentDetail(poId: string) {
+export async function getPurchaseOrderDocumentDetail(poId: string, requestedSource?: 'ORIGINAL_SENT' | 'CONFIRMED') {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'No autorizado' }
@@ -682,7 +704,7 @@ export async function getPurchaseOrderDocumentDetail(poId: string) {
     .select('id, header_snapshot, items_snapshot')
     .eq('po_id', poId)
     .eq('company_id', companyId)
-    .eq('snapshot_type', 'CONFIRMED')
+    .eq('snapshot_type', requestedSource ?? 'CONFIRMED')
     .maybeSingle()
 
   if (snapshotError) {
@@ -691,6 +713,13 @@ export async function getPurchaseOrderDocumentDetail(poId: string) {
   }
 
   if (!confirmed) {
+    if (requestedSource) return { error: 'La versión documental solicitada no está disponible.' }
+    if (current.po.status === 'CONFIRMADA' && current.po.commercial_managed) return { error: 'La orden comercial confirmada no tiene snapshot documental.' }
+    const [{ data: persistedLines, error: linesError }, { data: documentHeader, error: documentHeaderError }] = await Promise.all([db.from('purchase_order_items')
+      .select('id, purchase_unit_snapshot, purchase_unit_factor_snapshot, product_supplier_mapping_id, commercial_unit_price_snapshot, commercial_gross_amount_snapshot')
+      .eq('po_id', poId).eq('company_id', companyId), db.from('purchase_orders').select('commercial_draft_revision').eq('id', poId).eq('company_id', companyId).maybeSingle()])
+    if (linesError || documentHeaderError || !documentHeader || !persistedLines || current.items.some(item => !persistedLines.some(line => line.id === item.id))) return { error: 'No se pudieron obtener las líneas documentales persistidas.' }
+    const persistedById = new Map(persistedLines.map(line => [line.id, line]))
     const productIds = current.items.map(item => item.product_id).filter((id): id is string => Boolean(id))
     const { data: products } = productIds.length > 0
       ? await db.from('products').select('id, sku').in('id', productIds).eq('company_id', companyId)
@@ -699,8 +728,10 @@ export async function getPurchaseOrderDocumentDetail(poId: string) {
     return {
       data: {
         ...current,
+        po: { ...current.po, commercial_managed: Number(documentHeader.commercial_draft_revision) > 0 || persistedLines.some(line => line.purchase_unit_factor_snapshot != null) },
         items: current.items.map(item => ({
           ...item,
+          ...persistedById.get(item.id),
           sku: item.sku ?? (item.product_id ? currentSkuById.get(item.product_id) ?? null : null),
         })),
         document_source: 'CURRENT' as const,
@@ -755,6 +786,11 @@ export async function getPurchaseOrderDocumentDetail(poId: string) {
       unit: snapshotText(item.unit),
       quantity,
       unit_price: snapshotNumber(item.unit_price) as number,
+      purchase_unit_snapshot: snapshotText(item.purchase_unit_snapshot),
+      purchase_unit_factor_snapshot: snapshotNumber(item.purchase_unit_factor_snapshot),
+      commercial_quantity: snapshotNumber(item.commercial_quantity),
+      commercial_unit_price_snapshot: snapshotText(item.commercial_unit_price_snapshot),
+      commercial_gross_amount_snapshot: snapshotText(item.commercial_gross_amount_snapshot),
       discount_percent: snapshotNumber(item.discount_percent) as number,
       discount_unit_amount: snapshotNumber(item.discount_unit_amount) ?? 0,
       discount_amount: snapshotNumber(item.discount_amount) as number,
@@ -777,7 +813,7 @@ export async function getPurchaseOrderDocumentDetail(poId: string) {
     data: {
       po: snapshotPo,
       items: documentItems,
-      document_source: 'CONFIRMED' as const,
+      document_source: requestedSource ?? 'CONFIRMED',
       snapshot_id: confirmed.id,
       generated_from_persisted_data: true as const,
     } satisfies PurchaseOrderDocumentDetail,
@@ -812,6 +848,128 @@ export interface CreatePOData {
   currency?: string
   status?: 'BORRADOR' | 'EMITIDA'
   items: CreatePOItem[]
+}
+
+export interface CommercialDraftLine {
+  item_id?: string | null
+  item_type: 'PRODUCT' | 'SERVICE'
+  product_id: string | null
+  product_description: string
+  unit: string | null
+  quantity: number
+  unit_price: number
+  commercial_unit_price?: string | null
+  purchase_unit_snapshot?: string | null
+  purchase_unit_factor_snapshot?: number | null
+  product_supplier_mapping_id?: string | null
+  warehouse_id?: string | null
+  cost_center?: string | null
+  required_date?: string | null
+  discount_percent: number
+  discount_unit_amount: number
+  tax_rate: number
+  notes: string | null
+}
+
+export interface CommercialDraftRequest {
+  poId: string | null
+  requestId: string
+  revision: number | null
+  data: Omit<CreatePOData, 'items'> & { items: CommercialDraftLine[] }
+}
+
+export async function saveCommercialDraft(request: CommercialDraftRequest) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado' }
+  const companyId = await getActiveCompanyId(user)
+  if (!companyId) return { error: 'No hay empresa activa' }
+  const { data, error } = await adqAdmin().rpc('save_commercial_draft_request', {
+    p_po_id: request.poId, p_data: request.data, p_user_id: user.id, p_company_id: companyId,
+    p_request_id: request.requestId, p_expected_revision: request.revision,
+  })
+  if (error) return { error: error.message, definite: /^[0-9A-Z]{5}$/.test(error.code ?? '') && !(error.code ?? '').startsWith('PGRST') }
+  return { data: data as { po_id: string; revision: number; lines: Array<{ id: string; purchase_unit_snapshot: string | null; purchase_unit_factor_snapshot: number | null; product_supplier_mapping_id: string | null; commercial_unit_price_snapshot: string | null }> } }
+}
+
+export async function emitCommercialDraft(poId: string, revision: number) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado' }
+  const companyId = await getActiveCompanyId(user)
+  if (!companyId) return { error: 'No hay empresa activa' }
+  const { data, error } = await adqAdmin().rpc('emit_commercial_purchase_draft', {
+    p_po_id: poId, p_expected_revision: revision, p_user_id: user.id, p_company_id: companyId,
+  })
+  if (error) return { error: error.message }
+  return { data: data as { success: boolean; po_id: string; status: string; correlative: string } }
+}
+
+export async function markCommercialOrderSent(poId: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado' }
+  const companyId = await getActiveCompanyId(user)
+  if (!companyId) return { error: 'No hay empresa activa' }
+  const { data, error } = await adqAdmin().rpc('send_commercial_purchase_order', { p_po_id: poId, p_user_id: user.id, p_company_id: companyId })
+  if (error) return { error: error.message }
+  return { data: data as { success: boolean; po_id: string; status: string } }
+}
+
+export interface CommercialSupplierReviewItem extends PurchaseOrderReviewItem {
+  purchase_unit_snapshot: string | null
+  purchase_unit_factor_snapshot: number | null
+  product_supplier_mapping_id: string | null
+  historical_product_supplier_mapping_id: string | null
+  commercial_unit_price: string | null
+  commercial_gross_amount: number | null
+}
+
+export async function getCommercialSupplierReviewState(poId: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado' }
+  const companyId = await getActiveCompanyId(user)
+  if (!companyId) return { error: 'No hay empresa activa' }
+  const { data, error } = await adqAdmin().rpc('get_commercial_supplier_review_state', {
+    p_po_id: poId, p_user_id: user.id, p_company_id: companyId,
+  })
+  if (error) return { error: error.message }
+  return { data: data as { revision: number; items: CommercialSupplierReviewItem[] } }
+}
+
+export async function saveCommercialSupplierReview(request: { poId: string; requestId: string; revision: number; items: CommercialDraftLine[] }) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado', definite: true }
+  const companyId = await getActiveCompanyId(user)
+  if (!companyId) return { error: 'No hay empresa activa', definite: true }
+  const { data, error } = await adqAdmin().rpc('save_commercial_supplier_review', {
+    p_po_id: request.poId, p_data: { items: request.items }, p_user_id: user.id, p_company_id: companyId,
+    p_request_id: request.requestId, p_expected_revision: request.revision,
+  })
+  if (error) return { error: error.message, definite: /^[0-9A-Z]{5}$/.test(error.code ?? '') && !(error.code ?? '').startsWith('PGRST') }
+  return { data: data as { success: boolean; po_id: string; revision: number; item_ids: string[]; net_total: number; discount_total: number; tax_total: number; grand_total: number } }
+}
+
+export async function getCommercialDraftDetail(poId: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado' }
+  const companyId = await getActiveCompanyId(user)
+  if (!companyId) return { error: 'No hay empresa activa' }
+  const before = await adqAdmin().rpc('get_commercial_draft_snapshots', { p_po_id: poId, p_user_id: user.id, p_company_id: companyId })
+  if (before.error) return { error: before.error.message }
+  const detail = await getPurchaseOrderDetail(poId)
+  if (!detail || detail.po.status !== 'BORRADOR' || detail.po.source_type !== 'MANUAL') return { error: 'Borrador manual no encontrado' }
+  const { data, error } = await adqAdmin().rpc('get_commercial_draft_snapshots', { p_po_id: poId, p_user_id: user.id, p_company_id: companyId })
+  if (error) return { error: error.message }
+  const snapshot = data as { revision: number; lines: Array<{ id: string; purchase_unit_snapshot: string | null; purchase_unit_factor_snapshot: number | null; product_supplier_mapping_id: string | null; commercial_unit_price_snapshot: string | null }> }
+  if ((before.data as { revision: number }).revision !== snapshot.revision) return { error: 'El borrador cambió durante la lectura. Vuelva a intentarlo.' }
+  const byId = new Map(snapshot.lines.map(line => [line.id, line]))
+  if (detail.items.length !== snapshot.lines.length || detail.items.some(item => !byId.has(item.id))) return { error: 'El borrador cambió durante la lectura. Vuelva a intentarlo.' }
+  const managed = snapshot.revision > 0 || snapshot.lines.some(line => line.purchase_unit_factor_snapshot !== null)
+  return { data: { detail: { ...detail, items: detail.items.map(item => ({ ...item, ...byId.get(item.id)! })) }, revision: snapshot.revision, managed } }
 }
 
 export async function createPurchaseOrder(data: CreatePOData) {
@@ -878,11 +1036,12 @@ export async function updateDraftPurchaseOrder(poId: string, data: CreatePOData)
   const db = adqAdmin()
   const { data: existing, error: existingError } = await db
     .from('purchase_orders')
-    .select('id, status')
+    .select('id, status, source_type')
     .eq('id', poId)
     .eq('company_id', companyId)
     .single()
   if (existingError || !existing) return { error: 'La OC no existe o no pertenece a la empresa' }
+  if (existing.status === 'BORRADOR' && existing.source_type === 'MANUAL') return { error: 'El borrador manual debe guardarse mediante la operación comercial transaccional.' }
   if (existing.status !== 'BORRADOR' && existing.status !== 'EMITIDA') {
     return { error: 'Solo se pueden editar órdenes de compra en estado borrador o emitida sin recepciones' }
   }
@@ -1135,6 +1294,27 @@ export async function confirmPurchaseOrderSupplierReview(poId: string) {
   const result = data as Partial<ConfirmPurchaseOrderSupplierReviewResult> & { success?: boolean; error?: string }
   if (result.success !== true) return { error: result.error || 'No se pudo confirmar la OC' }
   return result as ConfirmPurchaseOrderSupplierReviewResult
+}
+
+export async function confirmCommercialPurchaseOrder(poId: string, expectedRevision: number) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autorizado' }
+
+  const companyId = await getActiveCompanyId()
+  if (!companyId) return { error: 'No se ha seleccionado una empresa activa' }
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) return { error: 'Revisión comercial inválida' }
+
+  const { data, error } = await adqAdmin().rpc('confirm_commercial_purchase_order', {
+    p_po_id: poId,
+    p_user_id: user.id,
+    p_company_id: companyId,
+    p_expected_revision: expectedRevision,
+  })
+  if (error) return { error: error.message }
+  const result = data as Partial<ConfirmPurchaseOrderSupplierReviewResult> & { success?: boolean; error?: string; revision?: number }
+  if (result.success !== true) return { error: result.error || 'No se pudo confirmar la OC' }
+  return result as ConfirmPurchaseOrderSupplierReviewResult & { revision: number }
 }
 
 export async function getPurchaseOrderSupplierReviewComparison(poId: string) {
