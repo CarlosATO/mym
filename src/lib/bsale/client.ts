@@ -1,4 +1,11 @@
-import { getBsaleConfigForCompany } from './company-config'
+// @ts-expect-error Standalone Node strip-types runner resolves explicit source extension.
+import { getBsaleConfigForCompany } from './company-config.ts'
+import {
+  assertActiveBsaleCoordinatorLease,
+  composeBsaleProtectedSignal,
+  parseBsaleRetryAfterSeconds,
+// @ts-expect-error Standalone Node strip-types runner resolves explicit source extension.
+} from '../integraciones/bsale-sync-coordinator.ts'
 
 const BSALE_API_BASE = process.env.BSALE_API_BASE_URL || 'https://api.bsale.cl/v1'
 const BSALE_TOKEN = process.env.BSALE_ACCESS_TOKEN
@@ -18,13 +25,21 @@ interface BsaleFetchOptions {
 }
 
 export class BsaleApiError extends Error {
+  status: number
+  body?: string
+  retryAfterSeconds: number | null
+
   constructor(
-    public status: number,
+    status: number,
     message: string,
-    public body?: string
+    body?: string,
+    retryAfterSeconds: number | null = null,
   ) {
     super(message)
     this.name = 'BsaleApiError'
+    this.status = status
+    this.body = body
+    this.retryAfterSeconds = retryAfterSeconds
   }
 }
 
@@ -62,6 +77,7 @@ interface BsaleFetchForCompanyOptions extends BsaleFetchOptions {
 }
 
 async function fetchBsaleForCompany<T>(options: BsaleFetchForCompanyOptions): Promise<T> {
+  assertActiveBsaleCoordinatorLease()
   const { companyId, path, params, signal, cache } = options
   const { baseUrl, accessToken } = getBsaleConfigForCompany(companyId)
   const url = new URL(`${baseUrl}${path}`)
@@ -71,6 +87,7 @@ async function fetchBsaleForCompany<T>(options: BsaleFetchForCompanyOptions): Pr
       if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value))
     })
   }
+  const composedSignal = composeBsaleProtectedSignal({ signal })
   const response = await fetch(url.toString(), {
     method: 'GET',
     headers: {
@@ -78,12 +95,21 @@ async function fetchBsaleForCompany<T>(options: BsaleFetchForCompanyOptions): Pr
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
-    signal,
+    signal: composedSignal,
     cache,
   })
+  assertActiveBsaleCoordinatorLease()
   if (!response.ok) {
     const body = await response.text().catch(() => '')
-    throw new BsaleApiError(response.status, `Bsale API error ${response.status}: ${response.statusText}`, body)
+    const retryAfterSeconds = response.status === 429
+      ? parseBsaleRetryAfterSeconds(response.headers.get('retry-after'), body)
+      : null
+    throw new BsaleApiError(
+      response.status,
+      `Bsale API error ${response.status}: ${response.statusText}`,
+      body,
+      retryAfterSeconds,
+    )
   }
   return response.json() as Promise<T>
 }
@@ -106,6 +132,7 @@ export async function bsaleFetchResourceForCompany<T>(
 }
 
 export async function bsaleFetch<T>(options: BsaleFetchOptions): Promise<BsaleResponse<T>> {
+  assertActiveBsaleCoordinatorLease()
   const { path, params, signal } = options
   const url = new URL(`${BSALE_API_BASE}${path}`)
 
@@ -117,18 +144,24 @@ export async function bsaleFetch<T>(options: BsaleFetchOptions): Promise<BsaleRe
     })
   }
 
+  const composedSignal = composeBsaleProtectedSignal({ signal })
   const response = await fetch(url.toString(), {
     method: 'GET',
     headers: getBsaleHeaders(),
-    signal,
+    signal: composedSignal,
   })
+  assertActiveBsaleCoordinatorLease()
 
   if (!response.ok) {
     const body = await response.text().catch(() => '')
+    const retryAfterSeconds = response.status === 429
+      ? parseBsaleRetryAfterSeconds(response.headers.get('retry-after'), body)
+      : null
     throw new BsaleApiError(
       response.status,
       `Bsale API error ${response.status}: ${response.statusText}`,
-      body
+      body,
+      retryAfterSeconds,
     )
   }
 

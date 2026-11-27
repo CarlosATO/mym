@@ -2293,6 +2293,10 @@ export type OperationalBsaleSyncResult = {
   status?: string
   skipped?: 'fresh' | 'running' | 'throttled'
   health?: WarehousePreparationSyncHealth
+  queued?: boolean
+  queueRequestId?: string | null
+  queueStatus?: 'PENDING' | 'RUNNING' | null
+  deduplicated?: boolean
 }
 
 export async function syncOperationalBsaleSalesOrders(): Promise<OperationalBsaleSyncResult> {
@@ -2314,16 +2318,47 @@ export async function syncOperationalBsaleSalesOrders(): Promise<OperationalBsal
 
     const companyId = await getActiveCompanyId()
     if (!companyId) return { ok: false, error: 'No se pudo determinar la empresa activa' }
+
+    const { findActiveBsaleSyncOperation } = await import('@/lib/integraciones/bsale-sync-queue-status')
+    const activeManual = await findActiveBsaleSyncOperation({
+      companyId,
+      operationKinds: ['WAREHOUSE_MANUAL'],
+      resourceKey: null,
+    })
+    if (activeManual) {
+      return {
+        ok: false,
+        status: 'SKIPPED_LOCKED',
+        queued: activeManual.status === 'PENDING',
+        queueRequestId: activeManual.requestId,
+        queueStatus: activeManual.status,
+        deduplicated: true,
+        error: activeManual.status === 'PENDING'
+          ? 'Ya existe una actualización de Notas de Venta en espera; se ejecutará automáticamente.'
+          : 'Ya existe una actualización de Notas de Venta en ejecución.',
+      }
+    }
+
     const { runManualWarehouseBsaleRefresh } = await import('@/app/actions/integraciones/bsale-sync')
 
     const result = await runManualWarehouseBsaleRefresh(companyId)
     if (!result.success) {
+      const queued = 'queued' in result ? Boolean(result.queued) : false
+      const alreadyRunning = 'alreadyRunning' in result ? Boolean(result.alreadyRunning) : false
+      const queueRequestId = 'queueRequestId' in result && result.queueRequestId ? String(result.queueRequestId) : null
+      const deduplicated = 'deduplicated' in result ? Boolean(result.deduplicated) : false
       return {
         ok: false,
         status: result.status,
         data: result.counts,
+        queued,
+        queueRequestId,
+        queueStatus: queued ? 'PENDING' : (alreadyRunning || result.status === 'SKIPPED_LOCKED' ? 'RUNNING' : null),
+        deduplicated,
         error: result.status === 'SKIPPED_LOCKED'
-          ? 'Ya existe una sincronización en curso.'
+          ? (queued
+            ? 'Sincronización en curso. Tu actualización de Notas de Venta quedó en espera y se ejecutará automáticamente.'
+            : 'Ya existe una actualización de Notas de Venta en ejecución.')
           : result.error,
       }
     }
@@ -2336,7 +2371,30 @@ export async function syncOperationalBsaleSalesOrders(): Promise<OperationalBsal
 
 export async function syncOperationalBsaleSalesOrdersIfStale(): Promise<OperationalBsaleSyncResult> {
   try {
-    const health = await getWarehousePreparationSyncHealth()
+    const [health, activeCompanyId] = await Promise.all([
+      getWarehousePreparationSyncHealth(),
+      getActiveCompanyId(),
+    ])
+
+    if (activeCompanyId) {
+      const { findActiveBsaleSyncOperation, PREPARATION_BOARD_QUEUE_OPERATIONS } = await import('@/lib/integraciones/bsale-sync-queue-status')
+      const activeBoardOp = await findActiveBsaleSyncOperation({
+        companyId: activeCompanyId,
+        operationKinds: PREPARATION_BOARD_QUEUE_OPERATIONS,
+        resourceKey: null,
+      })
+      if (activeBoardOp) {
+        return {
+          ok: true,
+          skipped: 'running',
+          queued: activeBoardOp.status === 'PENDING',
+          queueRequestId: activeBoardOp.requestId,
+          queueStatus: activeBoardOp.status,
+          health,
+        }
+      }
+    }
+
     const latestRunAgeMinutes = health.latestRun?.started_at
       ? Math.floor((Date.now() - new Date(health.latestRun.started_at).getTime()) / 60000)
       : null
@@ -2354,7 +2412,16 @@ export async function syncOperationalBsaleSalesOrdersIfStale(): Promise<Operatio
     const nextHealth = await getWarehousePreparationSyncHealth()
 
     if (!result.ok && result.status === 'SKIPPED_LOCKED') {
-      return { ok: true, skipped: 'running', status: result.status, health: nextHealth }
+      return {
+        ok: true,
+        skipped: 'running',
+        status: result.status,
+        queued: result.queued,
+        queueRequestId: result.queueRequestId ?? null,
+        queueStatus: result.queueStatus ?? null,
+        deduplicated: result.deduplicated,
+        health: nextHealth,
+      }
     }
 
     return { ...result, health: nextHealth }

@@ -76,6 +76,9 @@ interface SalesOrderAuditDrawerProps {
   onAuditLockChange: () => void
   onOwnershipConflict: () => void
   onFinalized?: (result: SalesOrderAuditFinalizeResult) => void
+  onSyncCard?: (card: SalesOrderPreparationCardInfo) => Promise<AuditCardSyncResult | null>
+  cardSyncPhase?: 'WAITING' | 'RUNNING' | null
+  externalSyncResult?: AuditCardSyncResult | null
 }
 
 type IncidentDialogState = {
@@ -139,6 +142,9 @@ export function SalesOrderAuditDrawer({
   onAuditLockChange,
   onOwnershipConflict,
   onFinalized,
+  onSyncCard,
+  cardSyncPhase = null,
+  externalSyncResult = null,
 }: SalesOrderAuditDrawerProps) {
   const [detail, setDetail] = useState<SalesOrderAuditDetail | null>(() => (
     card.status === 'IN_AUDIT' ? null : getAuditCache(card.card_id)
@@ -719,6 +725,19 @@ export function SalesOrderAuditDrawer({
     setResolveIncidentError(null)
   }, [card.card_id])
 
+  useEffect(() => {
+    if (!externalSyncResult || externalSyncResult.cardId !== card.card_id) return
+    setAuditSyncResult(externalSyncResult)
+    if (externalSyncResult.ok) {
+      if (externalSyncResult.canFinalize) {
+        setFinalizeError(null)
+      }
+      invalidateAuditCache(card.card_id)
+      onAuditLockChange()
+      void loadDetail()
+    }
+  }, [externalSyncResult, card.card_id, onAuditLockChange, loadDetail])
+
   const openResolveIncidentDialog = (line: SalesOrderAuditLine, incident: SalesOrderAuditIncident) => {
     if (!canWrite || resolvingIncident) return
     setResolveDialog({ line, incident })
@@ -768,24 +787,28 @@ export function SalesOrderAuditDrawer({
   }
 
   const handleSyncAuditBsale = async () => {
-    if (!audit || isFinalized || !canManage || isSelfAuditBlocked || isLockedByOther || syncingAuditBsale) return
+    if (!audit || isFinalized || !canManage || isSelfAuditBlocked || isLockedByOther || syncingAuditBsale || Boolean(cardSyncPhase)) return
     setSyncingAuditBsale(true)
     try {
-      const result = await syncSalesOrderAuditCardFromBsale(card.card_id)
-      if (!mountedRef.current) return
+      const result = onSyncCard
+        ? await onSyncCard(card)
+        : await syncSalesOrderAuditCardFromBsale(card.card_id)
+      if (!mountedRef.current || !result) return
       setAuditSyncResult(result)
       if (!result.ok) {
-        if (result.status === 'CONFLICT' || result.status === 'IN_PROGRESS') {
-          toast.warning(result.message)
-        } else {
-          toast.error(result.message)
+        if (!onSyncCard) {
+          if (result.status === 'CONFLICT' || result.status === 'IN_PROGRESS') {
+            toast.warning(result.message)
+          } else {
+            toast.error(result.message)
+          }
         }
         return
       }
       if (result.canFinalize) {
         setFinalizeError(null)
-        toast.success(result.message)
-      } else {
+        if (!onSyncCard) toast.success(result.message)
+      } else if (!onSyncCard) {
         toast.warning(result.message)
       }
       invalidateAuditCache(card.card_id)
@@ -810,7 +833,7 @@ export function SalesOrderAuditDrawer({
           canFinalize: false,
           message,
         })
-        toast.error(message)
+        if (!onSyncCard) toast.error(message)
       }
     } finally {
       if (mountedRef.current) setSyncingAuditBsale(false)
@@ -1454,6 +1477,7 @@ export function SalesOrderAuditDrawer({
                           || summary.incidentLines > 0
                           || Boolean(finalizeError)
                           || Boolean(auditSyncResult)
+                          || Boolean(cardSyncPhase)
                         ) && (
                           <div className="rounded-md border border-[#72383D]/25 bg-[#FBF7F4] px-2.5 py-2">
                             <p className="text-[10px] font-bold uppercase tracking-wide text-[#72383D]">
@@ -1465,24 +1489,33 @@ export function SalesOrderAuditDrawer({
                             <button
                               type="button"
                               onClick={() => void handleSyncAuditBsale()}
-                              disabled={syncingAuditBsale || precloseLoading || finalizing}
-                              className="mt-2 flex w-full items-center justify-center gap-1.5 rounded border border-[#72383D]/35 bg-white px-2.5 py-1.5 text-[11px] font-bold text-[#72383D] transition-colors hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50"
+                              disabled={syncingAuditBsale || Boolean(cardSyncPhase) || precloseLoading || finalizing}
+                              aria-busy={syncingAuditBsale || Boolean(cardSyncPhase)}
+                              className={`mt-2 flex w-full items-center justify-center gap-1.5 rounded border px-2.5 py-1.5 text-[11px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                                cardSyncPhase === 'WAITING'
+                                  ? 'border-amber-400/60 bg-amber-50 text-amber-800'
+                                  : 'border-[#72383D]/35 bg-white text-[#72383D] hover:bg-[#F5EDE9]'
+                              }`}
                             >
-                              <RefreshCw className={`h-3.5 w-3.5 ${syncingAuditBsale ? 'animate-spin' : ''}`} />
-                              {syncingAuditBsale ? 'Sincronizando…' : 'Sincronizar'}
+                              <RefreshCw className={`h-3.5 w-3.5 ${cardSyncPhase === 'WAITING' ? 'animate-pulse' : (syncingAuditBsale || cardSyncPhase === 'RUNNING') ? 'animate-spin' : ''}`} />
+                              {cardSyncPhase === 'WAITING' ? 'En espera…' : (syncingAuditBsale || cardSyncPhase === 'RUNNING') ? 'Sincronizando…' : 'Sincronizar'}
                             </button>
-                            {auditSyncResult && (
+                            {(auditSyncResult || cardSyncPhase === 'WAITING') && (
                               <p
-                                role={auditSyncResult.ok ? 'status' : 'alert'}
+                                role={auditSyncResult && !auditSyncResult.ok && !auditSyncResult.queued && auditSyncResult.status !== 'CONFLICT' && auditSyncResult.status !== 'IN_PROGRESS' ? 'alert' : 'status'}
                                 className={`mt-2 text-[10px] font-medium leading-snug ${
-                                  auditSyncResult.canFinalize
-                                    ? 'text-emerald-800'
-                                    : auditSyncResult.ok
-                                      ? 'text-amber-900'
-                                      : 'text-red-800'
+                                  cardSyncPhase === 'WAITING'
+                                    ? 'text-amber-900'
+                                    : auditSyncResult?.canFinalize
+                                      ? 'text-emerald-800'
+                                      : auditSyncResult?.ok || auditSyncResult?.queued || auditSyncResult?.status === 'CONFLICT' || auditSyncResult?.status === 'IN_PROGRESS'
+                                        ? 'text-amber-900'
+                                        : 'text-red-800'
                                 }`}
                               >
-                                {auditSyncResult.message}
+                                {cardSyncPhase === 'WAITING'
+                                  ? (auditSyncResult?.message ?? 'Solicitud en espera en la cola de sincronización; se ejecutará automáticamente.')
+                                  : auditSyncResult?.message}
                               </p>
                             )}
                           </div>

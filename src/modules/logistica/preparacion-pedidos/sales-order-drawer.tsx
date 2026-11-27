@@ -42,6 +42,8 @@ interface SalesOrderDrawerProps {
   onCommercialAcceptanceSuccess?: (cardId: string) => void
   canSyncCard?: boolean
   isSyncingCard?: boolean
+  cardSyncPhase?: 'WAITING' | 'RUNNING' | null
+  externalCardSyncFeedback?: { tone: 'success' | 'warning' | 'error'; message: string } | null
   onSyncCard?: (card: SalesOrderPreparationCardInfo) => Promise<PreparationCardSyncResult | null>
 }
 
@@ -125,6 +127,8 @@ export function SalesOrderDrawer({
   onCommercialAcceptanceSuccess,
   canSyncCard = false,
   isSyncingCard = false,
+  cardSyncPhase = null,
+  externalCardSyncFeedback = null,
   onSyncCard,
 }: SalesOrderDrawerProps) {
   const [fallbackClientData, setFallbackClientData] = useState<SalesOrderClientData | null>(null)
@@ -154,7 +158,7 @@ export function SalesOrderDrawer({
   const [isTakingPreparation, setIsTakingPreparation] = useState(false)
   const [isAcceptingCommercialChanges, setIsAcceptingCommercialChanges] = useState(false)
   const [commercialAcceptanceError, setCommercialAcceptanceError] = useState<string | null>(null)
-  const [cardSyncFeedback, setCardSyncFeedback] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
+  const [cardSyncFeedback, setCardSyncFeedback] = useState<{ tone: 'success' | 'warning' | 'error'; message: string } | null>(null)
 
   useEffect(() => {
     setCardSyncFeedback(null)
@@ -316,8 +320,15 @@ export function SalesOrderDrawer({
     try {
       const result = await onSyncCard(card)
       if (!result) return
+      const tone: 'success' | 'warning' | 'error' = result.queued || result.status === 'CONFLICT' || result.status === 'IN_PROGRESS'
+        ? 'warning'
+        : result.ok && !result.blockMessage
+          ? 'success'
+          : result.ok
+            ? 'warning'
+            : 'error'
       setCardSyncFeedback({
-        tone: result.ok && !result.blockMessage ? 'success' : 'error',
+        tone,
         message: result.message,
       })
     } catch (error) {
@@ -1049,7 +1060,7 @@ export function SalesOrderDrawer({
                   </div>
                 )}
 
-                {isPreparation && canSyncCard && isBlockedForSync && onSyncCard && (
+                {isPreparation && canSyncCard && (isBlockedForSync || isSyncingCard || Boolean(externalCardSyncFeedback)) && onSyncCard && (
                   <div className="rounded-md border border-[#72383D]/25 bg-[#FBF7F4] px-2.5 py-2">
                     <p className="text-[10px] font-bold uppercase tracking-wide text-[#72383D]">
                       Sincronización puntual Bsale
@@ -1061,21 +1072,38 @@ export function SalesOrderDrawer({
                       type="button"
                       onClick={() => void handleManualCardSync()}
                       disabled={isSyncingCard || isMoving}
-                      className="mt-2 flex w-full items-center justify-center gap-1.5 rounded border border-[#72383D]/35 bg-white px-2.5 py-1.5 text-[11px] font-bold text-[#72383D] transition-colors hover:bg-[#F5EDE9] disabled:cursor-not-allowed disabled:opacity-50"
+                      aria-busy={isSyncingCard}
+                      className={`mt-2 flex w-full items-center justify-center gap-1.5 rounded border px-2.5 py-1.5 text-[11px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                        cardSyncPhase === 'WAITING'
+                          ? 'border-amber-400/60 bg-amber-50 text-amber-800'
+                          : 'border-[#72383D]/35 bg-white text-[#72383D] hover:bg-[#F5EDE9]'
+                      }`}
                     >
-                      <RefreshCw className={`h-3.5 w-3.5 ${isSyncingCard ? 'animate-spin' : ''}`} />
-                      {isSyncingCard ? 'Sincronizando…' : 'Sincronizar'}
+                      <RefreshCw className={`h-3.5 w-3.5 ${cardSyncPhase === 'WAITING' ? 'animate-pulse' : isSyncingCard ? 'animate-spin' : ''}`} />
+                      {cardSyncPhase === 'WAITING' ? 'En espera…' : isSyncingCard ? 'Sincronizando…' : 'Sincronizar'}
                     </button>
-                    {cardSyncFeedback && (
-                      <p
-                        role={cardSyncFeedback.tone === 'error' ? 'alert' : 'status'}
-                        className={`mt-2 text-[10px] font-medium leading-snug ${
-                          cardSyncFeedback.tone === 'success' ? 'text-emerald-800' : 'text-red-800'
-                        }`}
-                      >
-                        {cardSyncFeedback.message}
-                      </p>
-                    )}
+                    {(() => {
+                      const effectiveFeedback = externalCardSyncFeedback
+                        ?? cardSyncFeedback
+                        ?? (cardSyncPhase === 'WAITING'
+                          ? { tone: 'warning' as const, message: 'Solicitud en espera en la cola de sincronización; se ejecutará automáticamente.' }
+                          : null)
+                      if (!effectiveFeedback) return null
+                      return (
+                        <p
+                          role={effectiveFeedback.tone === 'error' ? 'alert' : 'status'}
+                          className={`mt-2 text-[10px] font-medium leading-snug ${
+                            effectiveFeedback.tone === 'success'
+                              ? 'text-emerald-800'
+                              : effectiveFeedback.tone === 'warning'
+                                ? 'text-amber-900'
+                                : 'text-red-800'
+                          }`}
+                        >
+                          {effectiveFeedback.message}
+                        </p>
+                      )
+                    })()}
                   </div>
                 )}
 

@@ -240,6 +240,8 @@ export function AppTopbar({ profile, activeCompany, permissions }: AppTopbarProp
         <div className="flex items-center gap-2 shrink-0">
           <BsaleReplenishmentTopbarControl
             isSuperUsuario={profile.roles?.name === 'SUPER_USUARIO'}
+            roleName={profile.roles?.name}
+            permissions={permissions}
           />
 
           {/* Botón de engranaje con Popover estilo Imagen 4 (Operaciones + Mi cuenta y vista) */}

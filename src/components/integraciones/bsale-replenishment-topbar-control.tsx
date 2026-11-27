@@ -1,15 +1,19 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
+import { usePathname, useSearchParams } from 'next/navigation'
 import { AlertCircle, CheckCircle2, Clock3, RefreshCw } from 'lucide-react'
 import {
   forceSyncBsaleReplenishment,
   getLatestBsaleSyncRun,
   type LatestBsaleSyncRun,
 } from '@/app/actions/integraciones/sync'
+import { isPreparationOrdersTopbarSurface } from '@/modules/logistica/preparacion-pedidos/preparation-sync-policy'
 
 type Props = {
   isSuperUsuario: boolean
+  roleName?: string
+  permissions?: string[]
 }
 
 const TIME_ZONE = 'America/Santiago'
@@ -43,7 +47,17 @@ function statusClass(status: string | undefined) {
   return 'text-theme-text-muted'
 }
 
-export function BsaleReplenishmentTopbarControl({ isSuperUsuario }: Props) {
+function BsaleReplenishmentTopbarControlInner({ isSuperUsuario, roleName, permissions }: Props) {
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const tab = searchParams.get('tab')
+  const hiddenOnPreparation = isPreparationOrdersTopbarSurface({
+    pathname,
+    tab,
+    roleName,
+    permissions,
+  })
+
   const [latestRun, setLatestRun] = useState<LatestBsaleSyncRun | null>(null)
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
@@ -59,13 +73,18 @@ export function BsaleReplenishmentTopbarControl({ isSuperUsuario }: Props) {
   }
 
   useEffect(() => {
+    if (hiddenOnPreparation) return
     const initialLoad = window.setTimeout(() => void loadLatestRun(), 0)
     const interval = window.setInterval(() => void loadLatestRun(), 30000)
     return () => {
       window.clearTimeout(initialLoad)
       window.clearInterval(interval)
     }
-  }, [])
+  }, [hiddenOnPreparation])
+
+  if (hiddenOnPreparation) {
+    return null
+  }
 
   async function handleSync() {
     if (syncing) return
@@ -130,5 +149,15 @@ export function BsaleReplenishmentTopbarControl({ isSuperUsuario }: Props) {
         </div>
       )}
     </div>
+  )
+}
+
+export { isPreparationOrdersTopbarSurface }
+
+export function BsaleReplenishmentTopbarControl(props: Props) {
+  return (
+    <Suspense fallback={null}>
+      <BsaleReplenishmentTopbarControlInner {...props} />
+    </Suspense>
   )
 }

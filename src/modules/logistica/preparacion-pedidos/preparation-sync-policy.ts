@@ -110,3 +110,135 @@ export function shouldRefreshBoardAfterSync(input: {
   if (input.didRun) return true
   return Boolean(input.nextRunId && input.nextRunId !== input.previousRunId)
 }
+
+export type PreparationQueueLifecycleStatus =
+  | 'PENDING'
+  | 'RUNNING'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'CANCELLED'
+
+export type PreparationOperationalSyncPhase =
+  | 'IDLE'
+  | 'WAITING'
+  | 'RUNNING'
+  | 'COMPLETED'
+  | 'ERROR'
+
+export function isPreparationOrdersTopbarSurface(params: {
+  pathname: string | null | undefined
+  tab: string | null | undefined
+  roleName?: string | null
+  permissions?: readonly string[]
+}): boolean {
+  if (params.pathname !== '/dashboard/logistica') return false
+  if (params.tab === 'preparacion_pedidos') return true
+  if (params.tab !== null && params.tab !== undefined && params.tab !== '') return false
+  const role = String(params.roleName ?? '').trim().toUpperCase()
+  const perms = params.permissions ?? []
+  return (
+    role === 'SUPER_USUARIO'
+    || role === 'OPERADOR_BODEGA'
+    || perms.includes('system.admin')
+    || perms.includes('logistica.preparation.manage')
+    || perms.includes('logistica.preparation.access')
+  )
+}
+
+export function resolvePreparationBoardSyncUiState(input: {
+  isLocalSyncing: boolean
+  queueStatus: PreparationQueueLifecycleStatus | null
+  activeLockRunning?: boolean
+  latestRunStatus: string | null
+  latestRunErrorMessage?: string | null
+  syncError: string | null
+  lastSuccessAgeMinutes: number | null
+  hasHealth: boolean
+}): {
+  phase: PreparationOperationalSyncPhase
+  isWaiting: boolean
+  isRunning: boolean
+  isError: boolean
+  isFresh: boolean
+  disableManualRefresh: boolean
+  buttonLabel: string
+  statusLabel: string
+} {
+  const isRunning = input.isLocalSyncing
+    || input.queueStatus === 'RUNNING'
+    || Boolean(input.activeLockRunning)
+    || input.latestRunStatus === 'STARTED'
+  const isWaiting = !isRunning && input.queueStatus === 'PENDING'
+  const latestRunIsSkippedLock = String(input.latestRunErrorMessage ?? '').startsWith('SKIPPED_LOCKED:')
+  const latestRunFailed = (input.latestRunStatus === 'FAILED' || input.latestRunStatus === 'PARTIAL') && !latestRunIsSkippedLock
+  const isError = !isRunning
+    && !isWaiting
+    && (Boolean(input.syncError) || input.queueStatus === 'FAILED' || input.queueStatus === 'CANCELLED' || latestRunFailed)
+  const isFresh = input.lastSuccessAgeMinutes !== null && input.lastSuccessAgeMinutes < PREPARATION_SYNC_STALE_AFTER_MINUTES
+
+  const statusLabel = isRunning
+    ? 'Sincronizando…'
+    : isWaiting
+      ? 'En espera…'
+      : isError
+        ? 'ERROR'
+        : isFresh
+          ? 'Actualizado'
+          : input.hasHealth
+            ? 'Desactualizado'
+            : 'Sin evidencia'
+
+  const phase: PreparationOperationalSyncPhase = isRunning
+    ? 'RUNNING'
+    : isWaiting
+      ? 'WAITING'
+      : isError
+        ? 'ERROR'
+        : input.queueStatus === 'COMPLETED' || isFresh
+          ? 'COMPLETED'
+          : 'IDLE'
+
+  return {
+    phase,
+    isWaiting,
+    isRunning,
+    isError,
+    isFresh,
+    disableManualRefresh: isRunning || isWaiting,
+    buttonLabel: isWaiting ? 'En espera…' : isRunning ? 'Sincronizando…' : 'Actualizar',
+    statusLabel,
+  }
+}
+
+export function resolveIndividualCardSyncUiState(input: {
+  isLocalSyncing: boolean
+  queueStatus: PreparationQueueLifecycleStatus | null
+  activeLockRunning?: boolean
+}): {
+  phase: 'IDLE' | 'WAITING' | 'RUNNING'
+  isBusy: boolean
+  cardSyncPhase: 'WAITING' | 'RUNNING' | null
+  buttonLabel: string
+} {
+  const isRunning = input.isLocalSyncing || input.queueStatus === 'RUNNING' || Boolean(input.activeLockRunning)
+  const isWaiting = !isRunning && input.queueStatus === 'PENDING'
+  const isBusy = isRunning || isWaiting
+  return {
+    phase: isWaiting ? 'WAITING' : isRunning ? 'RUNNING' : 'IDLE',
+    isBusy,
+    cardSyncPhase: isWaiting ? 'WAITING' : isRunning ? 'RUNNING' : null,
+    buttonLabel: isWaiting ? 'En espera…' : isRunning ? 'Sincronizando…' : 'Sincronizar',
+  }
+}
+
+export function shouldRefreshPreparationBoardOnQueueTransition(input: {
+  requestId: string
+  nextStatus: PreparationQueueLifecycleStatus
+  skippedReason?: string | null
+  alreadyProcessedIds: ReadonlySet<string>
+}): boolean {
+  if (!input.requestId || input.alreadyProcessedIds.has(input.requestId)) return false
+  if (input.nextStatus !== 'COMPLETED') return false
+  if (input.skippedReason) return false
+  return true
+}

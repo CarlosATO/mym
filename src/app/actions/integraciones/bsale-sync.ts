@@ -17,6 +17,20 @@ import type {
   WarehouseFullRefreshResult,
 } from '@/lib/integraciones/bsale-sync-types'
 import { createClient as createServerSessionClient } from '@/lib/supabase/server'
+import {
+  BsaleRateLimitError,
+  assertActiveBsaleCoordinatorLease,
+  bsaleProtectedFetch,
+  createSupabaseBsaleSyncCoordinatorStore,
+  getActiveBsaleCoordinatorContexts,
+  getBsaleSyncRolloutConfig,
+  getIncompatibleLockNames,
+  parseBsaleRetryAfterSeconds,
+  resolveBsaleCredentialScope,
+  runWithBsaleSyncCoordinator,
+  type BsaleSyncOperationKind,
+} from '@/lib/integraciones/bsale-sync-coordinator'
+import { ensureBsaleSyncQueueRuntimeRegistered } from '@/lib/integraciones/bsale-sync-queue-runtime'
 import crypto from 'crypto'
 
 /** Resuelve baseUrl + headers HTTP para BSale según companyId. */
@@ -2283,49 +2297,152 @@ export async function syncBsaleCatalog(companyId: string): Promise<{
 }
 
 
-// ─── Locking & Auto-Sync Orchestration (Fase 4B) ────────────────
+// ─── Locking & Auto-Sync Orchestration (Fase 4B + SYNC-01) ──────
 
-export async function acquireSyncLock(companyId: string, lockName: string, runId: string, ttlMinutes: number = 60): Promise<boolean> {
-  const db = integrDb();
-  
-  // Try to clean up expired lock first (due to Supabase REST limitations on ON CONFLICT WHERE)
-  // 1. Delete if expired
-  await db.from('bsale_sync_locks')
-    .delete()
-    .eq('company_id', companyId)
-    .eq('lock_name', lockName)
-    .lt('expires_at', new Date().toISOString());
+function inferOperationKindFromLockName(lockName: string): BsaleSyncOperationKind {
+  if (lockName === 'bsale_replenishment_sync') return 'REPLENISHMENT_SYNC'
+  if (lockName === 'bsale_warehouse_full_refresh') return 'WAREHOUSE_FULL_REFRESH'
+  if (lockName === 'bsale_cobranza_manual_dispatch') return 'COBRANZA_SNAPSHOT'
+  return 'OPERATIONAL_PREP_SYNC'
+}
 
-  // 2. Try to insert
-  const expiresAt = new Date(Date.now() + ttlMinutes * 60000).toISOString();
-  const { data, error } = await db.from('bsale_sync_locks')
-    .insert({
-      company_id: companyId,
-      lock_name: lockName,
-      run_id: runId,
-      acquired_at: new Date().toISOString(),
-      expires_at: expiresAt
-    })
-    .select('run_id')
-    .single();
-
-  if (error) {
-    // If it violates unique constraint, it means the lock is actively held
-    return false;
+export async function acquireSyncLock(
+  companyId: string,
+  lockName: string,
+  runId: string,
+  ttlMinutes: number = 60,
+  options?: {
+    operationKind?: BsaleSyncOperationKind
+    resourceKey?: string | null
+    metadata?: Record<string, unknown>
+  },
+): Promise<boolean> {
+  const rollout = getBsaleSyncRolloutConfig()
+  if (!rollout.coordinatorEnabled) {
+    const db = integrDb()
+    await db.from('bsale_sync_locks')
+      .delete()
+      .eq('company_id', companyId)
+      .eq('lock_name', lockName)
+      .lt('expires_at', new Date().toISOString())
+    const expiresAt = new Date(Date.now() + ttlMinutes * 60_000).toISOString()
+    const { error } = await db.from('bsale_sync_locks')
+      .insert({
+        company_id: companyId,
+        lock_name: lockName,
+        run_id: runId,
+        acquired_at: new Date().toISOString(),
+        expires_at: expiresAt,
+      })
+      .select('run_id')
+      .single()
+    return !error
   }
-  return true;
+
+  const credentialScope = resolveBsaleCredentialScope(companyId)
+  const resourceKey = options?.resourceKey ?? null
+  const activeContexts = getActiveBsaleCoordinatorContexts()
+  if (activeContexts.some(entry => entry.credentialScope === credentialScope && (entry.resourceKey === null || entry.resourceKey === resourceKey))) {
+    return true
+  }
+
+  const operationKind = options?.operationKind ?? inferOperationKindFromLockName(lockName)
+  const store = createSupabaseBsaleSyncCoordinatorStore()
+  const result = await store.acquire({
+    companyId,
+    lockName,
+    ownerToken: runId,
+    operationKind,
+    credentialScope,
+    resourceKey,
+    runId,
+    ttlSeconds: Math.max(60, Math.round(ttlMinutes * 60)),
+    incompatibleLockNames: getIncompatibleLockNames(operationKind),
+    metadata: options?.metadata ?? {},
+  })
+  return result.acquired
 }
 
 export async function releaseSyncLock(companyId: string, lockName: string, runId: string): Promise<void> {
-  const db = integrDb();
-  await db.from('bsale_sync_locks')
-    .delete()
-    .eq('company_id', companyId)
-    .eq('lock_name', lockName)
-    .eq('run_id', runId);
+  const rollout = getBsaleSyncRolloutConfig()
+  if (!rollout.coordinatorEnabled) {
+    await integrDb().from('bsale_sync_locks')
+      .delete()
+      .eq('company_id', companyId)
+      .eq('lock_name', lockName)
+      .eq('run_id', runId)
+    return
+  }
+
+  const credentialScope = resolveBsaleCredentialScope(companyId)
+  const activeContexts = getActiveBsaleCoordinatorContexts()
+  if (activeContexts.some(entry => entry.credentialScope === credentialScope && entry.ownerToken !== runId)) {
+    return
+  }
+
+  const store = createSupabaseBsaleSyncCoordinatorStore()
+  const res = await store.release({
+    companyId,
+    lockName,
+    credentialScope,
+    ownerToken: runId,
+  })
+  if (res.released && rollout.queueEnabled && rollout.supervisorEnabled) {
+    ensureBsaleSyncQueueRuntimeRegistered().triggerBackgroundDrain()
+  }
+}
+
+async function enqueueSyncWhenLockBusy(params: {
+  companyId: string
+  operationKind: BsaleSyncOperationKind
+  lockName: string
+  triggerType: string
+  ttlSeconds: number
+  resourceKey?: string | null
+  requestedBy?: string | null
+  payload?: Record<string, unknown>
+}) {
+  const rollout = getBsaleSyncRolloutConfig()
+  if (!rollout.queueEnabled) return null
+  try {
+    const queueManager = ensureBsaleSyncQueueRuntimeRegistered()
+    return await queueManager.enqueue({
+      companyId: params.companyId,
+      operationKind: params.operationKind,
+      lockName: params.lockName,
+      triggerType: params.triggerType,
+      ttlSeconds: params.ttlSeconds,
+      resourceKey: params.resourceKey ?? null,
+      requestedBy: params.requestedBy ?? null,
+      payload: params.payload ?? {},
+    })
+  } catch (queueErr) {
+    console.error(`[bsale-sync] Error al registrar solicitud en espera (${params.operationKind}):`, queueErr)
+    return null
+  }
+}
+
+async function fetchBsaleSyncResponseWithSignal(
+  url: string,
+  headers: Record<string, string>,
+  timeoutMs: number,
+  contextLabel: string,
+): Promise<Response> {
+  const response = await bsaleProtectedFetch(url, {
+    method: 'GET',
+    headers,
+    timeoutMs,
+  })
+  if (response.status === 429) {
+    const body = await response.text().catch(() => '')
+    const retryAfter = parseBsaleRetryAfterSeconds(response.headers.get('retry-after'), body)
+    throw new BsaleRateLimitError(`${contextLabel} HTTP 429`, retryAfter, body)
+  }
+  return response
 }
 
 async function materializePreparationAfterSalesSync(companyId: string, runId?: string) {
+  assertActiveBsaleCoordinatorLease()
   const { data, error } = await integrDb()
     .schema('logistica')
     .rpc('reconcile_bodega_preparation_cards', { p_company_id: companyId })
@@ -2395,7 +2512,7 @@ async function fetchPreparationDocumentDetails(
   while (true) {
     const url = `${baseUrl}/documents/${documentId}/details.json?limit=${limit}&offset=${offset}`
     onRequest?.()
-    const response = await fetch(url, { headers, signal: AbortSignal.timeout(20000) })
+    const response = await fetchBsaleSyncResponseWithSignal(url, headers, 20000, `Detalles Bsale (${documentId})`)
     if (!response.ok) throw new Error(`Detalles Bsale HTTP ${response.status}`)
     const data = await response.json() as { items?: unknown[] }
     if (!Array.isArray(data.items)) throw new Error('Respuesta de detalles Bsale sin items')
@@ -2456,34 +2573,44 @@ async function refreshClientMetricsSnapshot(companyId: string) {
   return data
 }
 
-export async function runReplenishmentBsaleSync(companyId: string, trigger: string = 'SCHEDULED'): Promise<{
+export async function runReplenishmentBsaleSync(
+  companyId: string,
+  trigger: string = 'SCHEDULED',
+  options?: { fromQueueWorker?: boolean },
+): Promise<{
   success: boolean;
   status: string;
   runId?: string;
   counts?: any;
   error?: string;
   duration?: number;
+  queued?: boolean;
+  queueRequestId?: string;
+  deduplicated?: boolean;
 }> {
+  ensureBsaleSyncQueueRuntimeRegistered();
   const startTime = Date.now();
-  let run = null;
+  let run: { id: string } | null = null;
   const lockName = 'bsale_replenishment_sync';
-  
+
   try {
     run = await createSyncRun(companyId, trigger);
     const runId = run.id;
 
-    // Acquire lock
-    const acquired = await acquireSyncLock(companyId, lockName, runId, 60);
-    if (!acquired) {
-      console.log(`[runReplenishmentBsaleSync] Lock ocupado para ${companyId}`);
-      await finishSyncRun(runId, 'FAILED', {}, 'SKIPPED_LOCKED: Sync already running');
-      return { success: false, status: 'SKIPPED_LOCKED', error: 'Sync already running', duration: Date.now() - startTime };
-    }
+    const coordResult = await runWithBsaleSyncCoordinator({
+      companyId,
+      operationKind: 'REPLENISHMENT_SYNC',
+      lockName,
+      runId,
+      triggerType: trigger,
+      ttlSeconds: 60 * 60,
+      execute: async (lease) => {
 
     let finalStatus: 'COMPLETED' | 'PARTIAL' | 'FAILED' = 'COMPLETED';
     let errorMessage = '';
     let commercialSyncConsistent = true;
 
+    lease.assertActive();
     // 0a-0c. Catalog auto-sync: product types → products → auto-mapping
     const catalogResult = await runCatalogAutoSyncStep(companyId, trigger, 'SCHEDULED');
     if (catalogResult.finalStatus === 'PARTIAL') {
@@ -2491,6 +2618,7 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       errorMessage += (errorMessage ? ' | ' : '') + catalogResult.errorMessage;
     }
 
+    lease.assertActive();
     // 1. Sync Clients (before documents to reduce orphans)
     console.log('[runReplenishmentBsaleSync] Iniciando syncBsaleClients...');
     let clientStats = { bsaleTotal: 0, bsaleFetched: 0, insertedCount: 0, updatedCount: 0, skippedCount: 0, errorCount: 0 };
@@ -2524,6 +2652,7 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       errorMessage += (errorMessage ? ' | ' : '') + 'Error en clients: ' + clientsErr.message;
     }
 
+    lease.assertActive();
     // 2. Sync Sales (14 days)
     console.log('[runReplenishmentBsaleSync] Iniciando syncBsaleSales (14 days)...');
     const salesRes = await syncBsaleSales(companyId, { days: 14 });
@@ -2583,6 +2712,7 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
     }
 
     // 3. Materialize eligible sales orders only after their documents are available locally.
+    lease.assertActive();
     let preparationResult: Awaited<ReturnType<typeof materializePreparationAfterSalesSync>> | null = null;
     if (finalStatus !== 'FAILED') {
       try {
@@ -2760,8 +2890,6 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
        cogs_nc_errors: creditNoteCogsResult?.errors ?? 0,
      } : undefined);
 
-    await releaseSyncLock(companyId, lockName, runId);
-
     return {
       success: finalStatus !== 'FAILED',
       status: finalStatus,
@@ -2769,11 +2897,39 @@ export async function runReplenishmentBsaleSync(companyId: string, trigger: stri
       counts,
       duration: Date.now() - startTime
     };
+      },
+    });
+
+    if (coordResult.status === 'LOCK_BUSY') {
+      console.log(`[runReplenishmentBsaleSync] Lock ocupado para ${companyId}: ${coordResult.error}`);
+      const enqueued = options?.fromQueueWorker
+        ? null
+        : await enqueueSyncWhenLockBusy({
+          companyId,
+          operationKind: 'REPLENISHMENT_SYNC',
+          lockName,
+          triggerType: trigger,
+          ttlSeconds: 60 * 60,
+        });
+      await finishSyncRun(runId, 'FAILED', {}, `SKIPPED_LOCKED: ${coordResult.error}`);
+      return {
+        success: false,
+        status: 'SKIPPED_LOCKED',
+        error: coordResult.error,
+        duration: Date.now() - startTime,
+        queued: Boolean(enqueued?.enqueued),
+        queueRequestId: enqueued?.requestId ?? undefined,
+        deduplicated: enqueued?.deduplicated,
+      };
+    }
+    if (coordResult.status === 'TECHNICAL_ERROR') {
+      throw coordResult.cause instanceof Error ? coordResult.cause : new Error(coordResult.error);
+    }
+    return coordResult.data;
 
   } catch (err: any) {
     if (run?.id) {
        await finishSyncRun(run.id, 'FAILED', {}, err.message || 'Error inesperado');
-       await releaseSyncLock(companyId, lockName, run.id);
     }
     return { success: false, status: 'FAILED', error: err.message, duration: Date.now() - startTime };
   }
@@ -2787,6 +2943,7 @@ type WarehousePreparationSyncOptions = {
   // Sólo se usa cuando discoverRecent=false (flujo operacional). Con discoverRecent=true
   // (incremental) los tipos 1/7 usan la misma ventana incremental + solape existente.
   closureDocsRepairDays?: number
+  fromQueueWorker?: boolean
 }
 
 const DEFAULT_WAREHOUSE_PREPARATION_SYNC_OPTIONS: WarehousePreparationSyncOptions = {
@@ -2825,7 +2982,13 @@ export async function syncBsaleSalesOrdersForPreparation(
     errors: number
   }
   error?: string
+  queued?: boolean
+  alreadyRunning?: boolean
+  queueStatus?: string | null
+  queueRequestId?: string
+  deduplicated?: boolean
 }> {
+  ensureBsaleSyncQueueRuntimeRegistered()
   const startTime = Date.now()
   if (!companyId) return { success: false, error: 'company_id es requerido' }
   const runTrigger = options.trigger
@@ -2836,15 +2999,15 @@ export async function syncBsaleSalesOrdersForPreparation(
     run = await createSyncRun(companyId, runTrigger)
     const runId = run.id
 
-    const acquired = await acquireSyncLock(companyId, lockName, runId, 10)
-    if (!acquired) {
-      await finishSyncRun(runId, 'FAILED', {}, 'SKIPPED_LOCKED: Sync already running')
-      return {
-        success: false,
-        status: 'SKIPPED_LOCKED',
-        error: 'Ya existe una sincronización de Notas de Venta en curso.',
-      }
-    }
+    const coordResult = await runWithBsaleSyncCoordinator({
+      companyId,
+      operationKind: 'OPERATIONAL_PREP_SYNC',
+      lockName,
+      runId,
+      triggerType: runTrigger,
+      ttlSeconds: 10 * 60,
+      execute: async (lease) => {
+    lease.assertActive()
 
     const db = integrDb()
     const admin = integrDb()
@@ -2915,7 +3078,7 @@ export async function syncBsaleSalesOrdersForPreparation(
       while (true) {
         const url = `${prepBase}/documents.json?documenttypeid=${documentTypeId}&limit=50&offset=${closureOffset}&generationdaterange=${range}&expand=details`
         bsaleGetRequests++
-        const response = await fetch(url, { headers: prepHeaders, signal: AbortSignal.timeout(30000) })
+        const response = await fetchBsaleSyncResponseWithSignal(url, prepHeaders, 30000, `Bsale closure discovery (documenttypeid=${documentTypeId})`)
         if (!response.ok) throw new Error(`Bsale closure discovery error ${response.status} (documenttypeid=${documentTypeId})`)
         const data = await response.json() as { items?: unknown[] }
         if (!Array.isArray(data.items)) throw new Error(`Bsale closure discovery response missing items (documenttypeid=${documentTypeId})`)
@@ -2933,7 +3096,7 @@ export async function syncBsaleSalesOrdersForPreparation(
       while (true) {
         const url = `${prepBase}/documents.json?documenttypeid=23&limit=50&offset=${offset}&generationdaterange=${rangeEncoded}&expand=details`
         bsaleGetRequests++
-        const response = await fetch(url, { headers: prepHeaders, signal: AbortSignal.timeout(30000) })
+        const response = await fetchBsaleSyncResponseWithSignal(url, prepHeaders, 30000, 'Bsale discovery')
         if (!response.ok) throw new Error(`Bsale discovery error ${response.status}`)
         const data = await response.json() as { items?: unknown[] }
         if (!Array.isArray(data.items)) throw new Error('Bsale discovery response missing items')
@@ -2968,7 +3131,7 @@ export async function syncBsaleSalesOrdersForPreparation(
       async (bsaleId) => {
         const url = `${prepBase}/documents/${bsaleId}.json?expand=details`
         bsaleGetRequests++
-        const response = await fetch(url, { headers: prepHeaders, signal: AbortSignal.timeout(15000) })
+        const response = await fetchBsaleSyncResponseWithSignal(url, prepHeaders, 15000, `Refresh NV ${bsaleId}`)
         if (!response.ok) {
           refreshErrors++
           console.error(`[syncBsaleSalesOrdersForPreparation] Refresh NV ${bsaleId} HTTP ${response.status}`)
@@ -2996,7 +3159,7 @@ export async function syncBsaleSalesOrdersForPreparation(
       while (true) {
         const url = `${prepBase}/documents.json?documenttypeid=5&limit=50&offset=${invoiceOffset}&generationdaterange=${rangeEncoded}&expand=details`
         bsaleGetRequests++
-        const response = await fetch(url, { headers: prepHeaders, signal: AbortSignal.timeout(30000) })
+        const response = await fetchBsaleSyncResponseWithSignal(url, prepHeaders, 30000, 'Bsale invoice discovery')
         if (!response.ok) throw new Error(`Bsale invoice discovery error ${response.status}`)
         const data = await response.json() as { items?: unknown[] }
         if (!Array.isArray(data.items)) throw new Error('Bsale invoice discovery response missing items')
@@ -3043,6 +3206,7 @@ export async function syncBsaleSalesOrdersForPreparation(
     if (allDocs.length > 0) {
       // Upsert documentos
       for (let i = 0; i < allDocs.length; i += 50) {
+        lease.assertActive()
         const batch = allDocs.slice(i, i + 50)
         const records = batch.map((d) => ({
           company_id: companyId,
@@ -3097,6 +3261,7 @@ export async function syncBsaleSalesOrdersForPreparation(
       for (const result of detailResults) {
          const { doc, details, error: detailError } = result
          try {
+           lease.assertActive()
            if (detailError) throw new Error(detailError)
 
            const detailRecords = details.map((detail, idx) => ({
@@ -3177,7 +3342,6 @@ export async function syncBsaleSalesOrdersForPreparation(
       duration_ms: durationMs,
     })
     console.log(`[syncBsaleSalesOrdersForPreparation] closure_docs discovered=${closureDiscoveryCount} doc_errors=${closureDocumentErrors} detail_errors=${closureDetailErrors} reconcile_ran=true`)
-    await releaseSyncLock(companyId, lockName, runId)
 
     return {
       success: true,
@@ -3200,80 +3364,166 @@ export async function syncBsaleSalesOrdersForPreparation(
         errors: totalErrors,
       },
     }
+      },
+    })
+
+    if (coordResult.status === 'LOCK_BUSY') {
+      const queueOp: BsaleSyncOperationKind = options.trigger === 'WAREHOUSE_INCREMENTAL'
+        ? 'WAREHOUSE_INCREMENTAL'
+        : 'WAREHOUSE_OPERATIONAL'
+      const enqueued = options.fromQueueWorker
+        ? null
+        : await enqueueSyncWhenLockBusy({
+          companyId,
+          operationKind: queueOp,
+          lockName,
+          triggerType: runTrigger,
+          ttlSeconds: 10 * 60,
+          payload: {
+            discoverRecent: options.discoverRecent,
+            refreshActiveBoard: options.refreshActiveBoard,
+            closureDocsRepairDays: options.closureDocsRepairDays,
+          },
+        })
+      await finishSyncRun(runId, 'FAILED', {}, `SKIPPED_LOCKED: ${coordResult.error}`)
+      return {
+        success: false,
+        status: 'SKIPPED_LOCKED',
+        error: coordResult.error,
+        queued: Boolean(enqueued?.enqueued),
+        alreadyRunning: Boolean(enqueued?.alreadyRunning),
+        queueStatus: enqueued?.status ?? null,
+        queueRequestId: enqueued?.requestId ?? undefined,
+        deduplicated: Boolean(enqueued?.deduplicated),
+      }
+    }
+    if (coordResult.status === 'TECHNICAL_ERROR') {
+      throw coordResult.cause instanceof Error ? coordResult.cause : new Error(coordResult.error)
+    }
+    return coordResult.data
   } catch (err: unknown) {
     if (run?.id) {
       const message = err instanceof Error ? err.message : String(err)
       await finishSyncRun(run.id, 'FAILED', {}, message)
-      await releaseSyncLock(companyId, lockName, run.id).catch(() => {})
     }
     return { success: false, error: err instanceof Error ? err.message : String(err) }
   }
 }
 
-export async function runIncrementalWarehouseBsaleRefresh(companyId: string) {
+export async function runIncrementalWarehouseBsaleRefresh(
+  companyId: string,
+  options?: { fromQueueWorker?: boolean },
+) {
   return syncBsaleSalesOrdersForPreparation(companyId, {
     trigger: 'WAREHOUSE_INCREMENTAL',
     discoverRecent: true,
     refreshActiveBoard: false,
+    fromQueueWorker: options?.fromQueueWorker,
   })
 }
 
 export async function runOperationalWarehouseBsaleRefresh(
   companyId: string,
-  options?: { closureDocsRepairDays?: number }
+  options?: { closureDocsRepairDays?: number; fromQueueWorker?: boolean }
 ) {
   return syncBsaleSalesOrdersForPreparation(companyId, {
     trigger: 'WAREHOUSE_OPERATIONAL',
     discoverRecent: false,
     refreshActiveBoard: true,
     closureDocsRepairDays: options?.closureDocsRepairDays ?? 90,
+    fromQueueWorker: options?.fromQueueWorker,
   })
 }
 
-export async function runManualWarehouseBsaleRefresh(companyId: string) {
-  const incremental = await runIncrementalWarehouseBsaleRefresh(companyId)
-  if (!incremental.success || !incremental.counts) return incremental
+export async function runManualWarehouseBsaleRefresh(
+  companyId: string,
+  options?: { fromQueueWorker?: boolean },
+) {
+  ensureBsaleSyncQueueRuntimeRegistered()
+  const coordResult = await runWithBsaleSyncCoordinator({
+    companyId,
+    operationKind: 'WAREHOUSE_MANUAL',
+    lockName: 'bsale_operational_prep_sync',
+    triggerType: 'WAREHOUSE_MANUAL',
+    ttlSeconds: 15 * 60,
+    execute: async (lease) => {
+      lease.assertActive()
+      const incremental = await runIncrementalWarehouseBsaleRefresh(companyId)
+      if (!incremental.success || !incremental.counts) return incremental
 
-  const operational = await runOperationalWarehouseBsaleRefresh(companyId, {
-    closureDocsRepairDays: 30,
+      lease.assertActive()
+      const operational = await runOperationalWarehouseBsaleRefresh(companyId, {
+        closureDocsRepairDays: 30,
+      })
+
+      const incrementalCounts = incremental.counts
+      const operationalCounts = operational.counts
+      const combinedCounts = operationalCounts ? {
+        ...operationalCounts,
+        discovery: incrementalCounts.discovery,
+        refresh: operationalCounts.refresh,
+        get_requests: incrementalCounts.get_requests + operationalCounts.get_requests,
+        documents: incrementalCounts.documents + operationalCounts.documents,
+        details: incrementalCounts.details + operationalCounts.details,
+        detail_errors: incrementalCounts.detail_errors + operationalCounts.detail_errors,
+        reference_errors: incrementalCounts.reference_errors + operationalCounts.reference_errors,
+        missing_details: incrementalCounts.missing_details + operationalCounts.missing_details,
+        new_cards: incrementalCounts.new_cards + operationalCounts.new_cards,
+        skipped_invoiced: incrementalCounts.skipped_invoiced + operationalCounts.skipped_invoiced,
+        relations_created: incrementalCounts.relations_created + operationalCounts.relations_created,
+        closed_invoiced: incrementalCounts.closed_invoiced + operationalCounts.closed_invoiced,
+        closed_cancelled: incrementalCounts.closed_cancelled + operationalCounts.closed_cancelled,
+        closed_non_operational: incrementalCounts.closed_non_operational + operationalCounts.closed_non_operational,
+        errors: incrementalCounts.errors + operationalCounts.errors,
+        duration_ms: incrementalCounts.duration_ms + operationalCounts.duration_ms,
+      } : incrementalCounts
+
+      if (!operational.success) {
+        return {
+          success: false,
+          status: operational.status,
+          error: operational.error ?? 'Error en conciliación operacional',
+          partial: true,
+          counts: combinedCounts,
+        }
+      }
+
+      return {
+        ...operational,
+        counts: combinedCounts,
+      }
+    },
   })
 
-  const incrementalCounts = incremental.counts
-  const operationalCounts = operational.counts
-  const combinedCounts = operationalCounts ? {
-    ...operationalCounts,
-    discovery: incrementalCounts.discovery,
-    refresh: operationalCounts.refresh,
-    get_requests: incrementalCounts.get_requests + operationalCounts.get_requests,
-    documents: incrementalCounts.documents + operationalCounts.documents,
-    details: incrementalCounts.details + operationalCounts.details,
-    detail_errors: incrementalCounts.detail_errors + operationalCounts.detail_errors,
-    reference_errors: incrementalCounts.reference_errors + operationalCounts.reference_errors,
-    missing_details: incrementalCounts.missing_details + operationalCounts.missing_details,
-    new_cards: incrementalCounts.new_cards + operationalCounts.new_cards,
-    skipped_invoiced: incrementalCounts.skipped_invoiced + operationalCounts.skipped_invoiced,
-    relations_created: incrementalCounts.relations_created + operationalCounts.relations_created,
-    closed_invoiced: incrementalCounts.closed_invoiced + operationalCounts.closed_invoiced,
-    closed_cancelled: incrementalCounts.closed_cancelled + operationalCounts.closed_cancelled,
-    closed_non_operational: incrementalCounts.closed_non_operational + operationalCounts.closed_non_operational,
-    errors: incrementalCounts.errors + operationalCounts.errors,
-    duration_ms: incrementalCounts.duration_ms + operationalCounts.duration_ms,
-  } : incrementalCounts
-
-  if (!operational.success) {
+  if (coordResult.status === 'LOCK_BUSY') {
+    const enqueued = options?.fromQueueWorker
+      ? null
+      : await enqueueSyncWhenLockBusy({
+        companyId,
+        operationKind: 'WAREHOUSE_MANUAL',
+        lockName: 'bsale_operational_prep_sync',
+        triggerType: 'WAREHOUSE_MANUAL',
+        ttlSeconds: 15 * 60,
+      })
     return {
       success: false,
-      status: operational.status,
-      error: operational.error ?? 'Error en conciliación operacional',
-      partial: true,
-      counts: combinedCounts,
+      status: 'SKIPPED_LOCKED',
+      error: coordResult.error,
+      queued: Boolean(enqueued?.enqueued),
+      alreadyRunning: Boolean(enqueued?.alreadyRunning),
+      queueStatus: enqueued?.status ?? null,
+      queueRequestId: enqueued?.requestId ?? null,
+      deduplicated: Boolean(enqueued?.deduplicated),
+      counts: undefined,
     }
   }
-
-  return {
-    ...operational,
-    counts: combinedCounts,
+  if (coordResult.status === 'TECHNICAL_ERROR') {
+    return {
+      success: false,
+      error: coordResult.error,
+    }
   }
+  return coordResult.data
 }
 
 /**
@@ -3283,7 +3533,11 @@ export async function runManualWarehouseBsaleRefresh(companyId: string) {
  * successful page is upserted immediately, so a retry after a partial failure
  * is safe and converges without truncating the mirror or preparation history.
  */
-export async function runFullWarehouseBsaleRefresh(companyId: string): Promise<WarehouseFullRefreshResult> {
+export async function runFullWarehouseBsaleRefresh(
+  companyId: string,
+  options?: { fromQueueWorker?: boolean },
+): Promise<WarehouseFullRefreshResult> {
+  ensureBsaleSyncQueueRuntimeRegistered()
   const startedAt = Date.now()
   const lockName = 'bsale_warehouse_full_refresh'
   let run: SyncRun | null = null
@@ -3313,11 +3567,15 @@ export async function runFullWarehouseBsaleRefresh(companyId: string): Promise<W
     if (!companyId) throw new Error('company_id es requerido')
     run = await createSyncRun(companyId, 'WAREHOUSE_FULL')
     const runId = run.id
-    const acquired = await acquireSyncLock(companyId, lockName, runId, 60)
-    if (!acquired) {
-      await finishSyncRun(runId, 'FAILED', {}, 'SKIPPED_LOCKED: Full refresh already running', metrics)
-      return { success: false, status: 'SKIPPED_LOCKED', runId, metrics, error: 'Full refresh ya está en curso.' }
-    }
+    const coordResult = await runWithBsaleSyncCoordinator<WarehouseFullRefreshResult>({
+      companyId,
+      operationKind: 'WAREHOUSE_FULL_REFRESH',
+      lockName,
+      runId,
+      triggerType: 'WAREHOUSE_FULL',
+      ttlSeconds: 60 * 60,
+      execute: async (lease) => {
+    lease.assertActive()
 
     const db = integrDb()
     const { baseUrl, headers } = bsaleConfig(companyId)
@@ -3326,6 +3584,7 @@ export async function runFullWarehouseBsaleRefresh(companyId: string): Promise<W
 
     const upsertPage = async (items: BsalePreparationDocument[]) => {
       if (!items.length) return
+      lease.assertActive()
       const records = items.map((doc) => ({
         company_id: companyId,
         bsale_id: doc.id,
@@ -3410,9 +3669,12 @@ export async function runFullWarehouseBsaleRefresh(companyId: string): Promise<W
     const openDocuments = await mapWithConcurrency(directRefreshIds, PREPARATION_REFRESH_CONCURRENCY, async (bsaleId) => {
       try {
         metrics.get_requests++
-        const response = await fetch(`${baseUrl}/documents/${bsaleId}.json?expand=details`, {
-          method: 'GET', headers, signal: AbortSignal.timeout(20000),
-        })
+        const response = await fetchBsaleSyncResponseWithSignal(
+          `${baseUrl}/documents/${bsaleId}.json?expand=details`,
+          headers,
+          20000,
+          `Full refresh open NV ${bsaleId}`,
+        )
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const document = await response.json() as unknown
         if (!isBsalePreparationDocument(document)) throw new Error('Respuesta inválida')
@@ -3537,15 +3799,42 @@ export async function runFullWarehouseBsaleRefresh(companyId: string): Promise<W
       documents: metrics.documents_updated,
       document_details_count: metrics.details_seen,
     }, metrics.errors ? `Warehouse FULL partial: errors=${metrics.errors}` : undefined, metrics)
-    await releaseSyncLock(companyId, lockName, runId)
     return { success: metrics.errors === 0, status: finalStatus, runId, metrics }
+      },
+    })
+
+    if (coordResult.status === 'LOCK_BUSY') {
+      const enqueued = options?.fromQueueWorker
+        ? null
+        : await enqueueSyncWhenLockBusy({
+          companyId,
+          operationKind: 'WAREHOUSE_FULL_REFRESH',
+          lockName,
+          triggerType: 'WAREHOUSE_FULL',
+          ttlSeconds: 60 * 60,
+        })
+      await finishSyncRun(runId, 'FAILED', {}, `SKIPPED_LOCKED: ${coordResult.error}`, metrics)
+      return {
+        success: false,
+        status: 'SKIPPED_LOCKED',
+        runId,
+        metrics,
+        error: coordResult.error,
+        queued: Boolean(enqueued?.enqueued),
+        queueRequestId: enqueued?.requestId ?? undefined,
+        deduplicated: enqueued?.deduplicated,
+      }
+    }
+    if (coordResult.status === 'TECHNICAL_ERROR') {
+      throw coordResult.cause instanceof Error ? coordResult.cause : new Error(coordResult.error)
+    }
+    return coordResult.data
   } catch (error) {
     metrics.errors++
     metrics.duration_ms = Date.now() - startedAt
     const message = error instanceof Error ? error.message : String(error)
     if (run?.id) {
       await finishSyncRun(run.id, 'FAILED', {}, message, metrics).catch(() => {})
-      await releaseSyncLock(companyId, lockName, run.id).catch(() => {})
     }
     return { success: false, status: 'FAILED', runId: run?.id, metrics, error: message }
   }

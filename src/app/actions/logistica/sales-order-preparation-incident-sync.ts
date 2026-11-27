@@ -10,6 +10,9 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { createBsalePreparationCommercialProvider } from '@/lib/logistica/preparation-commercial-bsale-provider'
 import { hydrateBsaleDocumentsById, mapBsaleDocument, mapBsaleDocumentDetails } from '@/lib/integraciones/bsale-document-hydration'
 import { acquireSyncLock as acquireOperationalBsaleSyncLock, releaseSyncLock as releaseOperationalBsaleSyncLock } from '@/app/actions/integraciones/bsale-sync'
+import { assertActiveBsaleCoordinatorLease, composeBsaleProtectedSignal, getBsaleSyncRolloutConfig } from '@/lib/integraciones/bsale-sync-coordinator'
+import { ensureBsaleSyncQueueRuntimeRegistered } from '@/lib/integraciones/bsale-sync-queue-runtime'
+import { findActiveBsaleSyncOperation, PREPARATION_CARD_QUEUE_OPERATIONS } from '@/lib/integraciones/bsale-sync-queue-status'
 import { evaluatePostSyncAuditTransition } from '@/modules/logistica/preparacion-pedidos/preparation-line-validation'
 
 type IncidentSyncStatus = 'RESOLVED' | 'PENDING' | 'UNABLE_TO_VERIFY' | 'ALREADY_RESOLVED'
@@ -23,6 +26,10 @@ export type PreparationIncidentSyncResult = {
   verification: Record<string, unknown> | null
   differences: Array<Record<string, unknown>>
   message: string
+  queued?: boolean
+  queueRequestId?: string | null
+  queueStatus?: 'PENDING' | 'RUNNING' | null
+  deduplicated?: boolean
 }
 
 export type PreparationCardSyncStatus =
@@ -47,6 +54,10 @@ export type PreparationCardSyncResult = {
   blockReason: string | null
   blockMessage: string | null
   message: string
+  queued?: boolean
+  queueRequestId?: string | null
+  queueStatus?: 'PENDING' | 'RUNNING' | null
+  deduplicated?: boolean
 }
 
 const inFlightCardSyncs = new Set<string>()
@@ -90,6 +101,7 @@ async function finishBsaleRun(runId: string, status: 'COMPLETED' | 'FAILED', err
 }
 
 async function replaceBsaleDocumentSnapshot(companyId: string, runId: string, document: Record<string, unknown>, details: Array<Record<string, unknown>>) {
+  assertActiveBsaleCoordinatorLease()
   const { data, error } = await createAdminClient().schema('integraciones').rpc('replace_bsale_document_snapshot_v1', {
     p_company_id: companyId,
     p_run_id: runId,
@@ -146,19 +158,98 @@ export async function syncSalesOrderPreparationIncident(incidentId: string): Pro
   const cardRow = card as CardRow
   if (!cardRow.canonical_bsale_token || !cardRow.bsale_nv_folio) return result('UNABLE_TO_VERIFY', incidentId, cardRow.id, null, null, 'La identidad canónica de la Nota de Venta está incompleta.')
 
+  const activeCardOp = await findActiveBsaleSyncOperation({
+    companyId: auth.companyId,
+    operationKinds: PREPARATION_CARD_QUEUE_OPERATIONS,
+    resourceKey: `card:${cardRow.id}`,
+  })
+  if (activeCardOp) {
+    return {
+      ...result(
+        'UNABLE_TO_VERIFY',
+        incidentId,
+        cardRow.id,
+        cardRow.current_bsale_nv_id,
+        null,
+        activeCardOp.status === 'PENDING'
+          ? 'Esta Nota de Venta ya tiene una sincronización en espera; se ejecutará automáticamente.'
+          : 'Esta Nota de Venta ya se está sincronizando con Bsale.',
+      ),
+      queued: activeCardOp.status === 'PENDING',
+      queueRequestId: activeCardOp.requestId,
+      queueStatus: activeCardOp.status,
+      deduplicated: true,
+    }
+  }
+
+  const incidentInFlightKey = `incident:${auth.companyId}:${cardRow.id}`
+  if (inFlightCardSyncs.has(incidentInFlightKey) || inFlightCardSyncs.has(`${auth.companyId}:${cardRow.id}`)) {
+    return {
+      ...result(
+        'UNABLE_TO_VERIFY',
+        incidentId,
+        cardRow.id,
+        cardRow.current_bsale_nv_id,
+        null,
+        'Esta Nota de Venta ya se está sincronizando con Bsale.',
+      ),
+      queued: false,
+      queueRequestId: null,
+      queueStatus: 'RUNNING',
+      deduplicated: true,
+    }
+  }
+
+  inFlightCardSyncs.add(incidentInFlightKey)
   let runId: string | null = null
   let operationalLockAcquired = false
   try {
     runId = await createBsaleRun(auth.companyId)
+    const operationalLockName = 'bsale_operational_prep_sync'
+    operationalLockAcquired = await acquireOperationalBsaleSyncLock(auth.companyId, operationalLockName, runId, 10, {
+      operationKind: 'INCIDENT_SYNC',
+      resourceKey: `card:${cardRow.id}`,
+    })
+    if (!operationalLockAcquired) {
+      const enqueued = getBsaleSyncRolloutConfig().queueEnabled
+        ? await ensureBsaleSyncQueueRuntimeRegistered().enqueue({
+          companyId: auth.companyId,
+          operationKind: 'INCIDENT_SYNC',
+          lockName: operationalLockName,
+          resourceKey: `card:${cardRow.id}`,
+          requestedBy: auth.user.id,
+          triggerType: 'MANUAL',
+          ttlSeconds: 10 * 60,
+          payload: { incidentId, cardId: cardRow.id },
+        }).catch(() => null)
+        : null
+      const alreadyRunning = Boolean(enqueued?.alreadyRunning)
+      await finishBsaleRun(runId, 'FAILED', alreadyRunning
+        ? 'Esta Nota de Venta ya se está sincronizando con Bsale.'
+        : 'Ya existe una sincronización de Notas de Venta en curso. Solicitud encolada.')
+      return {
+        ...result(
+          'UNABLE_TO_VERIFY',
+          incidentId,
+          cardRow.id,
+          cardRow.current_bsale_nv_id,
+          runId,
+          alreadyRunning
+            ? 'Esta Nota de Venta ya se está sincronizando con Bsale.'
+            : 'Ya existe una sincronización de Notas de Venta en curso. Tu solicitud quedó en espera y se ejecutará automáticamente.',
+        ),
+        queued: Boolean(enqueued?.enqueued),
+        queueRequestId: enqueued?.requestId ?? null,
+        queueStatus: enqueued?.enqueued ? 'PENDING' : (alreadyRunning ? 'RUNNING' : null),
+        deduplicated: Boolean(enqueued?.deduplicated),
+      }
+    }
     const identity = { companyId: auth.companyId, cardId: cardRow.id, status: cardRow.status, canonicalToken: cardRow.canonical_bsale_token, historicalBsaleId: cardRow.bsale_nv_id, currentBsaleId: cardRow.current_bsale_nv_id, folio: cardRow.bsale_nv_folio }
-    const live = await createBsalePreparationCommercialProvider().getCurrentVersion(identity, AbortSignal.timeout(30_000))
+    const live = await createBsalePreparationCommercialProvider().getCurrentVersion(identity, composeBsaleProtectedSignal({ signal: AbortSignal.timeout(30_000) }) ?? AbortSignal.timeout(30_000))
     const currentBsaleNvId = live.identity.currentBsaleId
     const hydrated = await hydrateBsaleDocumentsById(createAdminClient(), auth.companyId, [currentBsaleNvId], null, undefined, false)
     const document = hydrated[0]
     if (!document || Number(document.document.id) !== currentBsaleNvId || document.details.length !== live.lines.length) throw new Error('La sincronización de la NV quedó incompleta.')
-    const operationalLockName = 'bsale_operational_prep_sync'
-    operationalLockAcquired = await acquireOperationalBsaleSyncLock(auth.companyId, operationalLockName, runId, 10)
-    if (!operationalLockAcquired) throw new Error('Ya existe una sincronización de Notas de Venta en curso. Intente nuevamente.')
     const documentSnapshot = mapBsaleDocument(auth.companyId, runId, document.document) as Record<string, unknown>
     const detailSnapshots = mapBsaleDocumentDetails(auth.companyId, runId, currentBsaleNvId, document.details) as Array<Record<string, unknown>>
     const replacement = await replaceBsaleDocumentSnapshot(auth.companyId, runId, documentSnapshot, detailSnapshots)
@@ -179,6 +270,7 @@ export async function syncSalesOrderPreparationIncident(incidentId: string): Pro
     return result('UNABLE_TO_VERIFY', incidentId, cardRow.id, cardRow.current_bsale_nv_id, runId, error instanceof Error ? error.message : 'La comprobación no pudo completarse.')
   } finally {
     if (operationalLockAcquired && runId) await releaseOperationalBsaleSyncLock(auth.companyId, 'bsale_operational_prep_sync', runId)
+    inFlightCardSyncs.delete(incidentInFlightKey)
   }
 }
 
@@ -235,6 +327,10 @@ export async function syncSalesOrderPreparationCardFromBsale(cardId: string): Pr
       detailCount: 0,
       syncRunId: null,
       syncedAt: null,
+      queued: false,
+      queueRequestId: null,
+      queueStatus: 'RUNNING',
+      deduplicated: true,
       message: 'Esta Nota de Venta ya se está sincronizando con Bsale.',
     })
   }
@@ -302,16 +398,60 @@ export async function syncSalesOrderPreparationCardFromBsale(cardId: string): Pr
       })
     }
 
+    const activeCardOp = await findActiveBsaleSyncOperation({
+      companyId: auth.companyId,
+      operationKinds: PREPARATION_CARD_QUEUE_OPERATIONS,
+      resourceKey: `card:${cardRow.id}`,
+    })
+    if (activeCardOp) {
+      return cardSyncResult({
+        ok: false,
+        status: activeCardOp.status === 'RUNNING' ? 'IN_PROGRESS' : 'CONFLICT',
+        cardId: cardRow.id,
+        previousBsaleNvId,
+        currentBsaleNvId: previousBsaleNvId,
+        substitutedDocument: false,
+        detailCount: 0,
+        syncRunId: null,
+        syncedAt: null,
+        queued: activeCardOp.status === 'PENDING',
+        queueRequestId: activeCardOp.requestId,
+        queueStatus: activeCardOp.status,
+        deduplicated: true,
+        message: activeCardOp.status === 'PENDING'
+          ? 'Esta Nota de Venta ya tiene una solicitud en espera y se procesará automáticamente.'
+          : 'Esta Nota de Venta ya se está sincronizando con Bsale.',
+      })
+    }
+
     runId = await createBsaleRun(auth.companyId)
 
     const operationalLockName = 'bsale_operational_prep_sync'
-    operationalLockAcquired = await acquireOperationalBsaleSyncLock(auth.companyId, operationalLockName, runId, 10)
+    operationalLockAcquired = await acquireOperationalBsaleSyncLock(auth.companyId, operationalLockName, runId, 10, {
+      operationKind: 'CARD_SYNC',
+      resourceKey: `card:${cardRow.id}`,
+    })
     if (!operationalLockAcquired) {
-      await finishBsaleRun(runId, 'FAILED', 'Sincronización operativa de Bsale en curso.')
+      const enqueued = getBsaleSyncRolloutConfig().queueEnabled
+        ? await ensureBsaleSyncQueueRuntimeRegistered().enqueue({
+          companyId: auth.companyId,
+          operationKind: 'CARD_SYNC',
+          lockName: operationalLockName,
+          resourceKey: `card:${cardRow.id}`,
+          requestedBy: auth.user.id,
+          triggerType: 'MANUAL',
+          ttlSeconds: 10 * 60,
+          payload: { cardId: cardRow.id },
+        }).catch(() => null)
+        : null
+      const alreadyRunning = Boolean(enqueued?.alreadyRunning)
+      await finishBsaleRun(runId, 'FAILED', alreadyRunning
+        ? 'Esta Nota de Venta ya se está sincronizando con Bsale.'
+        : 'Sincronización operativa de Bsale en curso.')
       runCompleted = true
       return cardSyncResult({
         ok: false,
-        status: 'CONFLICT',
+        status: alreadyRunning ? 'IN_PROGRESS' : 'CONFLICT',
         cardId: cardRow.id,
         previousBsaleNvId,
         currentBsaleNvId: previousBsaleNvId,
@@ -319,7 +459,13 @@ export async function syncSalesOrderPreparationCardFromBsale(cardId: string): Pr
         detailCount: 0,
         syncRunId: runId,
         syncedAt: null,
-        message: 'Ya existe una sincronización de Bsale en curso. Intenta nuevamente en unos segundos.',
+        queued: Boolean(enqueued?.enqueued),
+        queueRequestId: enqueued?.requestId ?? null,
+        queueStatus: enqueued?.enqueued ? 'PENDING' : (alreadyRunning ? 'RUNNING' : null),
+        deduplicated: Boolean(enqueued?.deduplicated),
+        message: alreadyRunning
+          ? 'Esta Nota de Venta ya se está sincronizando con Bsale.'
+          : 'Ya existe una sincronización de Bsale en curso. La solicitud quedó en espera y se procesará automáticamente.',
       })
     }
 
@@ -332,7 +478,7 @@ export async function syncSalesOrderPreparationCardFromBsale(cardId: string): Pr
       currentBsaleId: cardRow.current_bsale_nv_id,
       folio: cardRow.bsale_nv_folio,
     }
-    const live = await createBsalePreparationCommercialProvider().getCurrentVersion(identity, AbortSignal.timeout(30_000))
+    const live = await createBsalePreparationCommercialProvider().getCurrentVersion(identity, composeBsaleProtectedSignal({ signal: AbortSignal.timeout(30_000) }) ?? AbortSignal.timeout(30_000))
     const currentBsaleNvId = live.identity.currentBsaleId
 
     const admin = createAdminClient()
@@ -576,6 +722,10 @@ export type AuditCardSyncResult = {
   openAuditIncidentsCount: number
   canFinalize: boolean
   message: string
+  queued?: boolean
+  queueRequestId?: string | null
+  queueStatus?: 'PENDING' | 'RUNNING' | null
+  deduplicated?: boolean
 }
 
 function auditSyncResult(params: AuditCardSyncResult): AuditCardSyncResult {
@@ -628,6 +778,10 @@ export async function syncSalesOrderAuditCardFromBsale(cardId: string): Promise<
       commercialVerification: null,
       openAuditIncidentsCount: 0,
       canFinalize: false,
+      queued: false,
+      queueRequestId: null,
+      queueStatus: 'RUNNING',
+      deduplicated: true,
       message: 'Esta Nota de Venta en Auditoría ya se está sincronizando con Bsale.',
     })
   }
@@ -760,15 +914,63 @@ export async function syncSalesOrderAuditCardFromBsale(cardId: string): Promise<
       })
     }
 
+    const activeAuditCardOp = await findActiveBsaleSyncOperation({
+      companyId: auth.companyId,
+      operationKinds: PREPARATION_CARD_QUEUE_OPERATIONS,
+      resourceKey: `card:${cardRow.id}`,
+    })
+    if (activeAuditCardOp) {
+      return auditSyncResult({
+        ok: false,
+        status: activeAuditCardOp.status === 'RUNNING' ? 'IN_PROGRESS' : 'CONFLICT',
+        cardId: cardRow.id,
+        auditId,
+        previousBsaleNvId,
+        currentBsaleNvId: previousBsaleNvId,
+        substitutedDocument: false,
+        detailCount: 0,
+        syncRunId: null,
+        syncedAt: null,
+        commercialVerification: null,
+        openAuditIncidentsCount: 0,
+        canFinalize: false,
+        queued: activeAuditCardOp.status === 'PENDING',
+        queueRequestId: activeAuditCardOp.requestId,
+        queueStatus: activeAuditCardOp.status,
+        deduplicated: true,
+        message: activeAuditCardOp.status === 'PENDING'
+          ? 'Esta Nota de Venta en Auditoría ya tiene una solicitud en espera y se procesará automáticamente.'
+          : 'Esta Nota de Venta en Auditoría ya se está sincronizando con Bsale.',
+      })
+    }
+
     runId = await createBsaleRun(auth.companyId)
     const operationalLockName = 'bsale_operational_prep_sync'
-    operationalLockAcquired = await acquireOperationalBsaleSyncLock(auth.companyId, operationalLockName, runId, 10)
+    operationalLockAcquired = await acquireOperationalBsaleSyncLock(auth.companyId, operationalLockName, runId, 10, {
+      operationKind: 'AUDIT_SYNC',
+      resourceKey: `card:${cardRow.id}`,
+    })
     if (!operationalLockAcquired) {
-      await finishBsaleRun(runId, 'FAILED', 'Sincronización operativa de Bsale en curso.')
+      const enqueued = getBsaleSyncRolloutConfig().queueEnabled
+        ? await ensureBsaleSyncQueueRuntimeRegistered().enqueue({
+          companyId: auth.companyId,
+          operationKind: 'AUDIT_SYNC',
+          lockName: operationalLockName,
+          resourceKey: `card:${cardRow.id}`,
+          requestedBy: auth.user.id,
+          triggerType: 'MANUAL',
+          ttlSeconds: 10 * 60,
+          payload: { cardId: cardRow.id, auditId },
+        }).catch(() => null)
+        : null
+      const alreadyRunning = Boolean(enqueued?.alreadyRunning)
+      await finishBsaleRun(runId, 'FAILED', alreadyRunning
+        ? 'Esta Nota de Venta en Auditoría ya se está sincronizando con Bsale.'
+        : 'Sincronización operativa de Bsale en curso.')
       runCompleted = true
       return auditSyncResult({
         ok: false,
-        status: 'CONFLICT',
+        status: alreadyRunning ? 'IN_PROGRESS' : 'CONFLICT',
         cardId: cardRow.id,
         auditId,
         previousBsaleNvId,
@@ -780,7 +982,13 @@ export async function syncSalesOrderAuditCardFromBsale(cardId: string): Promise<
         commercialVerification: null,
         openAuditIncidentsCount: 0,
         canFinalize: false,
-        message: 'Ya existe una sincronización de Bsale en curso. Intenta nuevamente en unos segundos.',
+        queued: Boolean(enqueued?.enqueued),
+        queueRequestId: enqueued?.requestId ?? null,
+        queueStatus: enqueued?.enqueued ? 'PENDING' : (alreadyRunning ? 'RUNNING' : null),
+        deduplicated: Boolean(enqueued?.deduplicated),
+        message: alreadyRunning
+          ? 'Esta Nota de Venta en Auditoría ya se está sincronizando con Bsale.'
+          : 'Ya existe una sincronización de Bsale en curso. La solicitud quedó en espera y se procesará automáticamente.',
       })
     }
 
@@ -793,7 +1001,7 @@ export async function syncSalesOrderAuditCardFromBsale(cardId: string): Promise<
       currentBsaleId: cardRow.current_bsale_nv_id,
       folio: cardRow.bsale_nv_folio,
     }
-    const live = await createBsalePreparationCommercialProvider().getCurrentVersion(identity, AbortSignal.timeout(30_000))
+    const live = await createBsalePreparationCommercialProvider().getCurrentVersion(identity, composeBsaleProtectedSignal({ signal: AbortSignal.timeout(30_000) }) ?? AbortSignal.timeout(30_000))
     const currentBsaleNvId = live.identity.currentBsaleId
 
     const hydrated = await hydrateBsaleDocumentsById(admin, auth.companyId, [currentBsaleNvId], null, undefined, false)

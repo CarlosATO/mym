@@ -54,6 +54,7 @@ interface SalesOrderCardProps {
   onVerifyClientCommercial?: (cardId: string) => Promise<VerifyCardClientCommercialResult>
   canSyncCard?: boolean
   isSyncingCard?: boolean
+  cardSyncPhase?: 'WAITING' | 'RUNNING' | null
   onSyncCard?: (card: SalesOrderPreparationCardInfo) => void | Promise<unknown>
   canSyncAuditCard?: boolean
   onSyncAuditCard?: (card: SalesOrderPreparationCardInfo) => void | Promise<unknown>
@@ -103,6 +104,7 @@ export function SalesOrderCard({
   onVerifyClientCommercial,
   canSyncCard = false,
   isSyncingCard = false,
+  cardSyncPhase = null,
   onSyncCard,
   canSyncAuditCard = false,
   onSyncAuditCard,
@@ -410,6 +412,7 @@ export function SalesOrderCard({
                 type="button"
                 data-card-action
                 disabled={isSyncingCard || isPending}
+                aria-busy={isSyncingCard}
                 title="Sincronizar esta Nota de Venta con Bsale"
                 onPointerDown={event => event.stopPropagation()}
                 onClick={event => {
@@ -422,10 +425,14 @@ export function SalesOrderCard({
                   }
                 }}
                 onDoubleClick={event => event.stopPropagation()}
-                className="inline-flex items-center gap-1 rounded border border-[#72383D]/35 bg-[#F5EDE9] px-1.5 py-0.5 text-[9px] font-bold text-[#72383D] transition-colors hover:bg-[#EBDDD6] disabled:cursor-not-allowed disabled:opacity-60"
+                className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                  cardSyncPhase === 'WAITING'
+                    ? 'border-amber-400/60 bg-amber-50 text-amber-800'
+                    : 'border-[#72383D]/35 bg-[#F5EDE9] text-[#72383D] hover:bg-[#EBDDD6]'
+                }`}
               >
-                <RefreshCw className={`h-2.5 w-2.5 ${isSyncingCard ? 'animate-spin' : ''}`} />
-                {isSyncingCard ? 'Sincronizando…' : 'Sincronizar'}
+                <RefreshCw className={`h-2.5 w-2.5 ${cardSyncPhase === 'WAITING' ? 'animate-pulse' : isSyncingCard ? 'animate-spin' : ''}`} />
+                {cardSyncPhase === 'WAITING' ? 'En espera…' : isSyncingCard ? 'Sincronizando…' : 'Sincronizar'}
               </button>
             )}
             {(isFinalized || commercialMirror) && openCommercialIncidentCount > 0 && onOpenCommercialIncidents && (

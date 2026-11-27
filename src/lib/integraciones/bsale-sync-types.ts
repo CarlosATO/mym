@@ -33,4 +33,7 @@ export type WarehouseFullRefreshResult = {
   runId?: string
   metrics?: Record<string, number>
   error?: string
+  queued?: boolean
+  queueRequestId?: string
+  deduplicated?: boolean
 }

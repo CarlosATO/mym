@@ -11,7 +11,8 @@ const cronRoutes = [
   '/api/cron/warehouse-incremental',
   '/api/cron/warehouse-operational',
   '/api/cron/receivables-snapshot',
-  '/api/cron/collection-payment-worker'
+  '/api/cron/collection-payment-worker',
+  '/api/cron/bsale-sync-worker'
 ]
 
 export async function middleware(request: NextRequest) {

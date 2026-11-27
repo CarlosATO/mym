@@ -1,6 +1,13 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 // @ts-expect-error Standalone Node harnesses use explicit TypeScript extensions.
 import { getBsaleConfigForCompany } from '../bsale/company-config.ts'
+import {
+  assertActiveBsaleCoordinatorLease,
+  composeBsaleProtectedSignal,
+  parseBsaleRetryAfterSeconds,
+  BsaleRateLimitError,
+// @ts-expect-error Standalone Node harnesses use explicit TypeScript extensions.
+} from './bsale-sync-coordinator.ts'
 import { normalizeBsaleRelatedDetailId } from './bsale-invoice-sales-order-link'
 
 export interface BsaleDocumentPayload {
@@ -111,6 +118,7 @@ export function mapBsaleDocumentDetails(companyId: string, runId: string | null,
 // Supabase clients are created with the runtime schema; the shared helper accepts any generated schema shape.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function upsertBsaleDocument(client: SupabaseClient<any, any, any>, companyId: string, runId: string | null, document: BsaleDocumentPayload) {
+  assertActiveBsaleCoordinatorLease()
   const { error } = await client.schema('integraciones').from('bsale_documents').upsert(
     mapBsaleDocument(companyId, runId, document),
     { onConflict: 'company_id,bsale_id', ignoreDuplicates: false },
@@ -120,6 +128,7 @@ export async function upsertBsaleDocument(client: SupabaseClient<any, any, any>,
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function upsertBsaleDocumentDetails(client: SupabaseClient<any, any, any>, companyId: string, runId: string | null, documentId: number, details: BsaleDocumentDetailPayload[]) {
+  assertActiveBsaleCoordinatorLease()
   const records = mapBsaleDocumentDetails(companyId, runId, documentId, details)
   if (!records.length) return
   const { error } = await client.schema('integraciones').from('bsale_document_details').upsert(records, {
@@ -130,8 +139,18 @@ export async function upsertBsaleDocumentDetails(client: SupabaseClient<any, any
 }
 
 async function defaultFetchBsaleJson<T>(baseUrl: string, headers: Record<string, string>, path: string): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, { headers, signal: AbortSignal.timeout(30000) })
-  if (!response.ok) throw new Error(`Bsale API error ${response.status} at ${path}`)
+  assertActiveBsaleCoordinatorLease()
+  const signal = composeBsaleProtectedSignal({ timeoutMs: 30_000 })
+  const response = await fetch(`${baseUrl}${path}`, { headers, signal })
+  assertActiveBsaleCoordinatorLease()
+  if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    if (response.status === 429) {
+      const retryAfter = parseBsaleRetryAfterSeconds(response.headers.get('retry-after'), body)
+      throw new BsaleRateLimitError(`Bsale API error 429 at ${path}`, retryAfter, body)
+    }
+    throw new Error(`Bsale API error ${response.status} at ${path}`)
+  }
   return response.json() as Promise<T>
 }
 

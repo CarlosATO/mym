@@ -37,9 +37,13 @@ import {
   PREPARATION_SYNC_STALE_AFTER_MINUTES,
   mergePreparationBoardRows,
   removeCardOptimistically,
+  resolveIndividualCardSyncUiState,
+  resolvePreparationBoardSyncUiState,
   restoreCardOptimistically,
   shouldRefreshBoardAfterSync,
+  shouldRefreshPreparationBoardOnQueueTransition,
   type PreparationCardSnapshot,
+  type PreparationQueueLifecycleStatus,
 } from './preparation-sync-policy'
 import {
   markPreparationBoardFetch,
@@ -84,6 +88,11 @@ import {
   type AuditCardSyncResult,
   type PreparationCardSyncResult,
 } from '@/app/actions/logistica/sales-order-preparation-incident-sync'
+import {
+  finalizeCompletedQueuedPreparationSync,
+  getPreparationSyncQueueSnapshot,
+} from '@/app/actions/logistica/sales-order-preparation-sync-queue'
+import type { PreparationCardActiveSyncEntry } from '@/lib/integraciones/bsale-sync-queue-status'
 import { CreditNoteConfirmationModal, InvoiceConfirmationModal, InvoiceDocumentsDetail, InvoiceReviewModal, type InvoiceDocumentPreview, type InvoiceEmissionUiResult, type InvoiceReviewSnapshot } from './invoice-flow-ui'
 import { openConfirmedInvoicePdf, prepareInvoicePrintWindow, setInvoicePrintWindowStatus, validateBsalePdfUrl } from '@/lib/integraciones/invoice-print-assistant'
 import { createInvoicePreviewCache, getInvoicePreviewCacheKey, invalidateInvoicePreview, isInvoicePreviewFresh, type InvoicePreviewCache } from './invoice-preview-cache'
@@ -94,6 +103,30 @@ import { emitSalesOrderInvoice } from '@/app/actions/logistica/sales-order-invoi
 import { diagnoseSalesOrderInvoiceCommercial } from '@/app/actions/logistica/sales-order-invoice-diagnostics'
 
 const LOCAL_INVOICE_DIAGNOSTIC_CARD_ID = '0cfe3c69-baa7-44ec-95d8-649658343f95'
+
+const PREPARATION_QUEUE_POLL_INTERVAL_MS = 2_500
+
+function readSyncSessionList(prefix: string, companyId: string | null): string[] {
+  if (!companyId) return []
+  try {
+    const raw = sessionStorage.getItem(`${prefix}:${companyId}`)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string' && v.length > 0) : []
+  } catch {
+    return []
+  }
+}
+
+function writeSyncSessionList(prefix: string, companyId: string | null, values: Iterable<string>) {
+  if (!companyId) return
+  try {
+    const list = [...new Set(values)].slice(-60)
+    sessionStorage.setItem(`${prefix}:${companyId}`, JSON.stringify(list))
+  } catch {
+    // Storage may be unavailable in restricted contexts.
+  }
+}
 
 function isLocalInvoiceDiagnosticTarget(snapshot: InvoiceReviewSnapshot | null): boolean {
   return process.env.NODE_ENV === 'development'
@@ -295,6 +328,7 @@ function DroppableColumn({
   onClientCommercialStatusChange,
   canSyncCard = false,
   syncingCardIds,
+  cardSyncPhaseByCardId,
   onSyncCard,
   canSyncAuditCard = false,
   onSyncAuditCard,
@@ -331,6 +365,7 @@ function DroppableColumn({
   }) => void
   canSyncCard?: boolean
   syncingCardIds: Set<string>
+  cardSyncPhaseByCardId?: Record<string, 'WAITING' | 'RUNNING' | null>
   onSyncCard?: (card: SalesOrderPreparationCardInfo) => Promise<PreparationCardSyncResult | null>
   canSyncAuditCard?: boolean
   onSyncAuditCard?: (card: SalesOrderPreparationCardInfo) => Promise<AuditCardSyncResult | null>
@@ -443,7 +478,8 @@ function DroppableColumn({
                  canVerifyClientCommercial={!commercialMirror && canVerifyClientCommercial}
                  onClientCommercialStatusChange={onClientCommercialStatusChange}
                  canSyncCard={!commercialMirror && canSyncCard}
-                 isSyncingCard={syncingCardIds.has(card.card_id)}
+                 isSyncingCard={syncingCardIds.has(card.card_id) || Boolean(cardSyncPhaseByCardId?.[card.card_id])}
+                 cardSyncPhase={cardSyncPhaseByCardId?.[card.card_id] ?? null}
                  onSyncCard={onSyncCard}
                  canSyncAuditCard={!commercialMirror && canSyncAuditCard}
                  onSyncAuditCard={onSyncAuditCard}
@@ -492,6 +528,12 @@ export function SalesOrderPreparationPanel({
   })
   const [syncingCardIds, setSyncingCardIds] = useState<Set<string>>(() => new Set())
   const syncingCardIdsRef = useRef<Set<string>>(new Set())
+  const [boardQueueStatus, setBoardQueueStatus] = useState<PreparationQueueLifecycleStatus | null>(null)
+  const [boardActiveLockRunning, setBoardActiveLockRunning] = useState(false)
+  const [cardQueueByCardId, setCardQueueByCardId] = useState<Record<string, PreparationCardActiveSyncEntry>>({})
+  const [cardSyncFeedbackByCardId, setCardSyncFeedbackByCardId] = useState<Record<string, { tone: 'success' | 'warning' | 'error'; message: string }>>({})
+  const [auditSyncResultByCardId, setAuditSyncResultByCardId] = useState<Record<string, AuditCardSyncResult>>({})
+  const [trackedQueueVersion, setTrackedQueueVersion] = useState(0)
 
   const handleClientCommercialStatusChange = useCallback((cardId: string, result: {
     status: 'BLOCKED' | 'UNBLOCKED' | 'UNKNOWN'
@@ -606,6 +648,12 @@ export function SalesOrderPreparationPanel({
   const pendingExclusionNvIdsRef = useRef<Set<number>>(new Set())
   const exclusionSnapshotsRef = useRef<Map<number, PreparationCardSnapshot<SalesOrderPreparationCardInfo>>>(new Map())
   const syncInFlightRef = useRef(false)
+  const boardSyncBusyRef = useRef(false)
+  const cardQueueByCardIdRef = useRef<Record<string, PreparationCardActiveSyncEntry>>({})
+  const trackedRequestIdsRef = useRef<Set<string>>(new Set())
+  const processedTerminalIdsRef = useRef<Set<string>>(new Set())
+  const queuePollInFlightRef = useRef(false)
+  const companyIdRef = useRef<string | null>(null)
   const preparingRouteRef = useRef(false)
   const profitabilitySeqRef = useRef(0)
   const profitabilityInFlightRef = useRef<Set<number>>(new Set())
@@ -971,6 +1019,17 @@ export function SalesOrderPreparationPanel({
         return
       }
 
+      if (companyIdRef.current !== activeCompanyId) {
+        companyIdRef.current = activeCompanyId
+        for (const id of readSyncSessionList('mym:prep-sync-processed', activeCompanyId)) {
+          processedTerminalIdsRef.current.add(id)
+        }
+        for (const id of readSyncSessionList('mym:prep-sync-tracked', activeCompanyId)) {
+          if (!processedTerminalIdsRef.current.has(id)) {
+            trackedRequestIdsRef.current.add(id)
+          }
+        }
+      }
       setCompanyId(activeCompanyId)
       const res = await getSalesOrderPreparationBoard(activeCompanyId)
       setServerIsOperatorBodega(res.isOperatorBodega)
@@ -1041,8 +1100,280 @@ export function SalesOrderPreparationPanel({
     }
   }, [])
 
+  const trackQueueRequestId = useCallback((requestId: string | null | undefined) => {
+    if (!requestId || processedTerminalIdsRef.current.has(requestId)) return
+    if (trackedRequestIdsRef.current.has(requestId)) return
+    trackedRequestIdsRef.current.add(requestId)
+    writeSyncSessionList('mym:prep-sync-tracked', companyIdRef.current, trackedRequestIdsRef.current)
+    setTrackedQueueVersion(v => v + 1)
+  }, [])
+
+  const markTerminalRequestProcessed = useCallback((requestId: string) => {
+    trackedRequestIdsRef.current.delete(requestId)
+    processedTerminalIdsRef.current.add(requestId)
+    writeSyncSessionList('mym:prep-sync-tracked', companyIdRef.current, trackedRequestIdsRef.current)
+    writeSyncSessionList('mym:prep-sync-processed', companyIdRef.current, processedTerminalIdsRef.current)
+    setTrackedQueueVersion(v => v + 1)
+  }, [])
+
+  const applyCompletedCardSyncResult = useCallback(async (
+    card: { card_id: string; nv_bsale_id?: number; company_id?: string },
+    result: PreparationCardSyncResult,
+  ) => {
+    const existingCard = cardsRef.current.find(item => item.card_id === card.card_id)
+    const nvId = existingCard?.nv_bsale_id ?? card.nv_bsale_id
+    if (nvId != null) {
+      detailCacheRef.current.delete(nvId)
+    }
+    if (result.previousBsaleNvId != null) {
+      detailCacheRef.current.delete(result.previousBsaleNvId)
+    }
+    if (result.currentBsaleNvId != null) {
+      detailCacheRef.current.delete(result.currentBsaleNvId)
+    }
+
+    if (result.autoMovedToAudit) {
+      clearCommercialAlert(card.card_id)
+      setCardSyncFeedbackByCardId(current => {
+        if (!(card.card_id in current)) return current
+        const next = { ...current }
+        delete next[card.card_id]
+        return next
+      })
+      const nextCards = cardsRef.current.map(item => (
+        item.card_id === card.card_id
+          ? {
+              ...item,
+              status: 'IN_AUDIT',
+              locked_by_user_id: null,
+              locked_by_user_name: null,
+              locked_at: null,
+            }
+          : item
+      ))
+      cardsRef.current = nextCards
+      setCards(nextCards)
+      setSelectedCard(current => (
+        current?.card_id === card.card_id
+          ? {
+              ...current,
+              status: 'IN_AUDIT',
+              locked_by_user_id: null,
+              locked_by_user_name: null,
+              locked_at: null,
+            }
+          : current
+      ))
+      void loadBoard({ showSpinner: false })
+      toast.success(result.message)
+      return
+    }
+
+    await checkCommercialAlertNow(card.card_id)
+
+    const targetCompanyId = existingCard?.company_id ?? card.company_id ?? companyIdRef.current
+    if (selectedCardRef.current?.card_id === card.card_id && targetCompanyId) {
+      const linesRes = await getSalesOrderPreparationLines(targetCompanyId, card.card_id)
+      if (!linesRes.error) {
+        setSelectedPreparationLines(linesRes.data)
+        putPreparationLines(preparationLinesCacheRef.current, card.card_id, linesRes.data)
+      }
+    }
+
+    setCardSyncFeedbackByCardId(current => ({
+      ...current,
+      [card.card_id]: {
+        tone: result.blockMessage ? 'warning' : 'success',
+        message: result.message,
+      },
+    }))
+    void loadBoard({ showSpinner: false })
+    if (result.blockMessage) {
+      toast.warning(result.message)
+    } else {
+      toast.success(result.message)
+    }
+  }, [checkCommercialAlertNow, clearCommercialAlert, loadBoard])
+
+  const refreshSyncQueueSnapshot = useCallback(async () => {
+    if (queuePollInFlightRef.current || !mountedRef.current) return
+    queuePollInFlightRef.current = true
+    try {
+      const res = await getPreparationSyncQueueSnapshot({
+        trackedRequestIds: [...trackedRequestIdsRef.current],
+      })
+      if (!mountedRef.current || !res.data) return
+      const snapshot = res.data
+
+      setBoardActiveLockRunning(snapshot.activeLockRunning)
+      cardQueueByCardIdRef.current = snapshot.cardSyncsByCardId
+      setCardQueueByCardId(snapshot.cardSyncsByCardId)
+
+      if (snapshot.boardSync) {
+        boardSyncBusyRef.current = true
+        setBoardQueueStatus(snapshot.boardSync.status)
+        if (snapshot.boardSync.requestId) {
+          trackQueueRequestId(snapshot.boardSync.requestId)
+        }
+      } else {
+        boardSyncBusyRef.current = snapshot.activeLockRunning
+        setBoardQueueStatus(prev => (prev === 'PENDING' || prev === 'RUNNING' ? null : prev))
+      }
+
+      for (const entry of Object.values(snapshot.cardSyncsByCardId)) {
+        if (entry.requestId) {
+          trackQueueRequestId(entry.requestId)
+        }
+      }
+
+      for (const item of Object.values(snapshot.trackedRequests)) {
+        if (item.status !== 'COMPLETED' && item.status !== 'FAILED' && item.status !== 'CANCELLED') {
+          continue
+        }
+        if (processedTerminalIdsRef.current.has(item.id)) {
+          trackedRequestIdsRef.current.delete(item.id)
+          continue
+        }
+
+        const skippedReason = typeof item.resultSummary?.skipped === 'string' && item.resultSummary.skipped
+          ? item.resultSummary.skipped
+          : null
+        const shouldRefresh = shouldRefreshPreparationBoardOnQueueTransition({
+          requestId: item.id,
+          nextStatus: item.status,
+          skippedReason,
+          alreadyProcessedIds: processedTerminalIdsRef.current,
+        })
+        markTerminalRequestProcessed(item.id)
+
+        const isBoardOp = item.operationKind === 'WAREHOUSE_MANUAL'
+          || item.operationKind === 'WAREHOUSE_OPERATIONAL'
+          || item.operationKind === 'WAREHOUSE_INCREMENTAL'
+          || item.operationKind === 'OPERATIONAL_PREP_SYNC'
+
+        if (isBoardOp) {
+          if (shouldRefresh) {
+            setBoardQueueStatus('COMPLETED')
+            setSyncError(null)
+            detailCacheRef.current.clear()
+            preparationLinesCacheRef.current.clear()
+            invalidatePreparationProfitabilityCache()
+            invalidatePreparationMissingCostLinesCache()
+            setProfitabilityVersion(current => current + 1)
+            await Promise.all([
+              loadSyncHealth(),
+              loadBoard({ showSpinner: false }),
+            ])
+            if (item.operationKind === 'WAREHOUSE_MANUAL' && mountedRef.current) {
+              const summary = item.resultSummary ?? {}
+              const discovery = Number(summary.discovery ?? 0)
+              const newCards = Number(summary.new_cards ?? 0)
+              const refreshed = Number(summary.refresh ?? 0)
+              const closedInvoiced = Number(summary.closed_invoiced ?? 0)
+              const detailErrors = Number(summary.detail_errors ?? 0)
+              const suffix = detailErrors > 0 ? ` · ${detailErrors} con error de detalles` : ''
+              toast.success(`Notas de Venta actualizadas · ${discovery} descubiertas · ${newCards} nuevas · ${refreshed} revisadas · ${closedInvoiced} cerradas${suffix}`)
+            }
+          } else if (item.status === 'FAILED') {
+            const errMsg = item.lastErrorMessage || 'Error al sincronizar Notas de Venta'
+            setBoardQueueStatus('FAILED')
+            setSyncError(errMsg)
+            toast.error(errMsg)
+          }
+          continue
+        }
+
+        const targetCardId = item.cardId
+        if (shouldRefresh) {
+          const finalized = await finalizeCompletedQueuedPreparationSync(item.id)
+          if (!mountedRef.current) return
+          if (finalized.ok && finalized.kind === 'CARD_SYNC') {
+            await applyCompletedCardSyncResult({ card_id: finalized.cardResult.cardId }, finalized.cardResult)
+          } else if (finalized.ok && finalized.kind === 'AUDIT_SYNC') {
+            const auditRes = finalized.auditResult
+            const existingCard = cardsRef.current.find(c => c.card_id === auditRes.cardId)
+            if (existingCard) detailCacheRef.current.delete(existingCard.nv_bsale_id)
+            if (auditRes.currentBsaleNvId != null) detailCacheRef.current.delete(auditRes.currentBsaleNvId)
+            setAuditSyncResultByCardId(current => ({ ...current, [auditRes.cardId]: auditRes }))
+            void loadBoard({ showSpinner: false })
+            void refreshAuditLocks()
+            if (auditRes.canFinalize) {
+              toast.success(auditRes.message)
+            } else {
+              toast.warning(auditRes.message)
+            }
+          } else if (finalized.ok && finalized.kind === 'INCIDENT_SYNC') {
+            void loadBoard({ showSpinner: false })
+            if (finalized.incidentResolved) {
+              toast.success(finalized.message)
+            } else {
+              toast.warning(finalized.message)
+            }
+          } else if (!finalized.ok) {
+            if (targetCardId) {
+              setCardSyncFeedbackByCardId(current => ({
+                ...current,
+                [targetCardId]: {
+                  tone: finalized.skipped ? 'warning' : 'error',
+                  message: finalized.message,
+                },
+              }))
+            }
+            if (finalized.skipped) {
+              toast.warning(finalized.message)
+            } else {
+              toast.error(finalized.message)
+            }
+          }
+        } else if (skippedReason) {
+          const skipMsg = 'La tarjeta cambió de estado antes de ejecutarse la sincronización en cola.'
+          if (targetCardId) {
+            setCardSyncFeedbackByCardId(current => ({
+              ...current,
+              [targetCardId]: { tone: 'warning', message: skipMsg },
+            }))
+          }
+          toast.warning(skipMsg)
+        } else if (item.status === 'FAILED') {
+          const errMsg = item.lastErrorMessage || 'No se pudo completar la sincronización individual en cola.'
+          if (targetCardId) {
+            setCardSyncFeedbackByCardId(current => ({
+              ...current,
+              [targetCardId]: { tone: 'error', message: errMsg },
+            }))
+            if (item.operationKind === 'AUDIT_SYNC') {
+              const existingCard = cardsRef.current.find(c => c.card_id === targetCardId)
+              setAuditSyncResultByCardId(current => ({
+                ...current,
+                [targetCardId]: {
+                  ok: false,
+                  status: 'ERROR',
+                  cardId: targetCardId,
+                  auditId: null,
+                  previousBsaleNvId: existingCard?.nv_bsale_id ?? null,
+                  currentBsaleNvId: existingCard?.nv_bsale_id ?? null,
+                  substitutedDocument: false,
+                  detailCount: 0,
+                  syncRunId: item.syncRunId,
+                  syncedAt: null,
+                  commercialVerification: null,
+                  openAuditIncidentsCount: 0,
+                  canFinalize: false,
+                  message: errMsg,
+                },
+              }))
+            }
+          }
+          toast.error(errMsg)
+        }
+      }
+    } finally {
+      queuePollInFlightRef.current = false
+    }
+  }, [applyCompletedCardSyncResult, loadBoard, loadSyncHealth, markTerminalRequestProcessed, refreshAuditLocks, trackQueueRequestId])
+
   const runSync = useCallback(async (source: 'manual' | 'auto') => {
-    if (syncInFlightRef.current) return
+    if (syncInFlightRef.current || boardSyncBusyRef.current) return
 
     syncInFlightRef.current = true
     setIsSyncing(true)
@@ -1065,12 +1396,24 @@ export function SalesOrderPreparationPanel({
         void loadSyncHealth()
       }
 
+      if (res.queueRequestId) {
+        trackQueueRequestId(res.queueRequestId)
+      }
+      if (res.queueStatus === 'PENDING' || res.queueStatus === 'RUNNING') {
+        boardSyncBusyRef.current = true
+        setBoardQueueStatus(res.queueStatus)
+      }
+
       const didRun = res.ok && !res.skipped
       const nextRunId = res.health?.latestSuccessfulRun?.id ?? null
       const refresh = shouldRefreshBoardAfterSync({ didRun, previousRunId, nextRunId })
 
       if (res.ok) {
         setSyncError(null)
+        if (!res.skipped) {
+          setBoardQueueStatus('COMPLETED')
+          boardSyncBusyRef.current = false
+        }
         if (refresh && mountedRef.current) {
           detailCacheRef.current.clear()
           preparationLinesCacheRef.current.clear()
@@ -1093,10 +1436,20 @@ export function SalesOrderPreparationPanel({
         }
       } else if (res.status === 'SKIPPED_LOCKED') {
         setSyncError(null)
-        if (source === 'manual') toast.info('Ya existe una sincronización de Notas de Venta en curso.')
+        const nextQueueState = res.queueStatus ?? (res.queued ? 'PENDING' : 'RUNNING')
+        boardSyncBusyRef.current = true
+        setBoardQueueStatus(nextQueueState)
+        void refreshSyncQueueSnapshot()
+        if (source === 'manual') {
+          toast.info(res.error || (res.queued
+            ? 'Sincronización en curso. Tu actualización de Notas de Venta quedó en espera y se ejecutará automáticamente.'
+            : 'Ya existe una sincronización de Notas de Venta en curso.'))
+        }
       } else {
         const message = res.error || 'Error al sincronizar Notas de Venta'
         setSyncError(message)
+        setBoardQueueStatus('FAILED')
+        boardSyncBusyRef.current = false
 
         // Resiliencia: si la fase incremental creó tarjetas válidamente,
         // recargar el board para que la nueva NV sea visible de inmediato sin esperar otro intento.
@@ -1116,6 +1469,8 @@ export function SalesOrderPreparationPanel({
       const message = err instanceof Error ? err.message : 'Error al sincronizar Notas de Venta'
       if (mountedRef.current) {
         setSyncError(message)
+        setBoardQueueStatus('FAILED')
+        boardSyncBusyRef.current = false
         if (source === 'manual') toast.error(message)
       }
     } finally {
@@ -1123,10 +1478,10 @@ export function SalesOrderPreparationPanel({
       syncInFlightRef.current = false
       if (mountedRef.current) setIsSyncing(false)
     }
-  }, [loadBoard, loadSyncHealth])
+  }, [loadBoard, loadSyncHealth, refreshSyncQueueSnapshot, trackQueueRequestId])
 
   const maybeAutoSync = useCallback(async () => {
-    if (!mountedRef.current || syncInFlightRef.current) return
+    if (!mountedRef.current || syncInFlightRef.current || boardSyncBusyRef.current) return
 
     const now = Date.now()
     // Evita ráfagas repetidas de sincronización Bsale: mínimo 30s entre llamadas automáticas
@@ -1151,7 +1506,10 @@ export function SalesOrderPreparationPanel({
     void (async () => {
       await loadBoard({ showSpinner: true })
       if (cancelled) return
-      await loadSyncHealth()
+      await Promise.all([
+        loadSyncHealth(),
+        refreshSyncQueueSnapshot(),
+      ])
       if (cancelled) return
     })()
 
@@ -1159,7 +1517,32 @@ export function SalesOrderPreparationPanel({
       cancelled = true
       mountedRef.current = false
     }
-  }, [loadBoard, loadSyncHealth, maybeAutoSync])
+  }, [loadBoard, loadSyncHealth, maybeAutoSync, refreshSyncQueueSnapshot])
+
+  const hasActiveQueueMonitoring = boardQueueStatus === 'PENDING'
+    || boardQueueStatus === 'RUNNING'
+    || boardActiveLockRunning
+    || Object.keys(cardQueueByCardId).length > 0
+    || trackedRequestIdsRef.current.size > 0
+
+  useEffect(() => {
+    if (!hasActiveQueueMonitoring) return
+    const timer = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      void refreshSyncQueueSnapshot()
+    }, PREPARATION_QUEUE_POLL_INTERVAL_MS)
+    return () => window.clearInterval(timer)
+  }, [hasActiveQueueMonitoring, refreshSyncQueueSnapshot, trackedQueueVersion])
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshSyncQueueSnapshot()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange)
+  }, [refreshSyncQueueSnapshot])
 
   useEffect(() => {
     const resetRoutePreparation = () => {
@@ -1542,7 +1925,7 @@ export function SalesOrderPreparationPanel({
   }
 
   const handleSyncBlockedCard = useCallback(async (card: SalesOrderPreparationCardInfo): Promise<PreparationCardSyncResult | null> => {
-    if (syncingCardIdsRef.current.has(card.card_id)) return null
+    if (syncingCardIdsRef.current.has(card.card_id) || Boolean(cardQueueByCardIdRef.current[card.card_id])) return null
     syncingCardIdsRef.current.add(card.card_id)
     setSyncingCardIds(current => {
       const next = new Set(current)
@@ -1552,69 +1935,49 @@ export function SalesOrderPreparationPanel({
     try {
       const result = await syncSalesOrderPreparationCardFromBsale(card.card_id)
       if (!result.ok) {
+        if (result.queueRequestId) {
+          trackQueueRequestId(result.queueRequestId)
+        }
+        if (result.queued || result.queueStatus === 'PENDING' || result.queueStatus === 'RUNNING') {
+          const entryStatus = result.queueStatus ?? 'PENDING'
+          const nextEntry: PreparationCardActiveSyncEntry = {
+            cardId: card.card_id,
+            requestId: result.queueRequestId ?? null,
+            operationKind: 'CARD_SYNC',
+            status: entryStatus,
+            enqueuedAt: new Date().toISOString(),
+            startedAt: entryStatus === 'RUNNING' ? new Date().toISOString() : null,
+          }
+          cardQueueByCardIdRef.current = { ...cardQueueByCardIdRef.current, [card.card_id]: nextEntry }
+          setCardQueueByCardId(current => ({ ...current, [card.card_id]: nextEntry }))
+          setCardSyncFeedbackByCardId(current => ({
+            ...current,
+            [card.card_id]: { tone: 'warning', message: result.message },
+          }))
+          void refreshSyncQueueSnapshot()
+          toast.info(result.message)
+          return result
+        }
         if (result.status === 'CONFLICT' || result.status === 'IN_PROGRESS') {
           toast.warning(result.message)
         } else {
+          setCardSyncFeedbackByCardId(current => ({
+            ...current,
+            [card.card_id]: { tone: 'error', message: result.message },
+          }))
           toast.error(result.message)
         }
         return result
       }
 
-      detailCacheRef.current.delete(card.nv_bsale_id)
-      if (result.currentBsaleNvId != null) {
-        detailCacheRef.current.delete(result.currentBsaleNvId)
-      }
-
-      if (result.autoMovedToAudit) {
-        clearCommercialAlert(card.card_id)
-        const nextCards = cardsRef.current.map(item => (
-          item.card_id === card.card_id
-            ? {
-                ...item,
-                status: 'IN_AUDIT',
-                locked_by_user_id: null,
-                locked_by_user_name: null,
-                locked_at: null,
-              }
-            : item
-        ))
-        cardsRef.current = nextCards
-        setCards(nextCards)
-        setSelectedCard(current => (
-          current?.card_id === card.card_id
-            ? {
-                ...current,
-                status: 'IN_AUDIT',
-                locked_by_user_id: null,
-                locked_by_user_name: null,
-                locked_at: null,
-              }
-            : current
-        ))
-        void loadBoard({ showSpinner: false })
-        toast.success(result.message)
-        return result
-      }
-
-      await checkCommercialAlertNow(card.card_id)
-
-      if (selectedCardRef.current?.card_id === card.card_id) {
-        const linesRes = await getSalesOrderPreparationLines(card.company_id, card.card_id)
-        if (!linesRes.error) {
-          setSelectedPreparationLines(linesRes.data)
-          putPreparationLines(preparationLinesCacheRef.current, card.card_id, linesRes.data)
-        }
-      }
-
-      void loadBoard({ showSpinner: false })
-      if (result.blockMessage) {
-        toast.warning(result.message)
-      } else {
-        toast.success(result.message)
-      }
+      await applyCompletedCardSyncResult(card, result)
       return result
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo sincronizar la Nota de Venta.'
+      setCardSyncFeedbackByCardId(current => ({
+        ...current,
+        [card.card_id]: { tone: 'error', message },
+      }))
       toast.error(message)
       return {
         ok: false,
@@ -1640,10 +2003,10 @@ export function SalesOrderPreparationPanel({
         return next
       })
     }
-  }, [checkCommercialAlertNow])
+  }, [applyCompletedCardSyncResult, refreshSyncQueueSnapshot, trackQueueRequestId])
 
   const handleSyncAuditCard = useCallback(async (card: SalesOrderPreparationCardInfo): Promise<AuditCardSyncResult | null> => {
-    if (syncingCardIdsRef.current.has(card.card_id)) return null
+    if (syncingCardIdsRef.current.has(card.card_id) || Boolean(cardQueueByCardIdRef.current[card.card_id])) return null
     syncingCardIdsRef.current.add(card.card_id)
     setSyncingCardIds(current => {
       const next = new Set(current)
@@ -1653,6 +2016,26 @@ export function SalesOrderPreparationPanel({
     try {
       const result = await syncSalesOrderAuditCardFromBsale(card.card_id)
       if (!result.ok) {
+        if (result.queueRequestId) {
+          trackQueueRequestId(result.queueRequestId)
+        }
+        if (result.queued || result.queueStatus === 'PENDING' || result.queueStatus === 'RUNNING') {
+          const entryStatus = result.queueStatus ?? 'PENDING'
+          const nextEntry: PreparationCardActiveSyncEntry = {
+            cardId: card.card_id,
+            requestId: result.queueRequestId ?? null,
+            operationKind: 'AUDIT_SYNC',
+            status: entryStatus,
+            enqueuedAt: new Date().toISOString(),
+            startedAt: entryStatus === 'RUNNING' ? new Date().toISOString() : null,
+          }
+          cardQueueByCardIdRef.current = { ...cardQueueByCardIdRef.current, [card.card_id]: nextEntry }
+          setCardQueueByCardId(current => ({ ...current, [card.card_id]: nextEntry }))
+          setAuditSyncResultByCardId(current => ({ ...current, [card.card_id]: result }))
+          void refreshSyncQueueSnapshot()
+          toast.info(result.message)
+          return result
+        }
         if (result.status === 'CONFLICT' || result.status === 'IN_PROGRESS') {
           toast.warning(result.message)
         } else {
@@ -1665,7 +2048,9 @@ export function SalesOrderPreparationPanel({
       if (result.currentBsaleNvId != null) {
         detailCacheRef.current.delete(result.currentBsaleNvId)
       }
+      setAuditSyncResultByCardId(current => ({ ...current, [card.card_id]: result }))
       void loadBoard({ showSpinner: false })
+      void refreshAuditLocks()
       if (result.canFinalize) {
         toast.success(result.message)
       } else {
@@ -1685,7 +2070,7 @@ export function SalesOrderPreparationPanel({
         return next
       })
     }
-  }, [])
+  }, [loadBoard, refreshAuditLocks, refreshSyncQueueSnapshot, trackQueueRequestId])
 
   const transitionCard = async (card: SalesOrderPreparationCardInfo, toStatus: string, observation?: string): Promise<{ ok: boolean; error?: string }> => {
     if (pendingCardIds.has(card.card_id) || card.status === toStatus) {
@@ -2294,23 +2679,51 @@ export function SalesOrderPreparationPanel({
     setSelectedComunas(new Set())
     setFilterSellerKey('')
   }
+  const cardSyncPhaseByCardId = useMemo(() => {
+    const map: Record<string, 'WAITING' | 'RUNNING' | null> = {}
+    for (const card of cards) {
+      const queueEntry = cardQueueByCardId[card.card_id]
+      const ui = resolveIndividualCardSyncUiState({
+        isLocalSyncing: syncingCardIds.has(card.card_id),
+        queueStatus: queueEntry?.status ?? null,
+      })
+      if (ui.cardSyncPhase) {
+        map[card.card_id] = ui.cardSyncPhase
+      }
+    }
+    return map
+  }, [cards, cardQueueByCardId, syncingCardIds])
+
   const syncRun = syncHealth?.latestSuccessfulRun
   const latestRun = syncHealth?.latestRun
   const syncTrigger = syncRun?.trigger === 'SCHEDULED' ? 'SCHED' : syncRun?.trigger === 'MANUAL' ? 'MANUAL' : syncRun?.trigger || 'INIT'
   const syncTime = syncRun?.completed_at || syncRun?.started_at
   const syncAge = syncHealth?.lastSuccessAgeMinutes ?? null
-  const isSyncRunning = isSyncing || latestRun?.status === 'STARTED'
-  const syncIsError = Boolean(syncError) || latestRun?.status === 'FAILED' || latestRun?.status === 'PARTIAL'
-  const syncIsFresh = syncAge !== null && syncAge < PREPARATION_SYNC_STALE_AFTER_MINUTES
+  const boardSyncUi = resolvePreparationBoardSyncUiState({
+    isLocalSyncing: isSyncing,
+    queueStatus: boardQueueStatus,
+    activeLockRunning: boardActiveLockRunning,
+    latestRunStatus: latestRun?.status ?? null,
+    latestRunErrorMessage: latestRun?.error_message ?? null,
+    syncError,
+    lastSuccessAgeMinutes: syncAge,
+    hasHealth: Boolean(syncHealth),
+  })
+  const isSyncRunning = boardSyncUi.isRunning
+  const isSyncWaiting = boardSyncUi.isWaiting
+  const syncIsError = boardSyncUi.isError
+  const syncIsFresh = boardSyncUi.isFresh
   const syncStatusLabel = isSyncRunning
     ? 'Sincronizando…'
-    : syncIsError
-      ? 'ERROR'
-      : syncIsFresh
-        ? 'Actualizado'
-        : syncHealth
-          ? 'Desactualizado'
-          : 'Sin evidencia'
+    : isSyncWaiting
+      ? 'En espera…'
+      : syncIsError
+        ? 'ERROR'
+        : syncIsFresh
+          ? 'Actualizado'
+          : syncHealth
+            ? 'Desactualizado'
+            : 'Sin evidencia'
 
   return (
     <div className="flex flex-col h-[calc(100vh-110px)] w-full overflow-hidden bg-[#EFE9E1] text-[#322D29]">
@@ -2330,7 +2743,7 @@ export function SalesOrderPreparationPanel({
               className={`inline-flex w-[92px] shrink-0 items-center gap-1.5 px-1 py-1 text-[10px] font-medium tabular-nums whitespace-nowrap ${
                 syncIsError
                   ? 'text-[#8A4B4B]'
-                  : isSyncRunning
+                  : isSyncRunning || isSyncWaiting
                     ? 'text-amber-800'
                     : syncIsFresh
                       ? 'text-emerald-800'
@@ -2338,8 +2751,8 @@ export function SalesOrderPreparationPanel({
               }`}
               title={[syncStatusLabel, syncTrigger, syncTime ? new Date(syncTime).toLocaleString('es-CL') : 'Sin sincronización registrada', syncError].filter(Boolean).join(' · ')}
             >
-              <span className={`h-2 w-2 shrink-0 rounded-full ${isSyncRunning ? 'animate-spin border border-current border-t-transparent' : syncIsError ? 'bg-red-500' : syncIsFresh ? 'bg-emerald-500' : 'bg-slate-400'}`} aria-hidden="true" />
-              <span>Actu: {syncAge === null ? '—' : Math.max(0, Math.floor(syncAge))} Min.</span>
+              <span className={`h-2 w-2 shrink-0 rounded-full ${isSyncRunning ? 'animate-spin border border-current border-t-transparent' : isSyncWaiting ? 'animate-pulse bg-amber-500' : syncIsError ? 'bg-red-500' : syncIsFresh ? 'bg-emerald-500' : 'bg-slate-400'}`} aria-hidden="true" />
+              <span>{isSyncWaiting ? 'En cola…' : `Actu: ${syncAge === null ? '—' : Math.max(0, Math.floor(syncAge))} Min.`}</span>
             </div>
           </div>
           
@@ -2350,11 +2763,16 @@ export function SalesOrderPreparationPanel({
               aria-label="Actualizar Notas de Venta"
               title="Actualizar Notas de Venta"
               onClick={() => void runSync('manual')}
-              disabled={isSyncing}
-              className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[#D1C7BD]/60 px-1.5 py-1 text-[10px] font-medium text-[#6B625C] hover:bg-[#F5F0EA] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={boardSyncUi.disableManualRefresh}
+              aria-busy={boardSyncUi.disableManualRefresh}
+              className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-1 text-[10px] font-medium disabled:cursor-not-allowed disabled:opacity-50 ${
+                isSyncWaiting
+                  ? 'border-amber-400/60 bg-amber-50 text-amber-800'
+                  : 'border-[#D1C7BD]/60 text-[#6B625C] hover:bg-[#F5F0EA]'
+              }`}
             >
-              <RefreshCw className="h-3 w-3" />
-              <span className="hidden sm:inline">Actualizar</span>
+              <RefreshCw className={`h-3 w-3 ${isSyncRunning ? 'animate-spin' : isSyncWaiting ? 'animate-pulse' : ''}`} />
+              <span className="hidden sm:inline">{boardSyncUi.buttonLabel}</span>
             </button>
 
             <button
@@ -2694,6 +3112,7 @@ export function SalesOrderPreparationPanel({
                          onClientCommercialStatusChange={handleClientCommercialStatusChange}
                          canSyncCard={canManagePreparation}
                          syncingCardIds={syncingCardIds}
+                         cardSyncPhaseByCardId={cardSyncPhaseByCardId}
                          onSyncCard={handleSyncBlockedCard}
                          canSyncAuditCard={canManageAudit}
                          onSyncAuditCard={handleSyncAuditCard}
@@ -2733,6 +3152,9 @@ export function SalesOrderPreparationPanel({
           onAuditLockChange={() => { void refreshAuditLocks() }}
           onOwnershipConflict={handleAuditOwnershipConflict}
           onFinalized={handleAuditFinalized}
+          onSyncCard={handleSyncAuditCard}
+          cardSyncPhase={cardSyncPhaseByCardId[selectedCard.card_id] ?? null}
+          externalSyncResult={auditSyncResultByCardId[selectedCard.card_id] ?? null}
         />
       ) : (
         <SalesOrderDrawer
@@ -2756,7 +3178,9 @@ export function SalesOrderPreparationPanel({
            openCommercialIncidentCount={selectedCard ? commercialIncidentCounts[selectedCard.card_id] ?? 0 : 0}
            onCommercialAcceptanceSuccess={handleCommercialAcceptanceSuccess}
            canSyncCard={canManagePreparation}
-           isSyncingCard={selectedCard ? syncingCardIds.has(selectedCard.card_id) : false}
+           isSyncingCard={selectedCard ? (syncingCardIds.has(selectedCard.card_id) || Boolean(cardSyncPhaseByCardId[selectedCard.card_id])) : false}
+           cardSyncPhase={selectedCard ? cardSyncPhaseByCardId[selectedCard.card_id] ?? null : null}
+           externalCardSyncFeedback={selectedCard ? cardSyncFeedbackByCardId[selectedCard.card_id] ?? null : null}
            onSyncCard={handleSyncBlockedCard}
           />
       )}
