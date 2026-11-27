@@ -100,6 +100,14 @@ def _sum(values: list[Decimal]) -> Decimal:
     return sum(values, Decimal("0.00"))
 
 
+def _estimate_component(row: dict[str, Any], field: str) -> Decimal:
+    value = _money(row.get(field))
+    # Indemnities are already included in real earnings; exclude them only from projections.
+    if field == "formal_earnings":
+        value -= _money(row.get("indemnities"))
+    return value
+
+
 def _coverage_status(available_months: list[int]) -> str:
     if not available_months:
         return "MISSING"
@@ -142,7 +150,7 @@ def build_personnel_response(
             {
                 "year": previous_year,
                 "month": previous_month,
-                "formalEarnings": _money_string(_money(payroll_by_period[(previous_year, previous_month)].get("formal_earnings"))),
+                "formalEarnings": _money_string(_estimate_component(payroll_by_period[(previous_year, previous_month)], "formal_earnings")),
                 "employerContributions": _money_string(_money(payroll_by_period[(previous_year, previous_month)].get("employer_contributions"))),
             }
             for previous_year, previous_month in history
@@ -157,7 +165,7 @@ def build_personnel_response(
             def component(field: str) -> Decimal:
                 if is_available:
                     return _money(payroll.get(field))
-                return (_sum([_money(payroll_by_period[previous].get(field)) for previous in history]) / Decimal(len(history))).quantize(CLP_QUANTUM, rounding=ROUND_HALF_UP)
+                return (_sum([_estimate_component(payroll_by_period[previous], field) for previous in history]) / Decimal(len(history))).quantize(CLP_QUANTUM, rounding=ROUND_HALF_UP)
 
             formal_earnings = component("formal_earnings")
             employer_contributions = component("employer_contributions")

@@ -158,3 +158,24 @@ def test_window_crosses_year_boundary_using_only_real_imports() -> None:
     assert result["months"][0]["formalEarnings"] == "101.00"
     assert result["months"][2]["estimateWindowMonths"] == [12, 2]
     assert result["months"][2]["formalEarnings"] == "102.00"
+
+def test_estimate_excludes_indemnities_but_keeps_actual_and_bank_costs() -> None:
+    imports = [payroll(m, 1000, 100) for m in range(5, 11)]
+    imports[4].update(formal_earnings=Decimal(1600), indemnities=Decimal(600))
+    bank = [{"month": 11, "category_code": "EXPENSE_SALARIES_OTHER", "amount": 25}]
+    result = build_personnel_response(COMPANY_ID, 2026, imports, bank)
+    september, november = result["months"][8], result["months"][10]
+    assert september["status"] == "AVAILABLE"
+    assert september["formalEarnings"] == "1600.00"
+    assert september["formalLaborCost"] == "1700.00"
+    assert september["indemnities"] == "600.00"
+    assert september["recurringLaborCost"] == "1100.00"
+    assert november["status"] == "ESTIMATED"
+    assert november["formalEarnings"] == "1000.00"
+    assert november["employerContributions"] == "100.00"
+    assert november["totalPersonnel"] == "1125.00"
+    assert november["estimateWindowMonths"] == list(range(5, 11))
+    assert november["estimateSources"][4]["formalEarnings"] == "1000.00"
+    assert november["indemnities"] is None
+    assert result["ytd"]["availableTotal"]["formalLaborCost"] == "7200.00"
+
