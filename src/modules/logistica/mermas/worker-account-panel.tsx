@@ -13,6 +13,7 @@ import {
   TrendingDown,
   TrendingUp,
   ClipboardList,
+  Download,
 } from "lucide-react";
 import {
   cleanupWorkerPaymentUpload,
@@ -42,6 +43,7 @@ import {
 import { formatInstantInSantiago } from "@/lib/datetime";
 import { createClient as createBrowserSupabaseClient } from "@/lib/supabase/client";
 import { useMermasModule } from "./mermas-module-provider";
+import { downloadWorkerAccountExcel } from "./worker-account-excel";
 
 const money = new Intl.NumberFormat("es-CL", {
   style: "currency",
@@ -630,6 +632,13 @@ function WorkerAccountDetailPanel({
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => downloadWorkerAccountExcel(detail)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-theme-border px-3 py-1.5 text-xs font-bold text-theme-text hover:bg-theme-text/5"
+              >
+                <Download className="h-3.5 w-3.5" /> Descargar Excel
+              </button>
               {canRegisterPayment && <button
                 type="button"
                 onClick={onPayment}
